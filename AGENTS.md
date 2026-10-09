@@ -31,15 +31,3 @@
 ## Commits
 - Work in small commits, one feature at a time
 - Use one line commit messages; if you'd need more than one line, your commit is too big
-
-## Tracking work with `wf`
-This repo tracks its own work in `wf` (M0 commands; build with `cargo build -p wf-cli`, binary at `target/debug/wf`, or `just wf <args>`). Ids are base32 prefixes of at least 4 characters, written `#k3f9` in text.
-
-- `wf item ready` lists what can be worked on now; `wf item list` and `wf item show <id>` give detail and show what an item is blocked by.
-- Start work with `wf item move <id> in_progress`, finish with `wf item move <id> done --note "..."`. Questions use `answered`, decisions use `ratified`.
-- When you need an answer, `wf item add --title "..." --type question`, then `wf item link <task> --depends-on <question>` and stop; the task is ready again once the question is answered.
-- Split big work as "the big item depends on its parts": `wf item link <big> --depends-on <part>`. There is no parent/child.
-- Discuss with `wf comment <id> "text"`. `#id` references and `@handle` / `@handle/agent` mentions are found automatically (not in code). `wf mentions @handle` lists them.
-- At a terminal, leaving out the item (or the title, comment text, state) opens a picker or `$EDITOR`; `--edit` forces the editor. Without a terminal or with `--json` (agents) these are plain missing-argument errors, so always pass arguments.
-- Use `--json` for machine-readable output. It has a versioned schema (`schema` field).
-- `wf status` shows counts and anything flagged (unknown states, ignored cyclic dependencies). Do not edit `.workforce.toml`.
