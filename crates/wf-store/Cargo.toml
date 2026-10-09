@@ -1,0 +1,15 @@
+[package]
+name = "wf-store"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wf-core.workspace = true
+redb.workspace = true
+thiserror.workspace = true
+postcard.workspace = true
+serde.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
