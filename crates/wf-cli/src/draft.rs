@@ -197,7 +197,12 @@ mod tests {
 
         let text = draft.to_markdown().unwrap();
         assert!(text.starts_with("+++\ntitle = \"Old\"\n"));
-        assert!(text.contains("# priority = ") && text.contains("# lane = "));
+        assert!(text.contains("\npriority = \"P2\"\n") && text.contains("# lane = "));
+        let unset = Draft {
+            priority: None,
+            ..draft.clone()
+        };
+        assert!(unset.to_markdown().unwrap().contains("# priority = "));
         assert!(text.ends_with("+++\n\ntext\n"));
         let mut edited = Draft::from_markdown(&text).unwrap();
         assert_eq!(edited, draft);

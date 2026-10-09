@@ -496,11 +496,13 @@ nothing. A custom type opts in with `fields = ["priority", ...]`.
 | `P2` | Normal. The default. |
 | `P3` | Nice to have; when nothing else is waiting. |
 
-* **Effective priority** is the item's own priority, else `P2` if its type has priorities, else none.
-  Stored events keep what the author set (`null` after clearing); readers use the effective priority for
-  display (`effective_priority` in `--json`, next to the raw `priority`) and for ordering.
-* **Ordering** of `item list` and `item ready`: effective priority (`P0` first), items of types without
-  priorities last, then oldest first, then id.
+* **Required where it exists.** An item of a type with priorities must have one: `wf item add` sets `P2`
+  unless told otherwise, and the author check refuses to create such an item without a priority or to clear
+  it. Items of other types have none, and setting one is refused. Peers do not repeat the check (see
+  authoring checks), so an item whose type gained the field later, or an old one, can lack a priority:
+  `item show` flags it and it sorts last until one is set.
+* **Ordering** of `item list` and `item ready`: priority (`P0` first), items without a priority last, then
+  oldest first, then id.
 * **Not decided:** letting an item inherit the highest priority of the items it blocks, so `ready` puts what
   unblocks urgent work first. It would make the order depend on the dependency graph; if added, it should
   be shown separately from the item's own priority.

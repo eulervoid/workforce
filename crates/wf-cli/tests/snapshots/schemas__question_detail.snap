@@ -5,13 +5,12 @@ expression: "Envelope::new(&detail)"
 {
   "schema": 1,
   "data": {
-    "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+    "id": "3ga7ksosjfleq6ccsyrwrm64um5lbmcc3lfkbntwhgkrlebti5kq",
     "type": "question",
     "title": "Which hash for event ids?",
     "state": "open",
     "category": "open",
-    "priority": null,
-    "effective_priority": "P2",
+    "priority": "P2",
     "ready": true,
     "blocked_by": [],
     "archived": false,
@@ -25,7 +24,7 @@ expression: "Envelope::new(&detail)"
     "depends_on": [],
     "required_by": [
       {
-        "id": "h3jll5h3aefoythfphubvxdqm57mwxlejas7ih66qabswn3v2pfa",
+        "id": "oh6pwozvpk6qwzc3aysdxlasc4cdxesmhinrhqvijh6qfssqlwya",
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
@@ -37,14 +36,14 @@ expression: "Envelope::new(&detail)"
     "references": [],
     "referenced_by": [
       {
-        "item": "h3jll5h3aefoythfphubvxdqm57mwxlejas7ih66qabswn3v2pfa",
+        "item": "oh6pwozvpk6qwzc3aysdxlasc4cdxesmhinrhqvijh6qfssqlwya",
         "title": "Implement feed sync",
         "origin": "body"
       },
       {
-        "item": "h3jll5h3aefoythfphubvxdqm57mwxlejas7ih66qabswn3v2pfa",
+        "item": "oh6pwozvpk6qwzc3aysdxlasc4cdxesmhinrhqvijh6qfssqlwya",
         "title": "Implement feed sync",
-        "origin": "rfiswwsi5wflgzefltxwdibicuuwg46rmjf6lkx56bt5725tec7a"
+        "origin": "y6k4opb3fciez6tei5ti7vh5zia52d72d3rqnage7zz7gfvjpnaq"
       }
     ],
     "mentions": [],

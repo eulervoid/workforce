@@ -11,7 +11,7 @@ use wf_core::hlc::Hlc;
 use wf_core::id::{EventId, HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::item::{Item, ItemView, Origin, Standing};
-use wf_core::policy::Category;
+use wf_core::policy::{Category, Field};
 use wf_core::resolve::MentionTarget;
 use wf_core::state::State;
 
@@ -93,8 +93,6 @@ pub struct ItemSummary {
     /// `None` when the state is unknown under the current policy.
     pub category: Option<String>,
     pub priority: Option<String>,
-    /// The priority, or the default of types that have priorities while none is set.
-    pub effective_priority: Option<String>,
     pub ready: bool,
     pub blocked_by: Vec<BlockerView>,
     pub archived: bool,
@@ -125,11 +123,9 @@ fn blocker_view(state: &State, blocker: &Blocker) -> BlockerView {
 pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> ItemSummary {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let (state_name, category) = standing_parts(view.standing(policy));
-    let (priority, effective_priority, ready, blocked_by, archived) = match view {
+    let (priority, ready, blocked_by, archived) = match view {
         ItemView::Live(item) => (
             item.priority().map(|priority| priority.to_string()),
-            item.effective_priority(policy)
-                .map(|priority| priority.to_string()),
             state.is_ready(graph, item),
             state
                 .blockers(graph, item.id())
@@ -138,7 +134,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
                 .collect(),
             false,
         ),
-        ItemView::Archived(_) => (None, None, false, Vec::new(), true),
+        ItemView::Archived(_) => (None, false, Vec::new(), true),
     };
     ItemSummary {
         id: view.id().to_base32(),
@@ -147,7 +143,6 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
         state: state_name,
         category,
         priority,
-        effective_priority,
         ready,
         blocked_by,
         archived,
@@ -258,6 +253,16 @@ pub fn item_detail(
             "unknown type `{}` under the current policy",
             item.item_type()
         )),
+    }
+    if item.priority().is_none()
+        && policy
+            .type_config(item.item_type())
+            .is_some_and(|config| config.allows_field(Field::Priority))
+    {
+        flags.push(format!(
+            "a {} needs a priority; set one with `wf item edit --priority`",
+            item.item_type()
+        ));
     }
     let mut depends_on = Vec::new();
     for target in item.depends_on().values() {

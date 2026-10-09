@@ -266,7 +266,7 @@ fn item_edit_by_flags_and_by_editor() {
     let editor = wf.bin.join("fake-editor");
     std::fs::write(
         &editor,
-        "#!/bin/sh\n/usr/bin/sed -i.bak -e 's/^title = .*/title = \"Edited in editor\"/' -e '/^priority = /d' \"$1\"\n",
+        "#!/bin/sh\n/usr/bin/sed -i.bak -e 's/^title = .*/title = \"Edited in editor\"/' \"$1\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -283,7 +283,7 @@ fn item_edit_by_flags_and_by_editor() {
     );
     let shown = wf.json(&["item", "show", short(&task), "--history"]);
     assert_eq!(shown["title"], "Edited in editor");
-    assert_eq!(shown["priority"], Value::Null);
+    assert_eq!(shown["priority"], "P0");
     let history = shown["history"].as_array().unwrap();
     assert!(history.iter().any(|entry| {
         entry["summary"]
@@ -291,6 +291,22 @@ fn item_edit_by_flags_and_by_editor() {
             .unwrap()
             .contains("title = \"New title\"")
     }));
+
+    let remover = wf.bin.join("priority-remover");
+    std::fs::write(
+        &remover,
+        "#!/bin/sh\n/usr/bin/sed -i.bak -e '/^priority = /d' \"$1\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&remover, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = wf
+        .command(&["item", "edit", short(&task), "--edit"])
+        .env("EDITOR", &remover)
+        .env("VISUAL", &remover)
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("needs a priority"));
 
     assert!(
         wf.run(&["item", "edit", short(&task), "--title", "Edited in editor"])

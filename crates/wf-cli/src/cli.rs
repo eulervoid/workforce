@@ -180,8 +180,6 @@ pub struct ItemEditArgs {
     pub body: Option<String>,
     #[arg(long)]
     pub priority: Option<Priority>,
-    #[arg(long, conflicts_with = "priority")]
-    pub clear_priority: bool,
     #[arg(long)]
     pub lane: Option<LaneName>,
     #[arg(long = "add-label")]
@@ -199,7 +197,6 @@ impl ItemEditArgs {
         self.title.is_some()
             || self.body.is_some()
             || self.priority.is_some()
-            || self.clear_priority
             || self.lane.is_some()
             || !self.add_labels.is_empty()
             || !self.remove_labels.is_empty()

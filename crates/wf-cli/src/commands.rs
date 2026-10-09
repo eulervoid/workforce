@@ -9,8 +9,9 @@ use wf_core::event::{
 };
 use wf_core::id::{HashId, ItemId};
 use wf_core::identity::{Actor, MemberSeed, Signed};
-use wf_core::item::ItemView;
+use wf_core::item::{ItemView, Priority};
 use wf_core::name::{AgentName, Handle, HarnessName, LaneName, StateName};
+use wf_core::policy::Field;
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
 use wf_core::state::{State, Trust};
@@ -254,22 +255,18 @@ fn workspace_device(workspace: &Workspace) -> anyhow::Result<wf_core::identity::
 }
 
 fn sorted_views(state: &State, include_archived: bool) -> Vec<ItemView<'_>> {
-    let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut views: Vec<ItemView<'_>> = state
         .items()
         .filter(|view| include_archived || matches!(view, ItemView::Live(_)))
         .collect();
     views.sort_by_key(|view| match view {
-        ItemView::Live(item) => {
-            let priority = item.effective_priority(policy);
-            (
-                false,
-                priority.is_none(),
-                priority,
-                item.created(),
-                item.id(),
-            )
-        }
+        ItemView::Live(item) => (
+            false,
+            item.priority().is_none(),
+            item.priority(),
+            item.created(),
+            item.id(),
+        ),
         ItemView::Archived(stub) => (true, true, None, stub.archived_at(), stub.id()),
     });
     views
@@ -302,7 +299,7 @@ fn item_choice(summary: &ItemSummary) -> Choice {
             &summary.id[..wf_core::id::SHORT_ID_LEN],
             summary.item_type,
             summary.state.as_deref().unwrap_or("?"),
-            summary.effective_priority.as_deref().unwrap_or(""),
+            summary.priority.as_deref().unwrap_or(""),
             summary.title
         ),
     }
@@ -392,6 +389,14 @@ fn item(
                     requires: args.requires.into_iter().collect(),
                 },
             };
+            let has_priorities = workspace
+                .state()
+                .policy()
+                .and_then(|document| document.policy.type_config(&new_item.item_type))
+                .is_some_and(|config| config.allows_field(Field::Priority));
+            if has_priorities && new_item.draft.priority.is_none() {
+                new_item.draft.priority = Some(Priority::DEFAULT);
+            }
             if wants_editor {
                 new_item =
                     NewItemDraft::from_markdown(&edit_in_editor(&new_item.to_markdown()?, ".md")?)?;
@@ -614,9 +619,6 @@ fn edit(
         }
         if let Some(body) = args.body {
             draft.body = body;
-        }
-        if args.clear_priority {
-            draft.priority = None;
         }
         if let Some(priority) = args.priority {
             draft.priority = Some(priority);

@@ -6,17 +6,16 @@ expression: "Envelope::new(&all)"
   "schema": 1,
   "data": [
     {
-      "id": "h3jll5h3aefoythfphubvxdqm57mwxlejas7ih66qabswn3v2pfa",
+      "id": "oh6pwozvpk6qwzc3aysdxlasc4cdxesmhinrhqvijh6qfssqlwya",
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",
       "category": "open",
       "priority": "P1",
-      "effective_priority": "P1",
       "ready": false,
       "blocked_by": [
         {
-          "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+          "id": "3ga7ksosjfleq6ccsyrwrm64um5lbmcc3lfkbntwhgkrlebti5kq",
           "type": "question",
           "title": "Which hash for event ids?",
           "state": "open",
@@ -26,25 +25,23 @@ expression: "Envelope::new(&all)"
       "archived": false
     },
     {
-      "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+      "id": "3ga7ksosjfleq6ccsyrwrm64um5lbmcc3lfkbntwhgkrlebti5kq",
       "type": "question",
       "title": "Which hash for event ids?",
       "state": "open",
       "category": "open",
-      "priority": null,
-      "effective_priority": "P2",
+      "priority": "P2",
       "ready": true,
       "blocked_by": [],
       "archived": false
     },
     {
-      "id": "3ltp7keaf54zus66gjk2opjkjvdhjmtza6crwkvl4wd3gkzzytaq",
+      "id": "5ictkg6fy6whvcm7uiiffv4wf6dsmgfbucwrcviufcfsu7cwyxra",
       "type": "task",
       "title": "Write spec",
       "state": "done",
       "category": "done",
       "priority": null,
-      "effective_priority": null,
       "ready": false,
       "blocked_by": [],
       "archived": true
