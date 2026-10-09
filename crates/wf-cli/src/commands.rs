@@ -72,9 +72,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Init(_) | Command::Status { .. } => unreachable!("handled above"),
                 Command::Agent(command) => agent(json, command, &mut workspace),
                 Command::Item(command) => item(json, mode, command, &mut workspace),
-                Command::Comment { item, text } => {
-                    comment(json, &mut workspace, &item, &text.join(" "))
-                }
+                Command::Comment(args) => comment(json, mode, &mut workspace, args),
                 Command::Mentions { target } => mentions(json, &workspace, &target),
                 Command::Policy(command) => policy(json, command, &mut workspace),
                 Command::Log => log(json, &workspace),
@@ -565,8 +563,21 @@ fn link(json: bool, workspace: &mut Workspace, args: ItemLinkArgs) -> anyhow::Re
     done(json, message, &event, Some(id))
 }
 
-fn comment(json: bool, workspace: &mut Workspace, item: &str, text: &str) -> anyhow::Result<()> {
-    let id = workspace.resolve_item(item)?;
+fn comment(
+    json: bool,
+    mode: Mode,
+    workspace: &mut Workspace,
+    args: CommentArgs,
+) -> anyhow::Result<()> {
+    let id = workspace.resolve_item(&args.item)?;
+    let mut text = args.text.join(" ");
+    if args.edit || (text.is_empty() && mode == Mode::Interactive) {
+        text = edit_in_editor(&text, ".md")?;
+    }
+    let text = text.trim();
+    if text.is_empty() {
+        bail!("the comment is empty; nothing was sent");
+    }
     let event = workspace.author(EventBody::Comment(Comment {
         item: id,
         body: text.to_string(),

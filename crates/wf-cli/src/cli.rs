@@ -29,12 +29,8 @@ pub enum Command {
     /// Create and manage items: tasks, questions, decisions.
     #[command(subcommand)]
     Item(ItemCommand),
-    /// Comment on an item.
-    Comment {
-        item: String,
-        #[arg(required = true, num_args = 1..)]
-        text: Vec<String>,
-    },
+    /// Comment on an item. Without text, opens the editor when run at a terminal.
+    Comment(CommentArgs),
     /// Show where a principal or agent is mentioned.
     Mentions {
         /// `@joshua` or `@joshua/coder`
@@ -51,6 +47,15 @@ pub enum Command {
         #[arg(long)]
         refold: bool,
     },
+}
+
+#[derive(Args)]
+pub struct CommentArgs {
+    pub item: String,
+    pub text: Vec<String>,
+    /// Write the comment in `$VISUAL` or `$EDITOR`, starting from the text given.
+    #[arg(long)]
+    pub edit: bool,
 }
 
 #[derive(Args)]

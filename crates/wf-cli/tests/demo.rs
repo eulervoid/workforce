@@ -382,3 +382,35 @@ fn item_add_opens_the_editor_on_request_and_asks_for_a_title_otherwise() {
     assert_eq!(created["data"]["type"], "question");
     assert_eq!(created["data"]["priority"], "P1");
 }
+
+#[test]
+fn comments_need_text_or_the_editor() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    let task = wf.add(&["--title", "a task"]);
+    assert!(
+        wf.fail(&["comment", short(&task)])
+            .contains("the comment is empty")
+    );
+
+    let editor = wf.bin.join("fake-editor");
+    std::fs::write(
+        &editor,
+        "#!/bin/sh\necho 'written in the editor' >> \"$1\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = wf
+        .command(&["comment", short(&task), "--edit", "start:"])
+        .env("EDITOR", &editor)
+        .env("VISUAL", &editor)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let shown = wf.json(&["item", "show", short(&task)]);
+    assert!(shown.to_string().contains("written in the editor"));
+}
