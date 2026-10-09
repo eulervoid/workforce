@@ -62,8 +62,8 @@ A laptop (sleeps, roams), a cloud VM (always on), a home desktop (GPU, behind a 
 
 ```
 wf CLI (humans, agents)  ──unix socket──►  wf daemon (one per machine)
-                                            ├─ event store (per-author feeds, SQLite)
-                                            ├─ projections (SQLite): items, claims, members, progress
+                                            ├─ event store (per-author feeds, redb)
+                                            ├─ state (in memory, folded from the log, snapshotted to redb)
                                             ├─ policy engine (validates events)
                                             ├─ git adapter (worktrees, origin observer)
                                             ├─ harness runner (ACP client, wf MCP server)
@@ -75,6 +75,22 @@ wf CLI (humans, agents)  ──unix socket──►  wf daemon (one per machine)
 ```
 
 Without a daemon, `wf sync` does a one-shot sync. Any always-on daemon can act as the anchor.
+
+### Storage
+* **The event log is the only durable truth.** It is a key-value workload (append, get by `EventId`,
+  range by `(author, seq)`, heads, pending) and lives in **redb**: pure Rust, one file, copy-on-write
+  B+trees, one writer with concurrent MVCC readers, stable file format.
+* **State is folded into in-memory Rust structs** by `wf-core`. Queries are typed Rust, not SQL. Changing
+  the state shape needs no migration, only a refold.
+* **Snapshots:** the folded state is serialized to redb, keyed by the heads it covers. Startup loads the
+  latest snapshot and applies newer events. Large bodies (comments, progress messages) stay in the log
+  and are loaded on demand by `EventId`.
+* **Derived indexes** (search, M3) are rebuildable and never a second source of truth.
+* redb is single-process. The daemon owns the store; the CLI talks to the daemon and opens the store
+  directly only when no daemon runs. In the daemon, one storage task owns the database and receives
+  writes over a channel.
+* Access goes through a narrow `EventStore` trait so the backend (fjall, SQLite) can be swapped in one module.
+* Debugging without SQL: `wf export --json` plus `jq`, or load the export into DuckDB.
 
 ## 5. Identity and authority
 
@@ -260,8 +276,8 @@ struct ParsedNotes { parser: u16, decisions: Vec<String>, project_decisions: Vec
   `meta` lane, claimed like any other. This avoids duplicate scribes.
 * Decisions are append-only. Changes supersede, never edit.
 * Only **ratified** decisions enter agent context. Unratified ones are searchable by humans.
-* Search is local per peer, not synced: SQLite FTS5 for keywords, local vectors with a local embedding
-  model, fused by reciprocal rank. `wf search "..." --kind decision,comment --since 30d`.
+* Search is local per peer, not synced: a derived, rebuildable index (tantivy for keywords, a local vector
+  index with a local embedding model), fused by reciprocal rank. `wf search "..." --kind decision,comment --since 30d`.
 
 ## 12. Harness integration via ACP
 
@@ -381,7 +397,7 @@ All commands support `--json` with a versioned schema.
 
 | M | Scope |
 |---|---|
-| **M0** | Event log, `owner`/`member`, principal and device keys, items domain, fold to SQLite. Single peer. |
+| **M0** | Event log, `owner`/`member`, principal and device keys, items domain, in-memory fold, redb event store with snapshots. Single peer. |
 | **M1** | iroh sync, invites, device add, anchor dispatch, lanes, progress from commits, overlap notifications, `wf fork`. **= UC1** |
 | M2 | ACP harness, `wf` MCP server, secret brokering, redaction, worktrees, `Merged` from origin |
 | M3 | Project decisions, distill items, hybrid search |
