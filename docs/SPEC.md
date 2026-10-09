@@ -94,21 +94,81 @@ Without a daemon, `wf sync` does a one-shot sync. Any always-on daemon can act a
 
 ## 5. Identity and authority
 
-* **Principal key** (ed25519): a human. Rarely used, ideally held in 1Password. Signs owner-level events.
-* **Device key** (ed25519): one per daemon/agent seat. Signs ordinary events. Carries a `Delegation` from
-  its principal. The iroh `EndpointId` is the device key.
+### Concepts
+
+| Concept | Lifetime | Answers | Address |
+|---|---|---|---|
+| **Principal** | permanent | who is accountable (a human) | `@joshua` |
+| **Agent** | long-lived profile | what kind of worker: harness, model, capabilities, lanes | `@joshua/coder` |
+| **Session** | minutes to hours | who is working on which item right now, where, in which worktree | `@joshua/coder/s4k2` |
+| **Device** | long-lived infrastructure | where things run; mostly invisible | not mentionable |
+
+* **Principal key** (ed25519): one per human. Signs authority events: owner actions, invites,
+  device bindings, policy. Kept on disk for M0 (`$XDG_DATA_HOME/workforce/keys/`); a 1Password or
+  ssh-agent hook comes later.
+* **Device key** (ed25519): one per machine. Signs all ordinary events. It is the iroh `EndpointId`.
+  Never copied between machines.
+* **Agents have no keys.** The device signs, and every event carries an `actor`:
+
+```rust
+enum Actor {
+    Human(PrincipalKey),
+    Agent { agent: AgentId, session: SessionId },
+}
+```
+
+  The device is trusted to state the actor truthfully (members are trusted in v1). Attribution chain:
+  principal → agent → session → device signature.
 * **Workforce id**: BLAKE3 hash of the genesis event. Identifies, but is not a capability, so it may be
   committed to the repo.
 
-```rust
-struct Delegation {
-    principal: PrincipalKey,
-    device: DeviceKey,
-    kind: DeviceKind,        // Human | Agent | Anchor
-    labels: Vec<Label>,      // capabilities, e.g. gpu, os:linux
-    expires: Option<Timestamp>,
-}
+### Agents
+Defined once per principal, in the log, and runnable on any device that hosts them.
+
+```toml
+# AgentDefined, signed by a device of the owning principal
+[agents.coder]
+harness = "claude-code"
+model = "..."
+capabilities = ["rust", "typescript"]
+lanes = ["default"]
 ```
+
+* Named by role, not by harness, so the harness can change later.
+* Names are unique per principal and immutable in v1, so mentions keep resolving.
+* Agent definitions are work configuration, not authority, so a device key may sign them.
+
+### Devices
+A device publishes a mutable, device-signed `DeviceProfile`:
+
+```toml
+name = "desktop"
+hardware = ["gpu", "os:linux"]
+max_sessions = 3          # total concurrent sessions (default 1)
+
+[agents.coder]            # agents this device hosts
+max_sessions = 2
+[agents.reviewer]
+max_sessions = 1
+```
+
+Device names only appear in `wf status`, `wf device list` and debugging.
+
+### Sessions
+A **session** is one run of one agent on one device, working on **exactly one item**. It is the unit
+that holds a claim.
+
+* `SessionStarted{agent, item}` (device-signed). Its hash prefix is the session id.
+  `SessionEnded{reason: done | released | failed | cancelled}`.
+* session = claim = worktree = branch (`wf/<item>/<session>`).
+* When the item is finished the session ends; the next item starts a new session. Context carries over
+  through the progress log, not a long-lived conversation.
+* **Liveness is computed at query time** from `Heartbeat` events. A session without a heartbeat within the
+  lease counts as dead, even without `SessionEnded` (crash, sleeping laptop). Its claim expires and the
+  item becomes assignable again, possibly to the same agent on another device.
+* Location transparency stops at uncommitted work. Reassignment carries over only what was pushed, which
+  is why agents commit small.
+* wf session ids are separate from ACP session ids; the ACP id is a local detail of the runner.
 
 ### Roles (v1)
 | Role | Can do |
@@ -116,8 +176,8 @@ struct Delegation {
 | `owner` | everything: invites, policy, `ForkAnnounced`, naming other owners |
 | `member` | items, claims, comments, progress, reviews, decisions |
 
-Hard rule: `policy.*`, `invite.*` and `owner.*` events are valid only when signed by an owner
-**principal key**. No device key, so no agent, can change them.
+Hard rule: `policy.*`, `invite.*`, `owner.*` and device-binding events are valid only when signed by a
+**principal key** (owner principal where the role requires it). No device key, so no agent, can create them.
 
 The founder (named in genesis) holds `owner` and loses it only by explicitly giving it away.
 Membership only grows in v1, so validation is: *was the author a member at any causally earlier point?*
@@ -136,6 +196,7 @@ struct Event {
     v: u16,
     workforce: Hash,
     author: DeviceKey,
+    actor: Actor,            // human or agent session acting through this device
     seq: u64,                // per author, gapless, starting at 1
     prev: Option<EventId>,   // author's previous event
     deps: Vec<EventId>,      // heads seen when writing
@@ -154,9 +215,17 @@ struct Event {
 * **Fold order:** the causal order from `deps`, ties broken by `(hlc, EventId)`.
 
 ### Event bodies (v1)
-`Genesis`, `MemberAdded`, `DeviceBound`, `InviteCreated`, `PolicySet`, `ItemCreated`, `ItemFieldSet`,
-`ItemTransition`, `Comment`, `Assigned`, `Claim`, `Heartbeat`, `Release`, `Progress`, `Review`,
-`Merged`, `DecisionProposed`, `DecisionRatified`, `ForkAnnounced`.
+| Group | Bodies | Signed by |
+|---|---|---|
+| Authority | `Genesis`, `InviteCreated`, `MemberJoined`, `DeviceBound`, `PolicySet`, `OwnerAdded`, `ForkAnnounced` | principal key (carried in a device feed) |
+| Identity | `AgentDefined`, `DeviceProfile` | device |
+| Items | `ItemCreated`, `ItemEdited`, `ItemTransitioned`, `ItemLinked`, `ItemArchived`, `ItemUnarchived`, `Comment` | device |
+| Work | `SessionStarted`, `SessionEnded`, `Assigned`, `Claim`, `Heartbeat`, `Progress`, `Review`, `Merged` | device (`Assigned` by the anchor) |
+
+Decisions and questions are item types, not separate event families.
+
+Principal-signed statements are wrapped in an ordinary device-feed event, so every feed stays gapless
+and a principal key never needs its own sequence across machines.
 
 ## 7. Forking
 
@@ -192,25 +261,136 @@ wf fork list
 
 ## 8. Items
 
-Ported from `items`: configurable item types and states, `parent`, `depends_on`, cycle rejection,
-readiness from dependencies only. Mutations are events:
+The item is the **single universal document**: tasks, questions, decisions, meta work, and later
+discussions are all items. Types differ only in configured states and behaviour, so comments, mentions,
+references, search and inbox work the same everywhere. `items` is a reference for the model, not a
+compatibility target.
 
-* `ItemCreated` (short id from the event hash, so concurrent creates cannot collide)
-* `ItemFieldSet{field, value}`: last writer wins per field, ordered by causal order, then `(hlc, EventId)`
-* `ItemTransition{from, to}`, `Comment`
+### States and categories
+Each type configures its own states. Each state has a free name and one of six fixed **categories**.
+Built-in behaviour keys on categories, never on state names.
 
-Comments, history and attribution are core here (the `items` v1 left them out).
+| Category | Meaning | Built-in behaviour |
+|---|---|---|
+| `inactive` | exists, not actionable (backlog, draft) | not claimable |
+| `open` | actionable | claimable once dependencies are done |
+| `active` | being worked on | has a session/claim; lease expiry returns it to the type's `open` state |
+| `blocked` | waiting on something **outside** the model (review, CI, a vendor) | not claimable; entering it ends the session's claim; `@mentions`/`#refs` in the transition note say what it waits on |
+| `done` | finished successfully | terminal; satisfies dependents |
+| `cancelled` | finished without success | terminal; dependents are flagged, not unblocked |
 
-### Default workflow
-`backlog -> ready -> claimed -> in_progress -> in_review -> done`, plus `changes_requested`.
-Transitions are configurable in policy. In v1 transitions are signals, not security gates.
+Blocking on another item is **computed** from `depends_on`, never stored as a state.
+
+\[\text{ready}(i) \iff \text{cat}(i) = \texttt{open} \wedge \forall d \in \text{depends\_on}(i): \text{cat}(d) = \texttt{done} \wedge \text{no live session on } i\]
+
+`wf item show` prints an effective status, e.g. `open · blocked by #q7x2 (question, open)`.
+
+### Archiving
+`archived` is a flag, orthogonal to state, so an archived item keeps its terminal outcome.
+
+* `ItemArchived` / `ItemUnarchived`, allowed only in `done` or `cancelled`.
+* The fold still processes all events, but keeps only a **stub** for archived items (id, type, title,
+  final state, archived time). Body, comments and history load from the log on demand.
+* Hidden from lists, search and agent context by default (`--archived`). Dependencies on them still resolve.
+* Reclaiming disk space is compaction (M5); archiving is what makes it safe.
+
+### Type configuration (part of the signed policy)
+
+```toml
+[types.task]
+lane = "default"
+fields = ["priority", "labels", "requires"]
+depends_on = ["task", "question", "decision"]   # allowed target types
+initial = "open"
+transitions = "any"                              # later: explicit lists, guards, on_enter hooks
+states = [
+  { name = "backlog",     category = "inactive" },
+  { name = "open",        category = "open" },
+  { name = "in_progress", category = "active" },
+  { name = "in_review",   category = "blocked" },
+  { name = "done",        category = "done" },
+  { name = "dropped",     category = "cancelled" },
+]
+```
+
+If a policy change removes a state that items are still in, they keep it and are flagged as
+"unknown state" until moved.
+
+### Built-in types
+Types the code relies on. Shipped in the default policy, names reserved, states fixed in v1.
+
+| Type | States (category) | Purpose |
+|---|---|---|
+| `task` | backlog (inactive), open, in_progress (active), in_review (blocked), done, dropped (cancelled) | default unit of work; what agent sessions are assigned |
+| `question` | open, answered (done), dropped (cancelled) | an agent that needs an answer creates one, makes its task depend on it and ends its session; the task is ready again when it is answered |
+| `decision` | proposed (blocked), ratified (done), rejected (cancelled), superseded (done) | project decisions; only `ratified` enters agent context |
+| `distill` | open, in_progress (active), done | system-created meta work in the `meta` lane |
+
+Custom types (`bug`, `doc`, `spike`, ...) are fully configurable.
+
+### Relations
+Relations that change behaviour are explicit events. Informational ones are derived from text.
+
+| Relation | Source | Cardinality | Semantics |
+|---|---|---|---|
+| `depends_on` | explicit `ItemLinked` | many, acyclic | readiness; allowed targets per type |
+| `supersedes` | explicit `ItemLinked` | one, decisions only | moves the target to `superseded` |
+| `references` | derived from body and comments | many, cycles fine | backlinks only |
+| `mentions` | derived from body and comments | many | inbox entries |
+
+* **No parent/child.** Decomposition is "the big task depends on its parts", which also makes it ready
+  for integration exactly when the parts are done. `item show` lists dependents as "required by".
+  A label on the edge can be added later if "part of" needs to be distinguishable.
+* `depends_on` is never derived from text: a stray `#ref` must not block work.
+
+### Derived references and mentions
+* `#k3f9a2` for items (any unique prefix of at least 4 characters, like git).
+* `@joshua` for principals, `@joshua/coder` for agents, `@joshua/coder/s4k2` for sessions. Short forms
+  (`@coder`, `@s4k2`) work when unique in the workforce.
+* Parsed with `pulldown-cmark`, skipping code spans and blocks. Tokens that do not resolve are plain text.
+* Derived in the fold with a versioned parser, not stored as events. A better parser means a refold.
+
+**Mention resolution:**
+
+| Written | Goes to |
+|---|---|
+| `@joshua` | the principal's inbox |
+| `@joshua/coder` in a comment **on an item** | the live session of that agent on this item; otherwise the agent's inbox, picked up by its next session |
+| `@joshua/coder` elsewhere | the agent's inbox |
+| `@joshua/coder/s4k2` | that session; if it has ended, the agent's inbox with a note |
+
+So `@coder please also handle the empty case` on an item reaches the session working on it, which checks
+its inbox after each commit.
+
+### Fields, events and merge rules
+
+| Field | Merge rule |
+|---|---|
+| `type` | set at creation, immutable |
+| `title`, `body`, `priority`, `lane` | last writer wins per field; losing concurrent body edits stay visible in `item show --history` |
+| `state` | last writer wins, validated against the policy at the event's causal point |
+| `labels`, `requires` | set with add/remove; add wins over concurrent remove |
+| `depends_on` | same set semantics; concurrent adds that form a cycle: the edge with the greatest `(hlc, EventId)` is ignored and flagged |
+
+Events: `ItemCreated` (id = short base32 prefix of the event hash), `ItemEdited{changes}`,
+`ItemTransitioned{to, note}`, `ItemLinked{kind, target, add|remove}`, `ItemArchived`, `ItemUnarchived`,
+`Comment{item, body}`.
+
+### Stored vs computed
+
+| Stored (events) | Computed in the fold | Computed at query time |
+|---|---|---|
+| type, title, body, state, priority, lane, labels, requires, depends_on, supersedes, archived | category, author, created, updated, references, mentions, backlinks, `blocked_by`, cycle and unknown-state flags, sessions per item | session liveness, `ready`, overlap notifications |
+
+The fold is a pure function of events and never reads the clock. Everything that depends on "now" is
+computed per query.
 
 ### Routing work: three separate axes
 | Axis | Question | Mechanism |
 |---|---|---|
 | **scope** | who can *see* it | replication filter (*later*, v1 has one scope) |
 | **lane** | who may *claim* it | lane policy, matched by role and kind |
-| **requires** | who is *able* to | item labels vs. device labels (`gpu`, `os:linux`) |
+| **requires** | who is *able* to | item `requires` vs. agent capabilities plus device hardware |
 
 * Every item is in exactly one lane. The lane may derive from the item type (`distill`, `triage` go to `meta`).
 * In v1 lanes are **routing, not security**: members are trusted.
@@ -219,17 +399,24 @@ Transitions are configurable in policy. In v1 transitions are signals, not secur
 ### Assignment
 `dispatch` is the default; `pull` is configurable per workforce.
 
-1. An agent sends a claim request to the anchor.
-2. The anchor picks one and signs `Assigned{item, device, lease}`.
-3. If the anchor is unreachable, policy `fallback` decides: `optimistic` (unconfirmed `Claim`, conflicts
-   resolved later by earliest causal claim, then lowest hlc, then lowest id) or `wait`.
-4. Leases renew with `Heartbeat`, and expire back to `ready`.
+The dispatch target is an **agent**; the dispatcher picks any device that hosts it and has a free slot
+(device and per-agent `max_sessions`).
+
+1. A device with free capacity requests work for an agent it hosts.
+2. The anchor picks an item and signs `Assigned{item, agent, device, lease}`.
+3. The device starts a session (`SessionStarted`) for that item.
+4. If the anchor is unreachable, policy `fallback` decides: `optimistic` (the session starts with an
+   unconfirmed `Claim`; conflicts resolve to the earliest causal claim, then lowest hlc, then lowest id)
+   or `wait`.
+5. Sessions renew with `Heartbeat`. A dead session's claim expires and the item is assignable again.
 
 ## 9. VCS
 
 * Git only. A `VcsAdapter` trait is a code boundary with one implementation. Events carry a `vcs` enum
   with a single variant, so jj can be added later without a format change.
-* One worktree per item, branches named `wf/<item>/<device>`.
+* One worktree per **session**, branch `wf/<item>/<session>`. Worktrees live outside the repo in
+  `$XDG_DATA_HOME/workforce/<id>/worktrees/<session>`. Removed when the session ends if everything was
+  pushed, kept and flagged otherwise.
 * **Phase 1:** a central origin (GitHub etc.). **The origin decides merging** (branch protection).
   `wf` observes it and emits `Merged{item, commit}` when a `wf/<item>/...` branch lands in the target.
   `Review` events are coordination signals and gate nothing.
@@ -242,6 +429,7 @@ The "what is being changed right now" feed, tied to items. Small commits make sm
 ```rust
 struct Progress {
     item: ItemId,
+    session: Option<SessionId>,     // None for human commits
     commit: CommitInfo,             // raw, always present
     parsed: Option<ParsedNotes>,    // best effort
 }
@@ -260,7 +448,8 @@ struct ParsedNotes { parser: u16, decisions: Vec<String>, project_decisions: Vec
 * Redaction happens before signing.
 * Convention (docs and agent instructions, not code): `Decision:` and `Project-Decision:` trailers.
 * `wf progress "..."` for notes without a commit.
-* `wf activity` is a live feed. When two in-progress items' `touches` overlap, both get an inbox entry.
+* `wf activity` is a live feed. When two live sessions' `touches` overlap, both sessions get an inbox entry.
+* Sessions check their inbox after each commit; that is where comments and overlap notices arrive.
 
 ### Two kinds of decisions
 | | Item decisions | Project decisions |
@@ -274,23 +463,28 @@ struct ParsedNotes { parser: u16, decisions: Vec<String>, project_decisions: Vec
 
 * Distilling threads and progress into project decisions is **normal work**: a `distill` item in the
   `meta` lane, claimed like any other. This avoids duplicate scribes.
-* Decisions are append-only. Changes supersede, never edit.
+* Decisions are items of the built-in `decision` type. Ratified decisions change only through a new
+  decision that `supersedes` them.
 * Only **ratified** decisions enter agent context. Unratified ones are searchable by humans.
 * Search is local per peer, not synced: a derived, rebuildable index (tantivy for keywords, a local vector
   index with a local embedding model), fused by reciprocal rank. `wf search "..." --kind decision,comment --since 30d`.
 
 ## 12. Harness integration via ACP
 
-`wf agent run` is an ACP client (protocol v1) that drives the harness as a subprocess.
+The daemon is an ACP client (protocol v1). Each **wf session** drives one harness subprocess in its own
+worktree. A device runs as many sessions as its `max_sessions` allows.
+
+Harnesses are detected on `PATH` and probed with ACP `initialize` (installed, authenticated). wf never
+handles harness credentials.
 
 | ACP | Use |
 |---|---|
-| `session/new` + MCP servers | start in the item's worktree, attach the `wf` MCP server (`item_show`, `progress`, `inbox`, `search`, `decision_propose`) |
+| `session/new` + MCP servers | start in the session's worktree, attach the `wf` MCP server (`item_show`, `progress`, `inbox`, `search`, `decision_propose`) |
 | `session/prompt` | send the work package: item, dependencies, ratified decisions, search hits |
 | `session/update` | transcript capture, redaction, presence |
 | `session/request_permission` | answered by policy `[permissions]`: allow, deny, escalate to `wf inbox` |
 | `terminal/*`, `fs/*` | run inside wf's environment; secret injection |
-| `session/cancel` | lease lost or item reassigned |
+| `session/cancel` | `wf session stop`, lease lost, or item reassigned |
 
 * Pin ACP v1 and keep it behind a `Harness` trait; a `raw-cli` fallback starts any agent with a prompt
   file and observes commits.
@@ -311,20 +505,51 @@ struct ParsedNotes { parser: u16, decisions: Vec<String>, project_decisions: Vec
 
 ## 14. Connectivity and lifecycle
 
+### Creating
+`wf init --name <name>` inside a git clone: writes genesis, `.workforce.toml` (only the id), reads the
+origin from the clone, detects harnesses and offers one default agent per harness, named by role (`coder`).
+
+### Joining
+Two invite kinds, one command:
+
+| Kind | Created by | Effect |
+|---|---|---|
+| `device` | the principal (principal key required) | adds another machine of yours, same identity |
+| `member` | an owner | a new person with their own principal and handle |
+
+User's view, adding the cloud VM:
+
 ```
-wf init --name soundings          # genesis; prints the workforce id
-wf invite --expires 24h           # prints a ticket: id + inviter addresses + secret
-wf join <ticket>                  # on another machine
-wf device add                     # your own second device, principal-signed
-wf repo set <origin>
-wf daemon                         # launchd / systemd / NixOS module
+$ wf invite device                     # on a machine holding the principal key
+Invite code (valid 24h, single use):  wfi1qk7m3...x9ta
+
+$ cd ~/src/workforce && wf join wfi1qk7m3...x9ta     # on the VM, inside an existing clone
+✓ Connected to workforce "workforce" via laptop (direct)
+✓ This machine joins as a device of @joshua
+Machine name [vm-hetzner-1]: ⏎
+Detected harnesses:  [x] opencode (authenticated)  [x] claude-code (not logged in)  [ ] codex (missing)
+Host your agents here:  [x] @joshua/coder  [ ] @joshua/reviewer (codex missing)
+Max concurrent sessions [1]: 2
+Run wf in the background (systemd user service)? [Y/n] ⏎
+✓ Daemon running. This machine takes work for: @joshua/coder
 ```
 
-1. `InviteCreated{hash(secret), expiry, uses}` is in the log, so any online owner-signed path can redeem it.
-2. The joiner dials `wf/join/1` with the secret and its device key; a `MemberAdded` and `DeviceBound` follow.
-3. Gossip topics derive from the workforce id; bootstrap peers are the known members' endpoint ids.
-4. Non-member endpoints are rejected at the handshake.
-5. State lives in `$XDG_DATA_HOME/workforce/<id>/`. The repo holds only `.workforce.toml` with the id.
+Everything is also available as flags for headless and Nix setups:
+`wf join <code> --yes --name vm --agents coder --max-sessions 2 --daemon`.
+
+Under the hood:
+1. The code contains the workforce id, the endpoint ids of a few members, and a random invite secret.
+   Long codes, no rendezvous infrastructure.
+2. **Invites are self-authorizing.** At invite time the principal (or an owner, for member invites) signs
+   `InviteCreated{kind, role, hash(secret), expires, uses}`. The joiner writes its own `DeviceBound`
+   (or `MemberJoined` with a new principal key) containing the secret's preimage. Any peer verifies this
+   offline; no owner needs to be online and the new device never sees the principal key.
+3. Concurrent redemptions of a single-use invite: earliest `(hlc, EventId)` wins; the loser stays unbound
+   and is asked for a new code.
+4. The joiner dials `wf/join/1` on any reachable member, syncs the log, then publishes its `DeviceProfile`.
+5. Gossip topics derive from the workforce id; bootstrap peers are the known members' endpoint ids.
+6. Non-member endpoints are rejected at the handshake.
+7. State lives in `$XDG_DATA_HOME/workforce/<id>/`. The repo holds only `.workforce.toml` with the id.
 
 Defaults use n0's public relays and discovery. `--relay <url>` for self-hosted, mDNS for LAN-only.
 
@@ -378,18 +603,18 @@ Missing and built by us: authorization, authenticated gossip membership, orderin
 ## 17. CLI (v1 surface)
 
 ```
-wf init | invite | join | device add | members | owner add|transfer
+wf init | invite device|member | join <code> | members | owner add|transfer
+wf device list|edit                       # name, hardware, hosted agents, max_sessions
+wf agent add|list|edit                    # profiles: harness, model, capabilities, lanes
+wf session list|show|stop                 # live and recent sessions
 wf daemon | sync | status | log | export
-wf repo set
 wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
-wf item add|list|show|ready|update|edit|claim|release|close
+wf item add|list|show|ready|edit|move|link|archive    # all types: task, question, decision, ...
 wf comment <item> <text>
 wf progress "<text>" | activity | inbox
 wf review <item> --approve|--request-changes
-wf decision list|show|propose|ratify|supersede
 wf search <query>
-wf agent run [--harness ..] [--labels ..] [--max-parallel ..]
 ```
 All commands support `--json` with a versioned schema.
 
@@ -397,10 +622,10 @@ All commands support `--json` with a versioned schema.
 
 | M | Scope |
 |---|---|
-| **M0** | Event log, `owner`/`member`, principal and device keys, items domain, in-memory fold, redb event store with snapshots. Single peer. |
-| **M1** | iroh sync, invites, device add, anchor dispatch, lanes, progress from commits, overlap notifications, `wf fork`. **= UC1** |
-| M2 | ACP harness, `wf` MCP server, secret brokering, redaction, worktrees, `Merged` from origin |
-| M3 | Project decisions, distill items, hybrid search |
+| **M0** | Event log with `actor`, `owner`/`member`, principal and device keys, agent definitions, item model (types, categories, built-in types, relations, derived refs and mentions, archiving), in-memory fold, redb event store with snapshots. Single peer. |
+| **M1** | iroh sync, self-authorizing invites and `wf join`, device profiles, anchor dispatch, lanes, progress from commits, overlap notifications, `wf fork`. **= UC1** |
+| M2 | Sessions and worktrees, ACP harness runner, `wf` MCP server, session inboxes, secret brokering, redaction, `Merged` from origin |
+| M3 | Decision ratification flow, distill items, hybrid search |
 | M4 | Multiple principals, threads, scopes, `wf attach` |
 | M5 | Git bundles over iroh-blobs, peer-to-peer repos, compaction |
 | M6 | Donors: revocation, rate limits, sandbox, transcript publishing, governance |
