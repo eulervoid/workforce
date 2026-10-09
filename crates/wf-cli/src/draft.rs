@@ -1,4 +1,4 @@
-//! The YAML draft that `wf item edit` opens in `$EDITOR`, and how it turns into events.
+//! The TOML draft that `wf item edit` opens in `$EDITOR`, and how it turns into events.
 
 use std::collections::BTreeSet;
 
@@ -13,9 +13,13 @@ use wf_core::name::{Label, LaneName, Requirement};
 pub struct Draft {
     pub title: String,
     pub body: String,
+    #[serde(default)]
     pub priority: Option<Priority>,
+    #[serde(default)]
     pub lane: Option<LaneName>,
+    #[serde(default)]
     pub labels: BTreeSet<Label>,
+    #[serde(default)]
     pub requires: BTreeSet<Requirement>,
 }
 
@@ -31,12 +35,26 @@ impl Draft {
         }
     }
 
-    pub fn to_yaml(&self) -> anyhow::Result<String> {
-        Ok(serde_yaml_ng::to_string(self)?)
+    /// TOML has no null, so unset fields appear as commented-out hints.
+    pub fn to_toml(&self) -> anyhow::Result<String> {
+        let mut text = toml::to_string(self)?;
+        let mut hints = Vec::new();
+        if self.priority.is_none() {
+            hints.push("# priority = \"P2\"  # P0, P1, P2 or P3");
+        }
+        if self.lane.is_none() {
+            hints.push("# lane = \"default\"");
+        }
+        if !hints.is_empty() {
+            text.push('\n');
+            text.push_str(&hints.join("\n"));
+            text.push('\n');
+        }
+        Ok(text)
     }
 
-    pub fn from_yaml(text: &str) -> anyhow::Result<Self> {
-        Ok(serde_yaml_ng::from_str(text)?)
+    pub fn from_toml(text: &str) -> anyhow::Result<Self> {
+        Ok(toml::from_str(text)?)
     }
 
     /// The edits that turn `item` into this draft. Removals name the adds the item currently has.
@@ -94,8 +112,9 @@ mod tests {
         let draft = Draft::of(item);
         assert!(draft.changes(item).is_empty());
 
-        let yaml = draft.to_yaml().unwrap();
-        let mut edited = Draft::from_yaml(&yaml).unwrap();
+        let text = draft.to_toml().unwrap();
+        assert!(text.contains("# priority = ") && text.contains("# lane = "));
+        let mut edited = Draft::from_toml(&text).unwrap();
         assert_eq!(edited, draft);
         edited.title = "New".into();
         edited.priority = Some(Priority::P1);
@@ -103,17 +122,17 @@ mod tests {
         let changes = edited.changes(item);
         assert_eq!(changes.len(), 3);
         assert!(matches!(&changes[0], Change::Title(title) if title == "New"));
+        let set = edited.to_toml().unwrap();
+        assert!(set.contains("priority = \"P1\"") && !set.contains("# priority"));
+        assert_eq!(Draft::from_toml(&set).unwrap(), edited);
     }
 
     #[test]
     fn invalid_drafts_are_rejected() {
+        assert!(Draft::from_toml("title = \"x\"\nbody = \"\"\npriority = \"P9\"\n").is_err());
         assert!(
-            Draft::from_yaml(
-                "title: x\nbody: ''\npriority: P9\nlane: null\nlabels: []\nrequires: []\n"
-            )
-            .is_err()
+            Draft::from_toml("title = \"x\"\nbody = \"\"\nlabels = [\"Bad Label\"]\n").is_err()
         );
-        assert!(Draft::from_yaml("title: x\nbody: ''\npriority: null\nlane: null\nlabels: [Bad Label]\nrequires: []\n").is_err());
-        assert!(Draft::from_yaml("title: x\nsurprise: 1\n").is_err());
+        assert!(Draft::from_toml("title = \"x\"\nsurprise = 1\n").is_err());
     }
 }

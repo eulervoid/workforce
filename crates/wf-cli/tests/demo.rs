@@ -257,7 +257,7 @@ fn item_edit_by_flags_and_by_editor() {
     let editor = wf.bin.join("fake-editor");
     std::fs::write(
         &editor,
-        "#!/bin/sh\n/usr/bin/sed -i.bak -e 's/^title: .*/title: Edited in editor/' -e 's/^priority: .*/priority: null/' \"$1\"\n",
+        "#!/bin/sh\n/usr/bin/sed -i.bak -e 's/^title = .*/title = \"Edited in editor\"/' -e '/^priority = /d' \"$1\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();

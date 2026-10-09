@@ -155,7 +155,7 @@ pub struct ItemListArgs {
     pub archived: bool,
 }
 
-/// Without any flag, opens the item as a YAML draft in `$VISUAL` or `$EDITOR`.
+/// Without any flag, opens the item as a TOML draft in `$VISUAL` or `$EDITOR`.
 #[derive(Args)]
 pub struct ItemEditArgs {
     pub item: String,
