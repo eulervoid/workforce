@@ -778,6 +778,16 @@ wf search <query>
 All commands support `--json`. Output is `{"schema": 1, "data": ...}`; the schema number is bumped on
 incompatible changes and the shapes are snapshot-tested. Item ids print as the first 6 characters of their
 base32 hash and any unique prefix of at least 4 characters is accepted, with or without `#`.
+Without `--json`, lists (`item list|ready`, `agent list`, `log`, `mentions`) print as borderless tables
+with bold headers. Every table is built by one function in `wf-cli`, so the look is defined in one place.
+Styling is emitted only when stdout is a terminal; piped output is plain.
+
+`wf item edit <item>` without flags opens a markdown draft in `$VISUAL` or `$EDITOR`: TOML front matter
+between `+++` fences (`title`, `priority`, `lane`, `labels`, `requires`), then the body as plain markdown,
+taken verbatim. TOML has no null, so unset fields appear as commented-out hints. Unknown keys, an
+invalid priority or label, and a missing or unclosed fence are rejected. Flags (`--title`, `--body`,
+`--add-label`, ...) edit single fields instead. The item type and state are not editable here.
+
 Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the repository holds only
 `.workforce.toml` with the workforce id.
 
