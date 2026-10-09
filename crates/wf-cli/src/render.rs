@@ -131,6 +131,27 @@ fn short_time(timestamp: &str) -> String {
     )
 }
 
+/// `● #q7x2 (task:open) `, the icon and state colored by category. `suffix` follows the state.
+fn item_label(
+    id: &str,
+    item_type: &str,
+    state: Option<&str>,
+    category: Option<&str>,
+    suffix: &str,
+) -> String {
+    let state_style = state_style(category);
+    let icon = if category.is_some() { "●" } else { "?" };
+    format!(
+        "{} {} {}{}{}{}",
+        style::paint(state_style, icon),
+        id_label(id),
+        style::paint(style::DIM, format!("({item_type}:")),
+        style::paint(state_style, state.unwrap_or("unknown")),
+        style::paint(style::DIM, suffix),
+        style::paint(style::DIM, ")"),
+    )
+}
+
 fn id_label(id: &str) -> String {
     style::paint(style::ID, format!("#{}", short(id)))
 }
@@ -140,41 +161,47 @@ pub fn item_detail(detail: &ItemDetail) -> String {
 
     let summary = &detail.summary;
     let mut out = String::new();
+    let archived = if summary.archived { " · archived" } else { "" };
     let _ = writeln!(
         out,
-        "{} {} {}",
-        id_label(&summary.id),
-        paint(DIM, format!("({})", summary.item_type)),
+        "{} {}",
+        item_label(
+            &summary.id,
+            &summary.item_type,
+            summary.state.as_deref(),
+            summary.category.as_deref(),
+            archived
+        ),
         paint(BOLD, &summary.title)
     );
 
-    let mut status = vec![format!(
-        "{} {}",
-        paint(state_style(summary.category.as_deref()), "●"),
-        state_label(summary)
-    )];
+    let mut status = Vec::new();
     if let Some(priority) = &summary.priority {
         status.push(paint(priority_style(priority), priority));
     }
     if let Some(lane) = &detail.lane {
-        status.push(paint(DIM, format!("lane:{lane}")));
+        status.push(paint(DIM, format!("lane={lane}")));
     }
     if !summary.blocked_by.is_empty() {
-        status.push(format!(
-            "blocked by {}",
-            blockers(summary).replace('\n', ", ")
-        ));
+        let ids: Vec<String> = summary
+            .blocked_by
+            .iter()
+            .map(|blocker| id_label(&blocker.id))
+            .collect();
+        status.push(format!("blocked by {}", ids.join(", ")));
     }
-    let _ = writeln!(out, "  {}", status.join("  "));
+    if !status.is_empty() {
+        let _ = writeln!(out, "  {}", status.join("  "));
+    }
 
     let mut attributes = Vec::new();
     if !detail.labels.is_empty() {
-        attributes.push(paint(DIM, format!("labels:{}", detail.labels.join(","))));
+        attributes.push(paint(DIM, format!("labels={}", detail.labels.join(","))));
     }
     if !detail.requires.is_empty() {
         attributes.push(paint(
             DIM,
-            format!("requires:{}", detail.requires.join(",")),
+            format!("requires={}", detail.requires.join(",")),
         ));
     }
     attributes.push(paint(PERSON, &detail.author));
@@ -195,10 +222,14 @@ pub fn item_detail(detail: &ItemDetail) -> String {
         for link in links {
             let _ = writeln!(
                 out,
-                "  ↳ {label} {} {} {} \"{}\"{}",
-                id_label(&link.id),
-                paint(DIM, format!("({})", link.item_type)),
-                link.state.as_deref().unwrap_or("unknown"),
+                "  ↳ {label} {} \"{}\"{}",
+                item_label(
+                    &link.id,
+                    &link.item_type,
+                    link.state.as_deref(),
+                    link.category.as_deref(),
+                    ""
+                ),
                 link.title,
                 if link.ignored {
                     " [ignored: cycle]"
