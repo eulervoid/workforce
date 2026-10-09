@@ -29,7 +29,7 @@ fn emit<T: Serialize>(json: bool, data: &T, text: impl FnOnce(&T) -> String) -> 
     if json {
         println!("{}", serde_json::to_string_pretty(&Envelope::new(data))?);
     } else {
-        print!("{}", text(data));
+        anstream::print!("{}", text(data));
     }
     Ok(())
 }

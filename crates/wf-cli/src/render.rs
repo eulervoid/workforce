@@ -61,19 +61,6 @@ fn blockers(summary: &ItemSummary) -> String {
         .join("\n")
 }
 
-/// `open · blocked by #q7x2 (question, open)`
-pub fn effective_status(summary: &ItemSummary) -> String {
-    let mut status = state_label(summary);
-    if !summary.blocked_by.is_empty() {
-        let _ = write!(
-            status,
-            " · blocked by {}",
-            blockers(summary).replace('\n', ", ")
-        );
-    }
-    status
-}
-
 pub fn item_list(items: &[ItemSummary]) -> String {
     if items.is_empty() {
         return "no items\n".to_string();
@@ -92,46 +79,109 @@ pub fn item_list(items: &[ItemSummary]) -> String {
     format!("{table}\n")
 }
 
+/// Colors are always written as ANSI escapes; `anstream` strips them when output is not a terminal.
+mod style {
+    use anstyle::{AnsiColor, Style};
+
+    pub const BOLD: Style = Style::new().bold();
+    pub const DIM: Style = Style::new().dimmed();
+    pub const ID: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
+    pub const PERSON: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Magenta)));
+    pub const WARNING: Style = Style::new()
+        .bold()
+        .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Red)));
+
+    pub fn color(color: AnsiColor) -> Style {
+        Style::new().fg_color(Some(anstyle::Color::Ansi(color)))
+    }
+
+    pub fn paint(style: Style, text: impl std::fmt::Display) -> String {
+        format!("{style}{text}{style:#}")
+    }
+}
+
+fn state_style(category: Option<&str>) -> anstyle::Style {
+    use anstyle::AnsiColor;
+    match category {
+        Some("open") => style::color(AnsiColor::Yellow),
+        Some("active") => style::color(AnsiColor::Blue),
+        Some("blocked") => style::color(AnsiColor::Red),
+        Some("done") => style::color(AnsiColor::Green),
+        _ => style::DIM,
+    }
+}
+
+fn priority_style(priority: &str) -> anstyle::Style {
+    match priority {
+        "P0" => style::WARNING,
+        "P1" => style::color(anstyle::AnsiColor::Yellow),
+        _ => style::DIM,
+    }
+}
+
+fn id_label(id: &str) -> String {
+    style::paint(style::ID, format!("#{}", short(id)))
+}
+
 pub fn item_detail(detail: &ItemDetail) -> String {
+    use style::{BOLD, DIM, PERSON, WARNING, paint};
+
     let summary = &detail.summary;
     let mut out = String::new();
     let _ = writeln!(
         out,
-        "#{}  {}  {}",
-        short(&summary.id),
-        summary.item_type,
-        summary.priority.as_deref().unwrap_or("")
+        "{} {} {}",
+        id_label(&summary.id),
+        paint(DIM, format!("({})", summary.item_type)),
+        paint(BOLD, &summary.title)
     );
-    let _ = writeln!(out, "{}", summary.title);
-    let _ = writeln!(out, "{}", effective_status(summary));
-    let _ = writeln!(
-        out,
-        "by {} · created {} · updated {}",
-        detail.author, detail.created, detail.updated
-    );
+
+    let mut status = vec![format!(
+        "{} {}",
+        paint(state_style(summary.category.as_deref()), "●"),
+        state_label(summary)
+    )];
+    if let Some(priority) = &summary.priority {
+        status.push(paint(priority_style(priority), priority));
+    }
+    if !summary.blocked_by.is_empty() {
+        status.push(format!(
+            "blocked by {}",
+            blockers(summary).replace('\n', ", ")
+        ));
+    }
+    let _ = writeln!(out, "  {}", status.join("  "));
+
     let mut attributes = Vec::new();
     if let Some(lane) = &detail.lane {
-        attributes.push(format!("lane: {lane}"));
+        attributes.push(paint(DIM, format!("lane:{lane}")));
     }
     if !detail.labels.is_empty() {
-        attributes.push(format!("labels: {}", detail.labels.join(", ")));
+        attributes.push(paint(DIM, format!("labels:{}", detail.labels.join(","))));
     }
     if !detail.requires.is_empty() {
-        attributes.push(format!("requires: {}", detail.requires.join(", ")));
+        attributes.push(paint(
+            DIM,
+            format!("requires:{}", detail.requires.join(",")),
+        ));
     }
-    if !attributes.is_empty() {
-        let _ = writeln!(out, "{}", attributes.join("  "));
-    }
+    attributes.push(paint(PERSON, &detail.author));
+    attributes.push(paint(
+        DIM,
+        format!("created {} · updated {}", detail.created, detail.updated),
+    ));
+    let _ = writeln!(out, "  {}", attributes.join("  "));
     for flag in &detail.flags {
-        let _ = writeln!(out, "! {flag}");
+        let _ = writeln!(out, "  {}", paint(WARNING, format!("! {flag}")));
     }
+
     let links = |label: &str, links: &[crate::view::LinkView], out: &mut String| {
         for link in links {
             let _ = writeln!(
                 out,
-                "{label}: #{} {} \"{}\" ({}){}",
-                short(&link.id),
-                link.item_type,
+                "  ↳ {label} {} {} \"{}\" ({}){}",
+                id_label(&link.id),
+                paint(DIM, &link.item_type),
                 link.title,
                 link.state.as_deref().unwrap_or("unknown"),
                 if link.ignored {
@@ -149,27 +199,35 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     for source in &detail.referenced_by {
         let _ = writeln!(
             out,
-            "referenced by: #{} \"{}\" ({})",
-            short(&source.item),
+            "  ↳ referenced by {} \"{}\" ({})",
+            id_label(&source.item),
             source.title,
             origin(&source.origin)
         );
     }
     if !detail.mentions.is_empty() {
-        let _ = writeln!(out, "mentions: {}", detail.mentions.join(" "));
+        let mentions: Vec<String> = detail
+            .mentions
+            .iter()
+            .map(|mention| paint(PERSON, mention))
+            .collect();
+        let _ = writeln!(out, "  ↳ mentions {}", mentions.join(" "));
     }
     if !detail.body.trim().is_empty() {
-        let _ = writeln!(out, "\n{}", detail.body.trim_end());
+        out.push('\n');
+        for line in detail.body.trim_end().lines() {
+            let _ = writeln!(out, "  {line}");
+        }
     }
     if !detail.notes.is_empty() {
-        let _ = writeln!(out, "\ndiscussion:");
+        let _ = writeln!(out, "\n{}", paint(BOLD, "discussion"));
         for note in &detail.notes {
             let _ = writeln!(
                 out,
-                "  {} {} ({}): {}",
-                note.at,
-                note.by,
-                note.kind,
+                "  {} {} {}: {}",
+                paint(DIM, &note.at),
+                paint(PERSON, &note.by),
+                paint(DIM, format!("({})", note.kind)),
                 note.text
                     .as_deref()
                     .unwrap_or("[text not in the local log]")

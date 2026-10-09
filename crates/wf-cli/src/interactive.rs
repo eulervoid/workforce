@@ -61,7 +61,7 @@ pub fn page(text: &str) -> anyhow::Result<()> {
     let fits = terminal_size::terminal_size()
         .is_none_or(|(_, height)| text.lines().count() < usize::from(height.0));
     if fits {
-        print!("{text}");
+        anstream::print!("{text}");
         return Ok(());
     }
     let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
@@ -74,7 +74,7 @@ pub fn page(text: &str) -> anyhow::Result<()> {
             .ok()
     });
     let Some(mut child) = child else {
-        print!("{text}");
+        anstream::print!("{text}");
         return Ok(());
     };
     if let Some(mut stdin) = child.stdin.take() {
