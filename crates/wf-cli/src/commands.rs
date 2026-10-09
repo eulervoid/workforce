@@ -10,7 +10,7 @@ use wf_core::event::{
 use wf_core::id::{HashId, ItemId};
 use wf_core::identity::{Actor, MemberSeed, Signed};
 use wf_core::item::ItemView;
-use wf_core::name::{AgentName, Handle, HarnessName, LaneName};
+use wf_core::name::{AgentName, Handle, HarnessName, LaneName, StateName};
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
 use wf_core::state::{State, Trust};
@@ -19,7 +19,7 @@ use wf_store::{EventStore, RedbStore, Replica};
 use crate::cli::*;
 use crate::draft::{Draft, NewItemDraft};
 use crate::harness;
-use crate::interactive::Mode;
+use crate::interactive::{self, Choice, Mode};
 use crate::keys::DataDir;
 use crate::render;
 use crate::view::{self, Envelope, ItemSummary, LogView, MentionsView};
@@ -240,6 +240,118 @@ fn workspace_device(workspace: &Workspace) -> anyhow::Result<wf_core::identity::
         .key())
 }
 
+fn sorted_views(state: &State, include_archived: bool) -> Vec<ItemView<'_>> {
+    let mut views: Vec<ItemView<'_>> = state
+        .items()
+        .filter(|view| include_archived || matches!(view, ItemView::Live(_)))
+        .collect();
+    views.sort_by_key(|view| match view {
+        ItemView::Live(item) => (
+            false,
+            item.priority().is_none(),
+            item.priority(),
+            item.created(),
+            item.id(),
+        ),
+        ItemView::Archived(stub) => (true, true, None, stub.archived_at(), stub.id()),
+    });
+    views
+}
+
+/// Which items a picker offers.
+#[derive(Clone, Copy)]
+enum Scope {
+    Live,
+    Archived,
+    Any,
+}
+
+impl Scope {
+    fn includes(self, view: &ItemView<'_>) -> bool {
+        match (self, view) {
+            (Scope::Any, _)
+            | (Scope::Live, ItemView::Live(_))
+            | (Scope::Archived, ItemView::Archived(_)) => true,
+            (Scope::Live, ItemView::Archived(_)) | (Scope::Archived, ItemView::Live(_)) => false,
+        }
+    }
+}
+
+fn item_choice(summary: &ItemSummary) -> Choice {
+    Choice {
+        value: summary.id.clone(),
+        label: format!(
+            "#{}  {:<8}  {:<12}  {:<2}  {}",
+            &summary.id[..wf_core::id::SHORT_ID_LEN],
+            summary.item_type,
+            summary.state.as_deref().unwrap_or("?"),
+            summary.priority.as_deref().unwrap_or(""),
+            summary.title
+        ),
+    }
+}
+
+fn pick_item(
+    workspace: &Workspace,
+    mode: Mode,
+    scope: Scope,
+    what: &str,
+) -> anyhow::Result<ItemId> {
+    if mode == Mode::Scripted {
+        bail!("missing {what}; pass an item id, or run at a terminal to pick one");
+    }
+    let state = workspace.state();
+    let graph = state.dependency_graph();
+    let choices = sorted_views(state, true)
+        .into_iter()
+        .filter(|view| scope.includes(view))
+        .map(|view| item_choice(&view::summary(state, &graph, view)))
+        .collect();
+    let picked = interactive::pick(what, choices)?;
+    workspace.resolve_item(&picked)
+}
+
+fn choose_item(
+    workspace: &Workspace,
+    mode: Mode,
+    given: Option<String>,
+    scope: Scope,
+) -> anyhow::Result<ItemId> {
+    match given {
+        Some(item) => workspace.resolve_item(&item),
+        None => pick_item(workspace, mode, scope, "item"),
+    }
+}
+
+fn choose_state(
+    workspace: &Workspace,
+    mode: Mode,
+    id: ItemId,
+    given: Option<StateName>,
+) -> anyhow::Result<StateName> {
+    if let Some(state) = given {
+        return Ok(state);
+    }
+    if mode == Mode::Scripted {
+        bail!("missing state; pass one, or run at a terminal to pick one");
+    }
+    let state = workspace.state();
+    let item_type = state.item(id).expect("resolved ids exist").item_type();
+    let policy = &state.policy().expect("a workforce has a policy").policy;
+    let config = policy
+        .type_config(item_type)
+        .ok_or_else(|| anyhow!("no item type `{item_type}` in the policy"))?;
+    let choices = config
+        .states
+        .iter()
+        .map(|state| Choice {
+            value: state.name.to_string(),
+            label: format!("{}  ({})", state.name, state.category),
+        })
+        .collect();
+    Ok(StateName::new(interactive::pick("state", choices)?)?)
+}
+
 fn item(
     json: bool,
     mode: Mode,
@@ -295,20 +407,7 @@ fn item(
         ItemCommand::List(args) => {
             let state = workspace.state();
             let graph = state.dependency_graph();
-            let mut views: Vec<ItemView<'_>> = state
-                .items()
-                .filter(|view| args.archived || matches!(view, ItemView::Live(_)))
-                .collect();
-            views.sort_by_key(|view| match view {
-                ItemView::Live(item) => (
-                    false,
-                    item.priority().is_none(),
-                    item.priority(),
-                    item.created(),
-                    item.id(),
-                ),
-                ItemView::Archived(stub) => (true, true, None, stub.archived_at(), stub.id()),
-            });
+            let views = sorted_views(state, args.archived);
             let items: Vec<ItemSummary> = views
                 .into_iter()
                 .map(|view| view::summary(state, &graph, view))
@@ -336,12 +435,13 @@ fn item(
             emit(json, &items, |items| render::item_list(items))
         }
         ItemCommand::Show { item, history } => {
-            let id = workspace.resolve_item(&item)?;
+            let id = choose_item(workspace, mode, item, Scope::Any)?;
             show(json, workspace, id, history)
         }
         ItemCommand::Edit(args) => edit(json, mode, workspace, args),
         ItemCommand::Move { item, state, note } => {
-            let id = workspace.resolve_item(&item)?;
+            let id = choose_item(workspace, mode, item, Scope::Live)?;
+            let state = choose_state(workspace, mode, id, state)?;
             let event = workspace.author(EventBody::ItemTransitioned(ItemTransitioned {
                 item: id,
                 to: state.clone(),
@@ -354,14 +454,14 @@ fn item(
                 Some(id),
             )
         }
-        ItemCommand::Link(args) => link(json, workspace, args),
+        ItemCommand::Link(args) => link(json, mode, workspace, args),
         ItemCommand::Archive { item } => {
-            let id = workspace.resolve_item(&item)?;
+            let id = choose_item(workspace, mode, item, Scope::Live)?;
             let event = workspace.author(EventBody::ItemArchived(ItemRef { item: id }))?;
             done(json, format!("archived #{}", id.short()), &event, Some(id))
         }
         ItemCommand::Unarchive { item } => {
-            let id = workspace.resolve_item(&item)?;
+            let id = choose_item(workspace, mode, item, Scope::Archived)?;
             let event = workspace.author(EventBody::ItemUnarchived(ItemRef { item: id }))?;
             done(
                 json,
@@ -474,7 +574,7 @@ fn edit(
     workspace: &mut Workspace,
     args: ItemEditArgs,
 ) -> anyhow::Result<()> {
-    let id = workspace.resolve_item(&args.item)?;
+    let id = choose_item(workspace, mode, args.item.clone(), Scope::Live)?;
     let changes = {
         let state = workspace.state();
         let ItemView::Live(item) = state.item(id).expect("resolved ids exist") else {
@@ -532,35 +632,93 @@ fn edit(
     done(json, format!("edited #{}", id.short()), &event, Some(id))
 }
 
-fn link(json: bool, workspace: &mut Workspace, args: ItemLinkArgs) -> anyhow::Result<()> {
-    let id = workspace.resolve_item(&args.item)?;
+fn link(
+    json: bool,
+    mode: Mode,
+    workspace: &mut Workspace,
+    args: ItemLinkArgs,
+) -> anyhow::Result<()> {
+    let id = choose_item(workspace, mode, args.item, Scope::Live)?;
     let (link, message) = if let Some(target) = args.depends_on {
-        let target = workspace.resolve_item(&target)?;
-        (
-            Link::DependsOn(SetChange::Add(target)),
-            format!("#{} now depends on #{}", id.short(), target.short()),
-        )
+        depends_on(id, workspace.resolve_item(&target)?)
     } else if let Some(target) = args.remove_depends_on {
-        let target = workspace.resolve_item(&target)?;
-        let removal = match workspace.state().item(id).expect("resolved ids exist") {
-            ItemView::Live(item) => item.depends_on().removal(&target),
-            ItemView::Archived(_) => bail!("#{} is archived; unarchive it first", id.short()),
-        };
-        (
-            Link::DependsOn(removal),
-            format!("#{} no longer depends on #{}", id.short(), target.short()),
-        )
+        remove_depends_on(workspace, id, workspace.resolve_item(&target)?)?
     } else if let Some(target) = args.supersedes {
-        let target = workspace.resolve_item(&target)?;
-        (
-            Link::Supersedes(target),
-            format!("#{} supersedes #{}", id.short(), target.short()),
-        )
+        supersedes(id, workspace.resolve_item(&target)?)
+    } else if mode == Mode::Scripted {
+        bail!("missing link; pass --depends-on, --remove-depends-on or --supersedes");
     } else {
-        unreachable!("clap requires one link flag")
+        let action = interactive::pick(
+            "link",
+            ["depends on", "no longer depends on", "supersedes"]
+                .into_iter()
+                .map(|label| Choice {
+                    value: label.to_string(),
+                    label: label.to_string(),
+                })
+                .collect(),
+        )?;
+        match action.as_str() {
+            "depends on" => {
+                let target = pick_item(workspace, mode, Scope::Live, "item to depend on")?;
+                depends_on(id, target)
+            }
+            "no longer depends on" => {
+                let target = pick_dependency(workspace, id)?;
+                remove_depends_on(workspace, id, target)?
+            }
+            _ => supersedes(
+                id,
+                pick_item(workspace, mode, Scope::Live, "item to supersede")?,
+            ),
+        }
     };
     let event = workspace.author(EventBody::ItemLinked(ItemLinked { item: id, link }))?;
     done(json, message, &event, Some(id))
+}
+
+fn depends_on(id: ItemId, target: ItemId) -> (Link, String) {
+    (
+        Link::DependsOn(SetChange::Add(target)),
+        format!("#{} now depends on #{}", id.short(), target.short()),
+    )
+}
+
+fn remove_depends_on(
+    workspace: &Workspace,
+    id: ItemId,
+    target: ItemId,
+) -> anyhow::Result<(Link, String)> {
+    let removal = match workspace.state().item(id).expect("resolved ids exist") {
+        ItemView::Live(item) => item.depends_on().removal(&target),
+        ItemView::Archived(_) => bail!("#{} is archived; unarchive it first", id.short()),
+    };
+    Ok((
+        Link::DependsOn(removal),
+        format!("#{} no longer depends on #{}", id.short(), target.short()),
+    ))
+}
+
+fn supersedes(id: ItemId, target: ItemId) -> (Link, String) {
+    (
+        Link::Supersedes(target),
+        format!("#{} supersedes #{}", id.short(), target.short()),
+    )
+}
+
+fn pick_dependency(workspace: &Workspace, id: ItemId) -> anyhow::Result<ItemId> {
+    let state = workspace.state();
+    let graph = state.dependency_graph();
+    let ItemView::Live(item) = state.item(id).expect("resolved ids exist") else {
+        bail!("#{} is archived; unarchive it first", id.short());
+    };
+    let choices = item
+        .depends_on()
+        .values()
+        .filter_map(|dependency| state.item(*dependency))
+        .map(|view| item_choice(&view::summary(state, &graph, view)))
+        .collect();
+    workspace.resolve_item(&interactive::pick("dependency", choices)?)
 }
 
 fn comment(
@@ -569,7 +727,7 @@ fn comment(
     workspace: &mut Workspace,
     args: CommentArgs,
 ) -> anyhow::Result<()> {
-    let id = workspace.resolve_item(&args.item)?;
+    let id = choose_item(workspace, mode, args.item, Scope::Any)?;
     let mut text = args.text.join(" ");
     if args.edit || (text.is_empty() && mode == Mode::Interactive) {
         text = edit_in_editor(&text, ".md")?;

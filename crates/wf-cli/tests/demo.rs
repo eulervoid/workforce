@@ -414,3 +414,32 @@ fn comments_need_text_or_the_editor() {
     let shown = wf.json(&["item", "show", short(&task)]);
     assert!(shown.to_string().contains("written in the editor"));
 }
+
+#[test]
+fn missing_items_and_states_are_errors_without_a_terminal() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    let task = wf.add(&["--title", "a task"]);
+    for args in [
+        &["item", "show"][..],
+        &["item", "edit"],
+        &["item", "move"],
+        &["item", "archive"],
+        &["item", "unarchive"],
+        &["item", "link", "--depends-on", short(&task)],
+        &["comment"],
+    ] {
+        assert!(
+            wf.fail(args).contains("missing item; pass an item id"),
+            "{args:?}"
+        );
+    }
+    assert!(
+        wf.fail(&["item", "move", short(&task)])
+            .contains("missing state")
+    );
+    assert!(
+        wf.fail(&["item", "link", short(&task)])
+            .contains("missing link")
+    );
+}

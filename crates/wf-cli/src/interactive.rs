@@ -22,3 +22,32 @@ impl Mode {
         }
     }
 }
+
+/// One line in a picker, standing for `value`.
+pub struct Choice {
+    pub value: String,
+    pub label: String,
+}
+
+impl std::fmt::Display for Choice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.label)
+    }
+}
+
+/// Fuzzy-pick one of `choices` and return its value.
+pub fn pick(what: &str, choices: Vec<Choice>) -> anyhow::Result<String> {
+    use nucleo_picker::error::PickError;
+    use nucleo_picker::{Picker, render::DisplayRenderer};
+
+    if choices.is_empty() {
+        anyhow::bail!("there is no {what} to pick from");
+    }
+    let mut picker = Picker::new(DisplayRenderer);
+    picker.push_batch(choices);
+    match picker.pick() {
+        Ok(Some(choice)) => Ok(choice.value.clone()),
+        Ok(None) | Err(PickError::UserInterrupted) => anyhow::bail!("no {what} picked"),
+        Err(error) => Err(error.into()),
+    }
+}

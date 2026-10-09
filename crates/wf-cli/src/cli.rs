@@ -51,7 +51,7 @@ pub enum Command {
 
 #[derive(Args)]
 pub struct CommentArgs {
-    pub item: String,
+    pub item: Option<String>,
     pub text: Vec<String>,
     /// Write the comment in `$VISUAL` or `$EDITOR`, starting from the text given.
     #[arg(long)]
@@ -109,7 +109,7 @@ pub enum ItemCommand {
     Add(ItemAddArgs),
     List(ItemListArgs),
     Show {
-        item: String,
+        item: Option<String>,
         /// Print every event behind the item, including edits that lost a concurrent write.
         #[arg(long)]
         history: bool,
@@ -118,17 +118,17 @@ pub enum ItemCommand {
     Ready,
     Edit(ItemEditArgs),
     Move {
-        item: String,
-        state: StateName,
+        item: Option<String>,
+        state: Option<StateName>,
         #[arg(long)]
         note: Option<String>,
     },
     Link(ItemLinkArgs),
     Archive {
-        item: String,
+        item: Option<String>,
     },
     Unarchive {
-        item: String,
+        item: Option<String>,
     },
 }
 
@@ -166,11 +166,11 @@ pub struct ItemListArgs {
     pub archived: bool,
 }
 
-/// Without any flag, opens the item as markdown with TOML front matter in `$VISUAL` or `$EDITOR`
+/// Without an item, picks one at a terminal. Without any flag, opens the item as markdown with TOML front matter in `$VISUAL` or `$EDITOR`
 /// when run at a terminal.
 #[derive(Args)]
 pub struct ItemEditArgs {
-    pub item: String,
+    pub item: Option<String>,
     /// Open the item in the editor after applying the flags given.
     #[arg(long)]
     pub edit: bool,
@@ -209,9 +209,9 @@ impl ItemEditArgs {
 }
 
 #[derive(Args)]
-#[command(group(ArgGroup::new("link").required(true).args(["depends_on", "remove_depends_on", "supersedes"])))]
+#[command(group(ArgGroup::new("link").args(["depends_on", "remove_depends_on", "supersedes"])))]
 pub struct ItemLinkArgs {
-    pub item: String,
+    pub item: Option<String>,
     #[arg(long)]
     pub depends_on: Option<String>,
     #[arg(long)]
