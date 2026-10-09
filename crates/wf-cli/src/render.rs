@@ -15,7 +15,7 @@ fn short(id: &str) -> &str {
 fn table(header: &[&str]) -> Table {
     let header: Vec<Cell> = header
         .iter()
-        .map(|title| Cell::new(title).add_attributes(vec![Attribute::Bold, Attribute::Underlined]))
+        .map(|title| Cell::new(title).add_attribute(Attribute::Bold))
         .collect();
     let mut table = Table::new();
     table
