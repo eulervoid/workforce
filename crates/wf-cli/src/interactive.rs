@@ -51,3 +51,30 @@ pub fn pick(what: &str, choices: Vec<Choice>) -> anyhow::Result<String> {
         Err(error) => Err(error.into()),
     }
 }
+
+/// Print `text` through `$PAGER` (`less -FRX` by default, which exits at once for short text).
+/// Falls back to plain printing if the pager cannot be started.
+pub fn page(text: &str) -> anyhow::Result<()> {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -FRX".to_string());
+    let mut words = pager.split_whitespace();
+    let child = words.next().and_then(|program| {
+        Command::new(program)
+            .args(words)
+            .stdin(Stdio::piped())
+            .spawn()
+            .ok()
+    });
+    let Some(mut child) = child else {
+        print!("{text}");
+        return Ok(());
+    };
+    if let Some(mut stdin) = child.stdin.take() {
+        // The reader quitting early closes the pipe; that is not an error.
+        let _ = stdin.write_all(text.as_bytes());
+    }
+    child.wait()?;
+    Ok(())
+}

@@ -34,6 +34,19 @@ fn emit<T: Serialize>(json: bool, data: &T, text: impl FnOnce(&T) -> String) -> 
     Ok(())
 }
 
+/// Like [`emit`], but long text goes through the pager when a person is at the terminal.
+fn emit_paged<T: Serialize>(
+    json: bool,
+    mode: Mode,
+    data: &T,
+    text: impl FnOnce(&T) -> String,
+) -> anyhow::Result<()> {
+    match mode {
+        Mode::Interactive => interactive::page(&text(data)),
+        Mode::Scripted => emit(json, data, text),
+    }
+}
+
 #[derive(Serialize)]
 pub struct Done {
     pub message: String,
@@ -75,7 +88,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Comment(args) => comment(json, mode, &mut workspace, args),
                 Command::Mentions { target } => mentions(json, &workspace, &target),
                 Command::Policy(command) => policy(json, command, &mut workspace),
-                Command::Log => log(json, &workspace),
+                Command::Log => log(json, mode, &workspace),
             }
         }
     }
@@ -436,7 +449,7 @@ fn item(
         }
         ItemCommand::Show { item, history } => {
             let id = choose_item(workspace, mode, item, Scope::Any)?;
-            show(json, workspace, id, history)
+            show(json, mode, workspace, id, history)
         }
         ItemCommand::Edit(args) => edit(json, mode, workspace, args),
         ItemCommand::Move { item, state, note } => {
@@ -492,7 +505,13 @@ enum Shown {
     Archived(ArchivedShown),
 }
 
-fn show(json: bool, workspace: &Workspace, id: ItemId, history: bool) -> anyhow::Result<()> {
+fn show(
+    json: bool,
+    mode: Mode,
+    workspace: &Workspace,
+    id: ItemId,
+    history: bool,
+) -> anyhow::Result<()> {
     let state = workspace.state();
     let store = workspace.replica.store();
     match state.item(id).expect("resolved ids exist") {
@@ -503,7 +522,7 @@ fn show(json: bool, workspace: &Workspace, id: ItemId, history: bool) -> anyhow:
                 archived_at: view::timestamp(stub.archived_at()),
                 note: "archived: body and discussion load from the log on demand; `wf item unarchive` restores the item",
             });
-            emit(json, &shown, |shown| match shown {
+            emit_paged(json, mode, &shown, |shown| match shown {
                 Shown::Archived(archived) => format!(
                     "{}archived {}\n{}\n",
                     render::item_list(std::slice::from_ref(&archived.summary)),
@@ -531,7 +550,7 @@ fn show(json: bool, workspace: &Workspace, id: ItemId, history: bool) -> anyhow:
                 detail: Box::new(detail),
                 history,
             };
-            emit(json, &shown, |shown| match shown {
+            emit_paged(json, mode, &shown, |shown| match shown {
                 Shown::Live { detail, history } => {
                     let mut out = render::item_detail(detail);
                     if let Some(history) = history {
@@ -827,7 +846,7 @@ fn apply_policy(json: bool, workspace: &mut Workspace, source: String) -> anyhow
     done(json, "policy replaced".to_string(), &event, None)
 }
 
-fn log(json: bool, workspace: &Workspace) -> anyhow::Result<()> {
+fn log(json: bool, mode: Mode, workspace: &Workspace) -> anyhow::Result<()> {
     let state = workspace.state();
     let events = workspace.replica.store().events()?;
     // Replay into an empty state with full verification: signatures, feeds and authority.
@@ -848,5 +867,5 @@ fn log(json: bool, workspace: &Workspace) -> anyhow::Result<()> {
             .unwrap_or_default(),
         events: views,
     };
-    emit(json, &log, render::log)
+    emit_paged(json, mode, &log, render::log)
 }
