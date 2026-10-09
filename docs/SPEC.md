@@ -207,7 +207,7 @@ struct Event {
 // EventId = blake3(canonical encoding of everything incl. sig)
 ```
 
-* **Encoding:** canonical postcard (deterministic, compact). Signature covers the encoding without `sig`.
+* **Encoding:** canonical postcard (deterministic, compact). Signature covers the encoding without `sig`. See *Encoding and data format* below for the decision and the exact layout.
 * **Sync:** exchange version vectors `{author -> max_seq}`, stream missing ranges.
 * **Equivocation:** two events with the same `(author, seq)` are proof of misbehavior. v1 records and
   surfaces it; it has no automatic effect.
@@ -223,6 +223,120 @@ struct Event {
 | Work | `SessionStarted`, `SessionEnded`, `Assigned`, `Claim`, `Heartbeat`, `Progress`, `Review`, `Merged` | device (`Assigned` by the anchor) |
 
 Decisions and questions are item types, not separate event families.
+
+### Encoding and data format
+
+#### Decision: postcard
+Event ids are the hash of the encoded event and signatures cover the encoded content, so the encoding
+must give one value exactly one byte string, stay stable across releases, and be cheap to decode (a
+snapshot of 100k events decodes in about 40 ms). We use **postcard** 1.x (a serde binary format with a
+documented wire format).
+
+| Alternative | Why not (for now) |
+|---|---|
+| Deterministic CBOR / DAG-CBOR | The strongest alternative: a standard, self-describing format with implementations in every language, and what AT Protocol (Bluesky) uses for content-addressed, signed repository data. Larger and slower to decode, and determinism needs a strict profile. Choose it if non-Rust clients or third-party readers of the log appear. |
+| bincode | Similar speed, but uncertain maintenance and a wire format that changed between major versions. |
+| Protobuf, Cap'n Proto | Not canonical by default; adds a schema toolchain and code generation for a Rust-only system. |
+| JSON | Not canonical without extra rules (JCS), bulky, needs base64 for hashes and keys. Used only for `--json` output. |
+
+Consequences, accepted:
+* Postcard is not self-describing and struct field order is part of the format. Any layout change
+  changes every event id, so layout is pinned by golden tests and changes go through the envelope
+  version `v`.
+* Because a decoder cannot skip a variant it does not know, event bodies are wrapped as
+  `(tag, payload)` (below), which is what lets peers relay bodies from newer versions.
+* The decoder rejects trailing bytes but does not require minimal varints. Ids are always recomputed by
+  re-encoding the decoded value, never taken from received bytes, so this is harmless today. A relay
+  that trusts received bytes would need a stricter decoder.
+* All encoding lives in one module (`wf-core::encoding`), so replacing the format is a contained
+  change, but it must happen before sync ships (M1): it changes every event id.
+
+#### Primitives
+| Type | Encoding |
+|---|---|
+| integers | postcard varints (`u16`, `u32`, `u64`); `seq` and `Hlc` fields included |
+| strings, byte strings | varint length, then bytes |
+| `Option<T>` | one byte `0` or `1`, then `T` |
+| enums | varint variant index, then fields. Variant order is part of the format: append only |
+| `Vec<T>`, `BTreeMap`, `BTreeSet` | varint length, then elements; maps and sets in key order. Hash maps are never serialized |
+| ids (`EventId`, `WorkforceId`, `ItemId`, `SessionId`) | 32-byte BLAKE3 hash, written as a length-prefixed byte string (`0x20` + 32 bytes). Shown as lowercase base32 without padding |
+| `PrincipalKey`, `DeviceKey` | 32 raw bytes, length-prefixed, kept as bytes without validating the curve point on decode. A key that is not a point never verifies a signature |
+| `Signature` | 64 raw bytes, **no** length prefix (ed25519, deterministic) |
+| names (`Handle`, `AgentName`, `TypeName`, `StateName`, `LaneName`, `HarnessName`, `Label`, `Requirement`) | strings, validated on decode: lowercase `a-z 0-9 - _` (labels and requirements also allow `:` and `.`), starting with a letter or digit, at most 64 characters |
+| `Hlc` | `wall_ms: u64`, `counter: u32` |
+| `Priority` | enum `P0..P3` |
+
+Human-readable formats (`--json`) write ids, keys and names as strings instead.
+
+#### Event
+```
+Event        = EventContent, sig: Signature
+EventContent = v: u16 (currently 1)
+               workforce: Option<WorkforceId>     // None only in genesis
+               author: DeviceKey
+               actor: Actor                       // Human(PrincipalKey) | Agent{agent: AgentId, session: SessionId}
+               seq: u64                           // per author, from 1
+               prev: Option<EventId>              // None exactly when seq == 1
+               deps: Vec<EventId>                 // sorted, deduplicated
+               hlc: Hlc
+               body: EventBody
+AgentId      = principal: PrincipalKey, name: AgentName
+EventBody    = tag: u16, payload: bytes           // payload = postcard of the body struct for that tag
+```
+* **Event id** = BLAKE3 of the encoded `Event` (signature included). The **workforce id** is the id of
+  the genesis event.
+* **Device signature** covers `b"wf/event/1\0"` followed by the encoded `EventContent`.
+* **Principal signature** (inside authority bodies) covers `b"wf/authority/1\0"` followed by the encoding
+  of `(workforce: Option<WorkforceId>, statement)`. The workforce is `None` only for genesis, so a
+  statement cannot be replayed into another workforce. The two domain prefixes keep a device signature
+  from ever being valid as a principal signature, and the key types are distinct in code for the same
+  reason.
+* `hlc` of an event is greater than the `hlc` of its `prev` and every dep. The fold orders concurrent
+  writes by `(hlc, event id)`, which therefore extends causal order.
+
+#### Body tags
+Tags are explicit and never reused. An unknown tag decodes to `Unknown{tag, payload}`, is stored and
+relayed unchanged, and is ignored by the fold. A known tag with an undecodable payload makes the whole
+event invalid.
+
+| Tag | Body | Payload |
+|---|---|---|
+| 1 | `Genesis` | `Signed<Genesis>`: `name`, `founder: MemberSeed`, `members: Vec<MemberSeed>`, `policy` (TOML text), `forked_from: Option<ForkPoint>` |
+| 2 | `PolicySet` | `Signed<PolicySet>`: `policy` (TOML text, stored verbatim) |
+| 3 | `AgentDefined` | `name`, `harness`, `model: Option<String>`, `capabilities`, `lanes` |
+| 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires` |
+| 11 | `ItemEdited` | `item`, `changes: Vec<Change>` (`Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires`) |
+| 12 | `ItemTransitioned` | `item`, `to`, `note: Option<String>` |
+| 13 | `ItemLinked` | `item`, `link`: `DependsOn(SetChange<ItemId>)` or `Supersedes(ItemId)` |
+| 14 | `ItemArchived` | `item` |
+| 15 | `ItemUnarchived` | `item` |
+| 16 | `Comment` | `item`, `body` |
+
+* `Signed<T>` = `statement: T`, `signer: PrincipalKey`, `signature: Signature`.
+* `MemberSeed` = `principal`, `handle`, `devices: Vec<DeviceKey>`. The founder is `owner`; seeded
+  members are `member`.
+* `SetChange<T>` = `Add(T)` or `Remove{value: T, observed: Vec<EventId>}`. A removal lists the add events
+  its author had seen, so a concurrent add survives it (add wins) without any ancestry index.
+* An item id is the id of its `ItemCreated` event. Policy and `Genesis` carry TOML text, not a parsed
+  structure, so the stored policy is exactly what the owner wrote.
+* Bodies for later milestones (`SessionStarted`, `Heartbeat`, `Progress`, ...) take new tags.
+
+#### Local storage (redb)
+One file per workforce at `$XDG_DATA_HOME/workforce/<workforce id>/store.redb`. Values are the postcard
+encodings above; redb itself stores bytes.
+
+| Table | Key | Value |
+|---|---|---|
+| `events` | event id (32 bytes) | encoded `Event` |
+| `feeds` | `(author, seq)` | event id. Appends must be gapless per author |
+| `heads` | author | `(seq, event id)` of the latest event |
+| `pending` | event id | encoded `Event` still waiting for parents |
+| `snapshots` | BLAKE3 of the covered heads | encoded `(covered heads, blob)` |
+| `meta` | `latest_snapshot` | key of the current snapshot |
+
+A snapshot blob is `(format: u32, ref parser version: u16, State)`. It is a cache: any mismatch of
+format or parser version, or a snapshot that is ahead of the log, discards it and the state is refolded
+from `events`. Appends and the snapshot that covers them commit in one transaction.
 
 Principal-signed statements are wrapped in an ordinary device-feed event, so every feed stays gapless
 and a principal key never needs its own sequence across machines.
