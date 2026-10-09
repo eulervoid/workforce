@@ -93,6 +93,8 @@ pub struct ItemSummary {
     /// `None` when the state is unknown under the current policy.
     pub category: Option<String>,
     pub priority: Option<String>,
+    /// The priority, or the default of types that have priorities while none is set.
+    pub effective_priority: Option<String>,
     pub ready: bool,
     pub blocked_by: Vec<BlockerView>,
     pub archived: bool,
@@ -123,9 +125,11 @@ fn blocker_view(state: &State, blocker: &Blocker) -> BlockerView {
 pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> ItemSummary {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let (state_name, category) = standing_parts(view.standing(policy));
-    let (priority, ready, blocked_by, archived) = match view {
+    let (priority, effective_priority, ready, blocked_by, archived) = match view {
         ItemView::Live(item) => (
             item.priority().map(|priority| priority.to_string()),
+            item.effective_priority(policy)
+                .map(|priority| priority.to_string()),
             state.is_ready(graph, item),
             state
                 .blockers(graph, item.id())
@@ -134,7 +138,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
                 .collect(),
             false,
         ),
-        ItemView::Archived(_) => (None, false, Vec::new(), true),
+        ItemView::Archived(_) => (None, None, false, Vec::new(), true),
     };
     ItemSummary {
         id: view.id().to_base32(),
@@ -143,6 +147,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
         state: state_name,
         category,
         priority,
+        effective_priority,
         ready,
         blocked_by,
         archived,
@@ -210,8 +215,6 @@ pub struct NoteView {
 pub struct ItemDetail {
     #[serde(flatten)]
     pub summary: ItemSummary,
-    /// The priority, or the default of types that have priorities while none is set.
-    pub effective_priority: Option<String>,
     pub body: String,
     pub author: String,
     pub created: String,
@@ -295,9 +298,6 @@ pub fn item_detail(
 
     ItemDetail {
         summary: summary(state, &graph, ItemView::Live(item)),
-        effective_priority: item
-            .effective_priority(policy)
-            .map(|priority| priority.to_string()),
         body: item.body().text().to_string(),
         author: actor_label(state, item.author()),
         created: timestamp(item.created()),

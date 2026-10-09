@@ -70,7 +70,9 @@ pub fn item_list(items: &[ItemSummary]) -> String {
         table.add_row([
             format!("#{}", short(&item.id)),
             item.item_type.clone(),
-            item.priority.clone().unwrap_or_else(|| "-".to_string()),
+            item.effective_priority
+                .clone()
+                .unwrap_or_else(|| "-".to_string()),
             item.title.clone(),
             state_label(item),
             blockers(item),
@@ -176,7 +178,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     );
 
     let mut status = Vec::new();
-    if let Some(priority) = &detail.effective_priority {
+    if let Some(priority) = &summary.effective_priority {
         status.push(paint(priority_style(priority), priority));
     }
     if let Some(lane) = &detail.lane {

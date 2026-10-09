@@ -133,20 +133,20 @@ impl State {
             && self.blockers(graph, item.id()).is_empty()
     }
 
-    /// Ready items, most urgent first, oldest first within a priority.
+    /// Ready items, most urgent first, oldest first within a priority. Items without a priority,
+    /// because their type has none, come last.
     pub fn ready_items(&self) -> Vec<&Item> {
+        let Some(policy) = self.policy().map(|document| &document.policy) else {
+            return Vec::new();
+        };
         let graph = self.dependency_graph();
         let mut ready: Vec<&Item> = self
             .live_items()
             .filter(|item| self.is_ready(&graph, item))
             .collect();
         ready.sort_by_key(|item| {
-            (
-                item.priority().is_none(),
-                item.priority(),
-                item.created(),
-                item.id(),
-            )
+            let priority = item.effective_priority(policy);
+            (priority.is_none(), priority, item.created(), item.id())
         });
         ready
     }

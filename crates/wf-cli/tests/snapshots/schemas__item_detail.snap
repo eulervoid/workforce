@@ -11,6 +11,7 @@ expression: "Envelope::new(&detail)"
     "state": "open",
     "category": "open",
     "priority": "P1",
+    "effective_priority": "P1",
     "ready": false,
     "blocked_by": [
       {
@@ -22,7 +23,6 @@ expression: "Envelope::new(&detail)"
       }
     ],
     "archived": false,
-    "effective_priority": "P1",
     "body": "blocked on #q34xob, ask @coder",
     "author": "@joshua",
     "created": "1970-01-01T00:00:05Z",

@@ -484,6 +484,27 @@ Types the code relies on. Shipped in the default policy, names reserved, states 
 
 Custom types (`bug`, `doc`, `spike`, ...) are fully configurable.
 
+### Priority
+`priority` orders work; it is a field only of types that list it in `fields`. By default that is `task`
+and `question`. A decision records an outcome and `distill` is housekeeping, so ordering them means
+nothing. A custom type opts in with `fields = ["priority", ...]`.
+
+| Level | Meaning |
+|---|---|
+| `P0` | Drop everything: it blocks the team, or something is broken. Picked first. |
+| `P1` | Important; do it this cycle. |
+| `P2` | Normal. The default. |
+| `P3` | Nice to have; when nothing else is waiting. |
+
+* **Effective priority** is the item's own priority, else `P2` if its type has priorities, else none.
+  Stored events keep what the author set (`null` after clearing); readers use the effective priority for
+  display (`effective_priority` in `--json`, next to the raw `priority`) and for ordering.
+* **Ordering** of `item list` and `item ready`: effective priority (`P0` first), items of types without
+  priorities last, then oldest first, then id.
+* **Not decided:** letting an item inherit the highest priority of the items it blocks, so `ready` puts what
+  unblocks urgent work first. It would make the order depend on the dependency graph; if added, it should
+  be shown separately from the item's own priority.
+
 ### Relations
 Relations that change behaviour are explicit events. Informational ones are derived from text.
 

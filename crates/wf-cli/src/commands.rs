@@ -254,18 +254,22 @@ fn workspace_device(workspace: &Workspace) -> anyhow::Result<wf_core::identity::
 }
 
 fn sorted_views(state: &State, include_archived: bool) -> Vec<ItemView<'_>> {
+    let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut views: Vec<ItemView<'_>> = state
         .items()
         .filter(|view| include_archived || matches!(view, ItemView::Live(_)))
         .collect();
     views.sort_by_key(|view| match view {
-        ItemView::Live(item) => (
-            false,
-            item.priority().is_none(),
-            item.priority(),
-            item.created(),
-            item.id(),
-        ),
+        ItemView::Live(item) => {
+            let priority = item.effective_priority(policy);
+            (
+                false,
+                priority.is_none(),
+                priority,
+                item.created(),
+                item.id(),
+            )
+        }
         ItemView::Archived(stub) => (true, true, None, stub.archived_at(), stub.id()),
     });
     views
@@ -298,7 +302,7 @@ fn item_choice(summary: &ItemSummary) -> Choice {
             &summary.id[..wf_core::id::SHORT_ID_LEN],
             summary.item_type,
             summary.state.as_deref().unwrap_or("?"),
-            summary.priority.as_deref().unwrap_or(""),
+            summary.effective_priority.as_deref().unwrap_or(""),
             summary.title
         ),
     }
@@ -502,7 +506,7 @@ enum Shown {
         detail: Box<view::ItemDetail>,
         history: Option<Vec<view::EventView>>,
     },
-    Archived(ArchivedShown),
+    Archived(Box<ArchivedShown>),
 }
 
 fn show(
@@ -517,11 +521,11 @@ fn show(
     match state.item(id).expect("resolved ids exist") {
         ItemView::Archived(stub) => {
             let graph = state.dependency_graph();
-            let shown = Shown::Archived(ArchivedShown {
+            let shown = Shown::Archived(Box::new(ArchivedShown {
                 summary: view::summary(state, &graph, ItemView::Archived(stub)),
                 archived_at: view::timestamp(stub.archived_at()),
                 note: "archived: body and discussion load from the log on demand; `wf item unarchive` restores the item",
-            });
+            }));
             emit_paged(json, mode, &shown, |shown| match shown {
                 Shown::Archived(archived) => format!(
                     "{}archived {}\n{}\n",

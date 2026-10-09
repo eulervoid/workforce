@@ -12,6 +12,7 @@ expression: "Envelope::new(&all)"
       "state": "open",
       "category": "open",
       "priority": "P1",
+      "effective_priority": "P1",
       "ready": false,
       "blocked_by": [
         {
@@ -31,6 +32,7 @@ expression: "Envelope::new(&all)"
       "state": "open",
       "category": "open",
       "priority": null,
+      "effective_priority": "P2",
       "ready": true,
       "blocked_by": [],
       "archived": false
@@ -42,6 +44,7 @@ expression: "Envelope::new(&all)"
       "state": "done",
       "category": "done",
       "priority": null,
+      "effective_priority": null,
       "ready": false,
       "blocked_by": [],
       "archived": true
