@@ -298,7 +298,7 @@ fn a_forked_feed_is_admitted_on_both_branches_and_flagged() {
         vec![(author, first.content.seq)]
     );
     assert_eq!(state.feeds()[&author].tips().count(), 2);
-    assert_eq!(state.version_vector()[&author], first.content.seq);
+    assert_eq!(state.versions()[&author].max_seq, first.content.seq);
 
     // Receiving the same events in the other order flags the same seq.
     let mut other = fixture.state();

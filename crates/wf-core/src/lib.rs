@@ -14,6 +14,7 @@ pub mod policy;
 pub mod refs;
 pub mod resolve;
 pub mod state;
+pub mod sync;
 pub mod validate;
 
 #[cfg(any(test, feature = "testing"))]

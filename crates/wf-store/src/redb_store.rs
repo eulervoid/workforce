@@ -54,6 +54,15 @@ impl RedbStore {
         Err(StoreError::Locked)
     }
 
+    /// A store that lives and dies with the process, for tests and simulations.
+    pub fn in_memory() -> Result<Self, StoreError> {
+        let database =
+            Database::builder().create_with_backend(redb::backends::InMemoryBackend::new())?;
+        let store = Self { database };
+        store.create_tables()?;
+        Ok(store)
+    }
+
     fn create_tables(&self) -> Result<(), StoreError> {
         let transaction = self.database.begin_write()?;
         transaction.open_table(EVENTS)?;

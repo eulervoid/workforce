@@ -12,6 +12,7 @@ use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
 use crate::item::{Item, ItemView};
 use crate::name::{AgentName, Handle, HarnessName, LaneName, Requirement};
 use crate::policy::Policy;
+use crate::sync::{FeedVersion, Versions};
 use crate::validate::Invalid;
 
 /// Events that wait for missing parents are capped so a malformed `deps` cannot grow memory forever.
@@ -263,11 +264,19 @@ impl State {
         &self.feeds
     }
 
-    /// The highest `seq` seen from each author: what a peer needs to know to send the rest.
-    pub fn version_vector(&self) -> BTreeMap<DeviceKey, u64> {
+    /// What is known of each author's feed: what a peer needs to know to send the rest.
+    pub fn versions(&self) -> Versions {
         self.feeds
             .iter()
-            .map(|(author, feed)| (*author, feed.max_seq()))
+            .map(|(author, feed)| {
+                (
+                    *author,
+                    FeedVersion {
+                        max_seq: feed.max_seq(),
+                        tips: feed.tips().copied().collect(),
+                    },
+                )
+            })
             .collect()
     }
 

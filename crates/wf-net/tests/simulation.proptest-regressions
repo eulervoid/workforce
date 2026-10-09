@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 8dc3aaa23e06ebb3df379fa6276682597ff9bbae689d79aff70e9c921a27fc48 # shrinks to peers = 3, operations = [Write { peer: 0, kind: 0, choice: 0 }, Write { peer: 0, kind: 0, choice: 0 }, Write { peer: 3, kind: 0, choice: 0 }, Leak { from: 3, to: 1, seed: 0 }, Restore { peer: 3 }]

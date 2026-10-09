@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 [workspace.dependencies]
 wf-core = { path = "crates/wf-core" }
 wf-store = { path = "crates/wf-store" }
+wf-net = { path = "crates/wf-net" }
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
@@ -25,5 +26,6 @@ serde_json = "1"
 tempfile = "3"
 thiserror = "2"
 toml = "0.9"
+tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread", "sync", "time", "net"] }
 data-encoding = "2"
 humantime = "2"
