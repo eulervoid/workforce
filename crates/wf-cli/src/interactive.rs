@@ -35,30 +35,37 @@ impl std::fmt::Display for Choice {
     }
 }
 
-/// Fuzzy-pick one of `choices` and return its value.
+/// Fuzzy-pick one of `choices` inline, below the prompt, and return its value.
 pub fn pick(what: &str, choices: Vec<Choice>) -> anyhow::Result<String> {
-    use nucleo_picker::error::PickError;
-    use nucleo_picker::{Picker, render::DisplayRenderer};
+    use dialoguer::FuzzySelect;
 
     if choices.is_empty() {
         anyhow::bail!("there is no {what} to pick from");
     }
-    let mut picker = Picker::new(DisplayRenderer);
-    picker.push_batch(choices);
-    match picker.pick() {
-        Ok(Some(choice)) => Ok(choice.value.clone()),
-        Ok(None) | Err(PickError::UserInterrupted) => anyhow::bail!("no {what} picked"),
-        Err(error) => Err(error.into()),
+    let picked = FuzzySelect::new()
+        .with_prompt(format!("Pick {what}"))
+        .items(&choices)
+        .max_length(12)
+        .interact_opt()?;
+    match picked {
+        Some(index) => Ok(choices[index].value.clone()),
+        None => anyhow::bail!("no {what} picked"),
     }
 }
 
-/// Print `text` through `$PAGER` (`less -FRX` by default, which exits at once for short text).
-/// Falls back to plain printing if the pager cannot be started.
+/// Print `text` through `$PAGER` (`less -R` by default) if it is taller than the terminal,
+/// otherwise print it directly. Also prints directly if the pager cannot be started.
 pub fn page(text: &str) -> anyhow::Result<()> {
     use std::io::Write;
     use std::process::{Command, Stdio};
 
-    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -FRX".to_string());
+    let fits = terminal_size::terminal_size()
+        .is_none_or(|(_, height)| text.lines().count() < usize::from(height.0));
+    if fits {
+        print!("{text}");
+        return Ok(());
+    }
+    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
     let mut words = pager.split_whitespace();
     let child = words.next().and_then(|program| {
         Command::new(program)
