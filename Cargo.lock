@@ -1475,11 +1475,13 @@ name = "wf-core"
 version = "0.0.0"
 dependencies = [
  "blake3",
+ "data-encoding",
  "iroh-base",
  "postcard",
  "proptest",
  "pulldown-cmark",
  "serde",
+ "serde_json",
  "thiserror",
  "toml",
 ]
