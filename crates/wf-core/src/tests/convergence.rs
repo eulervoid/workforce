@@ -117,8 +117,7 @@ impl Simulation {
                 edit(item, Change::Body(format!("body {second} @coder"))),
             ),
             (4, Some(item)) => {
-                let priority =
-                    [None, Some(Priority::P0), Some(Priority::P2)][usize::from(second) % 3];
+                let priority = Some([Priority::P0, Priority::P2][usize::from(second) % 2]);
                 self.submit(device, edit(item, Change::Priority(priority)));
             }
             (5, Some(item)) => {

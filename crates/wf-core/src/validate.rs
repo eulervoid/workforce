@@ -100,6 +100,8 @@ pub enum PolicyViolation {
     },
     #[error("type `{type_name}` does not have the `{field:?}` field")]
     FieldNotAllowed { type_name: TypeName, field: Field },
+    #[error("a `{type_name}` needs a priority")]
+    PriorityRequired { type_name: TypeName },
     #[error("a `{type_name}` cannot depend on a `{target}`")]
     DependencyNotAllowed {
         type_name: TypeName,
@@ -438,8 +440,14 @@ impl State {
             EventBody::ItemCreated(created) => {
                 let type_name = &created.item_type;
                 type_of(type_name)?;
-                if created.priority.is_some() {
-                    require_field(type_name, Field::Priority)?;
+                match created.priority {
+                    Some(_) => require_field(type_name, Field::Priority)?,
+                    None if type_of(type_name)?.allows_field(Field::Priority) => {
+                        return Err(PolicyViolation::PriorityRequired {
+                            type_name: type_name.clone(),
+                        });
+                    }
+                    None => {}
                 }
                 if !created.labels.is_empty() {
                     require_field(type_name, Field::Labels)?;
@@ -453,7 +461,14 @@ impl State {
                 let type_name = item_of(&edited.item)?.item_type();
                 for change in &edited.changes {
                     match change {
-                        Change::Title(_) | Change::Body(_) | Change::Priority(None) => {}
+                        Change::Title(_) | Change::Body(_) => {}
+                        Change::Priority(None) => {
+                            if type_of(type_name)?.allows_field(Field::Priority) {
+                                return Err(PolicyViolation::PriorityRequired {
+                                    type_name: type_name.clone(),
+                                });
+                            }
+                        }
                         Change::Priority(Some(_)) => require_field(type_name, Field::Priority)?,
                         Change::Lane(lane) => lane.iter().try_for_each(known_lane)?,
                         Change::Labels(_) => require_field(type_name, Field::Labels)?,

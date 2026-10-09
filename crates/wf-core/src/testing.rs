@@ -7,6 +7,7 @@ use crate::event::{
 };
 use crate::id::{ItemId, WorkforceId};
 use crate::identity::{Actor, DeviceSigner, MemberSeed, PrincipalSigner, Signed};
+use crate::item::Priority;
 use crate::name::{AgentName, Handle, HarnessName, StateName, TypeName};
 use crate::policy::DEFAULT_POLICY_TOML;
 use crate::state::{State, Trust};
@@ -119,7 +120,7 @@ pub fn create(item_type: &str, title: &str) -> EventBody {
         item_type: TypeName::new(item_type).unwrap(),
         title: title.into(),
         body: String::new(),
-        priority: None,
+        priority: matches!(item_type, "task" | "question").then_some(Priority::DEFAULT),
         lane: None,
         labels: vec![],
         requires: vec![],

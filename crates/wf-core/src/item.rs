@@ -14,7 +14,7 @@ pub enum Priority {
 }
 
 impl Priority {
-    /// What an item of a type that has priorities counts as while none is set.
+    /// What `wf item add` gives an item of a type that has priorities when none is asked for.
     pub const DEFAULT: Priority = Priority::P2;
 }
 
@@ -54,7 +54,7 @@ use crate::hlc::Hlc;
 use crate::id::{EventId, ItemId};
 use crate::identity::Actor;
 use crate::name::{Label, LaneName, Requirement, StateName, TypeName};
-use crate::policy::{Category, Field, Policy};
+use crate::policy::{Category, Policy};
 use crate::refs::{self, Token};
 
 /// Markdown text together with the tokens parsed from it.
@@ -213,17 +213,6 @@ impl Item {
                 .type_config(&self.item_type)
                 .map(|config| &config.lane)
         })
-    }
-
-    /// The priority shown for the item: its own, else the default if its type has priorities.
-    pub fn effective_priority(&self, policy: &Policy) -> Option<Priority> {
-        let has_priorities = policy
-            .type_config(&self.item_type)
-            .is_some_and(|config| config.allows_field(Field::Priority));
-        match self.priority() {
-            None if has_priorities => Some(Priority::DEFAULT),
-            explicit => explicit,
-        }
     }
 
     pub fn standing<'a>(&'a self, policy: &'a Policy) -> Standing<'a> {

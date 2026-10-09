@@ -258,6 +258,38 @@ fn author_checks_follow_the_policy() {
 }
 
 #[test]
+fn types_with_priorities_need_one() {
+    use crate::event::EventBody;
+    use crate::validate::PolicyViolation;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
+    let EventBody::ItemCreated(mut created) = create("task", "b") else {
+        unreachable!()
+    };
+    created.priority = None;
+    assert!(matches!(
+        state.check_policy(&EventBody::ItemCreated(created)),
+        Err(PolicyViolation::PriorityRequired { .. })
+    ));
+    assert!(matches!(
+        state.check_policy(&edit(task, Change::Priority(None))),
+        Err(PolicyViolation::PriorityRequired { .. })
+    ));
+    assert_eq!(
+        state.check_policy(&edit(
+            task,
+            Change::Priority(Some(crate::item::Priority::P0))
+        )),
+        Ok(())
+    );
+    assert_eq!(
+        state.check_policy(&create("decision", "no priority")),
+        Ok(())
+    );
+}
+
+#[test]
 fn a_local_dependency_cycle_is_refused() {
     use crate::validate::PolicyViolation;
     let fixture = Fixture::new(1);
