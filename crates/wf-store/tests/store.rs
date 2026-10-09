@@ -1,6 +1,6 @@
 use tempfile::TempDir;
 use wf_core::event::{Event, EventBody};
-use wf_core::id::{EventId, ItemId};
+use wf_core::id::EventId;
 use wf_core::state::{Disposition, State, Trust};
 use wf_core::testing::*;
 use wf_store::{
