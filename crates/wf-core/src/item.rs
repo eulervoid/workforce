@@ -41,3 +41,309 @@ impl FromStr for Priority {
         }
     }
 }
+
+use std::collections::{BTreeMap, BTreeSet};
+
+use crate::crdt::{AddWinsSet, Lww, Stamp};
+use crate::hlc::Hlc;
+use crate::id::{EventId, ItemId};
+use crate::identity::Actor;
+use crate::name::{Label, LaneName, Requirement, StateName, TypeName};
+use crate::policy::{Category, Policy};
+use crate::refs::{self, Token};
+
+/// Markdown text together with the tokens parsed from it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Markdown {
+    text: String,
+    tokens: BTreeSet<Token>,
+}
+
+impl Markdown {
+    pub fn new(text: String) -> Self {
+        let tokens = refs::parse(&text);
+        Self { text, tokens }
+    }
+
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    pub fn tokens(&self) -> &BTreeSet<Token> {
+        &self.tokens
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NoteKind {
+    Comment,
+    /// The note attached to a state transition.
+    Transition,
+}
+
+/// What the fold keeps of a comment or transition note. The text itself stays in the log and is
+/// loaded on demand by event id; the fold keeps who wrote it and the tokens found in it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Note {
+    pub kind: NoteKind,
+    pub by: Actor,
+    pub at: Hlc,
+    pub tokens: BTreeSet<Token>,
+}
+
+/// Where a reference or mention was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Origin {
+    Body,
+    Note(EventId),
+}
+
+/// The effective state of an item under the current policy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Standing<'a> {
+    Known {
+        state: &'a StateName,
+        category: Category,
+    },
+    /// The item type or state was removed from the policy. The item keeps its state until moved.
+    Unknown { state: Option<&'a StateName> },
+}
+
+impl Standing<'_> {
+    pub fn category(&self) -> Option<Category> {
+        match self {
+            Standing::Known { category, .. } => Some(*category),
+            Standing::Unknown { .. } => None,
+        }
+    }
+}
+
+/// A folded item. Registers merge by [`Stamp`], sets are add-wins; see `crdt`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Item {
+    pub(crate) id: ItemId,
+    pub(crate) item_type: TypeName,
+    pub(crate) author: Actor,
+    pub(crate) created: Hlc,
+    pub(crate) updated: Hlc,
+    pub(crate) title: Lww<String>,
+    pub(crate) body: Lww<Markdown>,
+    /// `None` until the first transition: the type's initial state under the current policy.
+    pub(crate) state: Lww<Option<StateName>>,
+    pub(crate) priority: Lww<Option<Priority>>,
+    pub(crate) lane: Lww<Option<LaneName>>,
+    pub(crate) labels: AddWinsSet<Label>,
+    pub(crate) requires: AddWinsSet<Requirement>,
+    pub(crate) depends_on: AddWinsSet<ItemId>,
+    pub(crate) supersedes: Lww<Option<ItemId>>,
+    pub(crate) archived: Lww<Option<Hlc>>,
+    pub(crate) notes: BTreeMap<EventId, Note>,
+}
+
+impl Item {
+    pub fn id(&self) -> ItemId {
+        self.id
+    }
+
+    pub fn item_type(&self) -> &TypeName {
+        &self.item_type
+    }
+
+    pub fn author(&self) -> &Actor {
+        &self.author
+    }
+
+    pub fn created(&self) -> Hlc {
+        self.created
+    }
+
+    pub fn updated(&self) -> Hlc {
+        self.updated
+    }
+
+    pub fn title(&self) -> &str {
+        self.title.value()
+    }
+
+    pub fn body(&self) -> &Markdown {
+        self.body.value()
+    }
+
+    pub fn priority(&self) -> Option<Priority> {
+        *self.priority.value()
+    }
+
+    pub fn lane(&self) -> Option<&LaneName> {
+        self.lane.value().as_ref()
+    }
+
+    pub fn labels(&self) -> &AddWinsSet<Label> {
+        &self.labels
+    }
+
+    pub fn requires(&self) -> &AddWinsSet<Requirement> {
+        &self.requires
+    }
+
+    pub fn depends_on(&self) -> &AddWinsSet<ItemId> {
+        &self.depends_on
+    }
+
+    pub fn supersedes(&self) -> Option<ItemId> {
+        *self.supersedes.value()
+    }
+
+    pub fn archived_at(&self) -> Option<Hlc> {
+        *self.archived.value()
+    }
+
+    pub fn notes(&self) -> &BTreeMap<EventId, Note> {
+        &self.notes
+    }
+
+    /// The lane the item is routed to: its own, else its type's.
+    pub fn effective_lane<'a>(&'a self, policy: &'a Policy) -> Option<&'a LaneName> {
+        self.lane().or_else(|| {
+            policy
+                .type_config(&self.item_type)
+                .map(|config| &config.lane)
+        })
+    }
+
+    pub fn standing<'a>(&'a self, policy: &'a Policy) -> Standing<'a> {
+        let explicit = self.state.value().as_ref();
+        let Some(config) = policy.type_config(&self.item_type) else {
+            return Standing::Unknown { state: explicit };
+        };
+        let state = explicit.unwrap_or(&config.initial);
+        match config.category_of(state) {
+            Some(category) => Standing::Known { state, category },
+            None => Standing::Unknown { state: Some(state) },
+        }
+    }
+
+    pub(crate) fn touch(&mut self, hlc: Hlc) {
+        self.updated = self.updated.max(hlc);
+    }
+
+    pub(crate) fn new(
+        id: ItemId,
+        author: Actor,
+        stamp: Stamp,
+        created: &crate::event::ItemCreated,
+    ) -> Self {
+        let mut labels = AddWinsSet::default();
+        for label in &created.labels {
+            labels.add(label.clone(), stamp);
+        }
+        let mut requires = AddWinsSet::default();
+        for requirement in &created.requires {
+            requires.add(requirement.clone(), stamp);
+        }
+        Self {
+            id,
+            item_type: created.item_type.clone(),
+            author,
+            created: stamp.hlc,
+            updated: stamp.hlc,
+            title: Lww::new(created.title.clone(), stamp),
+            body: Lww::new(Markdown::new(created.body.clone()), stamp),
+            state: Lww::new(None, stamp),
+            priority: Lww::new(created.priority, stamp),
+            lane: Lww::new(created.lane.clone(), stamp),
+            labels,
+            requires,
+            depends_on: AddWinsSet::default(),
+            supersedes: Lww::new(None, stamp),
+            archived: Lww::new(None, stamp),
+            notes: BTreeMap::new(),
+        }
+    }
+}
+
+/// The few fields kept visible for an archived item.
+#[derive(Clone, Copy, Debug)]
+pub struct ArchivedStub<'a> {
+    item: &'a Item,
+    archived_at: Hlc,
+}
+
+impl<'a> ArchivedStub<'a> {
+    pub fn id(&self) -> ItemId {
+        self.item.id
+    }
+
+    pub fn item_type(&self) -> &'a TypeName {
+        &self.item.item_type
+    }
+
+    pub fn title(&self) -> &'a str {
+        self.item.title.value()
+    }
+
+    pub fn archived_at(&self) -> Hlc {
+        self.archived_at
+    }
+
+    pub fn standing(&self, policy: &'a Policy) -> Standing<'a> {
+        self.item.standing(policy)
+    }
+}
+
+/// What a reader may see of an item. Archived items expose only a stub; their body, notes and
+/// history are loaded from the log on demand, so code cannot read them by accident.
+#[derive(Clone, Copy, Debug)]
+pub enum ItemView<'a> {
+    Live(&'a Item),
+    Archived(ArchivedStub<'a>),
+}
+
+impl<'a> ItemView<'a> {
+    pub fn of(item: &'a Item) -> Self {
+        match item.archived_at() {
+            Some(archived_at) => ItemView::Archived(ArchivedStub { item, archived_at }),
+            None => ItemView::Live(item),
+        }
+    }
+
+    pub fn id(&self) -> ItemId {
+        match self {
+            ItemView::Live(item) => item.id,
+            ItemView::Archived(stub) => stub.id(),
+        }
+    }
+
+    pub fn item_type(&self) -> &'a TypeName {
+        match self {
+            ItemView::Live(item) => &item.item_type,
+            ItemView::Archived(stub) => stub.item_type(),
+        }
+    }
+
+    pub fn title(&self) -> &'a str {
+        match self {
+            ItemView::Live(item) => item.title.value(),
+            ItemView::Archived(stub) => stub.title(),
+        }
+    }
+
+    pub fn standing(&self, policy: &'a Policy) -> Standing<'a> {
+        match self {
+            ItemView::Live(item) => item.standing(policy),
+            ItemView::Archived(stub) => stub.standing(policy),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn priority_parses_case_insensitively() {
+        assert_eq!("p1".parse(), Ok(Priority::P1));
+        assert_eq!("P3".parse(), Ok(Priority::P3));
+        assert_eq!("P9".parse::<Priority>(), Err(PriorityError));
+        assert_eq!(Priority::P0.to_string(), "P0");
+    }
+}

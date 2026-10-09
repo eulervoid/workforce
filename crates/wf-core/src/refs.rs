@@ -18,7 +18,10 @@ pub const PARSER_VERSION: u16 = 1;
 pub enum Mention {
     /// One segment. A principal handle, or a short form of an agent or session name.
     Short(String),
-    Agent { principal: String, agent: String },
+    Agent {
+        principal: String,
+        agent: String,
+    },
     Session {
         principal: String,
         agent: String,
@@ -193,7 +196,8 @@ mod tests {
 
     #[test]
     fn skips_code() {
-        let text = "inline `#abcd @nobody` and\n\n```\n#efgh @ghost\n```\n\n    #ijkl\n\nreal #mnop";
+        let text =
+            "inline `#abcd @nobody` and\n\n```\n#efgh @ghost\n```\n\n    #ijkl\n\nreal #mnop";
         assert_eq!(parse(text), BTreeSet::from([item("mnop")]));
     }
 

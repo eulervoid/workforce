@@ -1,6 +1,10 @@
+//! `wf-core` is pure: no IO, no async, no clock or randomness except through parameters.
+
 pub mod crdt;
 pub mod encoding;
 pub mod event;
+mod fold;
+pub mod graph;
 pub mod hlc;
 pub mod id;
 pub mod identity;
@@ -8,3 +12,12 @@ pub mod item;
 pub mod name;
 pub mod policy;
 pub mod refs;
+pub mod resolve;
+pub mod state;
+pub mod validate;
+
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
+
+#[cfg(test)]
+mod tests;

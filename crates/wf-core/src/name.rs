@@ -159,10 +159,7 @@ mod tests {
 
     #[test]
     fn rejects_bad_names() {
-        assert_eq!(
-            Handle::new(""),
-            Err(NameError::Empty { kind: "handle" })
-        );
+        assert_eq!(Handle::new(""), Err(NameError::Empty { kind: "handle" }));
         assert!(matches!(
             Handle::new("Josh"),
             Err(NameError::InvalidCharacter { .. })

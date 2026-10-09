@@ -116,7 +116,9 @@ impl<T: Ord + Clone> AddWinsSet<T> {
 
     /// The newest add keeping `value` present.
     pub fn newest_stamp(&self, value: &T) -> Option<Stamp> {
-        self.elements.get(value).and_then(|tags| tags.last().copied())
+        self.elements
+            .get(value)
+            .and_then(|tags| tags.last().copied())
     }
 
     /// Builds the change that removes `value` as currently observed.

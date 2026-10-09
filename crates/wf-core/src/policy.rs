@@ -292,7 +292,9 @@ mod tests {
     fn default_policy_is_valid() {
         let policy = Policy::parse(DEFAULT_POLICY_TOML).unwrap();
         assert_eq!(&policy, Policy::default_policy());
-        let names: Vec<_> = Policy::builtin_type_names().map(|name| name.as_str()).collect();
+        let names: Vec<_> = Policy::builtin_type_names()
+            .map(|name| name.as_str())
+            .collect();
         assert_eq!(names, ["decision", "distill", "question", "task"]);
     }
 
@@ -325,7 +327,10 @@ mod tests {
 
     #[test]
     fn rejects_garbage() {
-        assert!(matches!(Policy::parse("types = 3"), Err(PolicyError::Parse(_))));
+        assert!(matches!(
+            Policy::parse("types = 3"),
+            Err(PolicyError::Parse(_))
+        ));
     }
 
     #[test]

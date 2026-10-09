@@ -213,7 +213,10 @@ mod tests {
     fn json_uses_base32() {
         let id = ItemId::from(EventId::of(b"json"));
         assert_eq!(serde_json::to_string(&id).unwrap(), format!("\"{id}\""));
-        assert_eq!(serde_json::from_str::<ItemId>(&format!("\"{id}\"")).unwrap(), id);
+        assert_eq!(
+            serde_json::from_str::<ItemId>(&format!("\"{id}\"")).unwrap(),
+            id
+        );
     }
 
     #[test]
@@ -237,7 +240,10 @@ mod tests {
             .iter()
             .filter(|id| id.to_base32().starts_with(first_char))
             .count();
-        assert!(ambiguous > 1, "fixture should contain a shared first letter");
+        assert!(
+            ambiguous > 1,
+            "fixture should contain a shared first letter"
+        );
     }
 
     #[test]

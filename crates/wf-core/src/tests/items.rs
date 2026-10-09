@@ -1,0 +1,469 @@
+use crate::crdt::SetChange;
+use crate::event::Change;
+use crate::id::{HashId, ItemId};
+use crate::item::{ItemView, Origin, Standing};
+use crate::name::{Label, StateName};
+use crate::policy::{Category, DEFAULT_POLICY_TOML};
+use crate::refs::Mention;
+use crate::resolve::{MentionTarget, Source};
+use crate::state::State;
+use crate::testing::*;
+
+fn item_id(event: &crate::event::Event) -> ItemId {
+    event.id().into()
+}
+
+fn category(state: &State, item: ItemId) -> Option<Category> {
+    let policy = &state.policy().unwrap().policy;
+    state.item(item).unwrap().standing(policy).category()
+}
+
+fn ready_ids(state: &State) -> Vec<ItemId> {
+    state.ready_items().iter().map(|item| item.id()).collect()
+}
+
+#[test]
+fn new_items_start_in_the_initial_state_of_their_type() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "Sync feeds")));
+    let decision = item_id(&fixture.apply(&mut state, 0, 2_001, create("decision", "Hash")));
+    assert_eq!(category(&state, task), Some(Category::Open));
+    assert_eq!(category(&state, decision), Some(Category::Blocked));
+    let policy = &state.policy().unwrap().policy;
+    let ItemView::Live(item) = state.item(task).unwrap() else {
+        panic!("live")
+    };
+    assert!(matches!(
+        item.standing(policy),
+        Standing::Known { state, .. } if state.as_str() == "open"
+    ));
+}
+
+#[test]
+fn a_task_waits_for_the_question_it_depends_on() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "Implement feed sync")));
+    let question = item_id(&fixture.apply(&mut state, 0, 2_001, create("question", "Which hash?")));
+    assert_eq!(ready_ids(&state).len(), 2);
+
+    fixture.apply(&mut state, 0, 2_002, depends_on(task, question));
+    assert_eq!(ready_ids(&state), vec![question]);
+    let graph = state.dependency_graph();
+    let blockers = state.blockers(&graph, task);
+    assert_eq!(blockers.len(), 1);
+    assert_eq!(blockers[0].item, question);
+    assert_eq!(blockers[0].category, Some(Category::Open));
+    assert_eq!(graph.dependents(question).collect::<Vec<_>>(), vec![task]);
+
+    fixture.apply(&mut state, 0, 2_003, transition(question, "answered"));
+    assert_eq!(ready_ids(&state), vec![task]);
+}
+
+#[test]
+fn only_open_items_are_ready() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "work")));
+    let expectations = [
+        ("backlog", Category::Inactive, false),
+        ("open", Category::Open, true),
+        ("in_progress", Category::Active, false),
+        ("in_review", Category::Blocked, false),
+        ("done", Category::Done, false),
+        ("dropped", Category::Cancelled, false),
+    ];
+    for (offset, (target, expected_category, ready)) in expectations.into_iter().enumerate() {
+        fixture.apply(
+            &mut state,
+            0,
+            3_000 + offset as u64,
+            transition(task, target),
+        );
+        assert_eq!(category(&state, task), Some(expected_category), "{target}");
+        assert_eq!(ready_ids(&state).contains(&task), ready, "{target}");
+    }
+}
+
+#[test]
+fn done_satisfies_dependents_but_cancelled_only_flags_them() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let part = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "part")));
+    let whole = item_id(&fixture.apply(&mut state, 0, 2_001, create("task", "whole")));
+    fixture.apply(&mut state, 0, 2_002, depends_on(whole, part));
+
+    fixture.apply(&mut state, 0, 2_003, transition(part, "dropped"));
+    let graph = state.dependency_graph();
+    let blockers = state.blockers(&graph, whole);
+    assert_eq!(blockers.len(), 1);
+    assert_eq!(blockers[0].category, Some(Category::Cancelled));
+    assert!(!ready_ids(&state).contains(&whole));
+
+    fixture.apply(&mut state, 0, 2_004, transition(part, "done"));
+    assert!(ready_ids(&state).contains(&whole));
+}
+
+#[test]
+fn archiving_leaves_a_stub_and_keeps_dependencies_resolving() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let part = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "part")));
+    let whole = item_id(&fixture.apply(&mut state, 0, 2_001, create("task", "whole")));
+    fixture.apply(&mut state, 0, 2_002, depends_on(whole, part));
+    fixture.apply(&mut state, 0, 2_003, transition(part, "done"));
+    fixture.apply(&mut state, 0, 2_004, archive(part));
+
+    let ItemView::Archived(stub) = state.item(part).unwrap() else {
+        panic!("archived items are stubs")
+    };
+    assert_eq!(stub.title(), "part");
+    assert_eq!(state.live_items().count(), 1);
+    assert!(
+        ready_ids(&state).contains(&whole),
+        "done dependency still counts"
+    );
+
+    fixture.apply(&mut state, 0, 2_005, unarchive(part));
+    assert!(matches!(state.item(part).unwrap(), ItemView::Live(_)));
+}
+
+#[test]
+fn archive_rules_are_checked_by_the_author() {
+    use crate::validate::PolicyViolation;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "work")));
+    assert_eq!(
+        state.check_policy(&archive(task)),
+        Err(PolicyViolation::ArchiveRequiresTerminal {
+            category: Some(Category::Open)
+        })
+    );
+    assert_eq!(
+        state.check_policy(&unarchive(task)),
+        Err(PolicyViolation::NotArchived(task))
+    );
+    fixture.apply(&mut state, 0, 2_001, transition(task, "dropped"));
+    assert_eq!(state.check_policy(&archive(task)), Ok(()));
+    fixture.apply(&mut state, 0, 2_002, archive(task));
+    assert_eq!(
+        state.check_policy(&archive(task)),
+        Err(PolicyViolation::AlreadyArchived(task))
+    );
+}
+
+#[test]
+fn superseding_moves_the_target_decision_to_superseded() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let old = item_id(&fixture.apply(&mut state, 0, 2_000, create("decision", "use sha1")));
+    let new = item_id(&fixture.apply(&mut state, 0, 2_001, create("decision", "use blake3")));
+    fixture.apply(&mut state, 0, 2_002, transition(old, "ratified"));
+    assert_eq!(state.check_policy(&supersedes(new, old)), Ok(()));
+    fixture.apply(&mut state, 0, 2_003, supersedes(new, old));
+    let policy = &state.policy().unwrap().policy;
+    let ItemView::Live(old_item) = state.item(old).unwrap() else {
+        panic!()
+    };
+    assert!(matches!(
+        old_item.standing(policy),
+        Standing::Known { state, category: Category::Done } if state.as_str() == "superseded"
+    ));
+    let ItemView::Live(new_item) = state.item(new).unwrap() else {
+        panic!()
+    };
+    assert_eq!(new_item.supersedes(), Some(old));
+}
+
+#[test]
+fn supersedes_is_for_decisions_only() {
+    use crate::validate::PolicyViolation;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
+    let decision = item_id(&fixture.apply(&mut state, 0, 2_001, create("decision", "b")));
+    assert_eq!(
+        state.check_policy(&supersedes(task, decision)),
+        Err(PolicyViolation::SupersedesRequiresDecisions)
+    );
+}
+
+#[test]
+fn removed_states_are_flagged_not_lost() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let custom = format!(
+        "{DEFAULT_POLICY_TOML}\n[types.bug]\nlane = \"default\"\ninitial = \"new\"\n\
+         states = [{{ name = \"new\", category = \"open\" }}, {{ name = \"triaged\", category = \"open\" }}, {{ name = \"fixed\", category = \"done\" }}]\n"
+    );
+    fixture.apply(
+        &mut state,
+        0,
+        2_000,
+        fixture.policy_set(&fixture.founder, &custom),
+    );
+    let bug = item_id(&fixture.apply(&mut state, 0, 2_001, create("bug", "crash")));
+    fixture.apply(&mut state, 0, 2_002, transition(bug, "triaged"));
+    assert_eq!(category(&state, bug), Some(Category::Open));
+
+    let shrunk = custom.replace(r#"{ name = "triaged", category = "open" }, "#, "");
+    fixture.apply(
+        &mut state,
+        0,
+        2_003,
+        fixture.policy_set(&fixture.founder, &shrunk),
+    );
+    let policy = &state.policy().unwrap().policy;
+    let ItemView::Live(item) = state.item(bug).unwrap() else {
+        panic!()
+    };
+    assert!(matches!(
+        item.standing(policy),
+        Standing::Unknown { state: Some(state) } if state.as_str() == "triaged"
+    ));
+    assert!(!ready_ids(&state).contains(&bug));
+}
+
+#[test]
+fn author_checks_follow_the_policy() {
+    use crate::validate::PolicyViolation;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
+    let question = item_id(&fixture.apply(&mut state, 0, 2_001, create("question", "b")));
+    let decision = item_id(&fixture.apply(&mut state, 0, 2_002, create("decision", "c")));
+
+    assert!(matches!(
+        state.check_policy(&create("nonsense", "x")),
+        Err(PolicyViolation::UnknownType(_))
+    ));
+    assert!(matches!(
+        state.check_policy(&transition(task, "answered")),
+        Err(PolicyViolation::UnknownState { .. })
+    ));
+    assert!(matches!(
+        state.check_policy(&depends_on(question, task)),
+        Err(PolicyViolation::DependencyNotAllowed { .. })
+    ));
+    assert_eq!(state.check_policy(&depends_on(task, decision)), Ok(()));
+    assert!(matches!(
+        state.check_policy(&edit(
+            decision,
+            Change::Priority(Some(crate::item::Priority::P1))
+        )),
+        Err(PolicyViolation::FieldNotAllowed { .. })
+    ));
+}
+
+#[test]
+fn a_local_dependency_cycle_is_refused() {
+    use crate::validate::PolicyViolation;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let first = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
+    let second = item_id(&fixture.apply(&mut state, 0, 2_001, create("task", "b")));
+    fixture.apply(&mut state, 0, 2_002, depends_on(first, second));
+    assert_eq!(
+        state.check_policy(&depends_on(second, first)),
+        Err(PolicyViolation::DependencyCycle {
+            from: second,
+            to: first
+        })
+    );
+}
+
+#[test]
+fn concurrent_links_forming_a_cycle_resolve_the_same_way_everywhere() {
+    let fixture = Fixture::new(2);
+    let mut left = fixture.state();
+    let first = item_id(&fixture.apply(&mut left, 0, 2_000, create("task", "a")));
+    let second = item_id(&fixture.apply(&mut left, 0, 2_001, create("task", "b")));
+    let mut right = left.clone();
+
+    let a_on_b = fixture.author(&left, 0, 3_000, depends_on(first, second));
+    let b_on_a = fixture.author(&right, 1, 3_001, depends_on(second, first));
+    for (state, events) in [
+        (&mut left, [&a_on_b, &b_on_a]),
+        (&mut right, [&b_on_a, &a_on_b]),
+    ] {
+        for event in events {
+            state
+                .receive((*event).clone(), crate::state::Trust::Untrusted)
+                .unwrap();
+        }
+    }
+    assert_eq!(left, right);
+    let graph = left.dependency_graph();
+    assert_eq!(graph.ignored().len(), 1);
+    // The edge with the greatest (hlc, id) is the one that is ignored.
+    assert!(graph.is_ignored(second, first));
+    assert!(!graph.is_ignored(first, second));
+    assert!(!graph.reaches(second, first));
+}
+
+#[test]
+fn concurrent_label_add_beats_remove() {
+    let fixture = Fixture::new(2);
+    let mut left = fixture.state();
+    let task = item_id(&fixture.apply(&mut left, 0, 2_000, create("task", "a")));
+    let label = Label::new("urgent").unwrap();
+    fixture.apply(
+        &mut left,
+        0,
+        2_001,
+        edit(task, Change::Labels(SetChange::Add(label.clone()))),
+    );
+    let mut right = left.clone();
+
+    let removal = {
+        let ItemView::Live(item) = left.item(task).unwrap() else {
+            panic!()
+        };
+        item.labels().removal(&label)
+    };
+    let remove = fixture.author(&left, 0, 3_000, edit(task, Change::Labels(removal)));
+    let add_again = fixture.author(
+        &right,
+        1,
+        3_001,
+        edit(task, Change::Labels(SetChange::Add(label.clone()))),
+    );
+    for event in [&remove, &add_again] {
+        left.receive(event.clone(), crate::state::Trust::Untrusted)
+            .unwrap();
+    }
+    for event in [&add_again, &remove] {
+        right
+            .receive(event.clone(), crate::state::Trust::Untrusted)
+            .unwrap();
+    }
+    assert_eq!(left, right);
+    let ItemView::Live(item) = left.item(task).unwrap() else {
+        panic!()
+    };
+    assert!(item.labels().contains(&label));
+}
+
+#[test]
+fn concurrent_edits_resolve_by_hlc_then_event_id() {
+    let fixture = Fixture::new(2);
+    let mut left = fixture.state();
+    let task = item_id(&fixture.apply(&mut left, 0, 2_000, create("task", "a")));
+    let mut right = left.clone();
+    let first = fixture.author(&left, 0, 3_000, edit(task, Change::Title("first".into())));
+    let second = fixture.author(&right, 1, 3_500, edit(task, Change::Title("second".into())));
+    for event in [&first, &second] {
+        left.receive(event.clone(), crate::state::Trust::Untrusted)
+            .unwrap();
+    }
+    for event in [&second, &first] {
+        right
+            .receive(event.clone(), crate::state::Trust::Untrusted)
+            .unwrap();
+    }
+    assert_eq!(left, right);
+    assert_eq!(left.item(task).unwrap().title(), "second");
+}
+
+#[test]
+fn references_mentions_and_backlinks_resolve_against_the_state() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    fixture.apply(&mut state, 0, 1_500, define_agent("coder"));
+    let question = item_id(&fixture.apply(&mut state, 0, 2_000, create("question", "Which hash?")));
+    let task = item_id(&fixture.apply(
+        &mut state,
+        0,
+        2_001,
+        create_with_body(
+            "task",
+            "Sync",
+            &format!(
+                "blocked on #{} and `#{}` or #zzzz",
+                question.short(),
+                question.short()
+            ),
+        ),
+    ));
+    let note = fixture.apply(
+        &mut state,
+        0,
+        2_002,
+        comment(
+            task,
+            &format!(
+                "see #{}, @coder please keep it small, cc @joshua @nobody",
+                question.short()
+            ),
+        ),
+    );
+
+    let ItemView::Live(task_item) = state.item(task).unwrap() else {
+        panic!()
+    };
+    assert_eq!(state.references_from(task_item), [question].into());
+
+    let backlinks = state.backlinks(question);
+    assert_eq!(
+        backlinks,
+        vec![
+            Source {
+                item: task,
+                origin: Origin::Body
+            },
+            Source {
+                item: task,
+                origin: Origin::Note(note.id())
+            },
+        ]
+    );
+
+    let mentioned = state.mentions_in(task_item);
+    let joshua = fixture.founder.key();
+    assert!(mentioned.contains(&MentionTarget::Principal(joshua)));
+    assert!(mentioned.iter().any(
+        |target| matches!(target, MentionTarget::Agent(agent) if agent.name.as_str() == "coder")
+    ));
+    assert_eq!(mentioned.len(), 2, "@nobody does not resolve");
+
+    let sources = state.mentions_of(&MentionTarget::Principal(joshua));
+    assert_eq!(
+        sources,
+        vec![Source {
+            item: task,
+            origin: Origin::Note(note.id())
+        }]
+    );
+
+    let resolver = state.resolver();
+    assert_eq!(
+        resolver.mention(&Mention::Agent {
+            principal: "joshua".into(),
+            agent: "coder".into()
+        }),
+        resolver.mention(&Mention::Short("coder".into()))
+    );
+    assert_eq!(resolver.mention(&Mention::Short("ghost".into())), None);
+}
+
+#[test]
+fn item_prefixes_resolve_like_git() {
+    use crate::id::PrefixError;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
+    let resolver = state.resolver();
+    assert_eq!(resolver.item(&task.to_base32()[..6]), Ok(task));
+    assert_eq!(resolver.item(&task.to_base32()), Ok(task));
+    assert!(matches!(
+        resolver.item("abc"),
+        Err(PrefixError::TooShort(_))
+    ));
+    assert!(matches!(
+        resolver.item("2222222"),
+        Err(PrefixError::NotFound(_))
+    ));
+    let _ = StateName::new("open");
+}

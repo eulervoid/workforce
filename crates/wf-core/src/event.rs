@@ -130,7 +130,10 @@ pub enum EventBody {
     ItemUnarchived(ItemRef),
     Comment(Comment),
     /// A body from a newer peer. Stored and relayed, ignored by the fold.
-    Unknown { tag: u16, payload: Vec<u8> },
+    Unknown {
+        tag: u16,
+        payload: Vec<u8>,
+    },
 }
 
 mod tag {
@@ -257,6 +260,13 @@ impl Event {
         encoding::decode(bytes)
     }
 
+    /// Signs arbitrary content. Normal code goes through [`EventBuilder`], which fills the
+    /// envelope consistently; this exists for tools and for tests that forge invalid events.
+    pub fn sign_content(content: EventContent, signer: &DeviceSigner) -> Result<Self, EventError> {
+        let sig = signer.sign_event(&encoding::encode(&content)?);
+        Ok(Event { content, sig })
+    }
+
     pub fn id(&self) -> EventId {
         EventId::of(&self.encode().expect("events always encode"))
     }
@@ -316,8 +326,7 @@ impl EventBuilder {
             hlc: self.hlc,
             body,
         };
-        let sig = signer.sign_event(&encoding::encode(&content)?);
-        Ok(Event { content, sig })
+        Event::sign_content(content, signer)
     }
 }
 

@@ -3,7 +3,9 @@
 use serde::{Deserialize, Serialize};
 
 /// Wall clock milliseconds plus a counter. Derived `Ord` compares wall time first.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(
+    Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize,
+)]
 pub struct Hlc {
     wall_ms: u64,
     counter: u32,
