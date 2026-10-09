@@ -17,8 +17,9 @@ use wf_core::state::{State, Trust};
 use wf_store::{EventStore, RedbStore, Replica};
 
 use crate::cli::*;
-use crate::draft::Draft;
+use crate::draft::{Draft, NewItemDraft};
 use crate::harness;
+use crate::interactive::Mode;
 use crate::keys::DataDir;
 use crate::render;
 use crate::view::{self, Envelope, ItemSummary, LogView, MentionsView};
@@ -54,6 +55,7 @@ fn done(json: bool, message: String, event: &Event, item: Option<ItemId>) -> any
 
 pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     let json = cli.json;
+    let mode = Mode::detect(json);
     match cli.command {
         Command::Init(args) => init(json, args, data, cwd),
         Command::Status { refold } => {
@@ -69,7 +71,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             match command {
                 Command::Init(_) | Command::Status { .. } => unreachable!("handled above"),
                 Command::Agent(command) => agent(json, command, &mut workspace),
-                Command::Item(command) => item(json, command, &mut workspace),
+                Command::Item(command) => item(json, mode, command, &mut workspace),
                 Command::Comment { item, text } => {
                     comment(json, &mut workspace, &item, &text.join(" "))
                 }
@@ -240,17 +242,45 @@ fn workspace_device(workspace: &Workspace) -> anyhow::Result<wf_core::identity::
         .key())
 }
 
-fn item(json: bool, command: ItemCommand, workspace: &mut Workspace) -> anyhow::Result<()> {
+fn item(
+    json: bool,
+    mode: Mode,
+    command: ItemCommand,
+    workspace: &mut Workspace,
+) -> anyhow::Result<()> {
     match command {
         ItemCommand::Add(args) => {
-            let event = workspace.author(EventBody::ItemCreated(ItemCreated {
+            let wants_editor = args.edit || (args.title.is_none() && mode == Mode::Interactive);
+            if args.title.is_none() && !wants_editor {
+                bail!("missing --title; run at a terminal to write the item in your editor");
+            }
+            let mut new_item = NewItemDraft {
                 item_type: args.item_type,
-                title: args.title,
-                body: args.body.unwrap_or_default(),
-                priority: args.priority,
-                lane: args.lane,
-                labels: args.labels,
-                requires: args.requires,
+                draft: Draft {
+                    title: args.title.unwrap_or_default(),
+                    body: args.body.unwrap_or_default(),
+                    priority: args.priority,
+                    lane: args.lane,
+                    labels: args.labels.into_iter().collect(),
+                    requires: args.requires.into_iter().collect(),
+                },
+            };
+            if wants_editor {
+                new_item =
+                    NewItemDraft::from_markdown(&edit_in_editor(&new_item.to_markdown()?, ".md")?)?;
+            }
+            let draft = new_item.draft;
+            if draft.title.trim().is_empty() {
+                bail!("the title is empty; nothing was created");
+            }
+            let event = workspace.author(EventBody::ItemCreated(ItemCreated {
+                item_type: new_item.item_type,
+                title: draft.title,
+                body: draft.body,
+                priority: draft.priority,
+                lane: draft.lane,
+                labels: draft.labels.into_iter().collect(),
+                requires: draft.requires.into_iter().collect(),
             }))?;
             let id = ItemId::from(event.id());
             let state = workspace.state();
@@ -311,7 +341,7 @@ fn item(json: bool, command: ItemCommand, workspace: &mut Workspace) -> anyhow::
             let id = workspace.resolve_item(&item)?;
             show(json, workspace, id, history)
         }
-        ItemCommand::Edit(args) => edit(json, workspace, args),
+        ItemCommand::Edit(args) => edit(json, mode, workspace, args),
         ItemCommand::Move { item, state, note } => {
             let id = workspace.resolve_item(&item)?;
             let event = workspace.author(EventBody::ItemTransitioned(ItemTransitioned {
@@ -440,47 +470,52 @@ fn event_touches(event: &Event, id: ItemId) -> bool {
     }
 }
 
-fn edit(json: bool, workspace: &mut Workspace, args: ItemEditArgs) -> anyhow::Result<()> {
+fn edit(
+    json: bool,
+    mode: Mode,
+    workspace: &mut Workspace,
+    args: ItemEditArgs,
+) -> anyhow::Result<()> {
     let id = workspace.resolve_item(&args.item)?;
-    let (draft, changes) = {
+    let changes = {
         let state = workspace.state();
         let ItemView::Live(item) = state.item(id).expect("resolved ids exist") else {
             bail!("#{} is archived; unarchive it to edit", id.short());
         };
         let current = Draft::of(item);
-        let draft = if args.is_editor_flow() {
-            Draft::from_markdown(&edit_in_editor(&current.to_markdown()?, ".md")?)?
-        } else {
-            let mut draft = current.clone();
-            if let Some(title) = args.title {
-                draft.title = title;
-            }
-            if let Some(body) = args.body {
-                draft.body = body;
-            }
-            if args.clear_priority {
-                draft.priority = None;
-            }
-            if let Some(priority) = args.priority {
-                draft.priority = Some(priority);
-            }
-            if let Some(lane) = args.lane {
-                draft.lane = Some(lane);
-            }
-            draft.labels.extend(args.add_labels);
-            for label in &args.remove_labels {
-                draft.labels.remove(label);
-            }
-            draft.requires.extend(args.add_requires);
-            for requirement in &args.remove_requires {
-                draft.requires.remove(requirement);
-            }
-            draft
-        };
-        let changes = draft.changes(item);
-        (draft, changes)
+        let wants_editor = args.edit || (!args.has_changes() && mode == Mode::Interactive);
+        if !args.has_changes() && !wants_editor {
+            bail!("nothing to change; pass flags, or run at a terminal to edit in your editor");
+        }
+        let mut draft = current;
+        if let Some(title) = args.title {
+            draft.title = title;
+        }
+        if let Some(body) = args.body {
+            draft.body = body;
+        }
+        if args.clear_priority {
+            draft.priority = None;
+        }
+        if let Some(priority) = args.priority {
+            draft.priority = Some(priority);
+        }
+        if let Some(lane) = args.lane {
+            draft.lane = Some(lane);
+        }
+        draft.labels.extend(args.add_labels);
+        for label in &args.remove_labels {
+            draft.labels.remove(label);
+        }
+        draft.requires.extend(args.add_requires);
+        for requirement in &args.remove_requires {
+            draft.requires.remove(requirement);
+        }
+        if wants_editor {
+            draft = Draft::from_markdown(&edit_in_editor(&draft.to_markdown()?, ".md")?)?;
+        }
+        draft.changes(item)
     };
-    let _ = draft;
     if changes.is_empty() {
         return emit(
             json,

@@ -202,8 +202,17 @@ fn invalid_requests_fail_with_the_specific_reason() {
             .contains("no item type")
     );
     assert!(
-        wf.fail(&["item", "add", "--title", "x", "--type", "decision", "--priority", "P1"])
-            .contains("Priority")
+        wf.fail(&[
+            "item",
+            "add",
+            "--title",
+            "x",
+            "--type",
+            "decision",
+            "--priority",
+            "P1"
+        ])
+        .contains("Priority")
     );
     assert!(
         wf.fail(&[
@@ -262,7 +271,7 @@ fn item_edit_by_flags_and_by_editor() {
     .unwrap();
     std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
     let output = wf
-        .command(&["item", "edit", short(&task)])
+        .command(&["item", "edit", short(&task), "--edit"])
         .env("EDITOR", &editor)
         .env("VISUAL", &editor)
         .output()
@@ -339,4 +348,37 @@ fn agents_and_policy() {
 fn commands_outside_a_workforce_explain_what_to_do() {
     let wf = Sandbox::new();
     assert!(wf.fail(&["item", "list"]).contains("wf init"));
+}
+
+#[test]
+fn item_add_opens_the_editor_on_request_and_asks_for_a_title_otherwise() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    assert!(
+        wf.fail(&["item", "add"])
+            .contains("missing --title; run at a terminal")
+    );
+
+    let editor = wf.bin.join("fake-editor");
+    std::fs::write(
+        &editor,
+        "#!/bin/sh\n/usr/bin/sed -i.bak -e 's/^title = .*/title = \"From the editor\"/' -e 's/^type = .*/type = \"question\"/' \"$1\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let output = wf
+        .command(&["item", "add", "--edit", "--priority", "P1", "--json"])
+        .env("EDITOR", &editor)
+        .env("VISUAL", &editor)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let created: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(created["data"]["title"], "From the editor");
+    assert_eq!(created["data"]["type"], "question");
+    assert_eq!(created["data"]["priority"], "P1");
 }

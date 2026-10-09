@@ -127,10 +127,12 @@ pub enum ItemCommand {
     },
 }
 
+/// Without `--title`, opens a new item as markdown with TOML front matter in `$VISUAL` or
+/// `$EDITOR` when run at a terminal.
 #[derive(Args)]
 pub struct ItemAddArgs {
     #[arg(short, long)]
-    pub title: String,
+    pub title: Option<String>,
     #[arg(long = "type", default_value = "task")]
     pub item_type: TypeName,
     #[arg(long)]
@@ -143,6 +145,9 @@ pub struct ItemAddArgs {
     pub labels: Vec<Label>,
     #[arg(long = "requires")]
     pub requires: Vec<Requirement>,
+    /// Open the item in the editor before creating it, filled in with the flags given.
+    #[arg(long)]
+    pub edit: bool,
 }
 
 #[derive(Args)]
@@ -156,11 +161,15 @@ pub struct ItemListArgs {
     pub archived: bool,
 }
 
-/// Without any flag, opens the item as markdown with TOML front matter in `$VISUAL` or `$EDITOR`.
+/// Without any flag, opens the item as markdown with TOML front matter in `$VISUAL` or `$EDITOR`
+/// when run at a terminal.
 #[derive(Args)]
 pub struct ItemEditArgs {
     pub item: String,
+    /// Open the item in the editor after applying the flags given.
     #[arg(long)]
+    pub edit: bool,
+    #[arg(short, long)]
     pub title: Option<String>,
     #[arg(long)]
     pub body: Option<String>,
@@ -181,16 +190,16 @@ pub struct ItemEditArgs {
 }
 
 impl ItemEditArgs {
-    pub fn is_editor_flow(&self) -> bool {
-        self.title.is_none()
-            && self.body.is_none()
-            && self.priority.is_none()
-            && !self.clear_priority
-            && self.lane.is_none()
-            && self.add_labels.is_empty()
-            && self.remove_labels.is_empty()
-            && self.add_requires.is_empty()
-            && self.remove_requires.is_empty()
+    pub fn has_changes(&self) -> bool {
+        self.title.is_some()
+            || self.body.is_some()
+            || self.priority.is_some()
+            || self.clear_priority
+            || self.lane.is_some()
+            || !self.add_labels.is_empty()
+            || !self.remove_labels.is_empty()
+            || !self.add_requires.is_empty()
+            || !self.remove_requires.is_empty()
     }
 }
 

@@ -2,6 +2,7 @@ pub mod cli;
 pub mod commands;
 pub mod draft;
 pub mod harness;
+pub mod interactive;
 pub mod keys;
 pub mod render;
 pub mod view;

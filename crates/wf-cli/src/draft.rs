@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use wf_core::crdt::SetChange;
 use wf_core::event::Change;
 use wf_core::item::{Item, Priority};
-use wf_core::name::{Label, LaneName, Requirement};
+use wf_core::name::{Label, LaneName, Requirement, TypeName};
 
 const FENCE: &str = "+++";
 
@@ -28,6 +28,8 @@ pub struct Draft {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FrontMatter {
+    #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
+    item_type: Option<TypeName>,
     title: String,
     #[serde(default)]
     priority: Option<Priority>,
@@ -51,9 +53,22 @@ impl Draft {
         }
     }
 
-    /// TOML has no null, so unset fields appear as commented-out hints.
     pub fn to_markdown(&self) -> anyhow::Result<String> {
+        self.render(None)
+    }
+
+    pub fn from_markdown(text: &str) -> anyhow::Result<Self> {
+        let (item_type, draft) = Self::parse(text)?;
+        if item_type.is_some() {
+            bail!("the type of an existing item cannot be changed");
+        }
+        Ok(draft)
+    }
+
+    /// TOML has no null, so unset fields appear as commented-out hints.
+    fn render(&self, item_type: Option<&TypeName>) -> anyhow::Result<String> {
         let mut front_matter = toml::to_string(&FrontMatter {
+            item_type: item_type.cloned(),
             title: self.title.clone(),
             priority: self.priority,
             lane: self.lane.clone(),
@@ -72,7 +87,7 @@ impl Draft {
         ))
     }
 
-    pub fn from_markdown(text: &str) -> anyhow::Result<Self> {
+    fn parse(text: &str) -> anyhow::Result<(Option<TypeName>, Self)> {
         let mut lines = text.split_inclusive('\n');
         if lines.next().map(str::trim_end) != Some(FENCE) {
             bail!("the draft must start with a `{FENCE}` line before the TOML front matter");
@@ -94,14 +109,15 @@ impl Draft {
         }
         let front_matter: FrontMatter =
             toml::from_str(&front_matter).context("invalid front matter")?;
-        Ok(Self {
+        let draft = Self {
             title: front_matter.title,
             body: body.trim().to_string(),
             priority: front_matter.priority,
             lane: front_matter.lane,
             labels: front_matter.labels,
             requires: front_matter.requires,
-        })
+        };
+        Ok((front_matter.item_type, draft))
     }
 
     /// The edits that turn `item` into this draft. Removals name the adds the item currently has.
@@ -133,6 +149,26 @@ impl Draft {
             changes.push(Change::Requires(item.requires().removal(requirement)));
         }
         changes
+    }
+}
+
+/// A draft of an item that does not exist yet, so it also says what type to create.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NewItemDraft {
+    pub item_type: TypeName,
+    pub draft: Draft,
+}
+
+impl NewItemDraft {
+    pub fn to_markdown(&self) -> anyhow::Result<String> {
+        self.draft.render(Some(&self.item_type))
+    }
+
+    pub fn from_markdown(text: &str) -> anyhow::Result<Self> {
+        match Draft::parse(text)? {
+            (Some(item_type), draft) => Ok(Self { item_type, draft }),
+            (None, _) => bail!("the front matter needs a `type`, for example `type = \"task\"`"),
+        }
     }
 }
 
@@ -198,5 +234,25 @@ mod tests {
         assert!(Draft::from_markdown(&draft("")).is_err());
         assert!(Draft::from_markdown("title = \"x\"\n").is_err());
         assert!(Draft::from_markdown("+++\ntitle = \"x\"\n").is_err());
+    }
+
+    #[test]
+    fn new_item_drafts_carry_the_type() {
+        let new = NewItemDraft {
+            item_type: TypeName::new("question").unwrap(),
+            draft: Draft {
+                title: String::new(),
+                body: String::new(),
+                priority: None,
+                lane: None,
+                labels: BTreeSet::new(),
+                requires: BTreeSet::new(),
+            },
+        };
+        let text = new.to_markdown().unwrap();
+        assert!(text.starts_with("+++\ntype = \"question\"\ntitle = \"\"\n"));
+        assert_eq!(NewItemDraft::from_markdown(&text).unwrap(), new);
+        assert!(Draft::from_markdown(&text).is_err());
+        assert!(NewItemDraft::from_markdown("+++\ntitle = \"x\"\n+++\n").is_err());
     }
 }
