@@ -135,7 +135,8 @@ lanes = ["default"]
 ```
 
 * Named by role, not by harness, so the harness can change later.
-* Names are unique per principal and immutable in v1, so mentions keep resolving.
+* Names are unique per principal and immutable in v1, so mentions keep resolving. The other fields can
+  change: a new `AgentDefined` for an existing name replaces the definition (last writer wins).
 * Agent definitions are work configuration, not authority, so a device key may sign them.
 
 ### Devices
@@ -341,6 +342,45 @@ from `events`. Appends and the snapshot that covers them commit in one transacti
 Principal-signed statements are wrapped in an ordinary device-feed event, so every feed stays gapless
 and a principal key never needs its own sequence across machines.
 
+### Admission and fold
+Two kinds of rules, because a rule is only safe for peers to enforce if its answer cannot depend on the
+order events arrive in.
+
+**Admission** (`State::receive`, enforced by every peer; depends only on an event's causal past):
+version; device signature; `workforce` matches (genesis names none); all parents (`prev` and `deps`)
+are known; the feed is gapless and unforked; `hlc` is greater than every parent's; the author is a bound
+device and the actor belongs to its principal; authority bodies carry a valid principal signature of an
+owner for this workforce; referenced items exist; no item links to itself.
+* Events with missing parents (or arriving before genesis) wait in a **pending set**, capped at 10,000
+  events, and are applied when their parents arrive. Any arrival order and any duplication give the same
+  state; this is tested with generated event sets.
+* A second event with the same `(author, seq)` is rejected, not recorded.
+
+**Authoring checks** (`State::check_policy`, run by the author before signing; peers do not repeat
+them): type exists, target state exists, field allowed for the type (`priority`, `labels`, `requires`),
+lane exists, `depends_on` target type allowed, no dependency cycle, archive only from `done`/`cancelled`,
+`supersedes` only between decisions. Peers cannot re-check these deterministically: a concurrent policy
+change would make acceptance depend on arrival order. Instead the fold keeps the event and flags the
+outcome ("unknown state or type", visible in `wf item show` and `wf status`), and the item keeps its
+state until moved.
+
+**Fold:**
+* Concurrent writes order by `(hlc, EventId)`. This extends causal order because authors stamp every
+  event above everything it follows, and admission enforces it.
+* Last-writer-wins registers: `title`, `body`, `state`, `priority`, `lane`, `supersedes`, archived.
+* Add-wins sets (`labels`, `requires`, `depends_on`) are observed-remove: each add is tagged with its
+  event id and a removal lists the tags its author saw, so a concurrent add survives.
+* An item's `state` is empty until its first transition and means "the type's initial state under the
+  current policy", so item creation does not depend on concurrent policy changes.
+* `supersedes` also writes `superseded` into the target's `state` register with the link's stamp.
+* `depends_on` cycles from concurrent links are resolved at query time, not stored: edges are taken in
+  `(hlc, EventId)` order and an edge that would close a cycle is ignored and flagged.
+* Comment and transition-note text stays in the log. The fold keeps who wrote it and the tokens parsed
+  from it. `#refs` and `@mentions` are stored as unresolved tokens and resolved against the whole state
+  at query time, because resolution depends on what is known.
+* The first device and the members' handles come from genesis (`founder`, `members`); handles are what
+  `@mentions` resolve against. `DeviceBound` and `MemberJoined` arrive with invites in M1.
+
 ## 7. Forking
 
 A fork is a **new genesis that points at a frozen point in the parent's history**.
@@ -403,8 +443,10 @@ Blocking on another item is **computed** from `depends_on`, never stored as a st
 `archived` is a flag, orthogonal to state, so an archived item keeps its terminal outcome.
 
 * `ItemArchived` / `ItemUnarchived`, allowed only in `done` or `cancelled`.
-* The fold still processes all events, but keeps only a **stub** for archived items (id, type, title,
-  final state, archived time). Body, comments and history load from the log on demand.
+* The fold still processes all events, but readers only get a **stub** for archived items (id, type, title,
+  final state, archived time). Body, comments and history load from the log on demand. M0 still keeps the
+  full item in memory behind that stub view: dropping bodies at fold time would make the state depend on
+  the order of archive, unarchive and concurrent edits, so real stubs wait for compaction (M5).
 * Hidden from lists, search and agent context by default (`--archived`). Dependencies on them still resolve.
 * Reclaiming disk space is compaction (M5); archiving is what makes it safe.
 
@@ -464,6 +506,9 @@ Relations that change behaviour are explicit events. Informational ones are deri
 * Parsed with `pulldown-cmark`, skipping code spans and blocks. Tokens that do not resolve are plain text.
 * Derived in the fold with a versioned parser, not stored as events. A better parser means a refold.
 
+A handle match wins: `@joshua` is a principal even if an agent is also called `joshua`. A short name that
+matches no handle resolves to an agent only if exactly one agent has that name. Sessions arrive in M2.
+
 **Mention resolution:**
 
 | Written | Goes to |
@@ -482,7 +527,7 @@ its inbox after each commit.
 |---|---|
 | `type` | set at creation, immutable |
 | `title`, `body`, `priority`, `lane` | last writer wins per field; losing concurrent body edits stay visible in `item show --history` |
-| `state` | last writer wins, validated against the policy at the event's causal point |
+| `state` | last writer wins. Not validated by peers: the author checks it against the policy before signing, and a state the policy does not know is flagged, not rejected (see *Admission and fold*) |
 | `labels`, `requires` | set with add/remove; add wins over concurrent remove |
 | `depends_on` | same set semantics; concurrent adds that form a cycle: the edge with the greatest `(hlc, EventId)` is ignored and flagged |
 
@@ -730,7 +775,11 @@ wf progress "<text>" | activity | inbox
 wf review <item> --approve|--request-changes
 wf search <query>
 ```
-All commands support `--json` with a versioned schema.
+All commands support `--json`. Output is `{"schema": 1, "data": ...}`; the schema number is bumped on
+incompatible changes and the shapes are snapshot-tested. Item ids print as the first 6 characters of their
+base32 hash and any unique prefix of at least 4 characters is accepted, with or without `#`.
+Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the repository holds only
+`.workforce.toml` with the workforce id.
 
 ## 18. Milestones
 
