@@ -1,7 +1,7 @@
 //! Runs the real `wf` binary through the demo script of the M0 plan.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 
 use serde_json::Value;
