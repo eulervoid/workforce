@@ -176,11 +176,20 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     );
 
     let mut status = Vec::new();
-    if let Some(priority) = &summary.priority {
+    if let Some(priority) = &detail.effective_priority {
         status.push(paint(priority_style(priority), priority));
     }
     if let Some(lane) = &detail.lane {
         status.push(paint(DIM, format!("lane={lane}")));
+    }
+    if !detail.labels.is_empty() {
+        status.push(paint(DIM, format!("labels={}", detail.labels.join(","))));
+    }
+    if !detail.requires.is_empty() {
+        status.push(paint(
+            DIM,
+            format!("requires={}", detail.requires.join(",")),
+        ));
     }
     if !summary.blocked_by.is_empty() {
         let ids: Vec<String> = summary
@@ -195,15 +204,6 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     }
 
     let mut attributes = Vec::new();
-    if !detail.labels.is_empty() {
-        attributes.push(paint(DIM, format!("labels={}", detail.labels.join(","))));
-    }
-    if !detail.requires.is_empty() {
-        attributes.push(paint(
-            DIM,
-            format!("requires={}", detail.requires.join(",")),
-        ));
-    }
     attributes.push(paint(PERSON, &detail.author));
     attributes.push(paint(
         DIM,

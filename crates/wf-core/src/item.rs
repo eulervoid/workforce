@@ -13,6 +13,11 @@ pub enum Priority {
     P3,
 }
 
+impl Priority {
+    /// What an item of a type that has priorities counts as while none is set.
+    pub const DEFAULT: Priority = Priority::P2;
+}
+
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("priority must be one of P0, P1, P2, P3")]
 pub struct PriorityError;
@@ -49,7 +54,7 @@ use crate::hlc::Hlc;
 use crate::id::{EventId, ItemId};
 use crate::identity::Actor;
 use crate::name::{Label, LaneName, Requirement, StateName, TypeName};
-use crate::policy::{Category, Policy};
+use crate::policy::{Category, Field, Policy};
 use crate::refs::{self, Token};
 
 /// Markdown text together with the tokens parsed from it.
@@ -208,6 +213,17 @@ impl Item {
                 .type_config(&self.item_type)
                 .map(|config| &config.lane)
         })
+    }
+
+    /// The priority shown for the item: its own, else the default if its type has priorities.
+    pub fn effective_priority(&self, policy: &Policy) -> Option<Priority> {
+        let has_priorities = policy
+            .type_config(&self.item_type)
+            .is_some_and(|config| config.allows_field(Field::Priority));
+        match self.priority() {
+            None if has_priorities => Some(Priority::DEFAULT),
+            explicit => explicit,
+        }
     }
 
     pub fn standing<'a>(&'a self, policy: &'a Policy) -> Standing<'a> {

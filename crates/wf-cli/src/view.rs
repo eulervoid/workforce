@@ -210,6 +210,8 @@ pub struct NoteView {
 pub struct ItemDetail {
     #[serde(flatten)]
     pub summary: ItemSummary,
+    /// The priority, or the default of types that have priorities while none is set.
+    pub effective_priority: Option<String>,
     pub body: String,
     pub author: String,
     pub created: String,
@@ -293,6 +295,9 @@ pub fn item_detail(
 
     ItemDetail {
         summary: summary(state, &graph, ItemView::Live(item)),
+        effective_priority: item
+            .effective_priority(policy)
+            .map(|priority| priority.to_string()),
         body: item.body().text().to_string(),
         author: actor_label(state, item.author()),
         created: timestamp(item.created()),
