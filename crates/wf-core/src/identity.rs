@@ -1,0 +1,280 @@
+//! Principal and device keys, signing, actors and principal-signed statements.
+//!
+//! Principal keys sign authority statements; device keys sign ordinary events. They are
+//! distinct types so a device key can never be used where the system requires a principal.
+
+use std::fmt;
+use std::str::FromStr;
+
+use iroh_base::{PublicKey, SecretKey, Signature};
+use serde::{Deserialize, Serialize};
+
+use crate::id::{SessionId, WorkforceId};
+use crate::name::{AgentName, Handle};
+
+const EVENT_DOMAIN: &[u8] = b"wf/event/1\0";
+const AUTHORITY_DOMAIN: &[u8] = b"wf/authority/1\0";
+
+#[derive(Debug, thiserror::Error)]
+pub enum KeyError {
+    #[error("not a valid public key")]
+    Malformed,
+    #[error("a secret key is 32 bytes")]
+    WrongSecretLength,
+    #[error("signature does not match")]
+    BadSignature,
+    #[error("failed to encode signed content: {0}")]
+    Encoding(#[from] postcard::Error),
+}
+
+macro_rules! key_pair {
+    ($(#[$meta:meta])* $public:ident, $signer:ident, $domain:expr) => {
+        $(#[$meta])*
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+        pub struct $public(PublicKey);
+
+        impl $public {
+            pub fn as_bytes(&self) -> &[u8; 32] {
+                self.0.as_bytes()
+            }
+
+            pub fn from_bytes(bytes: &[u8; 32]) -> Result<Self, KeyError> {
+                PublicKey::from_bytes(bytes)
+                    .map(Self)
+                    .map_err(|_| KeyError::Malformed)
+            }
+
+            pub fn fmt_short(&self) -> String {
+                self.0.fmt_short().to_string()
+            }
+
+            pub(crate) fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), KeyError> {
+                let mut signed = Vec::with_capacity($domain.len() + message.len());
+                signed.extend_from_slice($domain);
+                signed.extend_from_slice(message);
+                self.0
+                    .verify(&signed, signature)
+                    .map_err(|_| KeyError::BadSignature)
+            }
+        }
+
+        impl fmt::Display for $public {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                fmt::Display::fmt(&self.0, formatter)
+            }
+        }
+
+        impl fmt::Debug for $public {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "{}({})", stringify!($public), self.0.fmt_short())
+            }
+        }
+
+        impl FromStr for $public {
+            type Err = KeyError;
+
+            fn from_str(text: &str) -> Result<Self, KeyError> {
+                text.parse().map(Self).map_err(|_| KeyError::Malformed)
+            }
+        }
+
+        #[derive(Clone)]
+        pub struct $signer(SecretKey);
+
+        impl $signer {
+            pub fn generate() -> Self {
+                Self(SecretKey::generate())
+            }
+
+            pub fn from_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
+                let bytes: [u8; 32] = bytes.try_into().map_err(|_| KeyError::WrongSecretLength)?;
+                Ok(Self(SecretKey::from_bytes(&bytes)))
+            }
+
+            pub fn to_bytes(&self) -> [u8; 32] {
+                self.0.to_bytes()
+            }
+
+            pub fn key(&self) -> $public {
+                $public(self.0.public())
+            }
+
+            pub(crate) fn sign(&self, message: &[u8]) -> Signature {
+                let mut signed = Vec::with_capacity($domain.len() + message.len());
+                signed.extend_from_slice($domain);
+                signed.extend_from_slice(message);
+                self.0.sign(&signed)
+            }
+        }
+
+        impl fmt::Debug for $signer {
+            fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+                write!(formatter, "{}({})", stringify!($signer), self.key().fmt_short())
+            }
+        }
+    };
+}
+
+key_pair!(
+    /// Identifies a human. Signs authority statements: genesis, policy, owners, invites.
+    PrincipalKey, PrincipalSigner, AUTHORITY_DOMAIN
+);
+key_pair!(
+    /// Identifies a machine. Signs every ordinary event. Never copied between machines.
+    DeviceKey, DeviceSigner, EVENT_DOMAIN
+);
+
+impl DeviceSigner {
+    pub(crate) fn sign_event(&self, encoded_content: &[u8]) -> Signature {
+        self.sign(encoded_content)
+    }
+}
+
+impl DeviceKey {
+    pub(crate) fn verify_event(
+        &self,
+        encoded_content: &[u8],
+        signature: &Signature,
+    ) -> Result<(), KeyError> {
+        self.verify(encoded_content, signature)
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum Role {
+    Owner,
+    Member,
+}
+
+/// An agent is named by its principal and role name: `@joshua/coder`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct AgentId {
+    pub principal: PrincipalKey,
+    pub name: AgentName,
+}
+
+/// Who an event is attributed to. The signing device states this truthfully (members are trusted).
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum Actor {
+    Human(PrincipalKey),
+    Agent { agent: AgentId, session: SessionId },
+}
+
+impl Actor {
+    /// The accountable principal, whoever acts.
+    pub fn principal(&self) -> PrincipalKey {
+        match self {
+            Actor::Human(principal) => *principal,
+            Actor::Agent { agent, .. } => agent.principal,
+        }
+    }
+}
+
+/// A principal-signed authority statement. It travels inside an ordinary device-signed event so
+/// feeds stay gapless; the signature also covers the workforce so it cannot be replayed elsewhere.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Signed<T> {
+    pub statement: T,
+    pub signer: PrincipalKey,
+    signature: Signature,
+}
+
+#[derive(Serialize)]
+struct SignedPayload<'a, T> {
+    workforce: Option<WorkforceId>,
+    statement: &'a T,
+}
+
+impl<T: Serialize> Signed<T> {
+    /// `workforce` is `None` only for genesis, which creates the workforce id.
+    pub fn sign(
+        signer: &PrincipalSigner,
+        workforce: Option<WorkforceId>,
+        statement: T,
+    ) -> Result<Self, KeyError> {
+        let payload = postcard::to_stdvec(&SignedPayload {
+            workforce,
+            statement: &statement,
+        })?;
+        Ok(Self {
+            signature: signer.sign(&payload),
+            signer: signer.key(),
+            statement,
+        })
+    }
+
+    pub fn verify(&self, workforce: Option<WorkforceId>) -> Result<(), KeyError> {
+        let payload = postcard::to_stdvec(&SignedPayload {
+            workforce,
+            statement: &self.statement,
+        })?;
+        self.signer.verify(&payload, &self.signature)
+    }
+}
+
+/// A member of the workforce, as seeded in genesis.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MemberSeed {
+    pub principal: PrincipalKey,
+    pub handle: Handle,
+    pub devices: Vec<DeviceKey>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::id::EventId;
+
+    #[test]
+    fn signatures_verify_and_are_domain_separated() {
+        let principal = PrincipalSigner::generate();
+        let message = b"statement";
+        let signature = principal.sign(message);
+        assert!(principal.key().verify(message, &signature).is_ok());
+        assert!(principal.key().verify(b"other", &signature).is_err());
+
+        let device = DeviceSigner::from_bytes(&principal.to_bytes()).unwrap();
+        assert!(device.key().verify_event(message, &signature).is_err());
+    }
+
+    #[test]
+    fn signed_statements_are_bound_to_a_workforce() {
+        let principal = PrincipalSigner::generate();
+        let workforce = WorkforceId::from(EventId::of(b"one"));
+        let other = WorkforceId::from(EventId::of(b"two"));
+        let signed = Signed::sign(&principal, Some(workforce), "policy".to_string()).unwrap();
+        assert!(signed.verify(Some(workforce)).is_ok());
+        assert!(signed.verify(Some(other)).is_err());
+        assert!(signed.verify(None).is_err());
+    }
+
+    #[test]
+    fn signed_statements_detect_tampering() {
+        let principal = PrincipalSigner::generate();
+        let mut signed = Signed::sign(&principal, None, "policy".to_string()).unwrap();
+        signed.statement = "forged".to_string();
+        assert!(signed.verify(None).is_err());
+    }
+
+    #[test]
+    fn secret_key_round_trip() {
+        let signer = DeviceSigner::generate();
+        let restored = DeviceSigner::from_bytes(&signer.to_bytes()).unwrap();
+        assert_eq!(signer.key(), restored.key());
+        assert!(DeviceSigner::from_bytes(&[0; 5]).is_err());
+    }
+
+    #[test]
+    fn actor_resolves_to_principal() {
+        let principal = PrincipalSigner::generate().key();
+        let agent = Actor::Agent {
+            agent: AgentId {
+                principal,
+                name: AgentName::new("coder").unwrap(),
+            },
+            session: SessionId::from(EventId::of(b"session")),
+        };
+        assert_eq!(agent.principal(), principal);
+        assert_eq!(Actor::Human(principal).principal(), principal);
+    }
+}
