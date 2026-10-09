@@ -28,9 +28,9 @@ pub struct Draft {
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct FrontMatter {
+    title: String,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     item_type: Option<TypeName>,
-    title: String,
     #[serde(default)]
     priority: Option<Priority>,
     #[serde(default)]
@@ -255,7 +255,7 @@ mod tests {
             },
         };
         let text = new.to_markdown().unwrap();
-        assert!(text.starts_with("+++\ntype = \"question\"\ntitle = \"\"\n"));
+        assert!(text.starts_with("+++\ntitle = \"\"\ntype = \"question\"\n"));
         assert_eq!(NewItemDraft::from_markdown(&text).unwrap(), new);
         assert!(Draft::from_markdown(&text).is_err());
         assert!(NewItemDraft::from_markdown("+++\ntitle = \"x\"\n+++\n").is_err());
