@@ -40,5 +40,6 @@ This repo tracks its own work in `wf` (M0 commands; build with `cargo build -p w
 - When you need an answer, `wf item add --title "..." --type question`, then `wf item link <task> --depends-on <question>` and stop; the task is ready again once the question is answered.
 - Split big work as "the big item depends on its parts": `wf item link <big> --depends-on <part>`. There is no parent/child.
 - Discuss with `wf comment <id> "text"`. `#id` references and `@handle` / `@handle/agent` mentions are found automatically (not in code). `wf mentions @handle` lists them.
+- At a terminal, leaving out the item (or the title, comment text, state) opens a picker or `$EDITOR`; `--edit` forces the editor. Without a terminal or with `--json` (agents) these are plain missing-argument errors, so always pass arguments.
 - Use `--json` for machine-readable output. It has a versioned schema (`schema` field).
 - `wf status` shows counts and anything flagged (unknown states, ignored cyclic dependencies). Do not edit `.workforce.toml`.
