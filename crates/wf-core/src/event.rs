@@ -1,5 +1,7 @@
 //! The signed event envelope and the M0 event bodies.
 
+use std::collections::BTreeMap;
+
 use iroh_base::Signature;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
@@ -7,7 +9,9 @@ use crate::crdt::SetChange;
 use crate::encoding::{self, EncodingError};
 use crate::hlc::Hlc;
 use crate::id::{EventId, ItemId, WorkforceId};
-use crate::identity::{Actor, DeviceKey, DeviceSigner, KeyError, MemberSeed, Signed};
+use crate::identity::{
+    Actor, DeviceKey, DeviceSigner, InviteKey, KeyError, MemberSeed, PrincipalKey, Signed,
+};
 use crate::item::Priority;
 use crate::name::{AgentName, HarnessName, Label, LaneName, Requirement, StateName, TypeName};
 
@@ -23,7 +27,7 @@ pub enum EventError {
     SignerMismatch,
 }
 
-/// A frozen point in a parent workforce's history. Always `None` in genesis until `wf fork` (M1).
+/// A frozen point in a parent workforce's history. `None` in genesis unless the workforce is a fork.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForkPoint {
     pub workforce: WorkforceId,
@@ -55,6 +59,45 @@ pub struct AgentDefined {
     pub model: Option<String>,
     pub capabilities: Vec<Requirement>,
     pub lanes: Vec<LaneName>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum InviteKind {
+    Device,
+}
+
+/// Publishes the public half of an invite key. Signed by the principal the invite binds to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InviteCreated {
+    pub kind: InviteKind,
+    pub invite: InviteKey,
+    /// Milliseconds since the Unix epoch. Enforced by whoever serves the join, not at admission.
+    pub expires_ms: u64,
+}
+
+/// Binds the author to the principal of the invite. Always the first event of the author's feed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceBound {
+    pub invite: EventId,
+    /// By the invite key over the workforce, the invite event id and the author key.
+    pub proof: Signature,
+}
+
+/// What a device says about itself. Last writer wins per device.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DeviceProfile {
+    pub name: String,
+    pub hardware: String,
+    pub agents: BTreeMap<AgentName, u32>,
+    pub max_sessions: u32,
+}
+
+/// Written in a parent workforce by an owner who forked it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForkAnnounced {
+    pub to: WorkforceId,
+    /// The members the fork keeps.
+    pub members: Vec<PrincipalKey>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -122,6 +165,10 @@ pub enum EventBody {
     Genesis(Signed<Genesis>),
     PolicySet(Signed<PolicySet>),
     AgentDefined(AgentDefined),
+    InviteCreated(Signed<InviteCreated>),
+    DeviceBound(DeviceBound),
+    DeviceProfile(DeviceProfile),
+    ForkAnnounced(Signed<ForkAnnounced>),
     ItemCreated(ItemCreated),
     ItemEdited(ItemEdited),
     ItemTransitioned(ItemTransitioned),
@@ -140,6 +187,10 @@ mod tag {
     pub const GENESIS: u16 = 1;
     pub const POLICY_SET: u16 = 2;
     pub const AGENT_DEFINED: u16 = 3;
+    pub const INVITE_CREATED: u16 = 4;
+    pub const DEVICE_BOUND: u16 = 5;
+    pub const DEVICE_PROFILE: u16 = 6;
+    pub const FORK_ANNOUNCED: u16 = 7;
     pub const ITEM_CREATED: u16 = 10;
     pub const ITEM_EDITED: u16 = 11;
     pub const ITEM_TRANSITIONED: u16 = 12;
@@ -163,6 +214,10 @@ impl EventBody {
             EventBody::Genesis(_) => "Genesis",
             EventBody::PolicySet(_) => "PolicySet",
             EventBody::AgentDefined(_) => "AgentDefined",
+            EventBody::InviteCreated(_) => "InviteCreated",
+            EventBody::DeviceBound(_) => "DeviceBound",
+            EventBody::DeviceProfile(_) => "DeviceProfile",
+            EventBody::ForkAnnounced(_) => "ForkAnnounced",
             EventBody::ItemCreated(_) => "ItemCreated",
             EventBody::ItemEdited(_) => "ItemEdited",
             EventBody::ItemTransitioned(_) => "ItemTransitioned",
@@ -179,6 +234,10 @@ impl EventBody {
             EventBody::Genesis(body) => (tag::GENESIS, encoding::encode(body)?),
             EventBody::PolicySet(body) => (tag::POLICY_SET, encoding::encode(body)?),
             EventBody::AgentDefined(body) => (tag::AGENT_DEFINED, encoding::encode(body)?),
+            EventBody::InviteCreated(body) => (tag::INVITE_CREATED, encoding::encode(body)?),
+            EventBody::DeviceBound(body) => (tag::DEVICE_BOUND, encoding::encode(body)?),
+            EventBody::DeviceProfile(body) => (tag::DEVICE_PROFILE, encoding::encode(body)?),
+            EventBody::ForkAnnounced(body) => (tag::FORK_ANNOUNCED, encoding::encode(body)?),
             EventBody::ItemCreated(body) => (tag::ITEM_CREATED, encoding::encode(body)?),
             EventBody::ItemEdited(body) => (tag::ITEM_EDITED, encoding::encode(body)?),
             EventBody::ItemTransitioned(body) => (tag::ITEM_TRANSITIONED, encoding::encode(body)?),
@@ -197,6 +256,10 @@ impl EventBody {
             tag::GENESIS => EventBody::Genesis(encoding::decode(payload)?),
             tag::POLICY_SET => EventBody::PolicySet(encoding::decode(payload)?),
             tag::AGENT_DEFINED => EventBody::AgentDefined(encoding::decode(payload)?),
+            tag::INVITE_CREATED => EventBody::InviteCreated(encoding::decode(payload)?),
+            tag::DEVICE_BOUND => EventBody::DeviceBound(encoding::decode(payload)?),
+            tag::DEVICE_PROFILE => EventBody::DeviceProfile(encoding::decode(payload)?),
+            tag::FORK_ANNOUNCED => EventBody::ForkAnnounced(encoding::decode(payload)?),
             tag::ITEM_CREATED => EventBody::ItemCreated(encoding::decode(payload)?),
             tag::ITEM_EDITED => EventBody::ItemEdited(encoding::decode(payload)?),
             tag::ITEM_TRANSITIONED => EventBody::ItemTransitioned(encoding::decode(payload)?),
@@ -235,9 +298,9 @@ pub struct EventContent {
     pub workforce: Option<WorkforceId>,
     pub author: DeviceKey,
     pub actor: Actor,
-    /// Per author, gapless, starting at 1.
+    /// Per author, starting at 1. A feed that forks (equivocation) has several events per `seq`.
     pub seq: u64,
-    /// The author's previous event. `None` exactly when `seq` is 1.
+    /// The author's event with `seq - 1`. `None` exactly when `seq` is 1.
     pub prev: Option<EventId>,
     /// Heads the author had seen when writing.
     pub deps: Vec<EventId>,
@@ -349,6 +412,7 @@ mod tests {
             principal: principal.key(),
             handle: Handle::new("joshua").unwrap(),
             devices: vec![device.key()],
+            previous: vec![],
         };
         let genesis = Genesis {
             name: "demo".into(),
@@ -373,8 +437,8 @@ mod tests {
         );
     }
 
-    const GOLDEN_LEN: usize = 1745;
-    const GOLDEN_ID: &str = "gbeqgziznmfb7baf3oho6n3d65x2wvgxkt4ji5jdiujl5ba4jncq";
+    const GOLDEN_LEN: usize = 1746;
+    const GOLDEN_ID: &str = "rudghhczjbkleiy3ghm4tnplipdj6dkbcgo3hzmjagukji24wm6q";
 
     #[test]
     fn round_trips_and_verifies() {

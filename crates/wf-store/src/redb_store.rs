@@ -4,21 +4,21 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use redb::{
-    Database, DatabaseError, ReadableDatabase, ReadableTable, ReadableTableMetadata,
-    TableDefinition,
+    Database, DatabaseError, MultimapTableDefinition, ReadableDatabase, ReadableTable,
+    ReadableTableMetadata, TableDefinition,
 };
 use wf_core::event::Event;
 use wf_core::id::{EventId, HashId};
 use wf_core::identity::DeviceKey;
-use wf_core::state::FeedHead;
 
 use crate::store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError, StoredSnapshot};
 
 const EVENTS: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("events");
-/// `(author, seq)` to event id: the per-author feeds.
-const FEEDS: TableDefinition<([u8; 32], u64), [u8; 32]> = TableDefinition::new("feeds");
-/// Author to the head of its feed.
-const HEADS: TableDefinition<[u8; 32], (u64, [u8; 32])> = TableDefinition::new("heads");
+/// `(author, seq)` to the ids of the events there: more than one when a feed has forked.
+const FEEDS: MultimapTableDefinition<([u8; 32], u64), [u8; 32]> =
+    MultimapTableDefinition::new("feeds");
+/// Position to event id, in the order events were applied.
+const LOG: TableDefinition<u64, [u8; 32]> = TableDefinition::new("log");
 const PENDING: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("pending");
 /// Snapshots keyed by the hash of the heads they cover.
 const SNAPSHOTS: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("snapshots");
@@ -57,8 +57,8 @@ impl RedbStore {
     fn create_tables(&self) -> Result<(), StoreError> {
         let transaction = self.database.begin_write()?;
         transaction.open_table(EVENTS)?;
-        transaction.open_table(FEEDS)?;
-        transaction.open_table(HEADS)?;
+        transaction.open_multimap_table(FEEDS)?;
+        transaction.open_table(LOG)?;
         transaction.open_table(PENDING)?;
         transaction.open_table(SNAPSHOTS)?;
         transaction.open_table(META)?;
@@ -108,39 +108,20 @@ impl EventStore for RedbStore {
         Ok(Some(Event::decode(bytes.value())?))
     }
 
-    fn feed_heads(&self) -> Result<Vec<(DeviceKey, FeedHead)>, StoreError> {
-        let transaction = self.database.begin_read()?;
-        let heads = transaction.open_table(HEADS)?;
-        heads
-            .iter()?
-            .map(|row| {
-                let (author, head) = row?;
-                let (seq, id) = head.value();
-                let author = DeviceKey::from_bytes(&author.value())
-                    .map_err(|error| StoreError::Inconsistent(error.to_string()))?;
-                Ok((
-                    author,
-                    FeedHead {
-                        seq,
-                        id: EventId::from_bytes(id),
-                    },
-                ))
-            })
-            .collect()
-    }
-
     fn feed_since(&self, author: &DeviceKey, after_seq: u64) -> Result<Vec<Event>, StoreError> {
         let transaction = self.database.begin_read()?;
-        let feeds = transaction.open_table(FEEDS)?;
+        let feeds = transaction.open_multimap_table(FEEDS)?;
         let events = transaction.open_table(EVENTS)?;
         let author = *author.as_bytes();
         let mut result = Vec::new();
         for row in feeds.range((author, after_seq.saturating_add(1))..=(author, u64::MAX))? {
-            let (_, id) = row?;
-            let bytes = events.get(id.value())?.ok_or_else(|| {
-                StoreError::Inconsistent("a feed points at a missing event".into())
-            })?;
-            result.push(Event::decode(bytes.value())?);
+            let (_, ids) = row?;
+            for id in ids {
+                let bytes = events.get(id?.value())?.ok_or_else(|| {
+                    StoreError::Inconsistent("a feed points at a missing event".into())
+                })?;
+                result.push(Event::decode(bytes.value())?);
+            }
         }
         Ok(result)
     }
@@ -150,6 +131,34 @@ impl EventStore for RedbStore {
         let mut events = decode_all(transaction.open_table(EVENTS)?.iter()?)?;
         events.sort_by_key(|event| (event.content.hlc, event.id()));
         Ok(events)
+    }
+
+    fn log_len(&self) -> Result<u64, StoreError> {
+        let transaction = self.database.begin_read()?;
+        Ok(transaction.open_table(LOG)?.len()?)
+    }
+
+    fn log_id(&self, position: u64) -> Result<Option<EventId>, StoreError> {
+        let transaction = self.database.begin_read()?;
+        Ok(transaction
+            .open_table(LOG)?
+            .get(position)?
+            .map(|id| EventId::from_bytes(id.value())))
+    }
+
+    fn log_since(&self, position: u64) -> Result<Vec<Event>, StoreError> {
+        let transaction = self.database.begin_read()?;
+        let log = transaction.open_table(LOG)?;
+        let events = transaction.open_table(EVENTS)?;
+        let mut result = Vec::new();
+        for row in log.range(position..)? {
+            let (_, id) = row?;
+            let bytes = events.get(id.value())?.ok_or_else(|| {
+                StoreError::Inconsistent("the log points at a missing event".into())
+            })?;
+            result.push(Event::decode(bytes.value())?);
+        }
+        Ok(result)
     }
 
     fn pending(&self) -> Result<Vec<Event>, StoreError> {
@@ -180,25 +189,25 @@ impl EventStore for RedbStore {
         let transaction = self.database.begin_write()?;
         {
             let mut events = transaction.open_table(EVENTS)?;
-            let mut feeds = transaction.open_table(FEEDS)?;
-            let mut heads = transaction.open_table(HEADS)?;
-            for event in commit.append {
+            let mut feeds = transaction.open_multimap_table(FEEDS)?;
+            let mut log = transaction.open_table(LOG)?;
+            for (position, event) in (log.len()?..).zip(commit.append) {
                 let id = event.id();
-                let author = event.content.author;
-                let expected = heads
-                    .get(*author.as_bytes())?
-                    .map_or(1, |head| head.value().0 + 1);
-                if event.content.seq != expected {
-                    return Err(StoreError::FeedGap {
-                        author,
+                if let Some(prev) = event.content.prev
+                    && events.get(*prev.as_bytes())?.is_none()
+                {
+                    return Err(StoreError::MissingPrev {
+                        author: event.content.author,
                         id,
-                        expected,
-                        got: event.content.seq,
+                        prev,
                     });
                 }
                 events.insert(*id.as_bytes(), event.encode()?.as_slice())?;
-                feeds.insert((*author.as_bytes(), event.content.seq), *id.as_bytes())?;
-                heads.insert(*author.as_bytes(), (event.content.seq, *id.as_bytes()))?;
+                feeds.insert(
+                    (*event.content.author.as_bytes(), event.content.seq),
+                    *id.as_bytes(),
+                )?;
+                log.insert(position, *id.as_bytes())?;
             }
         }
         if let PendingChange::Update { put, remove } = commit.pending {

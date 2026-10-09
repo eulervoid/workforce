@@ -9,11 +9,12 @@ use std::str::FromStr;
 use iroh_base::{PublicKey, SecretKey, Signature};
 use serde::{Deserialize, Serialize};
 
-use crate::id::{SessionId, WorkforceId};
+use crate::id::{EventId, SessionId, WorkforceId};
 use crate::name::{AgentName, Handle};
 
 const EVENT_DOMAIN: &[u8] = b"wf/event/1\0";
 const AUTHORITY_DOMAIN: &[u8] = b"wf/authority/1\0";
+const INVITE_DOMAIN: &[u8] = b"wf/invite/1\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyError {
@@ -176,6 +177,52 @@ impl DeviceKey {
     }
 }
 
+key_pair!(
+    /// The secret half travels in an invite code; the public half is published in the log.
+    InviteKey, InviteSigner, INVITE_DOMAIN
+);
+
+#[derive(Serialize)]
+struct InviteProofPayload {
+    workforce: WorkforceId,
+    invite: EventId,
+    device: DeviceKey,
+}
+
+impl InviteSigner {
+    /// Proves that the holder of the invite secret wants `device` bound.
+    pub fn prove(
+        &self,
+        workforce: WorkforceId,
+        invite: EventId,
+        device: DeviceKey,
+    ) -> Result<Signature, KeyError> {
+        let payload = postcard::to_stdvec(&InviteProofPayload {
+            workforce,
+            invite,
+            device,
+        })?;
+        Ok(self.sign(&payload))
+    }
+}
+
+impl InviteKey {
+    pub fn verify_proof(
+        &self,
+        workforce: WorkforceId,
+        invite: EventId,
+        device: DeviceKey,
+        proof: &Signature,
+    ) -> Result<(), KeyError> {
+        let payload = postcard::to_stdvec(&InviteProofPayload {
+            workforce,
+            invite,
+            device,
+        })?;
+        self.verify(&payload, proof)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
@@ -255,12 +302,14 @@ pub struct MemberSeed {
     pub principal: PrincipalKey,
     pub handle: Handle,
     pub devices: Vec<DeviceKey>,
+    /// Principal keys this member used in the parent workforce of a fork, so events in the
+    /// prefix keep resolving to the same handle.
+    pub previous: Vec<PrincipalKey>,
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::id::EventId;
 
     #[test]
     fn signatures_verify_and_are_domain_separated() {
@@ -313,5 +362,35 @@ mod tests {
         };
         assert_eq!(agent.principal(), principal);
         assert_eq!(Actor::Human(principal).principal(), principal);
+    }
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::*;
+
+    #[test]
+    fn proofs_cover_workforce_invite_and_device() {
+        let invite = InviteSigner::generate();
+        let workforce = WorkforceId::from(EventId::of(b"one"));
+        let invite_id = EventId::of(b"invite");
+        let device = DeviceSigner::generate().key();
+        let proof = invite.prove(workforce, invite_id, device).unwrap();
+        let key = invite.key();
+        assert!(
+            key.verify_proof(workforce, invite_id, device, &proof)
+                .is_ok()
+        );
+        let other_device = DeviceSigner::generate().key();
+        assert!(
+            key.verify_proof(workforce, invite_id, other_device, &proof)
+                .is_err()
+        );
+        assert!(
+            key.verify_proof(workforce, EventId::of(b"x"), device, &proof)
+                .is_err()
+        );
+        let other = WorkforceId::from(EventId::of(b"two"));
+        assert!(key.verify_proof(other, invite_id, device, &proof).is_err());
     }
 }

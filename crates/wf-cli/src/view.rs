@@ -383,6 +383,10 @@ pub fn describe(state: &State, body: &EventBody) -> String {
         EventBody::Genesis(signed) => format!("workforce \"{}\"", signed.statement.name),
         EventBody::PolicySet(_) => "policy replaced".to_string(),
         EventBody::AgentDefined(defined) => format!("{} on {}", defined.name, defined.harness),
+        EventBody::InviteCreated(_) => "device invite".to_string(),
+        EventBody::DeviceBound(_) => "device bound".to_string(),
+        EventBody::DeviceProfile(profile) => format!("device \"{}\"", profile.name),
+        EventBody::ForkAnnounced(announced) => format!("forked to {}", announced.statement.to),
         EventBody::ItemCreated(created) => format!("{} \"{}\"", created.item_type, created.title),
         EventBody::ItemEdited(edited) => {
             let fields: Vec<&str> = edited
@@ -487,6 +491,12 @@ pub fn status(state: &State, refolded: bool) -> StatusView {
             "dependency #{} -> #{} ignored: concurrent links formed a cycle",
             edge.from.short(),
             edge.to.short()
+        ));
+    }
+    for (device, seq) in state.equivocations() {
+        flagged.insert(format!(
+            "device {} wrote two different events with seq {seq}; it was cloned or restored from a snapshot",
+            device.fmt_short()
         ));
     }
     StatusView {

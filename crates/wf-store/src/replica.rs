@@ -12,7 +12,7 @@ pub const SNAPSHOT_INTERVAL: usize = 256;
 
 /// Bumped whenever the serialized shape of [`State`] changes. Snapshots are a cache: a mismatch
 /// discards the snapshot and refolds from the log.
-const SNAPSHOT_FORMAT: u32 = 1;
+const SNAPSHOT_FORMAT: u32 = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
@@ -28,6 +28,10 @@ pub enum AuthorError {
     NoWorkforce,
     #[error(transparent)]
     Policy(#[from] PolicyViolation),
+    #[error(
+        "another event was written under this device's key; join the workforce again as a new device"
+    )]
+    OwnFeedForked,
     #[error(transparent)]
     Sign(#[from] EventError),
     #[error(transparent)]
@@ -61,14 +65,7 @@ impl<S: EventStore> Replica<S> {
         let mut state = snapshot.unwrap_or_default();
         let snapshot_event_count = state.event_count();
 
-        let mut unseen = Vec::new();
-        for (author, head) in store.feed_heads()? {
-            let applied = state.feed_heads().get(&author).map_or(0, |known| known.seq);
-            if head.seq > applied {
-                unseen.extend(store.feed_since(&author, applied)?);
-            }
-        }
-        unseen.sort_by_key(|event| (event.content.hlc, event.id()));
+        let unseen = store.log_since(snapshot_event_count as u64)?;
         let replayed = unseen.len();
         for event in unseen {
             state
@@ -116,7 +113,9 @@ impl<S: EventStore> Replica<S> {
         Ok(received)
     }
 
-    /// Checks the policy rules, signs the next event of `signer` and persists it.
+    /// Checks the policy rules, signs the next event of `signer` and persists it. Refuses when
+    /// another event exists under the same key: this device was cloned or restored from a
+    /// snapshot, and writing on would fork its feed further.
     pub fn author(
         &mut self,
         signer: &DeviceSigner,
@@ -124,6 +123,14 @@ impl<S: EventStore> Replica<S> {
         now_ms: u64,
         body: EventBody,
     ) -> Result<Event, AuthorError> {
+        let forked = self
+            .state
+            .feeds()
+            .get(&signer.key())
+            .is_some_and(|feed| feed.equivocated().is_some());
+        if forked {
+            return Err(AuthorError::OwnFeedForked);
+        }
         self.state.check_policy(&body)?;
         let builder = self
             .state
@@ -200,11 +207,13 @@ fn load_snapshot<S: EventStore>(store: &S) -> Result<Option<State>, StoreError> 
     let Ok(state) = postcard::from_bytes::<State>(rest) else {
         return Ok(None);
     };
-    let log_heads = store.feed_heads()?;
-    let behind_log = state.feed_heads().iter().all(|(author, head)| {
-        log_heads
-            .iter()
-            .any(|(candidate, logged)| candidate == author && logged.seq >= head.seq)
-    });
-    Ok(behind_log.then_some(state))
+    let position = state.event_count() as u64;
+    if position > store.log_len()? {
+        return Ok(None);
+    }
+    let consistent = match position.checked_sub(1) {
+        None => true,
+        Some(last) => store.log_id(last)?.is_some_and(|id| state.contains(&id)),
+    };
+    Ok(consistent.then_some(state))
 }

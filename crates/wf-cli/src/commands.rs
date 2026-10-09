@@ -128,6 +128,7 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
             principal: principal.key(),
             handle: handle.clone(),
             devices: vec![device.key()],
+            previous: Vec::new(),
         },
         members: Vec::new(),
         policy: DEFAULT_POLICY_TOML.to_string(),
@@ -592,6 +593,10 @@ fn event_touches(event: &Event, id: ItemId) -> bool {
         EventBody::Genesis(_)
         | EventBody::PolicySet(_)
         | EventBody::AgentDefined(_)
+        | EventBody::InviteCreated(_)
+        | EventBody::DeviceBound(_)
+        | EventBody::DeviceProfile(_)
+        | EventBody::ForkAnnounced(_)
         | EventBody::Unknown { .. } => false,
     }
 }

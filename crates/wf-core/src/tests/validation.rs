@@ -229,39 +229,16 @@ fn pending_events_that_turn_out_invalid_are_reported() {
 }
 
 #[test]
-fn feed_must_be_gapless_and_unforked() {
-    let fixture = Fixture::new(1);
+fn prev_must_be_the_previous_seq_of_the_same_author() {
+    let fixture = Fixture::new(2);
     let mut state = fixture.state();
     let first = fixture.apply(&mut state, 0, 2_000, create("task", "a"));
-
-    let fork = forged(&fixture, &state, |content| {
-        content.seq = 2;
-        content.prev = Some(first.id());
-        content.deps = vec![first.id()];
-        content.hlc = Hlc::next_after(first.content.hlc, 9_000);
-    });
-    let _ = fork;
-    let same_seq = {
-        let mut content = first.content.clone();
-        content.hlc = Hlc::next_after(first.content.hlc, 9_000);
-        Event::sign_content(content, &fixture.devices[0]).unwrap()
-    };
-    assert_eq!(
-        receive(&mut state, same_seq),
-        Err(Invalid::Equivocation {
-            author: fixture.devices[0].key(),
-            seq: 2
-        })
-    );
+    let author = fixture.devices[0].key();
 
     let skipping = forged(&fixture, &state, |content| content.seq += 1);
     assert_eq!(
         receive(&mut state, skipping),
-        Err(Invalid::UnexpectedSeq {
-            author: fixture.devices[0].key(),
-            expected: 3,
-            got: 4
-        })
+        Err(Invalid::PrevMismatch { author })
     );
 
     let wrong_prev = forged(&fixture, &state, |content| {
@@ -269,10 +246,69 @@ fn feed_must_be_gapless_and_unforked() {
     });
     assert_eq!(
         receive(&mut state, wrong_prev),
-        Err(Invalid::PrevMismatch {
-            author: fixture.devices[0].key()
+        Err(Invalid::PrevMismatch { author })
+    );
+
+    let missing_prev = forged(&fixture, &state, |content| content.prev = None);
+    assert_eq!(
+        receive(&mut state, missing_prev),
+        Err(Invalid::PrevMismatch { author })
+    );
+
+    let unexpected_prev = forged(&fixture, &state, |content| {
+        content.seq = 1;
+        content.prev = Some(first.id());
+    });
+    assert_eq!(
+        receive(&mut state, unexpected_prev),
+        Err(Invalid::PrevMismatch { author })
+    );
+
+    let zero = forged(&fixture, &state, |content| content.seq = 0);
+    assert_eq!(
+        receive(&mut state, zero),
+        Err(Invalid::UnexpectedSeq {
+            author,
+            expected: 1,
+            got: 0
         })
     );
+}
+
+#[test]
+fn a_forked_feed_is_admitted_on_both_branches_and_flagged() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let first = fixture.apply(&mut state, 0, 2_000, create("task", "a"));
+    assert_eq!(state.equivocations().count(), 0);
+
+    let branch = forged(&fixture, &state, |content| {
+        content.seq = first.content.seq;
+        content.prev = first.content.prev;
+        content.deps = first.content.deps.clone();
+        content.hlc = Hlc::next_after(first.content.hlc, 9_000);
+    });
+    assert_eq!(
+        receive(&mut state, branch.clone()),
+        Ok(Disposition::Applied)
+    );
+    let author = fixture.devices[0].key();
+    assert_eq!(
+        state.equivocations().collect::<Vec<_>>(),
+        vec![(author, first.content.seq)]
+    );
+    assert_eq!(state.feeds()[&author].tips().count(), 2);
+    assert_eq!(state.version_vector()[&author], first.content.seq);
+
+    // Receiving the same events in the other order flags the same seq.
+    let mut other = fixture.state();
+    receive(&mut other, branch).unwrap();
+    receive(&mut other, first.clone()).unwrap();
+    assert_eq!(
+        other.equivocations().collect::<Vec<_>>(),
+        state.equivocations().collect::<Vec<_>>()
+    );
+    assert_eq!(other, state);
 }
 
 #[test]

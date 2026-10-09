@@ -84,13 +84,15 @@ fn events_can_be_read_back_by_id_and_by_feed() {
             .collect::<Vec<_>>(),
         [3, 4]
     );
-    let heads = store.feed_heads().unwrap();
-    assert_eq!(heads.len(), 1);
-    assert_eq!(heads[0].1.seq, 4);
+    assert_eq!(store.log_len().unwrap(), 4);
+    assert_eq!(store.log_id(0).unwrap(), Some(fixture.genesis.id()));
+    let replayed = store.log_since(2).unwrap();
+    assert_eq!(replayed.len(), 2);
+    assert_eq!(replayed[0].id(), ids[1]);
 }
 
 #[test]
-fn appends_must_be_gapless() {
+fn appends_must_follow_a_stored_event() {
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);
     let mut author = fixture.state();
@@ -110,14 +112,7 @@ fn appends_must_be_gapless() {
             ..Commit::default()
         })
         .unwrap_err();
-    assert!(matches!(
-        error,
-        StoreError::FeedGap {
-            expected: 2,
-            got: 3,
-            ..
-        }
-    ));
+    assert!(matches!(error, StoreError::MissingPrev { .. }));
     store
         .commit(Commit {
             append: &[first, second],
@@ -147,7 +142,7 @@ fn a_failed_commit_changes_nothing() {
         covers: Default::default(),
         bytes: vec![1],
     };
-    // `first` is fine but `third` skips `second`: the whole transaction must roll back.
+    // `first` is fine but `third` follows `second`, which is missing: the whole transaction must roll back.
     let result = store.commit(Commit {
         append: &[first, third],
         pending: PendingChange::Update {
@@ -405,4 +400,45 @@ fn startup_with_100k_events_and_a_snapshot_is_fast() {
     assert_eq!(replica.state().event_count(), 100_001);
     eprintln!("first open (full fold): {first_open:?}, open with snapshot: {with_snapshot:?}");
     assert!(with_snapshot.as_millis() < 100, "{with_snapshot:?}");
+}
+
+#[test]
+fn both_branches_of_a_forked_feed_are_stored_and_replayed() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let mut replica = new_replica(&directory, &fixture);
+    let mut branch_state = fixture.state();
+    let branch_a = fixture.apply(&mut branch_state, 0, 2_000, create("task", "a"));
+    let mut other_state = fixture.state();
+    let branch_b = fixture.apply(&mut other_state, 0, 2_001, create("task", "b"));
+    replica.receive(branch_a.clone()).unwrap();
+    replica.receive(branch_b.clone()).unwrap();
+
+    let author = fixture.devices[0].key();
+    let stored = replica.store().feed_since(&author, 1).unwrap();
+    assert_eq!(stored.len(), 2);
+    assert_eq!(replica.state().equivocations().count(), 1);
+    let expected = replica.state().clone();
+    drop(replica);
+
+    let reopened = Replica::refold(open(&directory)).unwrap();
+    assert_eq!(reopened.state(), &expected);
+}
+
+#[test]
+fn a_replica_refuses_to_write_on_a_forked_own_feed() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let mut replica = new_replica(&directory, &fixture);
+    let mut other_state = fixture.state();
+    let branch = fixture.apply(&mut other_state, 0, 2_001, create("task", "elsewhere"));
+    add(&mut replica, &fixture, 1);
+    replica.receive(branch).unwrap();
+    let result = replica.author(
+        &fixture.devices[0],
+        fixture.founder_actor(),
+        9_000,
+        create("task", "more"),
+    );
+    assert!(matches!(result, Err(wf_store::AuthorError::OwnFeedForked)));
 }

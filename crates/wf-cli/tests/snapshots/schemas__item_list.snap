@@ -6,26 +6,7 @@ expression: "Envelope::new(&all)"
   "schema": 1,
   "data": [
     {
-      "id": "oh6pwozvpk6qwzc3aysdxlasc4cdxesmhinrhqvijh6qfssqlwya",
-      "type": "task",
-      "title": "Implement feed sync",
-      "state": "open",
-      "category": "open",
-      "priority": "P1",
-      "ready": false,
-      "blocked_by": [
-        {
-          "id": "3ga7ksosjfleq6ccsyrwrm64um5lbmcc3lfkbntwhgkrlebti5kq",
-          "type": "question",
-          "title": "Which hash for event ids?",
-          "state": "open",
-          "category": "open"
-        }
-      ],
-      "archived": false
-    },
-    {
-      "id": "3ga7ksosjfleq6ccsyrwrm64um5lbmcc3lfkbntwhgkrlebti5kq",
+      "id": "copop5ah64c3wnrj4wwyrjcmt7roxesa5zbgfreao6765xzjjypq",
       "type": "question",
       "title": "Which hash for event ids?",
       "state": "open",
@@ -36,7 +17,26 @@ expression: "Envelope::new(&all)"
       "archived": false
     },
     {
-      "id": "5ictkg6fy6whvcm7uiiffv4wf6dsmgfbucwrcviufcfsu7cwyxra",
+      "id": "porkjzoazjtvw4pbjfjicak7ojmue77fononyy4tpint3fxruyqa",
+      "type": "task",
+      "title": "Implement feed sync",
+      "state": "open",
+      "category": "open",
+      "priority": "P1",
+      "ready": false,
+      "blocked_by": [
+        {
+          "id": "copop5ah64c3wnrj4wwyrjcmt7roxesa5zbgfreao6765xzjjypq",
+          "type": "question",
+          "title": "Which hash for event ids?",
+          "state": "open",
+          "category": "open"
+        }
+      ],
+      "archived": false
+    },
+    {
+      "id": "u6v7ccq6aq4mfz2ljqnn6cykfibkszm6tp3t4uv4j35v6nuxrqwq",
       "type": "task",
       "title": "Write spec",
       "state": "done",

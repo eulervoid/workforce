@@ -43,11 +43,13 @@ impl Fixture {
                 principal: founder.key(),
                 handle: Handle::new("joshua").unwrap(),
                 devices: devices.iter().map(DeviceSigner::key).collect(),
+                previous: vec![],
             },
             members: vec![MemberSeed {
                 principal: member.key(),
                 handle: Handle::new("ada").unwrap(),
                 devices: vec![member_device.key()],
+                previous: vec![],
             }],
             policy: DEFAULT_POLICY_TOML.into(),
             forked_from: None,

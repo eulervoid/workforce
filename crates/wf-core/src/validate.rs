@@ -54,16 +54,14 @@ pub enum Invalid {
     DuplicateGenesis,
     #[error("invalid genesis: {0}")]
     Genesis(#[from] GenesisError),
-    #[error("expected seq {expected} from {author}, got {got}")]
+    #[error("seq {got} from {author} is not valid here, expected {expected}")]
     UnexpectedSeq {
         author: DeviceKey,
         expected: u64,
         got: u64,
     },
-    #[error("`prev` does not point at the previous event of {author}")]
+    #[error("`prev` is not the event of {author} with the previous seq")]
     PrevMismatch { author: DeviceKey },
-    #[error("equivocation: {author} already wrote an event with seq {seq}")]
-    Equivocation { author: DeviceKey, seq: u64 },
     #[error("hlc is not greater than the hlc of the events it follows")]
     HlcNotAfterParents,
     #[error("device {0} is not bound to a member")]
@@ -241,34 +239,36 @@ impl State {
         Ok(Admission::Apply)
     }
 
+    /// `prev` is empty exactly at seq 1, and otherwise an event of the same author with the
+    /// previous seq. Nothing else about the feed is checked: forked feeds are admitted.
     fn check_feed(&self, event: &Event) -> Result<(), Invalid> {
         let content = &event.content;
         let author = content.author;
-        let head = self.feeds.get(&author);
-        let expected = head.map_or(1, |head| head.seq + 1);
-        if content.seq <= head.map_or(0, |head| head.seq) {
-            return Err(Invalid::Equivocation {
-                author,
-                seq: content.seq,
-            });
-        }
-        if content.seq != expected {
+        if content.seq == 0 {
             return Err(Invalid::UnexpectedSeq {
                 author,
-                expected,
-                got: content.seq,
+                expected: 1,
+                got: 0,
             });
         }
-        if content.prev != head.map(|head| head.id) {
-            return Err(Invalid::PrevMismatch { author });
+        let prev_is_valid = match content.prev {
+            None => content.seq == 1,
+            Some(prev) => self
+                .known
+                .get(&prev)
+                .is_some_and(|known| known.author == author && known.seq + 1 == content.seq),
+        };
+        if prev_is_valid {
+            Ok(())
+        } else {
+            Err(Invalid::PrevMismatch { author })
         }
-        Ok(())
     }
 
     fn check_hlc(&self, event: &Event) -> Result<(), Invalid> {
         let follows_all = event
             .causal_parents()
-            .all(|parent| self.known[&parent] < event.content.hlc);
+            .all(|parent| self.known[&parent].hlc < event.content.hlc);
         if follows_all {
             Ok(())
         } else {
@@ -318,7 +318,12 @@ impl State {
                 Policy::parse(&signed.statement.policy)?;
                 Ok(())
             }
-            EventBody::AgentDefined(AgentDefined { .. }) | EventBody::Unknown { .. } => Ok(()),
+            EventBody::AgentDefined(AgentDefined { .. })
+            | EventBody::InviteCreated(_)
+            | EventBody::DeviceBound(_)
+            | EventBody::DeviceProfile(_)
+            | EventBody::ForkAnnounced(_)
+            | EventBody::Unknown { .. } => Ok(()),
             EventBody::ItemCreated(ItemCreated { .. }) => Ok(()),
             EventBody::ItemEdited(ItemEdited { item, .. })
             | EventBody::ItemTransitioned(ItemTransitioned { item, .. })
@@ -436,6 +441,10 @@ impl State {
             | EventBody::PolicySet(_)
             | EventBody::Comment(_)
             | EventBody::Unknown { .. } => Ok(()),
+            EventBody::InviteCreated(_)
+            | EventBody::DeviceBound(_)
+            | EventBody::DeviceProfile(_)
+            | EventBody::ForkAnnounced(_) => Ok(()),
             EventBody::AgentDefined(defined) => defined.lanes.iter().try_for_each(known_lane),
             EventBody::ItemCreated(created) => {
                 let type_name = &created.item_type;

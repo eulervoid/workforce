@@ -4,7 +4,6 @@ use wf_core::encoding::EncodingError;
 use wf_core::event::Event;
 use wf_core::id::EventId;
 use wf_core::identity::DeviceKey;
-use wf_core::state::FeedHead;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -20,12 +19,11 @@ pub enum StoreError {
     Commit(#[from] redb::CommitError),
     #[error("stored data does not decode: {0}")]
     Corrupt(#[from] EncodingError),
-    #[error("event {id} from {author} has seq {got}, expected {expected}")]
-    FeedGap {
+    #[error("event {id} from {author} follows {prev}, which is not stored")]
+    MissingPrev {
         author: DeviceKey,
         id: EventId,
-        expected: u64,
-        got: u64,
+        prev: EventId,
     },
     #[error("the stored log is inconsistent: {0}")]
     Inconsistent(String),
@@ -72,18 +70,26 @@ pub struct Commit<'a> {
 pub trait EventStore {
     fn event(&self, id: &EventId) -> Result<Option<Event>, StoreError>;
 
-    fn feed_heads(&self) -> Result<Vec<(DeviceKey, FeedHead)>, StoreError>;
-
-    /// The events of one author with `seq` greater than `after_seq`, in seq order.
+    /// The events of one author with `seq` greater than `after_seq`, in `(seq, id)` order. A
+    /// forked feed yields every branch.
     fn feed_since(&self, author: &DeviceKey, after_seq: u64) -> Result<Vec<Event>, StoreError>;
 
     /// Every event, ordered by `(hlc, id)`, which is a causal order.
     fn events(&self) -> Result<Vec<Event>, StoreError>;
 
+    /// How many events have been appended. Events are numbered in the order they were applied,
+    /// which is a causal order.
+    fn log_len(&self) -> Result<u64, StoreError>;
+
+    fn log_id(&self, position: u64) -> Result<Option<EventId>, StoreError>;
+
+    /// The events appended at `position` and after, in order.
+    fn log_since(&self, position: u64) -> Result<Vec<Event>, StoreError>;
+
     fn pending(&self) -> Result<Vec<Event>, StoreError>;
 
     fn snapshot(&self) -> Result<Option<StoredSnapshot>, StoreError>;
 
-    /// Atomic. Appends must continue each author's feed without gaps.
+    /// Atomic. Every appended event must follow an event that is stored or appended before it.
     fn commit(&self, commit: Commit<'_>) -> Result<(), StoreError>;
 }

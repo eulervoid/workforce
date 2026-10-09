@@ -11,7 +11,7 @@ use crate::item::{Item, Note, NoteKind};
 use crate::name::StateName;
 use crate::policy::Policy;
 use crate::refs;
-use crate::state::{AgentDefinition, FeedHead, Member, PolicyDoc, State, Workforce};
+use crate::state::{AgentDefinition, Feed, FeedHead, Known, Member, PolicyDoc, State, Workforce};
 
 impl State {
     /// Applies an event that [`State::receive`] has admitted.
@@ -22,14 +22,24 @@ impl State {
             id,
         };
 
-        self.known.insert(id, content.hlc);
-        self.feeds.insert(
-            content.author,
-            FeedHead {
+        self.known.insert(
+            id,
+            Known {
+                hlc: content.hlc,
+                author: content.author,
                 seq: content.seq,
-                id,
             },
         );
+        let head = FeedHead {
+            seq: content.seq,
+            id,
+        };
+        match self.feeds.get_mut(&content.author) {
+            Some(feed) => feed.extend(head, content.prev),
+            None => {
+                self.feeds.insert(content.author, Feed::new(head));
+            }
+        }
         for parent in event.causal_parents() {
             self.heads.remove(&parent);
         }
@@ -79,7 +89,12 @@ impl State {
             return;
         };
         match &content.body {
-            EventBody::Genesis(_) | EventBody::Unknown { .. } => {}
+            EventBody::Genesis(_)
+            | EventBody::InviteCreated(_)
+            | EventBody::DeviceBound(_)
+            | EventBody::DeviceProfile(_)
+            | EventBody::ForkAnnounced(_)
+            | EventBody::Unknown { .. } => {}
             EventBody::PolicySet(signed) => {
                 let source = &signed.statement.policy;
                 let policy = Policy::parse(source).expect("admitted policy is valid");

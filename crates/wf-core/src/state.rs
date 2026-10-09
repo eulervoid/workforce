@@ -46,10 +46,69 @@ pub struct AgentDefinition {
     pub lanes: Vec<LaneName>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FeedHead {
     pub seq: u64,
     pub id: EventId,
+}
+
+/// What one device has written. A device that wrote two events with the same `seq` (a machine
+/// restored from a snapshot, say) has several tips; both branches are kept.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Feed {
+    tips: BTreeSet<FeedHead>,
+    equivocated: Option<u64>,
+}
+
+impl Feed {
+    pub(crate) fn new(first: FeedHead) -> Self {
+        Self {
+            tips: BTreeSet::from([first]),
+            equivocated: None,
+        }
+    }
+
+    /// Adds an event whose `prev` is already part of the feed. Extending an event that has been
+    /// extended before means the feed forked at this `seq`.
+    pub(crate) fn extend(&mut self, head: FeedHead, prev: Option<EventId>) {
+        let extended = match prev {
+            Some(prev) => self.tips.remove(&FeedHead {
+                seq: head.seq - 1,
+                id: prev,
+            }),
+            None => false,
+        };
+        if !extended {
+            self.equivocated = Some(self.equivocated.map_or(head.seq, |seq| seq.min(head.seq)));
+        }
+        self.tips.insert(head);
+    }
+
+    /// The highest tip: the only one unless the feed has forked.
+    pub fn head(&self) -> FeedHead {
+        *self.tips.last().expect("a feed has at least one tip")
+    }
+
+    pub fn max_seq(&self) -> u64 {
+        self.head().seq
+    }
+
+    pub fn tips(&self) -> impl Iterator<Item = &FeedHead> {
+        self.tips.iter()
+    }
+
+    /// The lowest `seq` at which the feed has two events, if any.
+    pub fn equivocated(&self) -> Option<u64> {
+        self.equivocated
+    }
+}
+
+/// What is remembered about every applied event: enough to check the events that follow it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Known {
+    pub(crate) hlc: Hlc,
+    pub(crate) author: DeviceKey,
+    pub(crate) seq: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -113,8 +172,8 @@ pub struct Received {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct State {
     pub(crate) workforce: Option<Workforce>,
-    pub(crate) feeds: BTreeMap<DeviceKey, FeedHead>,
-    pub(crate) known: BTreeMap<EventId, Hlc>,
+    pub(crate) feeds: BTreeMap<DeviceKey, Feed>,
+    pub(crate) known: BTreeMap<EventId, Known>,
     pub(crate) heads: BTreeSet<EventId>,
     #[serde(skip)]
     pub(crate) pending: Pending,
@@ -200,8 +259,23 @@ impl State {
             .flat_map(|workforce| workforce.items.values())
     }
 
-    pub fn feed_heads(&self) -> &BTreeMap<DeviceKey, FeedHead> {
+    pub fn feeds(&self) -> &BTreeMap<DeviceKey, Feed> {
         &self.feeds
+    }
+
+    /// The highest `seq` seen from each author: what a peer needs to know to send the rest.
+    pub fn version_vector(&self) -> BTreeMap<DeviceKey, u64> {
+        self.feeds
+            .iter()
+            .map(|(author, feed)| (*author, feed.max_seq()))
+            .collect()
+    }
+
+    /// Devices whose feed has two events with the same `seq`, and the lowest such `seq`.
+    pub fn equivocations(&self) -> impl Iterator<Item = (DeviceKey, u64)> + '_ {
+        self.feeds
+            .iter()
+            .filter_map(|(author, feed)| Some((*author, feed.equivocated()?)))
     }
 
     /// Events nothing else depends on yet.
@@ -225,13 +299,13 @@ impl State {
     /// `None` before genesis, when there is no workforce to write into.
     pub fn builder(&self, author: DeviceKey, actor: Actor, now_ms: u64) -> Option<EventBuilder> {
         let workforce = self.workforce.as_ref()?;
-        let head = self.feeds.get(&author);
+        let head = self.feeds.get(&author).map(Feed::head);
         let floor = self
             .heads
             .iter()
             .filter_map(|head| self.known.get(head))
+            .map(|known| known.hlc)
             .max()
-            .copied()
             .unwrap_or(Hlc::ZERO);
         Some(EventBuilder {
             workforce: Some(workforce.id),
