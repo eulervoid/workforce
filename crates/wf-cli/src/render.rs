@@ -2,8 +2,8 @@
 
 use std::fmt::Write;
 
-use comfy_table::presets::UTF8_FULL_CONDENSED;
-use comfy_table::{ContentArrangement, Table};
+use comfy_table::presets::NOTHING;
+use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 
 use crate::view::{AgentView, ItemDetail, ItemSummary, LogView, MentionsView, StatusView};
 
@@ -11,10 +11,15 @@ fn short(id: &str) -> &str {
     &id[..id.len().min(wf_core::id::SHORT_ID_LEN)]
 }
 
+/// The one place where every table's look is defined.
 fn table(header: &[&str]) -> Table {
+    let header: Vec<Cell> = header
+        .iter()
+        .map(|title| Cell::new(title).add_attributes(vec![Attribute::Bold, Attribute::Underlined]))
+        .collect();
     let mut table = Table::new();
     table
-        .load_style(UTF8_FULL_CONDENSED)
+        .load_style(NOTHING)
         .set_content_arrangement(ContentArrangement::Dynamic)
         .set_header(header);
     table
