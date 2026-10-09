@@ -449,7 +449,7 @@ fn edit(json: bool, workspace: &mut Workspace, args: ItemEditArgs) -> anyhow::Re
         };
         let current = Draft::of(item);
         let draft = if args.is_editor_flow() {
-            Draft::from_toml(&edit_in_editor(&current.to_toml()?, ".toml")?)?
+            Draft::from_markdown(&edit_in_editor(&current.to_markdown()?, ".md")?)?
         } else {
             let mut draft = current.clone();
             if let Some(title) = args.title {
