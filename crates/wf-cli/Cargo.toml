@@ -17,6 +17,7 @@ wf-core.workspace = true
 wf-store.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+comfy-table.workspace = true
 data-encoding.workspace = true
 jiff.workspace = true
 serde.workspace = true

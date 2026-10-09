@@ -119,7 +119,7 @@ fn the_demo_script_works_end_to_end() {
     assert!(link.contains("now depends on"));
     let list = wf.run(&["item", "list"]);
     assert!(
-        list.contains("blocked by #") && list.contains("question, open"),
+        list.contains("Blocked by") && list.contains("question, open"),
         "{list}"
     );
     assert_eq!(

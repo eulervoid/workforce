@@ -2,38 +2,69 @@
 
 use std::fmt::Write;
 
+use comfy_table::presets::UTF8_FULL_CONDENSED;
+use comfy_table::{ContentArrangement, Table};
+
 use crate::view::{AgentView, ItemDetail, ItemSummary, LogView, MentionsView, StatusView};
 
 fn short(id: &str) -> &str {
     &id[..id.len().min(wf_core::id::SHORT_ID_LEN)]
 }
 
-/// `open · blocked by #q7x2 (question, open)`
-pub fn effective_status(summary: &ItemSummary) -> String {
-    let mut status = summary
+fn table(header: &[&str]) -> Table {
+    let mut table = Table::new();
+    table
+        .load_style(UTF8_FULL_CONDENSED)
+        .set_content_arrangement(ContentArrangement::Dynamic)
+        .set_header(header);
+    table
+}
+
+fn origin(origin: &str) -> &str {
+    if origin == "body" { "body" } else { "comment" }
+}
+
+/// `open · archived`
+fn state_label(summary: &ItemSummary) -> String {
+    let mut label = summary
         .state
         .clone()
         .unwrap_or_else(|| "unknown".to_string());
     if summary.archived {
-        status.push_str(" · archived");
+        label.push_str(" · archived");
     }
     if summary.category.is_none() && !summary.archived {
-        status.push_str(" · unknown state");
+        label.push_str(" · unknown state");
     }
+    label
+}
+
+/// `#q7x2 (question, open)`, one per line
+fn blockers(summary: &ItemSummary) -> String {
+    summary
+        .blocked_by
+        .iter()
+        .map(|blocker| {
+            format!(
+                "#{} ({}, {})",
+                short(&blocker.id),
+                blocker.item_type,
+                blocker.state.as_deref().unwrap_or("unknown")
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// `open · blocked by #q7x2 (question, open)`
+pub fn effective_status(summary: &ItemSummary) -> String {
+    let mut status = state_label(summary);
     if !summary.blocked_by.is_empty() {
-        let blockers: Vec<String> = summary
-            .blocked_by
-            .iter()
-            .map(|blocker| {
-                format!(
-                    "#{} ({}, {})",
-                    short(&blocker.id),
-                    blocker.item_type,
-                    blocker.state.as_deref().unwrap_or("unknown")
-                )
-            })
-            .collect();
-        let _ = write!(status, " · blocked by {}", blockers.join(", "));
+        let _ = write!(
+            status,
+            " · blocked by {}",
+            blockers(summary).replace('\n', ", ")
+        );
     }
     status
 }
@@ -42,19 +73,18 @@ pub fn item_list(items: &[ItemSummary]) -> String {
     if items.is_empty() {
         return "no items\n".to_string();
     }
-    let mut out = String::new();
+    let mut table = table(&["ID", "Type", "Pri", "Title", "State", "Blocked by"]);
     for item in items {
-        let _ = writeln!(
-            out,
-            "#{}  {:<9} {:<3} {}  [{}]",
-            short(&item.id),
-            item.item_type,
-            item.priority.as_deref().unwrap_or("-"),
-            item.title,
-            effective_status(item)
-        );
+        table.add_row([
+            format!("#{}", short(&item.id)),
+            item.item_type.clone(),
+            item.priority.clone().unwrap_or_else(|| "-".to_string()),
+            item.title.clone(),
+            state_label(item),
+            blockers(item),
+        ]);
     }
-    out
+    format!("{table}\n")
 }
 
 pub fn item_detail(detail: &ItemDetail) -> String {
@@ -117,11 +147,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             "referenced by: #{} \"{}\" ({})",
             short(&source.item),
             source.title,
-            if source.origin == "body" {
-                "body"
-            } else {
-                "comment"
-            }
+            origin(&source.origin)
         );
     }
     if !detail.mentions.is_empty() {
@@ -152,60 +178,52 @@ pub fn mentions(view: &MentionsView) -> String {
     if view.sources.is_empty() {
         return format!("{} is not mentioned anywhere\n", view.target);
     }
-    let mut out = String::new();
+    let mut table = table(&["ID", "Title", "In"]);
     for source in &view.sources {
-        let _ = writeln!(
-            out,
-            "#{} \"{}\" ({})",
-            short(&source.item),
-            source.title,
-            if source.origin == "body" {
-                "body"
-            } else {
-                "comment"
-            }
-        );
+        table.add_row([
+            format!("#{}", short(&source.item)),
+            source.title.clone(),
+            origin(&source.origin).to_string(),
+        ]);
     }
-    out
+    format!("{table}\n")
 }
 
 pub fn agents(agents: &[AgentView]) -> String {
     if agents.is_empty() {
         return "no agents defined\n".to_string();
     }
-    let mut out = String::new();
+    let mut table = table(&["Agent", "Harness", "Model", "Capabilities", "Lanes"]);
     for agent in agents {
-        let _ = writeln!(
-            out,
-            "{}  harness={}  model={}  capabilities=[{}]  lanes=[{}]",
-            agent.id,
-            agent.harness,
-            agent.model.as_deref().unwrap_or("default"),
+        table.add_row([
+            agent.id.clone(),
+            agent.harness.clone(),
+            agent.model.clone().unwrap_or_else(|| "default".to_string()),
             agent.capabilities.join(", "),
-            agent.lanes.join(", ")
-        );
+            agent.lanes.join(", "),
+        ]);
     }
-    out
+    format!("{table}\n")
 }
 
 pub fn log(view: &LogView) -> String {
-    let mut out = String::new();
+    let mut table = table(&["Event", "Device", "Seq", "At", "Kind", "Actor", "Summary"]);
     for event in &view.events {
-        let _ = writeln!(
-            out,
-            "{}  {}#{:<3} {}  {:<16} {}  {}",
-            short(&event.id),
-            event.device,
-            event.seq,
-            event.at,
-            event.kind,
-            event.actor,
-            event.summary
-        );
+        table.add_row([
+            short(&event.id).to_string(),
+            event.device.to_string(),
+            event.seq.to_string(),
+            event.at.to_string(),
+            event.kind.to_string(),
+            event.actor.to_string(),
+            event.summary.to_string(),
+        ]);
     }
     let verified = view.events.iter().filter(|event| event.verified).count();
-    let _ = writeln!(out, "{verified}/{} events verified", view.events.len());
-    out
+    format!(
+        "{table}\n{verified}/{} events verified\n",
+        view.events.len()
+    )
 }
 
 pub fn status(view: &StatusView) -> String {
