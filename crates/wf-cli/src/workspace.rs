@@ -79,6 +79,11 @@ impl Workspace {
         })
     }
 
+    /// Hands over the replica, for commands that share it with the network.
+    pub fn into_parts(self) -> (Replica<RedbStore>, DeviceSigner) {
+        (self.replica, self.device)
+    }
+
     pub fn state(&self) -> &State {
         self.replica.state()
     }

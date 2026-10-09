@@ -59,6 +59,22 @@ pub fn actor_label(state: &State, actor: &Actor) -> String {
     }
 }
 
+/// `@joshua (3f9a2c)`: whose device it is and which one.
+pub fn device_label(state: &State, device: wf_core::identity::DeviceKey) -> String {
+    match state.principal_of(&device) {
+        Some(principal) => format!(
+            "{} ({})",
+            actor_label(state, &Actor::Human(principal)),
+            device.fmt_short()
+        ),
+        None => device.fmt_short(),
+    }
+}
+
+pub fn timestamp_now() -> String {
+    Timestamp::now().to_string()
+}
+
 pub fn mention_label(state: &State, target: &MentionTarget) -> String {
     match target {
         MentionTarget::Principal(key) => actor_label(state, &Actor::Human(*key)),

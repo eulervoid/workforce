@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
 use wf_core::event::Event;
-use wf_core::id::EventId;
+use wf_core::id::{EventId, WorkforceId};
 use wf_core::sync::Versions;
 
 use crate::frame::{FrameError, read_frame, write_frame};
@@ -41,6 +41,8 @@ pub enum SyncError {
 
 #[derive(Serialize, Deserialize)]
 enum Message {
+    /// First message of the initiator: which workforce to sync.
+    Open(WorkforceId),
     Versions(Versions),
     Events(Vec<Event>),
     EndOfEvents,
@@ -52,6 +54,7 @@ enum Message {
 impl Message {
     fn name(&self) -> &'static str {
         match self {
+            Message::Open(_) => "open",
             Message::Versions(_) => "versions",
             Message::Events(_) => "events",
             Message::EndOfEvents => "end of events",
@@ -187,12 +190,32 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
     }
 }
 
+/// Reads which workforce the initiator wants to sync. The responder then picks the log and
+/// calls [`respond`].
+pub async fn read_open<S>(stream: &mut S) -> Result<WorkforceId, SyncError>
+where
+    S: AsyncRead + Unpin,
+{
+    match read_frame(stream).await? {
+        Message::Open(workforce) => Ok(workforce),
+        other => Err(SyncError::Unexpected {
+            expected: "open",
+            got: other.name(),
+        }),
+    }
+}
+
 /// Runs the protocol as the side that opened the stream.
-pub async fn initiate<S, L>(stream: S, log: &L) -> Result<SyncReport, SyncError>
+pub async fn initiate<S, L>(
+    mut stream: S,
+    workforce: WorkforceId,
+    log: &L,
+) -> Result<SyncReport, SyncError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
     L: SyncLog,
 {
+    write_frame(&mut stream, &Message::Open(workforce)).await?;
     let mut session = Session {
         stream,
         log,
@@ -206,7 +229,7 @@ where
     Ok(session.report)
 }
 
-/// Runs the protocol as the side that accepted the stream.
+/// Runs the protocol as the side that accepted the stream, after [`read_open`].
 pub async fn respond<S, L>(stream: S, log: &L) -> Result<SyncReport, SyncError>
 where
     S: AsyncRead + AsyncWrite + Unpin,

@@ -26,7 +26,11 @@ use crate::render;
 use crate::view::{self, Envelope, ItemSummary, LogView, MentionsView};
 use crate::workspace::{self, WORKFORCE_FILE, WorkforceFile, Workspace};
 
-fn emit<T: Serialize>(json: bool, data: &T, text: impl FnOnce(&T) -> String) -> anyhow::Result<()> {
+pub(crate) fn emit<T: Serialize>(
+    json: bool,
+    data: &T,
+    text: impl FnOnce(&T) -> String,
+) -> anyhow::Result<()> {
     if json {
         println!("{}", serde_json::to_string_pretty(&Envelope::new(data))?);
     } else {
@@ -90,6 +94,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Mentions { target } => mentions(json, &workspace, &target),
                 Command::Policy(command) => policy(json, command, &mut workspace),
                 Command::Log => log(json, mode, &workspace),
+                Command::Sync(args) => crate::network::sync(json, workspace, args),
             }
         }
     }

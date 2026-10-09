@@ -3,7 +3,9 @@
 
 mod frame;
 mod log;
+mod node;
 mod sync;
 
 pub use log::{LogError, ReceiveSummary, SharedReplica, SyncLog};
-pub use sync::{SYNC_ALPN, SyncError, SyncReport, initiate, respond};
+pub use node::{NetError, Network, Node, device_key, endpoint_id};
+pub use sync::{SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};

@@ -41,12 +41,24 @@ pub enum Command {
     Policy(PolicyCommand),
     /// Print every event of the log, verified.
     Log,
+    /// Exchange events with the other devices of the workforce.
+    Sync(SyncArgs),
     /// Summarize the workforce.
     Status {
         /// Ignore the snapshot and fold the whole log again.
         #[arg(long)]
         refold: bool,
     },
+}
+
+#[derive(Args)]
+pub struct SyncArgs {
+    /// Keep listening for other devices until interrupted.
+    #[arg(long)]
+    pub serve: bool,
+    /// Use this relay server instead of the default ones.
+    #[arg(long, value_name = "URL")]
+    pub relay: Option<String>,
 }
 
 #[derive(Args)]

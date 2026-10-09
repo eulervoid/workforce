@@ -7,7 +7,7 @@ use wf_core::id::ItemId;
 use wf_core::item::Priority;
 use wf_core::state::State;
 use wf_core::testing::*;
-use wf_net::{SharedReplica, initiate, respond};
+use wf_net::{SharedReplica, initiate, read_open, respond};
 use wf_store::{AuthorError, EventStore, RedbStore, Replica};
 
 const MAX_PEERS: usize = 5;
@@ -109,10 +109,13 @@ impl Cluster {
             return;
         }
         let (left, right) = tokio::io::duplex(4096);
-        let (first, second) = tokio::join!(
-            initiate(left, &self.peers[a].replica),
-            respond(right, &self.peers[b].replica)
-        );
+        let workforce = self.fixture.workforce();
+        let (first, second) =
+            tokio::join!(initiate(left, workforce, &self.peers[a].replica), async {
+                let mut right = right;
+                assert_eq!(read_open(&mut right).await.unwrap(), workforce);
+                respond(right, &self.peers[b].replica).await
+            });
         first.unwrap();
         second.unwrap();
     }

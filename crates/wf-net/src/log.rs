@@ -6,6 +6,7 @@ use std::sync::{Arc, Mutex, MutexGuard};
 
 use wf_core::event::Event;
 use wf_core::id::EventId;
+use wf_core::identity::DeviceKey;
 use wf_core::sync::{self, Versions};
 use wf_store::{EventStore, ReceiveError, Replica, StoreError};
 
@@ -46,6 +47,9 @@ pub trait SyncLog: Send + Sync {
         &self,
         events: Vec<Event>,
     ) -> impl Future<Output = Result<ReceiveSummary, LogError>> + Send;
+
+    /// Whether `device` is bound to a member of this workforce.
+    fn is_bound(&self, device: DeviceKey) -> impl Future<Output = Result<bool, LogError>> + Send;
 
     /// Parents of parked events that are not known yet.
     fn missing(&self) -> impl Future<Output = Result<Vec<EventId>, LogError>> + Send;
@@ -117,6 +121,10 @@ impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
             }
         }
         Ok(summary)
+    }
+
+    async fn is_bound(&self, device: DeviceKey) -> Result<bool, LogError> {
+        Ok(self.lock().state().principal_of(&device).is_some())
     }
 
     async fn missing(&self) -> Result<Vec<EventId>, LogError> {
