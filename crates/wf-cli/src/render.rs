@@ -119,6 +119,18 @@ fn priority_style(priority: &str) -> anstyle::Style {
     }
 }
 
+/// `2026-10-09 21:42` in the local time zone; text that is not a timestamp is kept as it is.
+fn short_time(timestamp: &str) -> String {
+    timestamp.parse::<jiff::Timestamp>().map_or_else(
+        |_| timestamp.to_string(),
+        |time| {
+            time.to_zoned(jiff::tz::TimeZone::system())
+                .strftime("%Y-%m-%d %H:%M")
+                .to_string()
+        },
+    )
+}
+
 fn id_label(id: &str) -> String {
     style::paint(style::ID, format!("#{}", short(id)))
 }
@@ -144,6 +156,9 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     if let Some(priority) = &summary.priority {
         status.push(paint(priority_style(priority), priority));
     }
+    if let Some(lane) = &detail.lane {
+        status.push(paint(DIM, format!("lane:{lane}")));
+    }
     if !summary.blocked_by.is_empty() {
         status.push(format!(
             "blocked by {}",
@@ -153,9 +168,6 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     let _ = writeln!(out, "  {}", status.join("  "));
 
     let mut attributes = Vec::new();
-    if let Some(lane) = &detail.lane {
-        attributes.push(paint(DIM, format!("lane:{lane}")));
-    }
     if !detail.labels.is_empty() {
         attributes.push(paint(DIM, format!("labels:{}", detail.labels.join(","))));
     }
@@ -168,7 +180,11 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     attributes.push(paint(PERSON, &detail.author));
     attributes.push(paint(
         DIM,
-        format!("created {} · updated {}", detail.created, detail.updated),
+        format!(
+            "created {} · updated {}",
+            short_time(&detail.created),
+            short_time(&detail.updated)
+        ),
     ));
     let _ = writeln!(out, "  {}", attributes.join("  "));
     for flag in &detail.flags {
@@ -179,11 +195,11 @@ pub fn item_detail(detail: &ItemDetail) -> String {
         for link in links {
             let _ = writeln!(
                 out,
-                "  ↳ {label} {} {} \"{}\" ({}){}",
+                "  ↳ {label} {} {} {} \"{}\"{}",
                 id_label(&link.id),
-                paint(DIM, &link.item_type),
-                link.title,
+                paint(DIM, format!("({})", link.item_type)),
                 link.state.as_deref().unwrap_or("unknown"),
+                link.title,
                 if link.ignored {
                     " [ignored: cycle]"
                 } else {
@@ -225,7 +241,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             let _ = writeln!(
                 out,
                 "  {} {} {}: {}",
-                paint(DIM, &note.at),
+                paint(DIM, short_time(&note.at)),
                 paint(PERSON, &note.by),
                 paint(DIM, format!("({})", note.kind)),
                 note.text
