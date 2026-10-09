@@ -1,0 +1,70 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(&detail)"
+---
+{
+  "schema": 1,
+  "data": {
+    "id": "h3jll5h3aefoythfphubvxdqm57mwxlejas7ih66qabswn3v2pfa",
+    "type": "task",
+    "title": "Implement feed sync",
+    "state": "open",
+    "category": "open",
+    "priority": "P1",
+    "ready": false,
+    "blocked_by": [
+      {
+        "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+        "type": "question",
+        "title": "Which hash for event ids?",
+        "state": "open",
+        "category": "open"
+      }
+    ],
+    "archived": false,
+    "body": "blocked on #q34xob, ask @coder",
+    "author": "@joshua",
+    "created": "1970-01-01T00:00:05Z",
+    "updated": "1970-01-01T00:00:09Z",
+    "lane": "default",
+    "labels": [],
+    "requires": [],
+    "depends_on": [
+      {
+        "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+        "type": "question",
+        "title": "Which hash for event ids?",
+        "state": "open",
+        "category": "open",
+        "ignored": false
+      }
+    ],
+    "required_by": [],
+    "supersedes": null,
+    "references": [
+      {
+        "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+        "type": "question",
+        "title": "Which hash for event ids?",
+        "state": "open",
+        "category": "open",
+        "ignored": false
+      }
+    ],
+    "referenced_by": [],
+    "mentions": [
+      "@joshua",
+      "@joshua/coder"
+    ],
+    "notes": [
+      {
+        "id": "rfiswwsi5wflgzefltxwdibicuuwg46rmjf6lkx56bt5725tec7a",
+        "kind": "comment",
+        "by": "@joshua",
+        "at": "1970-01-01T00:00:09Z",
+        "text": "see #q34xob, @joshua please check"
+      }
+    ],
+    "flags": []
+  }
+}

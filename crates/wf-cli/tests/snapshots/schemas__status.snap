@@ -1,0 +1,25 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(view::status(&scenario.state, false))"
+---
+{
+  "schema": 1,
+  "data": {
+    "name": "demo",
+    "id": "xvbckgavwlv4cqx23m26owxijg24wbqn4l3abvqenpxwui4ywyrq",
+    "members": [
+      "@ada (member)",
+      "@joshua (owner)"
+    ],
+    "agents": 1,
+    "events": 10,
+    "pending": 0,
+    "heads": 1,
+    "items_by_category": {
+      "open": 2
+    },
+    "archived_items": 1,
+    "flagged": [],
+    "refolded": false
+  }
+}

@@ -1,0 +1,50 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(&all)"
+---
+{
+  "schema": 1,
+  "data": [
+    {
+      "id": "h3jll5h3aefoythfphubvxdqm57mwxlejas7ih66qabswn3v2pfa",
+      "type": "task",
+      "title": "Implement feed sync",
+      "state": "open",
+      "category": "open",
+      "priority": "P1",
+      "ready": false,
+      "blocked_by": [
+        {
+          "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+          "type": "question",
+          "title": "Which hash for event ids?",
+          "state": "open",
+          "category": "open"
+        }
+      ],
+      "archived": false
+    },
+    {
+      "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+      "type": "question",
+      "title": "Which hash for event ids?",
+      "state": "open",
+      "category": "open",
+      "priority": null,
+      "ready": true,
+      "blocked_by": [],
+      "archived": false
+    },
+    {
+      "id": "3ltp7keaf54zus66gjk2opjkjvdhjmtza6crwkvl4wd3gkzzytaq",
+      "type": "task",
+      "title": "Write spec",
+      "state": "done",
+      "category": "done",
+      "priority": null,
+      "ready": false,
+      "blocked_by": [],
+      "archived": true
+    }
+  ]
+}

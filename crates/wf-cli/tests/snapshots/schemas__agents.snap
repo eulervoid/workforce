@@ -1,0 +1,16 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(view::agent_views(&scenario.state))"
+---
+{
+  "schema": 1,
+  "data": [
+    {
+      "id": "@joshua/coder",
+      "harness": "opencode",
+      "model": null,
+      "capabilities": [],
+      "lanes": []
+    }
+  ]
+}

@@ -1,0 +1,118 @@
+//! Pins the shape of every `--json` view. A deliberate change means bumping `SCHEMA_VERSION`
+//! and reviewing the snapshot diff.
+
+use std::collections::HashMap;
+
+use wf_cli::view::{self, Envelope};
+use wf_core::event::{Change, Event};
+use wf_core::id::{EventId, HashId, ItemId};
+use wf_core::item::{ItemView, Priority};
+use wf_core::state::State;
+use wf_core::testing::*;
+
+struct Scenario {
+    state: State,
+    events: HashMap<EventId, Event>,
+    task: ItemId,
+    question: ItemId,
+    done: ItemId,
+}
+
+fn scenario() -> Scenario {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let mut events = HashMap::from([(fixture.genesis.id(), fixture.genesis.clone())]);
+    let mut now = 2_000;
+    let mut apply = |state: &mut State, body| {
+        now += 1_000;
+        let event = fixture.apply(state, 0, now, body);
+        events.insert(event.id(), event.clone());
+        event
+    };
+
+    apply(&mut state, define_agent("coder"));
+    let question: ItemId = apply(&mut state, create("question", "Which hash for event ids?"))
+        .id()
+        .into();
+    let task: ItemId = apply(
+        &mut state,
+        create_with_body(
+            "task",
+            "Implement feed sync",
+            &format!("blocked on #{}, ask @coder", question.short()),
+        ),
+    )
+    .id()
+    .into();
+    let done: ItemId = apply(&mut state, create("task", "Write spec")).id().into();
+    apply(&mut state, edit(task, Change::Priority(Some(Priority::P1))));
+    apply(&mut state, depends_on(task, question));
+    apply(
+        &mut state,
+        comment(
+            task,
+            &format!("see #{}, @joshua please check", question.short()),
+        ),
+    );
+    apply(&mut state, transition(done, "done"));
+    apply(&mut state, archive(done));
+    Scenario {
+        state,
+        events,
+        task,
+        question,
+        done,
+    }
+}
+
+#[test]
+fn item_lists() {
+    let scenario = scenario();
+    let state = &scenario.state;
+    let graph = state.dependency_graph();
+    let all: Vec<_> = state
+        .items()
+        .map(|view| view::summary(state, &graph, view))
+        .collect();
+    insta::assert_json_snapshot!("item_list", Envelope::new(&all));
+}
+
+#[test]
+fn live_item_detail() {
+    let scenario = scenario();
+    let state = &scenario.state;
+    let ItemView::Live(item) = state.item(scenario.task).unwrap() else {
+        panic!()
+    };
+    let detail = view::item_detail(state, item, |id| scenario.events.get(id).cloned());
+    insta::assert_json_snapshot!("item_detail", Envelope::new(&detail));
+}
+
+#[test]
+fn question_detail_shows_backlinks_and_dependents() {
+    let scenario = scenario();
+    let state = &scenario.state;
+    let ItemView::Live(item) = state.item(scenario.question).unwrap() else {
+        panic!()
+    };
+    let detail = view::item_detail(state, item, |id| scenario.events.get(id).cloned());
+    insta::assert_json_snapshot!("question_detail", Envelope::new(&detail));
+}
+
+#[test]
+fn events_and_status() {
+    let scenario = scenario();
+    let mut ordered: Vec<&Event> = scenario.events.values().collect();
+    ordered.sort_by_key(|event| (event.content.hlc, event.id()));
+    let events: Vec<_> = ordered
+        .iter()
+        .map(|event| view::event_view(&scenario.state, event, true))
+        .collect();
+    insta::assert_json_snapshot!("log", Envelope::new(&events));
+    insta::assert_json_snapshot!(
+        "status",
+        Envelope::new(view::status(&scenario.state, false))
+    );
+    insta::assert_json_snapshot!("agents", Envelope::new(view::agent_views(&scenario.state)));
+    let _ = scenario.done;
+}

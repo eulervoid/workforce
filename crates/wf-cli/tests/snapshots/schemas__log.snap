@@ -1,0 +1,109 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(&events)"
+---
+{
+  "schema": 1,
+  "data": [
+    {
+      "id": "xvbckgavwlv4cqx23m26owxijg24wbqn4l3abvqenpxwui4ywyrq",
+      "seq": 1,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:01Z",
+      "kind": "Genesis",
+      "summary": "workforce \"demo\"",
+      "verified": true
+    },
+    {
+      "id": "jwbh4yo23b2ihbquujqcz4arj2ovb4tpo4ziiepfawo7ytdvwbga",
+      "seq": 2,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:03Z",
+      "kind": "AgentDefined",
+      "summary": "coder on opencode",
+      "verified": true
+    },
+    {
+      "id": "q34xob63iiyika2ahae2mxqfvwjzogy5ccleweire2kuejawhpha",
+      "seq": 3,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:04Z",
+      "kind": "ItemCreated",
+      "summary": "question \"Which hash for event ids?\"",
+      "verified": true
+    },
+    {
+      "id": "h3jll5h3aefoythfphubvxdqm57mwxlejas7ih66qabswn3v2pfa",
+      "seq": 4,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:05Z",
+      "kind": "ItemCreated",
+      "summary": "task \"Implement feed sync\"",
+      "verified": true
+    },
+    {
+      "id": "3ltp7keaf54zus66gjk2opjkjvdhjmtza6crwkvl4wd3gkzzytaq",
+      "seq": 5,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:06Z",
+      "kind": "ItemCreated",
+      "summary": "task \"Write spec\"",
+      "verified": true
+    },
+    {
+      "id": "pdp5fk4ybbllgz5a5ehsla4ljla4abfprpvjxuv6fxn73k4yvyaq",
+      "seq": 6,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:07Z",
+      "kind": "ItemEdited",
+      "summary": "#h3jll5 priority",
+      "verified": true
+    },
+    {
+      "id": "v4x5g5tezfyf2y27zi3i7yz7w6aa4gr64ti2mf5nfmjznbvuadlq",
+      "seq": 7,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:08Z",
+      "kind": "ItemLinked",
+      "summary": "#h3jll5 depends on #q34xob",
+      "verified": true
+    },
+    {
+      "id": "rfiswwsi5wflgzefltxwdibicuuwg46rmjf6lkx56bt5725tec7a",
+      "seq": 8,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:09Z",
+      "kind": "Comment",
+      "summary": "#h3jll5 commented",
+      "verified": true
+    },
+    {
+      "id": "mirh26j44x5wzwubtmaf2xccrmwbpl5ykw2hkbarausxb7mtgrxa",
+      "seq": 9,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:10Z",
+      "kind": "ItemTransitioned",
+      "summary": "#3ltp7k -> done",
+      "verified": true
+    },
+    {
+      "id": "k5vt4ylwzoj5udc7d6ipjd5pxeo6wjzjirw3cjtg3pk6vcsmok2q",
+      "seq": 10,
+      "device": "43a72e7144",
+      "actor": "@joshua",
+      "at": "1970-01-01T00:00:11Z",
+      "kind": "ItemArchived",
+      "summary": "#3ltp7k archived",
+      "verified": true
+    }
+  ]
+}
