@@ -30,43 +30,78 @@ pub enum KeyError {
 macro_rules! key_pair {
     ($(#[$meta:meta])* $public:ident, $signer:ident, $domain:expr) => {
         $(#[$meta])*
-        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-        pub struct $public(PublicKey);
+        ///
+        /// The bytes are kept raw: decoding a key from a snapshot or an event must be cheap, and a
+        /// key that is not a curve point simply never verifies a signature.
+        #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+        pub struct $public([u8; 32]);
 
         impl $public {
             pub fn as_bytes(&self) -> &[u8; 32] {
-                self.0.as_bytes()
+                &self.0
             }
 
+            /// Fails unless the bytes are a valid public key.
             pub fn from_bytes(bytes: &[u8; 32]) -> Result<Self, KeyError> {
                 PublicKey::from_bytes(bytes)
-                    .map(Self)
+                    .map(|key| Self(*key.as_bytes()))
                     .map_err(|_| KeyError::Malformed)
             }
 
+            fn parsed(&self) -> Result<PublicKey, KeyError> {
+                PublicKey::from_bytes(&self.0).map_err(|_| KeyError::Malformed)
+            }
+
             pub fn fmt_short(&self) -> String {
-                self.0.fmt_short().to_string()
+                match self.parsed() {
+                    Ok(key) => key.fmt_short().to_string(),
+                    Err(_) => "invalid".to_string(),
+                }
             }
 
             pub(crate) fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), KeyError> {
                 let mut signed = Vec::with_capacity($domain.len() + message.len());
                 signed.extend_from_slice($domain);
                 signed.extend_from_slice(message);
-                self.0
+                self.parsed()?
                     .verify(&signed, signature)
                     .map_err(|_| KeyError::BadSignature)
             }
         }
 
+        impl Serialize for $public {
+            fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+                if serializer.is_human_readable() {
+                    serializer.collect_str(self)
+                } else {
+                    serializer.serialize_bytes(&self.0)
+                }
+            }
+        }
+
+        impl<'de> Deserialize<'de> for $public {
+            fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+                if deserializer.is_human_readable() {
+                    let text = String::deserialize(deserializer)?;
+                    text.parse().map_err(serde::de::Error::custom)
+                } else {
+                    deserializer.deserialize_bytes(crate::id::HashVisitor).map(Self)
+                }
+            }
+        }
+
         impl fmt::Display for $public {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                fmt::Display::fmt(&self.0, formatter)
+                match self.parsed() {
+                    Ok(key) => fmt::Display::fmt(&key, formatter),
+                    Err(_) => formatter.write_str("invalid-key"),
+                }
             }
         }
 
         impl fmt::Debug for $public {
             fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                write!(formatter, "{}({})", stringify!($public), self.0.fmt_short())
+                write!(formatter, "{}({})", stringify!($public), self.fmt_short())
             }
         }
 
@@ -74,7 +109,8 @@ macro_rules! key_pair {
             type Err = KeyError;
 
             fn from_str(text: &str) -> Result<Self, KeyError> {
-                text.parse().map(Self).map_err(|_| KeyError::Malformed)
+                let key: PublicKey = text.parse().map_err(|_| KeyError::Malformed)?;
+                Ok(Self(*key.as_bytes()))
             }
         }
 
@@ -96,7 +132,7 @@ macro_rules! key_pair {
             }
 
             pub fn key(&self) -> $public {
-                $public(self.0.public())
+                $public(*self.0.public().as_bytes())
             }
 
             pub(crate) fn sign(&self, message: &[u8]) -> Signature {

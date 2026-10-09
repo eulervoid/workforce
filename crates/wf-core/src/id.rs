@@ -55,6 +55,24 @@ pub trait HashId: Copy {
     }
 }
 
+/// Reads a hash as one byte string. A tuple of 32 `u8`s costs 32 serde calls per id, which
+/// dominates snapshot decoding.
+pub(crate) struct HashVisitor;
+
+impl serde::de::Visitor<'_> for HashVisitor {
+    type Value = [u8; HASH_LEN];
+
+    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(formatter, "{HASH_LEN} bytes")
+    }
+
+    fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<Self::Value, E> {
+        bytes
+            .try_into()
+            .map_err(|_| E::invalid_length(bytes.len(), &self))
+    }
+}
+
 macro_rules! hash_id {
     ($(#[$meta:meta])* $name:ident) => {
         $(#[$meta])*
@@ -98,7 +116,7 @@ macro_rules! hash_id {
                 if serializer.is_human_readable() {
                     serializer.collect_str(self)
                 } else {
-                    self.0.serialize(serializer)
+                    serializer.serialize_bytes(&self.0)
                 }
             }
         }
@@ -109,7 +127,7 @@ macro_rules! hash_id {
                     let text = String::deserialize(deserializer)?;
                     text.parse().map_err(serde::de::Error::custom)
                 } else {
-                    <[u8; HASH_LEN]>::deserialize(deserializer).map(Self)
+                    deserializer.deserialize_bytes(HashVisitor).map(Self)
                 }
             }
         }
@@ -203,10 +221,13 @@ mod tests {
     }
 
     #[test]
-    fn postcard_encoding_is_raw_bytes() {
+    fn postcard_encoding_is_a_length_prefixed_byte_string() {
         let id = EventId::of(b"bytes");
         let encoded = postcard::to_stdvec(&id).unwrap();
-        assert_eq!(encoded, id.as_bytes());
+        assert_eq!(encoded[0], 32);
+        assert_eq!(&encoded[1..], id.as_bytes());
+        assert_eq!(postcard::from_bytes::<EventId>(&encoded).unwrap(), id);
+        assert!(postcard::from_bytes::<EventId>(&encoded[..20]).is_err());
     }
 
     #[test]

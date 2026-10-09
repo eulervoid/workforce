@@ -373,8 +373,8 @@ mod tests {
         );
     }
 
-    const GOLDEN_LEN: usize = 1740;
-    const GOLDEN_ID: &str = "cw7dlruqu5nvotsgejyz5otdpzregtl3umgfyck5olwvd5qnzqvq";
+    const GOLDEN_LEN: usize = 1745;
+    const GOLDEN_ID: &str = "gbeqgziznmfb7baf3oho6n3d65x2wvgxkt4ji5jdiujl5ba4jncq";
 
     #[test]
     fn round_trips_and_verifies() {
