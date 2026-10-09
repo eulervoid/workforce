@@ -1,0 +1,63 @@
+[assignment]
+mode = "dispatch"
+fallback = "optimistic"
+lease = "30m"
+
+[lanes.default]
+claim = ["member"]
+
+[lanes.meta]
+claim = ["member"]
+types = ["distill"]
+
+[types.task]
+lane = "default"
+fields = ["priority", "labels", "requires"]
+depends_on = ["task", "question", "decision"]
+initial = "open"
+transitions = "any"
+states = [
+  { name = "backlog", category = "inactive" },
+  { name = "open", category = "open" },
+  { name = "in_progress", category = "active" },
+  { name = "in_review", category = "blocked" },
+  { name = "done", category = "done" },
+  { name = "dropped", category = "cancelled" },
+]
+
+[types.question]
+lane = "default"
+fields = ["priority", "labels"]
+depends_on = []
+initial = "open"
+transitions = "any"
+states = [
+  { name = "open", category = "open" },
+  { name = "answered", category = "done" },
+  { name = "dropped", category = "cancelled" },
+]
+
+[types.decision]
+lane = "default"
+fields = ["labels"]
+depends_on = []
+initial = "proposed"
+transitions = "any"
+states = [
+  { name = "proposed", category = "blocked" },
+  { name = "ratified", category = "done" },
+  { name = "rejected", category = "cancelled" },
+  { name = "superseded", category = "done" },
+]
+
+[types.distill]
+lane = "meta"
+fields = ["labels"]
+depends_on = []
+initial = "open"
+transitions = "any"
+states = [
+  { name = "open", category = "open" },
+  { name = "in_progress", category = "active" },
+  { name = "done", category = "done" },
+]

@@ -141,6 +141,7 @@ impl DeviceKey {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Role {
     Owner,
     Member,
