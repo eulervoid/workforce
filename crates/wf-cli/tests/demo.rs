@@ -106,8 +106,8 @@ fn the_demo_script_works_end_to_end() {
     let agents = wf.run(&["agent", "list"]);
     assert!(agents.contains("@joshua/coder") && agents.contains("@joshua/coder-opencode"));
 
-    let task = wf.add(&["Implement feed sync", "--priority", "P1"]);
-    let question = wf.add(&["Which hash for event ids?", "--type", "question"]);
+    let task = wf.add(&["--title", "Implement feed sync", "--priority", "P1"]);
+    let question = wf.add(&["--title", "Which hash for event ids?", "--type", "question"]);
 
     let link = wf.run(&[
         "item",
@@ -186,8 +186,8 @@ fn the_demo_script_works_end_to_end() {
 fn invalid_requests_fail_with_the_specific_reason() {
     let wf = Sandbox::new();
     wf.run(&["init", "--name", "demo", "--no-agents"]);
-    let task = wf.add(&["a task"]);
-    let decision = wf.add(&["a decision", "--type", "decision"]);
+    let task = wf.add(&["--title", "a task"]);
+    let decision = wf.add(&["--title", "a decision", "--type", "decision"]);
 
     assert!(
         wf.fail(&["item", "move", short(&task), "answered"])
@@ -198,11 +198,11 @@ fn invalid_requests_fail_with_the_specific_reason() {
             .contains("done or cancelled")
     );
     assert!(
-        wf.fail(&["item", "add", "x", "--type", "nonsense"])
+        wf.fail(&["item", "add", "--title", "x", "--type", "nonsense"])
             .contains("no item type")
     );
     assert!(
-        wf.fail(&["item", "add", "x", "--type", "decision", "--priority", "P1"])
+        wf.fail(&["item", "add", "--title", "x", "--type", "decision", "--priority", "P1"])
             .contains("Priority")
     );
     assert!(
@@ -234,7 +234,7 @@ fn invalid_requests_fail_with_the_specific_reason() {
 fn item_edit_by_flags_and_by_editor() {
     let wf = Sandbox::new();
     wf.run(&["init", "--name", "demo", "--no-agents"]);
-    let task = wf.add(&["Old title", "--label", "keep", "--label", "drop"]);
+    let task = wf.add(&["--title", "Old title", "--label", "keep", "--label", "drop"]);
 
     wf.run(&[
         "item",
@@ -326,7 +326,7 @@ fn agents_and_policy() {
     let file = wf.repository.join("policy.toml");
     std::fs::write(&file, &custom).unwrap();
     wf.run(&["policy", "apply", file.to_str().unwrap()]);
-    wf.add(&["crash", "--type", "bug"]);
+    wf.add(&["--title", "crash", "--type", "bug"]);
 
     std::fs::write(&file, policy.replace("\"answered\"", "\"replied\"")).unwrap();
     assert!(

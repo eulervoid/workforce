@@ -12,7 +12,7 @@ cargo build
 export PATH="$PWD/target/debug:$PATH"
 cd ~/src/some-repo
 wf init --name demo
-wf item add "Implement feed sync" --priority P1
+wf item add --title "Implement feed sync" --priority P1
 wf item ready
 wf log
 ```

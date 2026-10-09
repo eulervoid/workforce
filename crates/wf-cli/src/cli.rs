@@ -129,6 +129,7 @@ pub enum ItemCommand {
 
 #[derive(Args)]
 pub struct ItemAddArgs {
+    #[arg(short, long)]
     pub title: String,
     #[arg(long = "type", default_value = "task")]
     pub item_type: TypeName,
