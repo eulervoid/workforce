@@ -24,8 +24,8 @@ serde.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true
 toml.workspace = true
-dialoguer = { version = "0.12", features = ["fuzzy-select"] }
 terminal_size = "0.4.4"
+nucleo-picker = "0.12"
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }

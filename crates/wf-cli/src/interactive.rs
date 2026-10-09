@@ -35,21 +35,20 @@ impl std::fmt::Display for Choice {
     }
 }
 
-/// Fuzzy-pick one of `choices` inline, below the prompt, and return its value.
+/// Fuzzy-pick one of `choices` and return its value.
 pub fn pick(what: &str, choices: Vec<Choice>) -> anyhow::Result<String> {
-    use dialoguer::FuzzySelect;
+    use nucleo_picker::error::PickError;
+    use nucleo_picker::{Picker, render::DisplayRenderer};
 
     if choices.is_empty() {
         anyhow::bail!("there is no {what} to pick from");
     }
-    let picked = FuzzySelect::new()
-        .with_prompt(format!("Pick {what}"))
-        .items(&choices)
-        .max_length(12)
-        .interact_opt()?;
-    match picked {
-        Some(index) => Ok(choices[index].value.clone()),
-        None => anyhow::bail!("no {what} picked"),
+    let mut picker = Picker::new(DisplayRenderer);
+    picker.push_batch(choices);
+    match picker.pick() {
+        Ok(Some(choice)) => Ok(choice.value.clone()),
+        Ok(None) | Err(PickError::UserInterrupted) => anyhow::bail!("no {what} picked"),
+        Err(error) => Err(error.into()),
     }
 }
 
