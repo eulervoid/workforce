@@ -5,6 +5,7 @@ Event-sourced, forkable, built on iroh. M0 (single peer: signed event log, item 
 
 - [docs/SPEC.md](docs/SPEC.md): the design
 - [docs/M0.md](docs/M0.md): plan for the first milestone
+- [docs/M1.md](docs/M1.md): plan for sync, device invites, daemon and fork
 
 ## Try it
 ```sh

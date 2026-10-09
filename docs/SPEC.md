@@ -177,8 +177,9 @@ that holds a claim.
 | `owner` | everything: invites, policy, `ForkAnnounced`, naming other owners |
 | `member` | items, claims, comments, progress, reviews, decisions |
 
-Hard rule: `policy.*`, `invite.*`, `owner.*` and device-binding events are valid only when signed by a
-**principal key** (owner principal where the role requires it). No device key, so no agent, can create them.
+Hard rule: `policy.*`, `invite.*` and `owner.*` events are valid only when signed by a **principal key**
+(owner principal where the role requires it). A device binding carries a proof from a principal-signed
+invite instead (section 14). No device key, so no agent, can create them on its own.
 
 The founder (named in genesis) holds `owner` and loses it only by explicitly giving it away.
 Membership only grows in v1, so validation is: *was the author a member at any causally earlier point?*
@@ -209,16 +210,20 @@ struct Event {
 ```
 
 * **Encoding:** canonical postcard (deterministic, compact). Signature covers the encoding without `sig`. See *Encoding and data format* below for the decision and the exact layout.
-* **Sync:** exchange version vectors `{author -> max_seq}`, stream missing ranges.
-* **Equivocation:** two events with the same `(author, seq)` are proof of misbehavior. v1 records and
-  surfaces it; it has no automatic effect.
+* **Sync:** exchange version vectors `{author -> max_seq}`, stream missing ranges, then fetch missing
+  parents by id until nothing is missing.
+* **Equivocation:** two events with the same `(author, seq)` are proof of misbehavior, or of a machine
+  restored from a snapshot. Both branches are admitted, stored and relayed, and the fold applies both, so
+  peers converge whatever they saw first. The device is flagged; a device that sees its own key write an
+  event it did not write stops authoring.
 * **Unknown event types** are stored, relayed, and ignored by the fold, so newer peers can add types.
 * **Fold order:** the causal order from `deps`, ties broken by `(hlc, EventId)`.
 
 ### Event bodies (v1)
 | Group | Bodies | Signed by |
 |---|---|---|
-| Authority | `Genesis`, `InviteCreated`, `MemberJoined`, `DeviceBound`, `PolicySet`, `OwnerAdded`, `ForkAnnounced` | principal key (carried in a device feed) |
+| Authority | `Genesis`, `InviteCreated`, `MemberJoined`, `PolicySet`, `OwnerAdded`, `ForkAnnounced` | principal key (carried in a device feed) |
+| Binding | `DeviceBound` | invite key proof, the new device's first event |
 | Identity | `AgentDefined`, `DeviceProfile` | device |
 | Items | `ItemCreated`, `ItemEdited`, `ItemTransitioned`, `ItemLinked`, `ItemArchived`, `ItemUnarchived`, `Comment` | device |
 | Work | `SessionStarted`, `SessionEnded`, `Assigned`, `Claim`, `Heartbeat`, `Progress`, `Review`, `Merged` | device (`Assigned` by the anchor) |
@@ -305,6 +310,10 @@ event invalid.
 | 1 | `Genesis` | `Signed<Genesis>`: `name`, `founder: MemberSeed`, `members: Vec<MemberSeed>`, `policy` (TOML text), `forked_from: Option<ForkPoint>` |
 | 2 | `PolicySet` | `Signed<PolicySet>`: `policy` (TOML text, stored verbatim) |
 | 3 | `AgentDefined` | `name`, `harness`, `model: Option<String>`, `capabilities`, `lanes` |
+| 4 | `InviteCreated` | `Signed<InviteCreated>`: `kind` (`Device`), `invite: InviteKey`, `expires` (M1) |
+| 5 | `DeviceBound` | `invite: EventId`, `proof: Signature` by the invite key (M1) |
+| 6 | `DeviceProfile` | `name`, `hardware`, `agents: {agent -> max_sessions}`, `max_sessions` (M1) |
+| 7 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` (M1) |
 | 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires` |
 | 11 | `ItemEdited` | `item`, `changes: Vec<Change>` (`Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires`) |
 | 12 | `ItemTransitioned` | `item`, `to`, `note: Option<String>` |
@@ -314,8 +323,9 @@ event invalid.
 | 16 | `Comment` | `item`, `body` |
 
 * `Signed<T>` = `statement: T`, `signer: PrincipalKey`, `signature: Signature`.
-* `MemberSeed` = `principal`, `handle`, `devices: Vec<DeviceKey>`. The founder is `owner`; seeded
-  members are `member`.
+* `MemberSeed` = `principal`, `handle`, `devices: Vec<DeviceKey>`, `previous: Vec<PrincipalKey>`. The
+  founder is `owner`; seeded members are `member`. `previous` lists keys the member used in the parent
+  workforce of a fork, so prefix events resolve to the same handle.
 * `SetChange<T>` = `Add(T)` or `Remove{value: T, observed: Vec<EventId>}`. A removal lists the add events
   its author had seen, so a concurrent add survives it (add wins) without any ancestry index.
 * An item id is the id of its `ItemCreated` event. Policy and `Genesis` carry TOML text, not a parsed
@@ -329,8 +339,8 @@ encodings above; redb itself stores bytes.
 | Table | Key | Value |
 |---|---|---|
 | `events` | event id (32 bytes) | encoded `Event` |
-| `feeds` | `(author, seq)` | event id. Appends must be gapless per author |
-| `heads` | author | `(seq, event id)` of the latest event |
+| `feeds` | `(author, seq)` | event ids (multimap: more than one only after equivocation). An append's `prev` must be stored |
+| `heads` | author | tips `(seq, event id)` of the author's feed (more than one only after equivocation) |
 | `pending` | event id | encoded `Event` still waiting for parents |
 | `snapshots` | BLAKE3 of the covered heads | encoded `(covered heads, blob)` |
 | `meta` | `latest_snapshot` | key of the current snapshot |
@@ -348,13 +358,15 @@ order events arrive in.
 
 **Admission** (`State::receive`, enforced by every peer; depends only on an event's causal past):
 version; device signature; `workforce` matches (genesis names none); all parents (`prev` and `deps`)
-are known; the feed is gapless and unforked; `hlc` is greater than every parent's; the author is a bound
-device and the actor belongs to its principal; authority bodies carry a valid principal signature of an
-owner for this workforce; referenced items exist; no item links to itself.
+are known; `prev` is the author's event with `seq - 1` (none for `seq == 1`); `hlc` is greater than
+every parent's; the author is a bound device and the actor belongs to its principal, where a
+`DeviceBound` as the author's first event, with its invite among its parents and a valid proof, binds
+it; authority bodies carry a valid principal signature of an owner for this workforce; referenced items
+exist; no item links to itself.
 * Events with missing parents (or arriving before genesis) wait in a **pending set**, capped at 10,000
   events, and are applied when their parents arrive. Any arrival order and any duplication give the same
   state; this is tested with generated event sets.
-* A second event with the same `(author, seq)` is rejected, not recorded.
+* A second event with the same `(author, seq)` is admitted and the author flagged (see *Equivocation*).
 
 **Authoring checks** (`State::check_policy`, run by the author before signing; peers do not repeat
 them): type exists, target state exists, field allowed for the type (`priority`, `labels`, `requires`),
@@ -396,19 +408,23 @@ struct Genesis {
 struct ForkPoint { workforce: Hash, heads: Vec<EventId> }
 ```
 
-* Parent events up to `heads` are a read-only prefix, validated under the parent's rules. Item ids,
-  comments, progress and decisions carry over.
+* Parent events up to `heads` are a read-only prefix, validated under the parent's rules. They are
+  admitted only when fetched by id from a known descendant, so nothing after the fork point gets in.
+  Item ids, comments, progress and decisions carry over.
 * Parent events after the fork point are ignored.
-* Excluded members are absent from the new member list, so their connections are rejected at the iroh handshake.
+* Excluded members and devices are absent from the new member list, so their connections are rejected
+  at the iroh handshake and their new events are not admitted. A lost machine is excluded as a device.
+* `--new-principal` founds the fork with a fresh principal key, for when the lost machine held it. The
+  member seed lists the old key as `previous`.
 * Anyone can fork. The forker becomes founder of the new workforce.
-* When the old owner forks, they publish `ForkAnnounced{to, members}` in the old workforce. Included
-  members' daemons follow automatically if the announcement is owner-signed, otherwise they ask
-  (`wf fork accept`). The old workforce is archived locally.
+* When an owner forks without `--new-principal`, they publish `ForkAnnounced{to, members}` in the old
+  workforce. In v1 devices follow by hand (`wf fork accept`), which writes the new id to
+  `.workforce.toml`. The old workforce is archived locally.
 
 This replaces revocation and recovery keys in v1.
 
 ```
-wf fork [--exclude <member|principal>...] [--name <name>]
+wf fork [--exclude <device|member>...] [--new-principal] [--name <name>]
 wf fork accept <id>
 wf fork list
 ```
@@ -720,15 +736,19 @@ Everything is also available as flags for headless and Nix setups:
 `wf join <code> --yes --name vm --agents coder --max-sessions 2 --daemon`.
 
 Under the hood:
-1. The code contains the workforce id, the endpoint ids of a few members, and a random invite secret.
-   Long codes, no rendezvous infrastructure.
+1. The code contains the workforce id, the id of the `InviteCreated` event, the endpoint ids of a few
+   members, and the invite secret key. Long codes, no rendezvous infrastructure.
 2. **Invites are self-authorizing.** At invite time the principal (or an owner, for member invites) signs
-   `InviteCreated{kind, role, hash(secret), expires, uses}`. The joiner writes its own `DeviceBound`
-   (or `MemberJoined` with a new principal key) containing the secret's preimage. Any peer verifies this
-   offline; no owner needs to be online and the new device never sees the principal key.
-3. Concurrent redemptions of a single-use invite: earliest `(hlc, EventId)` wins; the loser stays unbound
-   and is asked for a new code.
-4. The joiner dials `wf/join/1` on any reachable member, syncs the log, then publishes its `DeviceProfile`.
+   `InviteCreated{kind, invite: InviteKey, expires}` with the invite's public key. The joiner writes its
+   own `DeviceBound` (or `MemberJoined` with a new principal key) as the first event of its feed, with a
+   signature by the invite key over its own device key. Any peer verifies this offline; no owner needs to
+   be online, the new device never sees the principal key, and nothing in the log could bind another device.
+3. **Expiry and single use are enforced at the handshake** by the member serving `wf/join/1`, not by
+   admission: they need a clock and coordination, and admission must not depend on either. A leaked code
+   redeemed through two members that cannot see each other binds both devices, on every peer alike, and
+   is flagged; the fix is `wf fork --exclude <device>`.
+4. The joiner dials `wf/join/1` on any reachable member, proves the invite, syncs the log, writes its
+   `DeviceBound`, then publishes its `DeviceProfile`.
 5. Gossip topics derive from the workforce id; bootstrap peers are the known members' endpoint ids.
 6. Non-member endpoints are rejected at the handshake.
 7. State lives in `$XDG_DATA_HOME/workforce/<id>/`. The repo holds only `.workforce.toml` with the id.
@@ -819,8 +839,8 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
 | M | Scope |
 |---|---|
 | **M0** | Event log with `actor`, `owner`/`member`, principal and device keys, agent definitions, item model (types, categories, built-in types, relations, derived refs and mentions, archiving), in-memory fold, redb event store with snapshots. Single peer. |
-| **M1** | iroh sync, self-authorizing invites and `wf join`, device profiles, anchor dispatch, lanes, progress from commits, overlap notifications, `wf fork`. **= UC1** |
-| M2 | Sessions and worktrees, ACP harness runner, `wf` MCP server, session inboxes, secret brokering, redaction, `Merged` from origin |
+| **M1** | iroh sync, equivocation handling, self-authorizing device invites and `wf join`, device profiles, daemon, gossip, `wf fork`. |
+| M2 | Sessions and worktrees, anchor dispatch, claims and leases, lanes, ACP harness runner, `wf` MCP server, session inboxes, progress from commits, overlap notifications, secret brokering, redaction, `Merged` from origin. **= UC1** |
 | M3 | Decision ratification flow, distill items, hybrid search |
 | M4 | Multiple principals, threads, scopes, `wf attach` |
 | M5 | Git bundles over iroh-blobs, peer-to-peer repos, compaction |
