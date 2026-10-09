@@ -82,7 +82,7 @@ impl Cluster {
             (1, Some(item)) => comment(item, "noted"),
             (2, Some(item)) => edit(
                 item,
-                Change::Priority(Some(if choice % 2 == 0 {
+                Change::Priority(Some(if choice.is_multiple_of(2) {
                     Priority::P1
                 } else {
                     Priority::P3
@@ -123,7 +123,7 @@ impl Cluster {
             return;
         }
         let mut events: Vec<Event> = self.peers[from].replica.lock().store().events().unwrap();
-        events.retain(|event| (usize::from(seed) + event.content.seq as usize) % 3 != 0);
+        events.retain(|event| !(usize::from(seed) + event.content.seq as usize).is_multiple_of(3));
         events.reverse();
         let duplicates: Vec<Event> = events.iter().step_by(2).cloned().collect();
         events.extend(duplicates);
