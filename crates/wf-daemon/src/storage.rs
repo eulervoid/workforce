@@ -68,6 +68,21 @@ impl StorageHandle {
         answer.await.map_err(|_| StorageClosed)
     }
 
+    /// Like [`StorageHandle::with`], for code that runs on a thread of its own, such as another
+    /// storage task. Blocks until the job has run.
+    pub fn with_blocking<T: Send + 'static>(
+        &self,
+        job: impl FnOnce(&mut Replica<RedbStore>) -> T + Send + 'static,
+    ) -> Result<T, StorageClosed> {
+        let (reply, answer) = mpsc::channel();
+        self.jobs
+            .send(Box::new(move |replica| {
+                let _ = reply.send(job(replica));
+            }))
+            .map_err(|_| StorageClosed)?;
+        answer.recv().map_err(|_| StorageClosed)
+    }
+
     /// Changes whenever the heads of the replica do.
     pub fn watch_heads(&self) -> watch::Receiver<BTreeSet<EventId>> {
         self.heads.clone()
@@ -118,6 +133,8 @@ impl SyncLog for StorageHandle {
     }
 
     async fn missing(&self) -> Result<Vec<EventId>, LogError> {
-        Ok(self.with(|replica| replica::missing(replica)).await?)
+        self.with(|replica| replica::missing(replica))
+            .await?
+            .map_err(LogError::from)
     }
 }

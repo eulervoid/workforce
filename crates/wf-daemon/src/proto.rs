@@ -63,9 +63,13 @@ pub enum Call {
     },
     /// Syncs with every other bound device now.
     SyncNow,
-    /// Syncs with these devices now, which may not be bound in the workforce yet: how a device
-    /// takes in a fork it is only about to learn the members of.
-    SyncWith(Vec<DeviceKey>),
+    /// Founds the workforce of this genesis as a fork of the one the request names, from what the
+    /// daemon holds of it, and starts serving it.
+    Fork(Box<Event>),
+    /// Starts taking in a workforce this machine does not have yet, from these devices, which may
+    /// not be bound in it as far as this machine knows: how a device follows a fork it is only
+    /// about to learn the members of. The history comes from the parent when it is stored here.
+    Follow(Vec<DeviceKey>),
     /// When each device was last heard from, in milliseconds since the epoch.
     LastSeen,
 }
@@ -77,6 +81,7 @@ pub enum Response {
     Events(Vec<Event>),
     Authored(Event),
     Synced(Vec<PeerSync>),
+    Forked,
     LastSeen(Vec<(DeviceKey, u64)>),
     Failed(String),
 }

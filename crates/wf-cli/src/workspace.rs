@@ -187,6 +187,23 @@ impl Workspace {
         }
     }
 
+    /// Founds the fork that `genesis` starts from this workforce, with its history, in the store
+    /// of whoever owns the stores of this machine.
+    pub fn create_fork(&mut self, genesis: Event) -> anyhow::Result<()> {
+        match &mut self.source {
+            Source::Local(replica) => {
+                let child = genesis.id().into();
+                let store = RedbStore::open(store_path(&self.data, &child)?)?;
+                Replica::create_fork(store, genesis, &*replica)?;
+                Ok(())
+            }
+            Source::Daemon { client, .. } => {
+                client.get_mut().fork(self.workforce, genesis)?;
+                Ok(())
+            }
+        }
+    }
+
     pub fn principal_signer(&self) -> anyhow::Result<PrincipalSigner> {
         self.data.principal(&self.workforce)?.ok_or_else(|| {
             anyhow!("this machine has no principal key for this workforce, so it cannot sign policy changes")

@@ -757,6 +757,30 @@ mod forking {
     }
 
     #[test]
+    fn the_daemon_founds_the_fork_and_the_history_keeps_its_edits() {
+        let sandbox = Sandbox::new();
+        sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+        let item = sandbox.add(&["--title", "Original", "--priority", "P1"]);
+        sandbox.run(&["item", "edit", short(&item), "--title", "Renamed"]);
+        sandbox.run(&["comment", short(&item), "A note"]);
+
+        let daemon = sandbox.start_daemon();
+        let fork = sandbox.json(&["fork"]);
+        let child = fork["workforce"].as_str().unwrap().to_string();
+        let through_daemon = sandbox.json(&["item", "show", short(&item)]);
+        assert_eq!(through_daemon["title"], "Renamed");
+        assert_eq!(through_daemon["notes"].as_array().unwrap().len(), 1);
+        sandbox.add(&["--title", "After the fork", "--priority", "P2"]);
+        daemon.stop();
+
+        // The same through the store of the fork, which the daemon had created.
+        assert_eq!(sandbox.json(&["status"])["id"], child.as_str());
+        let from_store = sandbox.json(&["item", "show", short(&item)]);
+        assert_eq!(from_store["title"], "Renamed");
+        assert_eq!(sandbox.json(&["item", "list"]).as_array().unwrap().len(), 2);
+    }
+
+    #[test]
     fn excluding_a_device_leaves_it_out_but_keeps_its_items() {
         let sandbox = Sandbox::new();
         sandbox.run(&[

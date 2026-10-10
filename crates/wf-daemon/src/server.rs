@@ -44,7 +44,17 @@ async fn converse(daemon: &Arc<Daemon>, stream: &mut UnixStream) -> Result<(), F
 }
 
 async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
-    let loaded = match daemon.workforce(request.workforce) {
+    let opened = match request.call {
+        Call::Follow(_) => daemon.follow(request.workforce),
+        Call::State
+        | Call::Event(_)
+        | Call::Events
+        | Call::Author { .. }
+        | Call::SyncNow
+        | Call::Fork(_)
+        | Call::LastSeen => daemon.workforce(request.workforce),
+    };
+    let loaded = match opened {
         Ok(loaded) => loaded,
         Err(error) => return Response::Failed(error.to_string()),
     };
@@ -111,7 +121,14 @@ async fn call(
             let results = sync_all(daemon.node(), workforce, peers, Some(daemon.presence())).await;
             Ok(Response::Synced(results))
         }
-        Call::SyncWith(devices) => {
+        Call::Fork(genesis) => {
+            daemon
+                .create_fork(loaded, *genesis)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(Response::Forked)
+        }
+        Call::Follow(devices) => {
             let peers = devices
                 .into_iter()
                 .map(|device| (device, device.fmt_short()))

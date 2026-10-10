@@ -211,21 +211,8 @@ pub fn fork(
     let mut unfinished = Unfinished::new(workspace.data.workforce(&child));
     workspace.data.store_principal(&child, &founder_key)?;
 
-    // The fork holds the history it was made from, newest event first.
-    let mut history = workspace.events()?;
-    history.sort_by_key(|event| std::cmp::Reverse((event.content.hlc, event.id())));
-    let history_events = history.len();
-    {
-        let store = RedbStore::open(workspace::store_path(&workspace.data, &child)?)?;
-        let mut replica = Replica::open(store, child)?;
-        replica.receive(genesis_event)?;
-        for event in history {
-            replica.receive(event)?;
-        }
-        if !replica.state().missing_parents().is_empty() {
-            bail!("the history of the fork is incomplete; nothing was changed");
-        }
-    }
+    let history_events = state.event_count();
+    workspace.create_fork(genesis_event)?;
 
     let announce = !args.new_principal
         && state
@@ -335,15 +322,11 @@ pub fn accept(
     let bootstrap = bootstrap_devices(workspace.state(), child, own);
     let (replicated, device, _) = workspace.into_replicated();
 
-    // An empty store for the fork, so that whoever keeps the log of this machine (this process
-    // or the daemon) can take the fork in.
+    // Whoever keeps the log of this machine (the daemon, or this process) takes the fork in. The
+    // history comes from the workforce it was forked from when this machine has it.
     let events = match replicated {
         Replicated::Daemon(mut client) => {
-            drop(Replica::open(
-                RedbStore::open(workspace::store_path(&data, &child)?)?,
-                child,
-            )?);
-            let results = client.sync_with(child, bootstrap)?;
+            let results = client.follow(child, bootstrap)?;
             if results.iter().all(|result| !result.reached()) {
                 bail!("could not reach a device that has the fork");
             }
@@ -351,10 +334,11 @@ pub fn accept(
             check_member(&state, own, child)?;
             state.event_count()
         }
-        Replicated::Local(replica) => {
-            drop(replica);
+        Replicated::Local(parent) => {
             let store = RedbStore::open(workspace::store_path(&data, &child)?)?;
-            let shared = SharedReplica::new(Replica::open(store, child)?);
+            let mut replica = Replica::open(store, child)?;
+            replica.set_history_source(parent);
+            let shared = SharedReplica::new(replica);
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
@@ -410,6 +394,11 @@ fn check_member(state: &State, device: DeviceKey, child: WorkforceId) -> anyhow:
     }
     if state.principal_of(&device).is_none() {
         bail!("this device is not part of the fork");
+    }
+    if state.history_incomplete() {
+        bail!(
+            "the history of the fork is still arriving; run `wf sync` and then `wf fork accept` again"
+        );
     }
     Ok(())
 }

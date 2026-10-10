@@ -510,6 +510,17 @@ impl State {
         self.pending.events.values()
     }
 
+    /// The events of the parent workforce that a fork has been told about (by the fork point or
+    /// by history already taken in) but does not have yet.
+    pub fn wanted_history(&self) -> BTreeSet<EventId> {
+        self.workforce
+            .as_ref()
+            .and_then(|workforce| workforce.fork.as_ref())
+            .and_then(ForkState::wanted)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     /// Whether this is a fork that is still taking in the history it was made from. Nothing can
     /// be written until it has.
     pub fn history_incomplete(&self) -> bool {

@@ -120,6 +120,8 @@ pub fn check_join<S: EventStore>(
     replica.state().check_join(&invite, device, &proof, now_ms)
 }
 
-pub fn missing<S: EventStore>(replica: &Replica<S>) -> Vec<EventId> {
-    replica.state().missing_parents().into_iter().collect()
+/// What to ask a peer for. The history of a fork is looked for on this machine first.
+pub fn missing<S: EventStore>(replica: &mut Replica<S>) -> Result<Vec<EventId>, StoreError> {
+    replica.fill_history()?;
+    Ok(replica.state().missing_parents().into_iter().collect())
 }

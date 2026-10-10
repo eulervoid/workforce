@@ -7,6 +7,7 @@ use wf_core::refs::PARSER_VERSION;
 use wf_core::state::{BuildError, Disposition, Received, State, Trust};
 use wf_core::validate::{Invalid, PolicyViolation};
 
+use crate::history::HistorySource;
 use crate::store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError, StoredSnapshot};
 
 /// A snapshot is written once this many events have been applied since the last one.
@@ -40,6 +41,16 @@ pub enum AuthorError {
     Receive(#[from] ReceiveError),
 }
 
+#[derive(Debug, thiserror::Error)]
+pub enum ForkError {
+    #[error(transparent)]
+    Receive(#[from] ReceiveError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+    #[error("the history this fork was made from is not complete here")]
+    HistoryIncomplete,
+}
+
 /// What a batch of received events did.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct BatchReceived {
@@ -55,6 +66,7 @@ pub struct Replica<S: EventStore> {
     store: S,
     state: State,
     snapshot_event_count: usize,
+    history: Option<Box<dyn HistorySource>>,
 }
 
 impl<S: EventStore> Replica<S> {
@@ -101,6 +113,7 @@ impl<S: EventStore> Replica<S> {
             store,
             state,
             snapshot_event_count,
+            history: None,
         };
         for event in replica.store.pending()? {
             let received = replica
@@ -136,12 +149,20 @@ impl<S: EventStore> Replica<S> {
     /// (and snapshot) per event when a peer sends a long log. Events that are invalid are counted
     /// and dropped.
     pub fn receive_batch(&mut self, events: Vec<Event>) -> Result<BatchReceived, StoreError> {
+        self.receive_events(events, Trust::Untrusted)
+    }
+
+    fn receive_events(
+        &mut self,
+        events: Vec<Event>,
+        trust: Trust,
+    ) -> Result<BatchReceived, StoreError> {
         let mut applied: Vec<Event> = Vec::new();
         let mut parked: Vec<Event> = Vec::new();
         let mut released: Vec<EventId> = Vec::new();
         let mut rejected = 0;
         for event in events {
-            match self.state.receive(event.clone(), Trust::Untrusted) {
+            match self.state.receive(event.clone(), trust) {
                 Ok(received) => {
                     released.extend(received.applied.iter().map(Event::id));
                     released.extend(received.rejected.iter().map(|(id, _)| *id));
@@ -183,6 +204,52 @@ impl<S: EventStore> Replica<S> {
             applied: applied_count,
             rejected,
         })
+    }
+
+    /// Where this replica looks for the history of the workforce it was forked from, before it
+    /// asks a peer.
+    pub fn set_history_source(&mut self, source: Box<dyn HistorySource>) {
+        self.history = Some(source);
+    }
+
+    /// Takes in what `source` has of the history this fork is still waiting for. The events come
+    /// from a store that checked them, so their signatures are not checked again.
+    pub fn take_in_history(&mut self, source: &dyn HistorySource) -> Result<usize, StoreError> {
+        let Some((parent, _)) = self.state.fork_point() else {
+            return Ok(0);
+        };
+        let wanted = self.state.wanted_history();
+        if wanted.is_empty() {
+            return Ok(0);
+        }
+        let events = source.history_behind(parent, &wanted);
+        Ok(self.receive_events(events, Trust::Stored)?.applied)
+    }
+
+    /// [`Replica::take_in_history`] from the source set with [`Replica::set_history_source`].
+    pub fn fill_history(&mut self) -> Result<usize, StoreError> {
+        let Some(source) = self.history.take() else {
+            return Ok(0);
+        };
+        let result = self.take_in_history(source.as_ref());
+        self.history = Some(source);
+        result
+    }
+
+    /// Founds a fork in `store` from its genesis and the history `parent` holds. The fork is
+    /// complete when this returns: nothing needs to be fetched from a peer.
+    pub fn create_fork(
+        store: S,
+        genesis: Event,
+        parent: &dyn HistorySource,
+    ) -> Result<Self, ForkError> {
+        let mut replica = Self::open(store, WorkforceId::from(genesis.id()))?;
+        replica.receive(genesis)?;
+        replica.take_in_history(parent)?;
+        if replica.state.history_incomplete() {
+            return Err(ForkError::HistoryIncomplete);
+        }
+        Ok(replica)
     }
 
     /// Checks the policy rules, signs the next event of `signer` and persists it. Refuses when

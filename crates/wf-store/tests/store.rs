@@ -438,3 +438,83 @@ fn a_replica_expecting_a_workforce_refuses_the_genesis_of_another() {
     assert!(replica.receive(fixture.genesis.clone()).is_err());
     assert_eq!(replica.store().log_len().unwrap(), 0);
 }
+
+fn parent_with_items(directory: &TempDir, fixture: &Fixture, count: usize) -> Replica<RedbStore> {
+    let mut parent = new_replica(directory, fixture);
+    add(&mut parent, fixture, count);
+    parent
+}
+
+#[test]
+fn a_fork_is_created_complete_from_the_replica_it_was_made_from() {
+    let parent_directory = TempDir::new().unwrap();
+    let child_directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let parent = parent_with_items(&parent_directory, &fixture, 20);
+    let founder = wf_core::identity::PrincipalSigner::from_bytes(&[1; 32]).unwrap();
+    let genesis = fixture.fork(parent.state(), &founder, 90_000);
+
+    let child = Replica::create_fork(open(&child_directory), genesis.clone(), &parent).unwrap();
+    assert!(!child.state().history_incomplete());
+    assert_eq!(
+        child.state().event_count(),
+        parent.state().event_count() + 1
+    );
+    assert_eq!(titles(child.state()), titles(parent.state()));
+    drop(child);
+
+    let reopened = Replica::open(open(&child_directory), genesis.id().into()).unwrap();
+    assert!(!reopened.state().history_incomplete());
+    assert_eq!(reopened.state().items().count(), 20);
+}
+
+#[test]
+fn a_fork_cannot_be_created_from_a_replica_that_lacks_its_history() {
+    let parent_directory = TempDir::new().unwrap();
+    let child_directory = TempDir::new().unwrap();
+    let other_directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let parent = parent_with_items(&parent_directory, &fixture, 5);
+    let founder = wf_core::identity::PrincipalSigner::from_bytes(&[1; 32]).unwrap();
+    let genesis = fixture.fork(parent.state(), &founder, 90_000);
+
+    let behind = new_replica(&other_directory, &fixture);
+    let result = Replica::create_fork(open(&child_directory), genesis, &behind);
+    assert!(matches!(
+        result,
+        Err(wf_store::ForkError::HistoryIncomplete)
+    ));
+}
+
+#[test]
+#[ignore = "slow; run in release mode"]
+fn forking_a_workforce_with_20k_events_from_a_local_replica_is_fast() {
+    let parent_directory = TempDir::new().unwrap();
+    let child_directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let mut parent = new_replica(&parent_directory, &fixture);
+    let mut batch = Vec::new();
+    let mut state = parent.state().clone();
+    for index in 0..20_000u64 {
+        let event = fixture.author(
+            &state,
+            0,
+            2_000 + index,
+            create("task", &format!("t{index}")),
+        );
+        state.receive(event.clone(), Trust::Stored).unwrap();
+        batch.push(event);
+    }
+    parent.receive_batch(batch).unwrap();
+    let founder = wf_core::identity::PrincipalSigner::from_bytes(&[1; 32]).unwrap();
+    let genesis = fixture.fork(parent.state(), &founder, 90_000_000);
+
+    let started = std::time::Instant::now();
+    let child = Replica::create_fork(open(&child_directory), genesis, &parent).unwrap();
+    let elapsed = started.elapsed();
+    println!(
+        "forked {} events in {elapsed:?}",
+        child.state().event_count()
+    );
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
+}

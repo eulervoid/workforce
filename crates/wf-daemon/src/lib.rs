@@ -14,10 +14,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use tokio::net::UnixListener;
+use wf_core::event::Event;
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceSigner;
 use wf_net::{NetError, Network, Node};
-use wf_store::{RedbStore, Replica, StoreError};
+use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use storage::{StorageClosed, StorageHandle};
@@ -40,6 +41,16 @@ pub enum DaemonError {
     UnknownWorkforce(WorkforceId),
     #[error(transparent)]
     Store(#[from] StoreError),
+    #[error(transparent)]
+    Fork(#[from] ForkError),
+    #[error(transparent)]
+    StorageClosed(#[from] StorageClosed),
+    #[error("{path}: {source}")]
+    Io {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
 }
 
 pub struct Config {
@@ -63,6 +74,30 @@ async fn rescan(daemon: std::sync::Weak<Daemon>) {
             return;
         };
         daemon.load_stored_workforces();
+    }
+}
+
+/// Looks for the history of a fork among the workforces this daemon has loaded.
+struct ParentHistory(std::sync::Weak<Daemon>);
+
+impl HistorySource for ParentHistory {
+    fn history_behind(
+        &self,
+        parent: WorkforceId,
+        wanted: &std::collections::BTreeSet<wf_core::id::EventId>,
+    ) -> Vec<Event> {
+        let Some(loaded) = self
+            .0
+            .upgrade()
+            .and_then(|daemon| daemon.loaded_workforce(&parent))
+        else {
+            return Vec::new();
+        };
+        let wanted = wanted.clone();
+        loaded
+            .storage
+            .with_blocking(move |replica| HistorySource::history_behind(&*replica, parent, &wanted))
+            .unwrap_or_default()
     }
 }
 
@@ -152,7 +187,8 @@ impl Daemon {
         if !path.is_file() {
             return Err(DaemonError::UnknownWorkforce(id));
         }
-        let replica = Replica::open(RedbStore::open(path)?, id)?;
+        let mut replica = Replica::open(RedbStore::open(path)?, id)?;
+        replica.set_history_source(Box::new(ParentHistory(Arc::downgrade(self))));
         let storage = StorageHandle::spawn(replica);
         self.node.serve(id, storage.clone());
         tokio::spawn(peers::run_peer_loop(
@@ -164,6 +200,60 @@ impl Daemon {
         let entry = Arc::new(Loaded { storage });
         loaded.insert(id, Arc::clone(&entry));
         Ok(entry)
+    }
+
+    /// The loaded workforce, if it is one: nothing is opened.
+    fn loaded_workforce(&self, id: &WorkforceId) -> Option<Arc<Loaded>> {
+        self.loaded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .get(id)
+            .cloned()
+    }
+
+    /// Like [`Daemon::workforce`], and creates the workforce empty when this machine does not
+    /// have it yet, so it can be taken in from other devices.
+    pub(crate) fn follow(self: &Arc<Self>, id: WorkforceId) -> Result<Arc<Loaded>, DaemonError> {
+        let directory = self.config.data_dir.join(id.to_string());
+        std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
+            path: directory.clone(),
+            source,
+        })?;
+        drop(RedbStore::open(directory.join(STORE_FILE))?);
+        self.workforce(id)
+    }
+
+    /// Founds the fork that `genesis` starts from `parent`, which is a workforce of this daemon,
+    /// and starts serving it. The history is taken from the parent, so the fork is complete as
+    /// soon as it exists. If it cannot be founded nothing is left behind.
+    pub(crate) async fn create_fork(
+        self: &Arc<Self>,
+        parent: &Loaded,
+        genesis: Event,
+    ) -> Result<(), DaemonError> {
+        let child = WorkforceId::from(genesis.id());
+        let directory = self.config.data_dir.join(child.to_string());
+        std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
+            path: directory.clone(),
+            source,
+        })?;
+        let path = directory.join(STORE_FILE);
+        let created = {
+            let path = path.clone();
+            parent
+                .storage
+                .with(move |replica| {
+                    let store = RedbStore::open(path)?;
+                    Replica::create_fork(store, genesis, &*replica).map(drop)
+                })
+                .await?
+        };
+        if let Err(error) = created {
+            let _ = std::fs::remove_file(&path);
+            return Err(error.into());
+        }
+        self.workforce(child)?;
+        Ok(())
     }
 
     /// Serves the CLI on the socket until `shutdown` completes.

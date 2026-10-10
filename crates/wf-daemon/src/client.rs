@@ -121,12 +121,21 @@ impl DaemonClient {
         }
     }
 
-    pub fn sync_with(
+    /// Has the daemon found the fork of `parent` that `genesis` starts.
+    pub fn fork(&mut self, parent: WorkforceId, genesis: Event) -> Result<(), ClientError> {
+        match self.call(parent, Call::Fork(Box::new(genesis)))? {
+            Response::Forked => Ok(()),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    /// Has the daemon take in `workforce` from `devices`.
+    pub fn follow(
         &mut self,
         workforce: WorkforceId,
         devices: Vec<DeviceKey>,
     ) -> Result<Vec<PeerSync>, ClientError> {
-        match self.call(workforce, Call::SyncWith(devices))? {
+        match self.call(workforce, Call::Follow(devices))? {
             Response::Synced(peers) => Ok(peers),
             _ => Err(ClientError::UnexpectedResponse),
         }

@@ -177,6 +177,13 @@ async fn start_peer(
     fixture: &Fixture,
     device: usize,
 ) -> (TempDir, Arc<Daemon>, std::path::PathBuf) {
+    start_peer_as(fixture, fixture.devices[device].clone()).await
+}
+
+async fn start_peer_as(
+    fixture: &Fixture,
+    signer: wf_core::identity::DeviceSigner,
+) -> (TempDir, Arc<Daemon>, std::path::PathBuf) {
     let directory = TempDir::new().unwrap();
     let store_directory = directory.path().join(fixture.workforce().to_string());
     std::fs::create_dir_all(&store_directory).unwrap();
@@ -194,7 +201,7 @@ async fn start_peer(
             socket: socket.clone(),
             network: Network::Direct,
         },
-        fixture.devices[device].clone(),
+        signer,
     )
     .await
     .unwrap();
@@ -251,4 +258,125 @@ async fn daemons_of_two_devices_converge_on_their_own() {
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
     assert!(seen_vm, "the laptop knows when it last saw the vm");
+}
+
+#[tokio::test]
+async fn the_daemon_founds_a_fork_from_its_own_replica() {
+    let running = start().await;
+    let socket = running.socket.clone();
+    let parent = running.fixture.workforce();
+    let founder = wf_core::identity::PrincipalSigner::from_bytes(&[1; 32]).unwrap();
+    let fixture = Fixture::new(1);
+
+    let (parent_state, child_state, child) = blocking(move || {
+        let mut client = connect(&socket);
+        let parent_state = client.state(parent).unwrap();
+        let genesis = fixture.fork(&parent_state, &founder, 90_000);
+        let child = genesis.id().into();
+        client.fork(parent, genesis).unwrap();
+        let child_state = client.state(child).unwrap();
+        (parent_state, child_state, child)
+    })
+    .await;
+    assert_eq!(child_state.workforce_id(), Some(child));
+    assert!(!child_state.history_incomplete());
+    assert_eq!(child_state.items().count(), parent_state.items().count());
+    assert_eq!(child_state.event_count(), parent_state.event_count() + 1);
+
+    running.shutdown.send(()).unwrap();
+    running.task.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn a_fork_that_cannot_be_founded_leaves_no_store_behind() {
+    let running = start().await;
+    let socket = running.socket.clone();
+    let parent = running.fixture.workforce();
+    let founder = wf_core::identity::PrincipalSigner::from_bytes(&[1; 32]).unwrap();
+    // A genesis that names heads this daemon does not have.
+    let other = Fixture::new(1);
+    let mut elsewhere = other.state();
+    other.apply(&mut elsewhere, 0, 3_000, create("task", "only elsewhere"));
+    let genesis = other.fork(&elsewhere, &founder, 90_000);
+    let child: wf_core::id::WorkforceId = genesis.id().into();
+
+    let result = blocking(move || connect(&socket).fork(parent, genesis)).await;
+    assert!(matches!(result, Err(ClientError::Failed(_))), "{result:?}");
+    let store = running
+        ._directory
+        .path()
+        .join(child.to_string())
+        .join(STORE_FILE);
+    assert!(!store.exists());
+}
+
+#[tokio::test]
+async fn a_daemon_follows_a_fork_with_the_history_it_already_has() {
+    let fixture = Fixture::new(1);
+    let (_laptop_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
+    let (_vm_dir, vm, vm_socket) = start_peer_as(&fixture, fixture.member_device.clone()).await;
+    laptop.node().remember(vm.node().local_addr());
+    vm.node().remember(laptop.node().local_addr());
+    let parent = fixture.workforce();
+    let actor = fixture.founder_actor();
+
+    let socket = laptop_socket.clone();
+    blocking(move || {
+        let mut client = connect(&socket);
+        for index in 0..5 {
+            client
+                .author(
+                    parent,
+                    actor.clone(),
+                    create("task", &format!("task {index}")),
+                )
+                .unwrap();
+        }
+    })
+    .await;
+    let mut synced = false;
+    for _ in 0..200 {
+        let socket = vm_socket.clone();
+        let state = blocking(move || connect(&socket).state(parent).unwrap()).await;
+        if state.event_count() == 6 {
+            synced = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(synced, "the vm has the parent before the fork");
+
+    let socket = laptop_socket.clone();
+    let founder = wf_core::identity::PrincipalSigner::from_bytes(&[1; 32]).unwrap();
+    let genesis_fixture = Fixture::new(1);
+    let (child, forker_state) = blocking(move || {
+        let mut client = connect(&socket);
+        let state = client.state(parent).unwrap();
+        let genesis = genesis_fixture.fork(&state, &founder, 90_000);
+        let child: wf_core::id::WorkforceId = genesis.id().into();
+        client.fork(parent, genesis).unwrap();
+        (child, client.state(child).unwrap())
+    })
+    .await;
+
+    let socket = vm_socket.clone();
+    let laptop_device = laptop.device();
+    let (results, followed) = blocking(move || {
+        let mut client = connect(&socket);
+        let results = client.follow(child, vec![laptop_device]).unwrap();
+        (results, client.state(child).unwrap())
+    })
+    .await;
+    assert!(results.iter().all(|result| result.reached()));
+    for result in &results {
+        match result.outcome {
+            wf_daemon::PeerOutcome::Synced { received, .. } => {
+                assert!(received <= 1, "the history did not come from the laptop")
+            }
+            wf_daemon::PeerOutcome::Unreachable(_) => unreachable!("reached"),
+        }
+    }
+    assert!(!followed.history_incomplete());
+    assert_eq!(followed.event_count(), forker_state.event_count());
+    assert_eq!(followed.items().count(), 5);
 }

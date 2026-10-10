@@ -10,19 +10,19 @@ fn replica(workforce: wf_core::id::WorkforceId) -> SharedReplica<RedbStore> {
     SharedReplica::new(Replica::open(RedbStore::in_memory().unwrap(), workforce).unwrap())
 }
 
+/// Syncs `from` into `to`, and returns what each side did.
 async fn sync(
     from: &SharedReplica<RedbStore>,
     to: &SharedReplica<RedbStore>,
     workforce: wf_core::id::WorkforceId,
-) {
+) -> (wf_net::SyncReport, wf_net::SyncReport) {
     let (left, right) = tokio::io::duplex(8192);
     let (first, second) = tokio::join!(initiate(left, workforce, from), async {
         let mut right = right;
         assert_eq!(read_open(&mut right).await.unwrap(), workforce);
         respond(right, to).await
     });
-    first.unwrap();
-    second.unwrap();
+    (first.unwrap(), second.unwrap())
 }
 
 fn encoded(replica: &SharedReplica<RedbStore>) -> Vec<u8> {
@@ -177,4 +177,69 @@ async fn a_forked_replica_replays_from_its_log() {
         wf_core::encoding::encode(rebuilt.state()).unwrap(),
         expected
     );
+}
+
+/// A replica of the parent workforce holding the first `count` events of the history.
+fn parent_with(forked: &Forked, count: usize) -> Replica<RedbStore> {
+    let mut parent =
+        Replica::open(RedbStore::in_memory().unwrap(), forked.fixture.workforce()).unwrap();
+    for event in &forked.history[..count] {
+        parent.receive(event.clone()).unwrap();
+    }
+    parent
+}
+
+#[tokio::test]
+async fn a_device_that_has_the_parent_takes_in_the_history_from_it() {
+    let forked = forked(40);
+    let device = replica(forked.child);
+    device
+        .lock()
+        .set_history_source(Box::new(parent_with(&forked, forked.history.len())));
+
+    let (_, forker) = sync(&device, &forked.forker, forked.child).await;
+    assert_eq!(
+        forker.sent, 1,
+        "only the genesis of the fork crossed the network"
+    );
+    assert!(device.missing().await.unwrap().is_empty());
+    assert_eq!(encoded(&device), encoded(&forked.forker));
+}
+
+#[tokio::test]
+async fn a_device_behind_the_fork_point_gets_the_rest_from_a_peer() {
+    let forked = forked(40);
+    let device = replica(forked.child);
+    device
+        .lock()
+        .set_history_source(Box::new(parent_with(&forked, 10)));
+
+    let (_, forker) = sync(&device, &forked.forker, forked.child).await;
+    assert!(forker.sent > 1, "the history it lacked came from the peer");
+    assert!(device.missing().await.unwrap().is_empty());
+    assert_eq!(encoded(&device), encoded(&forked.forker));
+}
+
+#[tokio::test]
+async fn a_device_without_the_parent_gets_all_history_from_a_peer() {
+    let forked = forked(40);
+    let device = replica(forked.child);
+    let (_, forker) = sync(&device, &forked.forker, forked.child).await;
+    assert_eq!(
+        forker.sent,
+        forked.forker.lock().state().event_count(),
+        "the genesis of the fork and the whole history"
+    );
+    assert_eq!(encoded(&device), encoded(&forked.forker));
+}
+
+#[tokio::test]
+async fn a_source_that_holds_another_workforce_is_ignored() {
+    let forked = forked(10);
+    let device = replica(forked.child);
+    let other = Fixture::new(3);
+    let unrelated = Replica::open(RedbStore::in_memory().unwrap(), other.workforce()).unwrap();
+    device.lock().set_history_source(Box::new(unrelated));
+    sync(&device, &forked.forker, forked.child).await;
+    assert_eq!(encoded(&device), encoded(&forked.forker));
 }

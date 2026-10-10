@@ -127,6 +127,6 @@ impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
     }
 
     async fn missing(&self) -> Result<Vec<EventId>, LogError> {
-        Ok(replica::missing(&self.lock()))
+        Ok(replica::missing(&mut self.lock())?)
     }
 }
