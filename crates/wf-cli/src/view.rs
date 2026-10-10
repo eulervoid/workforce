@@ -1,19 +1,21 @@
 //! What commands print. Each view is a plain serializable struct: `--json` prints it inside a
 //! versioned [`Envelope`], text output is rendered from the same struct in `render`.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::event::{Change, Event, EventBody, Link};
-use wf_core::graph::{Blocker, DependencyGraph};
+use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::hlc::Hlc;
 use wf_core::id::{EventId, HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::item::{Item, ItemView, Origin, Standing};
-use wf_core::policy::{Category, Field};
+use wf_core::policy::{Field, StateCategory};
 use wf_core::resolve::MentionTarget;
 use wf_core::state::State;
+
+use crate::cli::ItemGrouping;
 
 /// Bump when a view changes shape incompatibly. Snapshot tests pin the current shapes.
 pub const SCHEMA_VERSION: u32 = 1;
@@ -92,17 +94,19 @@ pub fn mention_label(state: &State, target: &MentionTarget) -> String {
     }
 }
 
-#[derive(Serialize)]
-pub struct BlockerView {
+#[derive(Clone, Serialize)]
+pub struct ItemRefView {
     pub id: String,
     #[serde(rename = "type")]
     pub item_type: String,
     pub title: String,
     pub state: Option<String>,
-    pub category: Option<String>,
+    #[serde(skip)]
+    pub state_category: Option<String>,
+    pub priority: Option<String>,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 pub struct ItemSummary {
     pub id: String,
     #[serde(rename = "type")]
@@ -111,61 +115,259 @@ pub struct ItemSummary {
     /// `None` when the item's type was removed from the policy.
     pub state: Option<String>,
     /// `None` when the state is unknown under the current policy.
-    pub category: Option<String>,
+    #[serde(skip)]
+    pub state_category: Option<String>,
     pub priority: Option<String>,
-    pub ready: bool,
-    pub blocked_by: Vec<BlockerView>,
+    /// `None` unless the item is open.
+    pub readiness: Option<Readiness>,
+    pub blocked_by: Vec<ItemRefView>,
+    /// Live items waiting on this one, highest priority first.
+    pub blocking: Vec<ItemRefView>,
+    pub labels: Vec<String>,
+    /// The item's lane, or its type's default lane.
+    pub lane: Option<String>,
     pub archived: bool,
 }
 
 fn standing_parts(standing: Standing<'_>) -> (Option<String>, Option<String>) {
     match standing {
-        Standing::Known { state, category } => {
-            (Some(state.to_string()), Some(category.to_string()))
-        }
+        Standing::Known {
+            state,
+            state_category,
+        } => (Some(state.to_string()), Some(state_category.to_string())),
         Standing::Unknown { state } => (state.map(ToString::to_string), None),
     }
 }
 
-fn blocker_view(state: &State, blocker: &Blocker) -> BlockerView {
-    let view = state.item(blocker.item).expect("dependencies exist");
+fn item_ref_view(state: &State, view: ItemView<'_>) -> ItemRefView {
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let (state_name, category) = standing_parts(view.standing(policy));
-    BlockerView {
-        id: blocker.item.to_base32(),
+    let (state_name, state_category) = standing_parts(view.standing(policy));
+    let priority = match view {
+        ItemView::Live(item) => item.priority().map(|priority| priority.to_string()),
+        ItemView::Archived(_) => None,
+    };
+    ItemRefView {
+        id: view.id().to_base32(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
         state: state_name,
-        category,
+        state_category,
+        priority,
     }
+}
+
+fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<ItemRefView> {
+    let mut waiting: Vec<&Item> = graph
+        .dependents(item.id())
+        .filter_map(|id| match state.item(id) {
+            Some(ItemView::Live(waiting)) => Some(waiting),
+            _ => None,
+        })
+        .collect();
+    waiting.sort_by_key(|waiting| {
+        (
+            waiting.priority().is_none(),
+            waiting.priority(),
+            waiting.created(),
+            waiting.id(),
+        )
+    });
+    waiting
+        .into_iter()
+        .map(|waiting| item_ref_view(state, ItemView::Live(waiting)))
+        .collect()
 }
 
 pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> ItemSummary {
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let (state_name, category) = standing_parts(view.standing(policy));
-    let (priority, ready, blocked_by, archived) = match view {
+    let (state_name, state_category) = standing_parts(view.standing(policy));
+    let (priority, readiness, blocked_by, blocking, labels, lane, archived) = match view {
         ItemView::Live(item) => (
             item.priority().map(|priority| priority.to_string()),
-            state.is_ready(graph, item),
+            state.readiness(graph, item),
             state
                 .blockers(graph, item.id())
                 .iter()
-                .map(|blocker| blocker_view(state, blocker))
+                .map(|blocker| {
+                    item_ref_view(state, state.item(blocker.item).expect("dependencies exist"))
+                })
                 .collect(),
+            blocking_views(state, graph, item),
+            item.labels().values().map(ToString::to_string).collect(),
+            item.effective_lane(policy).map(ToString::to_string),
             false,
         ),
-        ItemView::Archived(_) => (None, false, Vec::new(), true),
+        ItemView::Archived(_) => (None, None, Vec::new(), Vec::new(), Vec::new(), None, true),
     };
     ItemSummary {
         id: view.id().to_base32(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
         state: state_name,
-        category,
+        state_category,
         priority,
-        ready,
+        readiness,
         blocked_by,
+        blocking,
+        labels,
+        lane,
         archived,
+    }
+}
+
+/// One group of `wf item list --group-by`; `group` names the state, readiness or label the items share.
+#[derive(Serialize)]
+pub struct ItemGroup {
+    pub group: String,
+    pub items: Vec<ItemSummary>,
+}
+
+/// Which state an item sits in, ordered by state category; items with an unknown state come last.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum StateGroup {
+    Known {
+        state_category: StateCategory,
+        state: String,
+    },
+    Unknown {
+        state: Option<String>,
+    },
+}
+
+/// Open items by readiness; everything else together.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum ReadinessGroup {
+    Open(Readiness),
+    NotOpen,
+}
+
+fn collect_groups<Key: Ord>(
+    entries: Vec<(ItemView<'_>, ItemSummary)>,
+    key: impl Fn(ItemView<'_>, &ItemSummary) -> Key,
+    label: impl Fn(&Key) -> String,
+) -> Vec<ItemGroup> {
+    let mut groups: BTreeMap<Key, Vec<ItemSummary>> = BTreeMap::new();
+    for (view, summary) in entries {
+        groups.entry(key(view, &summary)).or_default().push(summary);
+    }
+    groups
+        .into_iter()
+        .map(|(key, items)| ItemGroup {
+            group: label(&key),
+            items,
+        })
+        .collect()
+}
+
+/// A group keyed by an optional value. Values sort by their own order; items without a value
+/// come last.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+enum Assigned<T> {
+    Value(T),
+    Unassigned,
+}
+
+impl<T> From<Option<T>> for Assigned<T> {
+    fn from(value: Option<T>) -> Self {
+        value.map_or(Assigned::Unassigned, Assigned::Value)
+    }
+}
+
+fn assigned_name(key: &Assigned<String>, unassigned: &str) -> String {
+    match key {
+        Assigned::Value(name) => name.clone(),
+        Assigned::Unassigned => unassigned.to_string(),
+    }
+}
+
+/// An item with several labels is listed under each of them.
+fn group_by_label(entries: Vec<(ItemView<'_>, ItemSummary)>) -> Vec<ItemGroup> {
+    let mut groups: BTreeMap<Assigned<String>, Vec<ItemSummary>> = BTreeMap::new();
+    for (_, summary) in entries {
+        if summary.labels.is_empty() {
+            groups
+                .entry(Assigned::Unassigned)
+                .or_default()
+                .push(summary);
+            continue;
+        }
+        for label in &summary.labels {
+            groups
+                .entry(Assigned::Value(label.clone()))
+                .or_default()
+                .push(summary.clone());
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(key, items)| ItemGroup {
+            group: assigned_name(&key, "unlabeled"),
+            items,
+        })
+        .collect()
+}
+
+/// Groups `entries`, keeping their order inside each group.
+pub fn group_items(
+    state: &State,
+    grouping: ItemGrouping,
+    entries: Vec<(ItemView<'_>, ItemSummary)>,
+) -> Vec<ItemGroup> {
+    let policy = &state.policy().expect("a workforce has a policy").policy;
+    match grouping {
+        ItemGrouping::Label => group_by_label(entries),
+        ItemGrouping::Type => collect_groups(
+            entries,
+            |_, summary| summary.item_type.clone(),
+            |item_type| item_type.clone(),
+        ),
+        ItemGrouping::Lane => collect_groups(
+            entries,
+            |_, summary| Assigned::from(summary.lane.clone()),
+            |lane| assigned_name(lane, "no_lane"),
+        ),
+        ItemGrouping::Priority => collect_groups(
+            entries,
+            |_, summary| Assigned::from(summary.priority.clone()),
+            |priority| assigned_name(priority, "no_priority"),
+        ),
+        ItemGrouping::State => collect_groups(
+            entries,
+            |view, _| match view.standing(policy) {
+                Standing::Known {
+                    state,
+                    state_category,
+                } => StateGroup::Known {
+                    state_category,
+                    state: state.to_string(),
+                },
+                Standing::Unknown { state } => StateGroup::Unknown {
+                    state: state.map(ToString::to_string),
+                },
+            },
+            |group| match group {
+                StateGroup::Known { state, .. } => state.clone(),
+                StateGroup::Unknown { state } => {
+                    state.clone().unwrap_or_else(|| "unknown".to_string())
+                }
+            },
+        ),
+        ItemGrouping::Readiness => collect_groups(
+            entries,
+            |_, summary| match summary.readiness {
+                Some(readiness) => ReadinessGroup::Open(readiness),
+                None => ReadinessGroup::NotOpen,
+            },
+            |group| {
+                match group {
+                    ReadinessGroup::Open(Readiness::Ready) => "ready",
+                    ReadinessGroup::Open(Readiness::Blocked) => "blocked",
+                    ReadinessGroup::Open(Readiness::Stranded) => "stranded",
+                    ReadinessGroup::NotOpen => "not_open",
+                }
+                .to_string()
+            },
+        ),
     }
 }
 
@@ -176,7 +378,8 @@ pub struct LinkView {
     pub item_type: String,
     pub title: String,
     pub state: Option<String>,
-    pub category: Option<String>,
+    #[serde(skip)]
+    pub state_category: Option<String>,
     /// A concurrent link formed a cycle and this edge was dropped.
     pub ignored: bool,
 }
@@ -184,13 +387,13 @@ pub struct LinkView {
 fn link_view(state: &State, id: ItemId, ignored: bool) -> LinkView {
     let view = state.item(id).expect("linked items exist");
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let (state_name, category) = standing_parts(view.standing(policy));
+    let (state_name, state_category) = standing_parts(view.standing(policy));
     LinkView {
         id: id.to_base32(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
         state: state_name,
-        category,
+        state_category,
         ignored,
     }
 }
@@ -299,12 +502,11 @@ pub fn item_detail(
         .dependents(item.id())
         .map(|id| link_view(state, id, false))
         .collect();
-    let blockers = state.blockers(&graph, item.id());
-    if blockers
-        .iter()
-        .any(|blocker| blocker.category == Some(Category::Cancelled))
-    {
-        flags.push("a dependency was cancelled; it does not unblock this item".to_string());
+    if state.readiness(&graph, item) == Some(Readiness::Stranded) {
+        flags.push(
+            "stranded: a dependency was cancelled; `wf item link --remove-depends-on` frees it"
+                .to_string(),
+        );
     }
 
     let notes = item
@@ -479,7 +681,6 @@ pub struct StatusView {
     pub events: usize,
     pub pending: usize,
     pub heads: usize,
-    pub items_by_category: std::collections::BTreeMap<String, usize>,
     pub archived_items: usize,
     pub forked_from: Option<String>,
     pub devices: Vec<DeviceStatus>,
@@ -503,14 +704,21 @@ pub fn status(
 ) -> StatusView {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let graph = state.dependency_graph();
-    let mut by_category = std::collections::BTreeMap::new();
     let mut flagged = BTreeSet::new();
     let mut archived_items = 0;
     for view in state.items() {
         match view {
             ItemView::Archived(_) => archived_items += 1,
-            ItemView::Live(item) => match item.standing(policy).category() {
-                Some(category) => *by_category.entry(category.to_string()).or_insert(0) += 1,
+            ItemView::Live(item) => match item.standing(policy).state_category() {
+                Some(_) => {
+                    if state.readiness(&graph, item) == Some(Readiness::Stranded) {
+                        flagged.insert(format!(
+                            "#{} \"{}\" is stranded: a dependency was cancelled",
+                            item.id().short(),
+                            item.title()
+                        ));
+                    }
+                }
                 None => {
                     flagged.insert(format!(
                         "#{} \"{}\" has an unknown state or type",
@@ -574,7 +782,6 @@ pub fn status(
         events: state.event_count(),
         pending: state.pending_events().count(),
         heads: state.heads().len(),
-        items_by_category: by_category,
         archived_items,
         forked_from: state.fork_point().map(|(parent, _)| parent.to_string()),
         devices,

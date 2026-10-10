@@ -6,10 +6,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use crate::crdt::Stamp;
 use crate::id::ItemId;
 use crate::item::Item;
-use crate::policy::Category;
+use crate::policy::StateCategory;
 use crate::state::State;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -30,7 +32,19 @@ pub struct DependencyGraph {
 pub struct Blocker {
     pub item: ItemId,
     /// `None` when the dependency's state is unknown under the current policy.
-    pub category: Option<Category>,
+    pub state_category: Option<StateCategory>,
+}
+
+/// What an open item is waiting for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Readiness {
+    /// Every dependency is done.
+    Ready,
+    /// Some dependency is not done yet; none was cancelled.
+    Blocked,
+    /// Some dependency was cancelled, so waiting will not free the item; someone has to act.
+    Stranded,
 }
 
 impl DependencyGraph {
@@ -112,25 +126,41 @@ impl State {
         graph
             .depends_on(item)
             .filter_map(|dependency| {
-                let category = self
+                let state_category = self
                     .item(dependency)
-                    .and_then(|view| view.standing(&policy.policy).category());
-                (category != Some(Category::Done)).then_some(Blocker {
+                    .and_then(|view| view.standing(&policy.policy).state_category());
+                (state_category != Some(StateCategory::Done)).then_some(Blocker {
                     item: dependency,
-                    category,
+                    state_category,
                 })
             })
             .collect()
     }
 
+    /// Where an open item stands with its dependencies; `None` for items that are not open.
+    pub fn readiness(&self, graph: &DependencyGraph, item: &Item) -> Option<Readiness> {
+        let policy = self.policy()?;
+        if item.archived_at().is_some()
+            || item.standing(&policy.policy).state_category() != Some(StateCategory::Open)
+        {
+            return None;
+        }
+        let blockers = self.blockers(graph, item.id());
+        Some(if blockers.is_empty() {
+            Readiness::Ready
+        } else if blockers
+            .iter()
+            .any(|blocker| blocker.state_category == Some(StateCategory::Cancelled))
+        {
+            Readiness::Stranded
+        } else {
+            Readiness::Blocked
+        })
+    }
+
     /// `ready(i) ⇔ cat(i) = open ∧ every dependency is done`. Live sessions arrive in M2.
     pub fn is_ready(&self, graph: &DependencyGraph, item: &Item) -> bool {
-        let Some(policy) = self.policy() else {
-            return false;
-        };
-        item.archived_at().is_none()
-            && item.standing(&policy.policy).category() == Some(Category::Open)
-            && self.blockers(graph, item.id()).is_empty()
+        self.readiness(graph, item) == Some(Readiness::Ready)
     }
 
     /// Ready items, most urgent first, oldest first within a priority. Items without a priority,

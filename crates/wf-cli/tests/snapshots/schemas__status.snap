@@ -15,9 +15,6 @@ expression: "Envelope::new(view::status(&scenario.state, None, &Default::default
     "events": 10,
     "pending": 0,
     "heads": 1,
-    "items_by_category": {
-      "open": 2
-    },
     "archived_items": 1,
     "forked_from": null,
     "devices": [

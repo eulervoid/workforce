@@ -10,10 +10,20 @@ expression: "Envelope::new(&all)"
       "type": "question",
       "title": "Which hash for event ids?",
       "state": "open",
-      "category": "open",
       "priority": "P2",
-      "ready": true,
+      "readiness": "ready",
       "blocked_by": [],
+      "blocking": [
+        {
+          "id": "porkjzoazjtvw4pbjfjicak7ojmue77fononyy4tpint3fxruyqa",
+          "type": "task",
+          "title": "Implement feed sync",
+          "state": "open",
+          "priority": "P1"
+        }
+      ],
+      "labels": [],
+      "lane": "default",
       "archived": false
     },
     {
@@ -21,18 +31,20 @@ expression: "Envelope::new(&all)"
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",
-      "category": "open",
       "priority": "P1",
-      "ready": false,
+      "readiness": "blocked",
       "blocked_by": [
         {
           "id": "copop5ah64c3wnrj4wwyrjcmt7roxesa5zbgfreao6765xzjjypq",
           "type": "question",
           "title": "Which hash for event ids?",
           "state": "open",
-          "category": "open"
+          "priority": "P2"
         }
       ],
+      "blocking": [],
+      "labels": [],
+      "lane": "default",
       "archived": false
     },
     {
@@ -40,10 +52,12 @@ expression: "Envelope::new(&all)"
       "type": "task",
       "title": "Write spec",
       "state": "done",
-      "category": "done",
       "priority": null,
-      "ready": false,
+      "readiness": null,
       "blocked_by": [],
+      "blocking": [],
+      "labels": [],
+      "lane": null,
       "archived": true
     }
   ]

@@ -120,17 +120,51 @@ fn the_demo_script_works_end_to_end() {
     assert!(link.contains("now depends on"));
     let list = wf.run(&["item", "list"]);
     assert!(
-        list.contains("BLOCKED_BY") && list.contains("(task:open)"),
+        list.contains("BLOCKING") && list.contains("(task:open)"),
         "{list}"
     );
     assert_eq!(
-        titles(&wf.json(&["item", "ready"])),
+        titles(&wf.json(&["item", "list", "--ready"])),
         ["Which hash for event ids?"]
     );
+    let ready = wf.run(&["item", "list", "-r"]);
+    assert!(ready.contains("BLOCKING"), "{ready}");
+    assert_eq!(
+        titles(&wf.json(&["item", "list", "--blocked"])),
+        ["Implement feed sync"]
+    );
+    assert!(titles(&wf.json(&["item", "list", "--stranded"])).is_empty());
+    assert_eq!(
+        titles(&wf.json(&["item", "list", "--ready", "--blocked"])).len(),
+        2
+    );
+
+    wf.run(&["item", "move", short(&question), "dropped"]);
+    assert_eq!(
+        titles(&wf.json(&["item", "list", "--stranded"])),
+        ["Implement feed sync"]
+    );
+    assert!(titles(&wf.json(&["item", "list", "--blocked"])).is_empty());
+    assert!(wf.run(&["item", "list", "--stranded"]).contains('⚠'));
+    let by_readiness = wf.json(&["item", "list", "--group-by", "readiness"]);
+    let groups: Vec<&str> = by_readiness
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|group| group["group"].as_str().unwrap())
+        .collect();
+    assert_eq!(groups, ["stranded", "not_open"]);
+    assert_eq!(titles(&by_readiness[0]["items"]), ["Implement feed sync"]);
+    let by_state = wf.run(&["item", "list", "--group-by", "state"]);
+    assert!(
+        by_state.contains("open (1)") && by_state.contains("dropped (1)"),
+        "{by_state}"
+    );
+    wf.run(&["item", "move", short(&question), "open"]);
 
     wf.run(&["item", "move", short(&question), "answered"]);
     assert_eq!(
-        titles(&wf.json(&["item", "ready"])),
+        titles(&wf.json(&["item", "list", "--ready"])),
         ["Implement feed sync"]
     );
 
@@ -168,7 +202,7 @@ fn the_demo_script_works_end_to_end() {
     assert!(log.contains("events verified"), "{log}");
     let events = wf.json(&["log"])["events"].as_array().unwrap().len();
     // genesis, device profile, two agents, then the items
-    assert_eq!(events, 1 + 1 + 2 + 2 + 1 + 1 + 1 + 1 + 1);
+    assert_eq!(events, 1 + 1 + 2 + 2 + 1 + 1 + 1 + 1 + 1 + 2);
     assert!(
         wf.json(&["log"])["events"]
             .as_array()

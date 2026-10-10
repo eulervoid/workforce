@@ -9,10 +9,20 @@ expression: "Envelope::new(&detail)"
     "type": "question",
     "title": "Which hash for event ids?",
     "state": "open",
-    "category": "open",
     "priority": "P2",
-    "ready": true,
+    "readiness": "ready",
     "blocked_by": [],
+    "blocking": [
+      {
+        "id": "porkjzoazjtvw4pbjfjicak7ojmue77fononyy4tpint3fxruyqa",
+        "type": "task",
+        "title": "Implement feed sync",
+        "state": "open",
+        "priority": "P1"
+      }
+    ],
+    "labels": [],
+    "lane": "default",
     "archived": false,
     "body": "",
     "author": "@joshua",
@@ -28,7 +38,6 @@ expression: "Envelope::new(&detail)"
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
-        "category": "open",
         "ignored": false
       }
     ],

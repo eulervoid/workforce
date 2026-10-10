@@ -15,7 +15,7 @@ export PATH="$PWD/target/debug:$PATH"
 cd ~/src/some-repo
 wf init --name demo
 wf item add --title "Implement feed sync" --priority P1
-wf item ready
+wf item list --ready
 wf log
 ```
 ## Several machines

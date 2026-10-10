@@ -249,8 +249,8 @@ mod tests {
         let prefix = &wanted.to_base32()[..8];
         assert_eq!(resolve_prefix(prefix, ids.clone()), Ok(wanted));
         assert_eq!(
-            resolve_prefix("abc", ids.clone()),
-            Err(PrefixError::TooShort("abc".into()))
+            resolve_prefix("ab", ids.clone()),
+            Err(PrefixError::TooShort("ab".into()))
         );
         assert!(matches!(
             resolve_prefix("2222222", ids.clone()),

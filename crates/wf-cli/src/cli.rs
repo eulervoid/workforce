@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Args, Parser, Subcommand};
+use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use wf_core::graph::Readiness;
 use wf_core::item::Priority;
 use wf_core::name::{AgentName, HarnessName, Label, LaneName, Requirement, StateName, TypeName};
 
@@ -242,8 +243,6 @@ pub enum ItemCommand {
         #[arg(long)]
         history: bool,
     },
-    /// Items that can be worked on now.
-    Ready,
     Edit(ItemEditArgs),
     Move {
         item: Option<String>,
@@ -292,6 +291,52 @@ pub struct ItemListArgs {
     /// Include archived items.
     #[arg(long)]
     pub archived: bool,
+    /// Only open items whose dependencies are all done, so they can be worked on now.
+    #[arg(short, long)]
+    pub ready: bool,
+    /// Only open items waiting on dependencies that are not done yet.
+    #[arg(long)]
+    pub blocked: bool,
+    /// Only open items with a cancelled dependency; someone has to act to free them.
+    #[arg(long)]
+    pub stranded: bool,
+    /// Show the items in groups.
+    #[arg(long, value_enum)]
+    pub group_by: Option<ItemGrouping>,
+}
+
+/// What `wf item list --group-by` groups by.
+#[derive(Clone, Copy, ValueEnum)]
+pub enum ItemGrouping {
+    /// By state, ordered by state category: `open`, `in_progress`, `done`, ...
+    State,
+    /// Open items by `ready`, `blocked` and `stranded`; the rest as `not_open`.
+    Readiness,
+    /// By label, alphabetically; an item with several labels appears under each, and items
+    /// without one under `unlabeled`.
+    Label,
+    /// By item type, alphabetically.
+    Type,
+    /// By lane, alphabetically; items without one under `no_lane`.
+    Lane,
+    /// By priority, `P0` first; items without one under `no_priority`.
+    Priority,
+}
+
+impl ItemListArgs {
+    /// Whether an item passes the `--ready`, `--blocked` and `--stranded` filters; given together
+    /// they match any of them.
+    pub fn accepts(&self, readiness: Option<Readiness>) -> bool {
+        if !(self.ready || self.blocked || self.stranded) {
+            return true;
+        }
+        match readiness {
+            Some(Readiness::Ready) => self.ready,
+            Some(Readiness::Blocked) => self.blocked,
+            Some(Readiness::Stranded) => self.stranded,
+            None => false,
+        }
+    }
 }
 
 /// Without an item, picks one at a terminal. Without any flag, opens the item as markdown with TOML front matter in `$VISUAL` or `$EDITOR`

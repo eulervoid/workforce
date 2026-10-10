@@ -15,7 +15,7 @@ use crate::event::{
 use crate::id::{EventId, ItemId, WorkforceId};
 use crate::identity::{Actor, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, StateName, TypeName};
-use crate::policy::{Category, Field, Policy, PolicyError};
+use crate::policy::{Field, Policy, PolicyError, StateCategory};
 use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -122,7 +122,9 @@ pub enum PolicyViolation {
     #[error("{from} cannot depend on {to}: that would make a cycle")]
     DependencyCycle { from: ItemId, to: ItemId },
     #[error("only done or cancelled items can be archived")]
-    ArchiveRequiresTerminal { category: Option<Category> },
+    ArchiveRequiresTerminal {
+        state_category: Option<StateCategory>,
+    },
     #[error("{0} is already archived")]
     AlreadyArchived(ItemId),
     #[error("{0} is not archived")]
@@ -609,7 +611,7 @@ impl State {
             EventBody::ItemTransitioned(transition) => {
                 let item = item_of(&transition.item)?;
                 let config = type_of(item.item_type())?;
-                match config.category_of(&transition.to) {
+                match config.state_category_of(&transition.to) {
                     Some(_) => Ok(()),
                     None => Err(PolicyViolation::UnknownState {
                         type_name: item.item_type().clone(),
@@ -662,10 +664,10 @@ impl State {
                 if item.archived_at().is_some() {
                     return Err(PolicyViolation::AlreadyArchived(reference.item));
                 }
-                let category = item.standing(policy).category();
-                match category {
-                    Some(category) if category.is_terminal() => Ok(()),
-                    _ => Err(PolicyViolation::ArchiveRequiresTerminal { category }),
+                let state_category = item.standing(policy).state_category();
+                match state_category {
+                    Some(state_category) if state_category.is_terminal() => Ok(()),
+                    _ => Err(PolicyViolation::ArchiveRequiresTerminal { state_category }),
                 }
             }
             EventBody::ItemUnarchived(reference) => {

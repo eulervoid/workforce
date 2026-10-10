@@ -344,14 +344,7 @@ impl Scope {
 fn item_choice(summary: &ItemSummary) -> Choice {
     Choice {
         value: summary.id.clone(),
-        label: format!(
-            "#{}  {:<8}  {:<12}  {:<2}  {}",
-            &summary.id[..wf_core::id::SHORT_ID_LEN],
-            summary.item_type,
-            summary.state.as_deref().unwrap_or("?"),
-            summary.priority.as_deref().unwrap_or(""),
-            summary.title
-        ),
+        label: render::item_choice(summary),
     }
 }
 
@@ -410,7 +403,7 @@ fn choose_state(
         .iter()
         .map(|state| Choice {
             value: state.name.to_string(),
-            label: format!("{}  ({})", state.name, state.category),
+            label: render::state_choice(&state.name.to_string(), state.state_category),
         })
         .collect();
     Ok(StateName::new(interactive::pick("state", choices)?)?)
@@ -480,31 +473,34 @@ fn item(
             let state = workspace.state();
             let graph = state.dependency_graph();
             let views = sorted_views(state, args.archived);
-            let items: Vec<ItemSummary> = views
+            let entries: Vec<(ItemView<'_>, ItemSummary)> = views
                 .into_iter()
-                .map(|view| view::summary(state, &graph, view))
-                .filter(|summary| {
+                .map(|view| (view, view::summary(state, &graph, view)))
+                .filter(|(_, summary)| {
                     args.item_type
                         .as_ref()
                         .is_none_or(|wanted| summary.item_type == wanted.as_str())
                 })
-                .filter(|summary| {
+                .filter(|(_, summary)| {
                     args.state
                         .as_ref()
                         .is_none_or(|wanted| summary.state.as_deref() == Some(wanted.as_str()))
                 })
+                .filter(|(_, summary)| args.accepts(summary.readiness))
                 .collect();
-            emit(json, &items, |items| render::item_list(items))
-        }
-        ItemCommand::Ready => {
-            let state = workspace.state();
-            let graph = state.dependency_graph();
-            let items: Vec<ItemSummary> = state
-                .ready_items()
-                .into_iter()
-                .map(|item| view::summary(state, &graph, ItemView::Live(item)))
-                .collect();
-            emit(json, &items, |items| render::item_list(items))
+            match args.group_by {
+                None => {
+                    let items: Vec<ItemSummary> =
+                        entries.into_iter().map(|(_, summary)| summary).collect();
+                    emit(json, &items, |items| render::item_list(items))
+                }
+                Some(grouping) => {
+                    let groups = view::group_items(state, grouping, entries);
+                    emit(json, &groups, |groups| {
+                        render::item_groups(grouping, groups)
+                    })
+                }
+            }
         }
         ItemCommand::Show { item, history } => {
             let id = choose_item(workspace, mode, item, Scope::Any)?;

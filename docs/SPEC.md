@@ -524,11 +524,16 @@ Built-in behaviour keys on categories, never on state names.
 | `active` | being worked on | has a session/claim; lease expiry returns it to the type's `open` state |
 | `blocked` | waiting on something **outside** the model (review, CI, a vendor) | not claimable; entering it ends the session's claim; `@mentions`/`#refs` in the transition note say what it waits on |
 | `done` | finished successfully | terminal; satisfies dependents |
-| `cancelled` | finished without success | terminal; dependents are flagged, not unblocked |
+| `cancelled` | finished without success | terminal; open dependents become **stranded** (flagged, not unblocked) |
 
 Blocking on another item is **computed** from `depends_on`, never stored as a state.
 
 \[\text{ready}(i) \iff \text{cat}(i) = \texttt{open} \wedge \forall d \in \text{depends\_on}(i): \text{cat}(d) = \texttt{done} \wedge \text{no live session on } i\]
+
+An open item that is not ready is **blocked** while some dependency is not done, and **stranded** when
+some dependency is `cancelled`: waiting will not free it, so someone has to remove the dependency or
+cancel the item. `wf item list` filters with `--ready`, `--blocked` and `--stranded` (combined, they match
+any), and `wf status` flags stranded items.
 
 `wf item show` prints an effective status, e.g. `open · blocked by #q7x2 (question, open)`.
 
@@ -595,7 +600,7 @@ nothing. A custom type opts in with `fields = ["priority", ...]`.
   it. Items of other types have none, and setting one is refused. Peers do not repeat the check (see
   authoring checks), so an item whose type gained the field later, or an old one, can lack a priority:
   `item show` flags it and it sorts last until one is set.
-* **Ordering** of `item list` and `item ready`: priority (`P0` first), items without a priority last, then
+* **Ordering** of `item list` and `item list --ready`: priority (`P0` first), items without a priority last, then
   oldest first, then id.
 * **Not decided:** letting an item inherit the highest priority of the items it blocks, so `ready` puts what
   unblocks urgent work first. It would make the order depend on the dependency graph; if added, it should
@@ -670,7 +675,7 @@ computed per query.
 
 * Every item is in exactly one lane. The lane may derive from the item type (`distill`, `triage` go to `meta`).
 * In v1 lanes are **routing, not security**: members are trusted.
-* `wf item ready --for-me` and the dispatcher apply the same lane and requires filter.
+* `wf item list --ready --for-me` and the dispatcher apply the same lane and requires filter.
 
 ### Assignment
 `dispatch` is the default; `pull` is configurable per workforce.
@@ -899,7 +904,7 @@ wf session list|show|stop                 # live and recent sessions
 wf daemon | sync | status | log | export
 wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
-wf item add|list|show|ready|edit|move|link|archive    # all types: task, question, decision, ...
+wf item add|list|show|edit|move|link|archive    # all types: task, question, decision, ...
 wf comment <item> <text>
 wf progress "<text>" | activity | inbox
 wf review <item> --approve|--request-changes
@@ -908,7 +913,7 @@ wf search <query>
 All commands support `--json`. Output is `{"schema": 1, "data": ...}`; the schema number is bumped on
 incompatible changes and the shapes are snapshot-tested. Item ids print as the first 6 characters of their
 base32 hash and any unique prefix of at least 4 characters is accepted, with or without `#`.
-Without `--json`, lists (`item list|ready`, `agent list`, `log`, `mentions`) print as borderless tables
+Without `--json`, lists (`item list`, `agent list`, `log`, `mentions`) print as borderless tables
 with bold headers. Every table is built by one function in `wf-cli`, so the look is defined in one place.
 Styling is emitted only when stdout is a terminal; piped output is plain.
 

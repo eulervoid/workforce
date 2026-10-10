@@ -5,8 +5,13 @@ use std::fmt::Write;
 use comfy_table::presets::NOTHING;
 use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 
+use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
-use crate::view::{AgentView, ItemDetail, ItemSummary, LogView, MentionsView, StatusView};
+use crate::view::{
+    AgentView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, StatusView,
+};
+use wf_core::graph::Readiness;
+use wf_core::policy::StateCategory;
 
 fn short(id: &str) -> &str {
     &id[..id.len().min(wf_core::id::SHORT_ID_LEN)]
@@ -51,21 +56,41 @@ mod style {
     }
 }
 
-fn state_style(category: Option<&str>) -> anstyle::Style {
+fn state_style(state_category: Option<&str>) -> anstyle::Style {
     use anstyle::AnsiColor;
-    match category {
-        Some("open") => style::color(AnsiColor::Yellow),
+    match state_category {
+        Some("open") => style::color(AnsiColor::Green),
         Some("active") => style::color(AnsiColor::Blue),
         Some("blocked") => style::color(AnsiColor::Red),
-        Some("done") => style::color(AnsiColor::Green),
+        Some("done") => style::color(AnsiColor::Magenta),
+        Some("cancelled") => style::color(AnsiColor::BrightBlack),
         _ => style::DIM,
     }
+}
+
+/// The icon of a state category; `?` when the state is unknown under the current policy.
+fn state_icon(state_category: Option<&str>) -> &'static str {
+    match state_category {
+        Some("inactive") => "◌",
+        Some("open") => "○",
+        Some("active") => "◐",
+        Some("blocked") => "⊘",
+        Some("done") => "✓",
+        Some("cancelled") => "✗",
+        _ => "?",
+    }
+}
+
+/// `◐ in_progress`. Pickers take plain text, so the icon is not colored.
+pub fn state_choice(name: &str, state_category: StateCategory) -> String {
+    format!("{} {name}", state_icon(Some(&state_category.to_string())))
 }
 
 fn priority_style(priority: &str) -> anstyle::Style {
     match priority {
         "P0" => style::WARNING,
         "P1" => style::color(anstyle::AnsiColor::Yellow),
+        "P2" => anstyle::Style::new(),
         _ => style::DIM,
     }
 }
@@ -82,19 +107,48 @@ fn short_time(timestamp: &str) -> String {
     )
 }
 
-/// `● #q7x2 (task:open) `, the icon and state colored by category. `suffix` follows the state.
+/// The icon of an item: its state's icon, or a warning icon when the item is stranded.
+pub fn item_icon(state_category: Option<&str>, readiness: Option<Readiness>) -> &'static str {
+    match readiness {
+        Some(Readiness::Stranded) => "⚠",
+        Some(Readiness::Ready | Readiness::Blocked) | None => state_icon(state_category),
+    }
+}
+
+/// `○ #7ph6ds (task:open)  Title`. Pickers take plain text, so nothing is colored.
+pub fn item_choice(summary: &ItemSummary) -> String {
+    let state = if summary.archived {
+        "archived"
+    } else {
+        summary.state.as_deref().unwrap_or("unknown")
+    };
+    format!(
+        "{} #{} ({}:{state})  {}",
+        item_icon(summary.state_category.as_deref(), summary.readiness),
+        short(&summary.id),
+        summary.item_type,
+        summary.title,
+    )
+}
+
+/// `○ #q7x2 (task:open) `, the icon and state colored by its state category. A stranded item gets a warning
+/// icon instead. `suffix` follows the state.
 fn item_label(
     id: &str,
     item_type: &str,
     state: Option<&str>,
-    category: Option<&str>,
+    state_category: Option<&str>,
+    readiness: Option<Readiness>,
     suffix: &str,
 ) -> String {
-    let state_style = state_style(category);
-    let icon = if category.is_some() { "●" } else { "?" };
+    let state_style = state_style(state_category);
+    let icon_style = match readiness {
+        Some(Readiness::Stranded) => style::WARNING,
+        Some(Readiness::Ready | Readiness::Blocked) | None => state_style,
+    };
     format!(
         "{} {} {}{}{}{}",
-        style::paint(state_style, icon),
+        style::paint(icon_style, item_icon(state_category, readiness)),
         id_label(id),
         style::paint(style::DIM, format!("({item_type}:")),
         style::paint(state_style, state.unwrap_or("unknown")),
@@ -107,34 +161,95 @@ fn id_label(id: &str) -> String {
     style::paint(style::ID, format!("#{}", short(id)))
 }
 
+const ITEM_COLUMNS: [&str; 4] = ["ITEM (TYPE:STATE)", "PRIORITY", "TITLE", "BLOCKING"];
+
+fn item_row(item: &ItemSummary) -> [String; 4] {
+    let suffix = if item.archived { " · archived" } else { "" };
+    let priority = item.priority.as_deref().map_or_else(
+        || style::paint(style::DIM, "-"),
+        |priority| style::paint(priority_style(priority), priority),
+    );
+    let blocking = match item.blocking.split_first() {
+        None => String::new(),
+        Some((first, [])) => id_label(&first.id),
+        Some((first, rest)) => format!(
+            "{} {}",
+            id_label(&first.id),
+            style::paint(style::DIM, format!("+{}", rest.len()))
+        ),
+    };
+    [
+        item_label(
+            &item.id,
+            &item.item_type,
+            item.state.as_deref(),
+            item.state_category.as_deref(),
+            item.readiness,
+            suffix,
+        ),
+        priority,
+        item.title.clone(),
+        blocking,
+    ]
+}
+
 pub fn item_list(items: &[ItemSummary]) -> String {
     if items.is_empty() {
         return "no items\n".to_string();
     }
-    let mut table = table(&["ITEM (TYPE:STATE)", "PRIORITY", "TITLE", "BLOCKED_BY"]);
+    let mut table = table(&ITEM_COLUMNS);
     for item in items {
-        let suffix = if item.archived { " · archived" } else { "" };
-        let priority = item.priority.as_deref().map_or_else(
-            || style::paint(style::DIM, "-"),
-            |priority| style::paint(priority_style(priority), priority),
-        );
-        let blockers: Vec<String> = item
-            .blocked_by
-            .iter()
-            .map(|blocker| id_label(&blocker.id))
-            .collect();
+        table.add_row(item_row(item));
+    }
+    format!("{table}\n")
+}
+
+/// `◐ in_progress (3)`: the group's icon and name, with the number of items.
+fn group_heading(grouping: ItemGrouping, group: &ItemGroup) -> String {
+    let Some(first) = group.items.first() else {
+        return group.group.clone();
+    };
+    let (icon, heading_style) = match grouping {
+        ItemGrouping::State => (
+            state_icon(first.state_category.as_deref()),
+            state_style(first.state_category.as_deref()),
+        ),
+        ItemGrouping::Readiness => match first.readiness {
+            Some(Readiness::Ready) => ("○", state_style(Some("open"))),
+            Some(Readiness::Blocked) => ("⊘", state_style(Some("blocked"))),
+            Some(Readiness::Stranded) => ("⚠", style::WARNING),
+            None => ("·", style::DIM),
+        },
+        ItemGrouping::Label | ItemGrouping::Type | ItemGrouping::Lane | ItemGrouping::Priority => {
+            ("·", style::DIM)
+        }
+    };
+    format!(
+        "{} {}",
+        style::paint(heading_style, format!("{icon} {}", group.group)),
+        style::paint(style::DIM, format!("({})", group.items.len()))
+    )
+}
+
+/// One table, so columns line up across groups; each group starts with a heading row.
+pub fn item_groups(grouping: ItemGrouping, groups: &[ItemGroup]) -> String {
+    if groups.is_empty() {
+        return "no items\n".to_string();
+    }
+    let mut table = table(&ITEM_COLUMNS);
+    for (index, group) in groups.iter().enumerate() {
+        if index > 0 {
+            table.add_row([""; 4]);
+        }
         table.add_row([
-            item_label(
-                &item.id,
-                &item.item_type,
-                item.state.as_deref(),
-                item.category.as_deref(),
-                suffix,
-            ),
-            priority,
-            item.title.clone(),
-            blockers.join(", "),
+            group_heading(grouping, group),
+            String::new(),
+            String::new(),
+            String::new(),
         ]);
+        for item in &group.items {
+            table.add_row(item_row(item));
+        }
     }
     format!("{table}\n")
 }
@@ -144,7 +259,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
 
     let summary = &detail.summary;
     let mut out = String::new();
-    let archived = if summary.archived { " · archived" } else { "" };
+    let archived = if summary.archived { "[archived]" } else { "" };
     let _ = writeln!(
         out,
         "{} {}",
@@ -152,7 +267,8 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             &summary.id,
             &summary.item_type,
             summary.state.as_deref(),
-            summary.category.as_deref(),
+            summary.state_category.as_deref(),
+            summary.readiness,
             archived
         ),
         paint(BOLD, &summary.title)
@@ -210,7 +326,8 @@ pub fn item_detail(detail: &ItemDetail) -> String {
                     &link.id,
                     &link.item_type,
                     link.state.as_deref(),
-                    link.category.as_deref(),
+                    link.state_category.as_deref(),
+                    None,
                     ""
                 ),
                 link.title,
@@ -378,21 +495,7 @@ pub fn status(view: &StatusView) -> String {
         "events: {}  heads: {}  pending: {}  agents: {}",
         view.events, view.heads, view.pending, view.agents
     );
-    let categories: Vec<String> = view
-        .items_by_category
-        .iter()
-        .map(|(category, count)| format!("{count} {category}"))
-        .collect();
-    let _ = writeln!(
-        out,
-        "items: {} ({} archived)",
-        if categories.is_empty() {
-            "none".to_string()
-        } else {
-            categories.join(", ")
-        },
-        view.archived_items
-    );
+    let _ = writeln!(out, "archived items: {}", view.archived_items);
     let devices: Vec<String> = view
         .devices
         .iter()

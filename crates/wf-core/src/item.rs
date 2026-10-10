@@ -54,7 +54,7 @@ use crate::hlc::Hlc;
 use crate::id::{EventId, ItemId};
 use crate::identity::Actor;
 use crate::name::{Label, LaneName, Requirement, StateName, TypeName};
-use crate::policy::{Category, Policy};
+use crate::policy::{Policy, StateCategory};
 use crate::refs::{self, Token};
 
 /// Markdown text together with the tokens parsed from it.
@@ -108,16 +108,16 @@ pub enum Origin {
 pub enum Standing<'a> {
     Known {
         state: &'a StateName,
-        category: Category,
+        state_category: StateCategory,
     },
     /// The item type or state was removed from the policy. The item keeps its state until moved.
     Unknown { state: Option<&'a StateName> },
 }
 
 impl Standing<'_> {
-    pub fn category(&self) -> Option<Category> {
+    pub fn state_category(&self) -> Option<StateCategory> {
         match self {
-            Standing::Known { category, .. } => Some(*category),
+            Standing::Known { state_category, .. } => Some(*state_category),
             Standing::Unknown { .. } => None,
         }
     }
@@ -221,8 +221,11 @@ impl Item {
             return Standing::Unknown { state: explicit };
         };
         let state = explicit.unwrap_or(&config.initial);
-        match config.category_of(state) {
-            Some(category) => Standing::Known { state, category },
+        match config.state_category_of(state) {
+            Some(state_category) => Standing::Known {
+                state,
+                state_category,
+            },
             None => Standing::Unknown { state: Some(state) },
         }
     }

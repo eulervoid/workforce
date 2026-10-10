@@ -9,18 +9,20 @@ expression: "Envelope::new(&detail)"
     "type": "task",
     "title": "Implement feed sync",
     "state": "open",
-    "category": "open",
     "priority": "P1",
-    "ready": false,
+    "readiness": "blocked",
     "blocked_by": [
       {
         "id": "copop5ah64c3wnrj4wwyrjcmt7roxesa5zbgfreao6765xzjjypq",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
-        "category": "open"
+        "priority": "P2"
       }
     ],
+    "blocking": [],
+    "labels": [],
+    "lane": "default",
     "archived": false,
     "body": "blocked on #copop5, ask @coder",
     "author": "@joshua",
@@ -35,7 +37,6 @@ expression: "Envelope::new(&detail)"
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
-        "category": "open",
         "ignored": false
       }
     ],
@@ -47,7 +48,6 @@ expression: "Envelope::new(&detail)"
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
-        "category": "open",
         "ignored": false
       }
     ],

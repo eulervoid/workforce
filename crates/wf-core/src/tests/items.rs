@@ -1,9 +1,10 @@
 use crate::crdt::SetChange;
 use crate::event::Change;
+use crate::graph::Readiness;
 use crate::id::{HashId, ItemId};
 use crate::item::{ItemView, Origin, Standing};
 use crate::name::{Label, StateName};
-use crate::policy::{Category, DEFAULT_POLICY_TOML};
+use crate::policy::{DEFAULT_POLICY_TOML, StateCategory};
 use crate::refs::Mention;
 use crate::resolve::{MentionTarget, Source};
 use crate::state::State;
@@ -13,9 +14,9 @@ fn item_id(event: &crate::event::Event) -> ItemId {
     event.id().into()
 }
 
-fn category(state: &State, item: ItemId) -> Option<Category> {
+fn state_category(state: &State, item: ItemId) -> Option<StateCategory> {
     let policy = &state.policy().unwrap().policy;
-    state.item(item).unwrap().standing(policy).category()
+    state.item(item).unwrap().standing(policy).state_category()
 }
 
 fn ready_ids(state: &State) -> Vec<ItemId> {
@@ -28,8 +29,11 @@ fn new_items_start_in_the_initial_state_of_their_type() {
     let mut state = fixture.state();
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "Sync feeds")));
     let decision = item_id(&fixture.apply(&mut state, 0, 2_001, create("decision", "Hash")));
-    assert_eq!(category(&state, task), Some(Category::Open));
-    assert_eq!(category(&state, decision), Some(Category::Blocked));
+    assert_eq!(state_category(&state, task), Some(StateCategory::Open));
+    assert_eq!(
+        state_category(&state, decision),
+        Some(StateCategory::Blocked)
+    );
     let policy = &state.policy().unwrap().policy;
     let ItemView::Live(item) = state.item(task).unwrap() else {
         panic!("live")
@@ -54,7 +58,7 @@ fn a_task_waits_for_the_question_it_depends_on() {
     let blockers = state.blockers(&graph, task);
     assert_eq!(blockers.len(), 1);
     assert_eq!(blockers[0].item, question);
-    assert_eq!(blockers[0].category, Some(Category::Open));
+    assert_eq!(blockers[0].state_category, Some(StateCategory::Open));
     assert_eq!(graph.dependents(question).collect::<Vec<_>>(), vec![task]);
 
     fixture.apply(&mut state, 0, 2_003, transition(question, "answered"));
@@ -67,42 +71,58 @@ fn only_open_items_are_ready() {
     let mut state = fixture.state();
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "work")));
     let expectations = [
-        ("backlog", Category::Inactive, false),
-        ("open", Category::Open, true),
-        ("in_progress", Category::Active, false),
-        ("in_review", Category::Blocked, false),
-        ("done", Category::Done, false),
-        ("dropped", Category::Cancelled, false),
+        ("backlog", StateCategory::Inactive, false),
+        ("open", StateCategory::Open, true),
+        ("in_progress", StateCategory::Active, false),
+        ("in_review", StateCategory::Blocked, false),
+        ("done", StateCategory::Done, false),
+        ("dropped", StateCategory::Cancelled, false),
     ];
-    for (offset, (target, expected_category, ready)) in expectations.into_iter().enumerate() {
+    for (offset, (target, expected_state_category, ready)) in expectations.into_iter().enumerate() {
         fixture.apply(
             &mut state,
             0,
             3_000 + offset as u64,
             transition(task, target),
         );
-        assert_eq!(category(&state, task), Some(expected_category), "{target}");
+        assert_eq!(
+            state_category(&state, task),
+            Some(expected_state_category),
+            "{target}"
+        );
         assert_eq!(ready_ids(&state).contains(&task), ready, "{target}");
     }
 }
 
+fn readiness(state: &State, item: ItemId) -> Option<Readiness> {
+    let ItemView::Live(live) = state.item(item).unwrap() else {
+        panic!("live")
+    };
+    state.readiness(&state.dependency_graph(), live)
+}
+
 #[test]
-fn done_satisfies_dependents_but_cancelled_only_flags_them() {
+fn done_satisfies_dependents_but_cancelled_strands_them() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let part = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "part")));
     let whole = item_id(&fixture.apply(&mut state, 0, 2_001, create("task", "whole")));
+    assert_eq!(readiness(&state, whole), Some(Readiness::Ready));
     fixture.apply(&mut state, 0, 2_002, depends_on(whole, part));
+    assert_eq!(readiness(&state, whole), Some(Readiness::Blocked));
 
     fixture.apply(&mut state, 0, 2_003, transition(part, "dropped"));
     let graph = state.dependency_graph();
     let blockers = state.blockers(&graph, whole);
     assert_eq!(blockers.len(), 1);
-    assert_eq!(blockers[0].category, Some(Category::Cancelled));
+    assert_eq!(blockers[0].state_category, Some(StateCategory::Cancelled));
     assert!(!ready_ids(&state).contains(&whole));
+    assert_eq!(readiness(&state, whole), Some(Readiness::Stranded));
+    assert_eq!(readiness(&state, part), None);
 
     fixture.apply(&mut state, 0, 2_004, transition(part, "done"));
     assert!(ready_ids(&state).contains(&whole));
+    assert_eq!(readiness(&state, whole), Some(Readiness::Ready));
 }
 
 #[test]
@@ -138,7 +158,7 @@ fn archive_rules_are_checked_by_the_author() {
     assert_eq!(
         state.check_policy(&archive(task)),
         Err(PolicyViolation::ArchiveRequiresTerminal {
-            category: Some(Category::Open)
+            state_category: Some(StateCategory::Open)
         })
     );
     assert_eq!(
@@ -169,7 +189,7 @@ fn superseding_moves_the_target_decision_to_superseded() {
     };
     assert!(matches!(
         old_item.standing(policy),
-        Standing::Known { state, category: Category::Done } if state.as_str() == "superseded"
+        Standing::Known { state, state_category: StateCategory::Done } if state.as_str() == "superseded"
     ));
     let ItemView::Live(new_item) = state.item(new).unwrap() else {
         panic!()
@@ -206,7 +226,7 @@ fn removed_states_are_flagged_not_lost() {
     );
     let bug = item_id(&fixture.apply(&mut state, 0, 2_001, create("bug", "crash")));
     fixture.apply(&mut state, 0, 2_002, transition(bug, "triaged"));
-    assert_eq!(category(&state, bug), Some(Category::Open));
+    assert_eq!(state_category(&state, bug), Some(StateCategory::Open));
 
     let shrunk = custom.replace(r#"{ name = "triaged", category = "open" }, "#, "");
     fixture.apply(
@@ -489,10 +509,7 @@ fn item_prefixes_resolve_like_git() {
     let resolver = state.resolver();
     assert_eq!(resolver.item(&task.to_base32()[..6]), Ok(task));
     assert_eq!(resolver.item(&task.to_base32()), Ok(task));
-    assert!(matches!(
-        resolver.item("abc"),
-        Err(PrefixError::TooShort(_))
-    ));
+    assert!(matches!(resolver.item("ab"), Err(PrefixError::TooShort(_))));
     assert!(matches!(
         resolver.item("2222222"),
         Err(PrefixError::NotFound(_))

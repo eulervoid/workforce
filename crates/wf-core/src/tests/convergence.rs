@@ -203,8 +203,8 @@ impl Simulation {
                     .filter(|view| match view {
                         ItemView::Live(item) if second % 2 == 0 => item
                             .standing(policy)
-                            .category()
-                            .is_some_and(|category| category.is_terminal()),
+                            .state_category()
+                            .is_some_and(|state_category| state_category.is_terminal()),
                         ItemView::Archived(_) => second % 2 == 1,
                         ItemView::Live(_) => false,
                     })

@@ -40,10 +40,10 @@ pub enum PolicyError {
     },
 }
 
-/// Fixed set of behavioural categories. Built-in behaviour keys on these, never on state names.
+/// Fixed set of behavioural state categories. Built-in behaviour keys on these, never on state names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Category {
+pub enum StateCategory {
     Inactive,
     Open,
     Active,
@@ -52,24 +52,27 @@ pub enum Category {
     Cancelled,
 }
 
-impl Category {
+impl StateCategory {
     pub fn is_terminal(self) -> bool {
         match self {
-            Category::Done | Category::Cancelled => true,
-            Category::Inactive | Category::Open | Category::Active | Category::Blocked => false,
+            StateCategory::Done | StateCategory::Cancelled => true,
+            StateCategory::Inactive
+            | StateCategory::Open
+            | StateCategory::Active
+            | StateCategory::Blocked => false,
         }
     }
 }
 
-impl std::fmt::Display for Category {
+impl std::fmt::Display for StateCategory {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str(match self {
-            Category::Inactive => "inactive",
-            Category::Open => "open",
-            Category::Active => "active",
-            Category::Blocked => "blocked",
-            Category::Done => "done",
-            Category::Cancelled => "cancelled",
+            StateCategory::Inactive => "inactive",
+            StateCategory::Open => "open",
+            StateCategory::Active => "active",
+            StateCategory::Blocked => "blocked",
+            StateCategory::Done => "done",
+            StateCategory::Cancelled => "cancelled",
         })
     }
 }
@@ -77,7 +80,8 @@ impl std::fmt::Display for Category {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StateConfig {
     pub name: StateName,
-    pub category: Category,
+    #[serde(rename = "category")]
+    pub state_category: StateCategory,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -111,11 +115,11 @@ pub struct TypeConfig {
 }
 
 impl TypeConfig {
-    pub fn category_of(&self, state: &StateName) -> Option<Category> {
+    pub fn state_category_of(&self, state: &StateName) -> Option<StateCategory> {
         self.states
             .iter()
             .find(|candidate| &candidate.name == state)
-            .map(|candidate| candidate.category)
+            .map(|candidate| candidate.state_category)
     }
 
     pub fn allows_field(&self, field: Field) -> bool {
@@ -255,14 +259,19 @@ impl Policy {
                     });
                 }
             }
-            if config.category_of(&config.initial).is_none() {
+            if config.state_category_of(&config.initial).is_none() {
                 return Err(PolicyError::UnknownInitialState {
                     type_name: name.clone(),
                     state: config.initial.clone(),
                 });
             }
-            let has = |category| config.states.iter().any(|state| state.category == category);
-            if has(Category::Active) && !has(Category::Open) {
+            let has = |state_category| {
+                config
+                    .states
+                    .iter()
+                    .any(|state| state.state_category == state_category)
+            };
+            if has(StateCategory::Active) && !has(StateCategory::Open) {
                 return Err(PolicyError::ActiveWithoutOpen(name.clone()));
             }
             if let Some(target) = config
@@ -299,14 +308,14 @@ mod tests {
     }
 
     #[test]
-    fn categories_of_default_task_states() {
+    fn state_categories_of_default_task_states() {
         let policy = Policy::default_policy();
         let task = policy.type_config(&type_name("task")).unwrap();
-        let category = |state: &str| task.category_of(&StateName::new(state).unwrap());
-        assert_eq!(category("backlog"), Some(Category::Inactive));
-        assert_eq!(category("in_review"), Some(Category::Blocked));
-        assert_eq!(category("dropped"), Some(Category::Cancelled));
-        assert_eq!(category("nope"), None);
+        let state_category = |state: &str| task.state_category_of(&StateName::new(state).unwrap());
+        assert_eq!(state_category("backlog"), Some(StateCategory::Inactive));
+        assert_eq!(state_category("in_review"), Some(StateCategory::Blocked));
+        assert_eq!(state_category("dropped"), Some(StateCategory::Cancelled));
+        assert_eq!(state_category("nope"), None);
     }
 
     #[test]
