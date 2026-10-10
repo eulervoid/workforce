@@ -30,56 +30,6 @@ fn origin(origin: &str) -> &str {
     if origin == "body" { "body" } else { "comment" }
 }
 
-/// `open · archived`
-fn state_label(summary: &ItemSummary) -> String {
-    let mut label = summary
-        .state
-        .clone()
-        .unwrap_or_else(|| "unknown".to_string());
-    if summary.archived {
-        label.push_str(" · archived");
-    }
-    if summary.category.is_none() && !summary.archived {
-        label.push_str(" · unknown state");
-    }
-    label
-}
-
-/// `#q7x2 (question, open)`, one per line
-fn blockers(summary: &ItemSummary) -> String {
-    summary
-        .blocked_by
-        .iter()
-        .map(|blocker| {
-            format!(
-                "#{} ({}, {})",
-                short(&blocker.id),
-                blocker.item_type,
-                blocker.state.as_deref().unwrap_or("unknown")
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-pub fn item_list(items: &[ItemSummary]) -> String {
-    if items.is_empty() {
-        return "no items\n".to_string();
-    }
-    let mut table = table(&["ID", "Type", "Pri", "Title", "State", "Blocked by"]);
-    for item in items {
-        table.add_row([
-            format!("#{}", short(&item.id)),
-            item.item_type.clone(),
-            item.priority.clone().unwrap_or_else(|| "-".to_string()),
-            item.title.clone(),
-            state_label(item),
-            blockers(item),
-        ]);
-    }
-    format!("{table}\n")
-}
-
 /// Colors are always written as ANSI escapes; `anstream` strips them when output is not a terminal.
 mod style {
     use anstyle::{AnsiColor, Style};
@@ -155,6 +105,38 @@ fn item_label(
 
 fn id_label(id: &str) -> String {
     style::paint(style::ID, format!("#{}", short(id)))
+}
+
+pub fn item_list(items: &[ItemSummary]) -> String {
+    if items.is_empty() {
+        return "no items\n".to_string();
+    }
+    let mut table = table(&["ITEM (TYPE:STATE)", "PRIORITY", "TITLE", "BLOCKED_BY"]);
+    for item in items {
+        let suffix = if item.archived { " · archived" } else { "" };
+        let priority = item.priority.as_deref().map_or_else(
+            || style::paint(style::DIM, "-"),
+            |priority| style::paint(priority_style(priority), priority),
+        );
+        let blockers: Vec<String> = item
+            .blocked_by
+            .iter()
+            .map(|blocker| id_label(&blocker.id))
+            .collect();
+        table.add_row([
+            item_label(
+                &item.id,
+                &item.item_type,
+                item.state.as_deref(),
+                item.category.as_deref(),
+                suffix,
+            ),
+            priority,
+            item.title.clone(),
+            blockers.join(", "),
+        ]);
+    }
+    format!("{table}\n")
 }
 
 pub fn item_detail(detail: &ItemDetail) -> String {
@@ -289,7 +271,7 @@ pub fn mentions(view: &MentionsView) -> String {
     if view.sources.is_empty() {
         return format!("{} is not mentioned anywhere\n", view.target);
     }
-    let mut table = table(&["ID", "Title", "In"]);
+    let mut table = table(&["ITEM", "TITLE", "IN"]);
     for source in &view.sources {
         table.add_row([
             format!("#{}", short(&source.item)),
@@ -304,7 +286,7 @@ pub fn agents(agents: &[AgentView]) -> String {
     if agents.is_empty() {
         return "no agents defined\n".to_string();
     }
-    let mut table = table(&["Agent", "Harness", "Model", "Capabilities", "Lanes"]);
+    let mut table = table(&["AGENT", "HARNESS", "MODEL", "CAPABILITIES", "LANES"]);
     for agent in agents {
         table.add_row([
             agent.id.clone(),
@@ -319,13 +301,13 @@ pub fn agents(agents: &[AgentView]) -> String {
 
 pub fn devices(devices: &[DeviceView]) -> String {
     let mut table = table(&[
-        "Device",
-        "Name",
-        "Principal",
-        "Hardware",
-        "Sessions",
-        "Last seen",
-        "Flags",
+        "DEVICE",
+        "NAME",
+        "PRINCIPAL",
+        "HARDWARE",
+        "SESSIONS",
+        "LAST_SEEN",
+        "FLAGS",
     ]);
     for device in devices {
         let name = device.name.clone().unwrap_or_else(|| "-".to_string());
@@ -353,7 +335,7 @@ pub fn devices(devices: &[DeviceView]) -> String {
 }
 
 pub fn members(members: &[MemberView]) -> String {
-    let mut table = table(&["Member", "Role", "Devices"]);
+    let mut table = table(&["MEMBER", "ROLE", "DEVICES"]);
     for member in members {
         table.add_row([
             member.handle.clone(),
@@ -365,7 +347,7 @@ pub fn members(members: &[MemberView]) -> String {
 }
 
 pub fn log(view: &LogView) -> String {
-    let mut table = table(&["Event", "Device", "Seq", "At", "Kind", "Actor", "Summary"]);
+    let mut table = table(&["EVENT", "DEVICE", "SEQ", "AT", "KIND", "ACTOR", "SUMMARY"]);
     for event in &view.events {
         table.add_row([
             short(&event.id).to_string(),

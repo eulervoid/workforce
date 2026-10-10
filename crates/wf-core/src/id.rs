@@ -7,7 +7,7 @@ use data_encoding::BASE32_NOPAD;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 const HASH_LEN: usize = 32;
-pub const MIN_PREFIX_LEN: usize = 4;
+pub const MIN_PREFIX_LEN: usize = 3;
 pub const SHORT_ID_LEN: usize = 6;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]

@@ -48,7 +48,7 @@ A laptop (sleeps, roams), a cloud VM (always on), a home desktop (GPU, behind a 
 | P8 | Harness-agnostic through ACP, with a CLI fallback. |
 | P9 | **Forkable:** any member can start a new workforce from a frozen point of an old one. |
 | P10 | Indirect communication: agents coordinate through shared artifacts, not messages. |
-| P11 | **Derivable:** all workforce state is derivable from the log plus the repo. No daemon-only state. |
+| P11 | **Derivable:** all workforce state is derivable from the log plus the repo. No daemon-only state. After compaction, the log means the kept events plus everything above the frontier. |
 
 ## 3. Non-goals for v1
 * Revocation of access (use `wf fork` instead).
@@ -75,6 +75,10 @@ wf CLI (humans, agents)  ──unix socket──►  wf daemon (one per machine)
 ```
 
 Without a daemon, `wf sync` does a one-shot sync. Any always-on daemon can act as the anchor.
+
+The log and its fold do not depend on sync or the network: `wf-core` is pure and `wf-net` only carries
+the log. Sync can therefore be a cargo feature; without it, `wf` is a local tool for one machine with
+the same store, log and item model.
 
 ### Storage
 * **The event log is the only durable truth.** It is a key-value workload (append, get by `EventId`,
@@ -201,7 +205,7 @@ struct Event {
     actor: Actor,            // human or agent session acting through this device
     seq: u64,                // per author, gapless, starting at 1
     prev: Option<EventId>,   // author's previous event
-    deps: Vec<EventId>,      // heads seen when writing
+    seen: Vec<EventRef>,     // heads seen when writing, with author and seq
     hlc: Hlc,                // tie-breaks only, never authority
     body: EventBody,
     sig: Signature,
@@ -211,13 +215,15 @@ struct Event {
 
 * **Encoding:** canonical postcard (deterministic, compact). Signature covers the encoding without `sig`. See *Encoding and data format* below for the decision and the exact layout.
 * **Sync:** exchange version vectors `{author -> max_seq}`, stream missing ranges, then fetch missing
-  parents by id until nothing is missing.
+  parents by id until nothing is missing. Below a peer's compaction frontier only kept events are sent.
 * **Equivocation:** two events with the same `(author, seq)` are proof of misbehavior, or of a machine
   restored from a snapshot. Both branches are admitted, stored and relayed, and the fold applies both, so
   peers converge whatever they saw first. The device is flagged; a device that sees its own key write an
   event it did not write stops authoring.
 * **Unknown event types** are stored, relayed, and ignored by the fold, so newer peers can add types.
-* **Fold order:** the causal order from `deps`, ties broken by `(hlc, EventId)`.
+* **Fold order:** the causal order from `prev` and `seen`, ties broken by `(hlc, EventId)`.
+* `seen` is about events, not items: it records what the author had seen. Relations between items
+  (`depends_on`, `supersedes`) are item links in event bodies.
 
 ### Event bodies (v1)
 | Group | Bodies | Signed by |
@@ -283,9 +289,10 @@ EventContent = v: u16 (currently 1)
                actor: Actor                       // Human(PrincipalKey) | Agent{agent: AgentId, session: SessionId}
                seq: u64                           // per author, from 1
                prev: Option<EventId>              // None exactly when seq == 1
-               deps: Vec<EventId>                 // sorted, deduplicated
+               seen: Vec<EventRef>                // sorted by id, deduplicated
                hlc: Hlc
                body: EventBody
+EventRef     = author: DeviceKey, seq: u64, id: EventId
 AgentId      = principal: PrincipalKey, name: AgentName
 EventBody    = tag: u16, payload: bytes           // payload = postcard of the body struct for that tag
 ```
@@ -297,8 +304,11 @@ EventBody    = tag: u16, payload: bytes           // payload = postcard of the b
   statement cannot be replayed into another workforce. The two domain prefixes keep a device signature
   from ever being valid as a principal signature, and the key types are distinct in code for the same
   reason.
-* `hlc` of an event is greater than the `hlc` of its `prev` and every dep. The fold orders concurrent
-  writes by `(hlc, event id)`, which therefore extends causal order.
+* `hlc` of an event is greater than the `hlc` of its `prev` and every event in `seen`. The fold orders
+  concurrent writes by `(hlc, event id)`, which therefore extends causal order.
+* `seen` names the author and seq of each event, not only its id, so a peer can tell whether a missing
+  parent lies below its compaction frontier (see *Compaction*). This replaces the id-only `deps` of
+  M1 and changes every event id, so it lands before compaction does.
 
 #### Body tags
 Tags are explicit and never reused. An unknown tag decodes to `Unknown{tag, payload}`, is stored and
@@ -321,6 +331,7 @@ event invalid.
 | 14 | `ItemArchived` | `item` |
 | 15 | `ItemUnarchived` | `item` |
 | 16 | `Comment` | `item`, `body` |
+| 17 | `ItemCheckpoint` | `item`, `state`: the folded item with stamps, add tags and note text (M5, see *Compaction*) |
 
 * `Signed<T>` = `statement: T`, `signer: PrincipalKey`, `signature: Signature`.
 * `MemberSeed` = `principal`, `handle`, `devices: Vec<DeviceKey>`, `previous: Vec<PrincipalKey>`. The
@@ -357,8 +368,8 @@ Two kinds of rules, because a rule is only safe for peers to enforce if its answ
 order events arrive in.
 
 **Admission** (`State::receive`, enforced by every peer; depends only on an event's causal past):
-version; device signature; `workforce` matches (genesis names none); all parents (`prev` and `deps`)
-are known; `prev` is the author's event with `seq - 1` (none for `seq == 1`); `hlc` is greater than
+version; device signature; `workforce` matches (genesis names none); all parents (`prev` and `seen`)
+are known or below the frontier; `prev` is the author's event with `seq - 1` (none for `seq == 1`); `hlc` is greater than
 every parent's; the author is a bound device and the actor belongs to its principal, where a
 `DeviceBound` as the author's first event, with its invite among its parents and a valid proof, binds
 it; authority bodies carry a valid principal signature of an owner for this workforce; referenced items
@@ -384,7 +395,8 @@ state until moved.
   event id and a removal lists the tags its author saw, so a concurrent add survives.
 * An item's `state` is empty until its first transition and means "the type's initial state under the
   current policy", so item creation does not depend on concurrent policy changes.
-* `supersedes` also writes `superseded` into the target's `state` register with the link's stamp.
+* `supersedes` also writes `superseded` into the target's `state` register with the link's stamp. It
+  is the only link whose event changes another item, which compaction has to account for.
 * `depends_on` cycles from concurrent links are resolved at query time, not stored: edges are taken in
   `(hlc, EventId)` order and an edge that would close a cycle is ignored and flagged.
 * Comment and transition-note text stays in the log. The fold keeps who wrote it and the tokens parsed
@@ -392,6 +404,69 @@ state until moved.
   at query time, because resolution depends on what is known.
 * The first device and the members' handles come from genesis (`founder`, `members`); handles are what
   `@mentions` resolve against. `DeviceBound` and `MemberJoined` arrive with invites in M1.
+
+### Compaction (M5)
+History matters most for the last few months and for active items. Compaction lets a device drop old
+events without changing the folded state, and keeping everything stays a valid choice. It has two
+parts: **item checkpoints** carry the state, and a **frontier** drops events. Neither needs a format for
+the whole `State`.
+
+The merge rules make this possible. Every merge is commutative, associative and idempotent, and the
+state keeps the stamp of every register and set tag. So the folded state of an item is a valid base
+for any later event, including a concurrent event that arrives months late. And a write that lost a
+register to a greater `(hlc, EventId)` can never win again.
+
+#### Item checkpoints
+`ItemCheckpoint{item, state}` (tag 17) is an ordinary device-signed event. It is synced, admitted and
+relayed like any other.
+
+* **Covers:** every event that affects the item and lies in the checkpoint's causal past (`prev` and
+  `seen`, transitively). That includes a `Supersedes` link written on another item and earlier
+  checkpoints of the same item.
+* **Coverage is a version vector** `{author -> seq}`: feeds are chains, so a causal past holds each feed
+  up to some seq. Events of an author flagged for equivocation are never covered and stay as events.
+* **State:** type, author, `created`, `updated`, every register with its stamp, every set element with
+  its add tags (stamp, author, seq), and notes including their text. An old item is then one event.
+* **Applying** a checkpoint merges it into the item: registers by stamp. In a set, a tag absent from the
+  checkpoint whose event the checkpoint covers is removed. Plain union would bring back elements that
+  the checkpoint had seen removed. Concurrent checkpoints of the same item, written by different devices,
+  merge the same way.
+* **Verification:** a peer that holds every covered event refolds the item from them and compares. On a
+  mismatch it flags the checkpoint and folds the events instead. This is a flag, not an admission rule,
+  because a peer without the covered events cannot check. A joiner trusts checkpoints, which is fine
+  while members are trusted (v1).
+* **Writing** is an authoring decision, so it may read the clock. The anchor checkpoints items without
+  events for the policy's `[compaction] after` (for example `90d`); without an anchor, any device may.
+  Duplicates are harmless.
+* Some events need no checkpoint: a newer `AgentDefined` or `DeviceProfile` replaces the whole value, so
+  older ones are covered by it. `SessionEnded` closes a session the same way.
+
+#### Frontier
+A device's **frontier** is a version vector below which it has dropped events. It may raise its frontier
+when every event below the new frontier is either covered or **kept**:
+
+| Kept below the frontier | Why |
+|---|---|
+| authority (`Genesis`, `InviteCreated`, `DeviceBound`, `MemberJoined`, `PolicySet`, `OwnerAdded`, `ForkAnnounced`) | admission depends on them, and they are few |
+| the newest checkpoint of each item | it carries the state |
+| uncovered events | they still change the state |
+| unknown body tags | their effect is unknown |
+
+* **Admission:** a parent counts as known when it is stored or when its `(author, seq)` is at or below
+  the frontier. This is why `seen` carries author and seq.
+* An event at or below the frontier that is not stored is ignored as already covered. Equivocation below
+  the frontier goes undetected: an accepted cost.
+* **Sync:** a peer whose frontier is ahead sends its kept events and its frontier for the gap. The
+  receiver raises its own frontier for the part it cannot get. A joiner starts from the frontier of the
+  peer it joins through.
+* **Local choice:** each device decides whether and how far to compact. A device that never compacts is
+  an archive. It serves full history and makes forks from before a frontier possible.
+* `known` and the pending set shrink with the frontier, so memory stays bounded as well as disk.
+* P11 becomes: state is derivable from the log, where after compaction the log means the kept events plus
+  everything above the frontier.
+
+Tests: for any cut, any checkpointing and any arrival order, applying checkpoints plus later events
+gives the same state as folding the full log.
 
 ## 7. Forking
 
@@ -412,6 +487,8 @@ struct ForkPoint { workforce: Hash, heads: Vec<EventId> }
   admitted only when fetched by id from a known descendant, so nothing after the fork point gets in.
   Item ids, comments, progress and decisions carry over.
 * Parent events after the fork point are ignored.
+* After compaction the prefix is the parent's kept events plus its frontier, which the fork takes over.
+  A fork point below a frontier needs an archive device that kept the full history.
 * Excluded members and devices are absent from the new member list, so their connections are rejected
   at the iroh handshake and their new events are not admitted. A lost machine is excluded as a device.
 * `--new-principal` founds the fork with a fresh principal key, for when the lost machine held it. The
@@ -464,7 +541,8 @@ Blocking on another item is **computed** from `depends_on`, never stored as a st
   full item in memory behind that stub view: dropping bodies at fold time would make the state depend on
   the order of archive, unarchive and concurrent edits, so real stubs wait for compaction (M5).
 * Hidden from lists, search and agent context by default (`--archived`). Dependencies on them still resolve.
-* Reclaiming disk space is compaction (M5); archiving is what makes it safe.
+* Reclaiming disk space is compaction (M5): an archived item is the typical candidate for an item
+  checkpoint.
 
 ### Type configuration (part of the signed policy)
 
@@ -782,6 +860,9 @@ types = ["distill", "triage"]
 [transcripts]
 publish = "none"
 
+[compaction]             # M5: when the anchor writes item checkpoints
+after = "90d"
+
 [governance]
 mode = "advisory"
 ```
@@ -795,8 +876,14 @@ mode = "advisory"
 | announce heads, presence | `iroh-gossip` (hashes and heads only, payloads over `wf/sync/1`) |
 | large artifacts (later) | `iroh-blobs` |
 
-**Not iroh-docs:** a namespace secret is a bearer credential (no per-author revocation), it is
-last-writer-wins by wall clock, and it is pre-1.0. We write `wf/sync/1` ourselves (about 1-2k lines).
+**Not iroh-docs:** it is a mutable key-value store, not a log. Each `(author, key)` keeps only its
+latest value by wall clock, and a write removes the author's older entries under the same prefix, so a
+device could erase its own events on every replica. That breaks the append-only log, equivocation
+evidence and admission against the causal past. Its namespace secret is a bearer credential shared by
+every writer, and it is pre-1.0. Adopting it would remove only `wf/sync/1`, while admission, fold,
+equivocation, fork and invites stay ours. A state-based model on iroh-docs (one key per item field) would
+be simpler, but gives up history, offline authorization and causal conflict resolution (P3, P4, P6,
+P9). We write `wf/sync/1` ourselves (about 1-2k lines); it also keeps the log independent of transport.
 Keep the shape compatible with Willow ideas (author as subspace, `kind/id` as path) in case that matures.
 
 Missing and built by us: authorization, authenticated gossip membership, ordering, store-and-forward
@@ -843,7 +930,7 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
 | M2 | Sessions and worktrees, anchor dispatch, claims and leases, lanes, ACP harness runner, `wf` MCP server, session inboxes, progress from commits, overlap notifications, secret brokering, redaction, `Merged` from origin. **= UC1** |
 | M3 | Decision ratification flow, distill items, hybrid search |
 | M4 | Multiple principals, threads, scopes, `wf attach` |
-| M5 | Git bundles over iroh-blobs, peer-to-peer repos, compaction |
+| M5 | Git bundles over iroh-blobs, peer-to-peer repos, compaction (item checkpoints, frontier) |
 | M6 | Donors: revocation, rate limits, sandbox, transcript publishing, governance |
 
 ## 19. Open questions
@@ -851,3 +938,7 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
    (v1: origin decides.)
 2. Fork following for non-owner forks: ask-first UX.
 3. Prior art to read: **Radicle**, **p2panda**, Keyhive, Matrix state resolution (before M6).
+4. Do heartbeats belong in the log (M2)? One per minute for three sessions is about 130k events a
+   month, the main source of log growth. Liveness is computed against the clock at query time anyway, so
+   a lease renewed over gossip plus a final `SessionEnded` might be enough. Settle this before M2; it
+   decides how urgent compaction is.

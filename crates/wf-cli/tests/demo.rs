@@ -120,7 +120,7 @@ fn the_demo_script_works_end_to_end() {
     assert!(link.contains("now depends on"));
     let list = wf.run(&["item", "list"]);
     assert!(
-        list.contains("Blocked by") && list.contains("question, open"),
+        list.contains("BLOCKED_BY") && list.contains("(task:open)"),
         "{list}"
     );
     assert_eq!(
