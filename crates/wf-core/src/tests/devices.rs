@@ -226,6 +226,14 @@ fn the_handshake_refuses_expired_redeemed_and_forged_requests() {
     receive(&mut state, bound).unwrap();
     assert_eq!(
         state.check_join(&invite.id(), vm.key(), &proof, 5_000),
+        Ok(()),
+        "the device that redeemed it may ask again"
+    );
+    let other_proof = secret
+        .prove(fixture.workforce(), invite.id(), other.key())
+        .unwrap();
+    assert_eq!(
+        state.check_join(&invite.id(), other.key(), &other_proof, 5_000),
         Err(JoinRefusal::Redeemed)
     );
 }

@@ -78,19 +78,21 @@ async fn joining_a_workforce_with_100k_events_takes_seconds() {
     let started = Instant::now();
     joiner
         .join(&code, member.local_addr(), &local, move || {
-            authoring
-                .lock()
-                .author(
-                    &signer,
-                    actor,
-                    300_000,
-                    EventBody::DeviceBound(DeviceBound {
-                        invite: invite_id,
-                        proof,
-                    }),
-                )
-                .map(|_| ())
-                .map_err(Into::into)
+            std::future::ready(
+                authoring
+                    .lock()
+                    .author(
+                        &signer,
+                        actor,
+                        300_000,
+                        EventBody::DeviceBound(DeviceBound {
+                            invite: invite_id,
+                            proof,
+                        }),
+                    )
+                    .map(|_| ())
+                    .map_err(Into::into),
+            )
         })
         .await
         .unwrap();

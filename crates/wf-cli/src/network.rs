@@ -7,11 +7,14 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use serde::Serialize;
-use wf_core::event::{DeviceBound, DeviceProfile, EventBody, InviteCreated, InviteKind};
+use wf_core::event::{DeviceProfile, EventBody, InviteCreated, InviteKind};
 use wf_core::identity::{Actor, DeviceKey, DeviceSigner, InviteSigner, Signed};
 use wf_core::invite::InviteCode;
 use wf_core::name::AgentName;
+use wf_core::state::State;
+use wf_daemon::client::DaemonClient;
 use wf_daemon::{PeerOutcome, PeerSync, peers_of, sync_all};
+use wf_net::replica::{self, Joined};
 use wf_net::{NetError, Network, Node, SharedReplica};
 use wf_store::{RedbStore, Replica};
 
@@ -322,10 +325,20 @@ pub fn join(
             std::fs::write(cwd.join(WORKFORCE_FILE), file)?;
         }
     }
+    // A daemon on this machine owns the device key, the stores and the endpoint: it joins.
+    if let Some(mut client) = DaemonClient::connect(&data.daemon_socket())? {
+        client.join(code.workforce, &code, profile)?;
+        let state = client.state(code.workforce)?;
+        let device = data
+            .device(false)?
+            .context("the daemon has no device key")?;
+        return finish_join(json, &state, device.key(), &code, name);
+    }
+
     let device = data.device(true)?.expect("created on demand");
     let store = RedbStore::open(workspace::store_path(&data, &code.workforce)?)?;
     let replica = Replica::open(store, code.workforce)?;
-    if replica.state().principal_of(&device.key()).is_some() {
+    if replica::joined(&replica, device.key(), code.invite) == Joined::Otherwise {
         bail!("this machine has already joined the workforce");
     }
     let shared = SharedReplica::new(replica);
@@ -333,7 +346,7 @@ pub fn join(
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?;
-    runtime.block_on(async {
+    let state = runtime.block_on(async {
         let node = Node::start(&device, network)
             .await
             .context("starting the network endpoint")?;
@@ -347,26 +360,15 @@ pub fn join(
             let profile = profile.clone();
             let result = node
                 .join(&code, wf_net::endpoint_id(*bootstrap), &shared, move || {
-                    let mut replica = authoring.lock();
-                    let principal = replica
-                        .state()
-                        .invite(&invite)
-                        .map(|invite| invite.principal)
-                        .ok_or("the invite is not in the log the member sent")?;
-                    let actor = Actor::Human(principal);
-                    replica.author(
+                    let result = replica::bind_device(
+                        &mut authoring.lock(),
                         &signer,
-                        actor.clone(),
+                        invite,
+                        proof,
+                        profile,
                         workspace::now_ms(),
-                        EventBody::DeviceBound(DeviceBound { invite, proof }),
-                    )?;
-                    replica.author(
-                        &signer,
-                        actor,
-                        workspace::now_ms(),
-                        EventBody::DeviceProfile(profile),
-                    )?;
-                    Ok(())
+                    );
+                    std::future::ready(result.map_err(Into::into))
                 })
                 .await;
             match result {
@@ -388,28 +390,37 @@ pub fn join(
                 failures.join("\n  ")
             );
         }
-        let replica = shared.lock();
-        let state = replica.state();
-        let principal = state
-            .principal_of(&device.key())
-            .context("the join did not bind this device")?;
-        emit(
-            json,
-            &JoinView {
-                workforce: code.workforce.to_string(),
-                device: device.key().to_string(),
-                name,
-                principal: crate::view::actor_label(state, &Actor::Human(principal)),
-                events: state.event_count(),
-            },
-            |view| {
-                format!(
-                    "joined workforce {} as {} ({}) with {} events\n",
-                    view.workforce, view.name, view.principal, view.events
-                )
-            },
-        )
-    })
+        anyhow::Ok(shared.lock().state().clone())
+    })?;
+    finish_join(json, &state, device.key(), &code, name)
+}
+
+fn finish_join(
+    json: bool,
+    state: &State,
+    device: DeviceKey,
+    code: &InviteCode,
+    name: String,
+) -> anyhow::Result<()> {
+    let principal = state
+        .principal_of(&device)
+        .context("the join did not bind this device")?;
+    emit(
+        json,
+        &JoinView {
+            workforce: code.workforce.to_string(),
+            device: device.to_string(),
+            name,
+            principal: crate::view::actor_label(state, &Actor::Human(principal)),
+            events: state.event_count(),
+        },
+        |view| {
+            format!(
+                "joined workforce {} as {} ({}) with {} events\n",
+                view.workforce, view.name, view.principal, view.events
+            )
+        },
+    )
 }
 
 /// The name of this machine, for the device profile.

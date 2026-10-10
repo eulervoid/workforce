@@ -133,8 +133,6 @@ impl SyncLog for StorageHandle {
     }
 
     async fn missing(&self) -> Result<Vec<EventId>, LogError> {
-        self.with(replica::missing)
-            .await?
-            .map_err(LogError::from)
+        self.with(replica::missing).await?.map_err(LogError::from)
     }
 }

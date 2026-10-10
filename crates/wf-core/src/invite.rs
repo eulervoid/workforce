@@ -144,7 +144,8 @@ impl State {
         if now_ms >= known.expires_ms {
             return Err(JoinRefusal::Expired);
         }
-        if !known.redeemed_by.is_empty() {
+        // The device that redeemed the invite may ask again: its join may not have finished.
+        if known.redeemed_by.iter().any(|redeemer| *redeemer != device) {
             return Err(JoinRefusal::Redeemed);
         }
         Ok(())

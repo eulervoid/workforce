@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use wf_core::encoding;
-use wf_core::event::{Event, EventBody};
+use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
 use wf_net::frame::MAX_FRAME_LEN;
@@ -66,6 +66,12 @@ pub enum Call {
     /// Founds the workforce of this genesis as a fork of the one the request names, from what the
     /// daemon holds of it, and starts serving it.
     Fork(Box<Event>),
+    /// Joins the workforce of an invite code (`wfi1...`) as this machine's device, writing a
+    /// profile for it, so the daemon's endpoint is the only one with its key.
+    Join {
+        code: String,
+        profile: DeviceProfile,
+    },
     /// Starts taking in a workforce this machine does not have yet, from these devices, which may
     /// not be bound in it as far as this machine knows: how a device follows a fork it is only
     /// about to learn the members of. The history comes from the parent when it is stored here.
@@ -82,6 +88,7 @@ pub enum Response {
     Authored(Event),
     Synced(Vec<PeerSync>),
     Forked,
+    Joined,
     LastSeen(Vec<(DeviceKey, u64)>),
     Failed(String),
 }

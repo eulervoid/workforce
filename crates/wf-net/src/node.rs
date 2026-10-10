@@ -2,6 +2,7 @@
 //! but joining refuses endpoints that are not bound devices of a member.
 
 use std::collections::BTreeMap;
+use std::future::Future;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
@@ -336,13 +337,16 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
 
     /// Redeems an invite with the member at `peer`. The log of the workforce arrives in `log`,
     /// then `author` writes the events of this device into it, and they are sent back.
-    pub async fn join(
+    pub async fn join<Fut>(
         &self,
         code: &InviteCode,
         peer: impl Into<EndpointAddr>,
         log: &L,
-        author: impl FnOnce() -> Result<(), Box<dyn std::error::Error + Send + Sync>>,
-    ) -> Result<(), NetError> {
+        author: impl FnOnce() -> Fut,
+    ) -> Result<(), NetError>
+    where
+        Fut: Future<Output = Result<(), Box<dyn std::error::Error + Send + Sync>>>,
+    {
         let peer: EndpointAddr = peer.into();
         let name = device_key(peer.id).fmt_short();
         let connect_error = |reason: String| NetError::Connect {

@@ -14,9 +14,11 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use tokio::net::UnixListener;
-use wf_core::event::Event;
+use wf_core::event::{DeviceProfile, Event};
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceSigner;
+use wf_core::invite::InviteCode;
+use wf_net::replica::bind_device;
 use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
@@ -24,6 +26,14 @@ pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use storage::{StorageClosed, StorageHandle};
 
 pub const STORE_FILE: &str = "store.redb";
+
+pub(crate) fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -45,6 +55,8 @@ pub enum DaemonError {
     Fork(#[from] ForkError),
     #[error(transparent)]
     StorageClosed(#[from] StorageClosed),
+    #[error("could not reach a device to join through: {0}")]
+    JoinUnreachable(String),
     #[error("{path}: {source}")]
     Io {
         path: PathBuf,
@@ -254,6 +266,48 @@ impl Daemon {
         }
         self.workforce(child)?;
         Ok(())
+    }
+
+    /// Joins the workforce of `code` with this daemon's device key, through the first of the
+    /// devices it names that can be reached. A refusal ends it at once.
+    pub(crate) async fn join(
+        self: &Arc<Self>,
+        loaded: &Loaded,
+        code: &InviteCode,
+        profile: DeviceProfile,
+    ) -> Result<(), DaemonError> {
+        let mut failures = Vec::new();
+        for bootstrap in &code.bootstrap {
+            let storage = loaded.storage.clone();
+            let signer = self.device.clone();
+            let (invite, profile) = (code.invite, profile.clone());
+            let proof = code
+                .prove(signer.key())
+                .map_err(|error| NetError::JoinAuthoring(error.to_string()))?;
+            let author = {
+                let storage = storage.clone();
+                move || async move {
+                    storage
+                        .with(move |replica| {
+                            bind_device(replica, &signer, invite, proof, profile, now_ms())
+                        })
+                        .await?
+                        .map_err(Into::into)
+                }
+            };
+            match self
+                .node
+                .join(code, wf_net::endpoint_id(*bootstrap), &storage, author)
+                .await
+            {
+                Ok(()) => return Ok(()),
+                Err(error @ (NetError::JoinRefused { .. } | NetError::JoinAuthoring(_))) => {
+                    return Err(error.into());
+                }
+                Err(error) => failures.push(error.to_string()),
+            }
+        }
+        Err(DaemonError::JoinUnreachable(failures.join("; ")))
     }
 
     /// Serves the CLI on the socket until `shutdown` completes.

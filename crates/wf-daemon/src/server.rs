@@ -4,11 +4,12 @@ use std::sync::Arc;
 
 use tokio::net::UnixStream;
 use wf_core::id::WorkforceId;
+use wf_core::invite::{InviteCode, InviteCodeError};
 use wf_net::frame::{FrameError, read_frame, write_frame};
 
 use crate::peers::{peers_of, sync_all};
 use crate::proto::{Call, Hello, HelloReply, PROTOCOL_VERSION, Request, Response};
-use crate::{Daemon, Loaded};
+use crate::{Daemon, Loaded, now_ms};
 
 pub(crate) async fn handle(daemon: Arc<Daemon>, mut stream: UnixStream) {
     let _ = converse(&daemon, &mut stream).await;
@@ -45,7 +46,7 @@ async fn converse(daemon: &Arc<Daemon>, stream: &mut UnixStream) -> Result<(), F
 
 async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
     let opened = match request.call {
-        Call::Follow(_) => daemon.follow(request.workforce),
+        Call::Follow(_) | Call::Join { .. } => daemon.follow(request.workforce),
         Call::State
         | Call::Event(_)
         | Call::Events
@@ -128,6 +129,19 @@ async fn call(
                 .map_err(|error| error.to_string())?;
             Ok(Response::Forked)
         }
+        Call::Join { code, profile } => {
+            let code: InviteCode = code
+                .parse()
+                .map_err(|error: InviteCodeError| error.to_string())?;
+            if code.workforce != workforce {
+                return Err("the invite is for another workforce".to_string());
+            }
+            daemon
+                .join(loaded, &code, profile)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(Response::Joined)
+        }
         Call::Follow(devices) => {
             let peers = devices
                 .into_iter()
@@ -138,12 +152,4 @@ async fn call(
         }
         Call::LastSeen => Ok(Response::LastSeen(daemon.presence().snapshot())),
     }
-}
-
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-        })
 }

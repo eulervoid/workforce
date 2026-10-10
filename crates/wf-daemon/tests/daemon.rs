@@ -380,3 +380,87 @@ async fn a_daemon_follows_a_fork_with_the_history_it_already_has() {
     assert_eq!(followed.event_count(), forker_state.event_count());
     assert_eq!(followed.items().count(), 5);
 }
+
+async fn start_empty(
+    signer: wf_core::identity::DeviceSigner,
+) -> (TempDir, Arc<Daemon>, std::path::PathBuf) {
+    let directory = TempDir::new().unwrap();
+    let socket = directory.path().join("daemon.sock");
+    let daemon = Daemon::start(
+        Config {
+            data_dir: directory.path().to_path_buf(),
+            socket: socket.clone(),
+            network: Network::Direct,
+        },
+        signer,
+    )
+    .await
+    .unwrap();
+    tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
+    for _ in 0..100 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    (directory, daemon, socket)
+}
+
+#[tokio::test]
+async fn a_running_daemon_joins_a_workforce_with_its_own_key() {
+    use wf_core::event::{DeviceProfile, EventBody, InviteCreated, InviteKind};
+    use wf_core::identity::{InviteSigner, Signed};
+    use wf_core::invite::InviteCode;
+
+    let fixture = Fixture::new(1);
+    let (_laptop_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
+    let vm_signer = wf_core::identity::DeviceSigner::from_bytes(&[90; 32]).unwrap();
+    let (_vm_dir, vm, vm_socket) = start_empty(vm_signer.clone()).await;
+    vm.node().remember(laptop.node().local_addr());
+    let workforce = fixture.workforce();
+
+    let secret = InviteSigner::generate();
+    let statement = InviteCreated {
+        kind: InviteKind::Device,
+        invite: secret.key(),
+        expires_ms: u64::MAX / 2,
+    };
+    let actor = fixture.founder_actor();
+    let body = EventBody::InviteCreated(
+        Signed::sign(&fixture.founder, Some(workforce), statement).unwrap(),
+    );
+    let socket = laptop_socket.clone();
+    let invite = blocking(move || connect(&socket).author(workforce, actor, body).unwrap()).await;
+    let code = InviteCode::new(workforce, invite.id(), &secret, vec![laptop.device()]);
+
+    let socket = vm_socket.clone();
+    let state = blocking(move || {
+        let mut client = connect(&socket);
+        let profile = DeviceProfile {
+            name: "vm".into(),
+            hardware: "test".into(),
+            agents: Default::default(),
+            max_sessions: 1,
+        };
+        client.join(workforce, &code, profile).unwrap();
+        client.state(workforce).unwrap()
+    })
+    .await;
+    assert_eq!(
+        state.principal_of(&vm_signer.key()),
+        Some(fixture.founder.key())
+    );
+    assert!(
+        state
+            .devices()
+            .any(|info| info.profile.is_some_and(|p| p.name == "vm"))
+    );
+
+    let socket = laptop_socket.clone();
+    let laptop_state = blocking(move || connect(&socket).state(workforce).unwrap()).await;
+    assert_eq!(
+        laptop_state.principal_of(&vm_signer.key()),
+        Some(fixture.founder.key()),
+        "the laptop heard of the new device"
+    );
+}

@@ -4,9 +4,10 @@ use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
-use wf_core::event::{Event, EventBody};
+use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
+use wf_core::invite::InviteCode;
 use wf_core::state::State;
 
 use crate::peers::PeerSync;
@@ -125,6 +126,23 @@ impl DaemonClient {
     pub fn fork(&mut self, parent: WorkforceId, genesis: Event) -> Result<(), ClientError> {
         match self.call(parent, Call::Fork(Box::new(genesis)))? {
             Response::Forked => Ok(()),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    /// Has the daemon join the workforce of `code` as this machine's device.
+    pub fn join(
+        &mut self,
+        workforce: WorkforceId,
+        code: &InviteCode,
+        profile: DeviceProfile,
+    ) -> Result<(), ClientError> {
+        let call = Call::Join {
+            code: code.to_string(),
+            profile,
+        };
+        match self.call(workforce, call)? {
+            Response::Joined => Ok(()),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }

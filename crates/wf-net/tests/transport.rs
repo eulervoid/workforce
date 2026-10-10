@@ -105,9 +105,10 @@ async fn an_unserved_workforce_is_refused() {
 }
 
 mod joining {
-    use wf_core::event::{DeviceBound, EventBody};
+    use wf_core::event::DeviceProfile;
     use wf_core::identity::InviteSigner;
     use wf_core::invite::{InviteCode, JoinRefusal};
+    use wf_net::replica::bind_device;
 
     use super::*;
 
@@ -143,36 +144,68 @@ mod joining {
         u64::MAX / 2
     }
 
+    fn profile() -> DeviceProfile {
+        DeviceProfile {
+            name: "vm".into(),
+            hardware: "test".into(),
+            agents: Default::default(),
+            max_sessions: 1,
+        }
+    }
+
+    fn local_replica(fixture: &Fixture) -> SharedReplica<RedbStore> {
+        SharedReplica::new(
+            Replica::open(RedbStore::in_memory().unwrap(), fixture.workforce()).unwrap(),
+        )
+    }
+
+    /// Joins with the log in `local`. With `stop_after_binding` the join fails once the events of
+    /// the new device are written and before they are sent, like a connection that drops there.
+    async fn join_into(
+        invited: &Invited,
+        code: &InviteCode,
+        signer: &DeviceSigner,
+        local: &SharedReplica<RedbStore>,
+        stop_after_binding: bool,
+    ) -> Result<(), wf_net::NetError> {
+        let joiner = Node::start(signer, Network::Direct).await.unwrap();
+        let author_replica = local.clone();
+        let invite = code.invite;
+        let proof = code.prove(signer.key()).unwrap();
+        let signer_for_author = signer.clone();
+        let result = joiner
+            .join(
+                code,
+                invited.member.local_addr(),
+                local,
+                move || async move {
+                    bind_device(
+                        &mut author_replica.lock(),
+                        &signer_for_author,
+                        invite,
+                        proof,
+                        profile(),
+                        9_000,
+                    )?;
+                    if stop_after_binding {
+                        return Err("the connection dropped".into());
+                    }
+                    Ok(())
+                },
+            )
+            .await;
+        joiner.shutdown().await;
+        result
+    }
+
     async fn join(
         fixture: &Fixture,
         invited: &Invited,
         code: &InviteCode,
         signer: &DeviceSigner,
     ) -> (Result<(), wf_net::NetError>, SharedReplica<RedbStore>) {
-        let local = SharedReplica::new(
-            Replica::open(RedbStore::in_memory().unwrap(), fixture.workforce()).unwrap(),
-        );
-        let joiner = Node::start(signer, Network::Direct).await.unwrap();
-        let author_replica = local.clone();
-        let invite = code.invite;
-        let proof = code.prove(signer.key()).unwrap();
-        let actor = fixture.founder_actor();
-        let signer_for_author = signer.clone();
-        let result = joiner
-            .join(code, invited.member.local_addr(), &local, move || {
-                author_replica
-                    .lock()
-                    .author(
-                        &signer_for_author,
-                        actor,
-                        9_000,
-                        EventBody::DeviceBound(DeviceBound { invite, proof }),
-                    )
-                    .map(|_| ())
-                    .map_err(Into::into)
-            })
-            .await;
-        joiner.shutdown().await;
+        let local = local_replica(fixture);
+        let result = join_into(invited, code, signer, &local, false).await;
         (result, local)
     }
 
@@ -216,6 +249,52 @@ mod joining {
             })
         ));
         assert_eq!(local.lock().state().event_count(), 0);
+        invited.member.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_join_that_stopped_halfway_can_be_run_again_by_the_same_device() {
+        let fixture = Fixture::new(1);
+        let invited = invited(&fixture, far_future()).await;
+        let vm = DeviceSigner::from_bytes(&[95; 32]).unwrap();
+        let local = local_replica(&fixture);
+
+        let result = join_into(&invited, &invited.code, &vm, &local, true).await;
+        assert!(matches!(result, Err(wf_net::NetError::JoinAuthoring(_))));
+        assert!(local.lock().state().principal_of(&vm.key()).is_some());
+        assert!(
+            invited
+                .member_replica
+                .lock()
+                .state()
+                .principal_of(&vm.key())
+                .is_none(),
+            "the member has not heard of the device"
+        );
+
+        // Someone else cannot take the invite in the meantime.
+        let other = DeviceSigner::from_bytes(&[96; 32]).unwrap();
+        let (taken, _) = join(&fixture, &invited, &invited.code, &other).await;
+        assert!(matches!(
+            taken,
+            Err(wf_net::NetError::JoinRefused {
+                reason: JoinRefusal::Reserved,
+                ..
+            })
+        ));
+
+        let events_before = local.lock().state().event_count();
+        join_into(&invited, &invited.code, &vm, &local, false)
+            .await
+            .unwrap();
+        assert_eq!(local.lock().state().event_count(), events_before);
+        let member_state = invited.member_replica.lock().state().clone();
+        assert_eq!(
+            member_state.principal_of(&vm.key()),
+            Some(fixture.founder.key())
+        );
+        assert_eq!(member_state.event_count(), events_before);
+        assert_eq!(member_state.equivocations().count(), 0);
         invited.member.shutdown().await;
     }
 

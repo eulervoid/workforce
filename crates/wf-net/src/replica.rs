@@ -2,12 +2,12 @@
 //! one process, the daemon's storage task) implements [`crate::SyncLog`] by calling these.
 
 use iroh::Signature;
-use wf_core::event::Event;
+use wf_core::event::{DeviceBound, DeviceProfile, Event, EventBody};
 use wf_core::id::EventId;
-use wf_core::identity::DeviceKey;
+use wf_core::identity::{Actor, DeviceKey, DeviceSigner};
 use wf_core::invite::JoinRefusal;
 use wf_core::sync::{self, Versions};
-use wf_store::{EventStore, Replica, StoreError};
+use wf_store::{AuthorError, EventStore, Replica, StoreError};
 
 use crate::log::ReceiveSummary;
 
@@ -104,6 +104,77 @@ pub fn receive<S: EventStore>(
         applied: received.applied,
         rejected: received.rejected,
     })
+}
+
+/// How far a device is in joining a workforce with an invite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Joined {
+    /// Not bound.
+    No,
+    /// Bound by redeeming this invite: a join that may not have finished.
+    WithInvite,
+    /// Bound some other way.
+    Otherwise,
+}
+
+pub fn joined<S: EventStore>(replica: &Replica<S>, device: DeviceKey, invite: EventId) -> Joined {
+    let state = replica.state();
+    if state.principal_of(&device).is_none() {
+        return Joined::No;
+    }
+    match state.invite(&invite) {
+        Some(known) if known.redeemed_by.contains(&device) => Joined::WithInvite,
+        Some(_) | None => Joined::Otherwise,
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum BindError {
+    #[error("the invite is not in the log the member sent")]
+    UnknownInvite,
+    #[error("this machine has already joined the workforce")]
+    AlreadyJoined,
+    #[error(transparent)]
+    Author(#[from] AuthorError),
+}
+
+/// Writes the events that make `signer` a device of the workforce: the binding with the invite,
+/// then its profile. What is already there is not written again, so a join that stopped halfway
+/// can be run again.
+pub fn bind_device<S: EventStore>(
+    replica: &mut Replica<S>,
+    signer: &DeviceSigner,
+    invite: EventId,
+    proof: Signature,
+    profile: DeviceProfile,
+    now_ms: u64,
+) -> Result<(), BindError> {
+    let principal = replica
+        .state()
+        .invite(&invite)
+        .map(|known| known.principal)
+        .ok_or(BindError::UnknownInvite)?;
+    let actor = Actor::Human(principal);
+    match joined(replica, signer.key(), invite) {
+        Joined::Otherwise => return Err(BindError::AlreadyJoined),
+        Joined::WithInvite => {}
+        Joined::No => {
+            replica.author(
+                signer,
+                actor.clone(),
+                now_ms,
+                EventBody::DeviceBound(DeviceBound { invite, proof }),
+            )?;
+        }
+    }
+    let has_profile = replica
+        .state()
+        .devices()
+        .any(|info| info.device == signer.key() && info.profile.is_some());
+    if !has_profile {
+        replica.author(signer, actor, now_ms, EventBody::DeviceProfile(profile))?;
+    }
+    Ok(())
 }
 
 pub fn is_bound<S: EventStore>(replica: &Replica<S>, device: DeviceKey) -> bool {

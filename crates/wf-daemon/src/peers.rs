@@ -78,11 +78,7 @@ pub struct Presence(Arc<Mutex<BTreeMap<DeviceKey, u64>>>);
 
 impl Presence {
     pub fn saw(&self, device: DeviceKey) {
-        let now = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map_or(0, |elapsed| {
-                u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-            });
+        let now = crate::now_ms();
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
