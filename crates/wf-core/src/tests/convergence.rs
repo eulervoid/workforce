@@ -10,6 +10,7 @@ use crate::event::{Change, Event, EventBody};
 use crate::id::{EventId, ItemId};
 use crate::item::{ItemView, Priority};
 use crate::name::{Label, Requirement};
+use crate::session::EndReason;
 use crate::state::{Disposition, State, Trust};
 use crate::testing::*;
 
@@ -242,6 +243,27 @@ impl Simulation {
             (13, Some(item)) => {
                 self.submit(device, comment(item, &format!("note {second} @joshua")))
             }
+            (14, Some(item)) if second % 4 == 3 => {
+                let coder = crate::name::AgentName::new("coder").unwrap();
+                if self.replicas[device]
+                    .agent(&coder, self.fixture.founder.key())
+                    .is_some()
+                {
+                    self.submit(device, start_session("coder", item));
+                }
+            }
+            (14, _) if second % 4 == 2 => {
+                let live: Vec<_> = self.replicas[device]
+                    .live_sessions()
+                    .map(|session| session.id())
+                    .collect();
+                if !live.is_empty() {
+                    let session = live[usize::from(first) % live.len()];
+                    let reason = [EndReason::Released, EndReason::Failed, EndReason::Cancelled]
+                        [usize::from(first) % 3];
+                    self.submit(device, end_session(session, reason));
+                }
+            }
             (14, _) => match second % 3 {
                 0 => self.submit(device, define_agent("coder")),
                 1 => {
@@ -439,6 +461,12 @@ fn the_generator_exercises_real_histories() {
             .any(|item| item.labels().values().count() > 0)
     );
     assert!(!graph.ignored().is_empty(), "concurrent cycles occur");
+    assert!(
+        state.sessions().any(|session| session.is_live())
+            && state.sessions().any(|session| !session.is_live()),
+        "{} sessions",
+        state.sessions().count()
+    );
     eprintln!(
         "events={} items={} archived={} ignored_edges={}",
         simulation.authored.len(),
