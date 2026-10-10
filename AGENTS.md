@@ -24,6 +24,8 @@
 - Use clear and descriptive variable names, avoid single letters and overly short abbreviations
 - Before planning an implementation, check for published crates, don't reinvent the wheel
 - `wf-core` is pure: no IO, no async, no clock or randomness except through parameters
+- `wf-net` protocols are written against generic streams and a `SyncLog` trait, so convergence is tested in memory; iroh only carries them
+- The daemon owns the store when it runs: CLI code reads and writes through `Workspace`, never through the store directly
 
 ## Error Handling
 - `thiserror` enums in library crates, `anyhow` only at the CLI boundary
