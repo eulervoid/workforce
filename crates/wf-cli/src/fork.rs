@@ -194,7 +194,7 @@ pub fn fork(
     let history_events = history.len();
     {
         let store = RedbStore::open(workspace::store_path(&workspace.data, &child)?)?;
-        let mut replica = Replica::open(store)?;
+        let mut replica = Replica::open(store, child)?;
         replica.receive(genesis_event)?;
         for event in history {
             replica.receive(event)?;
@@ -311,21 +311,17 @@ pub fn accept(
         eprintln!("note: this workforce has no announcement of a fork to {child}");
     }
     let own = workspace.device_key();
-    let bootstrap: Vec<DeviceKey> = workspace
-        .state()
-        .devices()
-        .map(|info| info.device)
-        .filter(|device| *device != own)
-        .collect();
+    let bootstrap = bootstrap_devices(workspace.state(), child, own);
     let (replicated, device, _) = workspace.into_replicated();
 
     // An empty store for the fork, so that whoever keeps the log of this machine (this process
     // or the daemon) can take the fork in.
     let events = match replicated {
         Replicated::Daemon(mut client) => {
-            drop(Replica::open(RedbStore::open(workspace::store_path(
-                &data, &child,
-            )?)?)?);
+            drop(Replica::open(
+                RedbStore::open(workspace::store_path(&data, &child)?)?,
+                child,
+            )?);
             let results = client.sync_with(child, bootstrap)?;
             if results.iter().all(|result| !result.reached()) {
                 bail!("could not reach a device that has the fork");
@@ -337,7 +333,7 @@ pub fn accept(
         Replicated::Local(replica) => {
             drop(replica);
             let store = RedbStore::open(workspace::store_path(&data, &child)?)?;
-            let shared = SharedReplica::new(Replica::open(store)?);
+            let shared = SharedReplica::new(Replica::open(store, child)?);
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
@@ -370,6 +366,21 @@ pub fn accept(
             )
         },
     )
+}
+
+/// Where to look for a fork: the devices of the members the announcement says it keeps, so a
+/// device that was left out is not asked. Without an announcement, every other device.
+fn bootstrap_devices(state: &State, child: WorkforceId, own: DeviceKey) -> Vec<DeviceKey> {
+    let kept = state
+        .announcements()
+        .find(|announcement| announcement.to == child)
+        .map(|announcement| &announcement.members);
+    state
+        .devices()
+        .filter(|info| kept.is_none_or(|members| members.contains(&info.principal)))
+        .map(|info| info.device)
+        .filter(|device| *device != own)
+        .collect()
 }
 
 fn check_member(state: &State, device: DeviceKey, child: WorkforceId) -> anyhow::Result<()> {

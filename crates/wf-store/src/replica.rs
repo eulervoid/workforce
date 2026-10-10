@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use wf_core::event::{Event, EventBody, EventError};
-use wf_core::id::EventId;
+use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner};
 use wf_core::refs::PARSER_VERSION;
 use wf_core::state::{Disposition, Received, State, Trust};
@@ -58,20 +58,25 @@ pub struct Replica<S: EventStore> {
 }
 
 impl<S: EventStore> Replica<S> {
-    /// Loads the latest usable snapshot and replays the events written after it.
-    pub fn open(store: S) -> Result<Self, StoreError> {
+    /// Loads the latest usable snapshot and replays the events written after it. The replica is
+    /// for workforce `expected` and refuses the genesis of any other.
+    pub fn open(store: S, expected: WorkforceId) -> Result<Self, StoreError> {
         let loaded = load_snapshot(&store)?;
-        Self::fold(store, loaded)
+        Self::fold(store, loaded, expected)
     }
 
     /// Ignores any snapshot and folds the whole log, then writes a fresh snapshot.
-    pub fn refold(store: S) -> Result<Self, StoreError> {
-        Self::fold(store, None)
+    pub fn refold(store: S, expected: WorkforceId) -> Result<Self, StoreError> {
+        Self::fold(store, None, expected)
     }
 
-    fn fold(store: S, snapshot: Option<State>) -> Result<Self, StoreError> {
+    fn fold(store: S, snapshot: Option<State>, expected: WorkforceId) -> Result<Self, StoreError> {
+        let snapshot = snapshot.filter(|state| state.workforce_id().is_some());
         let from_snapshot = snapshot.is_some();
-        let mut state = snapshot.unwrap_or_default();
+        let mut state = snapshot.unwrap_or_else(|| State::expecting(expected));
+        if let Some(found) = state.workforce_id().filter(|found| *found != expected) {
+            return Err(StoreError::WrongWorkforce { expected, found });
+        }
         let snapshot_event_count = state.event_count();
 
         let unseen = store.log_since(snapshot_event_count as u64)?;
@@ -79,7 +84,12 @@ impl<S: EventStore> Replica<S> {
         for event in unseen {
             state
                 .receive(event, Trust::Stored)
-                .map_err(|error| StoreError::Inconsistent(error.to_string()))?;
+                .map_err(|error| match error {
+                    Invalid::WrongWorkforce(found) => {
+                        StoreError::WrongWorkforce { expected, found }
+                    }
+                    other => StoreError::Inconsistent(other.to_string()),
+                })?;
         }
         if state.pending_events().next().is_some() {
             return Err(StoreError::Inconsistent(

@@ -324,7 +324,7 @@ pub fn join(
     }
     let device = data.device(true)?.expect("created on demand");
     let store = RedbStore::open(workspace::store_path(&data, &code.workforce)?)?;
-    let replica = Replica::open(store)?;
+    let replica = Replica::open(store, code.workforce)?;
     if replica.state().principal_of(&device.key()).is_some() {
         bail!("this machine has already joined the workforce");
     }

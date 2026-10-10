@@ -51,7 +51,7 @@ async fn joining_a_workforce_with_100k_events_takes_seconds() {
             ..Commit::default()
         })
         .unwrap();
-    let member_replica = SharedReplica::new(Replica::open(store).unwrap());
+    let member_replica = SharedReplica::new(Replica::open(store, fixture.workforce()).unwrap());
 
     let member = Node::start(&fixture.devices[0], Network::Direct)
         .await
@@ -65,7 +65,9 @@ async fn joining_a_workforce_with_100k_events_takes_seconds() {
     );
 
     let vm = DeviceSigner::from_bytes(&[90; 32]).unwrap();
-    let local = SharedReplica::new(Replica::open(RedbStore::in_memory().unwrap()).unwrap());
+    let local = SharedReplica::new(
+        Replica::open(RedbStore::in_memory().unwrap(), fixture.workforce()).unwrap(),
+    );
     let joiner = Node::start(&vm, Network::Direct).await.unwrap();
     let authoring = local.clone();
     let proof = code.prove(vm.key()).unwrap();

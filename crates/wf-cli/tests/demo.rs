@@ -645,7 +645,8 @@ mod forking {
         let device = DeviceSigner::from_bytes(&read_key(&keys.join("device.key"))).unwrap();
         let second = DeviceSigner::generate();
         let store = sandbox.data.join("workforce").join(&id).join("store.redb");
-        let mut replica = Replica::open(RedbStore::open(store).unwrap()).unwrap();
+        let mut replica =
+            Replica::open(RedbStore::open(store).unwrap(), id.parse().unwrap()).unwrap();
         let workforce = replica.state().workforce_id().unwrap();
         let actor = Actor::Human(principal.key());
         let secret = InviteSigner::generate();

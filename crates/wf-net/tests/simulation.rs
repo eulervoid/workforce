@@ -50,7 +50,7 @@ struct Cluster {
 }
 
 fn fresh_replica(fixture: &Fixture, events: &[Event]) -> SharedReplica<RedbStore> {
-    let mut replica = Replica::open(RedbStore::in_memory().unwrap()).unwrap();
+    let mut replica = Replica::open(RedbStore::in_memory().unwrap(), fixture.workforce()).unwrap();
     replica.receive(fixture.genesis.clone()).unwrap();
     for event in events {
         let _ = replica.receive(event.clone());

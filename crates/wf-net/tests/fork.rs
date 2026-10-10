@@ -6,8 +6,8 @@ use wf_core::testing::*;
 use wf_net::{SharedReplica, SyncLog, initiate, read_open, respond};
 use wf_store::{EventStore, RedbStore, Replica};
 
-fn replica() -> SharedReplica<RedbStore> {
-    SharedReplica::new(Replica::open(RedbStore::in_memory().unwrap()).unwrap())
+fn replica(workforce: wf_core::id::WorkforceId) -> SharedReplica<RedbStore> {
+    SharedReplica::new(Replica::open(RedbStore::in_memory().unwrap(), workforce).unwrap())
 }
 
 async fn sync(
@@ -53,7 +53,7 @@ fn forked(history_len: usize) -> Forked {
     let child = genesis.id().into();
 
     // The forker holds the child and, newest first, the history it names.
-    let forker = replica();
+    let forker = replica(child);
     forker.lock().receive(genesis).unwrap();
     let mut newest_first = history.clone();
     newest_first.sort_by_key(|event| std::cmp::Reverse((event.content.hlc, event.id())));
@@ -77,7 +77,7 @@ async fn a_new_device_takes_in_a_fork_and_its_history() {
     );
     assert!(forked.forker.missing().await.unwrap().is_empty());
 
-    let device = replica();
+    let device = replica(forked.child);
     sync(&device, &forked.forker, forked.child).await;
     assert!(device.missing().await.unwrap().is_empty());
     assert_eq!(encoded(&device), encoded(&forked.forker));
@@ -88,7 +88,7 @@ async fn a_new_device_takes_in_a_fork_and_its_history() {
 #[tokio::test]
 async fn the_fork_continues_on_every_device_after_syncing() {
     let forked = forked(10);
-    let laptop = replica();
+    let laptop = replica(forked.child);
     sync(&laptop, &forked.forker, forked.child).await;
 
     // The forker writes on in the fork, continuing its feed from before.
@@ -147,7 +147,7 @@ async fn a_forked_replica_replays_from_its_log() {
         let replica = forked.forker.lock();
         replica.store().log_since(0).unwrap()
     };
-    let mut rebuilt = Replica::open(RedbStore::in_memory().unwrap()).unwrap();
+    let mut rebuilt = Replica::open(RedbStore::in_memory().unwrap(), forked.child).unwrap();
     // Replaying in the order they were applied: newest history first.
     for event in log {
         rebuilt.receive(event).unwrap();

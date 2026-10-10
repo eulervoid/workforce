@@ -25,8 +25,11 @@ async fn start() -> Running {
     let fixture = Fixture::new(1);
     let store_directory = directory.path().join(fixture.workforce().to_string());
     std::fs::create_dir_all(&store_directory).unwrap();
-    let mut replica =
-        Replica::open(RedbStore::open(store_directory.join(STORE_FILE)).unwrap()).unwrap();
+    let mut replica = Replica::open(
+        RedbStore::open(store_directory.join(STORE_FILE)).unwrap(),
+        fixture.workforce(),
+    )
+    .unwrap();
     replica.receive(fixture.genesis.clone()).unwrap();
     replica
         .author(
@@ -177,8 +180,11 @@ async fn start_peer(
     let directory = TempDir::new().unwrap();
     let store_directory = directory.path().join(fixture.workforce().to_string());
     std::fs::create_dir_all(&store_directory).unwrap();
-    let mut replica =
-        Replica::open(RedbStore::open(store_directory.join(STORE_FILE)).unwrap()).unwrap();
+    let mut replica = Replica::open(
+        RedbStore::open(store_directory.join(STORE_FILE)).unwrap(),
+        fixture.workforce(),
+    )
+    .unwrap();
     replica.receive(fixture.genesis.clone()).unwrap();
     drop(replica);
     let socket = directory.path().join("daemon.sock");

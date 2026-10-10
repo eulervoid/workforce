@@ -236,3 +236,27 @@ fn only_an_owner_can_announce_a_fork() {
         Err(Invalid::NotOwner(_)) | Err(Invalid::ActorMismatch)
     ));
 }
+
+#[test]
+fn a_state_expecting_the_fork_refuses_the_genesis_of_the_parent() {
+    let scenario = scenario(false);
+    let child_id: WorkforceId = scenario.genesis.id().into();
+    let mut state = State::expecting(child_id);
+
+    let result = state.receive(scenario.fixture.genesis.clone(), Trust::Untrusted);
+    assert!(
+        matches!(result, Err(Invalid::WrongWorkforce(_))),
+        "{result:?}"
+    );
+    let result = state.receive(scenario.history[1].clone(), Trust::Untrusted);
+    assert!(
+        matches!(result, Err(Invalid::WrongWorkforce(_))),
+        "{result:?}"
+    );
+    assert_eq!(state.event_count(), 0);
+
+    state
+        .receive(scenario.genesis.clone(), Trust::Untrusted)
+        .unwrap();
+    assert_eq!(state.workforce_id(), Some(child_id));
+}

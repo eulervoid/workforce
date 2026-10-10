@@ -13,7 +13,7 @@ fn open(directory: &TempDir) -> RedbStore {
 }
 
 fn new_replica(directory: &TempDir, fixture: &Fixture) -> Replica<RedbStore> {
-    let mut replica = Replica::open(open(directory)).unwrap();
+    let mut replica = Replica::open(open(directory), fixture.workforce()).unwrap();
     replica.receive(fixture.genesis.clone()).unwrap();
     replica
 }
@@ -52,7 +52,7 @@ fn events_survive_reopening() {
         add(&mut replica, &fixture, 5);
         replica.state().clone()
     };
-    let reopened = Replica::open(open(&directory)).unwrap();
+    let reopened = Replica::open(open(&directory), fixture.workforce()).unwrap();
     assert_eq!(reopened.state(), &expected);
     assert_eq!(reopened.store().events().unwrap().len(), 6);
 }
@@ -135,11 +135,11 @@ fn snapshots_are_written_atomically_with_events_and_replay_equals_refold() {
         replica.state().clone()
     };
 
-    let with_snapshot = Replica::open(open(&directory)).unwrap();
+    let with_snapshot = Replica::open(open(&directory), fixture.workforce()).unwrap();
     assert_eq!(with_snapshot.state(), &expected);
     drop(with_snapshot);
 
-    let refolded = Replica::refold(open(&directory)).unwrap();
+    let refolded = Replica::refold(open(&directory), fixture.workforce()).unwrap();
     assert_eq!(refolded.state(), &expected);
     assert_eq!(titles(refolded.state()), titles(&expected));
 }
@@ -161,7 +161,7 @@ fn deleting_the_snapshot_changes_nothing() {
         })
         .unwrap();
     assert!(store.snapshot().unwrap().is_none());
-    let replica = Replica::open(store).unwrap();
+    let replica = Replica::open(store, fixture.workforce()).unwrap();
     assert_eq!(replica.state(), &expected);
     assert!(
         replica.store().snapshot().unwrap().is_some(),
@@ -189,7 +189,7 @@ fn unusable_snapshots_are_discarded_and_refolded() {
                 ..Commit::default()
             })
             .unwrap();
-        let replica = Replica::open(store).unwrap();
+        let replica = Replica::open(store, fixture.workforce()).unwrap();
         assert_eq!(replica.state(), &expected);
     }
 }
@@ -210,7 +210,7 @@ fn out_of_order_events_are_parked_and_survive_restarts() {
         assert_eq!(replica.store().events().unwrap().len(), 1);
     }
     {
-        let mut replica = Replica::open(open(&directory)).unwrap();
+        let mut replica = Replica::open(open(&directory), fixture.workforce()).unwrap();
         assert_eq!(
             replica.state().pending_events().count(),
             1,
@@ -353,13 +353,13 @@ fn startup_with_100k_events_and_a_snapshot_is_fast() {
         .unwrap();
 
     let started = Instant::now();
-    let replica = Replica::open(store).unwrap();
+    let replica = Replica::open(store, fixture.workforce()).unwrap();
     let first_open = started.elapsed();
     assert_eq!(replica.state(), &state);
     drop(replica);
 
     let started = Instant::now();
-    let replica = Replica::open(open(&directory)).unwrap();
+    let replica = Replica::open(open(&directory), fixture.workforce()).unwrap();
     let with_snapshot = started.elapsed();
     assert_eq!(replica.state().event_count(), 100_001);
     eprintln!("first open (full fold): {first_open:?}, open with snapshot: {with_snapshot:?}");
@@ -385,7 +385,7 @@ fn both_branches_of_a_forked_feed_are_stored_and_replayed() {
     let expected = replica.state().clone();
     drop(replica);
 
-    let reopened = Replica::refold(open(&directory)).unwrap();
+    let reopened = Replica::refold(open(&directory), fixture.workforce()).unwrap();
     assert_eq!(reopened.state(), &expected);
 }
 
@@ -408,4 +408,33 @@ fn a_replica_refuses_to_write_on_a_forked_own_feed() {
         result,
         Err(wf_store::AuthorError::OwnFeedEquivocated)
     ));
+}
+
+#[test]
+fn a_store_of_another_workforce_is_refused() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    {
+        let mut replica = new_replica(&directory, &fixture);
+        add(&mut replica, &fixture, SNAPSHOT_INTERVAL + 5);
+    }
+    let other = Fixture::new(2).workforce();
+    for result in [
+        Replica::open(open(&directory), other),
+        Replica::refold(open(&directory), other),
+    ] {
+        assert!(matches!(
+            result,
+            Err(wf_store::StoreError::WrongWorkforce { .. })
+        ));
+    }
+}
+
+#[test]
+fn a_replica_expecting_a_workforce_refuses_the_genesis_of_another() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let mut replica = Replica::open(open(&directory), Fixture::new(2).workforce()).unwrap();
+    assert!(replica.receive(fixture.genesis.clone()).is_err());
+    assert_eq!(replica.store().log_len().unwrap(), 0);
 }

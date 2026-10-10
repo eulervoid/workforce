@@ -6,7 +6,7 @@ use wf_net::{Network, Node, SharedReplica};
 use wf_store::{RedbStore, Replica};
 
 fn replica(fixture: &Fixture) -> SharedReplica<RedbStore> {
-    let mut replica = Replica::open(RedbStore::in_memory().unwrap()).unwrap();
+    let mut replica = Replica::open(RedbStore::in_memory().unwrap(), fixture.workforce()).unwrap();
     replica.receive(fixture.genesis.clone()).unwrap();
     SharedReplica::new(replica)
 }
@@ -149,7 +149,9 @@ mod joining {
         code: &InviteCode,
         signer: &DeviceSigner,
     ) -> (Result<(), wf_net::NetError>, SharedReplica<RedbStore>) {
-        let local = SharedReplica::new(Replica::open(RedbStore::in_memory().unwrap()).unwrap());
+        let local = SharedReplica::new(
+            Replica::open(RedbStore::in_memory().unwrap(), fixture.workforce()).unwrap(),
+        );
         let joiner = Node::start(signer, Network::Direct).await.unwrap();
         let author_replica = local.clone();
         let invite = code.invite;

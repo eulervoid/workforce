@@ -91,9 +91,9 @@ impl Workspace {
         }
         let store = RedbStore::open(store_path(&data, &id)?)?;
         let replica = if refold {
-            Replica::refold(store)?
+            Replica::refold(store, id)?
         } else {
-            Replica::open(store)?
+            Replica::open(store, id)?
         };
         if replica.state().workforce_id() != Some(id) {
             bail!(

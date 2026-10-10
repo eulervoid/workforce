@@ -225,7 +225,10 @@ impl State {
                     Ok(Admission::Apply(Origin::Own))
                 }
                 (_, None) => Err(Invalid::MissingWorkforce),
-                (_, Some(_)) => Ok(Admission::Wait(Waiting::Genesis)),
+                (_, Some(id)) => match self.expected {
+                    Some(expected) if expected != id => Err(Invalid::WrongWorkforce(id)),
+                    Some(_) | None => Ok(Admission::Wait(Waiting::Genesis)),
+                },
             };
         };
 
@@ -434,6 +437,10 @@ impl State {
         let content = &event.content;
         if content.workforce.is_some() {
             return Err(Invalid::GenesisNamesWorkforce);
+        }
+        let id = WorkforceId::from(event.id());
+        if self.expected.is_some_and(|expected| expected != id) {
+            return Err(Invalid::WrongWorkforce(id));
         }
         let EventBody::Genesis(signed) = &content.body else {
             unreachable!("the caller matched on a genesis body")

@@ -80,6 +80,7 @@ impl State {
             }
             let policy =
                 Policy::parse(&genesis.policy).expect("admitted genesis has a valid policy");
+            self.expected = None;
             self.workforce = Some(Workforce {
                 id: id.into(),
                 name: genesis.name.clone(),

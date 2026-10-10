@@ -177,7 +177,7 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
             .sign(&device, body)?;
     let id: wf_core::id::WorkforceId = genesis_event.id().into();
 
-    let mut replica = Replica::open(RedbStore::open(workspace::store_path(&data, &id)?)?)?;
+    let mut replica = Replica::open(RedbStore::open(workspace::store_path(&data, &id)?)?, id)?;
     if replica.state().workforce_id().is_some() {
         bail!("a local log for workforce {id} already exists");
     }

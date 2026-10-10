@@ -274,11 +274,24 @@ pub struct State {
     pub(crate) heads: BTreeSet<EventId>,
     #[serde(skip)]
     pub(crate) pending: Pending,
+    /// The workforce this state is for, until its genesis has been applied: any other genesis
+    /// is refused, and so are events of another workforce.
+    #[serde(skip)]
+    pub(crate) expected: Option<WorkforceId>,
 }
 
 impl State {
+    /// A state that takes whichever workforce's genesis arrives first.
     pub fn new() -> Self {
         Self::default()
+    }
+
+    /// A state that only takes the genesis of workforce `id`.
+    pub fn expecting(id: WorkforceId) -> Self {
+        Self {
+            expected: Some(id),
+            ..Self::default()
+        }
     }
 
     pub fn workforce_id(&self) -> Option<WorkforceId> {

@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 
 use wf_core::encoding::EncodingError;
 use wf_core::event::Event;
-use wf_core::id::EventId;
+use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::DeviceKey;
 
 #[derive(Debug, thiserror::Error)]
@@ -19,6 +19,11 @@ pub enum StoreError {
     Commit(#[from] redb::CommitError),
     #[error("stored data does not decode: {0}")]
     Corrupt(#[from] EncodingError),
+    #[error("the store holds workforce {found}, not {expected}")]
+    WrongWorkforce {
+        expected: WorkforceId,
+        found: WorkforceId,
+    },
     #[error("the stored log is inconsistent: {0}")]
     Inconsistent(String),
     #[error("the database is locked by another wf process")]
