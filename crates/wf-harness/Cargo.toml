@@ -1,0 +1,17 @@
+[package]
+name = "wf-harness"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+agent-client-protocol = { version = "3.3", features = ["process"] }
+jiff = { workspace = true, features = ["serde"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+agent-client-protocol = "3.3"
+tempfile.workspace = true
+tokio.workspace = true
