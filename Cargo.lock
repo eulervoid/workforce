@@ -4225,6 +4225,7 @@ dependencies = [
  "n0-future",
  "proptest",
  "serde",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "wf-core",

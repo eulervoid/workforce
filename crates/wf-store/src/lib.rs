@@ -5,5 +5,5 @@ mod replica;
 mod store;
 
 pub use redb_store::RedbStore;
-pub use replica::{AuthorError, ReceiveError, Replica, SNAPSHOT_INTERVAL};
+pub use replica::{AuthorError, BatchReceived, ReceiveError, Replica, SNAPSHOT_INTERVAL};
 pub use store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError, StoredSnapshot};

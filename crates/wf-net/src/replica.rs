@@ -7,7 +7,7 @@ use wf_core::id::EventId;
 use wf_core::identity::DeviceKey;
 use wf_core::invite::JoinRefusal;
 use wf_core::sync::{self, Versions};
-use wf_store::{EventStore, ReceiveError, Replica, StoreError};
+use wf_store::{EventStore, Replica, StoreError};
 
 use crate::log::ReceiveSummary;
 
@@ -99,15 +99,11 @@ pub fn receive<S: EventStore>(
     replica: &mut Replica<S>,
     events: Vec<Event>,
 ) -> Result<ReceiveSummary, StoreError> {
-    let mut summary = ReceiveSummary::default();
-    for event in events {
-        match replica.receive(event) {
-            Ok(received) => summary.applied += received.applied.len(),
-            Err(ReceiveError::Invalid(_)) => summary.rejected += 1,
-            Err(ReceiveError::Store(error)) => return Err(error),
-        }
-    }
-    Ok(summary)
+    let received = replica.receive_batch(events)?;
+    Ok(ReceiveSummary {
+        applied: received.applied,
+        rejected: received.rejected,
+    })
 }
 
 pub fn is_bound<S: EventStore>(replica: &Replica<S>, device: DeviceKey) -> bool {

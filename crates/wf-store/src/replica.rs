@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use wf_core::event::{Event, EventBody, EventError};
 use wf_core::id::EventId;
 use wf_core::identity::{Actor, DeviceSigner};
@@ -36,6 +38,13 @@ pub enum AuthorError {
     Sign(#[from] EventError),
     #[error(transparent)]
     Receive(#[from] ReceiveError),
+}
+
+/// What a batch of received events did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BatchReceived {
+    pub applied: usize,
+    pub rejected: usize,
 }
 
 /// A local replica: the durable log plus the state folded from it.
@@ -113,6 +122,59 @@ impl<S: EventStore> Replica<S> {
         Ok(received)
     }
 
+    /// Receives many events and persists the outcome once, which is much cheaper than one commit
+    /// (and snapshot) per event when a peer sends a long log. Events that are invalid are counted
+    /// and dropped.
+    pub fn receive_batch(&mut self, events: Vec<Event>) -> Result<BatchReceived, StoreError> {
+        let mut applied: Vec<Event> = Vec::new();
+        let mut parked: Vec<Event> = Vec::new();
+        let mut released: Vec<EventId> = Vec::new();
+        let mut rejected = 0;
+        for event in events {
+            match self.state.receive(event.clone(), Trust::Untrusted) {
+                Ok(received) => {
+                    released.extend(received.applied.iter().map(Event::id));
+                    released.extend(received.rejected.iter().map(|(id, _)| *id));
+                    rejected += received.rejected.len();
+                    if received.disposition == Disposition::Pending {
+                        parked.push(event);
+                    }
+                    applied.extend(received.applied);
+                }
+                Err(_) => rejected += 1,
+            }
+        }
+        let released: BTreeSet<EventId> = released.into_iter().collect();
+        parked.retain(|event| !released.contains(&event.id()));
+        let released: Vec<EventId> = released.into_iter().collect();
+        let applied_count = applied.len();
+        if applied.is_empty() && parked.is_empty() && released.is_empty() {
+            return Ok(BatchReceived {
+                applied: 0,
+                rejected,
+            });
+        }
+        let due = self.snapshot_due();
+        let snapshot = due.then(|| self.snapshot()).transpose()?;
+        self.store.commit(Commit {
+            append: &applied,
+            pending: PendingChange::Update {
+                put: &parked,
+                remove: &released,
+            },
+            snapshot: snapshot
+                .as_ref()
+                .map_or(SnapshotChange::Keep, SnapshotChange::Replace),
+        })?;
+        if snapshot.is_some() {
+            self.snapshot_event_count = self.state.event_count();
+        }
+        Ok(BatchReceived {
+            applied: applied_count,
+            rejected,
+        })
+    }
+
     /// Checks the policy rules, signs the next event of `signer` and persists it. Refuses when
     /// another event exists under the same key: this device was cloned or restored from a
     /// snapshot, and writing on would fork its feed further.
@@ -158,7 +220,7 @@ impl<S: EventStore> Replica<S> {
         let parked_events = [submitted.clone()];
         let put: &[Event] = if parked { &parked_events } else { &[] };
 
-        let due = self.state.event_count() >= self.snapshot_event_count + SNAPSHOT_INTERVAL;
+        let due = self.snapshot_due();
         let snapshot = due.then(|| self.snapshot()).transpose()?;
         self.store.commit(Commit {
             append: &received.applied,
@@ -174,6 +236,13 @@ impl<S: EventStore> Replica<S> {
             self.snapshot_event_count = self.state.event_count();
         }
         Ok(())
+    }
+
+    /// A snapshot costs as much as the state is large, so the larger it is the longer the wait:
+    /// writing one per few hundred events would make a long log quadratic to take in.
+    fn snapshot_due(&self) -> bool {
+        let interval = SNAPSHOT_INTERVAL.max(self.snapshot_event_count / 8);
+        self.state.event_count() >= self.snapshot_event_count + interval
     }
 
     fn snapshot(&self) -> Result<StoredSnapshot, StoreError> {
