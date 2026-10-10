@@ -82,7 +82,12 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             let workspace = Workspace::open(data, cwd, refold)?;
             emit(
                 json,
-                &view::status(workspace.state(), refold),
+                &view::status(
+                    workspace.state(),
+                    Some(workspace.device_key()),
+                    &workspace.last_seen(),
+                    refold,
+                ),
                 render::status,
             )
         }

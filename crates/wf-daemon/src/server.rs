@@ -95,7 +95,6 @@ async fn call(
                 .await
                 .map_err(closed)?
                 .map_err(|error| error.to_string())?;
-            loaded.nudge.notify_one();
             Ok(Response::Authored(event))
         }
         Call::SyncNow => {

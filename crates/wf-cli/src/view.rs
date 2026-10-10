@@ -481,11 +481,25 @@ pub struct StatusView {
     pub heads: usize,
     pub items_by_category: std::collections::BTreeMap<String, usize>,
     pub archived_items: usize,
+    pub devices: Vec<DeviceStatus>,
     pub flagged: Vec<String>,
     pub refolded: bool,
 }
 
-pub fn status(state: &State, refolded: bool) -> StatusView {
+#[derive(Serialize)]
+pub struct DeviceStatus {
+    pub name: String,
+    pub this_device: bool,
+    /// Only a running daemon knows.
+    pub last_seen: Option<String>,
+}
+
+pub fn status(
+    state: &State,
+    own: Option<wf_core::identity::DeviceKey>,
+    last_seen: &std::collections::BTreeMap<wf_core::identity::DeviceKey, u64>,
+    refolded: bool,
+) -> StatusView {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let graph = state.dependency_graph();
     let mut by_category = std::collections::BTreeMap::new();
@@ -519,6 +533,24 @@ pub fn status(state: &State, refolded: bool) -> StatusView {
             device.fmt_short()
         ));
     }
+    for info in state.devices().filter(|info| info.invite_redeemed_twice) {
+        flagged.insert(format!(
+            "device {} was bound with an invite that two devices used; `wf fork --exclude` removes one",
+            device_label(state, info.device)
+        ));
+    }
+    let devices = state
+        .devices()
+        .map(|info| DeviceStatus {
+            name: info
+                .profile
+                .map_or_else(|| info.device.fmt_short(), |profile| profile.name.clone()),
+            this_device: Some(info.device) == own,
+            last_seen: last_seen
+                .get(&info.device)
+                .map(|millis| timestamp_ms(*millis)),
+        })
+        .collect();
     StatusView {
         name: state.name().unwrap_or_default().to_string(),
         id: state
@@ -535,6 +567,7 @@ pub fn status(state: &State, refolded: bool) -> StatusView {
         heads: state.heads().len(),
         items_by_category: by_category,
         archived_items,
+        devices,
         flagged: flagged.into_iter().collect(),
         refolded,
     }

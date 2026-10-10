@@ -11,7 +11,7 @@ use tokio::task::JoinSet;
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceKey;
 use wf_core::state::State;
-use wf_net::{NetError, Node, SyncLog, SyncReport};
+use wf_net::{HeadsTopic, Heard, NetError, Node, SyncLog, SyncReport, heads_digest};
 
 use crate::storage::StorageHandle;
 
@@ -154,57 +154,141 @@ impl Backoff {
             .min(LONGEST_RETRY);
         self.retry_at = Some(now + delay);
     }
+
+    /// How long to wait before the next attempt: until the retry time of a device that failed,
+    /// and a periodic round otherwise.
+    fn wait(&self, now: Instant) -> Duration {
+        self.retry_at
+            .map_or(PERIODIC_ROUND, |at| at.saturating_duration_since(now))
+    }
 }
 
-/// Syncs a workforce with its other devices when something changes and now and then in between,
-/// leaving unreachable devices alone for longer each time they fail.
+/// Keeps one device in sync: right away, whenever the heads here change and a minute after the
+/// last time. A device that cannot be reached is left alone for longer each time, unless it
+/// announces itself over gossip.
+async fn keep_in_sync(
+    node: Arc<Node<StorageHandle>>,
+    workforce: WorkforceId,
+    storage: StorageHandle,
+    device: DeviceKey,
+    presence: Presence,
+    kick: Arc<Notify>,
+) {
+    let mut heads = storage.watch_heads();
+    let mut backoff = Backoff::default();
+    loop {
+        let label = peer_label_of(&storage, device).await;
+        let results = sync_all(&node, workforce, vec![(device, label)], Some(&presence)).await;
+        let reached = results.iter().all(PeerSync::reached);
+        backoff.record(reached, Instant::now());
+        loop {
+            tokio::select! {
+                _ = kick.notified() => {
+                    backoff = Backoff::default();
+                    break;
+                }
+                changed = heads.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(SETTLE).await;
+                    heads.borrow_and_update();
+                    if backoff.ready(Instant::now()) {
+                        break;
+                    }
+                }
+                _ = tokio::time::sleep(backoff.wait(Instant::now())) => break,
+            }
+        }
+    }
+}
+
+/// Keeps a workforce in touch with its other devices: one task per device, gossip to announce
+/// our heads and to hear theirs.
 pub async fn run_peer_loop(
     node: Arc<Node<StorageHandle>>,
     workforce: WorkforceId,
     storage: StorageHandle,
     presence: Presence,
-    nudge: Arc<Notify>,
 ) {
     let mut heads = storage.watch_heads();
     let own = node.device();
-    let mut backoff: BTreeMap<DeviceKey, Backoff> = BTreeMap::new();
+    let mut syncers: BTreeMap<DeviceKey, Arc<Notify>> = BTreeMap::new();
+    let mut tasks = JoinSet::new();
+    let mut topic: Option<HeadsTopic> = None;
     loop {
-        let peers = match storage
-            .with(move |replica| {
-                let state = replica.state();
-                peers_of(state, own)
-                    .into_iter()
-                    .map(|device| (device, peer_label(state, device)))
-                    .collect::<Vec<_>>()
-            })
+        let Ok(devices) = storage
+            .with(move |replica| peers_of(replica.state(), own))
             .await
-        {
-            Ok(peers) => peers,
-            Err(_) => return,
+        else {
+            return;
         };
-        let now = Instant::now();
-        let due: Vec<_> = peers
-            .into_iter()
-            .filter(|(device, _)| backoff.entry(*device).or_default().ready(now))
-            .collect();
-        for result in sync_all(&node, workforce, due, Some(&presence)).await {
-            backoff
-                .entry(result.device)
-                .or_default()
-                .record(result.reached(), Instant::now());
+        for device in &devices {
+            syncers.entry(*device).or_insert_with(|| {
+                let kick = Arc::new(Notify::new());
+                tasks.spawn(keep_in_sync(
+                    Arc::clone(&node),
+                    workforce,
+                    storage.clone(),
+                    *device,
+                    presence.clone(),
+                    Arc::clone(&kick),
+                ));
+                kick
+            });
         }
-        tokio::select! {
-            changed = heads.changed() => {
-                if changed.is_err() {
-                    return;
-                }
-                tokio::time::sleep(SETTLE).await;
-                heads.borrow_and_update();
+        match &topic {
+            Some(topic) => {
+                let _ = topic.join(&devices).await;
             }
-            _ = nudge.notified() => {}
-            _ = tokio::time::sleep(PERIODIC_ROUND) => {}
+            None => topic = node.heads_topic(&workforce, &devices).await.ok(),
+        }
+        let current = heads.borrow().clone();
+        if let Some(topic) = &topic {
+            let _ = topic.announce(&current).await;
+        }
+
+        loop {
+            tokio::select! {
+                changed = heads.changed() => {
+                    if changed.is_err() {
+                        return;
+                    }
+                    tokio::time::sleep(SETTLE).await;
+                    heads.borrow_and_update();
+                    break;
+                }
+                _ = tokio::time::sleep(PERIODIC_ROUND) => break,
+                heard = next_heard(&mut topic) => {
+                    let Some(heard) = heard else {
+                        topic = None;
+                        break;
+                    };
+                    let Some(kick) = syncers.get(&heard.device) else {
+                        continue;
+                    };
+                    presence.saw(heard.device);
+                    if heard.digest != heads_digest(&heads.borrow()) {
+                        kick.notify_one();
+                    }
+                }
+            }
         }
     }
+}
+
+async fn next_heard(topic: &mut Option<HeadsTopic>) -> Option<Heard> {
+    match topic {
+        Some(topic) => topic.heard.recv().await,
+        None => std::future::pending().await,
+    }
+}
+
+async fn peer_label_of(storage: &StorageHandle, device: DeviceKey) -> String {
+    storage
+        .with(move |replica| peer_label(replica.state(), device))
+        .await
+        .unwrap_or_else(|_| device.fmt_short())
 }
 
 fn peer_label(state: &State, device: DeviceKey) -> String {
@@ -218,6 +302,16 @@ fn peer_label(state: &State, device: DeviceKey) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn waiting_is_a_periodic_round_until_a_failure_sets_a_retry_time() {
+        let now = Instant::now();
+        let mut backoff = Backoff::default();
+        assert_eq!(backoff.wait(now), PERIODIC_ROUND);
+        backoff.record(false, now);
+        assert_eq!(backoff.wait(now), FIRST_RETRY);
+        assert_eq!(backoff.wait(now + FIRST_RETRY * 2), Duration::ZERO);
+    }
 
     #[test]
     fn unreachable_devices_are_retried_later_each_time() {

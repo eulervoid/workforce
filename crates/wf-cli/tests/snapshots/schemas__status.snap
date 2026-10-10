@@ -1,6 +1,6 @@
 ---
 source: crates/wf-cli/tests/schemas.rs
-expression: "Envelope::new(view::status(&scenario.state, false))"
+expression: "Envelope::new(view::status(&scenario.state, None, &Default::default(), false))"
 ---
 {
   "schema": 1,
@@ -19,6 +19,18 @@ expression: "Envelope::new(view::status(&scenario.state, false))"
       "open": 2
     },
     "archived_items": 1,
+    "devices": [
+      {
+        "name": "2bc2800b33",
+        "this_device": false,
+        "last_seen": null
+      },
+      {
+        "name": "43a72e7144",
+        "this_device": false,
+        "last_seen": null
+      }
+    ],
     "flagged": [],
     "refolded": false
   }

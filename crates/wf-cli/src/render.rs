@@ -408,6 +408,16 @@ pub fn status(view: &StatusView) -> String {
         },
         view.archived_items
     );
+    let devices: Vec<String> = view
+        .devices
+        .iter()
+        .map(|device| match (&device.last_seen, device.this_device) {
+            (_, true) => format!("{} (this)", device.name),
+            (Some(seen), false) => format!("{} (seen {seen})", device.name),
+            (None, false) => device.name.clone(),
+        })
+        .collect();
+    let _ = writeln!(out, "devices: {}", devices.join(", "));
     for flag in &view.flagged {
         let _ = writeln!(out, "! {flag}");
     }

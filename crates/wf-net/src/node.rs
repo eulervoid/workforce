@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::{Connection, presets};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
@@ -12,6 +13,7 @@ use wf_core::id::WorkforceId;
 use wf_core::identity::{DeviceKey, DeviceSigner};
 use wf_core::invite::{InviteCode, JoinRefusal};
 
+use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::SyncLog;
 use crate::sync::{SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
@@ -34,6 +36,8 @@ pub enum NetError {
         #[source]
         source: SyncError,
     },
+    #[error("gossip failed: {0}")]
+    Gossip(String),
     #[error("workforce {0} is not served here")]
     NotServed(WorkforceId),
     #[error("{peer} refused the join: {reason}")]
@@ -153,13 +157,46 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for SyncHandler<L> {
     }
 }
 
+/// Lets a protocol handler through only for devices that are bound in a workforce served here.
+struct MembersOnly<H, L> {
+    inner: H,
+    registry: Registry<L>,
+}
+
+impl<H: std::fmt::Debug, L> std::fmt::Debug for MembersOnly<H, L> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(formatter, "MembersOnly({:?})", self.inner)
+    }
+}
+
+impl<H: ProtocolHandler, L: SyncLog + Clone + 'static> ProtocolHandler for MembersOnly<H, L> {
+    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+        if !self
+            .registry
+            .is_member(device_key(connection.remote_id()))
+            .await
+        {
+            connection.close(FORBIDDEN.into(), b"not a member");
+            return Ok(());
+        }
+        self.inner.accept(connection).await
+    }
+
+    async fn shutdown(&self) {
+        self.inner.shutdown().await;
+    }
+}
+
 pub struct Node<L: SyncLog + Clone + 'static> {
     router: Router,
     registry: Registry<L>,
+    gossip: iroh_gossip::Gossip,
+    lookup: MemoryLookup,
 }
 
 impl<L: SyncLog + Clone + 'static> Node<L> {
     pub async fn start(device: &DeviceSigner, network: Network) -> Result<Self, NetError> {
+        let lookup = MemoryLookup::new();
         let builder = match network {
             Network::Internet => Endpoint::builder(presets::N0),
             Network::InternetWithRelay(url) => {
@@ -167,14 +204,23 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             }
             Network::Direct => Endpoint::builder(presets::Minimal).relay_mode(RelayMode::Disabled),
         }
-        .secret_key(SecretKey::from_bytes(&device.to_bytes()));
+        .secret_key(SecretKey::from_bytes(&device.to_bytes()))
+        .address_lookup(lookup.clone());
         let endpoint = builder
             .bind()
             .await
             .map_err(|error| NetError::Bind(error.to_string()))?;
         let registry = Registry::new();
+        let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
         let router = Router::builder(endpoint)
             .accept(SYNC_ALPN, SyncHandler(registry.clone()))
+            .accept(
+                GOSSIP_ALPN,
+                MembersOnly {
+                    inner: gossip.clone(),
+                    registry: registry.clone(),
+                },
+            )
             .accept(
                 JOIN_ALPN,
                 JoinHandler {
@@ -183,7 +229,12 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
                 },
             )
             .spawn();
-        Ok(Self { router, registry })
+        Ok(Self {
+            router,
+            registry,
+            gossip,
+            lookup,
+        })
     }
 
     pub fn endpoint(&self) -> &Endpoint {
@@ -203,6 +254,27 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .fold(EndpointAddr::new(self.endpoint().id()), |addr, socket| {
                 addr.with_ip_addr(std::net::SocketAddr::new(loopback.into(), socket.port()))
             })
+    }
+
+    /// Remembers where a device can be reached, for peers address lookup does not know.
+    pub fn remember(&self, addr: EndpointAddr) {
+        self.lookup.add_endpoint_info(addr);
+    }
+
+    /// Joins the heads topic of a workforce, starting from `peers`.
+    pub async fn heads_topic(
+        &self,
+        workforce: &WorkforceId,
+        peers: &[DeviceKey],
+    ) -> Result<HeadsTopic, NetError> {
+        let bootstrap = peers.iter().map(|peer| endpoint_id(*peer)).collect();
+        let (sender, receiver) = self
+            .gossip
+            .subscribe(topic_id(workforce), bootstrap)
+            .await
+            .map_err(|error| NetError::Gossip(error.to_string()))?
+            .split();
+        Ok(HeadsTopic::new(sender, receiver, self.device()))
     }
 
     pub fn serve(&self, workforce: WorkforceId, log: L) {

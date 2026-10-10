@@ -111,7 +111,12 @@ fn events_and_status() {
     insta::assert_json_snapshot!("log", Envelope::new(&events));
     insta::assert_json_snapshot!(
         "status",
-        Envelope::new(view::status(&scenario.state, false))
+        Envelope::new(view::status(
+            &scenario.state,
+            None,
+            &Default::default(),
+            false
+        ))
     );
     insta::assert_json_snapshot!("agents", Envelope::new(view::agent_views(&scenario.state)));
     let _ = scenario.done;

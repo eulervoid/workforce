@@ -7,7 +7,10 @@ license.workspace = true
 [dependencies]
 wf-core.workspace = true
 wf-store.workspace = true
+blake3.workspace = true
 iroh.workspace = true
+iroh-gossip.workspace = true
+n0-future.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

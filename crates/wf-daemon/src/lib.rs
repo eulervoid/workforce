@@ -14,7 +14,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use tokio::net::UnixListener;
-use tokio::sync::Notify;
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceSigner;
 use wf_net::{NetError, Network, Node};
@@ -52,7 +51,6 @@ pub struct Config {
 
 pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
-    pub(crate) nudge: Arc<Notify>,
 }
 
 pub struct Daemon {
@@ -121,16 +119,14 @@ impl Daemon {
             return Err(DaemonError::UnknownWorkforce(id));
         }
         let storage = StorageHandle::spawn(replica);
-        let nudge = Arc::new(Notify::new());
         self.node.serve(id, storage.clone());
         tokio::spawn(peers::run_peer_loop(
             Arc::clone(&self.node),
             id,
             storage.clone(),
             self.presence.clone(),
-            Arc::clone(&nudge),
         ));
-        let entry = Arc::new(Loaded { storage, nudge });
+        let entry = Arc::new(Loaded { storage });
         loaded.insert(id, Arc::clone(&entry));
         Ok(entry)
     }

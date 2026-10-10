@@ -255,3 +255,79 @@ mod joining {
         invited.member.shutdown().await;
     }
 }
+
+mod gossip {
+    use std::collections::BTreeSet;
+    use std::time::Duration;
+
+    use wf_core::id::EventId;
+    use wf_net::heads_digest;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn devices_hear_each_others_heads() {
+        let fixture = Fixture::new(2);
+        let (first, second) = (replica(&fixture), replica(&fixture));
+        let laptop = node(&fixture, &fixture.devices[0], &first).await;
+        let vm = node(&fixture, &fixture.devices[1], &second).await;
+        laptop.remember(vm.local_addr());
+        vm.remember(laptop.local_addr());
+
+        let workforce = fixture.workforce();
+        let laptop_topic = laptop
+            .heads_topic(&workforce, &[vm.device()])
+            .await
+            .unwrap();
+        let mut vm_topic = vm
+            .heads_topic(&workforce, &[laptop.device()])
+            .await
+            .unwrap();
+
+        let heads = BTreeSet::from([EventId::of(b"head")]);
+        let heard = tokio::time::timeout(Duration::from_secs(20), async {
+            loop {
+                laptop_topic.announce(&heads).await.unwrap();
+                if let Ok(Some(heard)) =
+                    tokio::time::timeout(Duration::from_millis(500), vm_topic.heard.recv()).await
+                {
+                    return heard;
+                }
+            }
+        })
+        .await
+        .expect("the announcement arrives");
+        assert_eq!(heard.device, laptop.device());
+        assert_eq!(heard.digest, heads_digest(&heads));
+
+        laptop.shutdown().await;
+        vm.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn gossip_from_devices_that_are_not_bound_is_refused() {
+        let fixture = Fixture::new(1);
+        let served = replica(&fixture);
+        let member = node(&fixture, &fixture.devices[0], &served).await;
+        let stranger_signer = DeviceSigner::from_bytes(&[201; 32]).unwrap();
+        let stranger = node(&fixture, &stranger_signer, &replica(&fixture)).await;
+        stranger.remember(member.local_addr());
+        member.remember(stranger.local_addr());
+
+        let workforce = fixture.workforce();
+        let mut member_topic = member.heads_topic(&workforce, &[]).await.unwrap();
+        let stranger_topic = stranger
+            .heads_topic(&workforce, &[member.device()])
+            .await
+            .unwrap();
+        let heads = BTreeSet::from([EventId::of(b"head")]);
+        for _ in 0..6 {
+            stranger_topic.announce(&heads).await.unwrap();
+            let heard =
+                tokio::time::timeout(Duration::from_millis(400), member_topic.heard.recv()).await;
+            assert!(heard.is_err(), "nothing gets through from a stranger");
+        }
+        stranger.shutdown().await;
+        member.shutdown().await;
+    }
+}

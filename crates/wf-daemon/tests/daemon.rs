@@ -169,3 +169,77 @@ async fn a_second_daemon_on_the_same_socket_is_refused() {
     let result = second.serve(std::future::pending()).await;
     assert!(matches!(result, Err(DaemonError::AlreadyRunning(_))));
 }
+
+async fn start_peer(
+    fixture: &Fixture,
+    device: usize,
+) -> (TempDir, Arc<Daemon>, std::path::PathBuf) {
+    let directory = TempDir::new().unwrap();
+    let store_directory = directory.path().join(fixture.workforce().to_string());
+    std::fs::create_dir_all(&store_directory).unwrap();
+    let mut replica =
+        Replica::open(RedbStore::open(store_directory.join(STORE_FILE)).unwrap()).unwrap();
+    replica.receive(fixture.genesis.clone()).unwrap();
+    drop(replica);
+    let socket = directory.path().join("daemon.sock");
+    let daemon = Daemon::start(
+        Config {
+            data_dir: directory.path().to_path_buf(),
+            socket: socket.clone(),
+            network: Network::Direct,
+        },
+        fixture.devices[device].clone(),
+    )
+    .await
+    .unwrap();
+    tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
+    for _ in 0..100 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    (directory, daemon, socket)
+}
+
+#[tokio::test]
+async fn daemons_of_two_devices_converge_on_their_own() {
+    let fixture = Fixture::new(2);
+    let (_first_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
+    let (_second_dir, vm, vm_socket) = start_peer(&fixture, 1).await;
+    laptop.node().remember(vm.node().local_addr());
+    vm.node().remember(laptop.node().local_addr());
+    let workforce = fixture.workforce();
+    let actor = fixture.founder_actor();
+
+    let written = {
+        let socket = laptop_socket.clone();
+        blocking(move || {
+            connect(&socket)
+                .author(workforce, actor, create("task", "written on the laptop"))
+                .unwrap()
+        })
+        .await
+    };
+
+    let mut arrived = false;
+    for _ in 0..200 {
+        let socket = vm_socket.clone();
+        let state = blocking(move || connect(&socket).state(workforce).unwrap()).await;
+        if state.contains(&written.id()) {
+            arrived = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(arrived, "the vm's daemon received the event by itself");
+
+    let seen = {
+        let socket = laptop_socket.clone();
+        blocking(move || connect(&socket).last_seen(workforce).unwrap()).await
+    };
+    assert!(
+        seen.iter().any(|(device, _)| *device == vm.device()),
+        "the laptop knows when it last saw the vm"
+    );
+}
