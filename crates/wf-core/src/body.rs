@@ -52,6 +52,8 @@ fn normalize(text: &str) -> String {
 pub enum BodyError {
     #[error("the step \"{0}\" appears twice; steps need different text")]
     DuplicateStep(String),
+    #[error("the step \"{0}\" cannot be nested in another element")]
+    NestedStep(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -83,8 +85,8 @@ pub struct Body {
 }
 
 impl Body {
-    /// Splits `text` at the task-list items that are not nested in anything else. Items in
-    /// quotes, in lists inside items and in code blocks stay markdown.
+    /// Splits `text` at its task-list items, which must not be nested in anything else:
+    /// a checklist in a quote or inside a list item is an error. Code blocks are not checklists.
     pub fn parse(text: &str) -> Result<Self, BodyError> {
         let mut parts = Vec::new();
         let mut seen = BTreeSet::new();
@@ -102,10 +104,14 @@ impl Body {
                 Event::End(_) => {
                     open_lists.pop();
                 }
-                // The marker comes first in the item, in a paragraph if the list is loose.
-                Event::TaskListMarker(done)
-                    if matches!(open_lists.as_slice(), [true, false] | [true, false, false]) =>
+                Event::TaskListMarker(_)
+                    if !matches!(open_lists.as_slice(), [true, false] | [true, false, false]) =>
                 {
+                    let line = text[range.end..].lines().next().unwrap_or_default();
+                    return Err(BodyError::NestedStep(normalize(line)));
+                }
+                // The marker comes first in the item, in a paragraph if the list is loose.
+                Event::TaskListMarker(done) => {
                     let step = text[range.end..top_level_item.end].trim();
                     if step.is_empty() {
                         continue;
@@ -269,11 +275,8 @@ mod tests {
     #[test]
     fn a_step_keeps_what_is_nested_in_it() {
         assert_eq!(
-            parts("- [ ] a\n  - [ ] not a step\n  - detail\n- [ ] b\n"),
-            [
-                step("a\n  - [ ] not a step\n  - detail", false),
-                step("b", false)
-            ]
+            parts("- [ ] a\n  - detail\n- [ ] b\n"),
+            [step("a\n  - detail", false), step("b", false)]
         );
     }
 
@@ -286,9 +289,27 @@ mod tests {
     }
 
     #[test]
-    fn task_items_in_quotes_and_code_are_not_steps() {
-        let text = "> - [ ] quoted\n\n```\n- [ ] code\n```\n";
-        let body = Body::parse(text).unwrap();
+    fn checklists_nested_in_other_elements_are_rejected() {
+        for text in [
+            "> - [ ] quoted",
+            "- [ ] a\n  - [ ] sub-step",
+            "- plain\n  - [x] nested",
+            "1. > - [ ] deep",
+        ] {
+            assert!(
+                matches!(Body::parse(text), Err(BodyError::NestedStep(_))),
+                "{text:?}"
+            );
+        }
+        assert_eq!(
+            Body::parse("> - [ ] quoted"),
+            Err(BodyError::NestedStep("quoted".into()))
+        );
+    }
+
+    #[test]
+    fn task_markers_in_code_are_text() {
+        let body = Body::parse("```\n- [ ] code\n```\n\n`- [ ] inline`\n").unwrap();
         assert_eq!(body.steps().count(), 0);
         assert_eq!(body.parts().len(), 1);
     }
@@ -328,7 +349,7 @@ mod tests {
             "- [ ] a\n  - nested\n- plain\n- [x] b\n\n\n\ntail",
             "1. [ ] a\n\n   second paragraph\n2. [x] b",
             "intro\n- [ ] a\n",
-            "- [ ] a\nlazy continuation\n\n> - [ ] quoted",
+            "- [ ] a\nlazy continuation\n\n> plain quote",
         ] {
             let body = Body::parse(text).unwrap();
             let rendered = body.render();
