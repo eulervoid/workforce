@@ -8,5 +8,6 @@ pub mod interactive;
 pub mod keys;
 pub mod network;
 pub mod render;
+pub mod session;
 pub mod view;
 pub mod workspace;

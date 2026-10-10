@@ -43,6 +43,9 @@ pub enum Command {
     Policy(PolicyCommand),
     /// Print every event of the log, verified.
     Log,
+    /// Run an agent harness on a prompt and follow its transcript.
+    #[command(subcommand)]
+    Session(SessionCommand),
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
     /// Run the background process of this machine: it serves sync and join to your other
@@ -72,6 +75,45 @@ pub enum Command {
         #[arg(long)]
         refold: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum SessionCommand {
+    /// Run one prompt on a harness in a directory and record the transcript.
+    Run(SessionRunArgs),
+    /// Print a transcript and follow it while the agent is still writing.
+    Watch(SessionWatchArgs),
+}
+
+#[derive(Args)]
+pub struct SessionRunArgs {
+    /// The harness to start, such as `opencode`.
+    #[arg(long)]
+    pub harness: HarnessName,
+    /// Where the transcript is appended, one JSON object per line.
+    #[arg(long, value_name = "FILE")]
+    pub transcript: PathBuf,
+    /// The directory the agent works in. Defaults to the current directory.
+    #[arg(long, value_name = "DIR")]
+    pub directory: Option<PathBuf>,
+    /// How the permission requests of the agent are answered.
+    #[arg(long, value_enum)]
+    pub permissions: Permissions,
+    pub prompt: String,
+}
+
+#[derive(Clone, Copy, ValueEnum)]
+pub enum Permissions {
+    Allow,
+    Deny,
+}
+
+#[derive(Args)]
+pub struct SessionWatchArgs {
+    pub transcript: PathBuf,
+    /// Print what is there and stop, instead of waiting for more.
+    #[arg(long)]
+    pub no_follow: bool,
 }
 
 #[derive(Args)]
