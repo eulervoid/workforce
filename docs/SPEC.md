@@ -178,9 +178,9 @@ need different capabilities.
   Blocked | TimedOut | Failed | Cancelled`.
 * One branch per **item** (`wf/<item>`) in one worktree. A session is an attempt: the next session on the
   item (after a release, a crash or requested changes) continues the branch.
-* A work session ends when the agent submits (`wf submit`), releases (`wf release`), escalates by moving
+* A work session ends when the agent submits (`wf work submit`), releases (`wf work release`), escalates by moving
   its item to a blocked state, or runs out of nudges or time. Waiting on a dependency, such as its own
-  question (`wf ask`), **parks** it: the harness keeps its conversation and continues once the item is
+  question (`wf work ask`), **parks** it: the harness keeps its conversation and continues once the item is
   ready again, or ends after the agent's `park_timeout`.
 * Context carries over within a session in the conversation, and across sessions through the progress
   log, comments and review notes.
@@ -614,7 +614,7 @@ Types the code relies on. Shipped in the default policy, names reserved, states 
 | Type | States (category) | Purpose |
 |---|---|---|
 | `task` | backlog (inactive), open, in_progress (active), in_review (blocked), done, dropped (cancelled) | default unit of work; what agent sessions are assigned |
-| `question` | open, needs_human (blocked), answered (done), dropped (cancelled) | an agent that needs an answer asks with `wf ask`: the question is created, its item depends on it, and its session parks until it is answered. Questions go to the `supervision` lane, where a supervisor answers or moves them to `needs_human`; `initial = "needs_human"` sends them straight to the human |
+| `question` | open, needs_human (blocked), answered (done), dropped (cancelled) | an agent that needs an answer asks with `wf work ask`: the question is created, its item depends on it, and its session parks until it is answered. Questions go to the `supervision` lane, where a supervisor answers or moves them to `needs_human`; `initial = "needs_human"` sends them straight to the human |
 | `decision` | proposed (blocked), ratified (done), rejected (cancelled), superseded (done) | project decisions; only `ratified` enters agent context |
 | `distill` | open, in_progress (active), done | system-created meta work in the `meta` lane |
 
@@ -765,7 +765,7 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
 * An item names a level in its `review` field, defaulting to its type's `review`. No level means no
   review. The planner, a supervisor or the working agent set it; a session may raise it but not lower it
   for an item its agent worked on.
-* Submitting (`wf submit`) moves the item to its type's blocked state and starts the level's first step.
+* Submitting (`wf work submit`) moves the item to its type's blocked state and starts the level's first step.
   Steps run in order. A reviewer agent is always a different agent from the ones that worked on the
   item.
 * Verdicts: `Approve` moves on to the next step; `RequestChanges` moves the item back to its open state,
@@ -812,7 +812,7 @@ struct ParsedNotes { parser: u16, decisions: Vec<String>, project_decisions: Vec
 * Attribution comes from the event signature, not the git author.
 * Redaction happens before signing.
 * Convention (docs and agent instructions, not code): `Decision:` and `Project-Decision:` trailers.
-* `wf progress "..."` for notes without a commit.
+* `wf work progress "..."` for notes without a commit.
 * `wf activity` is a live feed. When two live sessions' `touches` overlap, both sessions get an inbox entry.
 * Sessions check their inbox after each commit; that is where comments and overlap notices arrive.
 
@@ -856,7 +856,7 @@ handles harness credentials.
 
 | Situation | Next |
 |---|---|
-| the session ended (`wf submit`, `wf release`) or the item entered a blocked state | close the harness |
+| the session ended (`wf work submit`, `wf work release`) or the item entered a blocked state | close the harness |
 | the item waits on a dependency (its question) | park; prompt again with the answers once the item is ready, end `TimedOut` after `park_timeout` |
 | otherwise, nudges left | prompt "continue": submit, ask or release when done or stuck |
 | `nudges` turns in a row without a new commit | end `Released`, with a comment |
@@ -1018,13 +1018,14 @@ wf device list|edit                       # name, hardware, hosted agents, max_s
 wf agent add|list|edit                    # profiles: harness, model, capabilities, lanes, autonomy
 wf session start|list|show|stop|watch     # live and recent sessions, transcripts
 wf session allow|deny <session>           # answer a held permission request
-wf submit | ask <question> | release      # agents, inside a session
+wf work submit | ask <question> | release  # agents, inside a session
 wf daemon | sync | status | log | export
 wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
 wf item add|list|show|edit|move|link|archive|diff   # all types: task, question, decision, ...
 wf comment <item> <text>
-wf progress "<text>" | activity | inbox
+wf work progress "<text>"
+wf activity | inbox
 wf review <item> --approve|--request-changes|--escalate
 wf search <query>
 ```
