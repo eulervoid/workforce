@@ -97,7 +97,7 @@ fn history_not_named_yet_is_refused_until_a_descendant_names_it() {
     let oldest = &scenario.history[1];
     let result = state.receive(oldest.clone(), Trust::Untrusted);
     assert!(
-        matches!(result, Err(Invalid::NotInForkPrefix(_))),
+        matches!(result, Err(Invalid::NotInForkHistory(_))),
         "{result:?}"
     );
     assert_eq!(state.event_count(), 1);
@@ -120,7 +120,7 @@ fn parent_events_after_the_fork_point_are_never_admitted() {
     );
     let result = state.receive(after.clone(), Trust::Untrusted);
     assert!(
-        matches!(result, Err(Invalid::NotInForkPrefix(_))),
+        matches!(result, Err(Invalid::NotInForkHistory(_))),
         "{result:?}"
     );
     assert!(!state.contains(&after.id()));

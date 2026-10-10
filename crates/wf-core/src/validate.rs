@@ -16,7 +16,7 @@ use crate::id::{EventId, ItemId, WorkforceId};
 use crate::identity::{Actor, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, StateName, TypeName};
 use crate::policy::{Category, Field, Policy, PolicyError};
-use crate::state::{Disposition, MAX_PENDING, Received, State, Trust, Waiting};
+use crate::state::{Disposition, MAX_PENDING, Origin, Received, State, Trust, Waiting};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GenesisError {
@@ -53,7 +53,7 @@ pub enum Invalid {
     #[error("this workforce already has a genesis")]
     DuplicateGenesis,
     #[error("an event of {0} that is not part of the history this fork was made from")]
-    NotInForkPrefix(WorkforceId),
+    NotInForkHistory(WorkforceId),
     #[error("invalid genesis: {0}")]
     Genesis(#[from] GenesisError),
     #[error("seq {got} from {author} is not valid here, expected {expected}")]
@@ -136,9 +136,7 @@ pub enum PolicyViolation {
 }
 
 enum Admission {
-    Apply,
-    /// History of the workforce this one was forked from.
-    ApplyPrefix,
+    Apply(Origin),
     Wait(Waiting),
     Duplicate,
 }
@@ -163,10 +161,10 @@ impl State {
             let id = event.id();
             let is_submitted = id == submitted;
             match self.admit(&event, trust) {
-                Ok(admission @ (Admission::Apply | Admission::ApplyPrefix)) => {
-                    let prefix = matches!(admission, Admission::ApplyPrefix);
-                    let is_genesis = !prefix && matches!(event.content.body, EventBody::Genesis(_));
-                    self.apply(&event, id, prefix);
+                Ok(Admission::Apply(origin)) => {
+                    let is_genesis = origin == Origin::Own
+                        && matches!(event.content.body, EventBody::Genesis(_));
+                    self.apply(&event, id, origin);
                     if is_submitted {
                         received.disposition = Disposition::Applied;
                     }
@@ -221,13 +219,13 @@ impl State {
         }
 
         let Some(workforce) = &self.workforce else {
-            return match &content.body {
-                EventBody::Genesis(_) => {
+            return match (&content.body, content.workforce) {
+                (EventBody::Genesis(_), _) => {
                     self.admit_genesis(event, trust)?;
-                    Ok(Admission::Apply)
+                    Ok(Admission::Apply(Origin::Own))
                 }
-                _ if content.workforce.is_none() => Err(Invalid::MissingWorkforce),
-                _ => Ok(Admission::Wait(Waiting::Genesis)),
+                (_, None) => Err(Invalid::MissingWorkforce),
+                (_, Some(_)) => Ok(Admission::Wait(Waiting::Genesis)),
             };
         };
 
@@ -237,7 +235,7 @@ impl State {
         if let Some(fork) = &workforce.fork
             && fork.wanted.contains(&event.id())
         {
-            return Ok(Admission::ApplyPrefix);
+            return Ok(Admission::Apply(Origin::History));
         }
         if matches!(content.body, EventBody::Genesis(_)) {
             return Err(Invalid::DuplicateGenesis);
@@ -246,7 +244,7 @@ impl State {
             None => return Err(Invalid::MissingWorkforce),
             Some(id) if id != workforce.id => {
                 return Err(match &workforce.fork {
-                    Some(fork) if fork.parent == id => Invalid::NotInForkPrefix(id),
+                    Some(fork) if fork.parent == id => Invalid::NotInForkHistory(id),
                     _ => Invalid::WrongWorkforce(id),
                 });
             }
@@ -267,11 +265,11 @@ impl State {
             _ => self.check_author(event)?,
         }
         self.check_body(event, trust)?;
-        Ok(Admission::Apply)
+        Ok(Admission::Apply(Origin::Own))
     }
 
     /// `prev` is empty exactly at seq 1, and otherwise an event of the same author with the
-    /// previous seq. Nothing else about the feed is checked: forked feeds are admitted.
+    /// previous seq. Nothing else about the feed is checked: equivocated feeds are admitted.
     fn check_feed(&self, event: &Event) -> Result<(), Invalid> {
         let content = &event.content;
         let author = content.author;

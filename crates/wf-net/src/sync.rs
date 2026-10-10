@@ -1,7 +1,7 @@
 //! `wf/sync/1`: bring two replicas of one workforce to the same set of events.
 //!
 //! 1. Both sides send their version vector.
-//! 2. Each sends the events the other lacks, in causal order, all branches of forked feeds.
+//! 2. Each sends the events the other lacks, in causal order, all branches of equivocated feeds.
 //! 3. Each side then asks for the parents of events it had to park, by id, until nothing is
 //!    missing or the peer does not have it.
 //!

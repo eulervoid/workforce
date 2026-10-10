@@ -14,7 +14,7 @@ use wf_core::identity::DeviceKey;
 use crate::store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError, StoredSnapshot};
 
 const EVENTS: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("events");
-/// `(author, seq)` to the ids of the events there: more than one when a feed has forked.
+/// `(author, seq)` to the ids of the events there: more than one when a feed has equivocated.
 const FEEDS: MultimapTableDefinition<([u8; 32], u64), [u8; 32]> =
     MultimapTableDefinition::new("feeds");
 /// Position to event id, in the order events were applied.

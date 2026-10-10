@@ -38,7 +38,7 @@ pub fn device_views(state: &State, own: DeviceKey, last_seen: &LastSeen) -> Vec<
         .map(|info| {
             let mut flags = Vec::new();
             if let Some(seq) = info.equivocated {
-                flags.push(format!("forked at seq {seq}"));
+                flags.push(format!("equivocated at seq {seq}"));
             }
             if info.invite_redeemed_twice {
                 flags.push("invite redeemed twice".to_string());

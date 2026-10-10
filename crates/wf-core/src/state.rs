@@ -53,10 +53,27 @@ pub struct FeedHead {
     pub id: EventId,
 }
 
+/// Whether an applied event was written in this workforce or is history of the one it was forked
+/// from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Origin {
+    Own,
+    History,
+}
+
+/// What the applied events say about where a new event sits in its feed.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Neighbours {
+    /// An applied event names the new one as its `prev`.
+    pub(crate) has_child: bool,
+    /// Another applied event has the same `prev`.
+    pub(crate) has_sibling: bool,
+}
+
 /// What one device has written. A device that wrote two events with the same `seq` (a machine
 /// restored from a snapshot, say) has several tips; both branches are kept.
 ///
-/// Events normally arrive after their parents, but the prefix of a fork is applied from the
+/// Events normally arrive after their parents, but the history of a fork is applied from the
 /// newest event down, so nothing here depends on the order events were applied in.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Feed {
@@ -74,38 +91,31 @@ impl Feed {
         }
     }
 
-    /// Records an event of this feed. `extended` is whether an applied event already names it as
-    /// its `prev`, and `prev_was_extended` whether another applied event already named the `prev`
-    /// of this one: then two events share a `seq`, and the feed has forked.
-    pub(crate) fn record(
-        &mut self,
-        head: FeedHead,
-        prev: Option<EventId>,
-        extended: bool,
-        prev_was_extended: bool,
-    ) {
-        let forked = match prev {
+    /// Records an event of this feed. If another applied event already has the same `prev` (or
+    /// this is a second root), two events share a `seq` and the feed has equivocated.
+    pub(crate) fn record(&mut self, head: FeedHead, prev: Option<EventId>, around: Neighbours) {
+        let equivocated = match prev {
             Some(prev) => {
                 self.tips.remove(&FeedHead {
                     seq: head.seq - 1,
                     id: prev,
                 });
-                prev_was_extended
+                around.has_sibling
             }
             None => {
                 self.roots += 1;
                 self.roots > 1
             }
         };
-        if forked {
+        if equivocated {
             self.equivocated = Some(self.equivocated.map_or(head.seq, |seq| seq.min(head.seq)));
         }
-        if !extended {
+        if !around.has_child {
             self.tips.insert(head);
         }
     }
 
-    /// The highest tip: the only one unless the feed has forked.
+    /// The highest tip: the only one unless the feed has equivocated.
     pub fn head(&self) -> FeedHead {
         *self.tips.last().expect("a feed has at least one tip")
     }
@@ -130,12 +140,6 @@ pub(crate) struct Known {
     pub(crate) hlc: Hlc,
     pub(crate) author: DeviceKey,
     pub(crate) seq: u64,
-}
-
-impl Workforce {
-    pub(crate) fn canonical(&self, principal: &PrincipalKey) -> PrincipalKey {
-        self.aliases.get(principal).copied().unwrap_or(*principal)
-    }
 }
 
 /// A device bound to a principal: by genesis, or by redeeming an invite.
@@ -206,6 +210,12 @@ pub(crate) struct Workforce {
     pub(crate) policy: Lww<PolicyDoc>,
     pub(crate) agents: BTreeMap<AgentId, Lww<AgentDefinition>>,
     pub(crate) items: BTreeMap<ItemId, Item>,
+}
+
+impl Workforce {
+    pub(crate) fn canonical(&self, principal: &PrincipalKey) -> PrincipalKey {
+        self.aliases.get(principal).copied().unwrap_or(*principal)
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]

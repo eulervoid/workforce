@@ -65,14 +65,14 @@ pub trait EventStore {
     fn event(&self, id: &EventId) -> Result<Option<Event>, StoreError>;
 
     /// The events of one author with `seq` greater than `after_seq`, in `(seq, id)` order. A
-    /// forked feed yields every branch.
+    /// equivocated feed yields every branch.
     fn feed_since(&self, author: &DeviceKey, after_seq: u64) -> Result<Vec<Event>, StoreError>;
 
-    /// Every event, ordered by `(hlc, id)`, which is a causal order.
+    /// Every event, ordered by `(hlc, id)`, which is a causal order within one workforce.
     fn events(&self) -> Result<Vec<Event>, StoreError>;
 
     /// How many events have been appended. Events are numbered in the order they were applied,
-    /// which is a causal order.
+    /// which is not always a causal one: a fork takes in its history newest event first.
     fn log_len(&self) -> Result<u64, StoreError>;
 
     fn log_id(&self, position: u64) -> Result<Option<EventId>, StoreError>;

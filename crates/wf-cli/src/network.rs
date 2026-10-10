@@ -12,6 +12,15 @@ use wf_core::identity::{Actor, DeviceKey, DeviceSigner, InviteSigner, Signed};
 use wf_core::invite::InviteCode;
 use wf_core::name::AgentName;
 use wf_daemon::{PeerOutcome, PeerSync, peers_of, sync_all};
+use wf_net::{NetError, Network, Node, SharedReplica};
+use wf_store::{RedbStore, Replica};
+
+use crate::cli::{DaemonArgs, InviteDeviceArgs, JoinArgs, SyncArgs};
+use crate::commands::emit;
+use crate::interactive::Mode;
+use crate::keys::DataDir;
+use crate::view::{device_label, timestamp_now};
+use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
 
 pub(crate) async fn sync_devices(
     node: &Arc<Node<SharedReplica<RedbStore>>>,
@@ -25,15 +34,6 @@ pub(crate) async fn sync_devices(
         .collect();
     sync_all(node, workforce, peers, presence).await
 }
-use wf_net::{NetError, Network, Node, SharedReplica};
-use wf_store::{RedbStore, Replica};
-
-use crate::cli::{DaemonArgs, InviteDeviceArgs, JoinArgs, SyncArgs};
-use crate::commands::emit;
-use crate::interactive::Mode;
-use crate::keys::DataDir;
-use crate::view::{device_label, timestamp_now};
-use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
 
 #[derive(Serialize)]
 pub struct PeerView {

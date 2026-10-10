@@ -404,5 +404,8 @@ fn a_replica_refuses_to_write_on_a_forked_own_feed() {
         9_000,
         create("task", "more"),
     );
-    assert!(matches!(result, Err(wf_store::AuthorError::OwnFeedForked)));
+    assert!(matches!(
+        result,
+        Err(wf_store::AuthorError::OwnFeedEquivocated)
+    ));
 }

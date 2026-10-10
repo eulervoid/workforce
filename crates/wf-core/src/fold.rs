@@ -13,12 +13,12 @@ use crate::policy::Policy;
 use crate::refs;
 use crate::state::{
     AgentDefinition, Announcement, Binding, Feed, FeedHead, ForkState, Invite, Known, Member,
-    PolicyDoc, State, Workforce,
+    Neighbours, Origin, PolicyDoc, State, Workforce,
 };
 
 impl State {
     /// Applies an event that [`State::receive`] has admitted.
-    pub(crate) fn apply(&mut self, event: &Event, id: EventId, prefix: bool) {
+    pub(crate) fn apply(&mut self, event: &Event, id: EventId, origin: Origin) {
         let content = &event.content;
         let stamp = Stamp {
             hlc: content.hlc,
@@ -37,14 +37,16 @@ impl State {
             seq: content.seq,
             id,
         };
-        let extended = self.extended.contains(&id);
-        let prev_was_extended = content.prev.is_some_and(|prev| !self.extended.insert(prev));
+        let around = Neighbours {
+            has_child: self.extended.contains(&id),
+            has_sibling: content.prev.is_some_and(|prev| !self.extended.insert(prev)),
+        };
         self.feeds
             .entry(content.author)
             .or_insert_with(Feed::new)
-            .record(head, content.prev, extended, prev_was_extended);
-        if prefix {
-            self.take_in_prefix(event, id, stamp);
+            .record(head, content.prev, around);
+        if origin == Origin::History {
+            self.take_in_history(event, id, stamp);
             return;
         }
         for parent in event.causal_parents() {
@@ -106,13 +108,13 @@ impl State {
             return;
         }
 
-        self.fold_body(event, id, stamp, false);
+        self.fold_body(event, id, stamp, Origin::Own);
     }
 
     /// Takes in an event of the history this workforce was forked from. What happened to items
     /// and agents carries over, and what the devices that are kept said about themselves: the
     /// members, devices, invites and policy of the parent are not those of the fork.
-    fn take_in_prefix(&mut self, event: &Event, id: EventId, stamp: Stamp) {
+    fn take_in_history(&mut self, event: &Event, id: EventId, stamp: Stamp) {
         if let Some(fork) = self
             .workforce
             .as_mut()
@@ -125,15 +127,15 @@ impl State {
                     .filter(|parent| !self.known.contains_key(parent)),
             );
         }
-        self.fold_body(event, id, stamp, true);
+        self.fold_body(event, id, stamp, Origin::History);
     }
 
-    fn fold_body(&mut self, event: &Event, id: EventId, stamp: Stamp, prefix: bool) {
+    fn fold_body(&mut self, event: &Event, id: EventId, stamp: Stamp, origin: Origin) {
         let content = &event.content;
         let Some(workforce) = self.workforce.as_mut() else {
             return;
         };
-        if prefix
+        if origin == Origin::History
             && matches!(
                 content.body,
                 EventBody::Genesis(_)
@@ -147,7 +149,7 @@ impl State {
             return;
         }
         // What a device said about itself carries over for the devices the fork keeps.
-        if prefix
+        if origin == Origin::History
             && matches!(content.body, EventBody::DeviceProfile(_))
             && !workforce.devices.contains_key(&content.author)
         {
@@ -224,7 +226,7 @@ impl State {
                 );
             }
             EventBody::AgentDefined(_)
-                if prefix
+                if origin == Origin::History
                     && !workforce
                         .members
                         .contains_key(&workforce.canonical(&content.actor.principal())) => {}

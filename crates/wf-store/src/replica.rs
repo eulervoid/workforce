@@ -33,7 +33,7 @@ pub enum AuthorError {
     #[error(
         "another event was written under this device's key; join the workforce again as a new device"
     )]
-    OwnFeedForked,
+    OwnFeedEquivocated,
     #[error(transparent)]
     Sign(#[from] EventError),
     #[error(transparent)]
@@ -191,7 +191,7 @@ impl<S: EventStore> Replica<S> {
             .get(&signer.key())
             .is_some_and(|feed| feed.equivocated().is_some());
         if forked {
-            return Err(AuthorError::OwnFeedForked);
+            return Err(AuthorError::OwnFeedEquivocated);
         }
         self.state.check_policy(&body)?;
         let mut builder = self

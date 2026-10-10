@@ -303,7 +303,7 @@ pub struct MemberSeed {
     pub handle: Handle,
     pub devices: Vec<DeviceKey>,
     /// Principal keys this member used in the parent workforce of a fork, so events in the
-    /// prefix keep resolving to the same handle.
+    /// history keep resolving to the same handle.
     pub previous: Vec<PrincipalKey>,
 }
 

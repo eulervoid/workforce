@@ -99,7 +99,7 @@ impl Cluster {
             body,
         );
         match result {
-            Ok(_) | Err(AuthorError::OwnFeedForked) | Err(AuthorError::Policy(_)) => {}
+            Ok(_) | Err(AuthorError::OwnFeedEquivocated) | Err(AuthorError::Policy(_)) => {}
             Err(error) => panic!("unexpected authoring failure: {error}"),
         }
     }

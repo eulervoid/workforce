@@ -14,14 +14,14 @@ use crate::state::{FeedHead, State, Waiting};
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FeedVersion {
     pub max_seq: u64,
-    /// The ends of the feed's branches: one unless the feed has forked.
+    /// The ends of the feed's branches: one unless the feed has equivocated.
     pub tips: Vec<FeedHead>,
 }
 
 pub type Versions = BTreeMap<DeviceKey, FeedVersion>;
 
 /// What to send of one author's feed: every event above `after_seq`, and these specific events,
-/// which can sit at or below it when the feed has forked.
+/// which can sit at or below it when the feed has equivocated.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Outgoing {
     pub author: DeviceKey,
@@ -31,7 +31,7 @@ pub struct Outgoing {
 
 /// What `mine` has that `theirs` may lack.
 ///
-/// Events above the peer's highest `seq` are always missing. Below it only a forked feed can hide
+/// Events above the peer's highest `seq` are always missing. Below it only an equivocated feed can hide
 /// something, because then two different events share a `seq`: the tips of such a feed are sent
 /// unless the peer already has them as its own tips. The events behind a tip reach the peer as
 /// missing parents, by id.
