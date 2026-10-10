@@ -102,7 +102,7 @@ impl Resolver<'_> {
 }
 
 fn tokens_of(item: &Item) -> impl Iterator<Item = (Origin, &BTreeSet<Token>)> {
-    std::iter::once((Origin::Body, item.body().tokens())).chain(
+    std::iter::once((Origin::Body, item.body_tokens())).chain(
         item.notes()
             .iter()
             .map(|(id, note)| (Origin::Note(*id), &note.tokens)),

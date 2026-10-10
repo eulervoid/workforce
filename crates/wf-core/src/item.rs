@@ -49,35 +49,14 @@ impl FromStr for Priority {
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::body::{Body, StepId};
 use crate::crdt::{AddWinsSet, Lww, Stamp};
 use crate::hlc::Hlc;
 use crate::id::{EventId, ItemId};
 use crate::identity::Actor;
 use crate::name::{Label, LaneName, Requirement, StateName, TypeName};
 use crate::policy::{Policy, StateCategory};
-use crate::refs::{self, Token};
-
-/// Markdown text together with the tokens parsed from it.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Markdown {
-    text: String,
-    tokens: BTreeSet<Token>,
-}
-
-impl Markdown {
-    pub fn new(text: String) -> Self {
-        let tokens = refs::parse(&text);
-        Self { text, tokens }
-    }
-
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    pub fn tokens(&self) -> &BTreeSet<Token> {
-        &self.tokens
-    }
-}
+use crate::refs::Token;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NoteKind {
@@ -132,7 +111,9 @@ pub struct Item {
     pub(crate) created: Hlc,
     pub(crate) updated: Hlc,
     pub(crate) title: Lww<String>,
-    pub(crate) body: Lww<Markdown>,
+    pub(crate) body: Lww<Body>,
+    /// Ticks of steps. One counts only while it is newer than the body it was made against.
+    pub(crate) step_marks: BTreeMap<StepId, Lww<bool>>,
     /// `None` until the first transition: the type's initial state under the current policy.
     pub(crate) state: Lww<Option<StateName>>,
     pub(crate) priority: Lww<Option<Priority>>,
@@ -170,8 +151,19 @@ impl Item {
         self.title.value()
     }
 
-    pub fn body(&self) -> &Markdown {
-        self.body.value()
+    /// The body with the steps ticked as of the latest ticks.
+    pub fn body(&self) -> Body {
+        let body_stamp = self.body.stamp();
+        self.body.value().clone().with_done(|step| {
+            self.step_marks
+                .get(&step)
+                .filter(|mark| mark.stamp() > body_stamp)
+                .map(|mark| *mark.value())
+        })
+    }
+
+    pub fn body_tokens(&self) -> &BTreeSet<Token> {
+        self.body.value().tokens()
     }
 
     pub fn priority(&self) -> Option<Priority> {
@@ -255,7 +247,8 @@ impl Item {
             created: stamp.hlc,
             updated: stamp.hlc,
             title: Lww::new(created.title.clone(), stamp),
-            body: Lww::new(Markdown::new(created.body.clone()), stamp),
+            body: Lww::new(body_of(&created.body), stamp),
+            step_marks: BTreeMap::new(),
             state: Lww::new(None, stamp),
             priority: Lww::new(created.priority, stamp),
             lane: Lww::new(created.lane.clone(), stamp),
@@ -267,6 +260,12 @@ impl Item {
             notes: BTreeMap::new(),
         }
     }
+}
+
+/// What the fold makes of body text. Authors cannot write a body with duplicate steps, so one
+/// that has them comes from a peer that does not check; its steps stay plain markdown.
+pub(crate) fn body_of(text: &str) -> Body {
+    Body::parse(text).unwrap_or_else(|_| Body::plain(text))
 }
 
 /// The few fields kept visible for an archived item.

@@ -8,6 +8,7 @@
 
 use std::collections::VecDeque;
 
+use crate::body::{Body, BodyError, StepId};
 use crate::event::{
     AgentDefined, Change, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated, ItemEdited,
     ItemLinked, ItemTransitioned, Link,
@@ -135,6 +136,10 @@ pub enum PolicyViolation {
     CannotRemoveSupersedes,
     #[error("there is no lane `{0}`")]
     UnknownLane(LaneName),
+    #[error(transparent)]
+    Body(#[from] BodyError),
+    #[error("the item has no step {0}")]
+    UnknownStep(StepId),
 }
 
 enum Admission {
@@ -586,13 +591,23 @@ impl State {
                 if !created.requires.is_empty() {
                     require_field(type_name, Field::Requires)?;
                 }
+                Body::parse(&created.body)?;
                 created.lane.iter().try_for_each(known_lane)
             }
             EventBody::ItemEdited(edited) => {
-                let type_name = item_of(&edited.item)?.item_type();
+                let item = item_of(&edited.item)?;
+                let type_name = item.item_type();
                 for change in &edited.changes {
                     match change {
-                        Change::Title(_) | Change::Body(_) => {}
+                        Change::Title(_) => {}
+                        Change::Body(text) => {
+                            Body::parse(text)?;
+                        }
+                        Change::StepDone { step, .. } => {
+                            if item.body().step(*step).is_none() {
+                                return Err(PolicyViolation::UnknownStep(*step));
+                            }
+                        }
                         Change::Priority(None) => {
                             if type_of(type_name)?.allows_field(Field::Priority) {
                                 return Err(PolicyViolation::PriorityRequired {

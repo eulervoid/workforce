@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use iroh_base::Signature;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::encoding::{self, EncodingError};
 use crate::hlc::Hlc;
@@ -120,6 +121,12 @@ pub enum Change {
     Lane(Option<LaneName>),
     Labels(SetChange<Label>),
     Requires(SetChange<Requirement>),
+    /// Ticks or unticks a step, named by the hash of its text. Ignored when the body has no
+    /// such step.
+    StepDone {
+        step: StepId,
+        done: bool,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -45,7 +45,7 @@ impl Draft {
     pub fn of(item: &Item) -> Self {
         Self {
             title: item.title().to_string(),
-            body: item.body().text().to_string(),
+            body: item.body().render(),
             priority: item.priority(),
             lane: item.lane().cloned(),
             labels: item.labels().values().cloned().collect(),

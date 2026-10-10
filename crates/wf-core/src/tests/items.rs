@@ -516,3 +516,131 @@ fn item_prefixes_resolve_like_git() {
     ));
     let _ = StateName::new("open");
 }
+
+fn done_steps(state: &State, item: ItemId) -> Vec<bool> {
+    let ItemView::Live(item) = state.item(item).unwrap() else {
+        panic!("live")
+    };
+    item.body().steps().map(|step| step.done).collect()
+}
+
+#[test]
+fn ticks_change_one_step_and_a_later_body_edit_wins_over_earlier_ticks() {
+    use crate::body::StepId;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let body = "plan #abcd\n\n- [ ] write parser\n- [ ] add tests\n";
+    let task = item_id(&fixture.apply(
+        &mut state,
+        0,
+        2_000,
+        create_with_body("task", "Steps", body),
+    ));
+    assert_eq!(done_steps(&state, task), [false, false]);
+
+    let tick = |done| Change::StepDone {
+        step: StepId::of("add tests"),
+        done,
+    };
+    fixture.apply(&mut state, 0, 2_001, edit(task, tick(true)));
+    assert_eq!(done_steps(&state, task), [false, true]);
+    fixture.apply(&mut state, 0, 2_002, edit(task, tick(false)));
+    assert_eq!(done_steps(&state, task), [false, false]);
+
+    fixture.apply(&mut state, 0, 2_003, edit(task, tick(true)));
+    fixture.apply(
+        &mut state,
+        0,
+        2_004,
+        edit(
+            task,
+            Change::Body("- [x] write parser\n- [ ] add tests".into()),
+        ),
+    );
+    assert_eq!(done_steps(&state, task), [true, false]);
+}
+
+#[test]
+fn ticks_do_not_depend_on_arrival_order() {
+    use crate::body::StepId;
+    let fixture = Fixture::new(1);
+    let mut author = fixture.state();
+    let created = fixture.apply(
+        &mut author,
+        0,
+        2_000,
+        create_with_body("task", "Steps", "- [ ] a\n- [ ] b"),
+    );
+    let task = item_id(&created);
+    let tick = fixture.apply(
+        &mut author,
+        0,
+        2_001,
+        edit(
+            task,
+            Change::StepDone {
+                step: StepId::of("b"),
+                done: true,
+            },
+        ),
+    );
+    let rewrite = fixture.apply(
+        &mut author,
+        0,
+        2_002,
+        edit(task, Change::Body("- [ ] a\n- [ ] b\n- [ ] c".into())),
+    );
+    assert_eq!(done_steps(&author, task), [false, false, false]);
+
+    let mut peer = State::new();
+    for event in [fixture.genesis.clone(), rewrite, tick, created] {
+        peer.receive(event, crate::state::Trust::Stored).unwrap();
+    }
+    assert_eq!(done_steps(&peer, task), [false, false, false]);
+}
+
+#[test]
+fn authors_cannot_write_duplicate_steps_or_tick_missing_ones() {
+    use crate::body::StepId;
+    use crate::validate::PolicyViolation;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(
+        &mut state,
+        0,
+        2_000,
+        create_with_body("task", "Steps", "- [ ] a"),
+    ));
+    assert!(matches!(
+        state.check_policy(&edit(task, Change::Body("- [ ] x\n- [x] x".into()))),
+        Err(PolicyViolation::Body(_))
+    ));
+    assert!(matches!(
+        state.check_policy(&create_with_body("task", "Dup", "- [ ] x\n- [ ] x")),
+        Err(PolicyViolation::Body(_))
+    ));
+    let missing = StepId::of("not there");
+    assert_eq!(
+        state.check_policy(&edit(
+            task,
+            Change::StepDone {
+                step: missing,
+                done: true
+            }
+        )),
+        Err(PolicyViolation::UnknownStep(missing))
+    );
+}
+
+#[test]
+fn a_peer_body_with_duplicate_steps_folds_as_plain_markdown() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(
+        &mut state,
+        0,
+        2_000,
+        create_with_body("task", "Dup", "- [ ] x\n- [ ] x"),
+    ));
+    assert_eq!(done_steps(&state, task), Vec::<bool>::new());
+}

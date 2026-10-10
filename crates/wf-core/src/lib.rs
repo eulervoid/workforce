@@ -1,5 +1,6 @@
 //! `wf-core` is pure: no IO, no async, no clock or randomness except through parameters.
 
+pub mod body;
 pub mod crdt;
 pub mod encoding;
 pub mod event;

@@ -382,9 +382,22 @@ fn apply_change(item: &mut Item, change: &Change, stamp: Stamp) {
             item.title.set(title.clone(), stamp);
         }
         Change::Body(body) => {
-            item.body
-                .set(crate::item::Markdown::new(body.clone()), stamp);
+            if item.body.set(crate::item::body_of(body), stamp) {
+                item.step_marks.retain(|_, mark| mark.stamp() > stamp);
+            }
         }
+        // Marks older than the body are dropped, so the stored marks do not depend on arrival order.
+        Change::StepDone { step, done } if stamp > item.body.stamp() => {
+            match item.step_marks.get_mut(step) {
+                Some(mark) => {
+                    mark.set(*done, stamp);
+                }
+                None => {
+                    item.step_marks.insert(*step, Lww::new(*done, stamp));
+                }
+            }
+        }
+        Change::StepDone { .. } => {}
         Change::Priority(priority) => {
             item.priority.set(*priority, stamp);
         }

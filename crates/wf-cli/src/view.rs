@@ -525,7 +525,7 @@ pub fn item_detail(
 
     ItemDetail {
         summary: summary(state, &graph, ItemView::Live(item)),
-        body: item.body().text().to_string(),
+        body: item.body().render(),
         author: actor_label(state, item.author()),
         created: timestamp(item.created()),
         updated: timestamp(item.updated()),
@@ -621,6 +621,7 @@ pub fn describe(state: &State, body: &EventBody) -> String {
                     Change::Lane(_) => "lane",
                     Change::Labels(_) => "labels",
                     Change::Requires(_) => "requires",
+                    Change::StepDone { .. } => "step",
                 })
                 .collect();
             format!("{} {}", item(&edited.item), fields.join(", "))
@@ -812,6 +813,9 @@ pub fn history_entry(state: &State, event: &Event) -> EventView {
                 ),
                 Change::Labels(change) => format!("labels {}", set_change(change)),
                 Change::Requires(change) => format!("requires {}", set_change(change)),
+                Change::StepDone { step, done } => {
+                    format!("step {step} {}", if *done { "done" } else { "not done" })
+                }
             })
             .collect();
         entry.summary = format!("edited: {}", changes.join("; "));

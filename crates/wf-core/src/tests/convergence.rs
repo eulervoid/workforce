@@ -114,7 +114,14 @@ impl Simulation {
             }
             (3, Some(item)) => self.submit(
                 device,
-                edit(item, Change::Body(format!("body {second} @coder"))),
+                edit(
+                    item,
+                    Change::Body(format!(
+                        "body {second} @coder\n\n- [ ] step {}\n- [x] step {}",
+                        second % 2,
+                        2 + second % 2
+                    )),
+                ),
             ),
             (4, Some(item)) => {
                 let priority = Some([Priority::P0, Priority::P2][usize::from(second) % 2]);
@@ -217,6 +224,19 @@ impl Simulation {
                         unarchive(*item)
                     };
                     self.submit(device, body);
+                }
+            }
+            (13, Some(item)) if second % 2 == 0 => {
+                let steps: Vec<_> = match self.replicas[device].item(item) {
+                    Some(ItemView::Live(live)) => live.body().steps().map(|step| step.id).collect(),
+                    _ => return,
+                };
+                if let Some(step) = steps.get(usize::from(first) % steps.len().max(1)) {
+                    let change = Change::StepDone {
+                        step: *step,
+                        done: second % 4 == 0,
+                    };
+                    self.submit(device, edit(item, change));
                 }
             }
             (13, Some(item)) => {
