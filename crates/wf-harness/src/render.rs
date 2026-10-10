@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use serde_json::Value;
 
 use crate::transcript::{Direction, TranscriptEntry};
@@ -7,6 +9,7 @@ use crate::transcript::{Direction, TranscriptEntry};
 #[derive(Debug, Default)]
 pub struct Renderer {
     mid_line: bool,
+    tool_titles: HashMap<String, String>,
 }
 
 impl Renderer {
@@ -55,12 +58,17 @@ impl Renderer {
             Some("tool_call") => {
                 let title = update["title"].as_str().unwrap_or("?");
                 let status = update["status"].as_str().unwrap_or("pending");
+                if let Some(id) = update["toolCallId"].as_str() {
+                    self.tool_titles.insert(id.to_owned(), title.to_owned());
+                }
                 self.line(format!("tool  {title} ({status})"))
             }
             Some("tool_call_update") => match update["status"].as_str() {
                 Some(status) => {
                     let id = update["toolCallId"].as_str().unwrap_or("?");
-                    self.line(format!("tool  {id} {status}"))
+                    let title = self.tool_titles.get(id).map_or(id, String::as_str);
+                    let line = format!("tool  {title} ({status})");
+                    self.line(line)
                 }
                 None => String::new(),
             },
@@ -129,6 +137,14 @@ mod tests {
             .map(|entry| renderer.render(entry))
             .collect();
         assert_eq!(output, "Hello\ntool  Read file (pending)\n");
+        let finished = update(serde_json::json!({
+            "sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "completed"
+        }));
+        let started = update(serde_json::json!({
+            "sessionUpdate": "tool_call", "toolCallId": "call-1", "title": "Read file"
+        }));
+        renderer.render(&started);
+        assert_eq!(renderer.render(&finished), "tool  Read file (completed)\n");
     }
 
     #[test]
