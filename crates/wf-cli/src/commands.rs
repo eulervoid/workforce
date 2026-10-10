@@ -3,6 +3,7 @@ use std::path::Path;
 
 use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
+use wf_core::autonomy::Autonomy;
 use wf_core::crdt::SetChange;
 use wf_core::event::{
     AgentDefined, Change, Comment, Event, EventBody, Genesis, ItemCreated, ItemLinked, ItemRef,
@@ -218,6 +219,7 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
                     model: None,
                     capabilities: Vec::new(),
                     lanes: vec![LaneName::new("default")?],
+                    autonomy: Autonomy::default(),
                 }),
             )?;
             agents.push(format!("@{handle}/{name} ({harness})"));
@@ -270,6 +272,7 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
                 model: args.model,
                 capabilities: args.capabilities,
                 lanes: args.lanes,
+                autonomy: args.autonomy.applied_to(Autonomy::default()),
             }))?;
             done(json, format!("defined agent {}", args.name), &event, None)
         }
@@ -293,6 +296,7 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
                 } else {
                     args.lanes
                 },
+                autonomy: args.autonomy.applied_to(current.autonomy),
             }))?;
             done(json, format!("updated agent {}", args.name), &event, None)
         }

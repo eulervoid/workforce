@@ -601,6 +601,11 @@ pub struct AgentView {
     pub model: Option<String>,
     pub capabilities: Vec<String>,
     pub lanes: Vec<String>,
+    pub start: String,
+    pub permissions: String,
+    pub nudges: u32,
+    pub park_timeout: String,
+    pub max_duration: Option<String>,
 }
 
 pub fn agent_views(state: &State) -> Vec<AgentView> {
@@ -616,6 +621,14 @@ pub fn agent_views(state: &State) -> Vec<AgentView> {
                 .map(ToString::to_string)
                 .collect(),
             lanes: definition.lanes.iter().map(ToString::to_string).collect(),
+            start: definition.autonomy.start.to_string(),
+            permissions: definition.autonomy.permissions.to_string(),
+            nudges: definition.autonomy.nudges,
+            park_timeout: humantime::format_duration(definition.autonomy.park_timeout).to_string(),
+            max_duration: definition
+                .autonomy
+                .max_duration
+                .map(|duration| humantime::format_duration(duration).to_string()),
         })
         .collect()
 }

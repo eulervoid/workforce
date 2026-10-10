@@ -5,6 +5,7 @@ use std::collections::BTreeMap;
 use iroh_base::Signature;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
+use crate::autonomy::Autonomy;
 use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::encoding::{self, EncodingError};
@@ -61,6 +62,7 @@ pub struct AgentDefined {
     pub model: Option<String>,
     pub capabilities: Vec<Requirement>,
     pub lanes: Vec<LaneName>,
+    pub autonomy: Autonomy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

@@ -1,5 +1,6 @@
 //! Deterministic fixtures for tests in this and downstream crates (feature `testing`).
 
+use crate::autonomy::Autonomy;
 use crate::crdt::SetChange;
 use crate::event::{
     AgentDefined, Change, Comment, DeviceBound, Event, EventBody, EventBuilder, ForkPoint, Genesis,
@@ -270,6 +271,7 @@ pub fn define_agent(name: &str) -> EventBody {
         model: None,
         capabilities: vec![],
         lanes: vec![],
+        autonomy: Autonomy::default(),
     })
 }
 

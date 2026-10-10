@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::autonomy::Autonomy;
 use crate::crdt::{Lww, Stamp};
 use crate::event::{DeviceProfile, Event, EventBuilder, InviteKind};
 use crate::hlc::Hlc;
@@ -46,6 +47,7 @@ pub struct AgentDefinition {
     pub model: Option<String>,
     pub capabilities: Vec<Requirement>,
     pub lanes: Vec<LaneName>,
+    pub autonomy: Autonomy,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

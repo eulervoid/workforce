@@ -2,6 +2,7 @@ use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use wf_core::autonomy::{Autonomy, PermissionMode, StartMode};
 use wf_core::graph::Readiness;
 use wf_core::item::Priority;
 use wf_core::name::{AgentName, HarnessName, Label, LaneName, Requirement, StateName, TypeName};
@@ -260,6 +261,40 @@ pub struct AgentAddArgs {
     pub capabilities: Vec<Requirement>,
     #[arg(long = "lane")]
     pub lanes: Vec<LaneName>,
+    #[command(flatten)]
+    pub autonomy: AutonomyArgs,
+}
+
+/// How much the agent does without a person. Fields that are not given keep their default, or
+/// with `wf agent edit` their current value.
+#[derive(Args)]
+pub struct AutonomyArgs {
+    /// `auto` lets the dispatcher start the agent on ready items.
+    #[arg(long)]
+    pub start: Option<StartMode>,
+    /// `allow`, `ask` or `deny` the permission requests of its sessions.
+    #[arg(long)]
+    pub permissions: Option<PermissionMode>,
+    /// Turns in a row without a commit before a session is released.
+    #[arg(long)]
+    pub nudges: Option<u32>,
+    /// How long a session may wait for an answer, such as `2h`.
+    #[arg(long, value_name = "DURATION")]
+    pub park_timeout: Option<humantime::Duration>,
+    /// How long a session may run, such as `1h`.
+    #[arg(long, value_name = "DURATION")]
+    pub max_duration: Option<humantime::Duration>,
+}
+
+impl AutonomyArgs {
+    pub fn applied_to(self, mut autonomy: Autonomy) -> Autonomy {
+        autonomy.start = self.start.unwrap_or(autonomy.start);
+        autonomy.permissions = self.permissions.unwrap_or(autonomy.permissions);
+        autonomy.nudges = self.nudges.unwrap_or(autonomy.nudges);
+        autonomy.park_timeout = self.park_timeout.map_or(autonomy.park_timeout, Into::into);
+        autonomy.max_duration = self.max_duration.map(Into::into).or(autonomy.max_duration);
+        autonomy
+    }
 }
 
 /// Fields that are given replace the current value.
@@ -274,6 +309,8 @@ pub struct AgentEditArgs {
     pub capabilities: Vec<Requirement>,
     #[arg(long = "lane")]
     pub lanes: Vec<LaneName>,
+    #[command(flatten)]
+    pub autonomy: AutonomyArgs,
 }
 
 #[derive(Subcommand)]

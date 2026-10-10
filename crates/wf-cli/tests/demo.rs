@@ -374,6 +374,25 @@ fn agents_and_policy() {
     assert_eq!(agents[0]["id"], "@joshua/reviewer");
     assert_eq!(agents[0]["model"], "big");
     assert_eq!(agents[0]["capabilities"], serde_json::json!(["rust"]));
+    assert_eq!(agents[0]["start"], "manual");
+    assert_eq!(agents[0]["permissions"], "ask");
+    wf.run(&[
+        "agent",
+        "edit",
+        "reviewer",
+        "--start",
+        "auto",
+        "--park-timeout",
+        "30m",
+        "--max-duration",
+        "1h",
+    ]);
+    let agents = wf.json(&["agent", "list"]);
+    assert_eq!(agents[0]["model"], "big");
+    assert_eq!(agents[0]["start"], "auto");
+    assert_eq!(agents[0]["permissions"], "ask");
+    assert_eq!(agents[0]["park_timeout"], "30m");
+    assert_eq!(agents[0]["max_duration"], "1h");
     assert!(
         wf.fail(&["agent", "edit", "ghost", "--model", "x"])
             .contains("no agent")

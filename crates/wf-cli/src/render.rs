@@ -429,7 +429,15 @@ pub fn agents(agents: &[AgentView]) -> String {
     if agents.is_empty() {
         return "no agents defined\n".to_string();
     }
-    let mut table = table(&["AGENT", "HARNESS", "MODEL", "CAPABILITIES", "LANES"]);
+    let mut table = table(&[
+        "AGENT",
+        "HARNESS",
+        "MODEL",
+        "CAPABILITIES",
+        "LANES",
+        "START",
+        "PERMISSIONS",
+    ]);
     for agent in agents {
         table.add_row([
             agent.id.clone(),
@@ -437,6 +445,8 @@ pub fn agents(agents: &[AgentView]) -> String {
             agent.model.clone().unwrap_or_else(|| "default".to_string()),
             agent.capabilities.join(", "),
             agent.lanes.join(", "),
+            agent.start.clone(),
+            agent.permissions.clone(),
         ]);
     }
     format!("{table}\n")
