@@ -362,6 +362,7 @@ pub fn group_items(
             |group| {
                 match group {
                     ReadinessGroup::Open(Readiness::Ready) => "ready",
+                    ReadinessGroup::Open(Readiness::Claimed) => "claimed",
                     ReadinessGroup::Open(Readiness::Blocked) => "blocked",
                     ReadinessGroup::Open(Readiness::Stranded) => "stranded",
                     ReadinessGroup::NotOpen => "not_open",

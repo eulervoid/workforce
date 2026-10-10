@@ -413,6 +413,7 @@ impl ItemListArgs {
         }
         match readiness {
             Some(Readiness::Ready) => self.ready,
+            Some(Readiness::Claimed) => false,
             Some(Readiness::Blocked) => self.blocked,
             Some(Readiness::Stranded) => self.stranded,
             None => false,

@@ -39,8 +39,10 @@ pub struct Blocker {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Readiness {
-    /// Every dependency is done.
+    /// Every dependency is done and no session works on the item.
     Ready,
+    /// Every dependency is done, and a live session holds the item.
+    Claimed,
     /// Some dependency is not done yet; none was cancelled.
     Blocked,
     /// Some dependency was cancelled, so waiting will not free the item; someone has to act.
@@ -147,7 +149,11 @@ impl State {
         }
         let blockers = self.blockers(graph, item.id());
         Some(if blockers.is_empty() {
-            Readiness::Ready
+            if self.claim(item.id()).is_some() {
+                Readiness::Claimed
+            } else {
+                Readiness::Ready
+            }
         } else if blockers
             .iter()
             .any(|blocker| blocker.state_category == Some(StateCategory::Cancelled))
@@ -158,7 +164,7 @@ impl State {
         })
     }
 
-    /// `ready(i) ⇔ cat(i) = open ∧ every dependency is done`. Live sessions arrive in M2.
+    /// `ready(i) ⇔ cat(i) = open ∧ every dependency is done ∧ no live session holds i`.
     pub fn is_ready(&self, graph: &DependencyGraph, item: &Item) -> bool {
         self.readiness(graph, item) == Some(Readiness::Ready)
     }

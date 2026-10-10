@@ -111,7 +111,9 @@ fn short_time(timestamp: &str) -> String {
 pub fn item_icon(state_category: Option<&str>, readiness: Option<Readiness>) -> &'static str {
     match readiness {
         Some(Readiness::Stranded) => "⚠",
-        Some(Readiness::Ready | Readiness::Blocked) | None => state_icon(state_category),
+        Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => {
+            state_icon(state_category)
+        }
     }
 }
 
@@ -144,7 +146,7 @@ fn item_label(
     let state_style = state_style(state_category);
     let icon_style = match readiness {
         Some(Readiness::Stranded) => style::WARNING,
-        Some(Readiness::Ready | Readiness::Blocked) | None => state_style,
+        Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => state_style,
     };
     format!(
         "{} {} {}{}{}{}",
@@ -216,6 +218,7 @@ fn group_heading(grouping: ItemGrouping, group: &ItemGroup) -> String {
         ),
         ItemGrouping::Readiness => match first.readiness {
             Some(Readiness::Ready) => ("○", state_style(Some("open"))),
+            Some(Readiness::Claimed) => ("◐", state_style(Some("active"))),
             Some(Readiness::Blocked) => ("⊘", state_style(Some("blocked"))),
             Some(Readiness::Stranded) => ("⚠", style::WARNING),
             None => ("·", style::DIM),

@@ -1,5 +1,6 @@
 use crate::event::Event;
 use crate::id::{ItemId, SessionId};
+use crate::item::ItemView;
 use crate::session::EndReason;
 use crate::state::{State, Trust};
 use crate::testing::*;
@@ -133,4 +134,32 @@ fn ending_an_unknown_session_is_refused() {
         state.receive(event, Trust::Untrusted).unwrap_err(),
         Invalid::UnknownSession(missing)
     );
+}
+
+#[test]
+fn an_item_held_by_a_live_session_is_not_ready() {
+    use crate::graph::Readiness;
+
+    let (fixture, mut state, task) = with_task();
+    let readiness = |state: &State| {
+        let ItemView::Live(item) = state.item(task).unwrap() else {
+            panic!("live")
+        };
+        state.readiness(&state.dependency_graph(), item)
+    };
+    assert_eq!(readiness(&state), Some(Readiness::Ready));
+    assert_eq!(state.ready_items().len(), 1);
+
+    let session = session_id(&fixture.apply(&mut state, 0, 3_000, start_session("coder", task)));
+    assert_eq!(readiness(&state), Some(Readiness::Claimed));
+    assert!(state.ready_items().is_empty());
+
+    fixture.apply(
+        &mut state,
+        0,
+        3_001,
+        end_session(session, EndReason::Failed),
+    );
+    assert_eq!(readiness(&state), Some(Readiness::Ready));
+    assert_eq!(state.ready_items().len(), 1);
 }
