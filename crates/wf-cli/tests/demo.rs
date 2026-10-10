@@ -459,3 +459,33 @@ fn missing_items_and_states_are_errors_without_a_terminal() {
             .contains("missing link")
     );
 }
+
+#[test]
+fn invite_device_prints_a_code_that_names_this_machine() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+    let invite = sandbox.json(&["invite", "device", "--expires", "1h"]);
+    let code = invite["code"].as_str().unwrap();
+    assert!(code.starts_with("wfi1"), "{code}");
+    let log = sandbox.run(&["log"]);
+    assert!(log.contains("InviteCreated"), "{log}");
+
+    let parsed: wf_core::invite::InviteCode = code.parse().unwrap();
+    let status = sandbox.json(&["status"]);
+    assert_eq!(parsed.workforce.to_string(), status["id"].as_str().unwrap());
+    assert_eq!(parsed.bootstrap.len(), 1);
+}
+
+#[test]
+fn join_refuses_bad_codes_and_missing_names() {
+    let sandbox = Sandbox::new();
+    let error = sandbox.fail(&["join", "not-a-code", "--name", "vm"]);
+    assert!(error.contains("invite code"), "{error}");
+    sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+    let code = sandbox.json(&["invite", "device"])["code"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let error = sandbox.fail(&["join", &code]);
+    assert!(error.contains("--name"), "{error}");
+}

@@ -4086,6 +4086,7 @@ dependencies = [
  "clap",
  "comfy-table",
  "data-encoding",
+ "humantime",
  "insta",
  "jiff",
  "nucleo-picker",

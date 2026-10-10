@@ -10,7 +10,9 @@ use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
 use wf_core::id::WorkforceId;
 use wf_core::identity::{DeviceKey, DeviceSigner};
+use wf_core::invite::{InviteCode, JoinRefusal};
 
+use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::SyncLog;
 use crate::sync::{SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
@@ -34,6 +36,10 @@ pub enum NetError {
     },
     #[error("workforce {0} is not served here")]
     NotServed(WorkforceId),
+    #[error("{peer} refused the join: {reason}")]
+    JoinRefused { peer: String, reason: JoinRefusal },
+    #[error("could not write the events of the new device: {0}")]
+    JoinAuthoring(String),
 }
 
 /// How the endpoint finds and reaches its peers.
@@ -169,6 +175,13 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         let registry = Registry::new();
         let router = Router::builder(endpoint)
             .accept(SYNC_ALPN, SyncHandler(registry.clone()))
+            .accept(
+                JOIN_ALPN,
+                JoinHandler {
+                    registry: registry.clone(),
+                    reservations: Reservations::default(),
+                },
+            )
             .spawn();
         Ok(Self { router, registry })
     }
@@ -238,6 +251,59 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         let _ = send.finish();
         connection.close(DONE.into(), b"done");
         Ok(report)
+    }
+
+    /// Redeems an invite with the member at `peer`. The log of the workforce arrives in `log`,
+    /// then `author` writes the events of this device into it, and they are sent back.
+    pub async fn join(
+        &self,
+        code: &InviteCode,
+        peer: impl Into<EndpointAddr>,
+        log: &L,
+        author: impl FnOnce() -> Result<(), Box<dyn std::error::Error + Send + Sync>>,
+    ) -> Result<(), NetError> {
+        let peer: EndpointAddr = peer.into();
+        let name = device_key(peer.id).fmt_short();
+        let connect_error = |reason: String| NetError::Connect {
+            peer: name.clone(),
+            reason,
+        };
+        let connection = tokio::time::timeout(
+            CONNECT_TIMEOUT,
+            self.endpoint().connect(peer.clone(), JOIN_ALPN),
+        )
+        .await
+        .map_err(|_| connect_error("timed out".into()))?
+        .map_err(|error| connect_error(error.to_string()))?;
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|error| connect_error(error.to_string()))?;
+        let proof = code
+            .prove(self.device())
+            .map_err(|error| NetError::JoinAuthoring(error.to_string()))?;
+        let request = JoinRequest {
+            workforce: code.workforce,
+            invite: code.invite,
+            proof,
+        };
+        let result = run_join(
+            &mut tokio::io::join(&mut recv, &mut send),
+            request,
+            log,
+            author,
+        )
+        .await;
+        let _ = send.finish();
+        connection.close(DONE.into(), b"done");
+        result.map_err(|failure| match failure {
+            JoinFailure::Net(reason) => connect_error(reason),
+            JoinFailure::Refused(reason) => NetError::JoinRefused {
+                peer: name.clone(),
+                reason,
+            },
+            JoinFailure::Author(error) => NetError::JoinAuthoring(error.to_string()),
+        })
     }
 
     pub async fn shutdown(self) {

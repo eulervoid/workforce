@@ -12,7 +12,7 @@ use crate::event::{
     AgentDefined, Change, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated, ItemEdited,
     ItemLinked, ItemTransitioned, Link,
 };
-use crate::id::{ItemId, WorkforceId};
+use crate::id::{EventId, ItemId, WorkforceId};
 use crate::identity::{Actor, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, StateName, TypeName};
 use crate::policy::{Category, Field, Policy, PolicyError};
@@ -70,6 +70,16 @@ pub enum Invalid {
     ActorMismatch,
     #[error("the acting agent is not defined")]
     UnknownAgent,
+    #[error("{0} is not a member")]
+    NotAMember(PrincipalKey),
+    #[error("a device is bound by the first event of its own feed")]
+    BindingNotFirst,
+    #[error("the invite is not among the parents of the binding")]
+    InviteNotInParents,
+    #[error("{0} is not an invite")]
+    UnknownInvite(EventId),
+    #[error("the proof does not come from the invite key for this device")]
+    BadInviteProof,
     #[error("{0} is not an owner")]
     NotOwner(PrincipalKey),
     #[error("principal signature is invalid")]
@@ -234,7 +244,10 @@ impl State {
 
         self.check_feed(event)?;
         self.check_hlc(event)?;
-        self.check_author(event)?;
+        match &content.body {
+            EventBody::DeviceBound(_) => self.check_binding(event)?,
+            _ => self.check_author(event)?,
+        }
         self.check_body(event, trust)?;
         Ok(Admission::Apply)
     }
@@ -293,6 +306,35 @@ impl State {
         Ok(())
     }
 
+    /// A `DeviceBound` is the author's first event, follows the invite it redeems and proves with
+    /// the invite key that this very device is meant. The author is not bound yet, so the usual
+    /// author check does not apply.
+    fn check_binding(&self, event: &Event) -> Result<(), Invalid> {
+        let content = &event.content;
+        let EventBody::DeviceBound(bound) = &content.body else {
+            unreachable!("the caller matched on a binding")
+        };
+        let workforce = self.workforce.as_ref().expect("checked by the caller");
+        if content.seq != 1 {
+            return Err(Invalid::BindingNotFirst);
+        }
+        if !content.deps.contains(&bound.invite) {
+            return Err(Invalid::InviteNotInParents);
+        }
+        let invite = workforce
+            .invites
+            .get(&bound.invite)
+            .ok_or(Invalid::UnknownInvite(bound.invite))?;
+        invite
+            .key
+            .verify_proof(workforce.id, bound.invite, content.author, &bound.proof)
+            .map_err(|_| Invalid::BadInviteProof)?;
+        if content.actor != Actor::Human(invite.principal) {
+            return Err(Invalid::ActorMismatch);
+        }
+        Ok(())
+    }
+
     fn check_body(&self, event: &Event, trust: Trust) -> Result<(), Invalid> {
         let workforce = self.workforce.as_ref().expect("checked by the caller");
         let known_item = |item: &ItemId| {
@@ -318,8 +360,19 @@ impl State {
                 Policy::parse(&signed.statement.policy)?;
                 Ok(())
             }
+            EventBody::InviteCreated(signed) => {
+                if !workforce.members.contains_key(&signed.signer) {
+                    return Err(Invalid::NotAMember(signed.signer));
+                }
+                if signed.signer != event.content.actor.principal() {
+                    return Err(Invalid::ActorMismatch);
+                }
+                if trust == Trust::Untrusted && signed.verify(Some(workforce.id)).is_err() {
+                    return Err(Invalid::BadPrincipalSignature);
+                }
+                Ok(())
+            }
             EventBody::AgentDefined(AgentDefined { .. })
-            | EventBody::InviteCreated(_)
             | EventBody::DeviceBound(_)
             | EventBody::DeviceProfile(_)
             | EventBody::ForkAnnounced(_)

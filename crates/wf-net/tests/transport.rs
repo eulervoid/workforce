@@ -103,3 +103,155 @@ async fn an_unserved_workforce_is_refused() {
     laptop.shutdown().await;
     vm.shutdown().await;
 }
+
+mod joining {
+    use wf_core::event::{DeviceBound, EventBody};
+    use wf_core::identity::InviteSigner;
+    use wf_core::invite::{InviteCode, JoinRefusal};
+
+    use super::*;
+
+    struct Invited {
+        member: Node<SharedReplica<RedbStore>>,
+        member_replica: SharedReplica<RedbStore>,
+        code: InviteCode,
+    }
+
+    async fn invited(fixture: &Fixture, expires_ms: u64) -> Invited {
+        let member_replica = replica(fixture);
+        write(&member_replica, fixture, 0, "existing work");
+        let (event, secret) = {
+            let replica = member_replica.lock();
+            fixture.invite(replica.state(), 5_000, expires_ms)
+        };
+        member_replica.lock().receive(event.clone()).unwrap();
+        let member = node(fixture, &fixture.devices[0], &member_replica).await;
+        let code = InviteCode::new(
+            fixture.workforce(),
+            event.id(),
+            &secret,
+            vec![member.device()],
+        );
+        Invited {
+            member,
+            member_replica,
+            code,
+        }
+    }
+
+    fn far_future() -> u64 {
+        u64::MAX / 2
+    }
+
+    async fn join(
+        fixture: &Fixture,
+        invited: &Invited,
+        code: &InviteCode,
+        signer: &DeviceSigner,
+    ) -> (Result<(), wf_net::NetError>, SharedReplica<RedbStore>) {
+        let local = SharedReplica::new(Replica::open(RedbStore::in_memory().unwrap()).unwrap());
+        let joiner = Node::start(signer, Network::Direct).await.unwrap();
+        let author_replica = local.clone();
+        let invite = code.invite;
+        let proof = code.prove(signer.key()).unwrap();
+        let actor = fixture.founder_actor();
+        let signer_for_author = signer.clone();
+        let result = joiner
+            .join(code, invited.member.local_addr(), &local, move || {
+                author_replica
+                    .lock()
+                    .author(
+                        &signer_for_author,
+                        actor,
+                        9_000,
+                        EventBody::DeviceBound(DeviceBound { invite, proof }),
+                    )
+                    .map(|_| ())
+                    .map_err(Into::into)
+            })
+            .await;
+        joiner.shutdown().await;
+        (result, local)
+    }
+
+    #[tokio::test]
+    async fn a_device_joins_and_the_member_learns_of_it() {
+        let fixture = Fixture::new(1);
+        let invited = invited(&fixture, far_future()).await;
+        let vm = DeviceSigner::from_bytes(&[90; 32]).unwrap();
+
+        let (result, local) = join(&fixture, &invited, &invited.code, &vm).await;
+        result.unwrap();
+
+        let state = local.lock().state().clone();
+        assert_eq!(state.principal_of(&vm.key()), Some(fixture.founder.key()));
+        assert_eq!(state.items().count(), 1);
+        let member_state = invited.member_replica.lock().state().clone();
+        assert_eq!(
+            member_state.principal_of(&vm.key()),
+            Some(fixture.founder.key())
+        );
+        assert_eq!(member_state.event_count(), state.event_count());
+        invited.member.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_invite_works_once() {
+        let fixture = Fixture::new(1);
+        let invited = invited(&fixture, far_future()).await;
+        let first = DeviceSigner::from_bytes(&[91; 32]).unwrap();
+        let second = DeviceSigner::from_bytes(&[92; 32]).unwrap();
+        join(&fixture, &invited, &invited.code, &first)
+            .await
+            .0
+            .unwrap();
+        let (result, local) = join(&fixture, &invited, &invited.code, &second).await;
+        assert!(matches!(
+            result,
+            Err(wf_net::NetError::JoinRefused {
+                reason: JoinRefusal::Redeemed,
+                ..
+            })
+        ));
+        assert_eq!(local.lock().state().event_count(), 0);
+        invited.member.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn an_expired_invite_is_refused() {
+        let fixture = Fixture::new(1);
+        let invited = invited(&fixture, 6_000).await;
+        let vm = DeviceSigner::from_bytes(&[93; 32]).unwrap();
+        let (result, _) = join(&fixture, &invited, &invited.code, &vm).await;
+        assert!(matches!(
+            result,
+            Err(wf_net::NetError::JoinRefused {
+                reason: JoinRefusal::Expired,
+                ..
+            })
+        ));
+        invited.member.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn a_code_with_the_wrong_secret_is_refused() {
+        let fixture = Fixture::new(1);
+        let invited = invited(&fixture, far_future()).await;
+        let forged = InviteCode::new(
+            fixture.workforce(),
+            invited.code.invite,
+            &InviteSigner::generate(),
+            invited.code.bootstrap.clone(),
+        );
+        let vm = DeviceSigner::from_bytes(&[94; 32]).unwrap();
+        let (result, _) = join(&fixture, &invited, &forged, &vm).await;
+        assert!(matches!(
+            result,
+            Err(wf_net::NetError::JoinRefused {
+                reason: JoinRefusal::BadProof,
+                ..
+            })
+        ));
+        invited.member.shutdown().await;
+    }
+}

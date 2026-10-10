@@ -4,9 +4,11 @@
 use std::future::Future;
 use std::sync::{Arc, Mutex, MutexGuard};
 
+use iroh::Signature;
 use wf_core::event::Event;
 use wf_core::id::EventId;
 use wf_core::identity::DeviceKey;
+use wf_core::invite::JoinRefusal;
 use wf_core::sync::{self, Versions};
 use wf_store::{EventStore, ReceiveError, Replica, StoreError};
 
@@ -50,6 +52,15 @@ pub trait SyncLog: Send + Sync {
 
     /// Whether `device` is bound to a member of this workforce.
     fn is_bound(&self, device: DeviceKey) -> impl Future<Output = Result<bool, LogError>> + Send;
+
+    /// The handshake rules for letting a device join with an invite.
+    fn check_join(
+        &self,
+        invite: EventId,
+        device: DeviceKey,
+        proof: Signature,
+        now_ms: u64,
+    ) -> impl Future<Output = Result<Result<(), JoinRefusal>, LogError>> + Send;
 
     /// Parents of parked events that are not known yet.
     fn missing(&self) -> impl Future<Output = Result<Vec<EventId>, LogError>> + Send;
@@ -125,6 +136,19 @@ impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
 
     async fn is_bound(&self, device: DeviceKey) -> Result<bool, LogError> {
         Ok(self.lock().state().principal_of(&device).is_some())
+    }
+
+    async fn check_join(
+        &self,
+        invite: EventId,
+        device: DeviceKey,
+        proof: Signature,
+        now_ms: u64,
+    ) -> Result<Result<(), JoinRefusal>, LogError> {
+        Ok(self
+            .lock()
+            .state()
+            .check_join(&invite, device, &proof, now_ms))
     }
 
     async fn missing(&self) -> Result<Vec<EventId>, LogError> {

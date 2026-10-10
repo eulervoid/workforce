@@ -12,7 +12,7 @@ pub const SNAPSHOT_INTERVAL: usize = 256;
 
 /// Bumped whenever the serialized shape of [`State`] changes. Snapshots are a cache: a mismatch
 /// discards the snapshot and refolds from the log.
-const SNAPSHOT_FORMAT: u32 = 2;
+const SNAPSHOT_FORMAT: u32 = 3;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
@@ -132,10 +132,13 @@ impl<S: EventStore> Replica<S> {
             return Err(AuthorError::OwnFeedForked);
         }
         self.state.check_policy(&body)?;
-        let builder = self
+        let mut builder = self
             .state
             .builder(signer.key(), actor, now_ms)
             .ok_or(AuthorError::NoWorkforce)?;
+        if let EventBody::DeviceBound(bound) = &body {
+            builder = builder.depending_on(bound.invite);
+        }
         let event = builder.sign(signer, body)?;
         self.receive(event.clone())?;
         Ok(event)

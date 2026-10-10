@@ -4,11 +4,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::crdt::Lww;
-use crate::event::{Event, EventBuilder};
+use crate::crdt::{Lww, Stamp};
+use crate::event::{DeviceProfile, Event, EventBuilder, InviteKind};
 use crate::hlc::Hlc;
 use crate::id::{EventId, ItemId, WorkforceId};
-use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
+use crate::identity::{Actor, AgentId, DeviceKey, InviteKey, PrincipalKey, Role};
 use crate::item::{Item, ItemView};
 use crate::name::{AgentName, Handle, HarnessName, LaneName, Requirement};
 use crate::policy::Policy;
@@ -112,13 +112,47 @@ pub(crate) struct Known {
     pub(crate) seq: u64,
 }
 
+/// A device bound to a principal: by genesis, or by redeeming an invite.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct Binding {
+    pub(crate) principal: PrincipalKey,
+    /// The earliest binding wins, so a device bound twice (a cloned join) has one principal on
+    /// every peer.
+    pub(crate) stamp: Stamp,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Invite {
+    pub kind: InviteKind,
+    /// The principal that signed it, and whose devices it binds.
+    pub principal: PrincipalKey,
+    pub key: InviteKey,
+    pub expires_ms: u64,
+    /// Every device whose `DeviceBound` used this invite.
+    pub redeemed_by: BTreeSet<DeviceKey>,
+}
+
+/// What `wf device list` shows about a bound device.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceInfo<'a> {
+    pub device: DeviceKey,
+    pub principal: PrincipalKey,
+    pub profile: Option<&'a DeviceProfile>,
+    /// Bound with an invite that was redeemed by more than one device.
+    pub invite_redeemed_twice: bool,
+    /// The lowest `seq` at which the device's feed forked.
+    pub equivocated: Option<u64>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Workforce {
     pub(crate) id: WorkforceId,
     pub(crate) name: String,
     pub(crate) founder: PrincipalKey,
     pub(crate) members: BTreeMap<PrincipalKey, Member>,
-    pub(crate) devices: BTreeMap<DeviceKey, PrincipalKey>,
+    pub(crate) devices: BTreeMap<DeviceKey, Binding>,
+    pub(crate) invites: BTreeMap<EventId, Invite>,
+    pub(crate) profiles: BTreeMap<DeviceKey, Lww<DeviceProfile>>,
     pub(crate) policy: Lww<PolicyDoc>,
     pub(crate) agents: BTreeMap<AgentId, Lww<AgentDefinition>>,
     pub(crate) items: BTreeMap<ItemId, Item>,
@@ -217,7 +251,33 @@ impl State {
 
     /// The principal a device is bound to.
     pub fn principal_of(&self, device: &DeviceKey) -> Option<PrincipalKey> {
-        self.workforce.as_ref()?.devices.get(device).copied()
+        self.workforce
+            .as_ref()?
+            .devices
+            .get(device)
+            .map(|binding| binding.principal)
+    }
+
+    pub fn invite(&self, id: &EventId) -> Option<&Invite> {
+        self.workforce.as_ref()?.invites.get(id)
+    }
+
+    /// Every bound device with what it says about itself and what is wrong with it.
+    pub fn devices(&self) -> impl Iterator<Item = DeviceInfo<'_>> {
+        self.workforce.iter().flat_map(|workforce| {
+            workforce
+                .devices
+                .iter()
+                .map(|(device, binding)| DeviceInfo {
+                    device: *device,
+                    principal: binding.principal,
+                    profile: workforce.profiles.get(device).map(Lww::value),
+                    invite_redeemed_twice: workforce.invites.values().any(|invite| {
+                        invite.redeemed_by.len() > 1 && invite.redeemed_by.contains(device)
+                    }),
+                    equivocated: self.feeds.get(device).and_then(Feed::equivocated),
+                })
+        })
     }
 
     pub fn agents(&self) -> impl Iterator<Item = (&AgentId, &AgentDefinition)> {

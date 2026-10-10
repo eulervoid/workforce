@@ -43,6 +43,11 @@ pub enum Command {
     Log,
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
+    /// Invite another machine of yours to the workforce.
+    #[command(subcommand)]
+    Invite(InviteCommand),
+    /// Bind this machine to a workforce with an invite code.
+    Join(JoinArgs),
     /// Summarize the workforce.
     Status {
         /// Ignore the snapshot and fold the whole log again.
@@ -56,6 +61,40 @@ pub struct SyncArgs {
     /// Keep listening for other devices until interrupted.
     #[arg(long)]
     pub serve: bool,
+    /// Use this relay server instead of the default ones.
+    #[arg(long, value_name = "URL")]
+    pub relay: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum InviteCommand {
+    /// Print a code that binds one more machine to you. Needs your principal key.
+    Device(InviteDeviceArgs),
+}
+
+#[derive(Args)]
+pub struct InviteDeviceArgs {
+    /// How long the code works, such as `24h` or `30m`.
+    #[arg(long, default_value = "24h")]
+    pub expires: humantime::Duration,
+}
+
+#[derive(Args)]
+pub struct JoinArgs {
+    /// The `wfi1...` code printed by `wf invite device`.
+    pub code: String,
+    /// A name for this machine. Asked for at a terminal when left out.
+    #[arg(long)]
+    pub name: Option<String>,
+    /// How many agent sessions this machine may run at once.
+    #[arg(long, default_value_t = 1)]
+    pub max_sessions: u32,
+    /// An agent this machine can run and how many sessions of it, as `coder=2`.
+    #[arg(long = "agent", value_name = "NAME=SESSIONS")]
+    pub agents: Vec<String>,
+    /// Describe the hardware; detected when left out.
+    #[arg(long)]
+    pub hardware: Option<String>,
     /// Use this relay server instead of the default ones.
     #[arg(long, value_name = "URL")]
     pub relay: Option<String>,

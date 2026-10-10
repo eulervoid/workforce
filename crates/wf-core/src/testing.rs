@@ -2,11 +2,12 @@
 
 use crate::crdt::SetChange;
 use crate::event::{
-    AgentDefined, Change, Comment, Event, EventBody, EventBuilder, Genesis, ItemCreated,
-    ItemEdited, ItemLinked, ItemRef, ItemTransitioned, Link, PolicySet,
+    AgentDefined, Change, Comment, DeviceBound, Event, EventBody, EventBuilder, Genesis,
+    InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemRef, ItemTransitioned,
+    Link, PolicySet,
 };
 use crate::id::{ItemId, WorkforceId};
-use crate::identity::{Actor, DeviceSigner, MemberSeed, PrincipalSigner, Signed};
+use crate::identity::{Actor, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed};
 use crate::item::Priority;
 use crate::name::{AgentName, Handle, HarnessName, StateName, TypeName};
 use crate::policy::DEFAULT_POLICY_TOML;
@@ -101,6 +102,50 @@ impl Fixture {
             .receive(event.clone(), Trust::Untrusted)
             .unwrap_or_else(|error| panic!("event should be valid: {error}"));
         event
+    }
+
+    /// An invite for the founder's principal, authored on device 0.
+    pub fn invite(&self, state: &State, now_ms: u64, expires_ms: u64) -> (Event, InviteSigner) {
+        let secret = InviteSigner::generate();
+        let body = EventBody::InviteCreated(
+            Signed::sign(
+                &self.founder,
+                Some(self.workforce()),
+                InviteCreated {
+                    kind: InviteKind::Device,
+                    invite: secret.key(),
+                    expires_ms,
+                },
+            )
+            .unwrap(),
+        );
+        (self.author(state, 0, now_ms, body), secret)
+    }
+
+    /// The first event of `joiner`: redeems `invite` for the founder's principal.
+    pub fn bind(
+        &self,
+        state: &State,
+        joiner: &DeviceSigner,
+        invite: &Event,
+        secret: &InviteSigner,
+        now_ms: u64,
+    ) -> Event {
+        let proof = secret
+            .prove(self.workforce(), invite.id(), joiner.key())
+            .unwrap();
+        state
+            .builder(joiner.key(), self.founder_actor(), now_ms)
+            .expect("state has a genesis")
+            .depending_on(invite.id())
+            .sign(
+                joiner,
+                EventBody::DeviceBound(DeviceBound {
+                    invite: invite.id(),
+                    proof,
+                }),
+            )
+            .unwrap()
     }
 
     pub fn policy_set(&self, signer: &PrincipalSigner, source: &str) -> EventBody {

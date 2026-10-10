@@ -20,6 +20,7 @@ anyhow.workspace = true
 clap.workspace = true
 comfy-table.workspace = true
 data-encoding.workspace = true
+humantime.workspace = true
 jiff.workspace = true
 serde.workspace = true
 serde_json.workspace = true

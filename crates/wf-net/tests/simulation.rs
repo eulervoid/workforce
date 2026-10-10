@@ -316,3 +316,60 @@ fn missing_parents_are_fetched_by_id() {
         assert_eq!(states[0].equivocations().count(), 1);
     });
 }
+
+#[test]
+fn a_leaked_invite_redeemed_through_two_partitioned_members_flags_both_devices() {
+    use wf_core::event::{DeviceBound, EventBody};
+    use wf_core::identity::DeviceSigner;
+
+    runtime().block_on(async {
+        let mut cluster = Cluster::new(3);
+        let (invite, secret) = {
+            let replica = cluster.peers[0].replica.lock();
+            cluster.fixture.invite(replica.state(), 5_000, u64::MAX / 2)
+        };
+        cluster.peers[0]
+            .replica
+            .lock()
+            .receive(invite.clone())
+            .unwrap();
+        cluster.reconnect_everyone().await;
+
+        cluster.run(Op::Partition(vec![0, 1, 2, 0, 0])).await;
+        let mut bound = Vec::new();
+        for (member, seed) in [(0, 80u8), (1, 81)] {
+            let device = DeviceSigner::from_bytes(&[seed; 32]).unwrap();
+            let proof = secret
+                .prove(cluster.fixture.workforce(), invite.id(), device.key())
+                .unwrap();
+            cluster.peers[member]
+                .replica
+                .lock()
+                .author(
+                    &device,
+                    cluster.fixture.founder_actor(),
+                    9_000 + u64::from(seed),
+                    EventBody::DeviceBound(DeviceBound {
+                        invite: invite.id(),
+                        proof,
+                    }),
+                )
+                .unwrap();
+            bound.push(device.key());
+        }
+        cluster.run(Op::Partition(vec![0, 0, 0, 0, 0])).await;
+        cluster.reconnect_everyone().await;
+
+        let states = cluster.states();
+        assert_converged(&states);
+        for state in &states {
+            let flagged: Vec<_> = state
+                .devices()
+                .filter(|info| info.invite_redeemed_twice)
+                .map(|info| info.device)
+                .collect();
+            assert_eq!(flagged.len(), 2);
+            assert!(bound.iter().all(|device| flagged.contains(device)));
+        }
+    });
+}

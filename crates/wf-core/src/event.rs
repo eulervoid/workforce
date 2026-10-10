@@ -371,6 +371,13 @@ impl EventBuilder {
         }
     }
 
+    /// Names an event the author depends on even though it is not a head, such as the invite a
+    /// `DeviceBound` redeems.
+    pub fn depending_on(mut self, event: EventId) -> Self {
+        self.deps.push(event);
+        self
+    }
+
     pub fn sign(self, signer: &DeviceSigner, body: EventBody) -> Result<Event, EventError> {
         if signer.key() != self.author {
             return Err(EventError::SignerMismatch);

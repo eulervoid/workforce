@@ -1,7 +1,7 @@
 //! Applying admitted events. Every register and set update here is commutative, so the result is
 //! a function of the set of events, not of the order they were applied in.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use crate::crdt::{Lww, Stamp};
 use crate::event::{Change, Event, EventBody, ItemLinked, Link};
@@ -11,7 +11,9 @@ use crate::item::{Item, Note, NoteKind};
 use crate::name::StateName;
 use crate::policy::Policy;
 use crate::refs;
-use crate::state::{AgentDefinition, Feed, FeedHead, Known, Member, PolicyDoc, State, Workforce};
+use crate::state::{
+    AgentDefinition, Binding, Feed, FeedHead, Invite, Known, Member, PolicyDoc, State, Workforce,
+};
 
 impl State {
     /// Applies an event that [`State::receive`] has admitted.
@@ -49,11 +51,12 @@ impl State {
             let genesis = &signed.statement;
             let mut members = BTreeMap::new();
             let mut devices = BTreeMap::new();
+            let genesis_binding = |principal| Binding { principal, stamp };
             let seeds = std::iter::once((&genesis.founder, Role::Owner))
                 .chain(genesis.members.iter().map(|seed| (seed, Role::Member)));
             for (seed, role) in seeds {
                 for device in &seed.devices {
-                    devices.insert(*device, seed.principal);
+                    devices.insert(*device, genesis_binding(seed.principal));
                 }
                 members.insert(
                     seed.principal,
@@ -81,6 +84,8 @@ impl State {
                 ),
                 agents: BTreeMap::new(),
                 items: BTreeMap::new(),
+                invites: BTreeMap::new(),
+                profiles: BTreeMap::new(),
             });
             return;
         }
@@ -89,12 +94,54 @@ impl State {
             return;
         };
         match &content.body {
-            EventBody::Genesis(_)
-            | EventBody::InviteCreated(_)
-            | EventBody::DeviceBound(_)
-            | EventBody::DeviceProfile(_)
-            | EventBody::ForkAnnounced(_)
-            | EventBody::Unknown { .. } => {}
+            EventBody::Genesis(_) | EventBody::ForkAnnounced(_) | EventBody::Unknown { .. } => {}
+            EventBody::InviteCreated(signed) => {
+                let created = &signed.statement;
+                workforce.invites.insert(
+                    id,
+                    Invite {
+                        kind: created.kind,
+                        principal: signed.signer,
+                        key: created.invite,
+                        expires_ms: created.expires_ms,
+                        redeemed_by: BTreeSet::new(),
+                    },
+                );
+            }
+            EventBody::DeviceBound(bound) => {
+                let Some(invite) = workforce.invites.get_mut(&bound.invite) else {
+                    return;
+                };
+                invite.redeemed_by.insert(content.author);
+                let principal = invite.principal;
+                let binding = Binding { principal, stamp };
+                let earlier = workforce
+                    .devices
+                    .get(&content.author)
+                    .is_none_or(|existing| binding.stamp < existing.stamp);
+                if earlier {
+                    if let Some(previous) = workforce.devices.insert(content.author, binding)
+                        && let Some(member) = workforce.members.get_mut(&previous.principal)
+                    {
+                        member.devices.remove(&content.author);
+                    }
+                    if let Some(member) = workforce.members.get_mut(&principal) {
+                        member.devices.insert(content.author);
+                    }
+                }
+            }
+            EventBody::DeviceProfile(profile) => {
+                match workforce.profiles.get_mut(&content.author) {
+                    Some(existing) => {
+                        existing.set(profile.clone(), stamp);
+                    }
+                    None => {
+                        workforce
+                            .profiles
+                            .insert(content.author, Lww::new(profile.clone(), stamp));
+                    }
+                }
+            }
             EventBody::PolicySet(signed) => {
                 let source = &signed.statement.policy;
                 let policy = Policy::parse(source).expect("admitted policy is valid");

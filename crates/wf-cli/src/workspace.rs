@@ -84,6 +84,10 @@ impl Workspace {
         (self.replica, self.device)
     }
 
+    pub fn device_key(&self) -> wf_core::identity::DeviceKey {
+        self.device.key()
+    }
+
     pub fn state(&self) -> &State {
         self.replica.state()
     }

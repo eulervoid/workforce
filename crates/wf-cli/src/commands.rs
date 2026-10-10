@@ -76,6 +76,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     let mode = Mode::detect(json);
     match cli.command {
         Command::Init(args) => init(json, args, data, cwd),
+        Command::Join(args) => crate::network::join(json, mode, args, data, cwd),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
             emit(
@@ -87,7 +88,9 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         command => {
             let mut workspace = Workspace::open(data, cwd, false)?;
             match command {
-                Command::Init(_) | Command::Status { .. } => unreachable!("handled above"),
+                Command::Init(_) | Command::Join(_) | Command::Status { .. } => {
+                    unreachable!("handled above")
+                }
                 Command::Agent(command) => agent(json, command, &mut workspace),
                 Command::Item(command) => item(json, mode, command, &mut workspace),
                 Command::Comment(args) => comment(json, mode, &mut workspace, args),
@@ -95,6 +98,9 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Policy(command) => policy(json, command, &mut workspace),
                 Command::Log => log(json, mode, &workspace),
                 Command::Sync(args) => crate::network::sync(json, workspace, args),
+                Command::Invite(InviteCommand::Device(args)) => {
+                    crate::network::invite_device(json, &mut workspace, args)
+                }
             }
         }
     }

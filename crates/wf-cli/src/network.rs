@@ -1,19 +1,27 @@
 //! Commands that talk to other devices.
 
+use std::collections::BTreeMap;
+use std::path::Path;
 use std::sync::Arc;
+use std::time::Duration;
 
 use anyhow::{Context, bail};
 use serde::Serialize;
 use tokio::task::JoinSet;
-use wf_core::identity::DeviceKey;
+use wf_core::event::{DeviceBound, DeviceProfile, EventBody, InviteCreated, InviteKind};
+use wf_core::identity::{Actor, DeviceKey, InviteSigner, Signed};
+use wf_core::invite::InviteCode;
+use wf_core::name::AgentName;
 use wf_core::state::State;
 use wf_net::{NetError, Network, Node, SharedReplica, SyncReport};
-use wf_store::RedbStore;
+use wf_store::{RedbStore, Replica};
 
-use crate::cli::SyncArgs;
+use crate::cli::{InviteDeviceArgs, JoinArgs, SyncArgs};
 use crate::commands::emit;
+use crate::interactive::Mode;
+use crate::keys::DataDir;
 use crate::view::{device_label, timestamp_now};
-use crate::workspace::Workspace;
+use crate::workspace::{self, WORKFORCE_FILE, WorkforceFile, Workspace};
 
 type ReplicaNode = Node<SharedReplica<RedbStore>>;
 
@@ -171,5 +179,235 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
             tokio::signal::ctrl_c().await?;
         }
         Ok(())
+    })
+}
+
+#[derive(Serialize)]
+pub struct InviteView {
+    pub code: String,
+    pub expires: String,
+}
+
+pub fn invite_device(
+    json: bool,
+    workspace: &mut Workspace,
+    args: InviteDeviceArgs,
+) -> anyhow::Result<()> {
+    let principal = workspace.principal_signer()?;
+    let device = workspace.device_key();
+    if workspace.state().principal_of(&device) != Some(principal.key()) {
+        bail!("the principal key on this machine belongs to someone else");
+    }
+    let workforce = workspace
+        .state()
+        .workforce_id()
+        .context("the workforce has no genesis")?;
+    let now = crate::workspace::now_ms();
+    let lifetime = u64::try_from(Duration::from(args.expires).as_millis()).unwrap_or(u64::MAX);
+    let expires_ms = now.saturating_add(lifetime);
+
+    let secret = InviteSigner::generate();
+    let statement = InviteCreated {
+        kind: InviteKind::Device,
+        invite: secret.key(),
+        expires_ms,
+    };
+    let event = workspace.author(EventBody::InviteCreated(Signed::sign(
+        &principal,
+        Some(workforce),
+        statement,
+    )?))?;
+    let mut bootstrap = vec![device];
+    bootstrap.extend(
+        peers_of(workspace.state(), device)
+            .into_iter()
+            .filter(|peer| workspace.state().principal_of(peer) == Some(principal.key())),
+    );
+    let code = InviteCode::new(workforce, event.id(), &secret, bootstrap);
+    let expires = i64::try_from(expires_ms)
+        .ok()
+        .and_then(|millis| jiff::Timestamp::from_millisecond(millis).ok())
+        .map_or_else(|| "unknown".to_string(), |time| time.to_string());
+    emit(
+        json,
+        &InviteView {
+            code: code.to_string(),
+            expires,
+        },
+        |view| {
+            format!(
+                "{}\nvalid until {}; on the new machine, inside a clone of this repository, run:\n  wf join <code> --name <machine>\nthis machine must be online: run `wf daemon` or `wf sync --serve`\n",
+                view.code, view.expires
+            )
+        },
+    )
+}
+
+#[derive(Serialize)]
+pub struct JoinView {
+    pub workforce: String,
+    pub device: String,
+    pub name: String,
+    pub principal: String,
+    pub events: usize,
+}
+
+fn detect_hardware() -> String {
+    let cpus = std::thread::available_parallelism().map_or(1, |count| count.get());
+    format!(
+        "{} {}, {cpus} cpus",
+        std::env::consts::OS,
+        std::env::consts::ARCH
+    )
+}
+
+fn parse_agents(agents: &[String]) -> anyhow::Result<BTreeMap<AgentName, u32>> {
+    agents
+        .iter()
+        .map(|text| {
+            let (name, sessions) = text
+                .split_once('=')
+                .with_context(|| format!("`{text}` is not NAME=SESSIONS"))?;
+            Ok((
+                AgentName::new(name)?,
+                sessions
+                    .parse()
+                    .with_context(|| format!("`{sessions}` is not a number"))?,
+            ))
+        })
+        .collect()
+}
+
+fn ask_device_name() -> anyhow::Result<String> {
+    use std::io::{BufRead, Write};
+    eprint!("name for this machine: ");
+    std::io::stderr().flush()?;
+    let mut line = String::new();
+    std::io::stdin().lock().read_line(&mut line)?;
+    Ok(line.trim().to_string())
+}
+
+pub fn join(
+    json: bool,
+    mode: Mode,
+    args: JoinArgs,
+    data: DataDir,
+    cwd: &Path,
+) -> anyhow::Result<()> {
+    let code: InviteCode = args.code.parse().context("reading the invite code")?;
+    let name = match args.name {
+        Some(name) => name,
+        None if mode == Mode::Interactive => ask_device_name()?,
+        None => bail!("pass --name to say what this machine is called"),
+    };
+    if name.trim().is_empty() {
+        bail!("the device name must not be empty");
+    }
+    let profile = DeviceProfile {
+        name: name.clone(),
+        hardware: args.hardware.unwrap_or_else(detect_hardware),
+        agents: parse_agents(&args.agents)?,
+        max_sessions: args.max_sessions,
+    };
+    let network = network_for(args.relay.as_deref())?;
+
+    match workspace::find_workforce(cwd) {
+        Ok((_, id)) if id != code.workforce => bail!(
+            "this directory belongs to workforce {id}, but the invite is for {}",
+            code.workforce
+        ),
+        Ok(_) => {}
+        Err(_) => {
+            let file = toml::to_string(&WorkforceFile { id: code.workforce })?;
+            std::fs::write(cwd.join(WORKFORCE_FILE), file)?;
+        }
+    }
+    let device = data.device(true)?.expect("created on demand");
+    let store = RedbStore::open(workspace::store_path(&data, &code.workforce)?)?;
+    let replica = Replica::open(store)?;
+    if replica.state().principal_of(&device.key()).is_some() {
+        bail!("this machine has already joined the workforce");
+    }
+    let shared = SharedReplica::new(replica);
+
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let node = Node::start(&device, network)
+            .await
+            .context("starting the network endpoint")?;
+        let mut failures = Vec::new();
+        let mut joined = false;
+        for bootstrap in &code.bootstrap {
+            let authoring = shared.clone();
+            let signer = device.clone();
+            let invite = code.invite;
+            let proof = code.prove(device.key())?;
+            let profile = profile.clone();
+            let result = node
+                .join(&code, wf_net::endpoint_id(*bootstrap), &shared, move || {
+                    let mut replica = authoring.lock();
+                    let principal = replica
+                        .state()
+                        .invite(&invite)
+                        .map(|invite| invite.principal)
+                        .ok_or("the invite is not in the log the member sent")?;
+                    let actor = Actor::Human(principal);
+                    replica.author(
+                        &signer,
+                        actor.clone(),
+                        workspace::now_ms(),
+                        EventBody::DeviceBound(DeviceBound { invite, proof }),
+                    )?;
+                    replica.author(
+                        &signer,
+                        actor,
+                        workspace::now_ms(),
+                        EventBody::DeviceProfile(profile),
+                    )?;
+                    Ok(())
+                })
+                .await;
+            match result {
+                Ok(()) => {
+                    joined = true;
+                    break;
+                }
+                Err(error @ (NetError::JoinRefused { .. } | NetError::JoinAuthoring(_))) => {
+                    node.shutdown().await;
+                    return Err(error.into());
+                }
+                Err(error) => failures.push(error.to_string()),
+            }
+        }
+        node.shutdown().await;
+        if !joined {
+            bail!(
+                "could not reach a device to join through:\n  {}",
+                failures.join("\n  ")
+            );
+        }
+        let replica = shared.lock();
+        let state = replica.state();
+        let principal = state
+            .principal_of(&device.key())
+            .context("the join did not bind this device")?;
+        emit(
+            json,
+            &JoinView {
+                workforce: code.workforce.to_string(),
+                device: device.key().to_string(),
+                name,
+                principal: crate::view::actor_label(state, &Actor::Human(principal)),
+                events: state.event_count(),
+            },
+            |view| {
+                format!(
+                    "joined workforce {} as {} ({}) with {} events\n",
+                    view.workforce, view.name, view.principal, view.events
+                )
+            },
+        )
     })
 }

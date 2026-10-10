@@ -8,6 +8,7 @@ pub mod graph;
 pub mod hlc;
 pub mod id;
 pub mod identity;
+pub mod invite;
 pub mod item;
 pub mod name;
 pub mod policy;
