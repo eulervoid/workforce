@@ -46,7 +46,7 @@ impl State {
             .or_insert_with(Feed::new)
             .record(head, content.prev, around);
         if origin == Origin::History {
-            self.take_in_history(event, id, stamp);
+            self.take_in_history(event, id);
             return;
         }
         for parent in event.causal_parents() {
@@ -98,11 +98,10 @@ impl State {
                 items: BTreeMap::new(),
                 invites: BTreeMap::new(),
                 profiles: BTreeMap::new(),
-                fork: genesis.forked_from.as_ref().map(|point| ForkState {
-                    parent: point.workforce,
-                    heads: point.heads.clone(),
-                    wanted: point.heads.iter().copied().collect(),
-                }),
+                fork: genesis
+                    .forked_from
+                    .as_ref()
+                    .map(|point| ForkState::starting_at(point.workforce, point.heads.clone())),
                 aliases,
                 announcements: BTreeMap::new(),
             });
@@ -112,23 +111,61 @@ impl State {
         self.fold_body(event, id, stamp, Origin::Own);
     }
 
-    /// Takes in an event of the history this workforce was forked from. What happened to items
-    /// and agents carries over, and what the devices that are kept said about themselves: the
-    /// members, devices, invites and policy of the parent are not those of the fork.
-    fn take_in_history(&mut self, event: &Event, id: EventId, stamp: Stamp) {
-        if let Some(fork) = self
+    /// Takes in an event of the history this workforce was forked from. It is only recorded here:
+    /// history arrives newest first, so its bodies are folded once all of it has arrived.
+    fn take_in_history(&mut self, event: &Event, id: EventId) {
+        let known = &self.known;
+        let Some(ForkState::TakingIn {
+            wanted, admitted, ..
+        }) = self
             .workforce
             .as_mut()
             .and_then(|workforce| workforce.fork.as_mut())
-        {
-            fork.wanted.remove(&id);
-            fork.wanted.extend(
-                event
-                    .causal_parents()
-                    .filter(|parent| !self.known.contains_key(parent)),
-            );
+        else {
+            return;
+        };
+        wanted.remove(&id);
+        wanted.extend(
+            event
+                .causal_parents()
+                .filter(|parent| !known.contains_key(parent)),
+        );
+        admitted.insert(id, event.clone());
+        if wanted.is_empty() {
+            self.fold_history();
         }
-        self.fold_body(event, id, stamp, Origin::History);
+    }
+
+    /// Folds the whole history of a fork, oldest event first, which puts every event after its
+    /// parents.
+    fn fold_history(&mut self) {
+        let Some(workforce) = self.workforce.as_mut() else {
+            return;
+        };
+        let Some(ForkState::TakingIn {
+            parent,
+            heads,
+            admitted,
+            ..
+        }) = workforce.fork.take()
+        else {
+            return;
+        };
+        workforce.fork = Some(ForkState::Complete { parent, heads });
+        let mut history: Vec<(Stamp, Event)> = admitted
+            .into_iter()
+            .map(|(id, event)| {
+                let stamp = Stamp {
+                    hlc: event.content.hlc,
+                    id,
+                };
+                (stamp, event)
+            })
+            .collect();
+        history.sort_by_key(|(stamp, _)| *stamp);
+        for (stamp, event) in history {
+            self.fold_body(&event, stamp.id, stamp, Origin::History);
+        }
     }
 
     fn fold_body(&mut self, event: &Event, id: EventId, stamp: Stamp, origin: Origin) {

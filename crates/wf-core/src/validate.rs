@@ -16,7 +16,7 @@ use crate::id::{EventId, ItemId, WorkforceId};
 use crate::identity::{Actor, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, StateName, TypeName};
 use crate::policy::{Category, Field, Policy, PolicyError};
-use crate::state::{Disposition, MAX_PENDING, Origin, Received, State, Trust, Waiting};
+use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GenesisError {
@@ -184,9 +184,19 @@ impl State {
                                 .map(|released| (released, Trust::Stored)),
                         );
                     }
+                    if origin == Origin::History && !self.history_incomplete() {
+                        queue.extend(
+                            self.pending
+                                .release(Waiting::History)
+                                .into_iter()
+                                .map(|released| (released, Trust::Stored)),
+                        );
+                    }
                 }
                 Ok(Admission::Wait(waiting)) => {
-                    if self.pending.events.len() >= MAX_PENDING {
+                    // Events that wait for the history of a fork are signed by bound devices and
+                    // end when the history is complete, so they are not capped.
+                    if waiting != Waiting::History && self.pending.events.len() >= MAX_PENDING {
                         if is_submitted {
                             return Err(Invalid::PendingFull);
                         }
@@ -235,8 +245,11 @@ impl State {
         // The ids of the history of a fork are named by the genesis and the events already taken
         // in, and an event is its own proof that it is the one named: there is nothing else to
         // check, and the rules of the parent were applied when it was written.
-        if let Some(fork) = &workforce.fork
-            && fork.wanted.contains(&event.id())
+        if workforce
+            .fork
+            .as_ref()
+            .and_then(ForkState::wanted)
+            .is_some_and(|wanted| wanted.contains(&event.id()))
         {
             return Ok(Admission::Apply(Origin::History));
         }
@@ -247,11 +260,17 @@ impl State {
             None => return Err(Invalid::MissingWorkforce),
             Some(id) if id != workforce.id => {
                 return Err(match &workforce.fork {
-                    Some(fork) if fork.parent == id => Invalid::NotInForkHistory(id),
+                    Some(fork) if fork.parent() == id => Invalid::NotInForkHistory(id),
                     _ => Invalid::WrongWorkforce(id),
                 });
             }
             Some(_) => {}
+        }
+
+        // What the devices of a fork write waits until the history it continues has been folded:
+        // their feeds and the items they touch are in it.
+        if self.history_incomplete() {
+            return Ok(Admission::Wait(Waiting::History));
         }
 
         if let Some(missing) = event

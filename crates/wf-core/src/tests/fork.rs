@@ -1,4 +1,4 @@
-use crate::event::{Event, EventBody};
+use crate::event::{Change, Event, EventBody};
 use crate::id::WorkforceId;
 use crate::identity::{PrincipalSigner, Signed};
 use crate::state::{Disposition, State, Trust};
@@ -27,6 +27,18 @@ fn scenario(new_principal: bool) -> Scenario {
         };
         history.push(fixture.apply(&mut parent, device, 2_000 + index as u64, body));
     }
+    let first = parent.items().next().expect("an item exists").id();
+    let second = parent.items().nth(1).expect("two items exist").id();
+    let later = [
+        edit(first, Change::Title("renamed in the parent".into())),
+        transition(second, "done"),
+        depends_on(first, second),
+        comment(second, "a second note"),
+        archive(second),
+    ];
+    for (index, body) in later.into_iter().enumerate() {
+        history.push(fixture.apply(&mut parent, index % 2, 3_000 + index as u64, body));
+    }
     let founder = if new_principal {
         PrincipalSigner::from_bytes(&[200; 32]).unwrap()
     } else {
@@ -47,6 +59,10 @@ fn child(scenario: &Scenario) -> State {
         .receive(scenario.genesis.clone(), Trust::Untrusted)
         .unwrap();
     state
+}
+
+fn items_of(state: &State) -> Vec<&crate::item::Item> {
+    state.raw_items().collect()
 }
 
 /// Hands the state what it asks for, newest first, until it asks for nothing.
@@ -85,6 +101,7 @@ fn a_fork_takes_in_the_history_it_names_by_descent() {
 
     fetch_history(&mut state, &scenario.history);
     assert_eq!(state.items().count(), 4);
+    assert_eq!(items_of(&state), items_of(&scenario.parent));
     assert_eq!(state.event_count(), scenario.history.len() + 1);
     assert_eq!(state.heads().len(), 1, "history is not a head of the fork");
     assert_eq!(state.equivocations().count(), 0);
@@ -259,4 +276,88 @@ fn a_state_expecting_the_fork_refuses_the_genesis_of_the_parent() {
         .receive(scenario.genesis.clone(), Trust::Untrusted)
         .unwrap();
     assert_eq!(state.workforce_id(), Some(child_id));
+}
+
+#[test]
+fn the_items_of_a_fork_are_those_of_the_parent_as_they_were_written() {
+    let scenario = scenario(false);
+    let mut state = child(&scenario);
+    fetch_history(&mut state, &scenario.history);
+    assert_eq!(items_of(&state), items_of(&scenario.parent));
+    let notes: usize = items_of(&state).iter().map(|item| item.notes().len()).sum();
+    assert_eq!(notes, 2, "both comments carry over");
+    assert!(
+        items_of(&state)
+            .iter()
+            .any(|item| item.title() == "renamed in the parent")
+    );
+}
+
+#[test]
+fn history_in_batches_of_any_size_gives_the_same_state() {
+    let scenario = scenario(false);
+    let mut reference = child(&scenario);
+    fetch_history(&mut reference, &scenario.history);
+
+    for batch_size in [1, 2, 3, 100] {
+        let mut state = child(&scenario);
+        loop {
+            let wanted = state.missing_parents();
+            if wanted.is_empty() {
+                break;
+            }
+            let mut batch: Vec<&Event> = scenario
+                .history
+                .iter()
+                .filter(|event| wanted.contains(&event.id()))
+                .take(batch_size)
+                .collect();
+            batch.sort_by_key(|event| std::cmp::Reverse((event.content.hlc, event.id())));
+            for event in batch {
+                state.receive(event.clone(), Trust::Untrusted).unwrap();
+            }
+        }
+        assert_eq!(items_of(&state), items_of(&reference), "batch {batch_size}");
+    }
+}
+
+#[test]
+fn what_a_kept_device_writes_waits_for_the_history_and_is_not_lost() {
+    let scenario = scenario(false);
+    let mut writer = child(&scenario);
+    fetch_history(&mut writer, &scenario.history);
+    let device = &scenario.fixture.devices[0];
+    let own = writer
+        .builder(device.key(), scenario.fixture.founder_actor(), 20_000)
+        .unwrap()
+        .sign(device, create("task", "written in the fork"))
+        .unwrap();
+
+    let mut state = child(&scenario);
+    let received = state.receive(own.clone(), Trust::Untrusted).unwrap();
+    assert_eq!(received.disposition, Disposition::Pending);
+    assert!(state.history_incomplete());
+    fetch_history(&mut state, &scenario.history);
+    assert!(!state.history_incomplete());
+    assert!(state.contains(&own.id()), "released once the history is in");
+    assert_eq!(state.items().count(), 5);
+    assert_eq!(state.equivocations().count(), 0);
+}
+
+#[test]
+fn nothing_can_be_written_until_the_history_has_arrived() {
+    let scenario = scenario(false);
+    let mut state = child(&scenario);
+    let device = &scenario.fixture.devices[0];
+    let result = state.builder(device.key(), scenario.fixture.founder_actor(), 20_000);
+    assert_eq!(
+        result.err(),
+        Some(crate::state::BuildError::HistoryIncomplete)
+    );
+    fetch_history(&mut state, &scenario.history);
+    assert!(
+        state
+            .builder(device.key(), scenario.fixture.founder_actor(), 20_000)
+            .is_ok()
+    );
 }

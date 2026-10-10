@@ -171,15 +171,54 @@ pub struct Announcement {
     pub by: PrincipalKey,
 }
 
-/// How a forked workforce takes in the history it was forked from: events of the parent are
+/// How a forked workforce takes in the history it was forked from. Events of the parent are
 /// read-only history, admitted only when named by an event already taken in, starting with the
-/// heads the fork was made at.
+/// heads the fork was made at. That makes them arrive newest first, so they are only recorded
+/// while the history is taken in, and folded in `(hlc, id)` order once none is wanted any more.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub(crate) struct ForkState {
-    pub(crate) parent: WorkforceId,
-    pub(crate) heads: Vec<EventId>,
-    /// Named by an applied event (or the fork point) but not applied yet.
-    pub(crate) wanted: BTreeSet<EventId>,
+pub(crate) enum ForkState {
+    TakingIn {
+        parent: WorkforceId,
+        heads: Vec<EventId>,
+        /// Named by an admitted event (or the fork point) but not admitted yet.
+        wanted: BTreeSet<EventId>,
+        admitted: BTreeMap<EventId, Event>,
+    },
+    Complete {
+        parent: WorkforceId,
+        heads: Vec<EventId>,
+    },
+}
+
+impl ForkState {
+    pub(crate) fn starting_at(parent: WorkforceId, heads: Vec<EventId>) -> Self {
+        Self::TakingIn {
+            parent,
+            wanted: heads.iter().copied().collect(),
+            heads,
+            admitted: BTreeMap::new(),
+        }
+    }
+
+    pub(crate) fn parent(&self) -> WorkforceId {
+        match self {
+            Self::TakingIn { parent, .. } | Self::Complete { parent, .. } => *parent,
+        }
+    }
+
+    pub(crate) fn heads(&self) -> &[EventId] {
+        match self {
+            Self::TakingIn { heads, .. } | Self::Complete { heads, .. } => heads,
+        }
+    }
+
+    /// The history that is still to be taken in.
+    pub(crate) fn wanted(&self) -> Option<&BTreeSet<EventId>> {
+        match self {
+            Self::TakingIn { wanted, .. } => Some(wanted),
+            Self::Complete { .. } => None,
+        }
+    }
 }
 
 /// What `wf device list` shows about a bound device.
@@ -221,6 +260,8 @@ impl Workforce {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum Waiting {
     Genesis,
+    /// The history of a fork, which has to be folded first.
+    History,
     Event(EventId),
 }
 
@@ -242,6 +283,14 @@ impl Pending {
         };
         ids.iter().filter_map(|id| self.events.remove(id)).collect()
     }
+}
+
+#[derive(Debug, thiserror::Error, PartialEq, Eq)]
+pub enum BuildError {
+    #[error("the workforce has no genesis yet")]
+    NoWorkforce,
+    #[error("the history of this fork is still arriving; run `wf sync`")]
+    HistoryIncomplete,
 }
 
 /// What happened to the submitted event.
@@ -336,7 +385,7 @@ impl State {
     /// The workforce this one was forked from and the heads it was forked at.
     pub fn fork_point(&self) -> Option<(WorkforceId, &[EventId])> {
         let fork = self.workforce.as_ref()?.fork.as_ref()?;
-        Some((fork.parent, &fork.heads))
+        Some((fork.parent(), fork.heads()))
     }
 
     /// Forks of this workforce announced by its owners.
@@ -461,24 +510,40 @@ impl State {
         self.pending.events.values()
     }
 
+    /// Whether this is a fork that is still taking in the history it was made from. Nothing can
+    /// be written until it has.
+    pub fn history_incomplete(&self) -> bool {
+        self.workforce
+            .as_ref()
+            .and_then(|workforce| workforce.fork.as_ref())
+            .is_some_and(|fork| fork.wanted().is_some())
+    }
+
     /// Starts the genesis of a fork of this workforce: it continues the feed `author` has here
-    /// and comes after everything this state has seen. `None` before genesis.
+    /// and comes after everything this state has seen.
     pub fn fork_genesis_builder(
         &self,
         author: DeviceKey,
         actor: Actor,
         now_ms: u64,
-    ) -> Option<EventBuilder> {
+    ) -> Result<EventBuilder, BuildError> {
         let mut builder = self.builder(author, actor, now_ms)?;
         builder.workforce = None;
         builder.deps = Vec::new();
-        Some(builder)
+        Ok(builder)
     }
 
     /// Starts an event authored by `author` on top of everything this state has seen.
-    /// `None` before genesis, when there is no workforce to write into.
-    pub fn builder(&self, author: DeviceKey, actor: Actor, now_ms: u64) -> Option<EventBuilder> {
-        let workforce = self.workforce.as_ref()?;
+    pub fn builder(
+        &self,
+        author: DeviceKey,
+        actor: Actor,
+        now_ms: u64,
+    ) -> Result<EventBuilder, BuildError> {
+        let workforce = self.workforce.as_ref().ok_or(BuildError::NoWorkforce)?;
+        if self.history_incomplete() {
+            return Err(BuildError::HistoryIncomplete);
+        }
         let head = self.feeds.get(&author).map(Feed::head);
         let floor = self
             .heads
@@ -489,7 +554,7 @@ impl State {
             .map(|known| known.hlc)
             .max()
             .unwrap_or(Hlc::ZERO);
-        Some(EventBuilder {
+        Ok(EventBuilder {
             workforce: Some(workforce.id),
             author,
             actor,

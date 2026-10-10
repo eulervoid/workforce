@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::event::Event;
 use crate::id::EventId;
 use crate::identity::DeviceKey;
-use crate::state::{FeedHead, State, Waiting};
+use crate::state::{FeedHead, ForkState, State, Waiting};
 
 /// What a replica knows of one author's feed: enough for a peer to tell what it lacks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,13 +74,14 @@ impl State {
             .workforce
             .iter()
             .filter_map(|workforce| workforce.fork.as_ref())
-            .flat_map(|fork| fork.wanted.iter().copied());
+            .filter_map(ForkState::wanted)
+            .flat_map(|wanted| wanted.iter().copied());
         self.pending
             .waiting
             .keys()
             .filter_map(|waiting| match waiting {
                 Waiting::Event(id) if !self.pending.events.contains_key(id) => Some(*id),
-                Waiting::Event(_) | Waiting::Genesis => None,
+                Waiting::Event(_) | Waiting::Genesis | Waiting::History => None,
             })
             .chain(fork_history)
             .collect()

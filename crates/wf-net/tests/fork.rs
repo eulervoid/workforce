@@ -1,6 +1,6 @@
 //! Syncing a forked workforce: the history it was forked from is fetched by id.
 
-use wf_core::event::Event;
+use wf_core::event::{Change, Event};
 use wf_core::identity::PrincipalSigner;
 use wf_core::testing::*;
 use wf_net::{SharedReplica, SyncLog, initiate, read_open, respond};
@@ -30,6 +30,7 @@ fn encoded(replica: &SharedReplica<RedbStore>) -> Vec<u8> {
 }
 
 struct Forked {
+    parent: wf_core::state::State,
     fixture: Fixture,
     history: Vec<Event>,
     forker: SharedReplica<RedbStore>,
@@ -48,6 +49,13 @@ fn forked(history_len: usize) -> Forked {
             create("task", &format!("task {index}")),
         ));
     }
+    let first = parent.items().next().expect("an item exists").id();
+    history.push(fixture.apply(
+        &mut parent,
+        0,
+        50_000,
+        edit(first, Change::Title("edited in the parent".into())),
+    ));
     let founder = PrincipalSigner::from_bytes(&[1; 32]).unwrap();
     let genesis = fixture.fork(&parent, &founder, 90_000);
     let child = genesis.id().into();
@@ -61,6 +69,7 @@ fn forked(history_len: usize) -> Forked {
         forker.lock().receive(event).unwrap();
     }
     Forked {
+        parent,
         fixture,
         history,
         forker,
@@ -82,6 +91,18 @@ async fn a_new_device_takes_in_a_fork_and_its_history() {
     assert!(device.missing().await.unwrap().is_empty());
     assert_eq!(encoded(&device), encoded(&forked.forker));
     assert_eq!(device.lock().state().items().count(), 40);
+    let items = |state: &wf_core::state::State| -> Vec<(String, Option<wf_core::item::Priority>)> {
+        state
+            .live_items()
+            .map(|item| (item.title().to_string(), item.priority()))
+            .collect()
+    };
+    assert_eq!(items(device.lock().state()), items(&forked.parent));
+    assert!(
+        items(device.lock().state())
+            .iter()
+            .any(|(title, _)| title == "edited in the parent")
+    );
     assert_eq!(device.lock().state().heads().len(), 1);
 }
 

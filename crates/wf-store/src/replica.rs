@@ -4,7 +4,7 @@ use wf_core::event::{Event, EventBody, EventError};
 use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner};
 use wf_core::refs::PARSER_VERSION;
-use wf_core::state::{Disposition, Received, State, Trust};
+use wf_core::state::{BuildError, Disposition, Received, State, Trust};
 use wf_core::validate::{Invalid, PolicyViolation};
 
 use crate::store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError, StoredSnapshot};
@@ -14,7 +14,7 @@ pub const SNAPSHOT_INTERVAL: usize = 256;
 
 /// Bumped whenever the serialized shape of [`State`] changes. Snapshots are a cache: a mismatch
 /// discards the snapshot and refolds from the log.
-const SNAPSHOT_FORMAT: u32 = 3;
+const SNAPSHOT_FORMAT: u32 = 4;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
@@ -26,8 +26,8 @@ pub enum ReceiveError {
 
 #[derive(Debug, thiserror::Error)]
 pub enum AuthorError {
-    #[error("the workforce has no genesis yet")]
-    NoWorkforce,
+    #[error(transparent)]
+    Build(#[from] BuildError),
     #[error(transparent)]
     Policy(#[from] PolicyViolation),
     #[error(
@@ -204,10 +204,7 @@ impl<S: EventStore> Replica<S> {
             return Err(AuthorError::OwnFeedEquivocated);
         }
         self.state.check_policy(&body)?;
-        let mut builder = self
-            .state
-            .builder(signer.key(), actor, now_ms)
-            .ok_or(AuthorError::NoWorkforce)?;
+        let mut builder = self.state.builder(signer.key(), actor, now_ms)?;
         if let EventBody::DeviceBound(bound) = &body {
             builder = builder.depending_on(bound.invite);
         }
