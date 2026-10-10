@@ -303,6 +303,9 @@ fn invite_codes_round_trip() {
     );
     let text = code.to_string();
     assert!(text.starts_with("wfi1"));
+    let debug = format!("{code:?}");
+    assert!(debug.contains("<redacted>"));
+    assert!(!debug.contains(&data_encoding::HEXLOWER.encode(&secret.to_bytes())));
     let parsed = InviteCode::from_str(&text).unwrap();
     assert_eq!(parsed, code);
     let device = joiner(70);

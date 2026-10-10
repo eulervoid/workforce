@@ -53,7 +53,7 @@ struct Payload {
 
 /// What `wf invite device` prints and `wf join` reads: everything a new device needs to find the
 /// workforce and prove it was invited.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct InviteCode {
     pub workforce: WorkforceId,
     /// The `InviteCreated` event.
@@ -61,6 +61,18 @@ pub struct InviteCode {
     secret: [u8; 32],
     /// Devices to dial, the inviting one first.
     pub bootstrap: Vec<DeviceKey>,
+}
+
+impl fmt::Debug for InviteCode {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("InviteCode")
+            .field("workforce", &self.workforce)
+            .field("invite", &self.invite)
+            .field("secret", &"<redacted>")
+            .field("bootstrap", &self.bootstrap)
+            .finish()
+    }
 }
 
 impl InviteCode {
