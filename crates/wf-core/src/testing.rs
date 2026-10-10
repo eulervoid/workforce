@@ -209,6 +209,7 @@ pub fn create(item_type: &str, title: &str) -> EventBody {
         lane: None,
         labels: vec![],
         requires: vec![],
+        review: None,
     })
 }
 

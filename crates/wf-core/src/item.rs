@@ -54,7 +54,7 @@ use crate::crdt::{AddWinsSet, Lww, Stamp};
 use crate::hlc::Hlc;
 use crate::id::{EventId, ItemId};
 use crate::identity::Actor;
-use crate::name::{Label, LaneName, Requirement, StateName, TypeName};
+use crate::name::{Label, LaneName, Requirement, ReviewName, StateName, TypeName};
 use crate::policy::{Policy, StateCategory};
 use crate::refs::Token;
 
@@ -118,6 +118,7 @@ pub struct Item {
     pub(crate) state: Lww<Option<StateName>>,
     pub(crate) priority: Lww<Option<Priority>>,
     pub(crate) lane: Lww<Option<LaneName>>,
+    pub(crate) review: Lww<Option<ReviewName>>,
     pub(crate) labels: AddWinsSet<Label>,
     pub(crate) requires: AddWinsSet<Requirement>,
     pub(crate) depends_on: AddWinsSet<ItemId>,
@@ -172,6 +173,11 @@ impl Item {
 
     pub fn lane(&self) -> Option<&LaneName> {
         self.lane.value().as_ref()
+    }
+
+    /// The review level the item needs, if any.
+    pub fn review(&self) -> Option<&ReviewName> {
+        self.review.value().as_ref()
     }
 
     pub fn labels(&self) -> &AddWinsSet<Label> {
@@ -252,6 +258,7 @@ impl Item {
             state: Lww::new(None, stamp),
             priority: Lww::new(created.priority, stamp),
             lane: Lww::new(created.lane.clone(), stamp),
+            review: Lww::new(created.review.clone(), stamp),
             labels,
             requires,
             depends_on: AddWinsSet::default(),

@@ -644,6 +644,7 @@ impl State {
                         Change::Lane(lane) => lane.iter().try_for_each(known_lane)?,
                         Change::Labels(_) => require_field(type_name, Field::Labels)?,
                         Change::Requires(_) => require_field(type_name, Field::Requires)?,
+                        Change::Review(_) => {}
                     }
                 }
                 Ok(())

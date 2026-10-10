@@ -463,6 +463,7 @@ fn item(
                 lane: draft.lane,
                 labels: draft.labels.into_iter().collect(),
                 requires: draft.requires.into_iter().collect(),
+                review: None,
             }))?;
             let id = ItemId::from(event.id());
             let state = workspace.state();

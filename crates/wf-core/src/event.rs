@@ -15,7 +15,9 @@ use crate::identity::{
     Actor, DeviceKey, DeviceSigner, InviteKey, KeyError, MemberSeed, PrincipalKey, Signed,
 };
 use crate::item::Priority;
-use crate::name::{AgentName, HarnessName, Label, LaneName, Requirement, StateName, TypeName};
+use crate::name::{
+    AgentName, HarnessName, Label, LaneName, Requirement, ReviewName, StateName, TypeName,
+};
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 
 pub const EVENT_VERSION: u16 = 1;
@@ -113,6 +115,8 @@ pub struct ItemCreated {
     pub lane: Option<LaneName>,
     pub labels: Vec<Label>,
     pub requires: Vec<Requirement>,
+    /// The review level the item needs; `None` for none.
+    pub review: Option<ReviewName>,
 }
 
 /// One edit to an item field.
@@ -124,6 +128,7 @@ pub enum Change {
     Lane(Option<LaneName>),
     Labels(SetChange<Label>),
     Requires(SetChange<Requirement>),
+    Review(Option<ReviewName>),
     /// Ticks or unticks a step, named by the hash of its text. Ignored when the body has no
     /// such step.
     StepDone {

@@ -5,7 +5,7 @@ expression: "Envelope::new(&detail)"
 {
   "schema": 2,
   "data": {
-    "id": "zesumrq3yvigcn3thtkjd6rzsgw7v26ebytnlsplqofwy6fpa7wa",
+    "id": "vo4bd6tmax7codkm3bdqc65vsqnq4grbsaxwgbab4i4jz7qxmuwq",
     "type": "task",
     "title": "Implement feed sync",
     "state": "open",
@@ -13,7 +13,7 @@ expression: "Envelope::new(&detail)"
     "readiness": "blocked",
     "blocked_by": [
       {
-        "id": "3bpomxm72btf4wtqg3gef5whwwpyln6valj5jz7nva4l4gl3vohq",
+        "id": "e6sqjlg746yilt3rze65sggriuq4lf2eway55smruwfjccohm2ea",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -27,7 +27,7 @@ expression: "Envelope::new(&detail)"
     "body": [
       {
         "kind": "markdown",
-        "text": "blocked on #3bpomx, ask @coder"
+        "text": "blocked on #e6sqjl, ask @coder"
       }
     ],
     "author": "@joshua",
@@ -38,7 +38,7 @@ expression: "Envelope::new(&detail)"
     "requires": [],
     "depends_on": [
       {
-        "id": "3bpomxm72btf4wtqg3gef5whwwpyln6valj5jz7nva4l4gl3vohq",
+        "id": "e6sqjlg746yilt3rze65sggriuq4lf2eway55smruwfjccohm2ea",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -49,7 +49,7 @@ expression: "Envelope::new(&detail)"
     "supersedes": null,
     "references": [
       {
-        "id": "3bpomxm72btf4wtqg3gef5whwwpyln6valj5jz7nva4l4gl3vohq",
+        "id": "e6sqjlg746yilt3rze65sggriuq4lf2eway55smruwfjccohm2ea",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -63,11 +63,11 @@ expression: "Envelope::new(&detail)"
     ],
     "notes": [
       {
-        "id": "zbwcg6qozj66yertvmje2mk3423xjh2vibai5pjqocswcc274oea",
+        "id": "i2ietcv7liwvtcihi3xujlyuvldlgl7uli5lynovlrfjq4jeeska",
         "kind": "comment",
         "by": "@joshua",
         "at": "1970-01-01T00:00:09Z",
-        "text": "see #3bpomx, @joshua please check"
+        "text": "see #e6sqjl, @joshua please check"
       }
     ],
     "flags": []

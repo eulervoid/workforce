@@ -442,6 +442,9 @@ fn apply_change(item: &mut Item, change: &Change, stamp: Stamp) {
         Change::Lane(lane) => {
             item.lane.set(lane.clone(), stamp);
         }
+        Change::Review(review) => {
+            item.review.set(review.clone(), stamp);
+        }
         Change::Labels(change) => item.labels.apply(change, stamp),
         Change::Requires(change) => item.requires.apply(change, stamp),
     }

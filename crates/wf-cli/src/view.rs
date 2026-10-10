@@ -667,6 +667,7 @@ pub fn describe(state: &State, body: &EventBody) -> String {
                     Change::Lane(_) => "lane",
                     Change::Labels(_) => "labels",
                     Change::Requires(_) => "requires",
+                    Change::Review(_) => "review",
                     Change::StepDone { .. } => "step",
                 })
                 .collect();
@@ -871,6 +872,12 @@ pub fn history_entry(state: &State, event: &Event) -> EventView {
                 ),
                 Change::Labels(change) => format!("labels {}", set_change(change)),
                 Change::Requires(change) => format!("requires {}", set_change(change)),
+                Change::Review(review) => format!(
+                    "review = {}",
+                    review
+                        .as_ref()
+                        .map_or("none".to_string(), ToString::to_string)
+                ),
                 Change::StepDone { step, done } => {
                     format!("step {step} {}", if *done { "done" } else { "not done" })
                 }
