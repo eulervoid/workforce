@@ -8,7 +8,7 @@ use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
 use crate::view::{
-    AgentView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, StatusView,
+    AgentView, BodyPartView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, StatusView,
 };
 use wf_core::graph::Readiness;
 use wf_core::policy::StateCategory;
@@ -360,9 +360,9 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             .collect();
         let _ = writeln!(out, "  ↳ mentions {}", mentions.join(" "));
     }
-    if !detail.body.trim().is_empty() {
+    if !detail.body.is_empty() {
         out.push('\n');
-        for line in detail.body.trim_end().lines() {
+        for line in body(&detail.body).lines() {
             let _ = writeln!(out, "  {line}");
         }
     }
@@ -380,6 +380,32 @@ pub fn item_detail(detail: &ItemDetail) -> String {
                     .unwrap_or("[text not in the local log]")
             );
         }
+    }
+    out
+}
+
+/// The body as markdown with each step's number after its checkbox: `- [ ](1) write parser`.
+fn body(parts: &[BodyPartView]) -> String {
+    let mut out = String::new();
+    let mut previous_was_step = false;
+    for (index, part) in parts.iter().enumerate() {
+        let is_step = matches!(part, BodyPartView::Step { .. });
+        if index > 0 {
+            out.push_str(if previous_was_step && is_step {
+                "\n"
+            } else {
+                "\n\n"
+            });
+        }
+        match part {
+            BodyPartView::Markdown { text } => out.push_str(text),
+            BodyPartView::Step { number, done, text } => {
+                let checkbox = if *done { "[x]" } else { "[ ]" };
+                let number = style::paint(style::DIM, format!("({number})"));
+                let _ = write!(out, "- {checkbox}{number} {text}");
+            }
+        }
+        previous_was_step = is_step;
     }
     out
 }

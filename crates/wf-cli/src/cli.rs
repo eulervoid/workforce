@@ -1,3 +1,4 @@
+use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
@@ -244,6 +245,7 @@ pub enum ItemCommand {
         history: bool,
     },
     Edit(ItemEditArgs),
+    Check(ItemCheckArgs),
     Move {
         item: Option<String>,
         state: Option<StateName>,
@@ -267,7 +269,7 @@ pub struct ItemAddArgs {
     pub title: Option<String>,
     #[arg(long = "type", default_value = "task")]
     pub item_type: TypeName,
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub body: Option<String>,
     #[arg(long)]
     pub priority: Option<Priority>,
@@ -349,7 +351,7 @@ pub struct ItemEditArgs {
     pub edit: bool,
     #[arg(short, long)]
     pub title: Option<String>,
-    #[arg(long)]
+    #[arg(long, allow_hyphen_values = true)]
     pub body: Option<String>,
     #[arg(long)]
     pub priority: Option<Priority>,
@@ -376,6 +378,17 @@ impl ItemEditArgs {
             || !self.add_requires.is_empty()
             || !self.remove_requires.is_empty()
     }
+}
+
+/// Ticks steps of an item, numbered as `wf item show` prints them: `wf item check #abc 1 3`.
+#[derive(Args)]
+pub struct ItemCheckArgs {
+    pub item: String,
+    #[arg(required = true)]
+    pub numbers: Vec<NonZeroUsize>,
+    /// Unticks the steps instead.
+    #[arg(long)]
+    pub remove: bool,
 }
 
 #[derive(Args)]

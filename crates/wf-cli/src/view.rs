@@ -5,6 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use serde::Serialize;
+use wf_core::body::{Body, BodyPart};
 use wf_core::event::{Change, Event, EventBody, Link};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::hlc::Hlc;
@@ -18,7 +19,7 @@ use wf_core::state::State;
 use crate::cli::ItemGrouping;
 
 /// Bump when a view changes shape incompatibly. Snapshot tests pin the current shapes.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[derive(Serialize)]
 pub struct Envelope<T> {
@@ -430,10 +431,42 @@ pub struct NoteView {
 }
 
 #[derive(Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum BodyPartView {
+    Markdown {
+        text: String,
+    },
+    Step {
+        /// What `wf item check` takes.
+        number: usize,
+        done: bool,
+        text: String,
+    },
+}
+
+pub fn body_parts(body: &Body) -> Vec<BodyPartView> {
+    let mut number = 0;
+    body.parts()
+        .iter()
+        .map(|part| match part {
+            BodyPart::Markdown(text) => BodyPartView::Markdown { text: text.clone() },
+            BodyPart::Step { text, done } => {
+                number += 1;
+                BodyPartView::Step {
+                    number,
+                    done: *done,
+                    text: text.clone(),
+                }
+            }
+        })
+        .collect()
+}
+
+#[derive(Serialize)]
 pub struct ItemDetail {
     #[serde(flatten)]
     pub summary: ItemSummary,
-    pub body: String,
+    pub body: Vec<BodyPartView>,
     pub author: String,
     pub created: String,
     pub updated: String,
@@ -525,7 +558,7 @@ pub fn item_detail(
 
     ItemDetail {
         summary: summary(state, &graph, ItemView::Live(item)),
-        body: item.body().render(),
+        body: body_parts(&item.body()),
         author: actor_label(state, item.author()),
         created: timestamp(item.created()),
         updated: timestamp(item.updated()),

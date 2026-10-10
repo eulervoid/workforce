@@ -1,10 +1,11 @@
+use std::collections::BTreeSet;
 use std::path::Path;
 
 use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
 use wf_core::crdt::SetChange;
 use wf_core::event::{
-    AgentDefined, Comment, Event, EventBody, Genesis, ItemCreated, ItemLinked, ItemRef,
+    AgentDefined, Change, Comment, Event, EventBody, Genesis, ItemCreated, ItemLinked, ItemRef,
     ItemTransitioned, Link, PolicySet,
 };
 use wf_core::id::{HashId, ItemId};
@@ -507,6 +508,7 @@ fn item(
             show(json, mode, workspace, id, history)
         }
         ItemCommand::Edit(args) => edit(json, mode, workspace, args),
+        ItemCommand::Check(args) => check(json, workspace, args),
         ItemCommand::Move { item, state, note } => {
             let id = choose_item(workspace, mode, item, Scope::Live)?;
             let state = choose_state(workspace, mode, id, state)?;
@@ -707,6 +709,81 @@ fn edit(
         changes,
     }))?;
     done(json, format!("edited #{}", id.short()), &event, Some(id))
+}
+
+fn check(json: bool, workspace: &mut Workspace, args: ItemCheckArgs) -> anyhow::Result<()> {
+    let id = workspace.resolve_item(&args.item)?;
+    let ticked = !args.remove;
+    let (changes, message) = {
+        let ItemView::Live(item) = workspace.state().item(id).expect("resolved ids exist") else {
+            bail!("#{} is archived; unarchive it to edit", id.short());
+        };
+        let body = item.body();
+        let steps: Vec<_> = body.steps().collect();
+        let mut chosen = Vec::new();
+        for number in args
+            .numbers
+            .iter()
+            .map(|number| number.get())
+            .collect::<BTreeSet<_>>()
+        {
+            match steps.get(number - 1) {
+                Some(step) => chosen.push(*step),
+                None if steps.is_empty() => bail!("#{} has no steps", id.short()),
+                None => bail!(
+                    "#{} has {} steps, there is no step {number}",
+                    id.short(),
+                    steps.len()
+                ),
+            }
+        }
+        let verb = if ticked { "checked" } else { "unchecked" };
+        let (changing, unchanged): (Vec<_>, Vec<_>) =
+            chosen.into_iter().partition(|step| step.done != ticked);
+        let label = |step: &wf_core::body::Step<'_>| {
+            let first_line = step.text.lines().next().unwrap_or_default();
+            format!("[{}] {first_line}", step.number)
+        };
+        if changing.is_empty() {
+            let labels: Vec<String> = unchanged.iter().map(label).collect();
+            return emit(
+                json,
+                &Done {
+                    message: format!("nothing changed: {} already {verb}", labels.join(", ")),
+                    event: String::new(),
+                    item: Some(id.to_base32()),
+                },
+                |done| format!("{}\n", done.message),
+            );
+        }
+        let done_count = steps.iter().filter(|step| step.done).count();
+        let done_count = if ticked {
+            done_count + changing.len()
+        } else {
+            done_count - changing.len()
+        };
+        let labels: Vec<String> = changing.iter().map(label).collect();
+        let changes: Vec<Change> = changing
+            .iter()
+            .map(|step| Change::StepDone {
+                step: step.id,
+                done: ticked,
+            })
+            .collect();
+        (
+            changes,
+            format!(
+                "{verb} {} ({done_count}/{} done)",
+                labels.join(", "),
+                steps.len()
+            ),
+        )
+    };
+    let event = workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {
+        item: id,
+        changes,
+    }))?;
+    done(json, message, &event, Some(id))
 }
 
 fn link(

@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(view::status(&scenario.state, None, &Default::default(), false))"
 ---
 {
-  "schema": 1,
+  "schema": 2,
   "data": {
     "name": "demo",
     "id": "lszdbbyjudzqwkpdufbyf5qi4mkvd2zal7duljhcocsjbgflcxiq",

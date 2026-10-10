@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&detail)"
 ---
 {
-  "schema": 1,
+  "schema": 2,
   "data": {
     "id": "copop5ah64c3wnrj4wwyrjcmt7roxesa5zbgfreao6765xzjjypq",
     "type": "question",
@@ -24,7 +24,7 @@ expression: "Envelope::new(&detail)"
     "labels": [],
     "lane": "default",
     "archived": false,
-    "body": "",
+    "body": [],
     "author": "@joshua",
     "created": "1970-01-01T00:00:04Z",
     "updated": "1970-01-01T00:00:04Z",

@@ -67,7 +67,7 @@ impl Sandbox {
         let mut all = args.to_vec();
         all.push("--json");
         let value: Value = serde_json::from_str(&self.run(&all)).unwrap();
-        assert_eq!(value["schema"], 1);
+        assert_eq!(value["schema"], wf_cli::view::SCHEMA_VERSION);
         value["data"].clone()
     }
 
@@ -930,4 +930,55 @@ mod forking {
         };
         assert_eq!(key_of(&parent), key_of(&child));
     }
+}
+
+#[test]
+fn steps_are_checked_and_unchecked_by_number() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    let task = wf.add(&[
+        "--title",
+        "Build it",
+        "--body",
+        "## Plan\n\n- [ ] write parser\n- [ ] add tests\n- [ ] ship",
+    ]);
+    let steps = |wf: &Sandbox| -> Vec<bool> {
+        wf.json(&["item", "show", short(&task)])["body"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|part| part["kind"] == "step")
+            .map(|part| part["done"].as_bool().unwrap())
+            .collect()
+    };
+    assert_eq!(steps(&wf), [false, false, false]);
+
+    let output = wf.run(&["item", "check", short(&task), "1", "3"]);
+    assert!(output.contains("checked [1] write parser, [3] ship (2/3 done)"));
+    assert_eq!(steps(&wf), [true, false, true]);
+
+    let output = wf.run(&["item", "check", short(&task), "1"]);
+    assert!(output.contains("nothing changed: [1] write parser already checked"));
+
+    let output = wf.run(&["item", "check", short(&task), "3", "--remove"]);
+    assert!(output.contains("unchecked [3] ship (1/3 done)"));
+    assert_eq!(steps(&wf), [true, false, false]);
+
+    let shown = wf.run(&["item", "show", short(&task)]);
+    assert!(shown.contains("- [x](1) write parser") && shown.contains("- [ ](2) add tests"));
+
+    assert!(
+        wf.fail(&["item", "check", short(&task), "4"])
+            .contains("has 3 steps, there is no step 4")
+    );
+    assert!(
+        wf.fail(&[
+            "item",
+            "edit",
+            short(&task),
+            "--body",
+            "- [ ] same\n- [ ] same"
+        ])
+        .contains("appears twice")
+    );
 }
