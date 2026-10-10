@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use wf_core::event::{Event, EventBody};
-use wf_core::id::{EventId, ItemId, WorkforceId};
+use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner, PrincipalSigner};
 use wf_core::state::State;
 use wf_daemon::client::DaemonClient;
@@ -20,6 +20,22 @@ pub const WORKFORCE_FILE: &str = ".workforce.toml";
 #[derive(Serialize, Deserialize)]
 pub struct WorkforceFile {
     pub id: WorkforceId,
+}
+
+/// Set by the runner for the processes of an agent session: what they write is the session's.
+pub const SESSION_VARIABLE: &str = "WF_SESSION";
+
+fn agent_actor(state: &State, session: &str) -> anyhow::Result<Actor> {
+    let id: SessionId = session
+        .parse()
+        .with_context(|| format!("{SESSION_VARIABLE} is not a session id"))?;
+    let folded = state
+        .session(id)
+        .ok_or_else(|| anyhow!("{SESSION_VARIABLE} names no session of this workforce"))?;
+    Ok(Actor::Agent {
+        agent: folded.agent().clone(),
+        session: id,
+    })
 }
 
 pub fn now_ms() -> u64 {
@@ -116,12 +132,16 @@ impl Workspace {
         let principal = state.principal_of(&device.key()).ok_or_else(|| {
             anyhow!("this machine's device key is not bound to a member of the workforce")
         })?;
+        let actor = match std::env::var(SESSION_VARIABLE) {
+            Ok(session) => agent_actor(state, &session)?,
+            Err(_) => Actor::Human(principal),
+        };
         Ok(Self {
             source,
             data,
             workforce,
             device,
-            actor: Actor::Human(principal),
+            actor,
         })
     }
 

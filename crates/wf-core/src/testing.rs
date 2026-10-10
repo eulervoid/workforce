@@ -8,7 +8,9 @@ use crate::event::{
     Link, PolicySet, SessionEnded, SessionStarted,
 };
 use crate::id::{ItemId, SessionId, WorkforceId};
-use crate::identity::{Actor, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed};
+use crate::identity::{
+    Actor, AgentId, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed,
+};
 use crate::item::Priority;
 use crate::name::{AgentName, Handle, HarnessName, StateName, TypeName};
 use crate::policy::DEFAULT_POLICY_TOML;
@@ -87,11 +89,34 @@ impl Fixture {
         Actor::Human(self.founder.key())
     }
 
+    /// The founder's agent `name` acting in `session`.
+    pub fn agent_actor(&self, name: &str, session: SessionId) -> Actor {
+        Actor::Agent {
+            agent: AgentId {
+                principal: self.founder.key(),
+                name: AgentName::new(name).unwrap(),
+            },
+            session,
+        }
+    }
+
     /// Authors the founder's next event on `device` as seen by `state`. Does not apply it.
     pub fn author(&self, state: &State, device: usize, now_ms: u64, body: EventBody) -> Event {
+        self.author_as(state, device, self.founder_actor(), now_ms, body)
+    }
+
+    /// Like [`Fixture::author`], with another actor for the same principal.
+    pub fn author_as(
+        &self,
+        state: &State,
+        device: usize,
+        actor: Actor,
+        now_ms: u64,
+        body: EventBody,
+    ) -> Event {
         let signer = &self.devices[device];
         state
-            .builder(signer.key(), self.founder_actor(), now_ms)
+            .builder(signer.key(), actor, now_ms)
             .expect("state has a genesis")
             .sign(signer, body)
             .unwrap()

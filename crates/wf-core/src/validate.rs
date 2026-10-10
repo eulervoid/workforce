@@ -93,6 +93,8 @@ pub enum Invalid {
     UnknownItem(ItemId),
     #[error("unknown session {0}")]
     UnknownSession(SessionId),
+    #[error("session {0} is not a session of this agent on this device")]
+    SessionMismatch(SessionId),
     #[error("an item cannot depend on itself")]
     SelfDependency,
     #[error("too many events are waiting for missing parents")]
@@ -142,6 +144,16 @@ pub enum PolicyViolation {
     Body(#[from] BodyError),
     #[error("the item has no step {0}")]
     UnknownStep(StepId),
+    #[error("unknown session {0}")]
+    UnknownSession(SessionId),
+    #[error("session {0} is not live on this device")]
+    SessionNotLive(SessionId),
+    #[error("an agent cannot write {0}")]
+    AgentCannotWrite(&'static str),
+    #[error("a session cannot end another session")]
+    SessionEndsAnother,
+    #[error("a session cannot move its own item to a done state; it submits the work instead")]
+    SessionFinishesItsItem,
 }
 
 enum Admission {
@@ -344,10 +356,15 @@ impl State {
         if content.actor.principal() != principal {
             return Err(Invalid::ActorMismatch);
         }
-        if let Actor::Agent { agent, .. } = &content.actor {
+        if let Actor::Agent { agent, session } = &content.actor {
             let workforce = self.workforce.as_ref().expect("checked by the caller");
             if !workforce.agents.contains_key(agent) {
                 return Err(Invalid::UnknownAgent);
+            }
+            match workforce.sessions.get(session) {
+                Some(folded) if folded.agent() == agent && folded.device() == content.author => {}
+                Some(_) => return Err(Invalid::SessionMismatch(*session)),
+                None => return Err(Invalid::UnknownSession(*session)),
             }
         }
         Ok(())
@@ -546,6 +563,68 @@ impl State {
         }
         Policy::parse(&genesis.policy)?;
         Ok(())
+    }
+
+    /// Checks what the acting agent may do, if the actor is one. Run by the author before signing,
+    /// together with [`State::check_policy`]. These are guards against mistakes and shortcuts,
+    /// not against attacks: members are trusted and their keys are on disk.
+    pub fn check_actor(
+        &self,
+        author: DeviceKey,
+        actor: &Actor,
+        body: &EventBody,
+    ) -> Result<(), PolicyViolation> {
+        let Actor::Agent { session, .. } = actor else {
+            return Ok(());
+        };
+        let Some(workforce) = &self.workforce else {
+            return Ok(());
+        };
+        let folded = workforce
+            .sessions
+            .get(session)
+            .ok_or(PolicyViolation::UnknownSession(*session))?;
+        if !folded.is_live() || folded.device() != author {
+            return Err(PolicyViolation::SessionNotLive(*session));
+        }
+        match body {
+            EventBody::Genesis(_)
+            | EventBody::PolicySet(_)
+            | EventBody::AgentDefined(_)
+            | EventBody::InviteCreated(_)
+            | EventBody::DeviceBound(_)
+            | EventBody::ForkAnnounced(_)
+            | EventBody::SessionStarted(_)
+            | EventBody::Merged(_) => Err(PolicyViolation::AgentCannotWrite(body.name())),
+            EventBody::SessionEnded(ended) if ended.session != *session => {
+                Err(PolicyViolation::SessionEndsAnother)
+            }
+            EventBody::ItemTransitioned(transition) if transition.item == folded.item() => {
+                let policy = &workforce.policy.value().policy;
+                let finishes = workforce
+                    .items
+                    .get(&transition.item)
+                    .and_then(|item| policy.type_config(item.item_type()))
+                    .and_then(|config| config.state_category_of(&transition.to))
+                    == Some(StateCategory::Done);
+                if finishes {
+                    Err(PolicyViolation::SessionFinishesItsItem)
+                } else {
+                    Ok(())
+                }
+            }
+            EventBody::DeviceProfile(_)
+            | EventBody::ItemCreated(_)
+            | EventBody::ItemEdited(_)
+            | EventBody::ItemTransitioned(_)
+            | EventBody::ItemLinked(_)
+            | EventBody::ItemArchived(_)
+            | EventBody::ItemUnarchived(_)
+            | EventBody::Comment(_)
+            | EventBody::SessionEnded(_)
+            | EventBody::Review(_)
+            | EventBody::Unknown { .. } => Ok(()),
+        }
     }
 
     /// Checks the rules that depend on the current policy and item states. Run by the author

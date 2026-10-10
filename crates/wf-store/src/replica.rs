@@ -288,6 +288,7 @@ impl<S: EventStore> Replica<S> {
         if forked {
             return Err(AuthorError::OwnFeedEquivocated);
         }
+        self.state.check_actor(signer.key(), &actor, &body)?;
         self.state.check_policy(&body)?;
         let mut builder = self.state.builder(signer.key(), actor, now_ms)?;
         if let EventBody::DeviceBound(bound) = &body {
