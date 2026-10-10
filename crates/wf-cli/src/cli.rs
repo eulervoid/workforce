@@ -48,6 +48,11 @@ pub enum Command {
     Invite(InviteCommand),
     /// Bind this machine to a workforce with an invite code.
     Join(JoinArgs),
+    /// List and describe the machines bound to the workforce.
+    #[command(subcommand)]
+    Device(DeviceCommand),
+    /// List the members of the workforce, with their roles and machines.
+    Members,
     /// Summarize the workforce.
     Status {
         /// Ignore the snapshot and fold the whole log again.
@@ -77,6 +82,27 @@ pub struct InviteDeviceArgs {
     /// How long the code works, such as `24h` or `30m`.
     #[arg(long, default_value = "24h")]
     pub expires: humantime::Duration,
+}
+
+#[derive(Subcommand)]
+pub enum DeviceCommand {
+    List,
+    /// Change what this machine says about itself.
+    Edit(DeviceEditArgs),
+}
+
+/// Fields that are given replace the current value.
+#[derive(Args)]
+pub struct DeviceEditArgs {
+    #[arg(long)]
+    pub name: Option<String>,
+    #[arg(long)]
+    pub hardware: Option<String>,
+    #[arg(long)]
+    pub max_sessions: Option<u32>,
+    /// Replaces the agents of this machine: `coder=2`. Repeat for several.
+    #[arg(long = "agent", value_name = "NAME=SESSIONS")]
+    pub agents: Vec<String>,
 }
 
 #[derive(Args)]
@@ -116,6 +142,9 @@ pub struct InitArgs {
     /// Your handle, the `joshua` in `@joshua`. Defaults to `$USER`.
     #[arg(long)]
     pub handle: Option<String>,
+    /// A name for this machine, shown by `wf device list`. Defaults to its host name.
+    #[arg(long)]
+    pub device_name: Option<String>,
     /// Do not define a default agent for each harness found on PATH.
     #[arg(long)]
     pub no_agents: bool,

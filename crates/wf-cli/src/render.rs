@@ -5,6 +5,7 @@ use std::fmt::Write;
 use comfy_table::presets::NOTHING;
 use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 
+use crate::devices::{DeviceView, MemberView};
 use crate::view::{AgentView, ItemDetail, ItemSummary, LogView, MentionsView, StatusView};
 
 fn short(id: &str) -> &str {
@@ -311,6 +312,53 @@ pub fn agents(agents: &[AgentView]) -> String {
             agent.model.clone().unwrap_or_else(|| "default".to_string()),
             agent.capabilities.join(", "),
             agent.lanes.join(", "),
+        ]);
+    }
+    format!("{table}\n")
+}
+
+pub fn devices(devices: &[DeviceView]) -> String {
+    let mut table = table(&[
+        "Device",
+        "Name",
+        "Principal",
+        "Hardware",
+        "Sessions",
+        "Last seen",
+        "Flags",
+    ]);
+    for device in devices {
+        let name = device.name.clone().unwrap_or_else(|| "-".to_string());
+        table.add_row([
+            device.device.chars().take(8).collect::<String>(),
+            if device.this_device {
+                format!("{name} (this)")
+            } else {
+                name
+            },
+            device.principal.clone(),
+            device.hardware.clone().unwrap_or_else(|| "-".to_string()),
+            device
+                .max_sessions
+                .map_or_else(|| "-".to_string(), |sessions| sessions.to_string()),
+            if device.this_device {
+                "now".to_string()
+            } else {
+                device.last_seen.clone().unwrap_or_else(|| "-".to_string())
+            },
+            device.flags.join(", "),
+        ]);
+    }
+    format!("{table}\n")
+}
+
+pub fn members(members: &[MemberView]) -> String {
+    let mut table = table(&["Member", "Role", "Devices"]);
+    for member in members {
+        table.add_row([
+            member.handle.clone(),
+            member.role.clone(),
+            member.devices.join(", "),
         ]);
     }
     format!("{table}\n")

@@ -252,7 +252,7 @@ pub struct JoinView {
     pub events: usize,
 }
 
-fn detect_hardware() -> String {
+pub(crate) fn detect_hardware() -> String {
     let cpus = std::thread::available_parallelism().map_or(1, |count| count.get());
     format!(
         "{} {}, {cpus} cpus",
@@ -261,7 +261,7 @@ fn detect_hardware() -> String {
     )
 }
 
-fn parse_agents(agents: &[String]) -> anyhow::Result<BTreeMap<AgentName, u32>> {
+pub(crate) fn parse_agents(agents: &[String]) -> anyhow::Result<BTreeMap<AgentName, u32>> {
     agents
         .iter()
         .map(|text| {
@@ -410,4 +410,17 @@ pub fn join(
             },
         )
     })
+}
+
+/// The name of this machine, for the device profile.
+pub(crate) fn host_name() -> String {
+    std::env::var("HOSTNAME")
+        .ok()
+        .filter(|name| !name.trim().is_empty())
+        .or_else(|| {
+            let output = std::process::Command::new("hostname").output().ok()?;
+            let name = String::from_utf8(output.stdout).ok()?.trim().to_string();
+            (!name.is_empty()).then_some(name)
+        })
+        .unwrap_or_else(|| "this-machine".to_string())
 }

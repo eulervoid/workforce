@@ -166,7 +166,8 @@ fn the_demo_script_works_end_to_end() {
     let log = wf.run(&["log"]);
     assert!(log.contains("events verified"), "{log}");
     let events = wf.json(&["log"])["events"].as_array().unwrap().len();
-    assert_eq!(events, 1 + 2 + 2 + 1 + 1 + 1 + 1 + 1);
+    // genesis, device profile, two agents, then the items
+    assert_eq!(events, 1 + 1 + 2 + 2 + 1 + 1 + 1 + 1 + 1);
     assert!(
         wf.json(&["log"])["events"]
             .as_array()
@@ -488,4 +489,49 @@ fn join_refuses_bad_codes_and_missing_names() {
         .to_string();
     let error = sandbox.fail(&["join", &code]);
     assert!(error.contains("--name"), "{error}");
+}
+
+#[test]
+fn devices_and_members_are_listed_and_editable() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&[
+        "init",
+        "--name",
+        "demo",
+        "--no-agents",
+        "--device-name",
+        "laptop",
+    ]);
+
+    let devices = sandbox.json(&["device", "list"]);
+    let devices = devices.as_array().unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0]["name"], "laptop");
+    assert_eq!(devices[0]["this_device"], true);
+    assert_eq!(devices[0]["principal"], "@joshua");
+
+    sandbox.run(&[
+        "device",
+        "edit",
+        "--name",
+        "work-laptop",
+        "--max-sessions",
+        "3",
+        "--agent",
+        "coder=2",
+    ]);
+    let devices = sandbox.json(&["device", "list"]);
+    assert_eq!(devices[0]["name"], "work-laptop");
+    assert_eq!(devices[0]["max_sessions"], 3);
+    assert_eq!(devices[0]["agents"]["coder"], 2);
+    let text = sandbox.run(&["device", "list"]);
+    assert!(text.contains("work-laptop (this)"), "{text}");
+
+    let members = sandbox.json(&["members"]);
+    assert_eq!(members[0]["handle"], "@joshua");
+    assert_eq!(members[0]["role"], "owner");
+    assert_eq!(members[0]["devices"][0], "work-laptop");
+
+    let error = sandbox.fail(&["device", "edit"]);
+    assert!(error.contains("nothing to change"), "{error}");
 }

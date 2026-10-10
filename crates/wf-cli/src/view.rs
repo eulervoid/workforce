@@ -34,7 +34,11 @@ impl<T> Envelope<T> {
 }
 
 pub fn timestamp(hlc: Hlc) -> String {
-    i64::try_from(hlc.wall_ms())
+    timestamp_ms(hlc.wall_ms())
+}
+
+pub fn timestamp_ms(millis: u64) -> String {
+    i64::try_from(millis)
         .ok()
         .and_then(|millis| Timestamp::from_millisecond(millis).ok())
         .map_or_else(|| "unknown".to_string(), |time| time.to_string())

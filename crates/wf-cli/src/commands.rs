@@ -97,6 +97,8 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Mentions { target } => mentions(json, &workspace, &target),
                 Command::Policy(command) => policy(json, command, &mut workspace),
                 Command::Log => log(json, mode, &workspace),
+                Command::Device(command) => crate::devices::device(json, command, &mut workspace),
+                Command::Members => crate::devices::members(json, &workspace),
                 Command::Sync(args) => crate::network::sync(json, workspace, args),
                 Command::Invite(InviteCommand::Device(args)) => {
                     crate::network::invite_device(json, &mut workspace, args)
@@ -157,6 +159,18 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
         bail!("a local log for workforce {id} already exists");
     }
     replica.receive(genesis_event)?;
+
+    replica.author(
+        &device,
+        actor.clone(),
+        workspace::now_ms(),
+        EventBody::DeviceProfile(wf_core::event::DeviceProfile {
+            name: args.device_name.unwrap_or_else(crate::network::host_name),
+            hardware: crate::network::detect_hardware(),
+            agents: Default::default(),
+            max_sessions: 1,
+        }),
+    )?;
 
     let mut agents = Vec::new();
     if !args.no_agents {

@@ -88,6 +88,11 @@ impl Workspace {
         self.device.key()
     }
 
+    /// Presence is only known to a running daemon.
+    pub fn last_seen(&self) -> crate::devices::LastSeen {
+        crate::devices::LastSeen::new()
+    }
+
     pub fn state(&self) -> &State {
         self.replica.state()
     }
