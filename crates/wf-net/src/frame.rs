@@ -79,4 +79,13 @@ mod tests {
         let result: Result<Vec<u32>, _> = read_frame(&mut right).await;
         assert!(matches!(result, Err(FrameError::Closed)));
     }
+
+    #[tokio::test]
+    async fn a_message_that_is_too_large_is_refused_before_anything_is_written() {
+        let mut written = Vec::new();
+        let message = vec![7u8; MAX_FRAME_LEN as usize + 1];
+        let result = write_frame(&mut written, &message).await;
+        assert!(matches!(result, Err(FrameError::TooLarge(_))));
+        assert!(written.is_empty());
+    }
 }

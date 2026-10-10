@@ -18,7 +18,10 @@ use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::peers::PeerSync;
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
+
+/// A frame holds this many events at most, so a long log does not need one huge frame.
+pub const EVENTS_PER_PAGE: usize = 512;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProtoError {
@@ -54,8 +57,11 @@ pub enum Call {
     /// The encoded [`wf_core::state::State`].
     State,
     Event(EventId),
-    /// Every event, ordered by `(hlc, id)`.
-    Events,
+    /// A page of the log: up to [`EVENTS_PER_PAGE`] events in the order the daemon applied them,
+    /// starting at position `from`. An empty page is the end.
+    Events {
+        from: u64,
+    },
     /// Checks the policy, signs with the device key of the daemon and stores the event.
     Author {
         actor: Actor,

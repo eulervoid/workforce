@@ -90,10 +90,16 @@ impl DaemonClient {
         }
     }
 
+    /// Every event, in the order the daemon applied them.
     pub fn events(&mut self, workforce: WorkforceId) -> Result<Vec<Event>, ClientError> {
-        match self.call(workforce, Call::Events)? {
-            Response::Events(events) => Ok(events),
-            _ => Err(ClientError::UnexpectedResponse),
+        let mut events = Vec::new();
+        loop {
+            let from = events.len() as u64;
+            match self.call(workforce, Call::Events { from })? {
+                Response::Events(page) if page.is_empty() => return Ok(events),
+                Response::Events(page) => events.extend(page),
+                _ => return Err(ClientError::UnexpectedResponse),
+            }
         }
     }
 

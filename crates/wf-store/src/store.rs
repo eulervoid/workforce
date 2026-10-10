@@ -83,7 +83,12 @@ pub trait EventStore {
     fn log_id(&self, position: u64) -> Result<Option<EventId>, StoreError>;
 
     /// The events appended at `position` and after, in order.
-    fn log_since(&self, position: u64) -> Result<Vec<Event>, StoreError>;
+    fn log_since(&self, position: u64) -> Result<Vec<Event>, StoreError> {
+        self.log_page(position, usize::MAX)
+    }
+
+    /// At most `limit` of the events appended at `position` and after, in order.
+    fn log_page(&self, position: u64, limit: usize) -> Result<Vec<Event>, StoreError>;
 
     fn pending(&self) -> Result<Vec<Event>, StoreError>;
 

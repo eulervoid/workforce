@@ -8,7 +8,7 @@ use wf_core::invite::{InviteCode, InviteCodeError};
 use wf_net::frame::{FrameError, read_frame, write_frame};
 
 use crate::peers::{peers_of, sync_all};
-use crate::proto::{Call, Hello, HelloReply, PROTOCOL_VERSION, Request, Response};
+use crate::proto::{Call, EVENTS_PER_PAGE, Hello, HelloReply, PROTOCOL_VERSION, Request, Response};
 use crate::{Daemon, Loaded, now_ms};
 
 pub(crate) async fn handle(daemon: Arc<Daemon>, mut stream: UnixStream) {
@@ -40,7 +40,16 @@ async fn converse(daemon: &Arc<Daemon>, stream: &mut UnixStream) -> Result<(), F
             Err(error) => return Err(error),
         };
         let response = answer(daemon, request).await;
-        write_frame(stream, &response).await?;
+        match write_frame(stream, &response).await {
+            Err(FrameError::TooLarge(size)) => {
+                // Nothing of the answer was written, so the connection is still in step.
+                let message = format!(
+                    "the answer is {size} bytes, more than fits in one message on the socket"
+                );
+                write_frame(stream, &Response::Failed(message)).await?;
+            }
+            other => other?,
+        }
     }
 }
 
@@ -49,7 +58,7 @@ async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
         Call::Follow(_) | Call::Join { .. } => daemon.follow(request.workforce),
         Call::State
         | Call::Event(_)
-        | Call::Events
+        | Call::Events { .. }
         | Call::Author { .. }
         | Call::SyncNow
         | Call::Fork(_)
@@ -90,9 +99,11 @@ async fn call(
                 .map_err(|error| error.to_string())?;
             Ok(Response::Event(event))
         }
-        Call::Events => {
+        Call::Events { from } => {
             let events = storage
-                .with(|replica| wf_store::EventStore::events(replica.store()))
+                .with(move |replica| {
+                    wf_store::EventStore::log_page(replica.store(), from, EVENTS_PER_PAGE)
+                })
                 .await
                 .map_err(closed)?
                 .map_err(|error| error.to_string())?;

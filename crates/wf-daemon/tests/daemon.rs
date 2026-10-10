@@ -464,3 +464,58 @@ async fn a_running_daemon_joins_a_workforce_with_its_own_key() {
         "the laptop heard of the new device"
     );
 }
+
+#[tokio::test]
+async fn a_log_longer_than_a_page_arrives_whole_and_in_order() {
+    use wf_core::state::Trust;
+    use wf_daemon::proto::EVENTS_PER_PAGE;
+
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let store_directory = directory.path().join(fixture.workforce().to_string());
+    std::fs::create_dir_all(&store_directory).unwrap();
+    let mut replica = Replica::open(
+        RedbStore::open(store_directory.join(STORE_FILE)).unwrap(),
+        fixture.workforce(),
+    )
+    .unwrap();
+    replica.receive(fixture.genesis.clone()).unwrap();
+    let mut state = replica.state().clone();
+    let mut batch = Vec::new();
+    for index in 0..(2 * EVENTS_PER_PAGE as u64 + 10) {
+        let event = fixture.author(
+            &state,
+            0,
+            2_000 + index,
+            create("task", &format!("t{index}")),
+        );
+        state.receive(event.clone(), Trust::Stored).unwrap();
+        batch.push(event);
+    }
+    replica.receive_batch(batch).unwrap();
+    let expected = wf_store::EventStore::log_since(replica.store(), 0).unwrap();
+    drop(replica);
+
+    let socket = directory.path().join("daemon.sock");
+    let daemon = Daemon::start(
+        Config {
+            data_dir: directory.path().to_path_buf(),
+            socket: socket.clone(),
+            network: Network::Direct,
+        },
+        fixture.devices[0].clone(),
+    )
+    .await
+    .unwrap();
+    tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
+    for _ in 0..100 {
+        if socket.exists() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let workforce = fixture.workforce();
+    let events = blocking(move || connect(&socket).events(workforce).unwrap()).await;
+    assert_eq!(events, expected);
+    assert!(events.len() > 2 * EVENTS_PER_PAGE);
+}

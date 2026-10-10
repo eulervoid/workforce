@@ -155,12 +155,12 @@ impl EventStore for RedbStore {
             .map(|id| EventId::from_bytes(id.value())))
     }
 
-    fn log_since(&self, position: u64) -> Result<Vec<Event>, StoreError> {
+    fn log_page(&self, position: u64, limit: usize) -> Result<Vec<Event>, StoreError> {
         let transaction = self.database.begin_read()?;
         let log = transaction.open_table(LOG)?;
         let events = transaction.open_table(EVENTS)?;
         let mut result = Vec::new();
-        for row in log.range(position..)? {
+        for row in log.range(position..)?.take(limit) {
             let (_, id) = row?;
             let bytes = events.get(id.value())?.ok_or_else(|| {
                 StoreError::Inconsistent("the log points at a missing event".into())

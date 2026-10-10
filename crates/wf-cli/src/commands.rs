@@ -596,7 +596,9 @@ fn show(
             });
             let history = if history {
                 let mut entries = Vec::new();
-                for event in workspace.events()? {
+                let mut events = workspace.events()?;
+                events.sort_by_key(|event| (event.content.hlc, event.id()));
+                for event in events {
                     if event_touches(&event, id) {
                         entries.push(view::history_entry(state, &event));
                     }
@@ -908,18 +910,27 @@ fn apply_policy(json: bool, workspace: &mut Workspace, source: String) -> anyhow
 
 fn log(json: bool, mode: Mode, workspace: &Workspace) -> anyhow::Result<()> {
     let state = workspace.state();
-    let events = workspace.events()?;
-    // Replay into an empty state with full verification: signatures, feeds and authority.
-    let mut replay = State::new();
+    // Replay in the order the events were applied into an empty state with full verification:
+    // signatures, feeds and authority. A fork takes in its history newest event first, so this
+    // is not the order they are shown in.
+    let mut replay = match state.workforce_id() {
+        Some(id) => State::expecting(id),
+        None => State::new(),
+    };
     let mut views = Vec::new();
-    for event in events {
+    for event in workspace.events()? {
         let verified = event.verify_signature().is_ok()
             && replay.receive(event.clone(), Trust::Untrusted).is_ok();
-        views.push(view::event_view(state, &event, verified));
+        views.push((
+            (event.content.hlc, event.id()),
+            view::event_view(state, &event, verified),
+        ));
     }
-    if replay.pending_events().next().is_some() {
+    if replay.pending_events().next().is_some() || replay.history_incomplete() {
         bail!("the log is incomplete: some events are missing their parents");
     }
+    views.sort_by_key(|(order, _)| *order);
+    let views = views.into_iter().map(|(_, view)| view).collect();
     let log = LogView {
         workforce: state
             .workforce_id()

@@ -771,7 +771,16 @@ mod forking {
         assert_eq!(through_daemon["title"], "Renamed");
         assert_eq!(through_daemon["notes"].as_array().unwrap().len(), 1);
         sandbox.add(&["--title", "After the fork", "--priority", "P2"]);
+        let log = sandbox.json(&["log"]);
+        let unverified = log["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|event| event["verified"] != true)
+            .count();
+        assert_eq!(unverified, 0, "{log}");
         daemon.stop();
+        assert_eq!(sandbox.json(&["log"]), log, "the same through the store");
 
         // The same through the store of the fork, which the daemon had created.
         assert_eq!(sandbox.json(&["status"])["id"], child.as_str());

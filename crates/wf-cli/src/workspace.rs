@@ -164,10 +164,11 @@ impl Workspace {
         }
     }
 
-    /// Every event, ordered by `(hlc, id)`.
+    /// Every event, in the order this machine applied them. That is a causal order, except that
+    /// a fork has the history it was made from newest event first.
     pub fn events(&self) -> anyhow::Result<Vec<Event>> {
         match &self.source {
-            Source::Local(replica) => Ok(replica.store().events()?),
+            Source::Local(replica) => Ok(replica.store().log_since(0)?),
             Source::Daemon { client, .. } => Ok(client.borrow_mut().events(self.workforce)?),
         }
     }
