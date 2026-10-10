@@ -74,11 +74,11 @@ impl HeadsTopic {
             device: self.device,
             digest: heads_digest(heads),
         })
-        .map_err(|error| NetError::Gossip(error.to_string()))?;
+        .map_err(|error| NetError::Gossip(error.into()))?;
         self.sender
             .broadcast(message.into())
             .await
-            .map_err(|error| NetError::Gossip(error.to_string()))
+            .map_err(|error| NetError::Gossip(error.into()))
     }
 
     /// Reaches out to devices that may not be neighbors yet.
@@ -87,7 +87,7 @@ impl HeadsTopic {
         self.sender
             .join_peers(peers)
             .await
-            .map_err(|error| NetError::Gossip(error.to_string()))
+            .map_err(|error| NetError::Gossip(error.into()))
     }
 }
 

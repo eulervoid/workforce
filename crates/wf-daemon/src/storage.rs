@@ -12,7 +12,7 @@ use wf_core::identity::DeviceKey;
 use wf_core::invite::JoinRefusal;
 use wf_core::sync::Versions;
 use wf_net::{LogError, ReceiveSummary, Signature, SyncLog, replica};
-use wf_store::{RedbStore, Replica};
+use wf_store::{RedbStore, Replica, StoreError};
 
 type Job = Box<dyn FnOnce(&mut Replica<RedbStore>) + Send>;
 
@@ -34,13 +34,30 @@ pub struct StorageHandle {
 }
 
 impl StorageHandle {
-    pub fn spawn(replica: Replica<RedbStore>) -> Self {
+    /// Starts the task. `reopen` opens the replica again after a write failed, when what the
+    /// replica holds in memory may be ahead of the log. If that fails too, or a job panics, the
+    /// task ends and [`StorageHandle::is_closed`] turns true.
+    pub fn spawn(
+        replica: Replica<RedbStore>,
+        reopen: impl Fn() -> Result<Replica<RedbStore>, StoreError> + Send + 'static,
+    ) -> Self {
         let (jobs, queue) = mpsc::channel::<Job>();
         let (publish, heads) = watch::channel(replica.state().heads().clone());
         std::thread::spawn(move || {
-            let mut replica = replica;
+            let mut current = Some(replica);
             for job in queue {
-                job(&mut replica);
+                let Some(replica) = current.as_mut() else {
+                    break;
+                };
+                job(replica);
+                if replica.needs_reopen() {
+                    // The old replica holds the lock on the store until it is dropped.
+                    drop(current.take());
+                    current = reopen().ok();
+                }
+                let Some(replica) = current.as_ref() else {
+                    break;
+                };
                 publish.send_if_modified(|heads| {
                     let current = replica.state().heads();
                     let changed = heads != current;
@@ -52,6 +69,11 @@ impl StorageHandle {
             }
         });
         Self { jobs, heads }
+    }
+
+    /// Whether the task has ended: the workforce has to be opened again.
+    pub fn is_closed(&self) -> bool {
+        self.heads.has_changed().is_err()
     }
 
     /// Runs `job` on the storage thread, after everything sent before it.
@@ -134,5 +156,49 @@ impl SyncLog for StorageHandle {
 
     async fn missing(&self) -> Result<Vec<EventId>, LogError> {
         self.with(replica::missing).await?.map_err(LogError::from)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use wf_core::testing::Fixture;
+
+    fn handle(fixture: &Fixture) -> StorageHandle {
+        let workforce = fixture.workforce();
+        let mut replica = Replica::open(RedbStore::in_memory().unwrap(), workforce).unwrap();
+        replica.receive(fixture.genesis.clone()).unwrap();
+        StorageHandle::spawn(replica, move || {
+            Replica::open(RedbStore::in_memory().unwrap(), workforce)
+        })
+    }
+
+    #[tokio::test]
+    async fn a_job_that_panics_ends_the_task_and_says_so() {
+        let fixture = Fixture::new(1);
+        let storage = handle(&fixture);
+        assert!(!storage.is_closed());
+        let result = storage.with(|_| panic!("a bug in a job")).await;
+        assert!(result.is_err());
+        // The thread has unwound by the time the reply channel closed, give or take a moment.
+        for _ in 0..100 {
+            if storage.is_closed() {
+                break;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+        }
+        assert!(storage.is_closed());
+        assert!(storage.with(|_| ()).await.is_err());
+    }
+
+    #[tokio::test]
+    async fn the_task_serves_jobs_in_order() {
+        let fixture = Fixture::new(1);
+        let storage = handle(&fixture);
+        let count = storage
+            .with(|replica| replica.state().event_count())
+            .await
+            .unwrap();
+        assert_eq!(count, 1);
     }
 }

@@ -18,8 +18,8 @@ use wf_core::invite::JoinRefusal;
 
 use crate::frame::{read_frame, write_frame};
 use crate::log::SyncLog;
-use crate::node::{Registry, device_key};
-use crate::sync::{initiate, read_open, respond};
+use crate::node::{Registry, SourceError, device_key};
+use crate::sync::{IDLE_TIMEOUT, initiate, read_open, respond};
 
 pub const JOIN_ALPN: &[u8] = b"wf/join/1";
 
@@ -97,7 +97,10 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for JoinHandler<L> {
             .accept_bi()
             .await
             .map_err(AcceptError::from_err)?;
-        let request: JoinRequest = read_frame(&mut recv).await.map_err(AcceptError::from_err)?;
+        let request: JoinRequest = tokio::time::timeout(IDLE_TIMEOUT, read_frame(&mut recv))
+            .await
+            .map_err(AcceptError::from_err)?
+            .map_err(AcceptError::from_err)?;
         let log = match self.decide(&request, joiner).await {
             Ok(accepted) => accepted,
             Err(refusal) => {
@@ -145,26 +148,26 @@ where
     let workforce = request.workforce;
     write_frame(stream, &request)
         .await
-        .map_err(|error| JoinFailure::Net(error.to_string()))?;
+        .map_err(|error| JoinFailure::Net(error.into()))?;
     match read_frame(stream)
         .await
-        .map_err(|error| JoinFailure::Net(error.to_string()))?
+        .map_err(|error| JoinFailure::Net(error.into()))?
     {
         JoinReply::Accepted => {}
         JoinReply::Refused(refusal) => return Err(JoinFailure::Refused(refusal)),
     }
     initiate(&mut *stream, workforce, log)
         .await
-        .map_err(|error| JoinFailure::Net(error.to_string()))?;
+        .map_err(|error| JoinFailure::Net(error.into()))?;
     author().await.map_err(JoinFailure::Author)?;
     initiate(&mut *stream, workforce, log)
         .await
-        .map_err(|error| JoinFailure::Net(error.to_string()))?;
+        .map_err(|error| JoinFailure::Net(error.into()))?;
     Ok(())
 }
 
 pub(crate) enum JoinFailure<E> {
-    Net(String),
+    Net(SourceError),
     Refused(JoinRefusal),
     Author(E),
 }

@@ -7,7 +7,7 @@ use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
-use tokio::task::JoinSet;
+use tokio::task::{AbortHandle, JoinSet};
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceKey;
 use wf_core::state::State;
@@ -187,9 +187,10 @@ async fn keep_in_sync(
                     }
                     tokio::time::sleep(SETTLE).await;
                     heads.borrow_and_update();
-                    // New events are worth another try even if the device was out of reach a
-                    // moment ago, as long as that was not just now.
-                    if Instant::now() >= attempted + RETRY_ON_NEWS_AFTER {
+                    // A device that answered gets another round at once, since what changed may
+                    // be what it lacks. One that was out of reach a moment ago is left alone
+                    // until that was not just now.
+                    if reached || Instant::now() >= attempted + RETRY_ON_NEWS_AFTER {
                         break;
                     }
                 }
@@ -209,7 +210,7 @@ pub async fn run_peer_loop(
 ) {
     let mut heads = storage.watch_heads();
     let own = node.device();
-    let mut syncers: BTreeMap<DeviceKey, Arc<Notify>> = BTreeMap::new();
+    let mut syncers: BTreeMap<DeviceKey, (Arc<Notify>, AbortHandle)> = BTreeMap::new();
     let mut tasks = JoinSet::new();
     let mut topic: Option<HeadsTopic> = None;
     loop {
@@ -219,10 +220,17 @@ pub async fn run_peer_loop(
         else {
             return;
         };
+        syncers.retain(|device, (_, task)| {
+            let still_bound = devices.contains(device);
+            if !still_bound {
+                task.abort();
+            }
+            still_bound
+        });
         for device in &devices {
             syncers.entry(*device).or_insert_with(|| {
                 let kick = Arc::new(Notify::new());
-                tasks.spawn(keep_in_sync(
+                let task = tasks.spawn(keep_in_sync(
                     Arc::clone(&node),
                     workforce,
                     storage.clone(),
@@ -230,7 +238,7 @@ pub async fn run_peer_loop(
                     presence.clone(),
                     Arc::clone(&kick),
                 ));
-                kick
+                (kick, task)
             });
         }
         match &topic {
@@ -260,7 +268,7 @@ pub async fn run_peer_loop(
                         topic = None;
                         break;
                     };
-                    let Some(kick) = syncers.get(&heard.device) else {
+                    let Some((kick, _)) = syncers.get(&heard.device) else {
                         continue;
                     };
                     presence.saw(heard.device);

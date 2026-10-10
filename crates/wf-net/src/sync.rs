@@ -9,6 +9,7 @@
 //! initiator goes first at every step.
 
 use std::collections::BTreeSet;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
@@ -20,6 +21,9 @@ use crate::frame::{FrameError, read_frame, write_frame};
 use crate::log::{LogError, SyncLog};
 
 pub const SYNC_ALPN: &[u8] = b"wf/sync/1";
+
+/// A peer that says nothing for this long has stopped answering: the session ends.
+pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 const EVENTS_PER_FRAME: usize = 256;
 const IDS_PER_WANT: usize = 1024;
@@ -37,6 +41,8 @@ pub enum SyncError {
     },
     #[error("the peer asked for {0} events at once")]
     WantTooLarge(usize),
+    #[error("the peer stopped answering")]
+    TimedOut,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -76,6 +82,7 @@ struct Session<'a, S, L> {
     stream: S,
     log: &'a L,
     report: SyncReport,
+    idle: Duration,
 }
 
 impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
@@ -84,7 +91,10 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
     }
 
     async fn receive(&mut self) -> Result<Message, SyncError> {
-        Ok(read_frame(&mut self.stream).await?)
+        tokio::time::timeout(self.idle, read_frame(&mut self.stream))
+            .await
+            .map_err(|_| SyncError::TimedOut)?
+            .map_err(SyncError::from)
     }
 
     async fn exchange_versions(&mut self, send_first: bool) -> Result<Versions, SyncError> {
@@ -196,7 +206,10 @@ pub async fn read_open<S>(stream: &mut S) -> Result<WorkforceId, SyncError>
 where
     S: AsyncRead + Unpin,
 {
-    match read_frame(stream).await? {
+    let message = tokio::time::timeout(IDLE_TIMEOUT, read_frame(stream))
+        .await
+        .map_err(|_| SyncError::TimedOut)??;
+    match message {
         Message::Open(workforce) => Ok(workforce),
         other => Err(SyncError::Unexpected {
             expected: "open",
@@ -207,9 +220,23 @@ where
 
 /// Runs the protocol as the side that opened the stream.
 pub async fn initiate<S, L>(
+    stream: S,
+    workforce: WorkforceId,
+    log: &L,
+) -> Result<SyncReport, SyncError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    L: SyncLog,
+{
+    initiate_within(stream, workforce, log, IDLE_TIMEOUT).await
+}
+
+/// Like [`initiate`], giving up when the peer is silent for `idle`.
+pub async fn initiate_within<S, L>(
     mut stream: S,
     workforce: WorkforceId,
     log: &L,
+    idle: Duration,
 ) -> Result<SyncReport, SyncError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
@@ -220,6 +247,7 @@ where
         stream,
         log,
         report: SyncReport::default(),
+        idle,
     };
     let theirs = session.exchange_versions(true).await?;
     session.push_events(&theirs).await?;
@@ -235,10 +263,24 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     L: SyncLog,
 {
+    respond_within(stream, log, IDLE_TIMEOUT).await
+}
+
+/// Like [`respond`], giving up when the peer is silent for `idle`.
+pub async fn respond_within<S, L>(
+    stream: S,
+    log: &L,
+    idle: Duration,
+) -> Result<SyncReport, SyncError>
+where
+    S: AsyncRead + AsyncWrite + Unpin,
+    L: SyncLog,
+{
     let mut session = Session {
         stream,
         log,
         report: SyncReport::default(),
+        idle,
     };
     let theirs = session.exchange_versions(false).await?;
     session.accept_events().await?;

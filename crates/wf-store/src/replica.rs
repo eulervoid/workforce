@@ -67,6 +67,7 @@ pub struct Replica<S: EventStore> {
     state: State,
     snapshot_event_count: usize,
     history: Option<Box<dyn HistorySource>>,
+    needs_reopen: bool,
 }
 
 impl<S: EventStore> Replica<S> {
@@ -114,6 +115,7 @@ impl<S: EventStore> Replica<S> {
             state,
             snapshot_event_count,
             history: None,
+            needs_reopen: false,
         };
         for event in replica.store.pending()? {
             let received = replica
@@ -127,6 +129,12 @@ impl<S: EventStore> Replica<S> {
             replica.write_snapshot()?;
         }
         Ok(replica)
+    }
+
+    /// Whether a write failed after the state had taken the event in, so the state may be ahead
+    /// of the log. Drop the replica and open it again.
+    pub fn needs_reopen(&self) -> bool {
+        self.needs_reopen
     }
 
     pub fn state(&self) -> &State {
@@ -153,6 +161,16 @@ impl<S: EventStore> Replica<S> {
     }
 
     fn receive_events(
+        &mut self,
+        events: Vec<Event>,
+        trust: Trust,
+    ) -> Result<BatchReceived, StoreError> {
+        let result = self.receive_events_unchecked(events, trust);
+        self.needs_reopen |= result.is_err();
+        result
+    }
+
+    fn receive_events_unchecked(
         &mut self,
         events: Vec<Event>,
         trust: Trust,
@@ -281,6 +299,16 @@ impl<S: EventStore> Replica<S> {
     }
 
     fn persist(&mut self, submitted: &Event, received: &Received) -> Result<(), StoreError> {
+        let result = self.persist_unchecked(submitted, received);
+        self.needs_reopen |= result.is_err();
+        result
+    }
+
+    fn persist_unchecked(
+        &mut self,
+        submitted: &Event,
+        received: &Received,
+    ) -> Result<(), StoreError> {
         let parked = received.disposition == Disposition::Pending;
         if received.applied.is_empty() && received.rejected.is_empty() && !parked {
             return Ok(());

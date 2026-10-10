@@ -162,12 +162,7 @@ impl Daemon {
             if !entry.path().join(STORE_FILE).is_file() {
                 continue;
             }
-            let loaded = self
-                .loaded
-                .lock()
-                .unwrap_or_else(|poisoned| poisoned.into_inner())
-                .contains_key(&id);
-            if loaded {
+            if self.loaded_workforce(&id).is_some() {
                 continue;
             }
             if let Err(error) = self.workforce(id) {
@@ -192,16 +187,26 @@ impl Daemon {
             .loaded
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        if let Some(existing) = loaded.get(&id) {
-            return Ok(Arc::clone(existing));
+        match loaded.get(&id) {
+            Some(existing) if !existing.storage.is_closed() => return Ok(Arc::clone(existing)),
+            Some(_) => {
+                loaded.remove(&id);
+            }
+            None => {}
         }
         let path = self.config.data_dir.join(id.to_string()).join(STORE_FILE);
         if !path.is_file() {
             return Err(DaemonError::UnknownWorkforce(id));
         }
-        let mut replica = Replica::open(RedbStore::open(path)?, id)?;
-        replica.set_history_source(Box::new(ParentHistory(Arc::downgrade(self))));
-        let storage = StorageHandle::spawn(replica);
+        let open = {
+            let daemon = Arc::downgrade(self);
+            move || {
+                let mut replica = Replica::open(RedbStore::open(path.clone())?, id)?;
+                replica.set_history_source(Box::new(ParentHistory(daemon.clone())));
+                Ok(replica)
+            }
+        };
+        let storage = StorageHandle::spawn(open()?, open);
         self.node.serve(id, storage.clone());
         tokio::spawn(peers::run_peer_loop(
             Arc::clone(&self.node),
@@ -214,12 +219,13 @@ impl Daemon {
         Ok(entry)
     }
 
-    /// The loaded workforce, if it is one: nothing is opened.
+    /// The loaded workforce, if it is one and its storage is running: nothing is opened.
     fn loaded_workforce(&self, id: &WorkforceId) -> Option<Arc<Loaded>> {
         self.loaded
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .get(id)
+            .filter(|loaded| !loaded.storage.is_closed())
             .cloned()
     }
 
@@ -283,7 +289,7 @@ impl Daemon {
             let (invite, profile) = (code.invite, profile.clone());
             let proof = code
                 .prove(signer.key())
-                .map_err(|error| NetError::JoinAuthoring(error.to_string()))?;
+                .map_err(|error| NetError::JoinAuthoring(error.into()))?;
             let author = {
                 let storage = storage.clone();
                 move || async move {

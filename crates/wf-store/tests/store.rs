@@ -518,3 +518,69 @@ fn forking_a_workforce_with_20k_events_from_a_local_replica_is_fast() {
     );
     assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
+
+/// A store whose writes can be made to fail.
+struct Flaky {
+    inner: RedbStore,
+    failing: std::cell::Cell<bool>,
+}
+
+impl EventStore for Flaky {
+    fn event(&self, id: &EventId) -> Result<Option<Event>, wf_store::StoreError> {
+        self.inner.event(id)
+    }
+    fn feed_since(
+        &self,
+        author: &wf_core::identity::DeviceKey,
+        after_seq: u64,
+    ) -> Result<Vec<Event>, wf_store::StoreError> {
+        self.inner.feed_since(author, after_seq)
+    }
+    fn events(&self) -> Result<Vec<Event>, wf_store::StoreError> {
+        self.inner.events()
+    }
+    fn log_len(&self) -> Result<u64, wf_store::StoreError> {
+        self.inner.log_len()
+    }
+    fn log_id(&self, position: u64) -> Result<Option<EventId>, wf_store::StoreError> {
+        self.inner.log_id(position)
+    }
+    fn log_page(&self, position: u64, limit: usize) -> Result<Vec<Event>, wf_store::StoreError> {
+        self.inner.log_page(position, limit)
+    }
+    fn pending(&self) -> Result<Vec<Event>, wf_store::StoreError> {
+        self.inner.pending()
+    }
+    fn snapshot(&self) -> Result<Option<StoredSnapshot>, wf_store::StoreError> {
+        self.inner.snapshot()
+    }
+    fn commit(&self, commit: Commit<'_>) -> Result<(), wf_store::StoreError> {
+        if self.failing.get() {
+            return Err(wf_store::StoreError::Inconsistent("disk full".into()));
+        }
+        self.inner.commit(commit)
+    }
+}
+
+#[test]
+fn a_failed_write_marks_the_replica_for_reopening() {
+    let fixture = Fixture::new(1);
+    let store = Flaky {
+        inner: RedbStore::in_memory().unwrap(),
+        failing: std::cell::Cell::new(false),
+    };
+    let mut replica = Replica::open(store, fixture.workforce()).unwrap();
+    replica.receive(fixture.genesis.clone()).unwrap();
+    assert!(!replica.needs_reopen());
+
+    replica.store().failing.set(true);
+    let result = replica.author(
+        &fixture.devices[0],
+        fixture.founder_actor(),
+        2_000,
+        create("task", "never stored"),
+    );
+    assert!(result.is_err());
+    assert!(replica.needs_reopen());
+    assert_eq!(replica.store().log_len().unwrap(), 1);
+}

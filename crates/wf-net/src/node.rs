@@ -22,18 +22,25 @@ use crate::sync::{SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond
 /// Hole punching and address lookup can take a while.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 /// Without those a connection works at once or not at all.
-const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FORBIDDEN: u32 = 403;
 const NOT_SERVED: u32 = 404;
 const FAILED: u32 = 500;
 const DONE: u32 = 0;
 
+/// The error of some other layer, kept as the source of a [`NetError`].
+pub type SourceError = Box<dyn std::error::Error + Send + Sync>;
+
 #[derive(Debug, thiserror::Error)]
 pub enum NetError {
     #[error("could not start the network endpoint: {0}")]
-    Bind(String),
-    #[error("could not reach {peer}: {reason}")]
-    Connect { peer: String, reason: String },
+    Bind(#[source] SourceError),
+    #[error("could not reach {peer}: {source}")]
+    Connect {
+        peer: String,
+        #[source]
+        source: SourceError,
+    },
     #[error("sync with {peer} failed: {source}")]
     Sync {
         peer: String,
@@ -41,13 +48,13 @@ pub enum NetError {
         source: SyncError,
     },
     #[error("gossip failed: {0}")]
-    Gossip(String),
+    Gossip(#[source] SourceError),
     #[error("workforce {0} is not served here")]
     NotServed(WorkforceId),
     #[error("{peer} refused the join: {reason}")]
     JoinRefused { peer: String, reason: JoinRefusal },
     #[error("could not write the events of the new device: {0}")]
-    JoinAuthoring(String),
+    JoinAuthoring(#[source] SourceError),
 }
 
 /// How the endpoint finds and reaches its peers.
@@ -59,6 +66,17 @@ pub enum Network {
     InternetWithRelay(RelayUrl),
     /// Direct connections to the addresses given only: no relay, no address lookup.
     Direct,
+}
+
+#[derive(Debug, thiserror::Error)]
+#[error("timed out")]
+struct TimedOut;
+
+fn connect_error(peer: &str, source: impl Into<SourceError>) -> NetError {
+    NetError::Connect {
+        peer: peer.to_string(),
+        source: source.into(),
+    }
 }
 
 pub fn endpoint_id(device: DeviceKey) -> EndpointId {
@@ -218,7 +236,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         let endpoint = builder
             .bind()
             .await
-            .map_err(|error| NetError::Bind(error.to_string()))?;
+            .map_err(|error| NetError::Bind(error.into()))?;
         let registry = Registry::new();
         let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
         let router = Router::builder(endpoint)
@@ -282,7 +300,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .gossip
             .subscribe(topic_id(workforce), bootstrap)
             .await
-            .map_err(|error| NetError::Gossip(error.to_string()))?
+            .map_err(|error| NetError::Gossip(error.into()))?
             .split();
         Ok(HeadsTopic::new(sender, receiver, self.device()))
     }
@@ -308,22 +326,12 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             self.endpoint().connect(peer.clone(), SYNC_ALPN),
         )
         .await
-        .map_err(|_| NetError::Connect {
-            peer: name.clone(),
-            reason: "timed out".into(),
-        })?
-        .map_err(|error| NetError::Connect {
-            peer: name.clone(),
-            reason: error.to_string(),
-        })?;
-        let (mut send, mut recv) =
-            connection
-                .open_bi()
-                .await
-                .map_err(|error| NetError::Connect {
-                    peer: name.clone(),
-                    reason: error.to_string(),
-                })?;
+        .map_err(|_| connect_error(&name, TimedOut))?
+        .map_err(|error| connect_error(&name, error))?;
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|error| connect_error(&name, error))?;
         let report = initiate(tokio::io::join(&mut recv, &mut send), workforce, &log)
             .await
             .map_err(|source| NetError::Sync {
@@ -349,24 +357,20 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
     {
         let peer: EndpointAddr = peer.into();
         let name = device_key(peer.id).fmt_short();
-        let connect_error = |reason: String| NetError::Connect {
-            peer: name.clone(),
-            reason,
-        };
         let connection = tokio::time::timeout(
             self.connect_timeout,
             self.endpoint().connect(peer.clone(), JOIN_ALPN),
         )
         .await
-        .map_err(|_| connect_error("timed out".into()))?
-        .map_err(|error| connect_error(error.to_string()))?;
+        .map_err(|_| connect_error(&name, TimedOut))?
+        .map_err(|error| connect_error(&name, error))?;
         let (mut send, mut recv) = connection
             .open_bi()
             .await
-            .map_err(|error| connect_error(error.to_string()))?;
+            .map_err(|error| connect_error(&name, error))?;
         let proof = code
             .prove(self.device())
-            .map_err(|error| NetError::JoinAuthoring(error.to_string()))?;
+            .map_err(|error| NetError::JoinAuthoring(error.into()))?;
         let request = JoinRequest {
             workforce: code.workforce,
             invite: code.invite,
@@ -382,12 +386,12 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         let _ = send.finish();
         connection.close(DONE.into(), b"done");
         result.map_err(|failure| match failure {
-            JoinFailure::Net(reason) => connect_error(reason),
+            JoinFailure::Net(source) => connect_error(&name, source),
             JoinFailure::Refused(reason) => NetError::JoinRefused {
                 peer: name.clone(),
                 reason,
             },
-            JoinFailure::Author(error) => NetError::JoinAuthoring(error.to_string()),
+            JoinFailure::Author(error) => NetError::JoinAuthoring(error),
         })
     }
 
