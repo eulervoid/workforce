@@ -34,6 +34,18 @@ impl DataDir {
         self.root.join("keys")
     }
 
+    /// The unix socket of the daemon of this machine.
+    pub fn daemon_socket(&self) -> PathBuf {
+        let runtime = std::env::var_os("XDG_RUNTIME_DIR")
+            .filter(|value| !value.is_empty())
+            .map(PathBuf::from);
+        wf_daemon::proto::socket_path(&self.root, runtime.as_deref())
+    }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+
     pub fn workforce(&self, id: &wf_core::id::WorkforceId) -> PathBuf {
         self.root.join(id.to_string())
     }

@@ -1,14 +1,16 @@
 //! Finding the workforce for the current directory and opening it.
 
+use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use wf_core::event::{Event, EventBody};
-use wf_core::id::{ItemId, WorkforceId};
+use wf_core::id::{EventId, ItemId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner, PrincipalSigner};
 use wf_core::state::State;
-use wf_store::{RedbStore, Replica};
+use wf_daemon::client::DaemonClient;
+use wf_store::{EventStore, RedbStore, Replica};
 
 use crate::keys::DataDir;
 
@@ -44,16 +46,49 @@ pub fn store_path(data: &DataDir, id: &WorkforceId) -> anyhow::Result<PathBuf> {
     Ok(directory.join("store.redb"))
 }
 
+/// Where a command reads and writes the workforce: a running daemon, which owns the store, or
+/// the store itself, opened by this process.
+enum Source {
+    Local(Replica<RedbStore>),
+    Daemon {
+        client: RefCell<DaemonClient>,
+        state: State,
+    },
+}
+
 pub struct Workspace {
-    pub replica: Replica<RedbStore>,
+    source: Source,
     pub data: DataDir,
+    workforce: WorkforceId,
     device: DeviceSigner,
     actor: Actor,
 }
 
+/// The replica of a command that talks to the network itself, or the daemon that does.
+pub enum Replicated {
+    Local(Box<Replica<RedbStore>>),
+    Daemon(Box<DaemonClient>),
+}
+
 impl Workspace {
+    /// Uses the daemon when one is running, and opens the store otherwise.
     pub fn open(data: DataDir, start: &Path, refold: bool) -> anyhow::Result<Self> {
         let (_, id) = find_workforce(start)?;
+        let device = data
+            .device(false)?
+            .ok_or_else(|| anyhow!("no device key; this machine has not joined the workforce"))?;
+        if !refold && let Some(mut client) = DaemonClient::connect(&data.daemon_socket())? {
+            let state = client.state(id)?;
+            return Self::bound(
+                Source::Daemon {
+                    client: RefCell::new(client),
+                    state,
+                },
+                data,
+                id,
+                device,
+            );
+        }
         let store = RedbStore::open(store_path(&data, &id)?)?;
         let replica = if refold {
             Replica::refold(store)?
@@ -65,43 +100,91 @@ impl Workspace {
                 "the local log for workforce {id} is missing or does not match; is this machine part of it?"
             );
         }
-        let device = data
-            .device(false)?
-            .ok_or_else(|| anyhow!("no device key; this machine has not joined the workforce"))?;
-        let principal = replica.state().principal_of(&device.key()).ok_or_else(|| {
+        Self::bound(Source::Local(replica), data, id, device)
+    }
+
+    fn bound(
+        source: Source,
+        data: DataDir,
+        workforce: WorkforceId,
+        device: DeviceSigner,
+    ) -> anyhow::Result<Self> {
+        let state = match &source {
+            Source::Local(replica) => replica.state(),
+            Source::Daemon { state, .. } => state,
+        };
+        let principal = state.principal_of(&device.key()).ok_or_else(|| {
             anyhow!("this machine's device key is not bound to a member of the workforce")
         })?;
         Ok(Self {
-            replica,
+            source,
             data,
+            workforce,
             device,
             actor: Actor::Human(principal),
         })
     }
 
     /// Hands over the replica, for commands that share it with the network.
-    pub fn into_parts(self) -> (Replica<RedbStore>, DeviceSigner) {
-        (self.replica, self.device)
+    pub fn into_replicated(self) -> (Replicated, DeviceSigner, WorkforceId) {
+        let replicated = match self.source {
+            Source::Local(replica) => Replicated::Local(Box::new(replica)),
+            Source::Daemon { client, .. } => Replicated::Daemon(Box::new(client.into_inner())),
+        };
+        (replicated, self.device, self.workforce)
     }
 
     pub fn device_key(&self) -> wf_core::identity::DeviceKey {
         self.device.key()
     }
 
-    /// Presence is only known to a running daemon.
+    /// When devices were last heard from. Only a running daemon knows.
     pub fn last_seen(&self) -> crate::devices::LastSeen {
-        crate::devices::LastSeen::new()
+        match &self.source {
+            Source::Local(_) => crate::devices::LastSeen::new(),
+            Source::Daemon { client, .. } => client
+                .borrow_mut()
+                .last_seen(self.workforce)
+                .map(|seen| seen.into_iter().collect())
+                .unwrap_or_default(),
+        }
     }
 
     pub fn state(&self) -> &State {
-        self.replica.state()
+        match &self.source {
+            Source::Local(replica) => replica.state(),
+            Source::Daemon { state, .. } => state,
+        }
+    }
+
+    pub fn event(&self, id: &EventId) -> anyhow::Result<Option<Event>> {
+        match &self.source {
+            Source::Local(replica) => Ok(replica.store().event(id)?),
+            Source::Daemon { client, .. } => Ok(client.borrow_mut().event(self.workforce, *id)?),
+        }
+    }
+
+    /// Every event, ordered by `(hlc, id)`.
+    pub fn events(&self) -> anyhow::Result<Vec<Event>> {
+        match &self.source {
+            Source::Local(replica) => Ok(replica.store().events()?),
+            Source::Daemon { client, .. } => Ok(client.borrow_mut().events(self.workforce)?),
+        }
     }
 
     /// Checks the policy rules, signs with this machine's device key and stores the event.
     pub fn author(&mut self, body: EventBody) -> anyhow::Result<Event> {
-        Ok(self
-            .replica
-            .author(&self.device, self.actor.clone(), now_ms(), body)?)
+        match &mut self.source {
+            Source::Local(replica) => {
+                Ok(replica.author(&self.device, self.actor.clone(), now_ms(), body)?)
+            }
+            Source::Daemon { client, state } => {
+                let mut client = client.borrow_mut();
+                let event = client.author(self.workforce, self.actor.clone(), body)?;
+                *state = client.state(self.workforce)?;
+                Ok(event)
+            }
+        }
     }
 
     pub fn principal_signer(&self) -> anyhow::Result<PrincipalSigner> {

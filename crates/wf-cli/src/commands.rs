@@ -15,7 +15,7 @@ use wf_core::policy::Field;
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
 use wf_core::state::{State, Trust};
-use wf_store::{EventStore, RedbStore, Replica};
+use wf_store::{RedbStore, Replica};
 
 use crate::cli::*;
 use crate::draft::{Draft, NewItemDraft};
@@ -77,6 +77,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     match cli.command {
         Command::Init(args) => init(json, args, data, cwd),
         Command::Join(args) => crate::network::join(json, mode, args, data, cwd),
+        Command::Daemon(args) => crate::network::daemon(json, args, data),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
             emit(
@@ -88,9 +89,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         command => {
             let mut workspace = Workspace::open(data, cwd, false)?;
             match command {
-                Command::Init(_) | Command::Join(_) | Command::Status { .. } => {
-                    unreachable!("handled above")
-                }
+                Command::Init(_)
+                | Command::Join(_)
+                | Command::Daemon(_)
+                | Command::Status { .. } => unreachable!("handled above"),
                 Command::Agent(command) => agent(json, command, &mut workspace),
                 Command::Item(command) => item(json, mode, command, &mut workspace),
                 Command::Comment(args) => comment(json, mode, &mut workspace, args),
@@ -548,7 +550,6 @@ fn show(
     history: bool,
 ) -> anyhow::Result<()> {
     let state = workspace.state();
-    let store = workspace.replica.store();
     match state.item(id).expect("resolved ids exist") {
         ItemView::Archived(stub) => {
             let graph = state.dependency_graph();
@@ -568,11 +569,12 @@ fn show(
             })
         }
         ItemView::Live(item) => {
-            let detail =
-                view::item_detail(state, item, |event_id| store.event(event_id).ok().flatten());
+            let detail = view::item_detail(state, item, |event_id| {
+                workspace.event(event_id).ok().flatten()
+            });
             let history = if history {
                 let mut entries = Vec::new();
-                for event in store.events()? {
+                for event in workspace.events()? {
                     if event_touches(&event, id) {
                         entries.push(view::history_entry(state, &event));
                     }
@@ -884,7 +886,7 @@ fn apply_policy(json: bool, workspace: &mut Workspace, source: String) -> anyhow
 
 fn log(json: bool, mode: Mode, workspace: &Workspace) -> anyhow::Result<()> {
     let state = workspace.state();
-    let events = workspace.replica.store().events()?;
+    let events = workspace.events()?;
     // Replay into an empty state with full verification: signatures, feeds and authority.
     let mut replay = State::new();
     let mut views = Vec::new();

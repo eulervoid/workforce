@@ -41,6 +41,7 @@ impl Sandbox {
             .args(args)
             .current_dir(&self.repository)
             .env("XDG_DATA_HOME", &self.data)
+            .env("XDG_RUNTIME_DIR", self._root.path().join("run"))
             .env("PATH", &self.bin)
             .env("USER", "joshua");
         command
@@ -534,4 +535,85 @@ fn devices_and_members_are_listed_and_editable() {
 
     let error = sandbox.fail(&["device", "edit"]);
     assert!(error.contains("nothing to change"), "{error}");
+}
+
+struct RunningDaemon {
+    child: std::process::Child,
+}
+
+impl Sandbox {
+    #[allow(clippy::zombie_processes)]
+    fn start_daemon(&self) -> RunningDaemon {
+        let child = self
+            .command(&["daemon", "--no-network"])
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
+            .spawn()
+            .unwrap();
+        let socket = self._root.path().join("run/workforce/daemon.sock");
+        for _ in 0..200 {
+            if socket.exists() && std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+                return RunningDaemon { child };
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        panic!("the daemon did not start");
+    }
+}
+
+impl RunningDaemon {
+    fn stop(self) {
+        drop(self);
+    }
+}
+
+impl Drop for RunningDaemon {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+#[test]
+fn the_cli_gives_the_same_output_through_the_daemon_as_through_the_store() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&[
+        "init",
+        "--name",
+        "demo",
+        "--no-agents",
+        "--device-name",
+        "laptop",
+    ]);
+    sandbox.add(&["--title", "Written before the daemon", "--priority", "P1"]);
+
+    let daemon = sandbox.start_daemon();
+    let through_daemon =
+        sandbox.add(&["--title", "Written through the daemon", "--priority", "P2"]);
+    let list = sandbox.json(&["item", "list"]);
+    let status = sandbox.json(&["status"]);
+    let item = sandbox.json(&["item", "show", short(&through_daemon)]);
+    let log = sandbox.json(&["log"]);
+    let devices = sandbox.json(&["device", "list"]);
+    daemon.stop();
+
+    assert_eq!(sandbox.json(&["item", "list"]), list);
+    assert_eq!(sandbox.json(&["status"]), status);
+    assert_eq!(
+        sandbox.json(&["item", "show", short(&through_daemon)]),
+        item
+    );
+    assert_eq!(sandbox.json(&["log"]), log);
+    assert_eq!(sandbox.json(&["device", "list"]), devices);
+    assert_eq!(list.as_array().unwrap().len(), 2);
+}
+
+#[test]
+fn a_second_daemon_is_refused() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+    let daemon = sandbox.start_daemon();
+    let error = sandbox.fail(&["daemon", "--no-network"]);
+    assert!(error.contains("already listening"), "{error}");
+    daemon.stop();
 }

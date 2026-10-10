@@ -16,6 +16,7 @@ path = "src/main.rs"
 wf-core.workspace = true
 wf-store.workspace = true
 wf-net.workspace = true
+wf-daemon.workspace = true
 anyhow.workspace = true
 clap.workspace = true
 comfy-table.workspace = true

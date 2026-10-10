@@ -9,8 +9,10 @@ use wf_core::event::Event;
 use wf_core::id::EventId;
 use wf_core::identity::DeviceKey;
 use wf_core::invite::JoinRefusal;
-use wf_core::sync::{self, Versions};
-use wf_store::{EventStore, ReceiveError, Replica, StoreError};
+use wf_core::sync::Versions;
+use wf_store::{EventStore, Replica, StoreError};
+
+use crate::replica;
 
 #[derive(Debug, thiserror::Error)]
 #[error("the local log failed: {0}")]
@@ -89,53 +91,23 @@ impl<S: EventStore> SharedReplica<S> {
 
 impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
     async fn versions(&self) -> Result<Versions, LogError> {
-        Ok(self.lock().state().versions())
+        Ok(replica::versions(&self.lock()))
     }
 
     async fn events_after(&self, theirs: &Versions) -> Result<Vec<Event>, LogError> {
-        let replica = self.lock();
-        let mut events = Vec::new();
-        for outgoing in sync::ahead_of(&replica.state().versions(), theirs) {
-            events.extend(
-                replica
-                    .store()
-                    .feed_since(&outgoing.author, outgoing.after_seq)?,
-            );
-            for id in &outgoing.tips {
-                events.extend(replica.store().event(id)?);
-            }
-        }
-        sync::causal_order(&mut events);
-        events.dedup_by_key(|event| event.id());
-        Ok(events)
+        Ok(replica::events_after(&self.lock(), theirs)?)
     }
 
     async fn events_by_id(&self, ids: &[EventId]) -> Result<Vec<Event>, LogError> {
-        let replica = self.lock();
-        let mut events = Vec::new();
-        for id in ids {
-            if let Some(event) = replica.store().event(id)? {
-                events.push(event);
-            }
-        }
-        Ok(events)
+        Ok(replica::events_by_id(&self.lock(), ids)?)
     }
 
     async fn receive(&self, events: Vec<Event>) -> Result<ReceiveSummary, LogError> {
-        let mut replica = self.lock();
-        let mut summary = ReceiveSummary::default();
-        for event in events {
-            match replica.receive(event) {
-                Ok(received) => summary.applied += received.applied.len(),
-                Err(ReceiveError::Invalid(_)) => summary.rejected += 1,
-                Err(ReceiveError::Store(error)) => return Err(error.into()),
-            }
-        }
-        Ok(summary)
+        Ok(replica::receive(&mut self.lock(), events)?)
     }
 
     async fn is_bound(&self, device: DeviceKey) -> Result<bool, LogError> {
-        Ok(self.lock().state().principal_of(&device).is_some())
+        Ok(replica::is_bound(&self.lock(), device))
     }
 
     async fn check_join(
@@ -145,13 +117,16 @@ impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
         proof: Signature,
         now_ms: u64,
     ) -> Result<Result<(), JoinRefusal>, LogError> {
-        Ok(self
-            .lock()
-            .state()
-            .check_join(&invite, device, &proof, now_ms))
+        Ok(replica::check_join(
+            &self.lock(),
+            invite,
+            device,
+            proof,
+            now_ms,
+        ))
     }
 
     async fn missing(&self) -> Result<Vec<EventId>, LogError> {
-        Ok(self.lock().state().missing_parents().into_iter().collect())
+        Ok(replica::missing(&self.lock()))
     }
 }

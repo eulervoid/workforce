@@ -11,6 +11,7 @@ license = "MIT OR Apache-2.0"
 wf-core = { path = "crates/wf-core" }
 wf-store = { path = "crates/wf-store" }
 wf-net = { path = "crates/wf-net" }
+wf-daemon = { path = "crates/wf-daemon" }
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }

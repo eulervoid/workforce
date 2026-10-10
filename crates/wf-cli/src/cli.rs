@@ -43,6 +43,9 @@ pub enum Command {
     Log,
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
+    /// Run the background process of this machine: it serves sync and join to your other
+    /// machines and keeps the workforce up to date.
+    Daemon(DaemonArgs),
     /// Invite another machine of yours to the workforce.
     #[command(subcommand)]
     Invite(InviteCommand),
@@ -69,6 +72,16 @@ pub struct SyncArgs {
     /// Use this relay server instead of the default ones.
     #[arg(long, value_name = "URL")]
     pub relay: Option<String>,
+}
+
+#[derive(Args)]
+pub struct DaemonArgs {
+    /// Use this relay server instead of the default ones.
+    #[arg(long, value_name = "URL")]
+    pub relay: Option<String>,
+    /// Neither relays nor address lookup: for tests.
+    #[arg(long, hide = true)]
+    pub no_network: bool,
 }
 
 #[derive(Subcommand)]

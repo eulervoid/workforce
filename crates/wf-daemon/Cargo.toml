@@ -1,0 +1,17 @@
+[package]
+name = "wf-daemon"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wf-core.workspace = true
+wf-store.workspace = true
+wf-net.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+wf-core = { workspace = true, features = ["testing"] }
+tempfile.workspace = true

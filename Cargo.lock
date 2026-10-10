@@ -4097,6 +4097,7 @@ dependencies = [
  "tokio",
  "toml",
  "wf-core",
+ "wf-daemon",
  "wf-net",
  "wf-store",
 ]
@@ -4116,6 +4117,19 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.21",
  "toml",
+]
+
+[[package]]
+name = "wf-daemon"
+version = "0.0.0"
+dependencies = [
+ "serde",
+ "tempfile",
+ "thiserror 2.0.21",
+ "tokio",
+ "wf-core",
+ "wf-net",
+ "wf-store",
 ]
 
 [[package]]

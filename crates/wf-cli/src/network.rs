@@ -7,26 +7,23 @@ use std::time::Duration;
 
 use anyhow::{Context, bail};
 use serde::Serialize;
-use tokio::task::JoinSet;
 use wf_core::event::{DeviceBound, DeviceProfile, EventBody, InviteCreated, InviteKind};
-use wf_core::identity::{Actor, DeviceKey, InviteSigner, Signed};
+use wf_core::identity::{Actor, DeviceKey, DeviceSigner, InviteSigner, Signed};
 use wf_core::invite::InviteCode;
 use wf_core::name::AgentName;
-use wf_core::state::State;
-use wf_net::{NetError, Network, Node, SharedReplica, SyncReport};
+use wf_daemon::{PeerOutcome, PeerSync, peers_of, sync_all};
+use wf_net::{NetError, Network, Node, SharedReplica};
 use wf_store::{RedbStore, Replica};
 
-use crate::cli::{InviteDeviceArgs, JoinArgs, SyncArgs};
+use crate::cli::{DaemonArgs, InviteDeviceArgs, JoinArgs, SyncArgs};
 use crate::commands::emit;
 use crate::interactive::Mode;
 use crate::keys::DataDir;
 use crate::view::{device_label, timestamp_now};
-use crate::workspace::{self, WORKFORCE_FILE, WorkforceFile, Workspace};
-
-type ReplicaNode = Node<SharedReplica<RedbStore>>;
+use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
 
 #[derive(Serialize)]
-pub struct PeerSync {
+pub struct PeerView {
     pub device: String,
     pub reached: bool,
     pub sent: usize,
@@ -35,10 +32,37 @@ pub struct PeerSync {
     pub error: Option<String>,
 }
 
+impl From<&PeerSync> for PeerView {
+    fn from(peer: &PeerSync) -> Self {
+        match &peer.outcome {
+            PeerOutcome::Synced {
+                sent,
+                received,
+                rejected,
+            } => Self {
+                device: peer.label.clone(),
+                reached: true,
+                sent: *sent,
+                received: *received,
+                rejected: *rejected,
+                error: None,
+            },
+            PeerOutcome::Unreachable(error) => Self {
+                device: peer.label.clone(),
+                reached: false,
+                sent: 0,
+                received: 0,
+                rejected: 0,
+                error: Some(error.clone()),
+            },
+        }
+    }
+}
+
 #[derive(Serialize)]
 pub struct SyncView {
     pub device: String,
-    pub peers: Vec<PeerSync>,
+    pub peers: Vec<PeerView>,
     pub events: usize,
     pub serving: bool,
 }
@@ -78,67 +102,20 @@ pub fn network_for(relay: Option<&str>) -> anyhow::Result<Network> {
     }
 }
 
-/// The other bound devices of the workforce.
-pub fn peers_of(state: &State, own: DeviceKey) -> Vec<DeviceKey> {
-    state
-        .members()
-        .flat_map(|(_, member)| member.devices.iter().copied())
-        .filter(|device| *device != own)
-        .collect()
-}
-
-pub async fn sync_all(
-    node: &Arc<ReplicaNode>,
-    workforce: wf_core::id::WorkforceId,
-    peers: Vec<(DeviceKey, String)>,
-) -> Vec<PeerSync> {
-    let mut tasks = JoinSet::new();
-    for (index, (device, label)) in peers.into_iter().enumerate() {
-        let node = Arc::clone(node);
-        tasks.spawn(async move {
-            let result = node.sync_with(workforce, wf_net::endpoint_id(device)).await;
-            (index, label, result)
-        });
-    }
-    let mut results = Vec::new();
-    while let Some(joined) = tasks.join_next().await {
-        let Ok((index, label, result)) = joined else {
-            continue;
-        };
-        results.push((index, peer_result(label, result)));
-    }
-    results.sort_by_key(|(index, _)| *index);
-    results.into_iter().map(|(_, result)| result).collect()
-}
-
-fn peer_result(device: String, result: Result<SyncReport, NetError>) -> PeerSync {
-    match result {
-        Ok(report) => PeerSync {
-            device,
-            reached: true,
-            sent: report.sent,
-            received: report.applied,
-            rejected: report.rejected,
-            error: None,
-        },
-        Err(error) => PeerSync {
-            device,
-            reached: false,
-            sent: 0,
-            received: 0,
-            rejected: 0,
-            error: Some(error.to_string()),
-        },
-    }
-}
-
 pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<()> {
     let network = network_for(args.relay.as_deref())?;
-    let (replica, device) = workspace.into_parts();
-    let workforce = replica
-        .state()
-        .workforce_id()
-        .context("the workforce has no genesis")?;
+    let (replicated, device, workforce) = workspace.into_replicated();
+    let replica = match replicated {
+        Replicated::Local(replica) => *replica,
+        Replicated::Daemon(mut client) => {
+            if args.serve {
+                bail!("the daemon of this machine is already serving; no need for --serve");
+            }
+            let peers = client.sync_now(workforce)?;
+            let state = client.state(workforce)?;
+            return finish(json, &device, &peers, state.event_count(), false);
+        }
+    };
     let peers: Vec<(DeviceKey, String)> = peers_of(replica.state(), device.key())
         .into_iter()
         .map(|peer| (peer, device_label(replica.state(), peer)))
@@ -162,24 +139,34 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
                 timestamp_now()
             );
         }
-        let results = sync_all(&node, workforce, peers).await;
+        let results = sync_all(&node, workforce, peers, None).await;
         let events = shared.lock().state().event_count();
-        let view = SyncView {
-            device: device.key().to_string(),
-            peers: results,
-            events,
-            serving: args.serve,
-        };
-        if !args.serve && !view.peers.is_empty() && view.peers.iter().all(|peer| !peer.reached) {
-            emit(json, &view, render)?;
-            bail!("no other device could be reached");
-        }
-        emit(json, &view, render)?;
+        finish(json, &device, &results, events, args.serve)?;
         if args.serve {
             tokio::signal::ctrl_c().await?;
         }
         Ok(())
     })
+}
+
+fn finish(
+    json: bool,
+    device: &DeviceSigner,
+    peers: &[PeerSync],
+    events: usize,
+    serving: bool,
+) -> anyhow::Result<()> {
+    let view = SyncView {
+        device: device.key().to_string(),
+        peers: peers.iter().map(PeerView::from).collect(),
+        events,
+        serving,
+    };
+    emit(json, &view, render)?;
+    if !serving && !peers.is_empty() && peers.iter().all(|peer| !peer.reached()) {
+        bail!("no other device could be reached");
+    }
+    Ok(())
 }
 
 #[derive(Serialize)]
@@ -423,4 +410,51 @@ pub(crate) fn host_name() -> String {
             (!name.is_empty()).then_some(name)
         })
         .unwrap_or_else(|| "this-machine".to_string())
+}
+
+#[derive(Serialize)]
+struct DaemonView {
+    device: String,
+    socket: String,
+}
+
+pub fn daemon(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
+    let device = data
+        .device(false)?
+        .context("no device key; run `wf init` or `wf join` first")?;
+    let socket = data.daemon_socket();
+    let config = wf_daemon::Config {
+        data_dir: data.root().to_path_buf(),
+        socket: socket.clone(),
+        network: if args.no_network {
+            Network::Direct
+        } else {
+            network_for(args.relay.as_deref())?
+        },
+    };
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?;
+    runtime.block_on(async {
+        let daemon = wf_daemon::Daemon::start(config, device.clone()).await?;
+        emit(
+            json,
+            &DaemonView {
+                device: device.key().to_string(),
+                socket: socket.display().to_string(),
+            },
+            |view| {
+                format!(
+                    "daemon of device {} listening on {}; interrupt to stop\n",
+                    view.device, view.socket
+                )
+            },
+        )?;
+        daemon
+            .serve(async {
+                let _ = tokio::signal::ctrl_c().await;
+            })
+            .await?;
+        Ok(())
+    })
 }
