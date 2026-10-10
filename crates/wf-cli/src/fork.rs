@@ -1,7 +1,7 @@
 //! `wf fork`: a new workforce that starts where this one is, without what was lost.
 
 use std::collections::BTreeSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use anyhow::{Context, anyhow, bail};
@@ -21,6 +21,27 @@ use crate::keys::DataDir;
 use crate::network::{network_for, sync_devices};
 use crate::view::{actor_label, device_label};
 use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
+
+/// The directory of a fork that is being made, removed again unless the fork is completed.
+struct Unfinished(Option<PathBuf>);
+
+impl Unfinished {
+    fn new(directory: PathBuf) -> Self {
+        Self(Some(directory))
+    }
+
+    fn keep(&mut self) {
+        self.0 = None;
+    }
+}
+
+impl Drop for Unfinished {
+    fn drop(&mut self) {
+        if let Some(directory) = &self.0 {
+            let _ = std::fs::remove_dir_all(directory);
+        }
+    }
+}
 
 /// What `--exclude` names.
 #[derive(Debug, PartialEq, Eq)]
@@ -187,6 +208,8 @@ pub fn fork(
             EventBody::Genesis(Signed::sign(&founder_key, None, genesis)?),
         )?;
     let child: WorkforceId = genesis_event.id().into();
+    let mut unfinished = Unfinished::new(workspace.data.workforce(&child));
+    workspace.data.store_principal(&child, &founder_key)?;
 
     // The fork holds the history it was made from, newest event first.
     let mut history = workspace.events()?;
@@ -218,11 +241,9 @@ pub fn fork(
             },
         )?))?;
     }
-    if args.new_principal {
-        workspace.data.replace_principal(&founder_key)?;
-    }
     let file = toml::to_string(&WorkforceFile { id: child })?;
     std::fs::write(find_file(cwd)?, file)?;
+    unfinished.keep();
 
     let describe = |device: &DeviceKey| device_label(&state, *device);
     emit(
@@ -266,7 +287,7 @@ pub fn fork(
             }
             if view.new_principal {
                 out.push_str(
-                    "founded with a new principal key; the old one is kept aside and no longer used\n",
+                    "founded with a new principal key; the old workforce keeps the old one\n",
                 );
             }
             out.push_str(&format!(

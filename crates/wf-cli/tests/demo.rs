@@ -640,8 +640,14 @@ mod forking {
             .unwrap()
             .to_string();
         let keys = sandbox.data.join("workforce/keys");
-        let principal =
-            PrincipalSigner::from_bytes(&read_key(&keys.join("principal.key"))).unwrap();
+        let principal = PrincipalSigner::from_bytes(&read_key(
+            &sandbox
+                .data
+                .join("workforce")
+                .join(&id)
+                .join("principal.key"),
+        ))
+        .unwrap();
         let device = DeviceSigner::from_bytes(&read_key(&keys.join("device.key"))).unwrap();
         let second = DeviceSigner::generate();
         let store = sandbox.data.join("workforce").join(&id).join("store.redb");
@@ -782,7 +788,7 @@ mod forking {
     }
 
     #[test]
-    fn a_new_principal_replaces_the_key_and_keeps_the_handle() {
+    fn a_new_principal_gives_the_fork_its_own_key_and_leaves_the_parent_alone() {
         let sandbox = Sandbox::new();
         sandbox.run(&[
             "init",
@@ -793,14 +799,27 @@ mod forking {
             "laptop",
         ]);
         sandbox.add(&["--title", "Written with the old key", "--priority", "P2"]);
-        let old_key =
-            std::fs::read_to_string(sandbox.data.join("workforce/keys/principal.key")).unwrap();
+        let parent = sandbox.json(&["status"])["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let key_of = |id: &str| {
+            std::fs::read_to_string(
+                sandbox
+                    .data
+                    .join("workforce")
+                    .join(id)
+                    .join("principal.key"),
+            )
+            .unwrap()
+        };
+        let old_key = key_of(&parent);
 
         let fork = sandbox.json(&["fork", "--new-principal"]);
         assert_eq!(fork["announced"], false);
-        let new_key =
-            std::fs::read_to_string(sandbox.data.join("workforce/keys/principal.key")).unwrap();
-        assert_ne!(old_key, new_key);
+        let child = fork["workforce"].as_str().unwrap().to_string();
+        assert_ne!(old_key, key_of(&child));
+        assert_eq!(old_key, key_of(&parent), "the parent keeps its key");
 
         let item = sandbox.json(&["item", "list"]);
         let id = item[0]["id"].as_str().unwrap().to_string();
@@ -810,5 +829,38 @@ mod forking {
         assert_eq!(members[0]["handle"], "@joshua");
         // The new key works for what needs a principal.
         sandbox.run(&["invite", "device"]);
+
+        // And the other workforce on this machine still has its own.
+        std::fs::write(
+            sandbox.repository.join(".workforce.toml"),
+            format!("id = \"{parent}\"\n"),
+        )
+        .unwrap();
+        sandbox.run(&["invite", "device"]);
+    }
+
+    #[test]
+    fn a_fork_without_a_new_principal_keeps_the_key_of_its_parent() {
+        let sandbox = Sandbox::new();
+        sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+        let parent = sandbox.json(&["status"])["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let child = sandbox.json(&["fork"])["workforce"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let key_of = |id: &str| {
+            std::fs::read_to_string(
+                sandbox
+                    .data
+                    .join("workforce")
+                    .join(id)
+                    .join("principal.key"),
+            )
+            .unwrap()
+        };
+        assert_eq!(key_of(&parent), key_of(&child));
     }
 }

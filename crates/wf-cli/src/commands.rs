@@ -8,7 +8,7 @@ use wf_core::event::{
     ItemTransitioned, Link, PolicySet,
 };
 use wf_core::id::{HashId, ItemId};
-use wf_core::identity::{Actor, MemberSeed, Signed};
+use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
 use wf_core::item::{ItemView, Priority};
 use wf_core::name::{AgentName, Handle, HarnessName, LaneName, StateName};
 use wf_core::policy::Field;
@@ -155,7 +155,7 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
         Some(handle) => Handle::new(handle)?,
         None => handle_from_environment(),
     };
-    let principal = data.principal(true)?.expect("created on demand");
+    let principal = PrincipalSigner::generate();
     let device = data.device(true)?.expect("created on demand");
 
     let genesis = Genesis {
@@ -177,6 +177,7 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
             .sign(&device, body)?;
     let id: wf_core::id::WorkforceId = genesis_event.id().into();
 
+    data.store_principal(&id, &principal)?;
     let mut replica = Replica::open(RedbStore::open(workspace::store_path(&data, &id)?)?, id)?;
     if replica.state().workforce_id().is_some() {
         bail!("a local log for workforce {id} already exists");

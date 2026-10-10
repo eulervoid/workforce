@@ -34,6 +34,10 @@ wf members
 wf fork --exclude vm             # the vm was lost: a new workforce without it
 wf fork accept <id>              # on each remaining device: follow the fork
 ```
+The principal key of a workforce is stored next to its store, in
+`~/.local/share/workforce/<workforce id>/principal.key`; every workforce has its own. If you created a
+workforce before this was the case, move `~/.local/share/workforce/keys/principal.key` there.
+
 Without a daemon the CLI opens the store itself; with one it asks the daemon, which owns the store.
 Devices find each other through iroh (relays and address lookup from n0; `--relay <url>` replaces the
 relay). Run the daemon as a service yourself, for example as a systemd user unit or a launchd agent

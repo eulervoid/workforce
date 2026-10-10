@@ -112,6 +112,9 @@ impl Daemon {
             else {
                 continue;
             };
+            if !entry.path().join(STORE_FILE).is_file() {
+                continue;
+            }
             let loaded = self
                 .loaded
                 .lock()

@@ -1,4 +1,5 @@
-//! Key files: `principal.key` and `device.key` under `$XDG_DATA_HOME/workforce/keys/`, mode 0600.
+//! Key files, mode 0600, under `$XDG_DATA_HOME/workforce/`: `keys/device.key` for the machine and
+//! `<workforce>/principal.key` for each workforce.
 //! A key-provider hook (1Password, ssh-agent) replaces this later.
 
 use std::io::Write;
@@ -7,6 +8,7 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, bail};
 use data_encoding::HEXLOWER;
+use wf_core::id::WorkforceId;
 use wf_core::identity::{DeviceSigner, PrincipalSigner};
 
 /// Where `wf` keeps everything outside the repository.
@@ -46,7 +48,7 @@ impl DataDir {
         &self.root
     }
 
-    pub fn workforce(&self, id: &wf_core::id::WorkforceId) -> PathBuf {
+    pub fn workforce(&self, id: &WorkforceId) -> PathBuf {
         self.root.join(id.to_string())
     }
 }
@@ -108,30 +110,24 @@ impl DataDir {
         )
     }
 
-    /// Puts a new principal key in place of the current one, which is kept aside under a name
-    /// that says it should not be used any more.
-    pub fn replace_principal(&self, new: &PrincipalSigner) -> anyhow::Result<()> {
-        let path = self.keys().join("principal.key");
-        if path.exists() {
-            let seconds = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .map_or(0, |elapsed| elapsed.as_secs());
-            let retired = self.keys().join(format!("principal.key.retired-{seconds}"));
-            std::fs::rename(&path, retired)?;
-        }
-        write_secret(&path, &new.to_bytes())
+    /// The principal key of one workforce, which lives next to its store. A person has a key per
+    /// workforce, so losing or replacing one touches nothing else.
+    pub fn principal(&self, workforce: &WorkforceId) -> anyhow::Result<Option<PrincipalSigner>> {
+        Ok(read_secret(&self.principal_path(workforce))?
+            .map(|secret| PrincipalSigner::from_bytes(&secret).expect("32 bytes")))
     }
 
-    pub fn principal(&self, create: bool) -> anyhow::Result<Option<PrincipalSigner>> {
-        load(
-            self.keys().join("principal.key"),
-            create,
-            || {
-                let signer = PrincipalSigner::generate();
-                (signer.to_bytes(), signer)
-            },
-            |secret| PrincipalSigner::from_bytes(secret).expect("32 bytes"),
-        )
+    /// Stores the principal key of a workforce that has none yet.
+    pub fn store_principal(
+        &self,
+        workforce: &WorkforceId,
+        signer: &PrincipalSigner,
+    ) -> anyhow::Result<()> {
+        write_secret(&self.principal_path(workforce), &signer.to_bytes())
+    }
+
+    fn principal_path(&self, workforce: &WorkforceId) -> PathBuf {
+        self.workforce(workforce).join("principal.key")
     }
 }
 
@@ -153,8 +149,31 @@ mod tests {
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
-        let principal = data.principal(true).unwrap().unwrap();
-        assert_ne!(principal.to_bytes(), created.to_bytes());
+    }
+
+    #[test]
+    fn every_workforce_has_its_own_principal_key() {
+        let directory = tempfile::tempdir().unwrap();
+        let data = DataDir::new(directory.path().to_path_buf());
+        let first = WorkforceId::from(wf_core::id::EventId::of(b"first"));
+        let second = WorkforceId::from(wf_core::id::EventId::of(b"second"));
+        assert!(data.principal(&first).unwrap().is_none());
+        let signer = PrincipalSigner::generate();
+        data.store_principal(&first, &signer).unwrap();
+        assert_eq!(
+            data.principal(&first).unwrap().unwrap().to_bytes(),
+            signer.to_bytes()
+        );
+        assert!(data.principal(&second).unwrap().is_none());
+        assert!(
+            data.store_principal(&first, &signer).is_err(),
+            "never overwritten"
+        );
+        let mode = std::fs::metadata(data.workforce(&first).join("principal.key"))
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600);
     }
 
     #[test]

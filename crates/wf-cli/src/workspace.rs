@@ -188,8 +188,8 @@ impl Workspace {
     }
 
     pub fn principal_signer(&self) -> anyhow::Result<PrincipalSigner> {
-        self.data.principal(false)?.ok_or_else(|| {
-            anyhow!("this machine has no principal key, so it cannot sign policy changes")
+        self.data.principal(&self.workforce)?.ok_or_else(|| {
+            anyhow!("this machine has no principal key for this workforce, so it cannot sign policy changes")
         })
     }
 
