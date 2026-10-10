@@ -18,7 +18,10 @@ use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations
 use crate::log::SyncLog;
 use crate::sync::{SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
+/// Hole punching and address lookup can take a while.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
+/// Without those a connection works at once or not at all.
+const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const FORBIDDEN: u32 = 403;
 const NOT_SERVED: u32 = 404;
 const FAILED: u32 = 500;
@@ -192,11 +195,16 @@ pub struct Node<L: SyncLog + Clone + 'static> {
     registry: Registry<L>,
     gossip: iroh_gossip::Gossip,
     lookup: MemoryLookup,
+    connect_timeout: Duration,
 }
 
 impl<L: SyncLog + Clone + 'static> Node<L> {
     pub async fn start(device: &DeviceSigner, network: Network) -> Result<Self, NetError> {
         let lookup = MemoryLookup::new();
+        let connect_timeout = match network {
+            Network::Direct => DIRECT_CONNECT_TIMEOUT,
+            Network::Internet | Network::InternetWithRelay(_) => CONNECT_TIMEOUT,
+        };
         let builder = match network {
             Network::Internet => Endpoint::builder(presets::N0),
             Network::InternetWithRelay(url) => {
@@ -234,6 +242,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             registry,
             gossip,
             lookup,
+            connect_timeout,
         })
     }
 
@@ -294,7 +303,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         let peer: EndpointAddr = peer.into();
         let name = device_key(peer.id).fmt_short();
         let connection = tokio::time::timeout(
-            CONNECT_TIMEOUT,
+            self.connect_timeout,
             self.endpoint().connect(peer.clone(), SYNC_ALPN),
         )
         .await
@@ -341,7 +350,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             reason,
         };
         let connection = tokio::time::timeout(
-            CONNECT_TIMEOUT,
+            self.connect_timeout,
             self.endpoint().connect(peer.clone(), JOIN_ALPN),
         )
         .await

@@ -121,6 +121,17 @@ impl DaemonClient {
         }
     }
 
+    pub fn sync_with(
+        &mut self,
+        workforce: WorkforceId,
+        devices: Vec<DeviceKey>,
+    ) -> Result<Vec<PeerSync>, ClientError> {
+        match self.call(workforce, Call::SyncWith(devices))? {
+            Response::Synced(peers) => Ok(peers),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
     pub fn last_seen(
         &mut self,
         workforce: WorkforceId,

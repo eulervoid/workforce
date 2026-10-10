@@ -111,6 +111,14 @@ async fn call(
             let results = sync_all(daemon.node(), workforce, peers, Some(daemon.presence())).await;
             Ok(Response::Synced(results))
         }
+        Call::SyncWith(devices) => {
+            let peers = devices
+                .into_iter()
+                .map(|device| (device, device.fmt_short()))
+                .collect();
+            let results = sync_all(daemon.node(), workforce, peers, Some(daemon.presence())).await;
+            Ok(Response::Synced(results))
+        }
         Call::LastSeen => Ok(Response::LastSeen(daemon.presence().snapshot())),
     }
 }

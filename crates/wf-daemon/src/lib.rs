@@ -53,6 +53,19 @@ pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
 }
 
+/// Workforces created or joined while the daemon runs are picked up this often.
+const RESCAN_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+
+async fn rescan(daemon: std::sync::Weak<Daemon>) {
+    loop {
+        tokio::time::sleep(RESCAN_EVERY).await;
+        let Some(daemon) = daemon.upgrade() else {
+            return;
+        };
+        daemon.load_stored_workforces();
+    }
+}
+
 pub struct Daemon {
     config: Config,
     device: DeviceSigner,
@@ -72,6 +85,7 @@ impl Daemon {
             loaded: Mutex::new(BTreeMap::new()),
         });
         daemon.load_stored_workforces();
+        tokio::spawn(rescan(Arc::downgrade(&daemon)));
         Ok(daemon)
     }
 
@@ -95,6 +109,14 @@ impl Daemon {
             else {
                 continue;
             };
+            let loaded = self
+                .loaded
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                .contains_key(&id);
+            if loaded {
+                continue;
+            }
             if let Err(error) = self.workforce(id) {
                 eprintln!("not serving workforce {id}: {error}");
             }
@@ -115,7 +137,12 @@ impl Daemon {
             return Err(DaemonError::UnknownWorkforce(id));
         }
         let replica = Replica::open(RedbStore::open(path)?)?;
-        if replica.state().workforce_id() != Some(id) {
+        // A workforce that is still empty is one this device is about to take in from others.
+        if replica
+            .state()
+            .workforce_id()
+            .is_some_and(|stored| stored != id)
+        {
             return Err(DaemonError::UnknownWorkforce(id));
         }
         let storage = StorageHandle::spawn(replica);

@@ -481,6 +481,7 @@ pub struct StatusView {
     pub heads: usize,
     pub items_by_category: std::collections::BTreeMap<String, usize>,
     pub archived_items: usize,
+    pub forked_from: Option<String>,
     pub devices: Vec<DeviceStatus>,
     pub flagged: Vec<String>,
     pub refolded: bool,
@@ -551,6 +552,14 @@ pub fn status(
                 .map(|millis| timestamp_ms(*millis)),
         })
         .collect();
+    for announcement in state.announcements() {
+        flagged.insert(format!(
+            "{} forked this workforce to {}; `wf fork accept {}` follows it",
+            actor_label(state, &Actor::Human(announcement.by)),
+            announcement.to,
+            announcement.to
+        ));
+    }
     StatusView {
         name: state.name().unwrap_or_default().to_string(),
         id: state
@@ -567,6 +576,7 @@ pub fn status(
         heads: state.heads().len(),
         items_by_category: by_category,
         archived_items,
+        forked_from: state.fork_point().map(|(parent, _)| parent.to_string()),
         devices,
         flagged: flagged.into_iter().collect(),
         refolded,

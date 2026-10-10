@@ -55,34 +55,54 @@ pub struct FeedHead {
 
 /// What one device has written. A device that wrote two events with the same `seq` (a machine
 /// restored from a snapshot, say) has several tips; both branches are kept.
+///
+/// Events normally arrive after their parents, but the prefix of a fork is applied from the
+/// newest event down, so nothing here depends on the order events were applied in.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Feed {
     tips: BTreeSet<FeedHead>,
+    roots: u32,
     equivocated: Option<u64>,
 }
 
 impl Feed {
-    pub(crate) fn new(first: FeedHead) -> Self {
+    pub(crate) fn new() -> Self {
         Self {
-            tips: BTreeSet::from([first]),
+            tips: BTreeSet::new(),
+            roots: 0,
             equivocated: None,
         }
     }
 
-    /// Adds an event whose `prev` is already part of the feed. Extending an event that has been
-    /// extended before means the feed forked at this `seq`.
-    pub(crate) fn extend(&mut self, head: FeedHead, prev: Option<EventId>) {
-        let extended = match prev {
-            Some(prev) => self.tips.remove(&FeedHead {
-                seq: head.seq - 1,
-                id: prev,
-            }),
-            None => false,
+    /// Records an event of this feed. `extended` is whether an applied event already names it as
+    /// its `prev`, and `prev_was_extended` whether another applied event already named the `prev`
+    /// of this one: then two events share a `seq`, and the feed has forked.
+    pub(crate) fn record(
+        &mut self,
+        head: FeedHead,
+        prev: Option<EventId>,
+        extended: bool,
+        prev_was_extended: bool,
+    ) {
+        let forked = match prev {
+            Some(prev) => {
+                self.tips.remove(&FeedHead {
+                    seq: head.seq - 1,
+                    id: prev,
+                });
+                prev_was_extended
+            }
+            None => {
+                self.roots += 1;
+                self.roots > 1
+            }
         };
-        if !extended {
+        if forked {
             self.equivocated = Some(self.equivocated.map_or(head.seq, |seq| seq.min(head.seq)));
         }
-        self.tips.insert(head);
+        if !extended {
+            self.tips.insert(head);
+        }
     }
 
     /// The highest tip: the only one unless the feed has forked.
@@ -112,6 +132,12 @@ pub(crate) struct Known {
     pub(crate) seq: u64,
 }
 
+impl Workforce {
+    pub(crate) fn canonical(&self, principal: &PrincipalKey) -> PrincipalKey {
+        self.aliases.get(principal).copied().unwrap_or(*principal)
+    }
+}
+
 /// A device bound to a principal: by genesis, or by redeeming an invite.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Binding {
@@ -130,6 +156,26 @@ pub struct Invite {
     pub expires_ms: u64,
     /// Every device whose `DeviceBound` used this invite.
     pub redeemed_by: BTreeSet<DeviceKey>,
+}
+
+/// A fork of this workforce that an owner announced here.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Announcement {
+    pub to: WorkforceId,
+    /// The members the fork keeps.
+    pub members: Vec<PrincipalKey>,
+    pub by: PrincipalKey,
+}
+
+/// How a forked workforce takes in the history it was forked from: events of the parent are
+/// read-only history, admitted only when named by an event already taken in, starting with the
+/// heads the fork was made at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ForkState {
+    pub(crate) parent: WorkforceId,
+    pub(crate) heads: Vec<EventId>,
+    /// Named by an applied event (or the fork point) but not applied yet.
+    pub(crate) wanted: BTreeSet<EventId>,
 }
 
 /// What `wf device list` shows about a bound device.
@@ -152,6 +198,10 @@ pub(crate) struct Workforce {
     pub(crate) members: BTreeMap<PrincipalKey, Member>,
     pub(crate) devices: BTreeMap<DeviceKey, Binding>,
     pub(crate) invites: BTreeMap<EventId, Invite>,
+    pub(crate) fork: Option<ForkState>,
+    /// Principal keys of the parent workforce, by the key that replaced them here.
+    pub(crate) aliases: BTreeMap<PrincipalKey, PrincipalKey>,
+    pub(crate) announcements: BTreeMap<EventId, Announcement>,
     pub(crate) profiles: BTreeMap<DeviceKey, Lww<DeviceProfile>>,
     pub(crate) policy: Lww<PolicyDoc>,
     pub(crate) agents: BTreeMap<AgentId, Lww<AgentDefinition>>,
@@ -209,6 +259,8 @@ pub struct State {
     pub(crate) workforce: Option<Workforce>,
     pub(crate) feeds: BTreeMap<DeviceKey, Feed>,
     pub(crate) known: BTreeMap<EventId, Known>,
+    /// Events that some applied event names as its `prev`.
+    pub(crate) extended: BTreeSet<EventId>,
     pub(crate) heads: BTreeSet<EventId>,
     #[serde(skip)]
     pub(crate) pending: Pending,
@@ -245,8 +297,30 @@ impl State {
             .flat_map(|workforce| workforce.members.iter())
     }
 
+    /// Looks a member up by a current key or by a key the member used in the parent workforce.
     pub fn member(&self, principal: &PrincipalKey) -> Option<&Member> {
-        self.workforce.as_ref()?.members.get(principal)
+        let workforce = self.workforce.as_ref()?;
+        workforce.members.get(&workforce.canonical(principal))
+    }
+
+    /// The key a principal has in this workforce, whichever key an event names.
+    pub fn canonical_principal(&self, principal: &PrincipalKey) -> PrincipalKey {
+        self.workforce
+            .as_ref()
+            .map_or(*principal, |workforce| workforce.canonical(principal))
+    }
+
+    /// The workforce this one was forked from and the heads it was forked at.
+    pub fn fork_point(&self) -> Option<(WorkforceId, &[EventId])> {
+        let fork = self.workforce.as_ref()?.fork.as_ref()?;
+        Some((fork.parent, &fork.heads))
+    }
+
+    /// Forks of this workforce announced by its owners.
+    pub fn announcements(&self) -> impl Iterator<Item = &Announcement> {
+        self.workforce
+            .iter()
+            .flat_map(|workforce| workforce.announcements.values())
     }
 
     /// The principal a device is bound to.
@@ -364,6 +438,20 @@ impl State {
         self.pending.events.values()
     }
 
+    /// Starts the genesis of a fork of this workforce: it continues the feed `author` has here
+    /// and comes after everything this state has seen. `None` before genesis.
+    pub fn fork_genesis_builder(
+        &self,
+        author: DeviceKey,
+        actor: Actor,
+        now_ms: u64,
+    ) -> Option<EventBuilder> {
+        let mut builder = self.builder(author, actor, now_ms)?;
+        builder.workforce = None;
+        builder.deps = Vec::new();
+        Some(builder)
+    }
+
     /// Starts an event authored by `author` on top of everything this state has seen.
     /// `None` before genesis, when there is no workforce to write into.
     pub fn builder(&self, author: DeviceKey, actor: Actor, now_ms: u64) -> Option<EventBuilder> {
@@ -372,7 +460,9 @@ impl State {
         let floor = self
             .heads
             .iter()
-            .filter_map(|head| self.known.get(head))
+            .copied()
+            .chain(head.map(|head| head.id))
+            .filter_map(|id| self.known.get(&id))
             .map(|known| known.hlc)
             .max()
             .unwrap_or(Hlc::ZERO);

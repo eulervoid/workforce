@@ -19,12 +19,6 @@ pub enum StoreError {
     Commit(#[from] redb::CommitError),
     #[error("stored data does not decode: {0}")]
     Corrupt(#[from] EncodingError),
-    #[error("event {id} from {author} follows {prev}, which is not stored")]
-    MissingPrev {
-        author: DeviceKey,
-        id: EventId,
-        prev: EventId,
-    },
     #[error("the stored log is inconsistent: {0}")]
     Inconsistent(String),
     #[error("the database is locked by another wf process")]
@@ -90,6 +84,7 @@ pub trait EventStore {
 
     fn snapshot(&self) -> Result<Option<StoredSnapshot>, StoreError>;
 
-    /// Atomic. Every appended event must follow an event that is stored or appended before it.
+    /// Atomic. Events are appended in the order they were applied, which is not always causal: a
+    /// fork takes in the history it was made from starting with the newest event.
     fn commit(&self, commit: Commit<'_>) -> Result<(), StoreError>;
 }

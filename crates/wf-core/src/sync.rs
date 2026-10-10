@@ -67,9 +67,14 @@ pub fn causal_order(events: &mut [Event]) {
 }
 
 impl State {
-    /// Parents of parked events that this state has not seen and no parked event can supply.
-    /// Ask a peer for these by id; nothing else can unblock the parked events.
+    /// Parents of parked events that this state has not seen and no parked event can supply, and
+    /// the history of a fork that is still to be taken in. Ask a peer for these by id.
     pub fn missing_parents(&self) -> BTreeSet<EventId> {
+        let fork_history = self
+            .workforce
+            .iter()
+            .filter_map(|workforce| workforce.fork.as_ref())
+            .flat_map(|fork| fork.wanted.iter().copied());
         self.pending
             .waiting
             .keys()
@@ -77,6 +82,7 @@ impl State {
                 Waiting::Event(id) if !self.pending.events.contains_key(id) => Some(*id),
                 Waiting::Event(_) | Waiting::Genesis => None,
             })
+            .chain(fork_history)
             .collect()
     }
 }

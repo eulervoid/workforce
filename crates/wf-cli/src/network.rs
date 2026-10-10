@@ -12,6 +12,19 @@ use wf_core::identity::{Actor, DeviceKey, DeviceSigner, InviteSigner, Signed};
 use wf_core::invite::InviteCode;
 use wf_core::name::AgentName;
 use wf_daemon::{PeerOutcome, PeerSync, peers_of, sync_all};
+
+pub(crate) async fn sync_devices(
+    node: &Arc<Node<SharedReplica<RedbStore>>>,
+    workforce: wf_core::id::WorkforceId,
+    devices: Vec<DeviceKey>,
+    presence: Option<&wf_daemon::Presence>,
+) -> Vec<PeerSync> {
+    let peers = devices
+        .into_iter()
+        .map(|device| (device, device.fmt_short()))
+        .collect();
+    sync_all(node, workforce, peers, presence).await
+}
 use wf_net::{NetError, Network, Node, SharedReplica};
 use wf_store::{RedbStore, Replica};
 

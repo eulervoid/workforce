@@ -202,15 +202,6 @@ impl EventStore for RedbStore {
             let mut log = transaction.open_table(LOG)?;
             for (position, event) in (log.len()?..).zip(commit.append) {
                 let id = event.id();
-                if let Some(prev) = event.content.prev
-                    && events.get(*prev.as_bytes())?.is_none()
-                {
-                    return Err(StoreError::MissingPrev {
-                        author: event.content.author,
-                        id,
-                        prev,
-                    });
-                }
                 events.insert(*id.as_bytes(), event.encode()?.as_slice())?;
                 feeds.insert(
                     (*event.content.author.as_bytes(), event.content.seq),

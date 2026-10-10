@@ -387,6 +387,9 @@ pub fn log(view: &LogView) -> String {
 pub fn status(view: &StatusView) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "workforce \"{}\" {}", view.name, view.id);
+    if let Some(parent) = &view.forked_from {
+        let _ = writeln!(out, "forked from {parent}");
+    }
     let _ = writeln!(out, "members: {}", view.members.join(", "));
     let _ = writeln!(
         out,

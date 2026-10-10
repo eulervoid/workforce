@@ -234,12 +234,15 @@ async fn daemons_of_two_devices_converge_on_their_own() {
     }
     assert!(arrived, "the vm's daemon received the event by itself");
 
-    let seen = {
+    let mut seen_vm = false;
+    for _ in 0..200 {
         let socket = laptop_socket.clone();
-        blocking(move || connect(&socket).last_seen(workforce).unwrap()).await
-    };
-    assert!(
-        seen.iter().any(|(device, _)| *device == vm.device()),
-        "the laptop knows when it last saw the vm"
-    );
+        let seen = blocking(move || connect(&socket).last_seen(workforce).unwrap()).await;
+        if seen.iter().any(|(device, _)| *device == vm.device()) {
+            seen_vm = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    assert!(seen_vm, "the laptop knows when it last saw the vm");
 }

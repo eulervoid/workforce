@@ -63,6 +63,9 @@ pub enum Call {
     },
     /// Syncs with every other bound device now.
     SyncNow,
+    /// Syncs with these devices now, which may not be bound in the workforce yet: how a device
+    /// takes in a fork it is only about to learn the members of.
+    SyncWith(Vec<DeviceKey>),
     /// When each device was last heard from, in milliseconds since the epoch.
     LastSeen,
 }

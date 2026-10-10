@@ -77,6 +77,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     match cli.command {
         Command::Init(args) => init(json, args, data, cwd),
         Command::Join(args) => crate::network::join(json, mode, args, data, cwd),
+        Command::Fork {
+            command: Some(ForkCommand::Accept { id, relay }),
+            ..
+        } => crate::fork::accept(json, data, cwd, &id, relay.as_deref()),
         Command::Daemon(args) => crate::network::daemon(json, args, data),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
@@ -106,6 +110,18 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Log => log(json, mode, &workspace),
                 Command::Device(command) => crate::devices::device(json, command, &mut workspace),
                 Command::Members => crate::devices::members(json, &workspace),
+                Command::Fork {
+                    command: Some(ForkCommand::List),
+                    ..
+                } => crate::fork::list(json, &workspace),
+                Command::Fork {
+                    args,
+                    command: None,
+                } => crate::fork::fork(json, &mut workspace, args, cwd),
+                Command::Fork {
+                    command: Some(ForkCommand::Accept { .. }),
+                    ..
+                } => unreachable!("handled above"),
                 Command::Sync(args) => crate::network::sync(json, workspace, args),
                 Command::Invite(InviteCommand::Device(args)) => {
                     crate::network::invite_device(json, &mut workspace, args)

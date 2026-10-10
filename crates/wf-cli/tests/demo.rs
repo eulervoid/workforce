@@ -617,3 +617,197 @@ fn a_second_daemon_is_refused() {
     assert!(error.contains("already listening"), "{error}");
     daemon.stop();
 }
+
+mod forking {
+    use super::*;
+    use wf_core::event::{DeviceBound, DeviceProfile, EventBody, InviteCreated, InviteKind};
+    use wf_core::identity::{Actor, DeviceSigner, InviteSigner, PrincipalSigner, Signed};
+    use wf_store::{RedbStore, Replica};
+
+    fn read_key(path: &std::path::Path) -> [u8; 32] {
+        let text = std::fs::read_to_string(path).unwrap();
+        let bytes = data_encoding::HEXLOWER
+            .decode(text.trim().as_bytes())
+            .unwrap();
+        bytes.try_into().unwrap()
+    }
+
+    /// Binds a second device named `name` by writing the events a join would, straight into the
+    /// store of the sandbox.
+    fn bind_second_device(sandbox: &Sandbox, name: &str) -> DeviceSigner {
+        let id = sandbox.json(&["status"])["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let keys = sandbox.data.join("workforce/keys");
+        let principal =
+            PrincipalSigner::from_bytes(&read_key(&keys.join("principal.key"))).unwrap();
+        let device = DeviceSigner::from_bytes(&read_key(&keys.join("device.key"))).unwrap();
+        let second = DeviceSigner::generate();
+        let store = sandbox.data.join("workforce").join(&id).join("store.redb");
+        let mut replica = Replica::open(RedbStore::open(store).unwrap()).unwrap();
+        let workforce = replica.state().workforce_id().unwrap();
+        let actor = Actor::Human(principal.key());
+        let secret = InviteSigner::generate();
+        let invite = replica
+            .author(
+                &device,
+                actor.clone(),
+                wf_cli::workspace::now_ms(),
+                EventBody::InviteCreated(
+                    Signed::sign(
+                        &principal,
+                        Some(workforce),
+                        InviteCreated {
+                            kind: InviteKind::Device,
+                            invite: secret.key(),
+                            expires_ms: u64::MAX / 2,
+                        },
+                    )
+                    .unwrap(),
+                ),
+            )
+            .unwrap();
+        let proof = secret.prove(workforce, invite.id(), second.key()).unwrap();
+        replica
+            .author(
+                &second,
+                actor.clone(),
+                wf_cli::workspace::now_ms(),
+                EventBody::DeviceBound(DeviceBound {
+                    invite: invite.id(),
+                    proof,
+                }),
+            )
+            .unwrap();
+        replica
+            .author(
+                &second,
+                actor,
+                wf_cli::workspace::now_ms(),
+                EventBody::DeviceProfile(DeviceProfile {
+                    name: name.into(),
+                    hardware: "test".into(),
+                    agents: Default::default(),
+                    max_sessions: 1,
+                }),
+            )
+            .unwrap();
+        second
+    }
+
+    fn workforce_file(sandbox: &Sandbox) -> String {
+        std::fs::read_to_string(sandbox.repository.join(".workforce.toml")).unwrap()
+    }
+
+    #[test]
+    fn a_fork_without_a_lost_device_keeps_every_item_and_is_announced() {
+        let sandbox = Sandbox::new();
+        sandbox.run(&[
+            "init",
+            "--name",
+            "demo",
+            "--no-agents",
+            "--device-name",
+            "laptop",
+        ]);
+        sandbox.add(&["--title", "Try sync", "--priority", "P1"]);
+        let parent_file = workforce_file(&sandbox);
+        let parent = sandbox.json(&["status"])["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+
+        let fork = sandbox.json(&["fork", "--name", "demo v2"]);
+        let child = fork["workforce"].as_str().unwrap().to_string();
+        assert_ne!(child, parent);
+        assert_eq!(fork["announced"], true);
+        assert!(workforce_file(&sandbox).contains(&child));
+
+        let status = sandbox.json(&["status"]);
+        assert_eq!(status["name"], "demo v2");
+        assert_eq!(status["forked_from"], parent.as_str());
+        let items = sandbox.json(&["item", "list"]);
+        assert_eq!(items.as_array().unwrap().len(), 1);
+        assert_eq!(items[0]["title"], "Try sync");
+        let list = sandbox.json(&["fork", "list"]);
+        assert_eq!(list["parent"]["workforce"], parent.as_str());
+
+        // Writing on in the fork continues the history.
+        sandbox.add(&["--title", "After the fork", "--priority", "P2"]);
+        assert_eq!(sandbox.json(&["item", "list"]).as_array().unwrap().len(), 2);
+
+        // The parent knows about the fork, and stays as it was.
+        std::fs::write(sandbox.repository.join(".workforce.toml"), parent_file).unwrap();
+        let status = sandbox.run(&["status"]);
+        assert!(
+            status.contains(&format!("wf fork accept {child}")),
+            "{status}"
+        );
+        assert_eq!(sandbox.json(&["item", "list"]).as_array().unwrap().len(), 1);
+        let list = sandbox.json(&["fork", "list"]);
+        assert_eq!(list["forks"][0]["workforce"], child.as_str());
+    }
+
+    #[test]
+    fn excluding_a_device_leaves_it_out_but_keeps_its_items() {
+        let sandbox = Sandbox::new();
+        sandbox.run(&[
+            "init",
+            "--name",
+            "demo",
+            "--no-agents",
+            "--device-name",
+            "laptop",
+        ]);
+        sandbox.add(&["--title", "From the laptop", "--priority", "P2"]);
+        bind_second_device(&sandbox, "vm");
+        assert_eq!(
+            sandbox.json(&["device", "list"]).as_array().unwrap().len(),
+            2
+        );
+
+        let error = sandbox.fail(&["fork", "--exclude", "laptop"]);
+        assert!(error.contains("cannot leave out"), "{error}");
+        let error = sandbox.fail(&["fork", "--exclude", "nonsense"]);
+        assert!(error.contains("no device"), "{error}");
+
+        let fork = sandbox.json(&["fork", "--exclude", "vm"]);
+        assert_eq!(fork["excluded_devices"].as_array().unwrap().len(), 1);
+        let devices = sandbox.json(&["device", "list"]);
+        assert_eq!(devices.as_array().unwrap().len(), 1);
+        assert_eq!(devices[0]["name"], "laptop");
+        assert_eq!(sandbox.json(&["item", "list"]).as_array().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn a_new_principal_replaces_the_key_and_keeps_the_handle() {
+        let sandbox = Sandbox::new();
+        sandbox.run(&[
+            "init",
+            "--name",
+            "demo",
+            "--no-agents",
+            "--device-name",
+            "laptop",
+        ]);
+        sandbox.add(&["--title", "Written with the old key", "--priority", "P2"]);
+        let old_key =
+            std::fs::read_to_string(sandbox.data.join("workforce/keys/principal.key")).unwrap();
+
+        let fork = sandbox.json(&["fork", "--new-principal"]);
+        assert_eq!(fork["announced"], false);
+        let new_key =
+            std::fs::read_to_string(sandbox.data.join("workforce/keys/principal.key")).unwrap();
+        assert_ne!(old_key, new_key);
+
+        let item = sandbox.json(&["item", "list"]);
+        let id = item[0]["id"].as_str().unwrap().to_string();
+        let shown = sandbox.run(&["item", "show", short(&id)]);
+        assert!(shown.contains("@joshua"), "{shown}");
+        let members = sandbox.json(&["members"]);
+        assert_eq!(members[0]["handle"], "@joshua");
+        // The new key works for what needs a principal.
+        sandbox.run(&["invite", "device"]);
+    }
+}

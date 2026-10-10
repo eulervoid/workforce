@@ -34,8 +34,8 @@ pub enum GenesisError {
     DuplicateHandle(String),
     #[error("device {0} is bound to two principals")]
     DuplicateDevice(DeviceKey),
-    #[error("forking is not supported yet")]
-    ForkNotSupported,
+    #[error("a fork names the heads of the workforce it was forked from")]
+    EmptyForkPoint,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -52,6 +52,8 @@ pub enum Invalid {
     WrongWorkforce(WorkforceId),
     #[error("this workforce already has a genesis")]
     DuplicateGenesis,
+    #[error("an event of {0} that is not part of the history this fork was made from")]
+    NotInForkPrefix(WorkforceId),
     #[error("invalid genesis: {0}")]
     Genesis(#[from] GenesisError),
     #[error("seq {got} from {author} is not valid here, expected {expected}")]
@@ -135,6 +137,8 @@ pub enum PolicyViolation {
 
 enum Admission {
     Apply,
+    /// History of the workforce this one was forked from.
+    ApplyPrefix,
     Wait(Waiting),
     Duplicate,
 }
@@ -159,9 +163,10 @@ impl State {
             let id = event.id();
             let is_submitted = id == submitted;
             match self.admit(&event, trust) {
-                Ok(Admission::Apply) => {
-                    let is_genesis = matches!(event.content.body, EventBody::Genesis(_));
-                    self.apply(&event, id);
+                Ok(admission @ (Admission::Apply | Admission::ApplyPrefix)) => {
+                    let prefix = matches!(admission, Admission::ApplyPrefix);
+                    let is_genesis = !prefix && matches!(event.content.body, EventBody::Genesis(_));
+                    self.apply(&event, id, prefix);
                     if is_submitted {
                         received.disposition = Disposition::Applied;
                     }
@@ -226,12 +231,25 @@ impl State {
             };
         };
 
+        // The ids of the history of a fork are named by the genesis and the events already taken
+        // in, and an event is its own proof that it is the one named: there is nothing else to
+        // check, and the rules of the parent were applied when it was written.
+        if let Some(fork) = &workforce.fork
+            && fork.wanted.contains(&event.id())
+        {
+            return Ok(Admission::ApplyPrefix);
+        }
         if matches!(content.body, EventBody::Genesis(_)) {
             return Err(Invalid::DuplicateGenesis);
         }
         match content.workforce {
             None => return Err(Invalid::MissingWorkforce),
-            Some(id) if id != workforce.id => return Err(Invalid::WrongWorkforce(id)),
+            Some(id) if id != workforce.id => {
+                return Err(match &workforce.fork {
+                    Some(fork) if fork.parent == id => Invalid::NotInForkPrefix(id),
+                    _ => Invalid::WrongWorkforce(id),
+                });
+            }
             Some(_) => {}
         }
 
@@ -372,10 +390,25 @@ impl State {
                 }
                 Ok(())
             }
+            EventBody::ForkAnnounced(signed) => {
+                let owner = workforce
+                    .members
+                    .get(&signed.signer)
+                    .is_some_and(|member| member.role == Role::Owner);
+                if !owner {
+                    return Err(Invalid::NotOwner(signed.signer));
+                }
+                if signed.signer != event.content.actor.principal() {
+                    return Err(Invalid::ActorMismatch);
+                }
+                if trust == Trust::Untrusted && signed.verify(Some(workforce.id)).is_err() {
+                    return Err(Invalid::BadPrincipalSignature);
+                }
+                Ok(())
+            }
             EventBody::AgentDefined(AgentDefined { .. })
             | EventBody::DeviceBound(_)
             | EventBody::DeviceProfile(_)
-            | EventBody::ForkAnnounced(_)
             | EventBody::Unknown { .. } => Ok(()),
             EventBody::ItemCreated(ItemCreated { .. }) => Ok(()),
             EventBody::ItemEdited(ItemEdited { item, .. })
@@ -404,22 +437,32 @@ impl State {
         if content.workforce.is_some() {
             return Err(Invalid::GenesisNamesWorkforce);
         }
-        if content.seq != 1 || content.prev.is_some() || !content.deps.is_empty() {
+        let EventBody::Genesis(signed) = &content.body else {
+            unreachable!("the caller matched on a genesis body")
+        };
+        let genesis: &Genesis = &signed.statement;
+        // The genesis of a fork continues the feed its device had in the parent workforce.
+        let continues_a_feed = genesis.forked_from.is_some() && content.seq > 1;
+        if content.seq == 0
+            || content.prev.is_some() != (content.seq > 1)
+            || (content.seq > 1 && !continues_a_feed)
+            || !content.deps.is_empty()
+        {
             return Err(Invalid::UnexpectedSeq {
                 author: content.author,
                 expected: 1,
                 got: content.seq,
             });
         }
-        let EventBody::Genesis(signed) = &content.body else {
-            unreachable!("the caller matched on a genesis body")
-        };
-        let genesis: &Genesis = &signed.statement;
         if genesis.name.trim().is_empty() {
             return Err(GenesisError::EmptyName.into());
         }
-        if genesis.forked_from.is_some() {
-            return Err(GenesisError::ForkNotSupported.into());
+        if genesis
+            .forked_from
+            .as_ref()
+            .is_some_and(|fork| fork.heads.is_empty())
+        {
+            return Err(GenesisError::EmptyForkPoint.into());
         }
         if signed.signer != genesis.founder.principal {
             return Err(GenesisError::NotSignedByFounder.into());

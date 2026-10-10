@@ -12,12 +12,13 @@ use crate::name::StateName;
 use crate::policy::Policy;
 use crate::refs;
 use crate::state::{
-    AgentDefinition, Binding, Feed, FeedHead, Invite, Known, Member, PolicyDoc, State, Workforce,
+    AgentDefinition, Announcement, Binding, Feed, FeedHead, ForkState, Invite, Known, Member,
+    PolicyDoc, State, Workforce,
 };
 
 impl State {
     /// Applies an event that [`State::receive`] has admitted.
-    pub(crate) fn apply(&mut self, event: &Event, id: EventId) {
+    pub(crate) fn apply(&mut self, event: &Event, id: EventId, prefix: bool) {
         let content = &event.content;
         let stamp = Stamp {
             hlc: content.hlc,
@@ -36,11 +37,15 @@ impl State {
             seq: content.seq,
             id,
         };
-        match self.feeds.get_mut(&content.author) {
-            Some(feed) => feed.extend(head, content.prev),
-            None => {
-                self.feeds.insert(content.author, Feed::new(head));
-            }
+        let extended = self.extended.contains(&id);
+        let prev_was_extended = content.prev.is_some_and(|prev| !self.extended.insert(prev));
+        self.feeds
+            .entry(content.author)
+            .or_insert_with(Feed::new)
+            .record(head, content.prev, extended, prev_was_extended);
+        if prefix {
+            self.take_in_prefix(event, id, stamp);
+            return;
         }
         for parent in event.causal_parents() {
             self.heads.remove(&parent);
@@ -51,10 +56,14 @@ impl State {
             let genesis = &signed.statement;
             let mut members = BTreeMap::new();
             let mut devices = BTreeMap::new();
+            let mut aliases = BTreeMap::new();
             let genesis_binding = |principal| Binding { principal, stamp };
             let seeds = std::iter::once((&genesis.founder, Role::Owner))
                 .chain(genesis.members.iter().map(|seed| (seed, Role::Member)));
             for (seed, role) in seeds {
+                for previous in &seed.previous {
+                    aliases.insert(*previous, seed.principal);
+                }
                 for device in &seed.devices {
                     devices.insert(*device, genesis_binding(seed.principal));
                 }
@@ -86,15 +95,76 @@ impl State {
                 items: BTreeMap::new(),
                 invites: BTreeMap::new(),
                 profiles: BTreeMap::new(),
+                fork: genesis.forked_from.as_ref().map(|point| ForkState {
+                    parent: point.workforce,
+                    heads: point.heads.clone(),
+                    wanted: point.heads.iter().copied().collect(),
+                }),
+                aliases,
+                announcements: BTreeMap::new(),
             });
             return;
         }
 
+        self.fold_body(event, id, stamp, false);
+    }
+
+    /// Takes in an event of the history this workforce was forked from. What happened to items
+    /// and agents carries over, and what the devices that are kept said about themselves: the
+    /// members, devices, invites and policy of the parent are not those of the fork.
+    fn take_in_prefix(&mut self, event: &Event, id: EventId, stamp: Stamp) {
+        if let Some(fork) = self
+            .workforce
+            .as_mut()
+            .and_then(|workforce| workforce.fork.as_mut())
+        {
+            fork.wanted.remove(&id);
+            fork.wanted.extend(
+                event
+                    .causal_parents()
+                    .filter(|parent| !self.known.contains_key(parent)),
+            );
+        }
+        self.fold_body(event, id, stamp, true);
+    }
+
+    fn fold_body(&mut self, event: &Event, id: EventId, stamp: Stamp, prefix: bool) {
+        let content = &event.content;
         let Some(workforce) = self.workforce.as_mut() else {
             return;
         };
+        if prefix
+            && matches!(
+                content.body,
+                EventBody::Genesis(_)
+                    | EventBody::PolicySet(_)
+                    | EventBody::InviteCreated(_)
+                    | EventBody::DeviceBound(_)
+                    | EventBody::ForkAnnounced(_)
+                    | EventBody::Unknown { .. }
+            )
+        {
+            return;
+        }
+        // What a device said about itself carries over for the devices the fork keeps.
+        if prefix
+            && matches!(content.body, EventBody::DeviceProfile(_))
+            && !workforce.devices.contains_key(&content.author)
+        {
+            return;
+        }
         match &content.body {
-            EventBody::Genesis(_) | EventBody::ForkAnnounced(_) | EventBody::Unknown { .. } => {}
+            EventBody::Genesis(_) | EventBody::Unknown { .. } => {}
+            EventBody::ForkAnnounced(signed) => {
+                workforce.announcements.insert(
+                    id,
+                    Announcement {
+                        to: signed.statement.to,
+                        members: signed.statement.members.clone(),
+                        by: signed.signer,
+                    },
+                );
+            }
             EventBody::InviteCreated(signed) => {
                 let created = &signed.statement;
                 workforce.invites.insert(
@@ -153,9 +223,14 @@ impl State {
                     stamp,
                 );
             }
+            EventBody::AgentDefined(_)
+                if prefix
+                    && !workforce
+                        .members
+                        .contains_key(&workforce.canonical(&content.actor.principal())) => {}
             EventBody::AgentDefined(defined) => {
                 let agent = AgentId {
-                    principal: content.actor.principal(),
+                    principal: workforce.canonical(&content.actor.principal()),
                     name: defined.name.clone(),
                 };
                 let definition = AgentDefinition {

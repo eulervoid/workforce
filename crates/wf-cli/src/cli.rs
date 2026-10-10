@@ -56,6 +56,14 @@ pub enum Command {
     Device(DeviceCommand),
     /// List the members of the workforce, with their roles and machines.
     Members,
+    /// Start a new workforce from this one, without the devices or members that were lost.
+    #[command(args_conflicts_with_subcommands = true)]
+    Fork {
+        #[command(flatten)]
+        args: ForkArgs,
+        #[command(subcommand)]
+        command: Option<ForkCommand>,
+    },
     /// Summarize the workforce.
     Status {
         /// Ignore the snapshot and fold the whole log again.
@@ -72,6 +80,33 @@ pub struct SyncArgs {
     /// Use this relay server instead of the default ones.
     #[arg(long, value_name = "URL")]
     pub relay: Option<String>,
+}
+
+#[derive(Args)]
+pub struct ForkArgs {
+    /// A device (its name or the start of its key) or a member (`@handle`) the fork leaves out.
+    #[arg(long = "exclude", value_name = "DEVICE|@MEMBER")]
+    pub exclude: Vec<String>,
+    /// Found the fork with a new principal key, for when a lost machine held yours.
+    #[arg(long)]
+    pub new_principal: bool,
+    /// The name of the new workforce. Defaults to the old name and "(fork)".
+    #[arg(long)]
+    pub name: Option<String>,
+}
+
+#[derive(Subcommand)]
+pub enum ForkCommand {
+    /// Follow a fork this device is a member of: take it in and use it in this directory.
+    Accept {
+        /// The id of the new workforce, as shown by `wf status` or `wf fork list`.
+        id: String,
+        /// Use this relay server instead of the default ones.
+        #[arg(long, value_name = "URL")]
+        relay: Option<String>,
+    },
+    /// Show what this workforce was forked from and the forks announced in it.
+    List,
 }
 
 #[derive(Args)]

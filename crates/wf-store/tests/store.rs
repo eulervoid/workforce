@@ -5,7 +5,7 @@ use wf_core::state::{Disposition, State, Trust};
 use wf_core::testing::*;
 use wf_store::{
     Commit, EventStore, PendingChange, RedbStore, Replica, SNAPSHOT_INTERVAL, SnapshotChange,
-    StoreError, StoredSnapshot,
+    StoredSnapshot,
 };
 
 fn open(directory: &TempDir) -> RedbStore {
@@ -92,38 +92,7 @@ fn events_can_be_read_back_by_id_and_by_feed() {
 }
 
 #[test]
-fn appends_must_follow_a_stored_event() {
-    let directory = TempDir::new().unwrap();
-    let fixture = Fixture::new(1);
-    let mut author = fixture.state();
-    let first = fixture.apply(&mut author, 0, 2_000, create("task", "a"));
-    let second = fixture.apply(&mut author, 0, 2_001, create("task", "b"));
-
-    let store = open(&directory);
-    store
-        .commit(Commit {
-            append: std::slice::from_ref(&fixture.genesis),
-            ..Commit::default()
-        })
-        .unwrap();
-    let error = store
-        .commit(Commit {
-            append: std::slice::from_ref(&second),
-            ..Commit::default()
-        })
-        .unwrap_err();
-    assert!(matches!(error, StoreError::MissingPrev { .. }));
-    store
-        .commit(Commit {
-            append: &[first, second],
-            ..Commit::default()
-        })
-        .unwrap();
-    assert_eq!(store.events().unwrap().len(), 3);
-}
-
-#[test]
-fn a_failed_commit_changes_nothing() {
+fn one_commit_stores_events_pending_events_and_the_snapshot_together() {
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);
     let mut author = fixture.state();
@@ -131,33 +100,28 @@ fn a_failed_commit_changes_nothing() {
     let second = fixture.apply(&mut author, 0, 2_001, create("task", "b"));
     let third = fixture.apply(&mut author, 0, 2_002, create("task", "c"));
 
-    let store = open(&directory);
-    store
-        .commit(Commit {
-            append: std::slice::from_ref(&fixture.genesis),
-            ..Commit::default()
-        })
-        .unwrap();
     let snapshot = StoredSnapshot {
         covers: Default::default(),
         bytes: vec![1],
     };
-    // `first` is fine but `third` follows `second`, which is missing: the whole transaction must roll back.
-    let result = store.commit(Commit {
-        append: &[first, third],
-        pending: PendingChange::Update {
-            put: std::slice::from_ref(&second),
-            remove: &[],
-        },
-        snapshot: SnapshotChange::Replace(&snapshot),
-    });
-    assert!(result.is_err());
-    drop(store);
-
+    {
+        let store = open(&directory);
+        store
+            .commit(Commit {
+                append: &[fixture.genesis.clone(), first, second],
+                pending: PendingChange::Update {
+                    put: std::slice::from_ref(&third),
+                    remove: &[],
+                },
+                snapshot: SnapshotChange::Replace(&snapshot),
+            })
+            .unwrap();
+    }
     let store = open(&directory);
-    assert_eq!(store.events().unwrap().len(), 1);
-    assert!(store.pending().unwrap().is_empty());
-    assert!(store.snapshot().unwrap().is_none());
+    assert_eq!(store.events().unwrap().len(), 3);
+    assert_eq!(store.log_len().unwrap(), 3);
+    assert_eq!(store.pending().unwrap().len(), 1);
+    assert_eq!(store.snapshot().unwrap(), Some(snapshot));
 }
 
 #[test]

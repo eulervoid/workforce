@@ -108,6 +108,20 @@ impl DataDir {
         )
     }
 
+    /// Puts a new principal key in place of the current one, which is kept aside under a name
+    /// that says it should not be used any more.
+    pub fn replace_principal(&self, new: &PrincipalSigner) -> anyhow::Result<()> {
+        let path = self.keys().join("principal.key");
+        if path.exists() {
+            let seconds = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map_or(0, |elapsed| elapsed.as_secs());
+            let retired = self.keys().join(format!("principal.key.retired-{seconds}"));
+            std::fs::rename(&path, retired)?;
+        }
+        write_secret(&path, &new.to_bytes())
+    }
+
     pub fn principal(&self, create: bool) -> anyhow::Result<Option<PrincipalSigner>> {
         load(
             self.keys().join("principal.key"),

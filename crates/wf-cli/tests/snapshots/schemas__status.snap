@@ -19,6 +19,7 @@ expression: "Envelope::new(view::status(&scenario.state, None, &Default::default
       "open": 2
     },
     "archived_items": 1,
+    "forked_from": null,
     "devices": [
       {
         "name": "2bc2800b33",

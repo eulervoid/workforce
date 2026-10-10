@@ -20,6 +20,7 @@ const PERIODIC_ROUND: Duration = Duration::from_secs(60);
 /// Writes that follow each other closely are sent in one round.
 const SETTLE: Duration = Duration::from_millis(300);
 const FIRST_RETRY: Duration = Duration::from_secs(5);
+const RETRY_ON_NEWS_AFTER: Duration = Duration::from_secs(1);
 const LONGEST_RETRY: Duration = Duration::from_secs(300);
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -139,10 +140,6 @@ struct Backoff {
 }
 
 impl Backoff {
-    fn ready(&self, now: Instant) -> bool {
-        self.retry_at.is_none_or(|at| now >= at)
-    }
-
     fn record(&mut self, reached: bool, now: Instant) {
         if reached {
             *self = Self::default();
@@ -177,6 +174,7 @@ async fn keep_in_sync(
     let mut heads = storage.watch_heads();
     let mut backoff = Backoff::default();
     loop {
+        let attempted = Instant::now();
         let label = peer_label_of(&storage, device).await;
         let results = sync_all(&node, workforce, vec![(device, label)], Some(&presence)).await;
         let reached = results.iter().all(PeerSync::reached);
@@ -193,7 +191,9 @@ async fn keep_in_sync(
                     }
                     tokio::time::sleep(SETTLE).await;
                     heads.borrow_and_update();
-                    if backoff.ready(Instant::now()) {
+                    // New events are worth another try even if the device was out of reach a
+                    // moment ago, as long as that was not just now.
+                    if Instant::now() >= attempted + RETRY_ON_NEWS_AFTER {
                         break;
                     }
                 }
@@ -317,18 +317,17 @@ mod tests {
     fn unreachable_devices_are_retried_later_each_time() {
         let now = Instant::now();
         let mut backoff = Backoff::default();
-        assert!(backoff.ready(now));
         backoff.record(false, now);
-        assert!(!backoff.ready(now));
-        assert!(backoff.ready(now + FIRST_RETRY));
+        let first = backoff.wait(now);
         backoff.record(false, now);
-        assert!(!backoff.ready(now + FIRST_RETRY));
-        assert!(backoff.ready(now + FIRST_RETRY * 2));
+        let second = backoff.wait(now);
+        assert_eq!(first, FIRST_RETRY);
+        assert_eq!(second, FIRST_RETRY * 2);
         for _ in 0..20 {
             backoff.record(false, now);
         }
-        assert!(backoff.ready(now + LONGEST_RETRY));
+        assert_eq!(backoff.wait(now), LONGEST_RETRY);
         backoff.record(true, now);
-        assert!(backoff.ready(now));
+        assert_eq!(backoff.wait(now), PERIODIC_ROUND);
     }
 }

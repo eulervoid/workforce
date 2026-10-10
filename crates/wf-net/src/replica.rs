@@ -15,7 +15,23 @@ pub fn versions<S: EventStore>(replica: &Replica<S>) -> Versions {
     replica.state().versions()
 }
 
+/// How many events of a fork's history one request for it may bring along.
+const MAX_HISTORY_PER_REQUEST: usize = 4096;
+
+/// Whether the event was written in the workforce of the replica, as opposed to being part of
+/// the history it was forked from.
+fn is_own<S: EventStore>(replica: &Replica<S>, event: &Event) -> bool {
+    match replica.state().workforce_id() {
+        Some(workforce) => {
+            event.content.workforce == Some(workforce)
+                || wf_core::id::WorkforceId::from(event.id()) == workforce
+        }
+        None => false,
+    }
+}
+
 /// Everything the peer lacks given its versions, in an order every event follows its parents.
+/// The history a fork was made from is not part of it: the peer asks for that by id.
 pub fn events_after<S: EventStore>(
     replica: &Replica<S>,
     theirs: &Versions,
@@ -31,22 +47,51 @@ pub fn events_after<S: EventStore>(
             events.extend(replica.store().event(id)?);
         }
     }
+    events.retain(|event| is_own(replica, event));
     sync::causal_order(&mut events);
     events.dedup_by_key(|event| event.id());
     Ok(events)
 }
 
+/// The events asked for that this replica has. Events of the workforce come parents first. A
+/// request for history of the fork it was made from brings the history behind it along, newest
+/// first, because the receiver takes in an event only once something it already has names it.
 pub fn events_by_id<S: EventStore>(
     replica: &Replica<S>,
     ids: &[EventId],
 ) -> Result<Vec<Event>, StoreError> {
-    let mut events = Vec::new();
+    let mut own = Vec::new();
+    let mut history = Vec::new();
     for id in ids {
         if let Some(event) = replica.store().event(id)? {
-            events.push(event);
+            if is_own(replica, &event) {
+                own.push(event);
+            } else {
+                history.push(event);
+            }
         }
     }
-    Ok(events)
+    let mut seen: std::collections::BTreeSet<EventId> = history.iter().map(Event::id).collect();
+    let mut frontier: Vec<EventId> = history
+        .iter()
+        .flat_map(|event| event.causal_parents())
+        .collect();
+    while let Some(id) = frontier.pop() {
+        if history.len() >= MAX_HISTORY_PER_REQUEST {
+            break;
+        }
+        if !seen.insert(id) {
+            continue;
+        }
+        if let Some(event) = replica.store().event(&id)? {
+            frontier.extend(event.causal_parents());
+            history.push(event);
+        }
+    }
+    sync::causal_order(&mut own);
+    history.sort_by_key(|event| std::cmp::Reverse((event.content.hlc, event.id())));
+    own.extend(history);
+    Ok(own)
 }
 
 /// Invalid events are counted and dropped; only a failing store is an error.

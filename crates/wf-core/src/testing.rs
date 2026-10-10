@@ -2,7 +2,7 @@
 
 use crate::crdt::SetChange;
 use crate::event::{
-    AgentDefined, Change, Comment, DeviceBound, Event, EventBody, EventBuilder, Genesis,
+    AgentDefined, Change, Comment, DeviceBound, Event, EventBody, EventBuilder, ForkPoint, Genesis,
     InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemRef, ItemTransitioned,
     Link, PolicySet,
 };
@@ -102,6 +102,42 @@ impl Fixture {
             .receive(event.clone(), Trust::Untrusted)
             .unwrap_or_else(|error| panic!("event should be valid: {error}"));
         event
+    }
+
+    /// A fork of `parent` made on device 0, leaving device 1 out. The founder is `founder`, a new
+    /// principal key when it differs from the one of this fixture.
+    pub fn fork(&self, parent: &State, founder: &PrincipalSigner, now_ms: u64) -> Event {
+        let old = self.founder.key();
+        let genesis = Genesis {
+            name: "demo (fork)".into(),
+            founder: MemberSeed {
+                principal: founder.key(),
+                handle: Handle::new("joshua").unwrap(),
+                devices: vec![self.devices[0].key()],
+                previous: if founder.key() == old {
+                    vec![]
+                } else {
+                    vec![old]
+                },
+            },
+            members: vec![MemberSeed {
+                principal: self.member.key(),
+                handle: Handle::new("ada").unwrap(),
+                devices: vec![self.member_device.key()],
+                previous: vec![],
+            }],
+            policy: DEFAULT_POLICY_TOML.into(),
+            forked_from: Some(ForkPoint {
+                workforce: self.workforce(),
+                heads: parent.heads().iter().copied().collect(),
+            }),
+        };
+        let body = EventBody::Genesis(Signed::sign(founder, None, genesis).unwrap());
+        parent
+            .fork_genesis_builder(self.devices[0].key(), Actor::Human(founder.key()), now_ms)
+            .unwrap()
+            .sign(&self.devices[0], body)
+            .unwrap()
     }
 
     /// An invite for the founder's principal, authored on device 0.

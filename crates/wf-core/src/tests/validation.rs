@@ -113,7 +113,7 @@ fn genesis_rules() {
                 heads: vec![],
             })
         }),
-        Err(GenesisError::ForkNotSupported.into())
+        Err(GenesisError::EmptyForkPoint.into())
     );
     assert_eq!(
         forged_genesis(&fixture, &fixture.member_device, |_| {}),
