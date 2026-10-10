@@ -680,6 +680,18 @@ pub fn describe(state: &State, body: &EventBody) -> String {
         EventBody::ItemArchived(reference) => format!("{} archived", item(&reference.item)),
         EventBody::ItemUnarchived(reference) => format!("{} unarchived", item(&reference.item)),
         EventBody::Comment(comment) => format!("{} commented", item(&comment.item)),
+        EventBody::SessionStarted(started) => {
+            format!("{} started on {}", started.agent, item(&started.item))
+        }
+        EventBody::SessionEnded(ended) => format!(
+            "session {} ended: {:?}",
+            ended.session.short(),
+            ended.reason
+        ),
+        EventBody::Review(review) => {
+            format!("{} reviewed: {:?}", item(&review.item), review.verdict)
+        }
+        EventBody::Merged(merged) => format!("{} merged as {}", item(&merged.item), merged.commit),
         EventBody::Unknown { tag, .. } => {
             let _ = state;
             format!("unknown body {tag}")

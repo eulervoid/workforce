@@ -9,12 +9,13 @@ use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::encoding::{self, EncodingError};
 use crate::hlc::Hlc;
-use crate::id::{EventId, ItemId, WorkforceId};
+use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
     Actor, DeviceKey, DeviceSigner, InviteKey, KeyError, MemberSeed, PrincipalKey, Signed,
 };
 use crate::item::Priority;
 use crate::name::{AgentName, HarnessName, Label, LaneName, Requirement, StateName, TypeName};
+use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 
 pub const EVENT_VERSION: u16 = 1;
 
@@ -167,6 +168,37 @@ pub struct Comment {
     pub body: String,
 }
 
+/// A session starts. Its id is the id of this event, and the agent is one of the acting principal.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionStarted {
+    pub agent: AgentName,
+    pub item: ItemId,
+    pub role: SessionRole,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SessionEnded {
+    pub session: SessionId,
+    pub reason: EndReason,
+}
+
+/// The verdict of a review session or of a human on one commit of an item.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Review {
+    pub item: ItemId,
+    pub commit: CommitId,
+    pub verdict: Verdict,
+    pub note: Option<String>,
+}
+
+/// The reviewed commit of an item went into the target branch as `commit`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Merged {
+    pub item: ItemId,
+    pub reviewed: CommitId,
+    pub commit: CommitId,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EventBody {
     Genesis(Signed<Genesis>),
@@ -183,6 +215,10 @@ pub enum EventBody {
     ItemArchived(ItemRef),
     ItemUnarchived(ItemRef),
     Comment(Comment),
+    SessionStarted(SessionStarted),
+    SessionEnded(SessionEnded),
+    Review(Review),
+    Merged(Merged),
     /// A body from a newer peer. Stored and relayed, ignored by the fold.
     Unknown {
         tag: u16,
@@ -205,6 +241,10 @@ mod tag {
     pub const ITEM_ARCHIVED: u16 = 14;
     pub const ITEM_UNARCHIVED: u16 = 15;
     pub const COMMENT: u16 = 16;
+    pub const SESSION_STARTED: u16 = 20;
+    pub const SESSION_ENDED: u16 = 21;
+    pub const REVIEW: u16 = 22;
+    pub const MERGED: u16 = 23;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -232,6 +272,10 @@ impl EventBody {
             EventBody::ItemArchived(_) => "ItemArchived",
             EventBody::ItemUnarchived(_) => "ItemUnarchived",
             EventBody::Comment(_) => "Comment",
+            EventBody::SessionStarted(_) => "SessionStarted",
+            EventBody::SessionEnded(_) => "SessionEnded",
+            EventBody::Review(_) => "Review",
+            EventBody::Merged(_) => "Merged",
             EventBody::Unknown { .. } => "Unknown",
         }
     }
@@ -252,6 +296,10 @@ impl EventBody {
             EventBody::ItemArchived(body) => (tag::ITEM_ARCHIVED, encoding::encode(body)?),
             EventBody::ItemUnarchived(body) => (tag::ITEM_UNARCHIVED, encoding::encode(body)?),
             EventBody::Comment(body) => (tag::COMMENT, encoding::encode(body)?),
+            EventBody::SessionStarted(body) => (tag::SESSION_STARTED, encoding::encode(body)?),
+            EventBody::SessionEnded(body) => (tag::SESSION_ENDED, encoding::encode(body)?),
+            EventBody::Review(body) => (tag::REVIEW, encoding::encode(body)?),
+            EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
             EventBody::Unknown { tag, payload } => (*tag, payload.clone()),
         };
         Ok(RawBody { tag, payload })
@@ -274,6 +322,10 @@ impl EventBody {
             tag::ITEM_ARCHIVED => EventBody::ItemArchived(encoding::decode(payload)?),
             tag::ITEM_UNARCHIVED => EventBody::ItemUnarchived(encoding::decode(payload)?),
             tag::COMMENT => EventBody::Comment(encoding::decode(payload)?),
+            tag::SESSION_STARTED => EventBody::SessionStarted(encoding::decode(payload)?),
+            tag::SESSION_ENDED => EventBody::SessionEnded(encoding::decode(payload)?),
+            tag::REVIEW => EventBody::Review(encoding::decode(payload)?),
+            tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
             tag => EventBody::Unknown {
                 tag,
                 payload: raw.payload,
@@ -450,6 +502,50 @@ mod tests {
             (GOLDEN_LEN, GOLDEN_ID.to_string())
         );
     }
+
+    fn golden_body_bytes(body: &EventBody) -> String {
+        data_encoding::HEXLOWER.encode(&encoding::encode(body).unwrap())
+    }
+
+    #[test]
+    fn golden_session_bodies() {
+        let item = ItemId::from_bytes([1; 32]);
+        let session = SessionId::from_bytes([2; 32]);
+        let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
+        let bodies = [
+            EventBody::SessionStarted(SessionStarted {
+                agent: AgentName::new("coder").unwrap(),
+                item,
+                role: SessionRole::Review { commit },
+            }),
+            EventBody::SessionEnded(SessionEnded {
+                session,
+                reason: EndReason::Submitted {
+                    commit: Some(commit),
+                },
+            }),
+            EventBody::Review(Review {
+                item,
+                commit,
+                verdict: Verdict::RequestChanges,
+                note: Some("tests".into()),
+            }),
+            EventBody::Merged(Merged {
+                item,
+                reviewed: commit,
+                commit,
+            }),
+        ];
+        let encoded: Vec<String> = bodies.iter().map(golden_body_bytes).collect();
+        assert_eq!(encoded, GOLDEN_SESSION_BODIES);
+    }
+
+    const GOLDEN_SESSION_BODIES: [&str; 4] = [
+        "143e05636f64657220010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
+        "15392002020202020202020202020202020202020202020202020202020202020202020001001400112233445566778899aabbccddeeff00112233",
+        "163f200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff001122330101057465737473",
+        "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
+    ];
 
     const GOLDEN_LEN: usize = 1746;
     const GOLDEN_ID: &str = "rudghhczjbkleiy3ghm4tnplipdj6dkbcgo3hzmjagukji24wm6q";

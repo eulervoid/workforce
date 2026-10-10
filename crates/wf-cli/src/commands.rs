@@ -599,7 +599,7 @@ fn show(
                 let mut events = workspace.events()?;
                 events.sort_by_key(|event| (event.content.hlc, event.id()));
                 for event in events {
-                    if event_touches(&event, id) {
+                    if event_touches(state, &event, id) {
                         entries.push(view::history_entry(state, &event));
                     }
                 }
@@ -631,7 +631,7 @@ fn show(
     }
 }
 
-fn event_touches(event: &Event, id: ItemId) -> bool {
+fn event_touches(state: &State, event: &Event, id: ItemId) -> bool {
     match &event.content.body {
         EventBody::ItemCreated(_) => ItemId::from(event.id()) == id,
         EventBody::ItemEdited(edited) => edited.item == id,
@@ -641,6 +641,12 @@ fn event_touches(event: &Event, id: ItemId) -> bool {
             reference.item == id
         }
         EventBody::Comment(comment) => comment.item == id,
+        EventBody::SessionStarted(started) => started.item == id,
+        EventBody::SessionEnded(ended) => state
+            .session(ended.session)
+            .is_some_and(|session| session.item() == id),
+        EventBody::Review(review) => review.item == id,
+        EventBody::Merged(merged) => merged.item == id,
         EventBody::Genesis(_)
         | EventBody::PolicySet(_)
         | EventBody::AgentDefined(_)

@@ -13,8 +13,8 @@ use crate::event::{
     AgentDefined, Change, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated, ItemEdited,
     ItemLinked, ItemTransitioned, Link,
 };
-use crate::id::{EventId, ItemId, WorkforceId};
-use crate::identity::{Actor, DeviceKey, PrincipalKey, Role};
+use crate::id::{EventId, ItemId, SessionId, WorkforceId};
+use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, StateName, TypeName};
 use crate::policy::{Field, Policy, PolicyError, StateCategory};
 use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
@@ -91,6 +91,8 @@ pub enum Invalid {
     Policy(#[from] PolicyError),
     #[error("unknown item {0}")]
     UnknownItem(ItemId),
+    #[error("unknown session {0}")]
+    UnknownSession(SessionId),
     #[error("an item cannot depend on itself")]
     SelfDependency,
     #[error("too many events are waiting for missing parents")]
@@ -438,6 +440,25 @@ impl State {
             | EventBody::DeviceProfile(_)
             | EventBody::Unknown { .. } => Ok(()),
             EventBody::ItemCreated(ItemCreated { .. }) => Ok(()),
+            EventBody::SessionStarted(started) => {
+                let agent = AgentId {
+                    principal: workforce.canonical(&event.content.actor.principal()),
+                    name: started.agent.clone(),
+                };
+                if !workforce.agents.contains_key(&agent) {
+                    return Err(Invalid::UnknownAgent);
+                }
+                known_item(&started.item)
+            }
+            EventBody::SessionEnded(ended) => {
+                if workforce.sessions.contains_key(&ended.session) {
+                    Ok(())
+                } else {
+                    Err(Invalid::UnknownSession(ended.session))
+                }
+            }
+            EventBody::Review(crate::event::Review { item, .. })
+            | EventBody::Merged(crate::event::Merged { item, .. }) => known_item(item),
             EventBody::ItemEdited(ItemEdited { item, .. })
             | EventBody::ItemTransitioned(ItemTransitioned { item, .. })
             | EventBody::Comment(crate::event::Comment { item, .. })
@@ -571,7 +592,11 @@ impl State {
             EventBody::InviteCreated(_)
             | EventBody::DeviceBound(_)
             | EventBody::DeviceProfile(_)
-            | EventBody::ForkAnnounced(_) => Ok(()),
+            | EventBody::ForkAnnounced(_)
+            | EventBody::SessionStarted(_)
+            | EventBody::SessionEnded(_)
+            | EventBody::Review(_)
+            | EventBody::Merged(_) => Ok(()),
             EventBody::AgentDefined(defined) => defined.lanes.iter().try_for_each(known_lane),
             EventBody::ItemCreated(created) => {
                 let type_name = &created.item_type;

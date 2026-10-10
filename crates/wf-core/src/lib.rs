@@ -15,6 +15,7 @@ pub mod name;
 pub mod policy;
 pub mod refs;
 pub mod resolve;
+pub mod session;
 pub mod state;
 pub mod sync;
 pub mod validate;

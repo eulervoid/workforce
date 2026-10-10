@@ -5,12 +5,14 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::crdt::{Lww, Stamp};
 use crate::event::{Change, Event, EventBody, ItemLinked, Link};
+use crate::id::SessionId;
 use crate::id::{EventId, ItemId};
 use crate::identity::{AgentId, Role};
 use crate::item::{Item, Note, NoteKind};
 use crate::name::StateName;
 use crate::policy::Policy;
 use crate::refs;
+use crate::session::{Ended, Session};
 use crate::state::{
     AgentDefinition, Announcement, Binding, Feed, FeedHead, ForkState, Invite, Known, Member,
     Neighbours, Origin, PolicyDoc, State, Workforce,
@@ -96,6 +98,7 @@ impl State {
                 ),
                 agents: BTreeMap::new(),
                 items: BTreeMap::new(),
+                sessions: BTreeMap::new(),
                 invites: BTreeMap::new(),
                 profiles: BTreeMap::new(),
                 fork: genesis
@@ -181,6 +184,10 @@ impl State {
                     | EventBody::InviteCreated(_)
                     | EventBody::DeviceBound(_)
                     | EventBody::ForkAnnounced(_)
+                    | EventBody::SessionStarted(_)
+                    | EventBody::SessionEnded(_)
+                    | EventBody::Review(_)
+                    | EventBody::Merged(_)
                     | EventBody::Unknown { .. }
             )
         {
@@ -288,6 +295,36 @@ impl State {
                     }
                 }
             }
+            EventBody::SessionStarted(started) => {
+                let session = SessionId::from(id);
+                workforce.sessions.insert(
+                    session,
+                    Session {
+                        id: session,
+                        agent: AgentId {
+                            principal: workforce.canonical(&content.actor.principal()),
+                            name: started.agent.clone(),
+                        },
+                        item: started.item,
+                        role: started.role,
+                        device: content.author,
+                        started: stamp,
+                        ended: None,
+                    },
+                );
+            }
+            EventBody::SessionEnded(ended) => {
+                if let Some(session) = workforce.sessions.get_mut(&ended.session)
+                    && session.ended.is_none_or(|earlier| stamp < earlier.stamp)
+                {
+                    session.ended = Some(Ended {
+                        reason: ended.reason,
+                        stamp,
+                    });
+                }
+            }
+            // Reviews and merges are folded with the review status (M2 items 7 and 8).
+            EventBody::Review(_) | EventBody::Merged(_) => {}
             EventBody::ItemCreated(created) => {
                 let item_id = ItemId::from(id);
                 workforce.items.insert(

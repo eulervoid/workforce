@@ -4,13 +4,14 @@ use crate::crdt::SetChange;
 use crate::event::{
     AgentDefined, Change, Comment, DeviceBound, Event, EventBody, EventBuilder, ForkPoint, Genesis,
     InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemRef, ItemTransitioned,
-    Link, PolicySet,
+    Link, PolicySet, SessionEnded, SessionStarted,
 };
-use crate::id::{ItemId, WorkforceId};
+use crate::id::{ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed};
 use crate::item::Priority;
 use crate::name::{AgentName, Handle, HarnessName, StateName, TypeName};
 use crate::policy::DEFAULT_POLICY_TOML;
+use crate::session::{EndReason, SessionRole};
 use crate::state::{State, Trust};
 
 /// A workforce founded by `@joshua` (an owner with several devices) plus a plain member `@ada`.
@@ -270,4 +271,16 @@ pub fn define_agent(name: &str) -> EventBody {
         capabilities: vec![],
         lanes: vec![],
     })
+}
+
+pub fn start_session(agent: &str, item: ItemId) -> EventBody {
+    EventBody::SessionStarted(SessionStarted {
+        agent: AgentName::new(agent).unwrap(),
+        item,
+        role: SessionRole::Work,
+    })
+}
+
+pub fn end_session(session: SessionId, reason: EndReason) -> EventBody {
+    EventBody::SessionEnded(SessionEnded { session, reason })
 }

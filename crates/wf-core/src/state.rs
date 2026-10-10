@@ -7,11 +7,12 @@ use serde::{Deserialize, Serialize};
 use crate::crdt::{Lww, Stamp};
 use crate::event::{DeviceProfile, Event, EventBuilder, InviteKind};
 use crate::hlc::Hlc;
-use crate::id::{EventId, ItemId, WorkforceId};
+use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, InviteKey, PrincipalKey, Role};
 use crate::item::{Item, ItemView};
 use crate::name::{AgentName, Handle, HarnessName, LaneName, Requirement};
 use crate::policy::Policy;
+use crate::session::{Session, SessionRole};
 use crate::sync::{FeedVersion, Versions};
 use crate::validate::Invalid;
 
@@ -249,6 +250,7 @@ pub(crate) struct Workforce {
     pub(crate) policy: Lww<PolicyDoc>,
     pub(crate) agents: BTreeMap<AgentId, Lww<AgentDefinition>>,
     pub(crate) items: BTreeMap<ItemId, Item>,
+    pub(crate) sessions: BTreeMap<SessionId, Session>,
 }
 
 impl Workforce {
@@ -439,6 +441,29 @@ impl State {
             name: name.clone(),
         };
         self.workforce.as_ref()?.agents.get(&id).map(Lww::value)
+    }
+
+    pub fn session(&self, id: SessionId) -> Option<&Session> {
+        self.workforce.as_ref()?.sessions.get(&id)
+    }
+
+    /// All sessions, live or ended, ordered by id.
+    pub fn sessions(&self) -> impl Iterator<Item = &Session> {
+        self.workforce
+            .iter()
+            .flat_map(|workforce| workforce.sessions.values())
+    }
+
+    pub fn live_sessions(&self) -> impl Iterator<Item = &Session> {
+        self.sessions().filter(|session| session.is_live())
+    }
+
+    /// The session that holds the claim on an item: the earliest live work session by
+    /// `(hlc, event id)`. A later one is meant to cancel itself.
+    pub fn claim(&self, item: ItemId) -> Option<&Session> {
+        self.live_sessions()
+            .filter(|session| session.item() == item && session.role() == SessionRole::Work)
+            .min_by_key(|session| session.started())
     }
 
     pub fn item(&self, id: ItemId) -> Option<ItemView<'_>> {
