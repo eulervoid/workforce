@@ -72,6 +72,8 @@ pub struct Daemon {
     node: Arc<Node<StorageHandle>>,
     presence: Presence,
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
+    /// Stores that failed to open, so each is reported once.
+    failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
 }
 
 impl Daemon {
@@ -83,6 +85,7 @@ impl Daemon {
             node,
             presence: Presence::default(),
             loaded: Mutex::new(BTreeMap::new()),
+            failed: Mutex::new(Default::default()),
         });
         daemon.load_stored_workforces();
         tokio::spawn(rescan(Arc::downgrade(&daemon)));
@@ -118,7 +121,17 @@ impl Daemon {
                 continue;
             }
             if let Err(error) = self.workforce(id) {
-                eprintln!("not serving workforce {id}: {error}");
+                let first_time = self
+                    .failed
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner())
+                    .insert(id);
+                if first_time {
+                    eprintln!(
+                        "not serving workforce {id}: {error}; if it is from an older build, remove {}",
+                        self.config.data_dir.join(id.to_string()).display()
+                    );
+                }
             }
         }
     }
