@@ -6,7 +6,7 @@
 use serde::{Serialize, de::DeserializeOwned};
 
 #[derive(Debug, thiserror::Error)]
-#[error("canonical encoding failed: {0}")]
+#[error("canonical encoding failed")]
 pub struct EncodingError(#[from] postcard::Error);
 
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, EncodingError> {

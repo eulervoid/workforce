@@ -33,7 +33,7 @@ pub type SourceError = Box<dyn std::error::Error + Send + Sync>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum NetError {
-    #[error("could not start the network endpoint: {0}")]
+    #[error("could not start the network endpoint")]
     Bind(#[source] SourceError),
     #[error("could not reach {peer}: {source}")]
     Connect {
@@ -47,13 +47,13 @@ pub enum NetError {
         #[source]
         source: SyncError,
     },
-    #[error("gossip failed: {0}")]
+    #[error("gossip failed")]
     Gossip(#[source] SourceError),
     #[error("workforce {0} is not served here")]
     NotServed(WorkforceId),
     #[error("{peer} refused the join: {reason}")]
     JoinRefused { peer: String, reason: JoinRefusal },
-    #[error("could not write the events of the new device: {0}")]
+    #[error("could not write the events of the new device")]
     JoinAuthoring(#[source] SourceError),
 }
 

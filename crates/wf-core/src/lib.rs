@@ -15,6 +15,7 @@ pub mod item;
 pub mod name;
 pub mod policy;
 pub mod refs;
+pub mod report;
 pub mod resolve;
 pub mod session;
 pub mod state;

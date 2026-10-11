@@ -66,7 +66,7 @@ async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
-        Err(error) => return Response::Failed(error.to_string()),
+        Err(error) => return Response::Failed(wf_core::report::report(&error)),
     };
     match call(daemon, request.workforce, &loaded, request.call).await {
         Ok(response) => response,
@@ -81,14 +81,14 @@ async fn call(
     call: Call,
 ) -> Result<Response, String> {
     let storage = &loaded.storage;
-    let closed = |error: crate::StorageClosed| error.to_string();
+    let closed = |error: crate::StorageClosed| wf_core::report::report(&error);
     match call {
         Call::State => {
             let bytes = storage
                 .with(|replica| wf_core::encoding::encode(replica.state()))
                 .await
                 .map_err(closed)?
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::State(bytes))
         }
         Call::Event(id) => {
@@ -96,7 +96,7 @@ async fn call(
                 .with(move |replica| wf_store::EventStore::event(replica.store(), &id))
                 .await
                 .map_err(closed)?
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::Event(event))
         }
         Call::Events { from } => {
@@ -106,7 +106,7 @@ async fn call(
                 })
                 .await
                 .map_err(closed)?
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::Events(events))
         }
         Call::Author { actor, body } => {
@@ -116,7 +116,7 @@ async fn call(
                 .with(move |replica| replica.author(&signer, actor, now_ms, *body))
                 .await
                 .map_err(closed)?
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::Authored(event))
         }
         Call::SyncNow => {
@@ -137,20 +137,20 @@ async fn call(
             daemon
                 .create_fork(loaded, *genesis)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::Forked)
         }
         Call::Join { code, profile } => {
             let code: InviteCode = code
                 .parse()
-                .map_err(|error: InviteCodeError| error.to_string())?;
+                .map_err(|error: InviteCodeError| wf_core::report::report(&error))?;
             if code.workforce != workforce {
                 return Err("the invite is for another workforce".to_string());
             }
             daemon
                 .join(loaded, &code, profile)
                 .await
-                .map_err(|error| error.to_string())?;
+                .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::Joined)
         }
         Call::Follow(devices) => {

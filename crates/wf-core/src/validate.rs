@@ -55,7 +55,7 @@ pub enum Invalid {
     DuplicateGenesis,
     #[error("an event of {0} that is not part of the history this fork was made from")]
     NotInForkHistory(WorkforceId),
-    #[error("invalid genesis: {0}")]
+    #[error("invalid genesis")]
     Genesis(#[from] GenesisError),
     #[error("seq {got} from {author} is not valid here, expected {expected}")]
     UnexpectedSeq {

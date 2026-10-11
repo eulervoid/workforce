@@ -48,7 +48,7 @@ impl PeerSync {
                 received: report.applied,
                 rejected: report.rejected,
             },
-            Err(error) => PeerOutcome::Unreachable(error.to_string()),
+            Err(error) => PeerOutcome::Unreachable(wf_core::report::report(&error)),
         };
         Self {
             device,

@@ -380,7 +380,7 @@ pub fn join(
                     node.shutdown().await;
                     return Err(error.into());
                 }
-                Err(error) => failures.push(error.to_string()),
+                Err(error) => failures.push(wf_core::report::report(&error)),
             }
         }
         node.shutdown().await;

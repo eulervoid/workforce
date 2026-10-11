@@ -173,7 +173,8 @@ impl Daemon {
                     .insert(id);
                 if first_time {
                     eprintln!(
-                        "not serving workforce {id}: {error}; if it is from an older build, remove {}",
+                        "not serving workforce {id}: {}; if it is from an older build, remove {}",
+                        wf_core::report::report(&error),
                         self.config.data_dir.join(id.to_string()).display()
                     );
                 }
@@ -310,7 +311,7 @@ impl Daemon {
                 Err(error @ (NetError::JoinRefused { .. } | NetError::JoinAuthoring(_))) => {
                     return Err(error.into());
                 }
-                Err(error) => failures.push(error.to_string()),
+                Err(error) => failures.push(wf_core::report::report(&error)),
             }
         }
         Err(DaemonError::JoinUnreachable(failures.join("; ")))

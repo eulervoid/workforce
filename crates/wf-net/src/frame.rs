@@ -10,9 +10,9 @@ pub const MAX_FRAME_LEN: u32 = 32 * 1024 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum FrameError {
-    #[error("connection failed: {0}")]
+    #[error("connection failed")]
     Io(#[from] std::io::Error),
-    #[error("message does not decode: {0}")]
+    #[error("message does not decode")]
     Encoding(#[from] EncodingError),
     #[error("frame of {0} bytes is too large")]
     TooLarge(u64),

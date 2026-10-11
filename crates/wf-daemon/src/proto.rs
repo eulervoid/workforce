@@ -25,9 +25,9 @@ pub const EVENTS_PER_PAGE: usize = 512;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ProtoError {
-    #[error("socket failed: {0}")]
+    #[error("socket failed")]
     Io(#[from] std::io::Error),
-    #[error("message does not decode: {0}")]
+    #[error("message does not decode")]
     Encoding(#[from] encoding::EncodingError),
     #[error("frame of {0} bytes is too large")]
     TooLarge(u64),

@@ -7,17 +7,17 @@ use wf_core::identity::DeviceKey;
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
-    #[error("database error: {0}")]
+    #[error("database error")]
     Database(#[from] redb::DatabaseError),
-    #[error("transaction error: {0}")]
+    #[error("transaction error")]
     Transaction(#[from] redb::TransactionError),
-    #[error("table error: {0}")]
+    #[error("table error")]
     Table(#[from] redb::TableError),
-    #[error("storage error: {0}")]
+    #[error("storage error")]
     Storage(#[from] redb::StorageError),
-    #[error("commit error: {0}")]
+    #[error("commit error")]
     Commit(#[from] redb::CommitError),
-    #[error("stored data does not decode: {0}")]
+    #[error("stored data does not decode")]
     Corrupt(#[from] EncodingError),
     #[error("the store holds workforce {found}, not {expected}")]
     WrongWorkforce {

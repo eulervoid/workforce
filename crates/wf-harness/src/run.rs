@@ -17,9 +17,9 @@ use crate::transcript::{Direction, TranscriptEntry, TranscriptWriter};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("agent connection failed: {0}")]
+    #[error("agent connection failed")]
     Protocol(#[from] agent_client_protocol::Error),
-    #[error("writing the transcript failed: {0}")]
+    #[error("writing the transcript failed")]
     Transcript(#[from] io::Error),
 }
 

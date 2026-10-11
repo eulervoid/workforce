@@ -15,7 +15,7 @@ use wf_store::{EventStore, Replica, StoreError};
 use crate::replica;
 
 #[derive(Debug, thiserror::Error)]
-#[error("the local log failed: {0}")]
+#[error("the local log failed")]
 pub struct LogError(#[source] pub Box<dyn std::error::Error + Send + Sync>);
 
 impl From<StoreError> for LogError {

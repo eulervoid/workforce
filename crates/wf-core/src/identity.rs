@@ -24,7 +24,7 @@ pub enum KeyError {
     WrongSecretLength,
     #[error("signature does not match")]
     BadSignature,
-    #[error("failed to encode signed content: {0}")]
+    #[error("failed to encode signed content")]
     Encoding(#[from] postcard::Error),
 }
 
