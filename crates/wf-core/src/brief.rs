@@ -448,6 +448,18 @@ impl SuperviseBrief {
     }
 }
 
+/// The prompt that goes out when a turn ended and the session on `item` is still going.
+pub fn nudge(item: ItemId) -> String {
+    let item = HashId::short(&item);
+    format!(
+        "Continue.\n\
+         - Finished: `wf work submit --note \"<what the reviewer should know>\"`\n\
+         - Need an answer from someone: `wf comment {item} \"<question>\" --block`, then end your turn.\n\
+         - Stuck: `wf work release --note \"<why>\"`\n\
+         {AGAIN}"
+    )
+}
+
 /// The last rule of every brief.
 const AGAIN: &str = "- Lost track: `wf work brief` prints this brief again.";
 

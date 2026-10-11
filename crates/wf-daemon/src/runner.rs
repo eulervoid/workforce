@@ -1148,7 +1148,7 @@ async fn turns(
                     End::Over
                 };
             }
-            TurnOutcome::Continue => prompt = CONTINUE.to_string(),
+            TurnOutcome::Continue => prompt = wf_core::brief::nudge(run.item),
             TurnOutcome::GiveUp => {
                 return End::Finish(Finish::GaveUp {
                     turns: turns_without_commit,
@@ -1302,10 +1302,6 @@ async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, StorageClosed>
         })
         .await
 }
-
-/// The prompt that goes out when a turn ended and the session is still going.
-const CONTINUE: &str = "Continue. When you are done run `wf work submit`; if you need an answer write a \
-     blocker with `wf comment <item> \"<question>\" --block`; if you are stuck run `wf work release`.";
 
 /// What to say when a parked session can go on: what others wrote on the item since the session's
 /// last blocker, and what finished dependencies left.

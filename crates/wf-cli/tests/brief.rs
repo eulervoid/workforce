@@ -59,7 +59,11 @@ fn briefs() -> Vec<String> {
         blockers: open("b7e3f0"),
         person: "@joshua".into(),
     };
+    let item: wf_core::id::ItemId = "socku2pyduljzcmqkhanbqmtk4buoncht2paahygwtnifoutha7q"
+        .parse()
+        .unwrap();
     vec![
+        wf_core::brief::nudge(item),
         work.render(),
         review(Some("abc123")).render(),
         review(None).render(),
@@ -111,7 +115,7 @@ fn every_command_in_a_brief_parses() {
             checked += 1;
         }
     }
-    assert!(checked >= 15, "only {checked} commands found");
+    assert!(checked >= 19, "only {checked} commands found");
     assert!(
         Cli::try_parse_from(words("wf work finish --note \"done\"")).is_err(),
         "a command the CLI does not have fails"
