@@ -12,6 +12,7 @@ pub mod id;
 pub mod identity;
 pub mod invite;
 pub mod item;
+pub mod lifecycle;
 pub mod name;
 pub mod policy;
 pub mod refs;
