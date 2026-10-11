@@ -985,6 +985,9 @@ mode = "local"           # local | origin (M3)
 target = "main"
 
 [[review]]               # ordered, least strict first; an item without a level is not reviewed
+name = "human"
+steps = ["human"]
+[[review]]
 name = "light"
 steps = [{ agent = { requires = ["review"] } }]
 [[review]]
@@ -1050,7 +1053,7 @@ wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
 wf item add|list|show|edit|move|link|archive|diff   # all types: task, question, decision, ...
 wf comment <item> <text>
-wf activity | inbox
+wf inbox
 wf review <item> --approve|--request-changes|--escalate
 wf search <query>
 ```
@@ -1092,7 +1095,5 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
    month, the main source of log growth. Liveness is computed against the clock at query time anyway, so
    a lease renewed over gossip plus a final `SessionEnded` might be enough. M2 needs neither: on one
    machine the daemon knows its sessions. Settle this before M3; it decides how urgent compaction is.
-5. What should the default review level be? The bundled policy sets none, so submitted work merges
-   at once. A `human` level (one human step) as the default for `task` would make a person the gate.
-6. With several principals (M5), should review steps be able to require a different principal than
+5. With several principals (M5), should review steps be able to require a different principal than
    the author (the former `distinct_principal`)?

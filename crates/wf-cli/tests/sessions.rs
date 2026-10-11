@@ -60,6 +60,10 @@ impl World {
     fn without_daemon(agents: &[(&str, &str)]) -> WorldSetup {
         let wf = Sandbox::new();
         wf.run(&["init", "--name", "demo", "--no-agents"]);
+        let policy = wf.run(&["policy", "show"]);
+        let path = wf.root.path().join("unreviewed-policy.toml");
+        std::fs::write(&path, policy.replace("review = \"human\"\n", "")).unwrap();
+        wf.run(&["policy", "apply", path.to_str().unwrap()]);
         git(
             &wf.repository,
             &["init", "--quiet", "--initial-branch=main"],

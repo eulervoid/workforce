@@ -1080,7 +1080,7 @@ fn items_name_a_review_level_from_the_policy() {
     wf.run(&["item", "edit", short(&task), "--review", "critical"]);
     assert_eq!(review(&wf), "critical");
     wf.run(&["item", "edit", short(&task), "--no-review"]);
-    assert_eq!(review(&wf), Value::Null);
+    assert_eq!(review(&wf), "human", "the task type's default applies");
 
     let message = wf.fail(&["item", "add", "--title", "x", "--review", "ghost"]);
     assert!(message.contains("no review level `ghost`"), "{message}");

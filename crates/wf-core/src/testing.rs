@@ -57,7 +57,7 @@ impl Fixture {
                 devices: vec![member_device.key()],
                 previous: vec![],
             }],
-            policy: DEFAULT_POLICY_TOML.into(),
+            policy: DEFAULT_POLICY_TOML.replace("review = \"human\"\n", ""),
             forked_from: None,
         };
         let body = EventBody::Genesis(Signed::sign(&founder, None, genesis).unwrap());

@@ -530,7 +530,7 @@ mod tests {
             .iter()
             .map(|level| level.name.as_str())
             .collect();
-        assert_eq!(names, ["light", "standard", "critical"]);
+        assert_eq!(names, ["human", "light", "standard", "critical"]);
         let critical = policy
             .review_level(&ReviewName::new("critical").unwrap())
             .unwrap();
@@ -557,17 +557,19 @@ mod tests {
             Some("needs_human")
         );
         assert_eq!(question.review, None);
+        let task = policy.type_config(&type_name("task")).unwrap();
+        assert_eq!(task.review, Some(ReviewName::new("human").unwrap()));
         assert_eq!(
             policy.review_rank(&ReviewName::new("standard").unwrap()),
-            Some(1)
+            Some(2)
         );
     }
 
     #[test]
     fn a_type_names_its_default_review_level() {
         let source = DEFAULT_POLICY_TOML.replace(
-            "[types.task]\nlane = \"default\"",
-            "[types.task]\nreview = \"standard\"\nlane = \"default\"",
+            "[types.task]\nreview = \"human\"\nlane",
+            "[types.task]\nreview = \"standard\"\nlane",
         );
         let policy = Policy::parse(&source).unwrap();
         let task = policy.type_config(&type_name("task")).unwrap();
@@ -589,8 +591,8 @@ mod tests {
             Err(PolicyError::NoReviewSteps(ReviewName::new("none").unwrap()))
         );
         let unknown = DEFAULT_POLICY_TOML.replace(
-            "[types.task]\nlane = \"default\"",
-            "[types.task]\nreview = \"ghost\"\nlane = \"default\"",
+            "review = \"human\"\nlane",
+            "review = \"ghost\"\nlane",
         );
         assert_eq!(
             Policy::parse(&unknown),

@@ -6,21 +6,29 @@ expression: "Envelope::new(&all)"
   "schema": 2,
   "data": [
     {
-      "id": "bejwn2hhptej6ei5iykk3pc6ohmxgmurpdeeto6g23punvk2esiq",
+      "id": "lzjswgizorn6dsbw3bwd6gmgox7od5yoqdbxr6oa2flduwkwbulq",
       "type": "task",
-      "title": "Write spec",
-      "state": "done",
-      "priority": null,
-      "readiness": null,
-      "blocked_by": [],
+      "title": "Implement feed sync",
+      "state": "open",
+      "priority": "P1",
+      "readiness": "blocked",
+      "blocked_by": [
+        {
+          "id": "sxaeggq42lps6ariacj4ou3gnc5362ywtp2mfyfnl7rrkroawuha",
+          "type": "question",
+          "title": "Which hash for event ids?",
+          "state": "open",
+          "priority": "P2"
+        }
+      ],
       "blocking": [],
       "labels": [],
-      "lane": null,
+      "lane": "default",
       "steps": null,
-      "archived": true
+      "archived": false
     },
     {
-      "id": "v6yxirbf5gqtsvhactvqdnzewmtscachpvjvr7rum3zdf6drwnrq",
+      "id": "sxaeggq42lps6ariacj4ou3gnc5362ywtp2mfyfnl7rrkroawuha",
       "type": "question",
       "title": "Which hash for event ids?",
       "state": "open",
@@ -29,7 +37,7 @@ expression: "Envelope::new(&all)"
       "blocked_by": [],
       "blocking": [
         {
-          "id": "5rmu3z54vpoz6c2ujimpplzuoiovzspbuewqkojjoeto3pmf434q",
+          "id": "lzjswgizorn6dsbw3bwd6gmgox7od5yoqdbxr6oa2flduwkwbulq",
           "type": "task",
           "title": "Implement feed sync",
           "state": "open",
@@ -42,26 +50,18 @@ expression: "Envelope::new(&all)"
       "archived": false
     },
     {
-      "id": "5rmu3z54vpoz6c2ujimpplzuoiovzspbuewqkojjoeto3pmf434q",
+      "id": "znbbwfgnvuopznjiuxnwxnmhzmvgguw4ojtwgc2aha35f7xuz2cq",
       "type": "task",
-      "title": "Implement feed sync",
-      "state": "open",
-      "priority": "P1",
-      "readiness": "blocked",
-      "blocked_by": [
-        {
-          "id": "v6yxirbf5gqtsvhactvqdnzewmtscachpvjvr7rum3zdf6drwnrq",
-          "type": "question",
-          "title": "Which hash for event ids?",
-          "state": "open",
-          "priority": "P2"
-        }
-      ],
+      "title": "Write spec",
+      "state": "done",
+      "priority": null,
+      "readiness": null,
+      "blocked_by": [],
       "blocking": [],
       "labels": [],
-      "lane": "default",
+      "lane": null,
       "steps": null,
-      "archived": false
+      "archived": true
     }
   ]
 }

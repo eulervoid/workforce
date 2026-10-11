@@ -19,6 +19,10 @@ mode = "local"
 target = "main"
 
 [[review]]
+name = "human"
+steps = ["human"]
+
+[[review]]
 name = "light"
 steps = [{ agent = { requires = ["review"] } }]
 
@@ -31,6 +35,7 @@ name = "critical"
 steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
 
 [types.task]
+review = "human"
 lane = "default"
 fields = ["priority", "labels", "requires"]
 depends_on = ["task", "question", "decision"]
