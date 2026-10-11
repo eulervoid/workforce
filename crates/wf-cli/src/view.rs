@@ -913,6 +913,12 @@ pub fn status(
             },
         }
     }
+    for item in state.unstaffed_reviews() {
+        flagged.insert(format!(
+            "the review of #{} waits for an agent step that no agent started on this workforce can take",
+            item.short()
+        ));
+    }
     for edge in graph.ignored() {
         flagged.insert(format!(
             "dependency #{} -> #{} ignored: concurrent links formed a cycle",
@@ -1032,7 +1038,7 @@ pub struct SessionView {
     pub title: String,
     /// `work` or `review`.
     pub role: String,
-    /// `live`, or why it ended.
+    /// `live`, `parked` while it waits for an answer, or why it ended.
     pub status: String,
     pub started: String,
     pub ended: Option<String>,
@@ -1044,6 +1050,7 @@ pub struct SessionView {
 
 /// Live sessions first, then the others, each the newest first.
 pub fn session_views(state: &State) -> Vec<SessionView> {
+    let graph = state.dependency_graph();
     let mut sessions: Vec<_> = state.sessions().collect();
     sessions.sort_by_key(|session| (!session.is_live(), std::cmp::Reverse(session.started())));
     sessions
@@ -1064,6 +1071,10 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                 Some(ItemView::Live(item)) => steps_view(&item.body()),
                 Some(ItemView::Archived(_)) | None => None,
             };
+            // A work session whose item waits on a dependency, such as its own question.
+            let parked = session.is_live()
+                && session.role() == SessionRole::Work
+                && !state.blockers(&graph, session.item()).is_empty();
             SessionView {
                 id: session.id().to_base32(),
                 agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),
@@ -1074,10 +1085,11 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                     SessionRole::Review { .. } => "review",
                 }
                 .to_string(),
-                status: session
-                    .ended()
-                    .map_or("live", |ended| ended.reason.name())
-                    .to_string(),
+                status: match session.ended() {
+                    Some(ended) => ended.reason.name().to_string(),
+                    None if parked => "parked".to_string(),
+                    None => "live".to_string(),
+                },
                 started: timestamp(session.started().hlc),
                 ended: session.ended().map(|ended| timestamp(ended.at())),
                 commit,

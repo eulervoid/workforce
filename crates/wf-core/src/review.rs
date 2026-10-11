@@ -120,6 +120,44 @@ impl State {
             .collect()
     }
 
+    /// Items that wait for a review step by an agent that no hosted agent the dispatcher starts has
+    /// the capabilities for.
+    pub fn unstaffed_reviews(&self) -> Vec<ItemId> {
+        let Some(policy) = self.policy().map(|document| &document.policy) else {
+            return Vec::new();
+        };
+        let staff: Vec<&crate::state::AgentDefinition> = self
+            .agents()
+            .filter(|(id, definition)| {
+                definition.autonomy.start == crate::autonomy::StartMode::Auto
+                    && self.devices().any(|device| {
+                        device.principal == id.principal
+                            && device
+                                .profile
+                                .is_some_and(|profile| profile.agents.contains_key(&id.name))
+                    })
+            })
+            .map(|(_, definition)| definition)
+            .collect();
+        self.live_items()
+            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
+            .filter(|item| {
+                let Some(ReviewStatus::Awaiting {
+                    step: ReviewStep::Agent { requires },
+                }) = self.review_status(item.id())
+                else {
+                    return false;
+                };
+                !staff.iter().any(|definition| {
+                    requires
+                        .iter()
+                        .all(|need| definition.capabilities.contains(need))
+                })
+            })
+            .map(Item::id)
+            .collect()
+    }
+
     /// Items waiting for a review step that `agent` could take: the step names capabilities the
     /// agent has, the agent never did the work on the item, and no review session holds the step.
     pub fn reviewable(&self, agent: &AgentId) -> Vec<(ItemId, CommitId)> {

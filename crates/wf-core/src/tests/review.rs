@@ -398,3 +398,43 @@ mod inbox {
         );
     }
 }
+
+#[test]
+fn a_review_step_nobody_hosted_can_take_is_noticed() {
+    use crate::autonomy::{Autonomy, StartMode};
+    use crate::event::{AgentDefined, DeviceProfile};
+    use crate::name::{HarnessName, Requirement};
+
+    let mut scene = Scene::new();
+    let item = scene.submitted("standard");
+    assert_eq!(scene.state.unstaffed_reviews(), [item], "nobody is hosted");
+
+    let reviewer = AgentDefined {
+        name: AgentName::new("reviewer").unwrap(),
+        harness: HarnessName::new("opencode").unwrap(),
+        model: None,
+        capabilities: ["review", "strong-model"]
+            .into_iter()
+            .map(|name| Requirement::new(name).unwrap())
+            .collect(),
+        lanes: vec![],
+        autonomy: Autonomy {
+            start: StartMode::Auto,
+            ..Autonomy::default()
+        },
+    };
+    scene.apply(EventBody::AgentDefined(reviewer));
+    assert_eq!(
+        scene.state.unstaffed_reviews(),
+        [item],
+        "defined, not hosted"
+    );
+
+    scene.apply(EventBody::DeviceProfile(DeviceProfile {
+        name: "laptop".into(),
+        hardware: String::new(),
+        agents: [(AgentName::new("reviewer").unwrap(), 1)].into(),
+        max_sessions: 1,
+    }));
+    assert!(scene.state.unstaffed_reviews().is_empty());
+}

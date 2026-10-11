@@ -125,6 +125,7 @@ impl World {
             let sessions = self.sessions();
             if let Some(session) = sessions.first()
                 && session["status"] != "live"
+                && session["status"] != "parked"
             {
                 // The item moves after the end, so give that a moment.
                 tokio::time::sleep(Duration::from_millis(300)).await;
@@ -465,7 +466,7 @@ wf work submit
     assert_eq!(waiting["depends_on"].as_array().unwrap().len(), 1);
 
     tokio::time::sleep(Duration::from_millis(1_000)).await;
-    assert_eq!(world.sessions()[0]["status"], "live", "parked, not ended");
+    assert_eq!(world.sessions()[0]["status"], "parked");
 
     world.wf.run(&[
         "item",
