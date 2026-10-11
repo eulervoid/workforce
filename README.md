@@ -43,6 +43,11 @@ Submitted work is reviewed at the level the item names, then merged into the tar
 --agent <name>` runs one by hand. The harnesses named above have not all been run against this build
 yet: see *As built* in [docs/M2.md](docs/M2.md).
 
+Set `default_agent = "coder"` at the top of the policy (before any `[table]`) to omit `--agent`.
+Use `-a <name>` to override it. Missing item/session arguments open a picker at a terminal;
+stop offers local live sessions, permission commands offer pending requests, and watch offers
+sessions with a local transcript.
+
 ## Several machines
 ```sh
 # laptop, where `wf init` ran (it holds your principal key)

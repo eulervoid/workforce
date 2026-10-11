@@ -207,6 +207,35 @@ fn start_session(world: &World, item: &str) -> String {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn manual_start_uses_the_policy_agent_unless_overridden() {
+    let world = World::agents(&[("coder", "say default\n"), ("other", "say override\n")]).await;
+    let item = world.wf.add(&["--title", "Default agent"]);
+    let error = world.wf.fail(&["session", "start", short(&item)]);
+    assert!(error.contains("default_agent"), "{error}");
+    assert!(world.sessions().is_empty());
+
+    let policy = world.wf.run(&["policy", "show"]);
+    let path = world.wf.root.path().join("policy.toml");
+    std::fs::write(&path, format!("default_agent = \"coder\"\n{policy}")).unwrap();
+    world.wf.run(&["policy", "apply", path.to_str().unwrap()]);
+    let started = world.wf(&["session", "start", short(&item)]);
+    let session = world.wf(&["session", "show", started["event"].as_str().unwrap()]);
+    assert!(
+        session["agent"].as_str().unwrap().contains("coder"),
+        "{session}"
+    );
+
+    let other_item = world.wf.add(&["--title", "Override agent"]);
+    let started = world.wf(&["session", "start", short(&other_item), "-a", "other"]);
+    let session = world.wf(&["session", "show", started["event"].as_str().unwrap()]);
+    assert!(
+        session["agent"].as_str().unwrap().contains("other"),
+        "{session}"
+    );
+}
+
+
+#[tokio::test(flavor = "multi_thread")]
 async fn submitted_work_without_review_is_merged_and_the_item_is_done() {
     let script = "\
 say hello

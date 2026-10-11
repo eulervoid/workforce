@@ -41,7 +41,7 @@ pub fn session(
             emit(json, &shown, render::session)
         }
         SessionCommand::Stop { session } => {
-            let id = choose_session(workspace, mode, session, Which::Live)?;
+            let id = choose_session(workspace, mode, session, Which::LocalLive)?;
             workspace.end_session(id, Finish::Stop)?;
             emit(
                 json,
@@ -72,7 +72,7 @@ fn answer(
     session: Option<String>,
     answer: Answer,
 ) -> anyhow::Result<()> {
-    let id = choose_session(workspace, mode, session, Which::Live)?;
+    let id = choose_session(workspace, mode, session, Which::Permission)?;
     let held = workspace.answer_permission(id, answer)?;
     let verb = match answer {
         Answer::Allow => "allowed",
@@ -92,7 +92,9 @@ fn answer(
 /// Which sessions a picker offers.
 #[derive(Clone, Copy)]
 enum Which {
-    Live,
+    LocalLive,
+    Permission,
+    Transcript,
     Any,
 }
 
@@ -113,17 +115,23 @@ fn pick_session(workspace: &Workspace, mode: Mode, which: Which) -> anyhow::Resu
         bail!("missing session; pass a session id, or run at a terminal to pick one");
     }
     let state = workspace.state();
-    let live: std::collections::HashSet<String> = state
+    let permissions = match which {
+        Which::Permission => workspace.held_permissions(),
+        Which::LocalLive | Which::Transcript | Which::Any => Vec::new(),
+    };
+    let eligible: std::collections::HashSet<String> = state
         .sessions()
-        .filter(|session| session.is_live())
+        .filter(|session| match which {
+            Which::LocalLive => session.is_live() && session.device() == workspace.device_key(),
+            Which::Permission => permissions.iter().any(|held| held.session == session.id()),
+            Which::Transcript => transcript_path(workspace, session.id()).is_file(),
+            Which::Any => true,
+        })
         .map(|session| session.id().to_base32())
         .collect();
     let choices = view::session_views(state)
         .iter()
-        .filter(|view| match which {
-            Which::Live => live.contains(&view.id),
-            Which::Any => true,
-        })
+        .filter(|view| eligible.contains(&view.id))
         .map(|view| Choice {
             value: view.id.clone(),
             label: render::session_choice(view),
@@ -140,7 +148,7 @@ fn choose_session_or_item(
     given: Option<String>,
 ) -> anyhow::Result<SessionId> {
     let Some(text) = given else {
-        return pick_session(workspace, mode, Which::Any);
+        return pick_session(workspace, mode, Which::Transcript);
     };
     let state = workspace.state();
     match state.resolver().session(&text) {
@@ -170,12 +178,6 @@ fn start(
     if args.watch && json {
         bail!("`--watch` has no --json output; the transcript is JSON lines");
     }
-    let item = choose_item(workspace, mode, args.item, Scope::Live)?;
-    let (file, _) = workspace::find_workforce(cwd)?;
-    let repository = file
-        .parent()
-        .ok_or_else(|| anyhow!("the workforce file has no directory"))?
-        .to_path_buf();
     let agent = match args.agent {
         Some(agent) => agent,
         None => workspace
@@ -186,6 +188,12 @@ fn start(
                 anyhow!("missing --agent; pass one, or set `default_agent` in the policy")
             })?,
     };
+    let item = choose_item(workspace, mode, args.item, Scope::Live)?;
+    let (file, _) = workspace::find_workforce(cwd)?;
+    let repository = file
+        .parent()
+        .ok_or_else(|| anyhow!("the workforce file has no directory"))?
+        .to_path_buf();
     let session = workspace.start_session(agent.clone(), item, &repository)?;
     emit(
         json,
