@@ -30,10 +30,13 @@ wf item add --title "Parse durations in policy" --review standard
 wf daemon &                      # starts the agents on what is ready, and merges what is approved
 wf session list                  # live and finished sessions
 wf session watch <item>          # follow the transcript of the latest session on an item
+wf watch                         # events as they arrive; answer what waits on you right there
 wf inbox                         # what waits on you: blockers, reviews, merges, permission requests
 wf session allow <session>       # or `deny`, for a permission request an agent is waiting on
 wf review <item> --approve       # your step of a review level that has one
-wf item diff <item>              # what the work changes, as a review sees it
+wf item diff <item> [--stat]     # the work, through git: your pager and delta apply
+wf item checkout <item>          # the main checkout on the work, detached; `checkout -` goes back
+cd $(wf item path <item>)        # the item's worktree
 ```
 A session runs one agent on one item in its own git worktree and branch (`wf/<item>`), started by the
 daemon over ACP (`opencode acp`, `claude-agent-acp`, `codex-acp`, `gemini --experimental-acp`). Inside a
@@ -55,6 +58,36 @@ plans, and unified diffs supplied by the agent. Tool output and diffs are capped
 block; use `--full` for everything. Use `--raw` for unrendered markdown with plain, color-free
 layout. Both options also work with `session start --watch`. Markdown is buffered until a
 paragraph or event boundary; raw mode streams text chunks immediately.
+
+## Permission requests
+An agent with `--permissions ask` asks before its harness runs a tool. The request goes through the
+deciders of this machine's config, `~/.config/workforce/config.toml` (or `$XDG_CONFIG_HOME`), in
+their order; what all of them pass on waits for you in `wf watch` and `wf inbox`. Without a config,
+the built-in rules decide alone: a session may run its own `wf` commands.
+```toml
+[permissions]
+guidance = "Allow reading anything and writing in the worktree. Ask about the network."
+
+[[permissions.decider]]
+kind = "rules"                   # built in: a session's own `wf` commands
+
+[[permissions.decider]]
+kind = "model"                   # a decision model over the System One API, such as Jev
+url = "https://openrouter.ai/api/v1/systemone"
+model = "typesafe/jev-1.13"
+api_key_env = "OPENROUTER_API_KEY"
+question = { noul = { allow_above = 0.95, deny_below = 0.05 } }   # or { choice = { min_confidence = 0.8 } }
+
+[[permissions.decider]]
+kind = "hook"                    # any program: the request as JSON on stdin,
+command = ["my-judge"]           # `{"permission": "allow" | "deny" | "ask", "reason": ...}` on stdout
+
+[[permissions.decider]]
+kind = "agent"                   # an agent of the workforce, in a harness session the daemon keeps
+agent = "judge"
+```
+`wf permissions test --command "cargo test"` runs the chain without a session; the transcript of a
+session says who decided each request and why.
 
 ## Several machines
 ```sh
