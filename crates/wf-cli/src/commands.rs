@@ -438,6 +438,7 @@ fn item(
                     lane: args.lane,
                     labels: args.labels.into_iter().collect(),
                     requires: args.requires.into_iter().collect(),
+                    review: args.review,
                 },
             };
             let has_priorities = workspace
@@ -464,7 +465,7 @@ fn item(
                 lane: draft.lane,
                 labels: draft.labels.into_iter().collect(),
                 requires: draft.requires.into_iter().collect(),
-                review: None,
+                review: draft.review,
             }))?;
             let id = ItemId::from(event.id());
             let state = workspace.state();
@@ -696,6 +697,12 @@ fn edit(
         }
         if let Some(lane) = args.lane {
             draft.lane = Some(lane);
+        }
+        if let Some(review) = args.review {
+            draft.review = Some(review);
+        }
+        if args.no_review {
+            draft.review = None;
         }
         draft.labels.extend(args.add_labels);
         for label in &args.remove_labels {

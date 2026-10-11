@@ -484,6 +484,8 @@ pub struct ItemDetail {
     pub created: String,
     pub updated: String,
     pub lane: Option<String>,
+    /// The review level the item needs: its own, or its type's default.
+    pub review: Option<String>,
     pub labels: Vec<String>,
     pub requires: Vec<String>,
     pub depends_on: Vec<LinkView>,
@@ -609,6 +611,7 @@ pub fn item_detail(
         created: timestamp(item.created()),
         updated: timestamp(item.updated()),
         lane: item.effective_lane(policy).map(ToString::to_string),
+        review: item.effective_review(policy).map(ToString::to_string),
         labels: item.labels().values().map(ToString::to_string).collect(),
         requires: item.requires().values().map(ToString::to_string).collect(),
         depends_on,

@@ -1132,3 +1132,30 @@ mod work {
         assert!(!output.status.success(), "--done needs --step");
     }
 }
+
+#[test]
+fn items_name_a_review_level_from_the_policy() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    let task = wf.add(&["--title", "Careful", "--review", "standard"]);
+    let review = |wf: &Sandbox| wf.json(&["item", "show", short(&task)])["review"].clone();
+    assert_eq!(review(&wf), "standard");
+    assert!(
+        wf.run(&["item", "show", short(&task)])
+            .contains("review=standard")
+    );
+
+    wf.run(&["item", "edit", short(&task), "--review", "critical"]);
+    assert_eq!(review(&wf), "critical");
+    wf.run(&["item", "edit", short(&task), "--no-review"]);
+    assert_eq!(review(&wf), Value::Null);
+
+    let message = wf.fail(&["item", "add", "--title", "x", "--review", "ghost"]);
+    assert!(message.contains("no review level `ghost`"), "{message}");
+    let message = wf.fail(&["item", "edit", short(&task), "--review", "ghost"]);
+    assert!(message.contains("no review level `ghost`"), "{message}");
+    let message = wf.fail(&[
+        "item", "add", "--type", "distill", "--title", "x", "--review", "light",
+    ]);
+    assert!(message.contains("no blocked state"), "{message}");
+}

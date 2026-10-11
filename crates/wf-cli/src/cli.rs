@@ -5,7 +5,9 @@ use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
 use wf_core::autonomy::{Autonomy, PermissionMode, StartMode};
 use wf_core::graph::Readiness;
 use wf_core::item::Priority;
-use wf_core::name::{AgentName, HarnessName, Label, LaneName, Requirement, StateName, TypeName};
+use wf_core::name::{
+    AgentName, HarnessName, Label, LaneName, Requirement, ReviewName, StateName, TypeName,
+};
 
 #[derive(Parser)]
 #[command(
@@ -379,6 +381,9 @@ pub struct ItemAddArgs {
     pub labels: Vec<Label>,
     #[arg(long = "requires")]
     pub requires: Vec<Requirement>,
+    /// The review level the work needs, a name from the policy's `[[review]]` list.
+    #[arg(long)]
+    pub review: Option<ReviewName>,
     /// Open the item in the editor before creating it, filled in with the flags given.
     #[arg(long)]
     pub edit: bool,
@@ -466,6 +471,12 @@ pub struct ItemEditArgs {
     pub add_requires: Vec<Requirement>,
     #[arg(long = "remove-requires")]
     pub remove_requires: Vec<Requirement>,
+    /// The review level the work needs, a name from the policy's `[[review]]` list.
+    #[arg(long, conflicts_with = "no_review")]
+    pub review: Option<ReviewName>,
+    /// Drop the item's own review level, so its type's default applies.
+    #[arg(long)]
+    pub no_review: bool,
 }
 
 impl ItemEditArgs {
@@ -474,6 +485,8 @@ impl ItemEditArgs {
             || self.body.is_some()
             || self.priority.is_some()
             || self.lane.is_some()
+            || self.review.is_some()
+            || self.no_review
             || !self.add_labels.is_empty()
             || !self.remove_labels.is_empty()
             || !self.add_requires.is_empty()

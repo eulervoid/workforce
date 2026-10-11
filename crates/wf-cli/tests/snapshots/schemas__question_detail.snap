@@ -29,6 +29,7 @@ expression: "Envelope::new(&detail)"
     "created": "1970-01-01T00:00:04Z",
     "updated": "1970-01-01T00:00:04Z",
     "lane": "supervision",
+    "review": null,
     "labels": [],
     "requires": [],
     "depends_on": [],

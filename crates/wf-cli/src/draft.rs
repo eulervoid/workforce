@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use wf_core::crdt::SetChange;
 use wf_core::event::Change;
 use wf_core::item::{Item, Priority};
-use wf_core::name::{Label, LaneName, Requirement, TypeName};
+use wf_core::name::{Label, LaneName, Requirement, ReviewName, TypeName};
 
 const FENCE: &str = "+++";
 
@@ -22,6 +22,8 @@ pub struct Draft {
     pub lane: Option<LaneName>,
     pub labels: BTreeSet<Label>,
     pub requires: BTreeSet<Requirement>,
+    /// The item's own review level, not the one it gets from its type.
+    pub review: Option<ReviewName>,
 }
 
 /// Everything in a draft except the body, which is the markdown after the front matter.
@@ -39,6 +41,8 @@ struct FrontMatter {
     labels: BTreeSet<Label>,
     #[serde(default)]
     requires: BTreeSet<Requirement>,
+    #[serde(default)]
+    review: Option<ReviewName>,
 }
 
 impl Draft {
@@ -50,6 +54,7 @@ impl Draft {
             lane: item.lane().cloned(),
             labels: item.labels().values().cloned().collect(),
             requires: item.requires().values().cloned().collect(),
+            review: item.review().cloned(),
         }
     }
 
@@ -74,12 +79,16 @@ impl Draft {
             lane: self.lane.clone(),
             labels: self.labels.clone(),
             requires: self.requires.clone(),
+            review: self.review.clone(),
         })?;
         if self.priority.is_none() {
             front_matter.push_str("# priority = \"P2\"  # P0, P1, P2 or P3\n");
         }
         if self.lane.is_none() {
             front_matter.push_str("# lane = \"default\"\n");
+        }
+        if self.review.is_none() {
+            front_matter.push_str("# review = \"standard\"\n");
         }
         Ok(format!(
             "{FENCE}\n{front_matter}{FENCE}\n\n{}\n",
@@ -116,6 +125,7 @@ impl Draft {
             lane: front_matter.lane,
             labels: front_matter.labels,
             requires: front_matter.requires,
+            review: front_matter.review,
         };
         Ok((front_matter.item_type, draft))
     }
@@ -135,6 +145,9 @@ impl Draft {
         }
         if self.lane != current.lane {
             changes.push(Change::Lane(self.lane.clone()));
+        }
+        if self.review != current.review {
+            changes.push(Change::Review(self.review.clone()));
         }
         for label in self.labels.difference(&current.labels) {
             changes.push(Change::Labels(SetChange::Add(label.clone())));
@@ -252,6 +265,7 @@ mod tests {
                 lane: None,
                 labels: BTreeSet::new(),
                 requires: BTreeSet::new(),
+                review: None,
             },
         };
         let text = new.to_markdown().unwrap();
