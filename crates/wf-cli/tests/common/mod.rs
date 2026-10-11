@@ -29,6 +29,12 @@ impl Sandbox {
             std::fs::write(&path, "#!/bin/sh\n").unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
         }
+        // Commands that show or check out work run git.
+        let git = std::env::split_paths(&std::env::var_os("PATH").unwrap())
+            .map(|directory| directory.join("git"))
+            .find(|path| path.is_file())
+            .expect("git is installed");
+        std::os::unix::fs::symlink(git, bin.join("git")).unwrap();
         Self {
             root,
             repository,

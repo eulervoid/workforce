@@ -1077,6 +1077,45 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_work_of_an_item_can_be_read_and_checked_out() {
+    let script = "\
+sh echo four >> file.txt && git commit -q -am four
+wf work release --note later
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Adds a line"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+
+    let stat = world.wf.run(&["item", "diff", short(&item), "--stat"]);
+    assert!(stat.contains("file.txt | 1 +"), "{stat}");
+    let diff = world
+        .wf
+        .json(&["item", "diff", short(&item), "--", "file.txt"]);
+    assert!(diff["diff"].as_str().unwrap().contains("+four"), "{diff}");
+
+    let path = world.wf.run(&["item", "path", short(&item)]);
+    assert!(
+        std::path::Path::new(path.trim()).join("file.txt").is_file(),
+        "{path}"
+    );
+
+    let checkout = world.wf.json(&["item", "checkout", short(&item)]);
+    let head = git(&world.wf.repository, &["rev-parse", "HEAD"]);
+    assert_eq!(checkout["commit"], head);
+    assert!(
+        std::fs::read_to_string(world.wf.repository.join("file.txt"))
+            .unwrap()
+            .contains("four")
+    );
+    world.wf.run(&["item", "checkout", "-"]);
+    assert_eq!(
+        git(&world.wf.repository, &["rev-parse", "--abbrev-ref", "HEAD"]),
+        "main"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn running_wf_is_allowed_without_asking_anyone() {
     let script = "\
 permission wf item show {item} 2>&1 | head -40

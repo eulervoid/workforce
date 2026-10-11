@@ -39,6 +39,8 @@ pub enum VcsError {
     NoBranch(String),
     #[error("{} is not a git repository", .0.display())]
     NotARepository(PathBuf),
+    #[error("{} has uncommitted changes; commit or stash them first", .0.display())]
+    DirtyCheckout(PathBuf),
 }
 
 /// What happened when reviewed work was merged into the target branch.
@@ -73,8 +75,19 @@ pub trait VcsAdapter {
     /// How many commits `commit` has that `target` does not.
     fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError>;
 
-    /// What `commit` changes relative to where it left `target`: `git diff <target>...<commit>`.
-    fn diff(&self, target: &str, commit: CommitId) -> Result<String, VcsError>;
+    /// What `commit` changes relative to where it left `target`: `git diff <target>...<commit>`,
+    /// with `args` added, such as `--stat` or `-- src/`.
+    fn diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<String, VcsError>;
+
+    /// The same diff, written to the terminal by git itself, so its pager and diff settings
+    /// apply as for `git diff`.
+    fn show_diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<(), VcsError>;
+
+    /// Checks `commit` out, detached, in the main checkout, which has to be clean.
+    fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError>;
+
+    /// Goes back to what the main checkout had before the last checkout: `git checkout -`.
+    fn checkout_previous(&self) -> Result<(), VcsError>;
 
     /// Merges `commit` into `target` with a merge commit that has both as parents.
     fn merge(

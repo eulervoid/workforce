@@ -1235,7 +1235,7 @@ async fn review_package(
     };
     let (repository, target) = (run.repository.clone(), run.target.clone());
     let diff = match commit {
-        Some(commit) => blocking(move || GitCli::open(&repository)?.diff(&target, commit))
+        Some(commit) => blocking(move || GitCli::open(&repository)?.diff(&target, commit, &[]))
             .await
             .ok()
             .and_then(Result::ok)

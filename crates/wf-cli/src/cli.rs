@@ -482,7 +482,20 @@ pub enum ItemCommand {
     },
     Link(ItemLinkArgs),
     /// Show what the work of an item changes in the repository, as a review sees it.
+    /// Show the work of an item, through git: its pager, colors and diff settings apply.
     Diff {
+        item: Option<String>,
+        /// Passed on to `git diff`, such as `--stat` or `-- src/`.
+        #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
+        git_args: Vec<String>,
+    },
+    /// Check out the work of an item in the main checkout, detached; `-` goes back.
+    Checkout {
+        /// The item, or `-` for where the checkout was before.
+        item: Option<String>,
+    },
+    /// Print the worktree of an item, as in `cd $(wf item path k3f7)`.
+    Path {
         item: Option<String>,
     },
     Archive {

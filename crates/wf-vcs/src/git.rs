@@ -338,9 +338,61 @@ impl VcsAdapter for GitCli {
             })
     }
 
-    fn diff(&self, target: &str, commit: CommitId) -> Result<String, VcsError> {
+    fn diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<String, VcsError> {
         let range = format!("refs/heads/{target}...{commit}");
-        self.succeed(["diff", &range])
+        let finished = Self::run_in(
+            &self.repository,
+            ["diff", range.as_str()]
+                .into_iter()
+                .chain(args.iter().map(String::as_str)),
+        )?;
+        if finished.success {
+            Ok(finished.stdout)
+        } else {
+            Err(VcsError::Git {
+                command: format!("diff {range} {}", args.join(" ")),
+                stderr: finished.stderr.trim().to_string(),
+            })
+        }
+    }
+
+    fn show_diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<(), VcsError> {
+        let range = format!("refs/heads/{target}...{commit}");
+        // The user's environment stays as it is, so the pager, colors and locale are theirs.
+        let status = Command::new("git")
+            .arg("diff")
+            .arg(&range)
+            .args(args)
+            .current_dir(&self.repository)
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .status()
+            .map_err(VcsError::Spawn)?;
+        if status.success() {
+            Ok(())
+        } else {
+            Err(VcsError::Git {
+                command: format!("diff {range} {}", args.join(" ")),
+                stderr: format!("exited with {status}"),
+            })
+        }
+    }
+
+    fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError> {
+        if !self.is_clean(&self.repository)? {
+            return Err(VcsError::DirtyCheckout(self.repository.clone()));
+        }
+        self.succeed(["checkout", "--quiet", "--detach", &commit.to_string()])?;
+        Ok(())
+    }
+
+    fn checkout_previous(&self) -> Result<(), VcsError> {
+        if !self.is_clean(&self.repository)? {
+            return Err(VcsError::DirtyCheckout(self.repository.clone()));
+        }
+        self.succeed(["checkout", "--quiet", "-"])?;
+        Ok(())
     }
 
     fn merge(
@@ -566,9 +618,33 @@ mod tests {
         let main = repo.directory();
         repo.write(&main, "other.txt", "elsewhere\n");
         repo.commit(&main, "unrelated");
-        let diff = repo.git.diff("main", commit).unwrap();
+        let diff = repo.git.diff("main", commit, &[]).unwrap();
         assert!(diff.contains("+four"), "{diff}");
         assert!(!diff.contains("elsewhere"), "{diff}");
+        let stat = repo.git.diff("main", commit, &["--stat".into()]).unwrap();
+        assert!(stat.contains("file.txt | 1 +"), "{stat}");
+    }
+
+    #[test]
+    fn the_main_checkout_goes_to_a_commit_and_back() {
+        let repo = TestRepo::new();
+        let commit = repo.work("wf/k3f9", "file.txt", "one\ntwo\nthree\nfour\n");
+        let main = repo.directory();
+        repo.git.checkout_detached(commit).unwrap();
+        assert_eq!(
+            git_in(&main, &["rev-parse", "HEAD"]).trim(),
+            commit.to_string()
+        );
+        repo.git.checkout_previous().unwrap();
+        assert_eq!(
+            git_in(&main, &["rev-parse", "--abbrev-ref", "HEAD"]).trim(),
+            "main"
+        );
+        repo.write(&main, "file.txt", "changed\n");
+        assert!(matches!(
+            repo.git.checkout_detached(commit),
+            Err(VcsError::DirtyCheckout(_))
+        ));
     }
 
     #[test]
