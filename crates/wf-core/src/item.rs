@@ -52,7 +52,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::body::{Body, StepId};
 use crate::crdt::{AddWinsSet, Lww, Stamp};
 use crate::hlc::Hlc;
-use crate::id::{EventId, ItemId};
+use crate::id::{EventId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::name::{Label, LaneName, Requirement, ReviewName, StateName, TypeName};
 use crate::policy::{Policy, StateCategory};
@@ -63,6 +63,21 @@ pub enum NoteKind {
     Comment,
     /// The note attached to a state transition.
     Transition,
+    /// A report by a session of the item. The step may no longer exist in the body.
+    Report {
+        session: SessionId,
+        step: Option<StepId>,
+    },
+}
+
+impl NoteKind {
+    pub fn name(&self) -> &'static str {
+        match self {
+            NoteKind::Comment => "comment",
+            NoteKind::Transition => "transition",
+            NoteKind::Report { .. } => "report",
+        }
+    }
 }
 
 /// What the fold keeps of a comment or transition note. The text itself stays in the log and is

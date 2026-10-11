@@ -302,3 +302,187 @@ mod actors {
         );
     }
 }
+
+mod reports {
+    use super::*;
+    use crate::body::StepId;
+    use crate::event::{EventBody, SessionStarted};
+    use crate::item::NoteKind;
+    use crate::name::AgentName;
+    use crate::session::SessionRole;
+    use crate::validate::PolicyViolation;
+
+    const STEP: &str = "pick storage";
+
+    /// A coder working a task with one step, and the session it holds.
+    fn working() -> (Fixture, State, ItemId, SessionId) {
+        let fixture = Fixture::new(2);
+        let mut state = fixture.state();
+        fixture.apply(&mut state, 0, 2_000, define_agent("coder"));
+        let task = item_id(&fixture.apply(
+            &mut state,
+            0,
+            2_001,
+            create_with_body("task", "work", &format!("- [ ] {STEP}\n")),
+        ));
+        let session =
+            session_id(&fixture.apply(&mut state, 0, 3_000, start_session("coder", task)));
+        (fixture, state, task, session)
+    }
+
+    fn write(
+        fixture: &Fixture,
+        state: &mut State,
+        session: SessionId,
+        now_ms: u64,
+        body: EventBody,
+    ) -> Event {
+        let actor = fixture.agent_actor("coder", session);
+        let event = fixture.author_as(state, 0, actor, now_ms, body);
+        state.receive(event.clone(), Trust::Untrusted).unwrap();
+        event
+    }
+
+    fn reports(state: &State, task: ItemId) -> Vec<NoteKind> {
+        let ItemView::Live(item) = state.item(task).unwrap() else {
+            panic!("live")
+        };
+        item.notes()
+            .values()
+            .map(|note| note.kind)
+            .filter(|kind| matches!(kind, NoteKind::Report { .. }))
+            .collect()
+    }
+
+    #[test]
+    fn a_report_belongs_to_the_item_of_its_session() {
+        let (fixture, mut state, task, session) = working();
+        let step = StepId::of(STEP);
+        write(
+            &fixture,
+            &mut state,
+            session,
+            3_001,
+            report(session, "chose redb", Some(step)),
+        );
+        write(
+            &fixture,
+            &mut state,
+            session,
+            3_002,
+            report(session, "halfway", None),
+        );
+        let kinds = reports(&state, task);
+        assert_eq!(kinds.len(), 2);
+        assert!(kinds.contains(&NoteKind::Report {
+            session,
+            step: Some(step)
+        }));
+        assert!(kinds.contains(&NoteKind::Report {
+            session,
+            step: None
+        }));
+    }
+
+    #[test]
+    fn a_report_for_an_unknown_session_is_refused() {
+        let (fixture, mut state, _, _) = working();
+        let missing = SessionId::from(crate::id::EventId::of(b"missing"));
+        let event = fixture.author(&state, 0, 3_001, report(missing, "ghost", None));
+        assert_eq!(
+            state.receive(event, Trust::Untrusted).unwrap_err(),
+            Invalid::UnknownSession(missing)
+        );
+    }
+
+    #[test]
+    fn a_report_outlives_the_step_it_names() {
+        let (fixture, mut state, task, session) = working();
+        let step = StepId::of(STEP);
+        write(
+            &fixture,
+            &mut state,
+            session,
+            3_001,
+            report(session, "chose redb", Some(step)),
+        );
+        fixture.apply(
+            &mut state,
+            0,
+            3_002,
+            edit(
+                task,
+                crate::event::Change::Body("- [ ] pick a database\n".into()),
+            ),
+        );
+        let ItemView::Live(item) = state.item(task).unwrap() else {
+            panic!("live")
+        };
+        assert!(item.body().step(step).is_none());
+        assert_eq!(reports(&state, task).len(), 1);
+    }
+
+    #[test]
+    fn only_the_session_itself_reports() {
+        let (fixture, mut state, task, session) = working();
+        let other = session_id(&fixture.apply(&mut state, 0, 3_002, start_session("coder", task)));
+        let actor = fixture.agent_actor("coder", session);
+        let device = fixture.devices[0].key();
+        assert_eq!(
+            state.check_actor(device, &actor, &report(other, "not mine", None)),
+            Err(PolicyViolation::ReportNotFromItsSession)
+        );
+        assert_eq!(
+            state.check_actor(device, &actor, &report(session, "mine", None)),
+            Ok(())
+        );
+        assert_eq!(
+            state.check_actor(
+                device,
+                &fixture.founder_actor(),
+                &report(session, "from a human", None)
+            ),
+            Err(PolicyViolation::ReportNotFromItsSession)
+        );
+    }
+
+    #[test]
+    fn a_step_must_exist_when_the_report_is_written() {
+        let (_, state, _, session) = working();
+        assert_eq!(
+            state.check_policy(&report(session, "ok", Some(StepId::of(STEP)))),
+            Ok(())
+        );
+        let missing = StepId::of("no such step");
+        assert_eq!(
+            state.check_policy(&report(session, "bad", Some(missing))),
+            Err(PolicyViolation::UnknownStep(missing))
+        );
+    }
+
+    #[test]
+    fn a_review_session_reports_without_steps() {
+        let (fixture, mut state, task, _) = working();
+        let commit = crate::session::CommitId::Git(
+            "00112233445566778899aabbccddeeff00112233".parse().unwrap(),
+        );
+        let reviewer = session_id(&fixture.apply(
+            &mut state,
+            0,
+            3_003,
+            EventBody::SessionStarted(SessionStarted {
+                agent: AgentName::new("coder").unwrap(),
+                item: task,
+                role: SessionRole::Review { commit },
+            }),
+        ));
+        assert_eq!(
+            state.check_policy(&report(reviewer, "looks fine", None)),
+            Ok(())
+        );
+        assert_eq!(
+            state.check_policy(&report(reviewer, "ticking", Some(StepId::of(STEP)))),
+            Err(PolicyViolation::StepInReviewReport)
+        );
+    }
+}

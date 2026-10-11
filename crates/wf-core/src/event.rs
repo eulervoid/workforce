@@ -206,6 +206,16 @@ pub struct Merged {
     pub commit: CommitId,
 }
 
+/// What the working agent says about what it is doing and why. The item is the session's. `step`
+/// names the step it is about by the hash of its text; the link is not checked when read, so it
+/// dangles once the step is edited.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Report {
+    pub session: SessionId,
+    pub note: String,
+    pub step: Option<StepId>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum EventBody {
     Genesis(Signed<Genesis>),
@@ -226,6 +236,7 @@ pub enum EventBody {
     SessionEnded(SessionEnded),
     Review(Review),
     Merged(Merged),
+    Report(Report),
     /// A body from a newer peer. Stored and relayed, ignored by the fold.
     Unknown {
         tag: u16,
@@ -252,6 +263,7 @@ mod tag {
     pub const SESSION_ENDED: u16 = 21;
     pub const REVIEW: u16 = 22;
     pub const MERGED: u16 = 23;
+    pub const REPORT: u16 = 24;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -283,6 +295,7 @@ impl EventBody {
             EventBody::SessionEnded(_) => "SessionEnded",
             EventBody::Review(_) => "Review",
             EventBody::Merged(_) => "Merged",
+            EventBody::Report(_) => "Report",
             EventBody::Unknown { .. } => "Unknown",
         }
     }
@@ -307,6 +320,7 @@ impl EventBody {
             EventBody::SessionEnded(body) => (tag::SESSION_ENDED, encoding::encode(body)?),
             EventBody::Review(body) => (tag::REVIEW, encoding::encode(body)?),
             EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
+            EventBody::Report(body) => (tag::REPORT, encoding::encode(body)?),
             EventBody::Unknown { tag, payload } => (*tag, payload.clone()),
         };
         Ok(RawBody { tag, payload })
@@ -333,6 +347,7 @@ impl EventBody {
             tag::SESSION_ENDED => EventBody::SessionEnded(encoding::decode(payload)?),
             tag::REVIEW => EventBody::Review(encoding::decode(payload)?),
             tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
+            tag::REPORT => EventBody::Report(encoding::decode(payload)?),
             tag => EventBody::Unknown {
                 tag,
                 payload: raw.payload,
@@ -542,16 +557,22 @@ mod tests {
                 reviewed: commit,
                 commit,
             }),
+            EventBody::Report(Report {
+                session,
+                note: "chose redb".into(),
+                step: Some(StepId::of("pick storage")),
+            }),
         ];
         let encoded: Vec<String> = bodies.iter().map(golden_body_bytes).collect();
         assert_eq!(encoded, GOLDEN_SESSION_BODIES);
     }
 
-    const GOLDEN_SESSION_BODIES: [&str; 4] = [
+    const GOLDEN_SESSION_BODIES: [&str; 5] = [
         "143e05636f64657220010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
         "15392002020202020202020202020202020202020202020202020202020202020202020001001400112233445566778899aabbccddeeff00112233",
         "163f200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff001122330101057465737473",
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
+        "18352002020202020202020202020202020202020202020202020202020202020202020a63686f7365207265646201b67b3441c138056f",
     ];
 
     const GOLDEN_LEN: usize = 1746;

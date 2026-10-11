@@ -1,11 +1,12 @@
 //! Deterministic fixtures for tests in this and downstream crates (feature `testing`).
 
 use crate::autonomy::Autonomy;
+use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::event::{
     AgentDefined, Change, Comment, DeviceBound, Event, EventBody, EventBuilder, ForkPoint, Genesis,
     InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemRef, ItemTransitioned,
-    Link, PolicySet, SessionEnded, SessionStarted,
+    Link, PolicySet, Report, SessionEnded, SessionStarted,
 };
 use crate::id::{ItemId, SessionId, WorkforceId};
 use crate::identity::{
@@ -311,4 +312,12 @@ pub fn start_session(agent: &str, item: ItemId) -> EventBody {
 
 pub fn end_session(session: SessionId, reason: EndReason) -> EventBody {
     EventBody::SessionEnded(SessionEnded { session, reason })
+}
+
+pub fn report(session: SessionId, note: &str, step: Option<StepId>) -> EventBody {
+    EventBody::Report(Report {
+        session,
+        note: note.into(),
+        step,
+    })
 }

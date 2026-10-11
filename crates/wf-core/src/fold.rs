@@ -188,6 +188,7 @@ impl State {
                     | EventBody::SessionEnded(_)
                     | EventBody::Review(_)
                     | EventBody::Merged(_)
+                    | EventBody::Report(_)
                     | EventBody::Unknown { .. }
             )
         {
@@ -326,6 +327,27 @@ impl State {
             }
             // Reviews and merges are folded with the review status (M2 items 7 and 8).
             EventBody::Review(_) | EventBody::Merged(_) => {}
+            EventBody::Report(report) => {
+                let item = workforce
+                    .sessions
+                    .get(&report.session)
+                    .and_then(|session| workforce.items.get_mut(&session.item));
+                if let Some(item) = item {
+                    item.touch(content.hlc);
+                    item.notes.insert(
+                        id,
+                        note_from(
+                            NoteKind::Report {
+                                session: report.session,
+                                step: report.step,
+                            },
+                            &content.actor,
+                            content.hlc,
+                            &report.note,
+                        ),
+                    );
+                }
+            }
             EventBody::ItemCreated(created) => {
                 let item_id = ItemId::from(id);
                 workforce.items.insert(

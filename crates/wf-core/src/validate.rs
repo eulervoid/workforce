@@ -17,6 +17,7 @@ use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, StateName, TypeName};
 use crate::policy::{Field, Policy, PolicyError, StateCategory};
+use crate::session::SessionRole;
 use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -154,6 +155,10 @@ pub enum PolicyViolation {
     SessionEndsAnother,
     #[error("a session cannot move its own item to a done state; it submits the work instead")]
     SessionFinishesItsItem,
+    #[error("a report is written by its own session")]
+    ReportNotFromItsSession,
+    #[error("a review session reports on the item, not on its steps")]
+    StepInReviewReport,
 }
 
 enum Admission {
@@ -474,6 +479,13 @@ impl State {
                     Err(Invalid::UnknownSession(ended.session))
                 }
             }
+            EventBody::Report(report) => {
+                if workforce.sessions.contains_key(&report.session) {
+                    Ok(())
+                } else {
+                    Err(Invalid::UnknownSession(report.session))
+                }
+            }
             EventBody::Review(crate::event::Review { item, .. })
             | EventBody::Merged(crate::event::Merged { item, .. }) => known_item(item),
             EventBody::ItemEdited(ItemEdited { item, .. })
@@ -574,11 +586,14 @@ impl State {
         actor: &Actor,
         body: &EventBody,
     ) -> Result<(), PolicyViolation> {
-        let Actor::Agent { session, .. } = actor else {
-            return Ok(());
-        };
         let Some(workforce) = &self.workforce else {
             return Ok(());
+        };
+        let Actor::Agent { session, .. } = actor else {
+            return match body {
+                EventBody::Report(_) => Err(PolicyViolation::ReportNotFromItsSession),
+                _ => Ok(()),
+            };
         };
         let folded = workforce
             .sessions
@@ -598,6 +613,9 @@ impl State {
             | EventBody::Merged(_) => Err(PolicyViolation::AgentCannotWrite(body.name())),
             EventBody::SessionEnded(ended) if ended.session != *session => {
                 Err(PolicyViolation::SessionEndsAnother)
+            }
+            EventBody::Report(report) if report.session != *session => {
+                Err(PolicyViolation::ReportNotFromItsSession)
             }
             EventBody::ItemTransitioned(transition) if transition.item == folded.item() => {
                 let policy = &workforce.policy.value().policy;
@@ -623,6 +641,7 @@ impl State {
             | EventBody::Comment(_)
             | EventBody::SessionEnded(_)
             | EventBody::Review(_)
+            | EventBody::Report(_)
             | EventBody::Unknown { .. } => Ok(()),
         }
     }
@@ -676,6 +695,27 @@ impl State {
             | EventBody::SessionEnded(_)
             | EventBody::Review(_)
             | EventBody::Merged(_) => Ok(()),
+            EventBody::Report(report) => {
+                let session = workforce
+                    .sessions
+                    .get(&report.session)
+                    .ok_or(PolicyViolation::UnknownSession(report.session))?;
+                let Some(step) = report.step else {
+                    return Ok(());
+                };
+                if matches!(session.role(), SessionRole::Review { .. }) {
+                    return Err(PolicyViolation::StepInReviewReport);
+                }
+                let has_step = workforce
+                    .items
+                    .get(&session.item())
+                    .is_some_and(|item| item.body().step(step).is_some());
+                if has_step {
+                    Ok(())
+                } else {
+                    Err(PolicyViolation::UnknownStep(step))
+                }
+            }
             EventBody::AgentDefined(defined) => defined.lanes.iter().try_for_each(known_lane),
             EventBody::ItemCreated(created) => {
                 let type_name = &created.item_type;

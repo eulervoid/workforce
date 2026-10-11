@@ -264,6 +264,16 @@ impl Simulation {
                     self.submit(device, end_session(session, reason));
                 }
             }
+            (14, _) if second % 4 == 1 => {
+                let sessions: Vec<_> = self.replicas[device]
+                    .sessions()
+                    .map(|session| session.id())
+                    .collect();
+                if !sessions.is_empty() {
+                    let session = sessions[usize::from(first) % sessions.len()];
+                    self.submit(device, report(session, &format!("report {second}"), None));
+                }
+            }
             (14, _) => match second % 3 {
                 0 => self.submit(device, define_agent("coder")),
                 1 => {
