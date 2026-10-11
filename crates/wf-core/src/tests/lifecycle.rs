@@ -53,14 +53,18 @@ impl Scene {
 fn a_work_session_moves_an_item_to_the_active_state_of_its_type() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
-    let question = scene.item(create("question", "why"));
+    let decision = scene.item(create("decision", "why"));
     let task_session = scene.start(task);
-    let question_session = scene.start(question);
+    let decision_session = scene.start(decision);
     assert_eq!(
         scene.state.start_move(task_session),
         Some((task, state_name("in_progress")))
     );
-    assert_eq!(scene.state.start_move(question_session), None);
+    assert_eq!(
+        scene.state.start_move(decision_session),
+        None,
+        "a decision has no active state"
+    );
 }
 
 #[test]
@@ -68,7 +72,7 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let reviewed = scene.item(create_reviewed("task", "careful", "standard"));
-    let question = scene.item(create("question", "why"));
+    let unreviewed = scene.item(create_reviewed("task", "finding", "none"));
     let submitted = EndReason::Submitted {
         commit: Some(commit()),
     };
@@ -91,19 +95,19 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     );
     scene.end(session, submitted);
 
-    let session = scene.start(question);
+    let session = scene.start(unreviewed);
     assert_eq!(
         after(&scene, session, EndReason::Submitted { commit: None }),
-        AfterEnd::MoveTo(state_name("answered"))
+        AfterEnd::MoveTo(state_name("done"))
     );
     scene.end(session, EndReason::Released);
 
-    let doubted = scene.item(create_reviewed("question", "unsure", "principal"));
+    let doubted = scene.item(create_reviewed("task", "unsure", "principal"));
     let session = scene.start(doubted);
     assert_eq!(
         after(&scene, session, EndReason::Submitted { commit: None }),
-        AfterEnd::MoveTo(state_name("needs_human")),
-        "an answer under review does not count as answered"
+        AfterEnd::MoveTo(state_name("in_review")),
+        "work without commits under review is not done yet"
     );
     scene.end(session, EndReason::Released);
 
@@ -122,7 +126,7 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
         );
     }
     assert_eq!(
-        after(&scene, blocked, EndReason::Blocked),
+        after(&scene, blocked, EndReason::Supervised),
         AfterEnd::Nothing
     );
 }
@@ -189,11 +193,11 @@ fn a_turn_parks_while_the_item_waits_on_a_dependency() {
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
     scene.apply(moved(task, "in_progress"));
-    let question = scene.item(create("question", "which database?"));
-    scene.apply(depends_on(task, question));
+    let first = scene.item(create("task", "pick a database"));
+    scene.apply(depends_on(task, first));
     assert_eq!(scene.state.turn_outcome(session, 0, 3), TurnOutcome::Park);
 
-    scene.apply(moved(question, "answered"));
+    scene.apply(moved(first, "done"));
     assert_eq!(
         scene.state.turn_outcome(session, 0, 3),
         TurnOutcome::Continue

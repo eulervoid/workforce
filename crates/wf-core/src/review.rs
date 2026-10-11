@@ -30,7 +30,7 @@ pub enum ReviewStatus {
 
 impl State {
     /// What the latest submitted work session of the item handed in, and when it ended: its
-    /// commit, or `None` when the branch had no commits, as for the answer to a question.
+    /// commit, or `None` when the branch had no commits, as for a finding that nothing has to change.
     pub fn submission(&self, item: ItemId) -> Option<(Option<CommitId>, Stamp)> {
         self.sessions()
             .filter(|session| session.item() == item && session.role() == SessionRole::Work)
@@ -40,7 +40,7 @@ impl State {
                     EndReason::Submitted { commit } => Some((commit, ended.stamp)),
                     EndReason::Reviewed
                     | EndReason::Released
-                    | EndReason::Blocked
+                    | EndReason::Supervised
                     | EndReason::TimedOut
                     | EndReason::Failed
                     | EndReason::Cancelled => None,
@@ -120,10 +120,10 @@ impl State {
             .collect()
     }
 
-    /// Items with an approved answer that wait in a blocked state to be finished: the answer was
+    /// Items with approved work that wait in a blocked state to be finished: the work was
     /// submitted without commits, so there is nothing to merge. An item that moved on after the
     /// submission was moved by someone, and is left where it is.
-    pub fn pending_answers(&self) -> Vec<ItemId> {
+    pub fn approved_without_commits(&self) -> Vec<ItemId> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };

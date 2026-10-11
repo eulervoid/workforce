@@ -5,7 +5,9 @@ mod run;
 mod transcript;
 
 pub use agent_client_protocol::{AcpAgentConfig, BoxFuture};
-pub use package::{CONTINUE, Dependency, Earlier, ReviewPackage, WorkPackage};
+pub use package::{
+    CONTINUE, Dependency, Earlier, ReviewPackage, SupervisePackage, WaitingBlocker, WorkPackage,
+};
 pub use run::{
     CancelHandle, Conversation, Error, Launch, PermissionMode, Permissions, StopReason, command_for,
 };

@@ -102,11 +102,26 @@ pub enum Replicated {
 impl Workspace {
     /// Uses the daemon when one is running, and opens the store otherwise.
     pub fn open(data: DataDir, start: &Path, refold: bool) -> anyhow::Result<Self> {
-        let (file, id) = find_workforce(start)?;
-        let named_by = file.clone();
+        // A session may run in an empty directory, without a workforce file to find.
+        let (file, id) = match std::env::var(WORKFORCE_VARIABLE) {
+            Ok(id) => (
+                find_workforce(start).ok().map(|(file, _)| file),
+                id.parse()
+                    .with_context(|| format!("{WORKFORCE_VARIABLE} is not a workforce id"))?,
+            ),
+            Err(_) => {
+                let (file, id) = find_workforce(start)?;
+                (Some(file), id)
+            }
+        };
+        let named_by = file.as_ref().map_or_else(
+            || WORKFORCE_VARIABLE.to_string(),
+            |file| file.display().to_string(),
+        );
         // The checkouts of sessions have the workforce file too, but they come and go.
         if let Some(repository) = file
-            .parent()
+            .as_deref()
+            .and_then(Path::parent)
             .filter(|directory| directory.join(".git").is_dir())
         {
             data.remember_repository(&id, repository);
@@ -116,10 +131,7 @@ impl Workspace {
             .ok_or_else(|| anyhow!("no device key; this machine has not joined the workforce"))?;
         if !refold && let Some(mut client) = DaemonClient::connect(&data.daemon_socket())? {
             let state = client.state(id).with_context(|| {
-                format!(
-                    "the daemon cannot serve workforce {id}, named by {}",
-                    named_by.display()
-                )
+                format!("the daemon cannot serve workforce {id}, named by {named_by}")
             })?;
             return Self::bound(
                 Source::Daemon {

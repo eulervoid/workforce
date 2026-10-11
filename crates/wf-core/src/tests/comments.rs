@@ -200,3 +200,84 @@ fn an_open_blocker_holds_up_the_work_until_it_is_resolved() {
     );
     assert!(ready(&state));
 }
+
+mod supervision {
+    use super::*;
+    use crate::identity::AgentId;
+    use crate::name::AgentName;
+    use crate::supervision::WaitsOn;
+
+    fn agent(fixture: &Fixture, name: &str) -> AgentId {
+        AgentId {
+            principal: fixture.founder.key(),
+            name: AgentName::new(name).unwrap(),
+        }
+    }
+
+    fn waits_on(state: &State, item: ItemId) -> Vec<WaitsOn> {
+        state
+            .open_blockers_of(live(state, item))
+            .into_iter()
+            .map(|blocker| blocker.waits_on)
+            .collect()
+    }
+
+    #[test]
+    fn a_blocker_waits_on_whoever_it_names_first_then_a_supervisor_then_its_writer() {
+        let (fixture, mut state, task) = with_task();
+        fixture.apply(&mut state, 0, 2_001, define_agent("coder"));
+        fixture.apply(&mut state, 0, 2_002, blocker(task, "which crate?"));
+        assert_eq!(
+            waits_on(&state, task),
+            [WaitsOn::Person(fixture.founder.key())],
+            "without a supervisor it goes back to a person"
+        );
+
+        fixture.apply(&mut state, 0, 2_003, define_supervisor("boss"));
+        fixture.apply(&mut state, 0, 2_004, blocker(task, "@joshua is it wanted?"));
+        fixture.apply(&mut state, 0, 2_005, blocker(task, "@coder why this way?"));
+        assert_eq!(
+            waits_on(&state, task),
+            [
+                WaitsOn::Supervisor,
+                WaitsOn::Person(fixture.founder.key()),
+                WaitsOn::Agent(agent(&fixture, "coder")),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_supervisor_takes_blockers_on_items_it_did_not_work_on() {
+        let (fixture, mut state, task) = with_task();
+        fixture.apply(&mut state, 0, 2_001, define_agent("coder"));
+        fixture.apply(&mut state, 0, 2_002, define_supervisor("boss"));
+        fixture.apply(&mut state, 0, 2_003, define_supervisor("helper"));
+        fixture.apply(&mut state, 0, 2_004, start_session("helper", task));
+        fixture.apply(&mut state, 0, 2_005, blocker(task, "which crate?"));
+
+        assert_eq!(state.supervisable(&agent(&fixture, "boss")), [task]);
+        assert!(
+            state.supervisable(&agent(&fixture, "helper")).is_empty(),
+            "it worked on the item"
+        );
+        assert!(
+            state.supervisable(&agent(&fixture, "coder")).is_empty(),
+            "not a supervisor"
+        );
+
+        fixture.apply(
+            &mut state,
+            0,
+            2_006,
+            EventBody::SessionStarted(crate::event::SessionStarted {
+                agent: AgentName::new("boss").unwrap(),
+                item: task,
+                role: crate::session::SessionRole::Supervise,
+            }),
+        );
+        assert!(
+            state.supervisable(&agent(&fixture, "boss")).is_empty(),
+            "one supervise session at a time"
+        );
+    }
+}

@@ -115,7 +115,7 @@ impl State {
                 Some(
                     EndReason::Submitted { .. }
                     | EndReason::Reviewed
-                    | EndReason::Blocked
+                    | EndReason::Supervised
                     | EndReason::Cancelled,
                 )
                 | None => {}

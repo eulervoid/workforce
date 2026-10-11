@@ -416,7 +416,7 @@ mod tests {
         let names: Vec<_> = Policy::builtin_type_names()
             .map(|name| name.as_str())
             .collect();
-        assert_eq!(names, ["decision", "distill", "question", "task"]);
+        assert_eq!(names, ["decision", "distill", "task"]);
     }
 
     #[test]
@@ -466,12 +466,12 @@ mod tests {
     #[test]
     fn rejects_changed_builtin_states() {
         let source = DEFAULT_POLICY_TOML.replace(
-            r#"{ name = "answered", category = "done" }"#,
-            r#"{ name = "answered", category = "blocked" }"#,
+            r#"{ name = "ratified", category = "done" }"#,
+            r#"{ name = "ratified", category = "blocked" }"#,
         );
         assert_eq!(
             Policy::parse(&source),
-            Err(PolicyError::BuiltinStatesChanged(type_name("question")))
+            Err(PolicyError::BuiltinStatesChanged(type_name("decision")))
         );
     }
 
@@ -555,15 +555,6 @@ mod tests {
                 .lanes
                 .contains_key(&LaneName::new("supervision").unwrap())
         );
-        let question = policy.type_config(&type_name("question")).unwrap();
-        assert_eq!(question.lane.as_str(), "supervision");
-        assert_eq!(
-            question
-                .first_state(StateCategory::Blocked)
-                .map(StateName::as_str),
-            Some("needs_human")
-        );
-        assert_eq!(question.review, Some(ReviewName::new("none").unwrap()));
         let task = policy.type_config(&type_name("task")).unwrap();
         assert_eq!(task.review, Some(ReviewName::new("principal").unwrap()));
         assert_eq!(

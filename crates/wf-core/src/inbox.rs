@@ -1,15 +1,18 @@
 //! What waits on a person, worked out from the state.
 
-use crate::id::ItemId;
+use crate::id::{CommentId, ItemId};
 use crate::policy::{ReviewStep, StateCategory};
 use crate::review::ReviewStatus;
 use crate::session::CommitId;
 use crate::state::State;
+use crate::supervision::WaitsOn;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Waiting {
-    /// The item is in a blocked state that is not a review, such as a question that needs a
-    /// person. Moving it on is the answer.
+    /// A blocker on the item waits on this person: resolving it is the answer.
+    Blocker { comment: CommentId },
+    /// The item is in a blocked state that is not a review, such as a proposed decision. Moving
+    /// it on is the answer.
     Blocked,
     /// The review of the work has reached a step for a person: `wf review`.
     HumanReview { commit: Option<CommitId> },
@@ -62,6 +65,22 @@ impl State {
                 ))
             })
             .collect();
+        for blocker in self.open_blockers() {
+            if let WaitsOn::Person(_) = blocker.waits_on {
+                let Some(crate::item::ItemView::Live(item)) = self.item(blocker.item) else {
+                    continue;
+                };
+                entries.push((
+                    item.updated(),
+                    InboxEntry {
+                        item: blocker.item,
+                        waiting: Waiting::Blocker {
+                            comment: blocker.comment,
+                        },
+                    },
+                ));
+            }
+        }
         entries.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.item.cmp(&right.1.item)));
         entries.into_iter().map(|(_, entry)| entry).collect()
     }

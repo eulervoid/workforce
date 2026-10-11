@@ -6,7 +6,7 @@ expression: "Envelope::new(&all)"
   "schema": 2,
   "data": [
     {
-      "id": "jr6sxwcakmtp4aexix74sciie3chckzbgzitlbpfwtsvhdov6arq",
+      "id": "nbj47gaeq3yzfauniozao2k6gd3acf3igumzjqksrofe7lgobuua",
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",
@@ -14,9 +14,9 @@ expression: "Envelope::new(&all)"
       "readiness": "blocked",
       "blocked_by": [
         {
-          "id": "5yszym6xkx7aut5tslmorgigc2i5exy3pfvm45gbp3yrgshqrvfa",
-          "type": "question",
-          "title": "Which hash for event ids?",
+          "id": "virvfl5ntv4t52lrlcoco32c3m3fligxyyndce6b6kxpsnl7kq2q",
+          "type": "task",
+          "title": "Pick a hash for event ids",
           "state": "open",
           "priority": "P2"
         }
@@ -28,7 +28,7 @@ expression: "Envelope::new(&all)"
       "archived": false
     },
     {
-      "id": "vujba6v6yhkdtznipxn4vx2kr7zvgadhkvlwo27r7snwnpxcvmwa",
+      "id": "ovpobx6c34fov2mlmu76ocdp4hdxkom67szbneqldqgjosxk4aqq",
       "type": "task",
       "title": "Write spec",
       "state": "done",
@@ -42,16 +42,16 @@ expression: "Envelope::new(&all)"
       "archived": true
     },
     {
-      "id": "5yszym6xkx7aut5tslmorgigc2i5exy3pfvm45gbp3yrgshqrvfa",
-      "type": "question",
-      "title": "Which hash for event ids?",
+      "id": "virvfl5ntv4t52lrlcoco32c3m3fligxyyndce6b6kxpsnl7kq2q",
+      "type": "task",
+      "title": "Pick a hash for event ids",
       "state": "open",
       "priority": "P2",
       "readiness": "ready",
       "blocked_by": [],
       "blocking": [
         {
-          "id": "jr6sxwcakmtp4aexix74sciie3chckzbgzitlbpfwtsvhdov6arq",
+          "id": "nbj47gaeq3yzfauniozao2k6gd3acf3igumzjqksrofe7lgobuua",
           "type": "task",
           "title": "Implement feed sync",
           "state": "open",
@@ -59,7 +59,7 @@ expression: "Envelope::new(&all)"
         }
       ],
       "labels": [],
-      "lane": "supervision",
+      "lane": "default",
       "steps": null,
       "archived": false
     }

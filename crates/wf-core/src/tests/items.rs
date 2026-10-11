@@ -45,23 +45,23 @@ fn new_items_start_in_the_initial_state_of_their_type() {
 }
 
 #[test]
-fn a_task_waits_for_the_question_it_depends_on() {
+fn a_task_waits_for_the_task_it_depends_on() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "Implement feed sync")));
-    let question = item_id(&fixture.apply(&mut state, 0, 2_001, create("question", "Which hash?")));
+    let first = item_id(&fixture.apply(&mut state, 0, 2_001, create("task", "Pick a hash")));
     assert_eq!(ready_ids(&state).len(), 2);
 
-    fixture.apply(&mut state, 0, 2_002, depends_on(task, question));
-    assert_eq!(ready_ids(&state), vec![question]);
+    fixture.apply(&mut state, 0, 2_002, depends_on(task, first));
+    assert_eq!(ready_ids(&state), vec![first]);
     let graph = state.dependency_graph();
     let blockers = state.blockers(&graph, task);
     assert_eq!(blockers.len(), 1);
-    assert_eq!(blockers[0].item, question);
+    assert_eq!(blockers[0].item, first);
     assert_eq!(blockers[0].state_category, Some(StateCategory::Open));
-    assert_eq!(graph.dependents(question).collect::<Vec<_>>(), vec![task]);
+    assert_eq!(graph.dependents(first).collect::<Vec<_>>(), vec![task]);
 
-    fixture.apply(&mut state, 0, 2_003, moved(question, "answered"));
+    fixture.apply(&mut state, 0, 2_003, moved(first, "done"));
     assert_eq!(ready_ids(&state), vec![task]);
 }
 
@@ -247,7 +247,6 @@ fn author_checks_follow_the_policy() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
-    let question = item_id(&fixture.apply(&mut state, 0, 2_001, create("question", "b")));
     let decision = item_id(&fixture.apply(&mut state, 0, 2_002, create("decision", "c")));
 
     assert!(matches!(
@@ -259,7 +258,7 @@ fn author_checks_follow_the_policy() {
         Err(PolicyViolation::UnknownState { .. })
     ));
     assert!(matches!(
-        state.check_policy(&depends_on(question, task)),
+        state.check_policy(&depends_on(decision, task)),
         Err(PolicyViolation::DependencyNotAllowed { .. })
     ));
     assert_eq!(state.check_policy(&depends_on(task, decision)), Ok(()));
@@ -419,7 +418,7 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     fixture.apply(&mut state, 0, 1_500, define_agent("coder"));
-    let question = item_id(&fixture.apply(&mut state, 0, 2_000, create("question", "Which hash?")));
+    let question = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "Pick a hash")));
     let task = item_id(&fixture.apply(
         &mut state,
         0,

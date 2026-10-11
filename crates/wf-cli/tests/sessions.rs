@@ -126,13 +126,6 @@ impl World {
         panic!("timed out waiting for {what}: {sessions:#?} {transcripts}");
     }
 
-    fn questions(&self) -> Vec<Value> {
-        self.wf(&["item", "list", "--type", "question"])
-            .as_array()
-            .unwrap()
-            .clone()
-    }
-
     /// Waits until the only session is not live any more and returns it.
     async fn ended_session(&self) -> Value {
         for _ in 0..400 {
@@ -590,9 +583,9 @@ async fn sessions_need_a_known_agent_and_harness() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_question_parks_the_session_until_it_is_answered() {
+async fn a_blocker_parks_the_session_until_it_is_resolved() {
     let script = "\
-wf work ask \"which crate?\" --body \"for durations\"
+wf comment {item} \"which crate?\" --block
 turn
 sh echo done > a.txt && git add a.txt && git commit -q -m a
 wf work submit
@@ -601,24 +594,22 @@ wf work submit
     let item = world.wf.add(&["--title", "Parse durations"]);
     start_session(&world, &item);
     world
-        .wait("the question", |world| !world.questions().is_empty())
+        .wait("the blocker", |world| {
+            !world.item(&item)["open"].as_array().unwrap().is_empty()
+        })
         .await;
-    let question = world.questions()[0]["id"].as_str().unwrap().to_string();
-    assert_eq!(world.item(&question)["state"], "open");
-    let waiting = world.item(&item);
-    assert_eq!(waiting["state"], "in_progress");
-    assert_eq!(waiting["depends_on"].as_array().unwrap().len(), 1);
-
+    assert_eq!(world.item(&item)["state"], "in_progress");
     tokio::time::sleep(Duration::from_millis(1_000)).await;
     assert_eq!(world.sessions()[0]["status"], "parked");
+    let inbox = inbox(&world);
+    assert_eq!(inbox.len(), 1, "no supervisor, so it waits on a person");
+    assert_eq!(inbox[0]["kind"], "blocker");
 
     world.wf.run(&[
-        "item",
-        "move",
-        short(&question),
-        "answered",
-        "--note",
+        "comment",
+        short(&item),
         "Use humantime",
+        "--resolve-blockers",
     ]);
     let session = world.ended_session().await;
     assert_eq!(world.sessions().len(), 1, "the same session continued");
@@ -632,7 +623,7 @@ wf work submit
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_that_waits_too_long_for_an_answer_times_out() {
-    let script = "wf work ask \"anyone there?\"\n";
+    let script = "wf comment {item} \"anyone there?\" --block\n";
     let world = World::new(script).await;
     world
         .wf
@@ -658,15 +649,15 @@ async fn a_session_that_runs_too_long_is_cancelled_and_times_out() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn submitting_without_commits_answers_a_question_and_leaves_no_branch() {
-    let world = World::new("wf work submit --note \"Use humantime\"\n").await;
-    let question = world
+async fn submitting_without_commits_finishes_the_item_and_leaves_no_branch() {
+    let world = World::new("wf work submit --note \"Nothing to change\"\n").await;
+    let item = world
         .wf
-        .add(&["--type", "question", "--title", "Which crate?"]);
-    start_session(&world, &question);
+        .add(&["--title", "Check the parser", "--review", "none"]);
+    start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
-    assert_eq!(world.item(&question)["state"], "answered");
+    assert_eq!(world.item(&item)["state"], "done");
     assert!(git(&world.wf.repository, &["branch", "--list", "wf/*"]).is_empty());
 }
 
@@ -718,14 +709,14 @@ async fn nothing_is_started_for_agents_the_device_does_not_host() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_supervisor_answers_the_question_of_a_coder_and_the_coder_goes_on() {
+async fn a_supervisor_answers_the_blocker_of_a_coder_and_the_coder_goes_on() {
     let coder = "\
-wf work ask \"which crate?\"
+wf comment {item} \"which crate?\" --block
 turn
 sh echo done > a.txt && git add a.txt && git commit -q -m a
 wf work submit
 ";
-    let supervisor = "wf work submit --note \"Use humantime\"\n";
+    let supervisor = "wf comment {item} \"Use humantime\" --resolve-blockers\n";
     let world = World::agents(&[("coder", coder), ("supervisor", supervisor)]).await;
     world.automate("coder", "default");
     world.automate("supervisor", "supervision");
@@ -745,14 +736,15 @@ wf work submit
             world.item(&item)["state"] == "done"
         })
         .await;
-    let question = world.questions()[0]["id"].as_str().unwrap().to_string();
-    assert_eq!(world.item(&question)["state"], "answered");
-    let sessions = world.sessions();
-    assert_eq!(sessions.len(), 2, "{sessions:?}");
-    assert!(
-        sessions
-            .iter()
-            .all(|session| session["status"] == "submitted")
+    let mut statuses: Vec<String> = world
+        .sessions()
+        .iter()
+        .map(|session| format!("{} {}", session["role"], session["status"]))
+        .collect();
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        ["\"supervise\" \"supervised\"", "\"work\" \"submitted\""]
     );
     let transcript = world
         .wf
@@ -761,26 +753,16 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_answer_under_review_counts_once_a_person_approves_it() {
+async fn a_supervisor_escalates_a_blocker_to_a_person() {
     let coder = "\
-wf work ask \"which crate?\"
+wf comment {item} \"is this still wanted?\" --block
 turn
 sh echo done > a.txt && git add a.txt && git commit -q -m a
 wf work submit
 ";
-    let supervisor = "wf work submit --note \"Use humantime\"\n";
+    let supervisor =
+        "wf comment {item} \"@joshua this is about intent\" --block --resolve-blockers\n";
     let world = World::agents(&[("coder", coder), ("supervisor", supervisor)]).await;
-    let policy = world.wf.run(&["policy", "show"]);
-    let path = world.wf.root.path().join("reviewed-questions.toml");
-    std::fs::write(
-        &path,
-        policy.replace(
-            "[types.question]\nreview = \"none\"",
-            "[types.question]\nreview = \"principal\"",
-        ),
-    )
-    .unwrap();
-    world.wf.run(&["policy", "apply", path.to_str().unwrap()]);
     world.automate("coder", "default");
     world.automate("supervisor", "supervision");
     world.wf.run(&[
@@ -795,26 +777,19 @@ wf work submit
     ]);
     let item = world.wf.add(&["--title", "Parse durations"]);
     world
-        .wait("the answer waiting for review", |world| {
-            world
-                .questions()
-                .first()
-                .is_some_and(|question| question["state"] == "needs_human")
-                && world
-                    .sessions()
-                    .iter()
-                    .any(|session| session["status"] == "submitted" && session["role"] == "work")
+        .wait("the escalation in the inbox", |world| {
+            inbox(world).iter().any(|entry| entry["kind"] == "blocker")
         })
         .await;
-    let question = world.questions()[0]["id"].as_str().unwrap().to_string();
     assert_ne!(world.item(&item)["state"], "done");
-    world.wf.run(&["review", short(&question), "--approve"]);
+    world
+        .wf
+        .run(&["comment", short(&item), "Yes, go on", "--resolve-blockers"]);
     world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
         })
         .await;
-    assert_eq!(world.item(&question)["state"], "answered");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1127,23 +1102,17 @@ async fn a_denied_permission_is_told_no_and_stopping_a_session_drops_its_request
 async fn the_inbox_lists_what_waits_on_a_person() {
     let world = World::new("").await;
     assert!(inbox(&world).is_empty());
-    let question = world
-        .wf
-        .add(&["--type", "question", "--title", "Which database?"]);
-    assert!(
-        inbox(&world).is_empty(),
-        "an open question waits on a supervisor"
-    );
+    let item = world.wf.add(&["--title", "Pick a database"]);
     world
         .wf
-        .run(&["item", "move", short(&question), "needs_human"]);
+        .run(&["comment", short(&item), "Which database?", "--block"]);
     let entries = inbox(&world);
     assert_eq!(entries.len(), 1);
-    assert_eq!(entries[0]["kind"], "blocked");
-    assert_eq!(entries[0]["title"], "Which database?");
+    assert_eq!(entries[0]["kind"], "blocker");
+    assert_eq!(entries[0]["title"], "Pick a database");
     let text = world.wf.run(&["inbox"]);
     assert!(
-        text.contains("Which database?") && text.contains("needs_human"),
+        text.contains("Pick a database") && text.contains("--resolve"),
         "{text}"
     );
 }

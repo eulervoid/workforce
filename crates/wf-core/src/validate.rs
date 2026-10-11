@@ -163,8 +163,6 @@ pub enum PolicyViolation {
     PersonCannotEscalate,
     #[error("{0} was not submitted at that commit, so a verdict on it counts for nothing")]
     StaleReview(ItemId),
-    #[error("a session cannot answer a question it asked; someone else has to")]
-    SessionAnswersItsOwnQuestion,
     #[error("there is no review level `{0}`")]
     UnknownReviewLevel(ReviewName),
     #[error("a `{type_name}` has no blocked state to wait in during review")]
@@ -681,13 +679,8 @@ impl State {
                     .and_then(|item| policy.type_config(item.item_type()))
                     .and_then(|config| config.state_category_of(&moved.to))
                     == Some(StateCategory::Done);
-                let asked_by_session = item.is_some_and(|item| {
-                    matches!(item.author(), Actor::Agent { session: asker, .. } if asker == session)
-                });
                 if finishes && moved.item == folded.item() {
                     Err(PolicyViolation::SessionFinishesItsItem)
-                } else if finishes && asked_by_session {
-                    Err(PolicyViolation::SessionAnswersItsOwnQuestion)
                 } else {
                     Ok(())
                 }

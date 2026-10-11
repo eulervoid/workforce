@@ -370,11 +370,7 @@ mod inbox {
     #[test]
     fn what_waits_on_a_person_is_listed_newest_first() {
         let mut scene = Scene::new();
-        let question: ItemId = scene.apply(create("question", "which crate?")).id().into();
-        assert!(
-            scene.state.inbox().is_empty(),
-            "an open question waits on a supervisor"
-        );
+        let asking: ItemId = scene.apply(create("task", "parse durations")).id().into();
 
         let careful = scene.submitted("critical");
         assert!(
@@ -382,7 +378,8 @@ mod inbox {
             "an agent has the first step of the review"
         );
         scene.apply(verdict(careful, commit(1), Verdict::Approve));
-        scene.apply(moved(question, "needs_human"));
+        let question: crate::id::CommentId =
+            scene.apply(blocker(asking, "which crate?")).id().into();
 
         let light = scene.submitted("standard");
         scene.apply(verdict(light, commit(1), Verdict::Approve));
@@ -395,8 +392,8 @@ mod inbox {
                     waiting: Waiting::Merge { commit: commit(1) }
                 },
                 InboxEntry {
-                    item: question,
-                    waiting: Waiting::Blocked
+                    item: asking,
+                    waiting: Waiting::Blocker { comment: question }
                 },
                 InboxEntry {
                     item: careful,
@@ -450,44 +447,44 @@ fn a_review_step_nobody_hosted_can_take_is_noticed() {
 }
 
 #[test]
-fn an_answer_is_reviewed_and_finished_by_its_approval() {
+fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
     let mut scene = Scene::new();
-    let question = scene
-        .apply(create_reviewed("question", "which crate?", "principal"))
+    let finding = scene
+        .apply(create_reviewed("task", "check the parser", "principal"))
         .id()
         .into();
-    let session: SessionId = scene.apply(start_session("coder", question)).id().into();
-    scene.apply(moved(question, "needs_human"));
+    let session: SessionId = scene.apply(start_session("coder", finding)).id().into();
+    scene.apply(moved(finding, "in_review"));
     scene.apply(end_session(session, EndReason::Submitted { commit: None }));
-    assert_eq!(scene.status(question), Some(awaiting_human()));
-    assert!(scene.state.pending_answers().is_empty());
+    assert_eq!(scene.status(finding), Some(awaiting_human()));
+    assert!(scene.state.approved_without_commits().is_empty());
 
-    scene.apply(verdict(question, None, Verdict::Approve));
+    scene.apply(verdict(finding, None, Verdict::Approve));
     assert_eq!(
-        scene.status(question),
+        scene.status(finding),
         Some(ReviewStatus::Approved { commit: None })
     );
-    assert_eq!(scene.state.pending_answers(), [question]);
+    assert_eq!(scene.state.approved_without_commits(), [finding]);
     assert!(scene.state.pending_merges().is_empty());
 
-    scene.apply(moved(question, "answered"));
-    assert!(scene.state.pending_answers().is_empty());
+    scene.apply(moved(finding, "done"));
+    assert!(scene.state.approved_without_commits().is_empty());
 }
 
 #[test]
-fn an_approved_answer_does_not_finish_an_item_that_was_moved_since() {
+fn approved_work_without_commits_does_not_finish_an_item_that_was_moved_since() {
     let mut scene = Scene::new();
-    let question = scene
-        .apply(create_reviewed("question", "which crate?", "principal"))
+    let finding = scene
+        .apply(create_reviewed("task", "check the parser", "principal"))
         .id()
         .into();
-    let session: SessionId = scene.apply(start_session("coder", question)).id().into();
-    scene.apply(moved(question, "needs_human"));
+    let session: SessionId = scene.apply(start_session("coder", finding)).id().into();
+    scene.apply(moved(finding, "in_review"));
     scene.apply(end_session(session, EndReason::Submitted { commit: None }));
-    scene.apply(verdict(question, None, Verdict::Approve));
-    scene.apply(moved(question, "open"));
-    scene.apply(moved(question, "needs_human"));
-    assert!(scene.state.pending_answers().is_empty());
+    scene.apply(verdict(finding, None, Verdict::Approve));
+    scene.apply(moved(finding, "open"));
+    scene.apply(moved(finding, "in_review"));
+    assert!(scene.state.approved_without_commits().is_empty());
 }
 
 #[test]

@@ -302,6 +302,34 @@ impl Daemon {
         .await
     }
 
+    /// Starts a supervise session of `agent` on `item`, to answer or escalate the blockers that
+    /// wait on it, in an empty directory.
+    pub(crate) async fn start_supervision(
+        self: &Arc<Self>,
+        workforce: WorkforceId,
+        loaded: &Arc<Loaded>,
+        agent: AgentName,
+        item: ItemId,
+        repository: PathBuf,
+    ) -> Result<SessionId, SessionError> {
+        self.begin_session(
+            workforce,
+            loaded,
+            agent,
+            item,
+            SessionRole::Supervise,
+            repository,
+        )
+        .await
+    }
+
+    /// The empty directory a supervise session runs in. One supervise session runs per item.
+    fn supervision_directory(&self, workforce: WorkforceId, item: ItemId) -> PathBuf {
+        self.workforce_directory(workforce)
+            .join("worktrees")
+            .join(format!("{}-supervise", item_name(item)))
+    }
+
     /// Where a review session looks at a commit of an item.
     fn review_worktree(
         &self,
@@ -377,6 +405,18 @@ impl Daemon {
                         Some(commit) => git.detached_worktree(&path, commit)?,
                         None => std::fs::create_dir_all(&path)?,
                     }
+                    Ok::<_, VcsError>(git.repository().to_path_buf())
+                })
+                .await??;
+                (worktree, repository)
+            }
+            SessionRole::Supervise => {
+                let worktree = self.supervision_directory(workforce, item);
+                let path = worktree.clone();
+                let repository = blocking(move || {
+                    let git = GitCli::open(&repository)?;
+                    let _ = std::fs::remove_dir_all(&path);
+                    std::fs::create_dir_all(&path)?;
                     Ok::<_, VcsError>(git.repository().to_path_buf())
                 })
                 .await??;
@@ -508,8 +548,8 @@ impl Daemon {
             }
             Finish::Release { note } => (EndReason::Released, by_agent.clone(), note.clone()),
             Finish::Reviewed => (EndReason::Reviewed, by_agent.clone(), None),
-            Finish::Stop => (EndReason::Cancelled, by_device.clone(), None),
-            Finish::Blocked => (EndReason::Blocked, by_device.clone(), None),
+            Finish::Supervised => (EndReason::Supervised, by_agent.clone(), None),
+            Finish::Stop | Finish::MovedOn => (EndReason::Cancelled, by_device.clone(), None),
             Finish::TimedOut => (EndReason::TimedOut, by_device.clone(), None),
             Finish::Failed => (EndReason::Failed, by_device.clone(), None),
             Finish::GaveUp { turns } => (
@@ -573,16 +613,25 @@ impl Daemon {
         )
         .await?;
         let how = match finish {
-            Finish::Submit { .. } | Finish::Release { .. } | Finish::Reviewed => Stop::AfterTurn,
+            Finish::Submit { .. }
+            | Finish::Release { .. }
+            | Finish::Reviewed
+            | Finish::Supervised => Stop::AfterTurn,
             Finish::Stop
-            | Finish::Blocked
+            | Finish::MovedOn
             | Finish::TimedOut
             | Finish::Failed
             | Finish::GaveUp { .. } => Stop::Now,
         };
         self.runners.stop(session, how);
-        if let SessionRole::Review { commit } = role {
-            self.discard_review_worktree(workforce, item, commit).await;
+        match role {
+            SessionRole::Work => {}
+            SessionRole::Review { commit } => {
+                self.discard_review_worktree(workforce, item, commit).await;
+            }
+            SessionRole::Supervise => {
+                let _ = std::fs::remove_dir_all(self.supervision_directory(workforce, item));
+            }
         }
         if matches!(reason, EndReason::Submitted { commit: None }) {
             self.discard_branch(workforce, item).await;
@@ -936,6 +985,7 @@ async fn turns(
     let mut prompt = match run.role {
         SessionRole::Work => work_package(daemon, loaded, run, &state).await,
         SessionRole::Review { commit } => review_package(loaded, run, &state, commit).await,
+        SessionRole::Supervise => supervise_package(loaded, run, &state).await,
     };
     let cancel = conversation.cancel();
     let deadline = run.max_duration.map(|duration| Instant::now() + duration);
@@ -982,7 +1032,7 @@ async fn turns(
                     .session(run.session)
                     .is_some_and(|session| session.is_live());
                 return if live {
-                    End::Finish(Finish::Blocked)
+                    End::Finish(Finish::MovedOn)
                 } else {
                     End::Over
                 };
@@ -1001,7 +1051,7 @@ async fn turns(
                 }
                 Parked::Over => return End::Over,
                 Parked::TimedOut => return End::Finish(Finish::TimedOut),
-                Parked::Blocked => return End::Finish(Finish::Blocked),
+                Parked::MovedOn => return End::Finish(Finish::MovedOn),
             },
         }
     }
@@ -1026,7 +1076,7 @@ enum Parked {
     Ready,
     Over,
     TimedOut,
-    Blocked,
+    MovedOn,
 }
 
 /// Waits until the item is ready again, keeping the harness and its conversation.
@@ -1049,7 +1099,7 @@ async fn park(
                 let live = state
                     .session(run.session)
                     .is_some_and(|session| session.is_live());
-                return if live { Parked::Blocked } else { Parked::Over };
+                return if live { Parked::MovedOn } else { Parked::Over };
             }
             TurnOutcome::Continue | TurnOutcome::GiveUp => return Parked::Ready,
         }
@@ -1162,9 +1212,112 @@ async fn review_package(
     .render()
 }
 
-/// What to say when a parked session can go on.
+/// The prompt of a supervise session: the blockers of the item it is to answer or escalate.
+async fn supervise_package(loaded: &Arc<Loaded>, run: &Run, state: &State) -> String {
+    let Some(ItemView::Live(item)) = state.item(run.item) else {
+        return String::new();
+    };
+    let Some(agent) = state
+        .session(run.session)
+        .map(|session| session.agent().clone())
+    else {
+        return String::new();
+    };
+    let waiting: Vec<_> = state
+        .open_blockers_of(item)
+        .into_iter()
+        .filter(|blocker| state.answers(&agent, blocker))
+        .collect();
+    let texts = comment_texts(
+        loaded,
+        waiting.iter().map(|blocker| blocker.comment).collect(),
+    )
+    .await;
+    let blockers = waiting
+        .iter()
+        .zip(texts)
+        .map(|(blocker, text)| wf_harness::WaitingBlocker {
+            comment: blocker.comment.short(),
+            by: speaker(&item.comments()[&blocker.comment].by),
+            text: text.unwrap_or_default(),
+        })
+        .collect();
+    let person = state
+        .members()
+        .find(|(principal, _)| **principal == agent.principal)
+        .map(|(_, member)| format!("@{}", member.handle))
+        .unwrap_or_default();
+    wf_harness::SupervisePackage {
+        item: HashId::short(&run.item),
+        title: item.title().to_string(),
+        body: item.body().render_numbered(),
+        earlier: earlier_comments(loaded, item).await,
+        blockers,
+        person,
+    }
+    .render()
+}
+
+/// Who wrote something, as an agent is told: the agent's name, or `someone` for a person.
+fn speaker(actor: &Actor) -> String {
+    match actor {
+        Actor::Human(_) => "someone".to_string(),
+        Actor::Agent { agent, .. } => agent.name.to_string(),
+    }
+}
+
+/// The text of comments, read from the log, in the order asked for.
+async fn comment_texts(loaded: &Loaded, comments: Vec<CommentId>) -> Vec<Option<String>> {
+    let count = comments.len();
+    loaded
+        .storage
+        .with(move |replica| {
+            comments
+                .iter()
+                .map(|comment| {
+                    match wf_store::EventStore::event(replica.store(), &EventId::from(*comment))
+                        .ok()
+                        .flatten()?
+                        .content
+                        .body
+                    {
+                        EventBody::Comment(written) => Some(written.text),
+                        _ => None,
+                    }
+                })
+                .collect()
+        })
+        .await
+        .unwrap_or_else(|_| vec![None; count])
+}
+
+/// What to say when a parked session can go on: what others wrote on the item since the session's
+/// last blocker, and what finished dependencies left.
 async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: &State) -> String {
-    let mut text = String::from("What you were waiting for is done.");
+    let mut text = String::from("What you were waiting for is resolved.");
+    if let Some(ItemView::Live(item)) = state.item(run.item) {
+        let asked = item
+            .comments()
+            .values()
+            .filter(|comment| comment.session() == Some(run.session))
+            .filter(|comment| comment.kind == wf_core::event::CommentKind::Blocker)
+            .map(|comment| comment.at)
+            .max();
+        if let Some(asked) = asked {
+            let mut since: Vec<_> = item
+                .comments()
+                .iter()
+                .filter(|(_, comment)| comment.at > asked && comment.session() != Some(run.session))
+                .collect();
+            since.sort_by_key(|(id, comment)| (comment.at, **id));
+            let texts = comment_texts(loaded, since.iter().map(|(id, _)| **id).collect()).await;
+            for ((_, comment), written) in since.into_iter().zip(texts) {
+                if let Some(written) = written {
+                    text.push_str(&format!("\n- {}: {}", speaker(&comment.by), written.trim()));
+                }
+            }
+        }
+    }
     let graph = state.dependency_graph();
     for dependency in graph.depends_on(run.item) {
         let Some(ItemView::Live(dependency)) = state.item(dependency) else {
@@ -1207,10 +1360,7 @@ async fn earlier_comments(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf
                 return None;
             };
             Some(wf_harness::Earlier {
-                by: match &comment.by {
-                    Actor::Human(_) => "someone".to_string(),
-                    Actor::Agent { agent, .. } => agent.name.to_string(),
-                },
+                by: speaker(&comment.by),
                 kind: comment.kind.name().replace('_', " "),
                 text: written.text.clone(),
             })
@@ -1272,8 +1422,8 @@ pub(crate) async fn run_dispatcher(
     }
 }
 
-/// Merges what is ready, then gives every hosted auto agent with a free slot a review first and
-/// otherwise the first item it may take. Whatever could not be started is not tried again by
+/// Merges what is ready, then gives every hosted auto agent with a free slot a review first, then
+/// a blocker to supervise, and otherwise the first item it may take. Whatever could not be started is not tried again by
 /// this daemon.
 async fn dispatch_once(
     daemon: &Arc<Daemon>,
@@ -1321,7 +1471,7 @@ async fn dispatch_once(
             );
         }
     }
-    for item in state.pending_answers() {
+    for item in state.approved_without_commits() {
         let done = state.item(item).and_then(|view| match view {
             ItemView::Live(live) => state
                 .policy()?
@@ -1361,8 +1511,12 @@ async fn dispatch_once(
                 .reviewable(&agent)
                 .into_iter()
                 .find(|(item, _)| !failed.contains(&(*item, agent.name.clone())));
-            let started = match review {
-                Some((item, commit)) => (
+            let supervision = state
+                .supervisable(&agent)
+                .into_iter()
+                .find(|item| !failed.contains(&(*item, agent.name.clone())));
+            let started = match (review, supervision) {
+                (Some((item, commit)), _) => (
                     item,
                     daemon
                         .start_review(
@@ -1375,7 +1529,19 @@ async fn dispatch_once(
                         )
                         .await,
                 ),
-                None => {
+                (None, Some(item)) => (
+                    item,
+                    daemon
+                        .start_supervision(
+                            workforce,
+                            loaded,
+                            agent.name.clone(),
+                            item,
+                            repository.clone(),
+                        )
+                        .await,
+                ),
+                (None, None) => {
                     let Some(item) = state
                         .dispatchable(device, &agent)
                         .into_iter()

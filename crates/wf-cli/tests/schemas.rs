@@ -14,7 +14,7 @@ struct Scenario {
     state: State,
     events: HashMap<EventId, Event>,
     task: ItemId,
-    question: ItemId,
+    dependency: ItemId,
     done: ItemId,
 }
 
@@ -31,7 +31,7 @@ fn scenario() -> Scenario {
     };
 
     apply(&mut state, define_agent("coder"));
-    let question: ItemId = apply(&mut state, create("question", "Which hash for event ids?"))
+    let dependency: ItemId = apply(&mut state, create("task", "Pick a hash for event ids"))
         .id()
         .into();
     let task: ItemId = apply(
@@ -39,19 +39,19 @@ fn scenario() -> Scenario {
         create_with_body(
             "task",
             "Implement feed sync",
-            &format!("blocked on #{}, ask @coder", question.short()),
+            &format!("blocked on #{}, ask @coder", dependency.short()),
         ),
     )
     .id()
     .into();
     let done: ItemId = apply(&mut state, create("task", "Write spec")).id().into();
     apply(&mut state, edit(task, Change::Priority(Some(Priority::P1))));
-    apply(&mut state, depends_on(task, question));
+    apply(&mut state, depends_on(task, dependency));
     apply(
         &mut state,
         comment(
             task,
-            &format!("see #{}, @joshua please check", question.short()),
+            &format!("see #{}, @joshua please check", dependency.short()),
         ),
     );
     apply(&mut state, moved(done, "done"));
@@ -60,7 +60,7 @@ fn scenario() -> Scenario {
         state,
         events,
         task,
-        question,
+        dependency,
         done,
     }
 }
@@ -89,14 +89,14 @@ fn live_item_detail() {
 }
 
 #[test]
-fn question_detail_shows_backlinks_and_dependents() {
+fn dependency_detail_shows_backlinks_and_dependents() {
     let scenario = scenario();
     let state = &scenario.state;
-    let ItemView::Live(item) = state.item(scenario.question).unwrap() else {
+    let ItemView::Live(item) = state.item(scenario.dependency).unwrap() else {
         panic!()
     };
     let detail = view::item_detail(state, item, |id| scenario.events.get(id).cloned());
-    insta::assert_json_snapshot!("question_detail", Envelope::new(&detail));
+    insta::assert_json_snapshot!("dependency_detail", Envelope::new(&detail));
 }
 
 #[test]

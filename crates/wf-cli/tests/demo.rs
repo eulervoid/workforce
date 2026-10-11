@@ -34,15 +34,9 @@ fn the_demo_script_works_end_to_end() {
     assert!(agents.contains("@joshua/coder") && agents.contains("@joshua/coder-opencode"));
 
     let task = wf.add(&["--title", "Implement feed sync", "--priority", "P1"]);
-    let question = wf.add(&["--title", "Which hash for event ids?", "--type", "question"]);
+    let first = wf.add(&["--title", "Pick a hash for event ids"]);
 
-    let link = wf.run(&[
-        "item",
-        "link",
-        short(&task),
-        "--depends-on",
-        short(&question),
-    ]);
+    let link = wf.run(&["item", "link", short(&task), "--depends-on", short(&first)]);
     assert!(link.contains("now depends on"));
     let list = wf.run(&["item", "list"]);
     assert!(
@@ -51,7 +45,7 @@ fn the_demo_script_works_end_to_end() {
     );
     assert_eq!(
         titles(&wf.json(&["item", "list", "--ready"])),
-        ["Which hash for event ids?"]
+        ["Pick a hash for event ids"]
     );
     let ready = wf.run(&["item", "list", "-r"]);
     assert!(ready.contains("BLOCKING"), "{ready}");
@@ -65,7 +59,7 @@ fn the_demo_script_works_end_to_end() {
         2
     );
 
-    wf.run(&["item", "move", short(&question), "dropped"]);
+    wf.run(&["item", "move", short(&first), "dropped"]);
     assert_eq!(
         titles(&wf.json(&["item", "list", "--stranded"])),
         ["Implement feed sync"]
@@ -86,9 +80,9 @@ fn the_demo_script_works_end_to_end() {
         by_state.contains("open (1)") && by_state.contains("dropped (1)"),
         "{by_state}"
     );
-    wf.run(&["item", "move", short(&question), "open"]);
+    wf.run(&["item", "move", short(&first), "open"]);
 
-    wf.run(&["item", "move", short(&question), "answered"]);
+    wf.run(&["item", "move", short(&first), "done"]);
     assert_eq!(
         titles(&wf.json(&["item", "list", "--ready"])),
         ["Implement feed sync"]
@@ -97,17 +91,17 @@ fn the_demo_script_works_end_to_end() {
     wf.run(&[
         "comment",
         short(&task),
-        &format!("see #{}, @coder please keep it small", short(&question)),
+        &format!("see #{}, @coder please keep it small", short(&first)),
     ]);
     let shown = wf.json(&["item", "show", short(&task)]);
-    assert_eq!(shown["references"][0]["id"], question);
+    assert_eq!(shown["references"][0]["id"], first);
     assert_eq!(shown["mentions"][0], "@joshua/coder");
     assert_eq!(
         shown["comments"][0]["text"],
-        format!("see #{}, @coder please keep it small", short(&question))
+        format!("see #{}, @coder please keep it small", short(&first))
     );
     assert_eq!(
-        wf.json(&["item", "show", short(&question)])["referenced_by"][0]["item"],
+        wf.json(&["item", "show", short(&first)])["referenced_by"][0]["item"],
         task
     );
     let mentions = wf.run(&["mentions", "@coder"]);
@@ -117,7 +111,7 @@ fn the_demo_script_works_end_to_end() {
     wf.run(&["item", "archive", short(&task)]);
     assert_eq!(
         titles(&wf.json(&["item", "list"])),
-        ["Which hash for event ids?"]
+        ["Pick a hash for event ids"]
     );
     let with_archived = wf.json(&["item", "list", "--archived"]);
     assert_eq!(titles(&with_archived).len(), 2);
@@ -334,7 +328,7 @@ fn agents_and_policy() {
     wf.run(&["policy", "apply", file.to_str().unwrap()]);
     wf.add(&["--title", "crash", "--type", "bug"]);
 
-    std::fs::write(&file, policy.replace("\"answered\"", "\"replied\"")).unwrap();
+    std::fs::write(&file, policy.replace("\"ratified\"", "\"accepted\"")).unwrap();
     assert!(
         wf.fail(&["policy", "apply", file.to_str().unwrap()])
             .contains("cannot be changed")
@@ -359,12 +353,12 @@ fn item_add_opens_the_editor_on_request_and_asks_for_a_title_otherwise() {
     let editor = wf.bin.join("fake-editor");
     std::fs::write(
         &editor,
-        "#!/bin/sh\n/usr/bin/sed -i.bak -e 's/^title = .*/title = \"From the editor\"/' -e 's/^type = .*/type = \"question\"/' \"$1\"\n",
+        "#!/bin/sh\n/usr/bin/sed -i.bak -e 's/^title = .*/title = \"From the editor\"/' -e 's/^type = .*/type = \"decision\"/' -e '/^priority = /d' \"$1\"\n",
     )
     .unwrap();
     std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
     let output = wf
-        .command(&["item", "add", "--edit", "--priority", "P1", "--json"])
+        .command(&["item", "add", "--edit", "--json"])
         .env("EDITOR", &editor)
         .env("VISUAL", &editor)
         .output()
@@ -376,8 +370,7 @@ fn item_add_opens_the_editor_on_request_and_asks_for_a_title_otherwise() {
     );
     let created: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(created["data"]["title"], "From the editor");
-    assert_eq!(created["data"]["type"], "question");
-    assert_eq!(created["data"]["priority"], "P1");
+    assert_eq!(created["data"]["type"], "decision");
 }
 
 #[test]

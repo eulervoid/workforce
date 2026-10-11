@@ -257,7 +257,7 @@ mod tests {
     #[test]
     fn new_item_drafts_carry_the_type() {
         let new = NewItemDraft {
-            item_type: TypeName::new("question").unwrap(),
+            item_type: TypeName::new("decision").unwrap(),
             draft: Draft {
                 title: String::new(),
                 body: String::new(),
@@ -269,7 +269,7 @@ mod tests {
             },
         };
         let text = new.to_markdown().unwrap();
-        assert!(text.starts_with("+++\ntitle = \"\"\ntype = \"question\"\n"));
+        assert!(text.starts_with("+++\ntitle = \"\"\ntype = \"decision\"\n"));
         assert_eq!(NewItemDraft::from_markdown(&text).unwrap(), new);
         assert!(Draft::from_markdown(&text).is_err());
         assert!(NewItemDraft::from_markdown("+++\ntitle = \"x\"\n+++\n").is_err());

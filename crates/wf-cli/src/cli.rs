@@ -80,7 +80,7 @@ pub enum Command {
     /// Manage agent definitions.
     #[command(subcommand)]
     Agent(AgentCommand),
-    /// Create and manage items: tasks, questions, decisions.
+    /// Create and manage items: tasks, decisions.
     #[command(subcommand)]
     Item(ItemCommand),
     /// Comment on an item. Without text, opens the editor when run at a terminal.
@@ -103,7 +103,7 @@ pub enum Command {
     Work(WorkCommand),
     /// Give a verdict on the submitted work of an item.
     Review(ReviewArgs),
-    /// What waits on you: questions, reviews, merges and permission requests.
+    /// What waits on you: blockers, reviews, merges and permission requests.
     Inbox,
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
@@ -156,12 +156,9 @@ pub struct ReviewArgs {
 
 #[derive(Subcommand)]
 pub enum WorkCommand {
-    /// Ask a question you need answered. The item waits for it, and you are prompted again once
-    /// it is answered. Stop working after asking.
-    Ask(WorkAskArgs),
     /// The work is finished: end the session and hand its commits on.
     Submit {
-        /// What the next reader should know, such as the answer to a question.
+        /// What the next reader should know.
         #[arg(long)]
         note: Option<String>,
     },
@@ -171,15 +168,6 @@ pub enum WorkCommand {
         #[arg(long)]
         note: Option<String>,
     },
-}
-
-#[derive(Args)]
-pub struct WorkAskArgs {
-    /// The question, as a title.
-    pub question: String,
-    /// What the answerer needs to know.
-    #[arg(long, allow_hyphen_values = true)]
-    pub body: Option<String>,
 }
 
 #[derive(Subcommand)]

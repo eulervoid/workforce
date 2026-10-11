@@ -30,14 +30,15 @@ wf item add --title "Parse durations in policy" --review standard
 wf daemon &                      # starts the agents on what is ready, and merges what is approved
 wf session list                  # live and finished sessions
 wf session watch <item>          # follow the transcript of the latest session on an item
-wf inbox                         # what waits on you: questions, reviews, merges, permission requests
+wf inbox                         # what waits on you: blockers, reviews, merges, permission requests
 wf session allow <session>       # or `deny`, for a permission request an agent is waiting on
 wf review <item> --approve       # your step of a review level that has one
 wf item diff <item>              # what the work changes, as a review sees it
 ```
 A session runs one agent on one item in its own git worktree and branch (`wf/<item>`), started by the
 daemon over ACP (`opencode acp`, `claude-agent-acp`, `codex-acp`, `gemini --experimental-acp`). Inside a
-session the agent works with `wf work report`, `wf work ask`, `wf work submit` and `wf work release`.
+session the agent comments with `wf comment <item>` (`--block` when it needs an answer, which a
+supervisor or you give with `--resolve`), and ends with `wf work submit` or `wf work release`.
 Submitted work is reviewed at the level the item names, then merged into the target branch of the
 `[merge]` policy. Agents start with `--start manual` and `--permissions ask`; `wf session start <item>
 --agent <name>` runs one by hand. The harnesses named above have not all been run against this build

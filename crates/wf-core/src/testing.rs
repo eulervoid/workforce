@@ -231,7 +231,7 @@ pub fn create(item_type: &str, title: &str) -> EventBody {
         item_type: TypeName::new(item_type).unwrap(),
         title: title.into(),
         body: String::new(),
-        priority: matches!(item_type, "task" | "question").then_some(Priority::DEFAULT),
+        priority: (item_type == "task").then_some(Priority::DEFAULT),
         lane: None,
         labels: vec![],
         requires: vec![],

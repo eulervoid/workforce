@@ -10,9 +10,9 @@ claim = ["member"]
 claim = ["member"]
 types = ["distill"]
 
+# Holds no items: its agents answer and escalate blockers.
 [lanes.supervision]
 claim = ["member"]
-types = ["question"]
 
 [merge]
 mode = "local"
@@ -42,7 +42,7 @@ steps = ["human"]
 review = "principal"
 lane = "default"
 fields = ["priority", "labels", "requires"]
-depends_on = ["task", "question", "decision"]
+depends_on = ["task", "decision"]
 initial = "open"
 transitions = "any"
 states = [
@@ -51,20 +51,6 @@ states = [
   { name = "in_progress", category = "active" },
   { name = "in_review", category = "blocked" },
   { name = "done", category = "done" },
-  { name = "dropped", category = "cancelled" },
-]
-
-[types.question]
-review = "none"
-lane = "supervision"
-fields = ["priority", "labels"]
-depends_on = []
-initial = "open"
-transitions = "any"
-states = [
-  { name = "open", category = "open" },
-  { name = "needs_human", category = "blocked" },
-  { name = "answered", category = "done" },
   { name = "dropped", category = "cancelled" },
 ]
 

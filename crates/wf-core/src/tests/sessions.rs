@@ -252,28 +252,6 @@ mod actors {
     }
 
     #[test]
-    fn a_session_cannot_answer_a_question_it_asked() {
-        let (fixture, mut state, _, session) = working();
-        let actor = fixture.agent_actor("coder", session);
-        let asked = fixture.author_as(&state, 0, actor, 3_002, create("question", "which crate?"));
-        state.receive(asked.clone(), Trust::Untrusted).unwrap();
-        let asked = item_id(&asked);
-        let other = item_id(&fixture.apply(&mut state, 0, 3_003, create("question", "not mine")));
-        assert_eq!(
-            check(&fixture, &state, 0, session, &moved(asked, "answered")),
-            Err(PolicyViolation::SessionAnswersItsOwnQuestion)
-        );
-        assert_eq!(
-            check(&fixture, &state, 0, session, &moved(asked, "needs_human")),
-            Ok(())
-        );
-        assert_eq!(
-            check(&fixture, &state, 0, session, &moved(other, "answered")),
-            Ok(())
-        );
-    }
-
-    #[test]
     fn a_session_ends_only_itself() {
         let (fixture, mut state, task, session) = working();
         let other = session_id(&fixture.apply(&mut state, 0, 3_002, start_session("coder", task)));

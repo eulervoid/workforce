@@ -83,7 +83,7 @@ impl Simulation {
         let device = usize::from(device) % DEVICES;
         let item = self.pick_item(device, first);
         let other = self.pick_item(device, second);
-        let types = ["task", "task", "question", "decision", "bug"];
+        let types = ["task", "task", "distill", "decision", "bug"];
         let states = [
             "backlog",
             "open",

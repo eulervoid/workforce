@@ -585,11 +585,20 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
 }
 
 fn session_label(session: &Session) -> String {
-    let role = match session.role() {
+    format!(
+        "{} {} {}",
+        session.agent().name,
+        role_name(session.role()),
+        session.id().short()
+    )
+}
+
+fn role_name(role: SessionRole) -> &'static str {
+    match role {
         SessionRole::Work => "work",
         SessionRole::Review { .. } => "review",
-    };
-    format!("{} {role} {}", session.agent().name, session.id().short())
+        SessionRole::Supervise => "supervise",
+    }
 }
 
 fn step_ref(body: &Body, step: StepId) -> StepRefView {
@@ -1096,26 +1105,27 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                 (SessionRole::Work, Some(EndReason::Submitted { commit })) => {
                     commit.map(|commit| commit.to_string())
                 }
-                (SessionRole::Work, _) => None,
+                (SessionRole::Work | SessionRole::Supervise, _) => None,
             };
             let steps = match state.item(session.item()) {
                 Some(ItemView::Live(item)) => steps_view(&item.body()),
                 Some(ItemView::Archived(_)) | None => None,
             };
-            // A work session whose item waits on a dependency, such as its own question.
+            // A work session whose item waits on a dependency or on an open blocker, such as its
+            // own question.
+            let blocked = match state.item(session.item()) {
+                Some(ItemView::Live(item)) => item.has_open_blocker(),
+                Some(ItemView::Archived(_)) | None => false,
+            };
             let parked = session.is_live()
                 && session.role() == SessionRole::Work
-                && !state.blockers(&graph, session.item()).is_empty();
+                && (blocked || !state.blockers(&graph, session.item()).is_empty());
             SessionView {
                 id: session.id().to_base32(),
                 agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),
                 item: session.item().to_base32(),
                 title,
-                role: match session.role() {
-                    SessionRole::Work => "work",
-                    SessionRole::Review { .. } => "review",
-                }
-                .to_string(),
+                role: role_name(session.role()).to_string(),
                 status: match session.ended() {
                     Some(ended) => ended.reason.name().to_string(),
                     None if parked => "parked".to_string(),
@@ -1132,7 +1142,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
 
 #[derive(Serialize)]
 pub struct InboxEntryView {
-    /// `blocked`, `human_review`, `merge` or `permission`.
+    /// `blocker`, `blocked`, `human_review`, `merge` or `permission`.
     pub kind: String,
     pub item: Option<String>,
     pub session: Option<String>,
@@ -1152,6 +1162,15 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
         .into_iter()
         .map(|entry| {
             let (kind, what) = match entry.waiting {
+                Waiting::Blocker { comment } => (
+                    "blocker",
+                    format!(
+                        "blocker {}: answer with `wf comment {} \"...\" --resolve {}`",
+                        comment.short(),
+                        entry.item.short(),
+                        comment.short()
+                    ),
+                ),
                 Waiting::Blocked => {
                     let state_name = match state.item(entry.item) {
                         Some(ItemView::Live(live)) => match live.standing(policy) {
@@ -1172,7 +1191,9 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
                             "review of {}: `wf item diff`, then `wf review`",
                             &commit.to_string()[..8]
                         ),
-                        None => "review of the answer: read it, then `wf review`".to_string(),
+                        None => {
+                            "review of work without commits: read it, then `wf review`".to_string()
+                        }
                     },
                 ),
                 Waiting::Merge { commit } => (

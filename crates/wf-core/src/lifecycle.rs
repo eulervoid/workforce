@@ -65,7 +65,7 @@ impl State {
                 },
                 (false, None) => move_to(first(StateCategory::Done)),
             },
-            EndReason::Blocked | EndReason::Reviewed => AfterEnd::Nothing,
+            EndReason::Reviewed | EndReason::Supervised => AfterEnd::Nothing,
             EndReason::Released
             | EndReason::TimedOut
             | EndReason::Failed
@@ -74,7 +74,7 @@ impl State {
                     .claim(item)
                     .is_some_and(|holder| holder.id() != session.id());
                 // Only an item that is being worked on goes back: one that was moved on, to done
-                // or to a question, stays where it is.
+                // or to review, stays where it is.
                 if held_by_another || self.category_of(item) != Some(StateCategory::Active) {
                     AfterEnd::Nothing
                 } else {
@@ -96,18 +96,20 @@ impl State {
             return TurnOutcome::Close;
         };
         let item = folded.item();
-        // An item under review is blocked on purpose: it waits for this very session.
-        let reviewing = matches!(folded.role(), SessionRole::Review { .. });
-        if !reviewing && self.category_of(item) == Some(StateCategory::Blocked) {
+        // Only work waits: a review or supervise session acts on an item that waits for it.
+        let working = match folded.role() {
+            SessionRole::Work => true,
+            SessionRole::Review { .. } | SessionRole::Supervise => false,
+        };
+        if working && self.category_of(item) == Some(StateCategory::Blocked) {
             return TurnOutcome::Close;
         }
         let blocked_by_comment = match self.item(item) {
             Some(ItemView::Live(live)) => live.has_open_blocker(),
             Some(ItemView::Archived(_)) | None => false,
         };
-        if (!reviewing && blocked_by_comment)
-            || !self.blockers(&self.dependency_graph(), item).is_empty()
-        {
+        let waits_on_dependency = !self.blockers(&self.dependency_graph(), item).is_empty();
+        if working && (blocked_by_comment || waits_on_dependency) {
             return TurnOutcome::Park;
         }
         if nudges_used > nudges_allowed {

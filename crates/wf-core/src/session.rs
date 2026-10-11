@@ -109,10 +109,12 @@ impl fmt::Display for CommitId {
 pub enum SessionRole {
     Work,
     /// A review of what a work session submitted: its commit, or `None` for work submitted
-    /// without commits, such as the answer to a question.
+    /// without commits.
     Review {
         commit: Option<CommitId>,
     },
+    /// Answers or escalates the blockers of the item that wait on a supervisor or on this agent.
+    Supervise,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -121,10 +123,10 @@ pub enum EndReason {
     Submitted { commit: Option<CommitId> },
     /// A review session gave its verdict.
     Reviewed,
+    /// A supervise session resolved or escalated the blockers it was started for.
+    Supervised,
     /// The agent gave up, or used up its nudges.
     Released,
-    /// The item entered a blocked state.
-    Blocked,
     /// Parked for too long, or `max_duration` reached.
     TimedOut,
     /// The harness exited or failed, or the daemon restarted.
@@ -139,7 +141,7 @@ impl EndReason {
             EndReason::Submitted { .. } => "submitted",
             EndReason::Reviewed => "reviewed",
             EndReason::Released => "released",
-            EndReason::Blocked => "blocked",
+            EndReason::Supervised => "supervised",
             EndReason::TimedOut => "timed_out",
             EndReason::Failed => "failed",
             EndReason::Cancelled => "cancelled",

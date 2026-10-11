@@ -856,7 +856,6 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
         )
     })?;
     match command {
-        WorkCommand::Ask(args) => ask(json, workspace, session, args),
         WorkCommand::Submit { note } => end(
             json,
             workspace,
@@ -987,44 +986,6 @@ fn diff(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Re
         Mode::Interactive => interactive::page(&view.diff),
         Mode::Scripted => emit(json, &view, |view| view.diff.clone()),
     }
-}
-
-fn ask(
-    json: bool,
-    workspace: &mut Workspace,
-    session: SessionId,
-    args: WorkAskArgs,
-) -> anyhow::Result<()> {
-    let item = workspace
-        .state()
-        .session(session)
-        .expect("the session was resolved when the workspace was opened")
-        .item();
-    let created = workspace.author(EventBody::ItemCreated(ItemCreated {
-        item_type: wf_core::name::TypeName::new("question")?,
-        title: args.question,
-        body: args.body.unwrap_or_default(),
-        priority: Some(Priority::DEFAULT),
-        lane: None,
-        labels: Vec::new(),
-        requires: Vec::new(),
-        review: None,
-    }))?;
-    let question = ItemId::from(created.id());
-    workspace.author(EventBody::ItemLinked(ItemLinked {
-        item,
-        link: Link::DependsOn(SetChange::Add(question)),
-    }))?;
-    done(
-        json,
-        format!(
-            "asked #{}; #{} waits for the answer. Stop here: you are prompted again once it is answered",
-            question.short(),
-            item.short()
-        ),
-        &created,
-        Some(question),
-    )
 }
 
 fn end(
@@ -1200,6 +1161,16 @@ fn comment(
         (Some(number), true) => message.push_str(&format!(", and checked step {number}")),
         (Some(number), false) => message.push_str(&format!(", on step {number}")),
         (None, _) => {}
+    }
+    // A supervise session is over once it has answered or escalated.
+    let supervising = workspace.session().filter(|session| {
+        workspace
+            .state()
+            .session(*session)
+            .is_some_and(|session| session.item() == id && session.role() == SessionRole::Supervise)
+    });
+    if let (Some(session), false) = (supervising, resolves.is_empty()) {
+        workspace.end_session(session, Finish::Supervised)?;
     }
     done(json, message, &event, Some(id))
 }

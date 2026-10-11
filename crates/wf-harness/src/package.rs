@@ -2,7 +2,7 @@
 
 use std::fmt::Write;
 
-/// What earlier work on the item left behind: a comment, a report or a note on a state change.
+/// What was said on the item before: a comment, a blocker or a change request.
 pub struct Earlier {
     pub by: String,
     pub kind: String,
@@ -80,8 +80,8 @@ impl WorkPackage {
              Add `--step <number>` when it is about a step, and `--done` to check the step off as well. \
              Write comments that make sense on their own. They are encouraged, not required.\n\
              - When the work is finished, run `wf work submit`. Your commits are reviewed and merged from there.\n\
-             - If you need an answer from someone, run `wf work ask \"<question>\"` and stop; \
-             you are prompted again when it is answered.\n\
+             - If you need an answer from someone, run `wf comment {item} \"<question>\" --block` and \
+             stop; you are prompted again when it is answered.\n\
              - If you cannot make progress, run `wf work release --note \"<why>\"`.\n",
             branch = self.branch,
             target = self.target,
@@ -180,9 +180,83 @@ impl ReviewPackage {
     }
 }
 
+/// A blocker the supervisor is asked to answer or escalate.
+pub struct WaitingBlocker {
+    /// The short id `--resolve` takes.
+    pub comment: String,
+    pub by: String,
+    pub text: String,
+}
+
+/// The prompt that starts a supervise session.
+pub struct SupervisePackage {
+    /// The short id of the item, as `wf` commands take it.
+    pub item: String,
+    pub title: String,
+    pub body: String,
+    pub earlier: Vec<Earlier>,
+    pub blockers: Vec<WaitingBlocker>,
+    /// The handle of the person to escalate to, as in `@joshua`.
+    pub person: String,
+}
+
+impl SupervisePackage {
+    pub fn render(&self) -> String {
+        let mut text = format!(
+            "You are supervising item #{item}: {title}\n\n\
+             Work on it waits for an answer. Do not change any files.\n\n",
+            item = self.item,
+            title = self.title
+        );
+        if !self.body.trim().is_empty() {
+            let _ = writeln!(text, "{}\n", self.body.trim());
+        }
+        if !self.earlier.is_empty() {
+            text.push_str("## What was said before\n\n");
+            for earlier in &self.earlier {
+                let _ = writeln!(
+                    text,
+                    "- {} ({}): {}",
+                    earlier.by,
+                    earlier.kind,
+                    earlier.text.trim()
+                );
+            }
+            text.push('\n');
+        }
+        text.push_str("## Waiting on you\n\n");
+        for blocker in &self.blockers {
+            let _ = writeln!(
+                text,
+                "- {} by {}: {}",
+                blocker.comment,
+                blocker.by,
+                blocker.text.trim()
+            );
+        }
+        let resolve: Vec<String> = self
+            .blockers
+            .iter()
+            .map(|blocker| format!("--resolve {}", blocker.comment))
+            .collect();
+        let _ = write!(
+            text,
+            "\n## How to answer\n\n\
+             Answer everything above in one comment; your session ends with it.\n\
+             - If you can answer: `wf comment {item} \"<answer>\" {resolve}`.\n\
+             - If a person has to decide: `wf comment {item} \"{person} <what they have to decide>\" \
+             --block {resolve}`. This hands the question to them.\n",
+            item = self.item,
+            resolve = resolve.join(" "),
+            person = self.person,
+        );
+        text
+    }
+}
+
 /// The prompt that goes out when a turn ended and the session is still going.
-pub const CONTINUE: &str = "Continue. When you are done run `wf work submit`; if you need an answer run `wf work ask`; \
-     if you are stuck run `wf work release`.";
+pub const CONTINUE: &str = "Continue. When you are done run `wf work submit`; if you need an answer write a \
+     blocker with `wf comment <item> \"<question>\" --block`; if you are stuck run `wf work release`.";
 
 #[cfg(test)]
 mod tests {
@@ -218,7 +292,7 @@ mod tests {
             "wf item check k3f9ab",
             "wf comment k3f9ab",
             "wf work submit",
-            "wf work ask",
+            "--block",
             "wf work release",
         ] {
             assert!(text.contains(command), "{command}");
