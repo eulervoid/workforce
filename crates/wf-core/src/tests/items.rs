@@ -537,12 +537,20 @@ fn comment_references_resolve_among_the_comments_of_their_item() {
         create_with_body(
             "task",
             "b",
-            &format!("as #{}/{} says, and #{}/zzzz", task.short(), said.short(), task.short()),
+            &format!(
+                "as #{}/{} says, and #{}/zzzz",
+                task.short(),
+                said.short(),
+                task.short()
+            ),
         ),
     ));
 
     let resolver = state.resolver();
-    assert_eq!(resolver.comment(&task.short(), &said.short()), Ok((task, said)));
+    assert_eq!(
+        resolver.comment(&task.short(), &said.short()),
+        Ok((task, said))
+    );
     assert!(matches!(
         resolver.comment(&task.short(), "zzzz"),
         Err(PrefixError::NotFound(_))

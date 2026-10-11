@@ -5,7 +5,9 @@
 
 use std::collections::BTreeSet;
 
-use crate::id::{CommentId, HashId, ItemId, MIN_PREFIX_LEN, PrefixError, SessionId, resolve_prefix};
+use crate::id::{
+    CommentId, HashId, ItemId, MIN_PREFIX_LEN, PrefixError, SessionId, resolve_prefix,
+};
 use crate::identity::{AgentId, PrincipalKey};
 use crate::item::{Item, Origin};
 use crate::refs::{Mention, Token};
