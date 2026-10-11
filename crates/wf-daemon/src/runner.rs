@@ -520,6 +520,10 @@ impl Daemon {
                 )),
             ),
         };
+        // A submission with open change requests is refused before anything is written.
+        state
+            .check_policy(&EventBody::SessionEnded(SessionEnded { session, reason }))
+            .map_err(|violation| SessionError::Authoring(violation.into()))?;
         // The comment comes first: once the session has ended it can no longer write.
         let because = match note {
             Some(note) => {

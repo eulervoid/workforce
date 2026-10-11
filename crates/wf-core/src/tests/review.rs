@@ -489,3 +489,39 @@ fn an_approved_answer_does_not_finish_an_item_that_was_moved_since() {
     scene.apply(moved(question, "needs_human"));
     assert!(scene.state.pending_answers().is_empty());
 }
+
+#[test]
+fn change_requests_hold_up_approval_and_the_next_submission() {
+    let mut scene = Scene::new();
+    let item = scene.submitted("standard");
+    assert_eq!(
+        scene
+            .state
+            .check_policy(&verdict(item, commit(1), Verdict::RequestChanges)),
+        Err(PolicyViolation::NoChangeRequests(item))
+    );
+
+    let change: crate::id::CommentId = scene.apply(change_request(item, "add a test")).id().into();
+    assert_eq!(
+        scene
+            .state
+            .check_policy(&verdict(item, commit(1), Verdict::Approve)),
+        Err(PolicyViolation::OpenChangeRequests(item))
+    );
+    scene.apply(verdict(item, commit(1), Verdict::RequestChanges));
+    scene.apply(moved(item, "open"));
+
+    let session: SessionId = scene.apply(start_session("coder", item)).id().into();
+    let submit = end_session(
+        session,
+        EndReason::Submitted {
+            commit: Some(commit(2)),
+        },
+    );
+    assert_eq!(
+        scene.state.check_policy(&submit),
+        Err(PolicyViolation::OpenChangeRequests(item))
+    );
+    scene.apply(resolving(item, "added one", &[change]));
+    assert_eq!(scene.state.check_policy(&submit), Ok(()));
+}

@@ -113,7 +113,17 @@ impl World {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        panic!("timed out waiting for {what}");
+        let sessions = self.sessions();
+        let mut transcripts = String::new();
+        for session in &sessions {
+            transcripts.push_str(&self.wf.run(&[
+                "session",
+                "watch",
+                short(session["id"].as_str().unwrap()),
+                "--no-follow",
+            ]));
+        }
+        panic!("timed out waiting for {what}: {sessions:#?} {transcripts}");
     }
 
     fn questions(&self) -> Vec<Value> {
@@ -911,11 +921,11 @@ async fn work_approved_by_a_reviewer_agent_is_merged() {
 #[tokio::test(flavor = "multi_thread")]
 async fn requested_changes_lead_to_a_second_session_on_the_same_branch() {
     let coder = "\
-sh if [ -f hello.txt ]; then echo test > test.txt && git add test.txt && git commit -q -m test; else echo hi > hello.txt && git add hello.txt && git commit -q -m hello; fi
+sh if [ -f hello.txt ]; then echo test > test.txt && git add test.txt && git commit -q -m test && \"$WF_BIN\" comment {item} \"added one\" --resolve-change-requests; else echo hi > hello.txt && git add hello.txt && git commit -q -m hello; fi
 wf work submit
 ";
     let reviewer = "\
-sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" review --request-changes --note \"add a test\"; fi
+sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" comment {item} \"add a test\" --request-change && \"$WF_BIN\" review --request-changes; fi
 ";
     let world = review_world(coder, reviewer).await;
     let item = world
@@ -998,9 +1008,17 @@ async fn an_escalated_review_goes_to_a_person() {
             world.item(&item)["review_status"]["step"] == "human"
         })
         .await;
+    let refused = world
+        .wf
+        .fail(&["review", short(&item), "--request-changes", "--note", "no"]);
+    assert!(
+        refused.contains("needs at least one open change request"),
+        "{refused}"
+    );
     world
         .wf
-        .run(&["review", short(&item), "--request-changes", "--note", "no"]);
+        .run(&["comment", short(&item), "not like this", "--request-change"]);
+    world.wf.run(&["review", short(&item), "--request-changes"]);
     assert_eq!(world.item(&item)["state"], "open");
     let message = world.wf.fail(&["review", short(&item), "--escalate"]);
     assert!(message.contains("only an agent can escalate"), "{message}");

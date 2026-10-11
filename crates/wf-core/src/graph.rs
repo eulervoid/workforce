@@ -43,7 +43,8 @@ pub enum Readiness {
     Ready,
     /// Every dependency is done, and a live session holds the item.
     Claimed,
-    /// Some dependency is not done yet; none was cancelled.
+    /// Some dependency is not done yet, or a blocker on the item is open; no dependency was
+    /// cancelled.
     Blocked,
     /// Some dependency was cancelled, so waiting will not free the item; someone has to act.
     Stranded,
@@ -148,23 +149,24 @@ impl State {
             return None;
         }
         let blockers = self.blockers(graph, item.id());
-        Some(if blockers.is_empty() {
-            if self.claim(item.id()).is_some() {
+        Some(
+            if blockers
+                .iter()
+                .any(|blocker| blocker.state_category == Some(StateCategory::Cancelled))
+            {
+                Readiness::Stranded
+            } else if !blockers.is_empty() || item.has_open_blocker() {
+                Readiness::Blocked
+            } else if self.claim(item.id()).is_some() {
                 Readiness::Claimed
             } else {
                 Readiness::Ready
-            }
-        } else if blockers
-            .iter()
-            .any(|blocker| blocker.state_category == Some(StateCategory::Cancelled))
-        {
-            Readiness::Stranded
-        } else {
-            Readiness::Blocked
-        })
+            },
+        )
     }
 
-    /// `ready(i) ⇔ cat(i) = open ∧ every dependency is done ∧ no live session holds i`.
+    /// `ready(i) ⇔ cat(i) = open ∧ every dependency is done ∧ no open blocker on i ∧ no live
+    /// session holds i`.
     pub fn is_ready(&self, graph: &DependencyGraph, item: &Item) -> bool {
         self.readiness(graph, item) == Some(Readiness::Ready)
     }

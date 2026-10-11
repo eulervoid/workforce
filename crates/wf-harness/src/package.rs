@@ -163,14 +163,18 @@ impl ReviewPackage {
             }
             text.push('\n');
         }
-        text.push_str(
+        let _ = write!(
+            text,
             "## How to review\n\n\
              Read the change or the answer, and run the tests if there are any. Do not change anything. \
              Then give exactly one verdict:\n\
              - `wf review --approve --note \"...\"` if the work is good as it is.\n\
-             - `wf review --request-changes --note \"...\"` if it needs changes: the item goes back for \
-             another session, which reads your note, so say what to change.\n\
+             - If it needs changes, write each change on its own: \
+             `wf comment {item} \"<what to change>\" --request-change`, then run \
+             `wf review --request-changes`. The item goes back for another session, which has to \
+             resolve every change request before it submits again.\n\
              - `wf review --escalate --note \"...\"` if a person has to decide.\n",
+            item = self.item,
         );
         text
     }

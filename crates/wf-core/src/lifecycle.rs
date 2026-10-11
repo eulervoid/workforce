@@ -25,7 +25,7 @@ pub enum AfterEnd {
 pub enum TurnOutcome {
     /// The session already ended, or its item is blocked.
     Close,
-    /// The item waits on a dependency, such as its own question.
+    /// The item waits on a dependency or an open blocker, such as the session's own question.
     Park,
     /// Prompt again: continue, and submit, ask or release when done or stuck.
     Continue,
@@ -101,7 +101,13 @@ impl State {
         if !reviewing && self.category_of(item) == Some(StateCategory::Blocked) {
             return TurnOutcome::Close;
         }
-        if !self.blockers(&self.dependency_graph(), item).is_empty() {
+        let blocked_by_comment = match self.item(item) {
+            Some(ItemView::Live(live)) => live.has_open_blocker(),
+            Some(ItemView::Archived(_)) | None => false,
+        };
+        if (!reviewing && blocked_by_comment)
+            || !self.blockers(&self.dependency_graph(), item).is_empty()
+        {
             return TurnOutcome::Park;
         }
         if nudges_used > nudges_allowed {

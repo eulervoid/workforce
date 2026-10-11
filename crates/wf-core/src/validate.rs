@@ -173,6 +173,14 @@ pub enum PolicyViolation {
     AgentLowersReview(ItemId),
     #[error("a review session comments on the item, not on its steps")]
     StepInReviewComment,
+    #[error(
+        "{0} has open change requests; resolve each with `wf comment <item> \"...\" --resolve <comment>` first"
+    )]
+    OpenChangeRequests(ItemId),
+    #[error(
+        "requesting changes on {0} needs at least one open change request: write each with `wf comment <item> \"...\" --request-change`"
+    )]
+    NoChangeRequests(ItemId),
     #[error("{0} is not a comment of this item")]
     UnknownComment(CommentId),
     #[error("a comment needs text unless it resolves something")]
@@ -183,6 +191,13 @@ pub enum PolicyViolation {
     AlreadyResolved(CommentId),
     #[error("a session cannot resolve a blocker it wrote; someone else has to")]
     SessionResolvesItsOwnBlocker,
+}
+
+/// Whether the item has an open comment of the kind.
+fn has_open(item: &crate::item::Item, kind: CommentKind) -> bool {
+    item.open_comments()
+        .iter()
+        .any(|(_, comment)| comment.kind == kind)
 }
 
 enum Admission {
@@ -837,13 +852,36 @@ impl State {
             | EventBody::DeviceProfile(_)
             | EventBody::ForkAnnounced(_)
             | EventBody::SessionStarted(_)
-            | EventBody::SessionEnded(_)
             | EventBody::Merged(_) => Ok(()),
+            EventBody::SessionEnded(ended) => {
+                let submitted = matches!(ended.reason, crate::session::EndReason::Submitted { .. });
+                let item = workforce
+                    .sessions
+                    .get(&ended.session)
+                    .map(|session| session.item());
+                match item.and_then(|item| workforce.items.get(&item)) {
+                    Some(item) if submitted && has_open(item, CommentKind::ChangeRequest) => {
+                        Err(PolicyViolation::OpenChangeRequests(item.id()))
+                    }
+                    Some(_) | None => Ok(()),
+                }
+            }
             EventBody::Review(review) => {
-                because_on(item_of(&review.item)?, review.because)?;
+                let item = item_of(&review.item)?;
+                because_on(item, review.because)?;
                 match self.submission(review.item) {
-                    Some((commit, _)) if commit == review.commit => Ok(()),
-                    Some(_) | None => Err(PolicyViolation::StaleReview(review.item)),
+                    Some((commit, _)) if commit == review.commit => {}
+                    Some(_) | None => return Err(PolicyViolation::StaleReview(review.item)),
+                }
+                let changes_open = has_open(item, CommentKind::ChangeRequest);
+                match review.verdict {
+                    Verdict::Approve if changes_open => {
+                        Err(PolicyViolation::OpenChangeRequests(review.item))
+                    }
+                    Verdict::RequestChanges if !changes_open => {
+                        Err(PolicyViolation::NoChangeRequests(review.item))
+                    }
+                    Verdict::Approve | Verdict::RequestChanges | Verdict::Escalate => Ok(()),
                 }
             }
             EventBody::AgentDefined(defined) => defined.lanes.iter().try_for_each(known_lane),

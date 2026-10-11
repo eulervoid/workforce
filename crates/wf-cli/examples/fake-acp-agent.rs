@@ -6,8 +6,9 @@
 //!
 //! - `say <text>`: an agent message.
 //! - `sh <command>`: runs the command with `sh -c` in the directory of the session.
-//! - `wf <args>`: runs `$WF_BIN` with the arguments; double quotes group words, and `{item}` is
-//!   the item named in the prompt, as in `You are working on item #k3f9ab`.
+//! - `wf <args>`: runs `$WF_BIN` with the arguments; double quotes group words.
+//!
+//! In `sh` and `wf` lines, `{item}` is the item named in the prompt, as in `item #k3f9ab`.
 //! - `permission`: asks for a permission and says what the answer was.
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
@@ -107,7 +108,7 @@ fn main() {
                         "say" => say(rest),
                         "sh" => {
                             let status = Command::new("sh")
-                                .args(["-c", rest])
+                                .args(["-c", &rest.replace("{item}", &item)])
                                 .current_dir(&directory)
                                 .status()
                                 .unwrap();

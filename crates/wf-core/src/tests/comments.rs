@@ -160,3 +160,43 @@ fn a_move_names_a_comment_of_its_item_as_its_reason() {
         Err(PolicyViolation::UnknownComment(elsewhere))
     );
 }
+
+#[test]
+fn an_open_blocker_holds_up_the_work_until_it_is_resolved() {
+    let (fixture, mut state, task) = with_task();
+    fixture.apply(&mut state, 0, 2_001, define_agent("coder"));
+    let ready = |state: &State| state.ready_items().iter().any(|item| item.id() == task);
+    assert!(ready(&state));
+
+    let session: SessionId = fixture
+        .apply(&mut state, 0, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    let actor = fixture.agent_actor("coder", session);
+    let asked = fixture.author_as(&state, 0, actor, 3_001, blocker(task, "which crate?"));
+    state.receive(asked.clone(), Trust::Untrusted).unwrap();
+    assert_eq!(
+        state.turn_outcome(session, 1, 3),
+        crate::lifecycle::TurnOutcome::Park
+    );
+
+    fixture.apply(
+        &mut state,
+        0,
+        3_002,
+        end_session(session, crate::session::EndReason::TimedOut),
+    );
+    fixture.apply(&mut state, 0, 3_003, moved(task, "open"));
+    assert!(
+        !ready(&state),
+        "an open blocker keeps the item from being ready"
+    );
+
+    fixture.apply(
+        &mut state,
+        0,
+        3_004,
+        resolving(task, "humantime", &[comment_id(&asked)]),
+    );
+    assert!(ready(&state));
+}
