@@ -149,9 +149,17 @@ impl GitCli {
         Ok(worktrees)
     }
 
+    /// Whether nothing tracked is edited. Untracked files do not count, such as the marker `wf init`
+    /// leaves: git itself refuses to overwrite one, and nothing else is at risk.
     fn is_clean(&self, worktree: &Path) -> Result<bool, VcsError> {
-        let status =
-            self.succeed_in(worktree, [OsStr::new("status"), OsStr::new("--porcelain")])?;
+        let status = self.succeed_in(
+            worktree,
+            [
+                OsStr::new("status"),
+                OsStr::new("--porcelain"),
+                OsStr::new("--untracked-files=no"),
+            ],
+        )?;
         Ok(status.trim().is_empty())
     }
 
@@ -739,6 +747,21 @@ mod tests {
             std::fs::read_to_string(main.join("file.txt")).unwrap(),
             "edited by a person\n"
         );
+    }
+
+    #[test]
+    fn untracked_files_do_not_block_a_merge_into_the_checked_out_target() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "a.txt", "a\n");
+        let main = repo.directory();
+        repo.write(&main, ".workforce.toml", "id = \"x\"\n");
+        let outcome = repo.git.merge("main", work, "Merge #k3f9").unwrap();
+        assert!(
+            matches!(outcome, MergeOutcome::Merged { .. }),
+            "{outcome:?}"
+        );
+        assert!(main.join("a.txt").exists());
+        assert!(main.join(".workforce.toml").exists());
     }
 
     #[test]
