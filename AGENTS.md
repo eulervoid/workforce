@@ -26,6 +26,7 @@
 - `wf-core` is pure: no IO, no async, no clock or randomness except through parameters
 - `wf-net` protocols are written against generic streams and a `SyncLog` trait, so convergence is tested in memory; iroh only carries them
 - The daemon owns the store when it runs: CLI code reads and writes through `Workspace`, never through the store directly
+- `wf-vcs` is the only crate that runs `git`. What happens to an item when a session starts, ends or finishes a turn is a pure function in `wf-core::lifecycle`; the daemon only carries it out
 
 ## Error Handling
 - `thiserror` enums in library crates, `anyhow` only at the CLI boundary
