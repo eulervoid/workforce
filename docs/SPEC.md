@@ -28,7 +28,7 @@ A laptop (sleeps, roams), a cloud VM (always on), a home desktop (GPU, behind a 
 * Prompt injection through issue text is a real risk on donor machines.
 
 ### Cross-cutting
-1. The only thing all peers must agree on is **project state**: items, claims, progress, decisions, membership.
+1. The only thing all peers must agree on is **project state**: items, claims, reports, decisions, membership.
 2. Authorization data replicates with the project and is checkable offline.
 3. "No external infrastructure" means none the user has to run. Public relays and discovery are
    defaults and can be swapped.
@@ -87,7 +87,7 @@ the same store, log and item model.
 * **State is folded into in-memory Rust structs** by `wf-core`. Queries are typed Rust, not SQL. Changing
   the state shape needs no migration, only a refold.
 * **Snapshots:** the folded state is serialized to redb, keyed by the heads it covers. Startup loads the
-  latest snapshot and applies newer events. Large bodies (comments, progress messages) stay in the log
+  latest snapshot and applies newer events. Large bodies (comments, reports) stay in the log
   and are loaded on demand by `EventId`.
 * **Derived indexes** (search, M4) are rebuildable and never a second source of truth.
 * redb is single-process. The daemon owns the store; the CLI talks to the daemon and opens the store
@@ -182,8 +182,8 @@ need different capabilities.
   its item to a blocked state, or runs out of nudges or time. Waiting on a dependency, such as its own
   question (`wf work ask`), **parks** it: the harness keeps its conversation and continues once the item is
   ready again, or ends after the agent's `park_timeout`.
-* Context carries over within a session in the conversation, and across sessions through the progress
-  log, comments and review notes.
+* Context carries over within a session in the conversation, and across sessions through reports,
+  comments and review notes.
 * **Liveness:** on one machine (M2) a session is live from `SessionStarted` until `SessionEnded`; a
   restarting daemon ends its own leftover sessions as `Failed`. Across devices (M3) liveness is computed
   at query time from a lease: a session without a renewal within the lease counts as dead, even without
@@ -201,7 +201,7 @@ need different capabilities.
 | Role | Can do |
 |---|---|
 | `owner` | everything: invites, policy, `ForkAnnounced`, naming other owners |
-| `member` | items, claims, comments, progress, reviews, decisions |
+| `member` | items, claims, comments, reports, reviews, decisions |
 
 Agent actors act for their principal with the member's rights, minus a few **guards** (authoring checks
 against mistakes and shortcuts, not attacks): a session cannot answer a question it asked, cannot lower
@@ -259,7 +259,7 @@ struct Event {
 | Binding | `DeviceBound` | invite key proof, the new device's first event |
 | Identity | `AgentDefined`, `DeviceProfile` | device |
 | Items | `ItemCreated`, `ItemEdited`, `ItemTransitioned`, `ItemLinked`, `ItemArchived`, `ItemUnarchived`, `Comment` | device |
-| Work | `SessionStarted`, `SessionEnded`, `Review`, `Merged` (M2); `Assigned`, `Claim`, `Heartbeat`, `Progress` (M3) | device (`Assigned` by the anchor) |
+| Work | `SessionStarted`, `SessionEnded`, `Review`, `Merged`, `Report` (M2); `Assigned`, `Claim`, `Heartbeat` (M3) | device (`Assigned` by the anchor) |
 
 Decisions and questions are item types, not separate event families.
 
@@ -363,6 +363,7 @@ event invalid.
 | 21 | `SessionEnded` | `session: SessionId`, `reason: EndReason` (M2, see *Sessions*) |
 | 22 | `Review` | `item`, `commit: CommitId`, `verdict`: `Approve`, `RequestChanges` or `Escalate`, `note: Option<String>` (M2) |
 | 23 | `Merged` | `item`, `reviewed: CommitId`, `commit: CommitId` (M2) |
+| 24 | `Report` | `session: SessionId`, `note: String`, `step: Option<StepId>` (M2, see *Reports*) |
 
 * `Signed<T>` = `statement: T`, `signer: PrincipalKey`, `signature: Signature`.
 * `MemberSeed` = `principal`, `handle`, `devices: Vec<DeviceKey>`, `previous: Vec<PrincipalKey>`. The
@@ -373,7 +374,7 @@ event invalid.
 * An item id is the id of its `ItemCreated` event. Policy and `Genesis` carry TOML text, not a parsed
   structure, so the stored policy is exactly what the owner wrote.
 * `CommitId` = `Git(GitOid)`, the single `vcs` variant (section 9).
-* Bodies for later milestones (`Assigned`, `Claim`, `Heartbeat`, `Progress`, ...) take new tags.
+* Bodies for later milestones (`Assigned`, `Claim`, `Heartbeat`, ...) take new tags.
 
 #### Local storage (redb)
 One file per workforce at `$XDG_DATA_HOME/workforce/<workforce id>/store.redb`. Values are the postcard
@@ -517,7 +518,7 @@ struct ForkPoint { workforce: Hash, heads: Vec<EventId> }
 
 * Parent events up to `heads` are a read-only prefix, validated under the parent's rules. They are
   admitted only when fetched by id from a known descendant, so nothing after the fork point gets in.
-  Item ids, comments, progress and decisions carry over.
+  Item ids, comments, reports and decisions carry over.
 * Parent events after the fork point are ignored.
 * After compaction the prefix is the parent's kept events plus its frontier, which the fork takes over.
   A fork point below a frontier needs an archive device that kept the full history.
@@ -787,46 +788,48 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
   `wf/<item>` branch lands in the target.
 * **Later:** git bundles over iroh-blobs for peer-to-peer repositories; `git-remote-iroh` as prior art.
 
-## 10. Progress log
+## 10. Reports
 
-The "what is being changed right now" feed, tied to items. Small commits make small reports.
+What the working agent says about what it is doing and why: progress, decisions made, options rejected. A
+report belongs to the session that wrote it, and through the session to its item. An item can have several
+sessions (an agent gives up, a review requests changes), and each report says which one it came from.
 
 ```rust
-struct Progress {
-    item: ItemId,
-    session: Option<SessionId>,     // None for human commits
-    commit: CommitInfo,             // raw, always present
-    parsed: Option<ParsedNotes>,    // best effort
+struct Report {
+    session: SessionId,             // the item is the session's item
+    note: String,
+    step: Option<StepId>,           // the step this is about, named by the hash of its text
 }
-struct CommitInfo {
-    vcs: VcsKind, id: CommitId, parents: Vec<CommitId>,
-    message: String,                // verbatim, after redaction
-    author: String, timestamp: Timestamp,   // informational only
-    touches: Vec<PathPrefix>, diffstat: DiffStat,
-}
-struct ParsedNotes { parser: u16, decisions: Vec<String>, project_decisions: Vec<String> }
 ```
 
-* No validation of message content: any commit yields a valid event.
-* `parsed` comes from a trailer parser and may be absent. Peers may re-parse from `message`.
-* Attribution comes from the event signature, not the git author.
+* Reports are written with `wf work report "<text>" [--step <id> [--done]]`, only inside a session.
+  `--done` requires `--step` and also writes `StepDone` for it. Work sessions only: a review session
+  reports without `--step`, since a reviewer does not tick the author's steps.
+* The step link is plain data and is not checked when read. `--step` is checked against the item's body
+  when the report is written, so a mistyped id writes nothing. If the step's text is edited later, the report
+  keeps pointing at a hash that is no longer in the body, and it is shown without a step.
+* The tick is its own event with its own rules, so a report never becomes invalid because a step changed.
+* Reports are encouraged and never required: `wf work submit` does not check for them. Agent instructions ask
+  for reports that stand on their own, saying what was chosen, what was rejected and why.
+* Attribution comes from the event signature and the session.
 * Redaction happens before signing.
-* Convention (docs and agent instructions, not code): `Decision:` and `Project-Decision:` trailers.
-* `wf work progress "..."` for notes without a commit.
-* `wf activity` is a live feed. When two live sessions' `touches` overlap, both sessions get an inbox entry.
-* Sessions check their inbox after each commit; that is where comments and overlap notices arrive.
+* `wf item show` lists the comments and reports of an item together in time order. Each report shows its
+  agent, role and short session id, and the step text while the step exists.
+* A work package includes the reports of earlier sessions of the item.
+* Nothing depends on commit messages. Overlap notifications (M3) come from the files commits touch, which
+  are read from the repository and are not part of a report.
 
 ### Two kinds of decisions
 | | Item decisions | Project decisions |
 |---|---|---|
-| Where | the item's progress log | the project decision log |
+| Where | the item's reports | the project decision log |
 | Written by | the working agent | agents, scribes, humans |
 | Ratified | no | yes |
 | Agent context | when working on that item | always, once ratified |
 
 ## 11. Project decisions and search (M4)
 
-* Distilling threads and progress into project decisions is **normal work**: a `distill` item in the
+* Distilling threads and reports into project decisions is **normal work**: a `distill` item in the
   `meta` lane, claimed like any other. This avoids duplicate scribes.
 * Decisions are items of the built-in `decision` type. Ratified decisions change only through a new
   decision that `supersedes` them.
@@ -844,7 +847,7 @@ handles harness credentials.
 
 | ACP | Use |
 |---|---|
-| `session/new` + MCP servers | start in the item's worktree with `WF_SESSION` set; attach the `wf` MCP server (`item_show`, `progress`, `inbox`, `search`, `decision_propose`, M3) |
+| `session/new` + MCP servers | start in the item's worktree with `WF_SESSION` set; attach the `wf` MCP server (`item_show`, `report`, `inbox`, `search`, `decision_propose`, M3) |
 | `session/prompt` | send the work package: item, dependencies, answers, review notes of earlier attempts, the agent rules; later ratified decisions and search hits |
 | end of a prompt turn | decides the next step (below) |
 | `session/update` | transcript capture (local, `wf session watch`), redaction (M3), presence |
@@ -885,7 +888,7 @@ handles harness credentials.
   references, the system keyring. Values are injected into the harness environment.
 * wf keeps the injected values in memory only and uses them to scrub: exact match plus base64, URL and hex
   encodings, then pattern scanning (gitleaks-style) as a second layer.
-* Progress events always pass redaction before signing.
+* Reports always pass redaction before signing.
 
 ## 14. Connectivity and lifecycle
 
@@ -1024,7 +1027,7 @@ wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
 wf item add|list|show|edit|move|link|archive|diff   # all types: task, question, decision, ...
 wf comment <item> <text>
-wf work progress "<text>"
+wf work report "<text>" [--step <id> [--done]]
 wf activity | inbox
 wf review <item> --approve|--request-changes|--escalate
 wf search <query>
@@ -1051,8 +1054,8 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
 |---|---|
 | **M0** | Event log with `actor`, `owner`/`member`, principal and device keys, agent definitions, item model (types, categories, built-in types, relations, derived refs and mentions, archiving), in-memory fold, redb event store with snapshots. Single peer. |
 | **M1** | iroh sync, equivocation handling, self-authorizing device invites and `wf join`, device profiles, daemon, gossip, `wf fork`. |
-| M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, questions and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress |
-| M3 | Sessions across devices: anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, session inboxes, progress from commits, overlap notifications, secret brokering, redaction, merge mode `origin` with `Merged` from origin. **= UC1** |
+| M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, questions and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress, `wf work report` and `Report` |
+| M3 | Sessions across devices: anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, session inboxes, overlap notifications, secret brokering, redaction, merge mode `origin` with `Merged` from origin. **= UC1** |
 | M4 | Decision ratification flow, distill items, hybrid search |
 | M5 | Multiple principals, threads, scopes, `wf attach` |
 | M6 | Git bundles over iroh-blobs, peer-to-peer repos, compaction (item checkpoints, frontier) |
