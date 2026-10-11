@@ -12,7 +12,7 @@ pub enum Waiting {
     /// person. Moving it on is the answer.
     Blocked,
     /// The review of the work has reached a step for a person: `wf review`.
-    HumanReview { commit: CommitId },
+    HumanReview { commit: Option<CommitId> },
     /// The work is ready to merge, but the target branch is checked out with changes.
     Merge { commit: CommitId },
 }
@@ -39,7 +39,7 @@ impl State {
                     Some(ReviewStatus::Awaiting {
                         step: ReviewStep::Human,
                     }) => {
-                        let (commit, _) = self.submitted_commit(item.id())?;
+                        let (commit, _) = self.submission(item.id())?;
                         Waiting::HumanReview { commit }
                     }
                     Some(ReviewStatus::Awaiting {

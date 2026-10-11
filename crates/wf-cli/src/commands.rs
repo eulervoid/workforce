@@ -738,11 +738,10 @@ fn edit(
         if let Some(lane) = args.lane {
             draft.lane = Some(lane);
         }
-        if let Some(review) = args.review {
-            draft.review = Some(review);
-        }
-        if args.no_review {
-            draft.review = None;
+        match args.review {
+            Some(ReviewChoice::Default) => draft.review = None,
+            Some(ReviewChoice::Level(review)) => draft.review = Some(review),
+            None => {}
         }
         draft.labels.extend(args.add_labels);
         for label in &args.remove_labels {
@@ -899,7 +898,7 @@ fn review(
         Some(_) | None => {
             workspace
                 .state()
-                .submitted_commit(item)
+                .submission(item)
                 .ok_or_else(|| anyhow!("#{} has no submitted work to review", item.short()))?
                 .0
         }
@@ -970,8 +969,12 @@ fn diff(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Re
         .target
         .clone();
     let git = wf_vcs::GitCli::open(repository)?;
-    let commit = match workspace.state().submitted_commit(id) {
-        Some((commit, _)) => commit,
+    let commit = match workspace.state().submission(id) {
+        Some((Some(commit), _)) => commit,
+        Some((None, _)) => bail!(
+            "#{} was submitted without commits, there is no diff",
+            id.short()
+        ),
         None => wf_vcs::VcsAdapter::branch_head(&git, &wf_vcs::item_branch(id))?,
     };
     let diff = wf_vcs::VcsAdapter::diff(&git, &target, commit)?;

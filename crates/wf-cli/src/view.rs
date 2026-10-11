@@ -557,7 +557,7 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
         ReviewStatus::Approved { commit } => ReviewStatusView {
             status: "approved".into(),
             step: None,
-            commit: Some(commit.to_string()),
+            commit: commit.map(|commit| commit.to_string()),
         },
         ReviewStatus::Merged { commit } => ReviewStatusView {
             status: "merged".into(),
@@ -1061,7 +1061,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                 Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
             };
             let commit = match (session.role(), session.ended().map(|ended| ended.reason)) {
-                (SessionRole::Review { commit }, _) => Some(commit.to_string()),
+                (SessionRole::Review { commit }, _) => commit.map(|commit| commit.to_string()),
                 (SessionRole::Work, Some(EndReason::Submitted { commit })) => {
                     commit.map(|commit| commit.to_string())
                 }
@@ -1136,10 +1136,13 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
                 }
                 Waiting::HumanReview { commit } => (
                     "human_review",
-                    format!(
-                        "review of {}: `wf item diff`, then `wf review`",
-                        &commit.to_string()[..8]
-                    ),
+                    match commit {
+                        Some(commit) => format!(
+                            "review of {}: `wf item diff`, then `wf review`",
+                            &commit.to_string()[..8]
+                        ),
+                        None => "review of the answer: read it, then `wf review`".to_string(),
+                    },
                 ),
                 Waiting::Merge { commit } => (
                     "merge",

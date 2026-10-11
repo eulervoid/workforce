@@ -99,7 +99,7 @@ pub struct Note {
 /// A verdict on one commit of an item, by a review session or a person.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Verdicted {
-    pub commit: CommitId,
+    pub commit: Option<CommitId>,
     pub verdict: Verdict,
     pub by: Actor,
     pub(crate) stamp: Stamp,
@@ -269,6 +269,18 @@ impl Item {
                 .type_config(&self.item_type)
                 .and_then(|config| config.review.as_ref())
         })
+    }
+
+    /// When the item last changed state.
+    pub fn moved(&self) -> Stamp {
+        self.state.stamp()
+    }
+
+    /// Whether submitted work waits for review steps before it is done.
+    pub fn needs_review(&self, policy: &Policy) -> bool {
+        self.effective_review(policy)
+            .and_then(|name| policy.review_level(name))
+            .is_some_and(|level| !level.steps.is_empty())
     }
 
     pub fn standing<'a>(&'a self, policy: &'a Policy) -> Standing<'a> {

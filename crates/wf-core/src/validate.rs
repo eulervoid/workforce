@@ -802,7 +802,7 @@ impl State {
             | EventBody::Merged(_) => Ok(()),
             EventBody::Review(review) => {
                 item_of(&review.item)?;
-                match self.submitted_commit(review.item) {
+                match self.submission(review.item) {
                     Some((commit, _)) if commit == review.commit => Ok(()),
                     Some(_) | None => Err(PolicyViolation::StaleReview(review.item)),
                 }

@@ -366,9 +366,9 @@ event invalid.
 | 15 | `ItemUnarchived` | `item` |
 | 16 | `Comment` | `item`, `body` |
 | 17 | `ItemCheckpoint` | `item`, `state`: the folded item with stamps, add tags and note text (M6, see *Compaction*) |
-| 20 | `SessionStarted` | `agent: AgentName`, `item`, `role`: `Work` or `Review{commit: CommitId}` (M2) |
+| 20 | `SessionStarted` | `agent: AgentName`, `item`, `role`: `Work` or `Review{commit: Option<CommitId>}` (M2) |
 | 21 | `SessionEnded` | `session: SessionId`, `reason: EndReason` (M2, see *Sessions*) |
-| 22 | `Review` | `item`, `commit: CommitId`, `verdict`: `Approve`, `RequestChanges` or `Escalate`, `note: Option<String>` (M2) |
+| 22 | `Review` | `item`, `commit: Option<CommitId>` (`None`: work submitted without commits), `verdict`: `Approve`, `RequestChanges` or `Escalate`, `note: Option<String>` (M2) |
 | 23 | `Merged` | `item`, `reviewed: CommitId`, `commit: CommitId` (M2) |
 | 24 | `Report` | `session: SessionId`, `note: String`, `step: Option<StepId>` (M2, see *Reports*) |
 
@@ -777,10 +777,18 @@ name = "critical"
 steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
 ```
 
-* An item names a level in its `review` field, defaulting to its type's `review`. No level means no
-  review. The planner, a supervisor or the working agent set it; a session may raise it but not lower it
-  for an item its agent worked on.
+* An item names a level in its `review` field, defaulting to its type's `review` (`principal` for `task`,
+  `none` for `question`). A type without one, like an item on the level `none`, is not reviewed.
+  `wf item edit --review <level>` sets it and `--review default` goes back to the type's level; `default`
+  is therefore not a level name. The planner, a supervisor or the working agent set it; a session may
+  raise it but not lower it for an item its agent worked on.
 * Submitting (`wf work submit`) moves the item to its type's blocked state and starts the level's first step.
+  A submission without commits is reviewed too: it is an answer. A question answered by an agent on a
+  level with steps waits in its blocked state, and counts as answered only once the last step approves:
+  the dispatcher then moves it to its done state, which unblocks what depends on it. `RequestChanges`
+  reopens it. An agent that is not sure of an answer can raise the level of its question to `principal`
+  before it submits. A reviewer of an answer gets the history of the item and an empty directory.
+  An item that someone moved after the submission is left where it is.
   Steps run in order. A reviewer agent never did the work on the item; the same reviewer looks again
   after changes. The status (`Awaiting{step}`, `ChangesRequested`, `Approved`, `Merged`) is computed
   from the latest submitted commit, the level and the verdicts on that commit; nothing is stored.
@@ -984,9 +992,9 @@ lease = "30m"
 mode = "local"           # local | origin (M3)
 target = "main"
 
-[[review]]               # ordered, least strict first; an item without a level is not reviewed
-name = "human"
-steps = ["human"]
+[[review]]               # ordered, least strict first
+name = "none"
+steps = []               # no steps: nothing waits for approval
 [[review]]
 name = "light"
 steps = [{ agent = { requires = ["review"] } }]
@@ -996,6 +1004,9 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }]
 [[review]]
 name = "critical"
 steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
+[[review]]
+name = "principal"       # the strictest: a principal decides alone
+steps = ["human"]
 
 [lanes.default]
 claim = ["member"]

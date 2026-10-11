@@ -5,7 +5,7 @@ expression: "Envelope::new(&detail)"
 {
   "schema": 2,
   "data": {
-    "id": "lzjswgizorn6dsbw3bwd6gmgox7od5yoqdbxr6oa2flduwkwbulq",
+    "id": "jr6sxwcakmtp4aexix74sciie3chckzbgzitlbpfwtsvhdov6arq",
     "type": "task",
     "title": "Implement feed sync",
     "state": "open",
@@ -13,7 +13,7 @@ expression: "Envelope::new(&detail)"
     "readiness": "blocked",
     "blocked_by": [
       {
-        "id": "sxaeggq42lps6ariacj4ou3gnc5362ywtp2mfyfnl7rrkroawuha",
+        "id": "5yszym6xkx7aut5tslmorgigc2i5exy3pfvm45gbp3yrgshqrvfa",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -28,7 +28,7 @@ expression: "Envelope::new(&detail)"
     "body": [
       {
         "kind": "markdown",
-        "text": "blocked on #sxaegg, ask @coder"
+        "text": "blocked on #5yszym, ask @coder"
       }
     ],
     "author": "@joshua",
@@ -41,7 +41,7 @@ expression: "Envelope::new(&detail)"
     "requires": [],
     "depends_on": [
       {
-        "id": "sxaeggq42lps6ariacj4ou3gnc5362ywtp2mfyfnl7rrkroawuha",
+        "id": "5yszym6xkx7aut5tslmorgigc2i5exy3pfvm45gbp3yrgshqrvfa",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -52,7 +52,7 @@ expression: "Envelope::new(&detail)"
     "supersedes": null,
     "references": [
       {
-        "id": "sxaeggq42lps6ariacj4ou3gnc5362ywtp2mfyfnl7rrkroawuha",
+        "id": "5yszym6xkx7aut5tslmorgigc2i5exy3pfvm45gbp3yrgshqrvfa",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -66,11 +66,11 @@ expression: "Envelope::new(&detail)"
     ],
     "notes": [
       {
-        "id": "fnhkeqii3td546q7odu4i6varlbbariryy73lzz2u3cw2i23c5vq",
+        "id": "j53rhhsig5dx6g7jau4xcegxlenmbdp25kormrknqxxl7oeu7h6q",
         "kind": "comment",
         "by": "@joshua",
         "at": "1970-01-01T00:00:09Z",
-        "text": "see #sxaegg, @joshua please check",
+        "text": "see #5yszym, @joshua please check",
         "session": null,
         "step": null
       }

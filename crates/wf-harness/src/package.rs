@@ -100,7 +100,8 @@ pub struct ReviewPackage {
     pub item: String,
     pub title: String,
     pub body: String,
-    pub commit: String,
+    /// The submitted commit, `None` when the work was submitted without commits.
+    pub commit: Option<String>,
     pub target: String,
     /// Which step of the review level this is, in words.
     pub step: String,
@@ -118,23 +119,36 @@ impl ReviewPackage {
         if !self.body.trim().is_empty() {
             let _ = writeln!(text, "{}\n", self.body.trim());
         }
-        let _ = write!(
-            text,
-            "## The work\n\n\
-             Commit `{commit}` is checked out here. It is meant to go into `{target}`. \
-             This is {step}.\n\n",
-            commit = self.commit,
-            target = self.target,
-            step = self.step,
-        );
-        if self.diff.len() <= MAX_DIFF_LEN {
-            let _ = writeln!(text, "```diff\n{}\n```\n", self.diff.trim_end());
-        } else {
-            let _ = writeln!(
-                text,
-                "The diff is too large to show here; run `git diff {}...HEAD`.\n",
-                self.target
-            );
+        match &self.commit {
+            Some(commit) => {
+                let _ = write!(
+                    text,
+                    "## The work\n\n\
+                     Commit `{commit}` is checked out here. It is meant to go into `{target}`. \
+                     This is {step}.\n\n",
+                    target = self.target,
+                    step = self.step,
+                );
+                if self.diff.len() <= MAX_DIFF_LEN {
+                    let _ = writeln!(text, "```diff\n{}\n```\n", self.diff.trim_end());
+                } else {
+                    let _ = writeln!(
+                        text,
+                        "The diff is too large to show here; run `git diff {}...HEAD`.\n",
+                        self.target
+                    );
+                }
+            }
+            None => {
+                let _ = write!(
+                    text,
+                    "## The work\n\n\
+                     This was submitted without commits: it is an answer, or the finding that \
+                     nothing has to change. What the author said is below, with the rest of the \
+                     history. Nothing is checked out here. This is {step}.\n\n",
+                    step = self.step,
+                );
+            }
         }
         if !self.earlier.is_empty() {
             text.push_str("## What was said before\n\n");
@@ -151,7 +165,7 @@ impl ReviewPackage {
         }
         text.push_str(
             "## How to review\n\n\
-             Read the change, and run the tests if the repository has them. Do not change the code. \
+             Read the change or the answer, and run the tests if there are any. Do not change anything. \
              Then give exactly one verdict:\n\
              - `wf review --approve --note \"...\"` if the work is good as it is.\n\
              - `wf review --request-changes --note \"...\"` if it needs changes: the item goes back for \
@@ -213,7 +227,7 @@ mod tests {
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
             body: String::new(),
-            commit: "abc123".into(),
+            commit: Some("abc123".into()),
             target: "main".into(),
             step: "step 1 of 2".into(),
             earlier: vec![],

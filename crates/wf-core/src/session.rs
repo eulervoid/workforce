@@ -108,7 +108,11 @@ impl fmt::Display for CommitId {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SessionRole {
     Work,
-    Review { commit: CommitId },
+    /// A review of what a work session submitted: its commit, or `None` for work submitted
+    /// without commits, such as the answer to a question.
+    Review {
+        commit: Option<CommitId>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]

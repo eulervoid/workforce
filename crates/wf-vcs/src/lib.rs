@@ -33,6 +33,8 @@ pub enum VcsError {
     TooOld { found: String },
     #[error("unexpected output from `git {command}`: {output}")]
     UnexpectedOutput { command: String, output: String },
+    #[error("cannot set up or remove a checkout")]
+    Io(#[from] std::io::Error),
     #[error("there is no branch `{0}`")]
     NoBranch(String),
     #[error("{} is not a git repository", .0.display())]

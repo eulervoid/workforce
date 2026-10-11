@@ -272,14 +272,15 @@ impl Daemon {
         .await
     }
 
-    /// Starts a review session of `agent` on `commit` of `item`, in a detached checkout of it.
+    /// Starts a review session of `agent` on the work submitted for `item`: a detached checkout
+    /// of `commit`, or an empty directory when it was submitted without commits.
     pub(crate) async fn start_review(
         self: &Arc<Self>,
         workforce: WorkforceId,
         loaded: &Arc<Loaded>,
         agent: AgentName,
         item: ItemId,
-        commit: CommitId,
+        commit: Option<CommitId>,
         repository: PathBuf,
     ) -> Result<SessionId, SessionError> {
         self.begin_session(
@@ -294,10 +295,18 @@ impl Daemon {
     }
 
     /// Where a review session looks at a commit of an item.
-    fn review_worktree(&self, workforce: WorkforceId, item: ItemId, commit: CommitId) -> PathBuf {
+    fn review_worktree(
+        &self,
+        workforce: WorkforceId,
+        item: ItemId,
+        commit: Option<CommitId>,
+    ) -> PathBuf {
+        let suffix = commit.map_or("answer".to_string(), |commit| {
+            commit.to_string()[..8].into()
+        });
         self.workforce_directory(workforce)
             .join("worktrees")
-            .join(format!("{}-{}", item_name(item), &commit.to_string()[..8]))
+            .join(format!("{}-{suffix}", item_name(item)))
     }
 
     async fn begin_session(
@@ -356,7 +365,10 @@ impl Daemon {
                     // A look at the same commit by an earlier review may have left its checkout.
                     let _ = git.remove_worktree(&path);
                     let _ = std::fs::remove_dir_all(&path);
-                    git.detached_worktree(&path, commit)?;
+                    match commit {
+                        Some(commit) => git.detached_worktree(&path, commit)?,
+                        None => std::fs::create_dir_all(&path)?,
+                    }
                     Ok::<_, VcsError>(git.repository().to_path_buf())
                 })
                 .await??;
@@ -567,13 +579,17 @@ impl Daemon {
         &self,
         workforce: WorkforceId,
         item: ItemId,
-        commit: CommitId,
+        commit: Option<CommitId>,
     ) {
         let Some(repository) = self.repository_of(workforce) else {
             return;
         };
         let worktree = self.review_worktree(workforce, item, commit);
-        let removed = blocking(move || GitCli::open(&repository)?.remove_worktree(&worktree)).await;
+        let removed = blocking(move || match commit {
+            Some(_) => GitCli::open(&repository)?.remove_worktree(&worktree),
+            None => Ok(std::fs::remove_dir_all(&worktree)?),
+        })
+        .await;
         if let Ok(Err(error)) = removed {
             eprintln!(
                 "could not remove the checkout of the review of #{}: {}",
@@ -1079,7 +1095,7 @@ async fn review_package(
     loaded: &Arc<Loaded>,
     run: &Run,
     state: &State,
-    commit: CommitId,
+    commit: Option<CommitId>,
 ) -> String {
     let Some(ItemView::Live(item)) = state.item(run.item) else {
         return String::new();
@@ -1106,16 +1122,19 @@ async fn review_package(
         | None => "a review".to_string(),
     };
     let (repository, target) = (run.repository.clone(), run.target.clone());
-    let diff = blocking(move || GitCli::open(&repository)?.diff(&target, commit))
-        .await
-        .ok()
-        .and_then(Result::ok)
-        .unwrap_or_default();
+    let diff = match commit {
+        Some(commit) => blocking(move || GitCli::open(&repository)?.diff(&target, commit))
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .unwrap_or_default(),
+        None => String::new(),
+    };
     ReviewPackage {
         item: HashId::short(&run.item),
         title: item.title().to_string(),
         body: item.body().render_numbered(),
-        commit: commit.to_string(),
+        commit: commit.map(|commit| commit.to_string()),
         target: run.target.clone(),
         step,
         earlier: earlier_notes(loaded, item).await,
@@ -1281,6 +1300,27 @@ async fn dispatch_once(
         {
             eprintln!(
                 "could not merge #{}: {}",
+                item.short(),
+                wf_core::report::report(&error)
+            );
+        }
+    }
+    for item in state.pending_answers() {
+        let done = state.item(item).and_then(|view| match view {
+            ItemView::Live(live) => state
+                .policy()?
+                .policy
+                .type_config(live.item_type())?
+                .first_state(wf_core::policy::StateCategory::Done)
+                .cloned(),
+            ItemView::Archived(_) => None,
+        });
+        let (Some(done), Ok(principal)) = (done, daemon.principal_of_device(&state)) else {
+            continue;
+        };
+        if let Err(error) = daemon.move_item(loaded, principal, item, done, None).await {
+            eprintln!(
+                "could not finish #{}: {}",
                 item.short(),
                 wf_core::report::report(&error)
             );

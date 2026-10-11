@@ -40,8 +40,8 @@ pub enum PolicyError {
     },
     #[error("review level `{0}` is defined twice")]
     DuplicateReviewLevel(ReviewName),
-    #[error("review level `{0}` has no steps")]
-    NoReviewSteps(ReviewName),
+    #[error("`default` is not a review level: it resets an item to the level of its type")]
+    ReservedReviewLevel,
     #[error("type `{type_name}` has the unknown review level `{level}`")]
     UnknownReviewLevel {
         type_name: TypeName,
@@ -263,7 +263,8 @@ pub enum ReviewStep {
     Human,
 }
 
-/// A named sequence of review steps. Levels are listed from least to most strict.
+/// A named sequence of review steps. Levels are listed from least to most strict. A level without
+/// steps needs no review.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewLevelConfig {
@@ -330,8 +331,8 @@ impl Policy {
             if !levels.insert(&level.name) {
                 return Err(PolicyError::DuplicateReviewLevel(level.name.clone()));
             }
-            if level.steps.is_empty() {
-                return Err(PolicyError::NoReviewSteps(level.name.clone()));
+            if level.name.as_str() == "default" {
+                return Err(PolicyError::ReservedReviewLevel);
             }
         }
         for (name, builtin) in &DEFAULT_POLICY.types {
@@ -378,7 +379,10 @@ impl Policy {
                         level: level.clone(),
                     });
                 }
-                if !has(StateCategory::Blocked) {
+                let reviews = self
+                    .review_level(level)
+                    .is_some_and(|level| !level.steps.is_empty());
+                if reviews && !has(StateCategory::Blocked) {
                     return Err(PolicyError::ReviewWithoutBlocked(name.clone()));
                 }
             }
@@ -530,7 +534,10 @@ mod tests {
             .iter()
             .map(|level| level.name.as_str())
             .collect();
-        assert_eq!(names, ["human", "light", "standard", "critical"]);
+        assert_eq!(
+            names,
+            ["none", "light", "standard", "critical", "principal"]
+        );
         let critical = policy
             .review_level(&ReviewName::new("critical").unwrap())
             .unwrap();
@@ -556,9 +563,9 @@ mod tests {
                 .map(StateName::as_str),
             Some("needs_human")
         );
-        assert_eq!(question.review, None);
+        assert_eq!(question.review, Some(ReviewName::new("none").unwrap()));
         let task = policy.type_config(&type_name("task")).unwrap();
-        assert_eq!(task.review, Some(ReviewName::new("human").unwrap()));
+        assert_eq!(task.review, Some(ReviewName::new("principal").unwrap()));
         assert_eq!(
             policy.review_rank(&ReviewName::new("standard").unwrap()),
             Some(2)
@@ -568,7 +575,7 @@ mod tests {
     #[test]
     fn a_type_names_its_default_review_level() {
         let source = DEFAULT_POLICY_TOML.replace(
-            "[types.task]\nreview = \"human\"\nlane",
+            "[types.task]\nreview = \"principal\"\nlane",
             "[types.task]\nreview = \"standard\"\nlane",
         );
         let policy = Policy::parse(&source).unwrap();
@@ -585,15 +592,13 @@ mod tests {
                 ReviewName::new("light").unwrap()
             ))
         );
-        let empty = with_custom("[[review]]\nname = \"none\"\nsteps = []\n");
+        let reserved = with_custom("[[review]]\nname = \"default\"\nsteps = []\n");
         assert_eq!(
-            Policy::parse(&empty),
-            Err(PolicyError::NoReviewSteps(ReviewName::new("none").unwrap()))
+            Policy::parse(&reserved),
+            Err(PolicyError::ReservedReviewLevel)
         );
-        let unknown = DEFAULT_POLICY_TOML.replace(
-            "review = \"human\"\nlane",
-            "review = \"ghost\"\nlane",
-        );
+        let unknown =
+            DEFAULT_POLICY_TOML.replace("review = \"principal\"\nlane", "review = \"ghost\"\nlane");
         assert_eq!(
             Policy::parse(&unknown),
             Err(PolicyError::UnknownReviewLevel {

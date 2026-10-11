@@ -118,7 +118,9 @@ fn a_level_is_walked_one_approval_at_a_time() {
     scene.apply(verdict(item, commit(1), Verdict::Approve));
     assert_eq!(
         scene.status(item),
-        Some(ReviewStatus::Approved { commit: commit(1) })
+        Some(ReviewStatus::Approved {
+            commit: Some(commit(1))
+        })
     );
     scene.apply(merged(item, commit(1), commit(9)));
     assert_eq!(
@@ -136,7 +138,9 @@ fn escalating_puts_a_human_step_right_after_the_current_one() {
     scene.apply(verdict(item, commit(1), Verdict::Approve));
     assert_eq!(
         scene.status(item),
-        Some(ReviewStatus::Approved { commit: commit(1) })
+        Some(ReviewStatus::Approved {
+            commit: Some(commit(1))
+        })
     );
 
     let item = scene.submitted("critical");
@@ -150,7 +154,9 @@ fn escalating_puts_a_human_step_right_after_the_current_one() {
     scene.apply(verdict(item, commit(1), Verdict::Approve));
     assert_eq!(
         scene.status(item),
-        Some(ReviewStatus::Approved { commit: commit(1) })
+        Some(ReviewStatus::Approved {
+            commit: Some(commit(1))
+        })
     );
 }
 
@@ -172,7 +178,9 @@ fn requested_changes_end_the_review_and_a_new_commit_starts_it_again() {
     scene.apply(verdict(item, commit(2), Verdict::Approve));
     assert_eq!(
         scene.status(item),
-        Some(ReviewStatus::Approved { commit: commit(2) })
+        Some(ReviewStatus::Approved {
+            commit: Some(commit(2))
+        })
     );
 }
 
@@ -211,7 +219,7 @@ fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
     let offered = |scene: &Scene, name: &str| scene.state.reviewable(&scene.agent(name));
-    assert_eq!(offered(&scene, "reviewer"), [(item, commit(1))]);
+    assert_eq!(offered(&scene, "reviewer"), [(item, Some(commit(1)))]);
     assert!(offered(&scene, "weak").is_empty(), "missing strong-model");
     assert!(
         offered(&scene, "coder").is_empty(),
@@ -229,7 +237,7 @@ fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
     scene.apply(end_session(held, EndReason::Reviewed));
     assert_eq!(
         offered(&scene, "reviewer"),
-        [(item, commit(1))],
+        [(item, Some(commit(1)))],
         "after changes a reviewer looks again"
     );
 }
@@ -392,7 +400,9 @@ mod inbox {
                 },
                 InboxEntry {
                     item: careful,
-                    waiting: Waiting::HumanReview { commit: commit(1) }
+                    waiting: Waiting::HumanReview {
+                        commit: Some(commit(1))
+                    }
                 },
             ]
         );
@@ -437,4 +447,45 @@ fn a_review_step_nobody_hosted_can_take_is_noticed() {
         max_sessions: 1,
     }));
     assert!(scene.state.unstaffed_reviews().is_empty());
+}
+
+#[test]
+fn an_answer_is_reviewed_and_finished_by_its_approval() {
+    let mut scene = Scene::new();
+    let question = scene
+        .apply(create_reviewed("question", "which crate?", "principal"))
+        .id()
+        .into();
+    let session: SessionId = scene.apply(start_session("coder", question)).id().into();
+    scene.apply(transition(question, "needs_human"));
+    scene.apply(end_session(session, EndReason::Submitted { commit: None }));
+    assert_eq!(scene.status(question), Some(awaiting_human()));
+    assert!(scene.state.pending_answers().is_empty());
+
+    scene.apply(verdict(question, None, Verdict::Approve));
+    assert_eq!(
+        scene.status(question),
+        Some(ReviewStatus::Approved { commit: None })
+    );
+    assert_eq!(scene.state.pending_answers(), [question]);
+    assert!(scene.state.pending_merges().is_empty());
+
+    scene.apply(transition(question, "answered"));
+    assert!(scene.state.pending_answers().is_empty());
+}
+
+#[test]
+fn an_approved_answer_does_not_finish_an_item_that_was_moved_since() {
+    let mut scene = Scene::new();
+    let question = scene
+        .apply(create_reviewed("question", "which crate?", "principal"))
+        .id()
+        .into();
+    let session: SessionId = scene.apply(start_session("coder", question)).id().into();
+    scene.apply(transition(question, "needs_human"));
+    scene.apply(end_session(session, EndReason::Submitted { commit: None }));
+    scene.apply(verdict(question, None, Verdict::Approve));
+    scene.apply(transition(question, "open"));
+    scene.apply(transition(question, "needs_human"));
+    assert!(scene.state.pending_answers().is_empty());
 }

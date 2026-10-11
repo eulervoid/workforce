@@ -189,11 +189,12 @@ pub struct SessionEnded {
     pub reason: EndReason,
 }
 
-/// The verdict of a review session or of a human on one commit of an item.
+/// The verdict of a review session or of a human on the work submitted for an item.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Review {
     pub item: ItemId,
-    pub commit: CommitId,
+    /// The submitted commit, or `None` for work submitted without commits.
+    pub commit: Option<CommitId>,
     pub verdict: Verdict,
     pub note: Option<String>,
 }
@@ -538,7 +539,9 @@ mod tests {
             EventBody::SessionStarted(SessionStarted {
                 agent: AgentName::new("coder").unwrap(),
                 item,
-                role: SessionRole::Review { commit },
+                role: SessionRole::Review {
+                    commit: Some(commit),
+                },
             }),
             EventBody::SessionEnded(SessionEnded {
                 session,
@@ -548,7 +551,7 @@ mod tests {
             }),
             EventBody::Review(Review {
                 item,
-                commit,
+                commit: Some(commit),
                 verdict: Verdict::RequestChanges,
                 note: Some("tests".into()),
             }),
@@ -568,15 +571,15 @@ mod tests {
     }
 
     const GOLDEN_SESSION_BODIES: [&str; 5] = [
-        "143e05636f64657220010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
+        "143f05636f6465722001010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
         "15392002020202020202020202020202020202020202020202020202020202020202020001001400112233445566778899aabbccddeeff00112233",
-        "163f200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff001122330101057465737473",
+        "164020010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff001122330101057465737473",
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
         "18352002020202020202020202020202020202020202020202020202020202020202020a63686f7365207265646201b67b3441c138056f",
     ];
 
-    const GOLDEN_LEN: usize = 2235;
-    const GOLDEN_ID: &str = "znnjktrh5oggbtdzbw6zzz5ps3uuc3i2ctvqk4wuefmpc3lh3lja";
+    const GOLDEN_LEN: usize = 2296;
+    const GOLDEN_ID: &str = "x5wqhhkqswzee7zhzfcjxmx6qsa5zzbf5uy35lrdksfrssylvhca";
 
     #[test]
     fn round_trips_and_verifies() {

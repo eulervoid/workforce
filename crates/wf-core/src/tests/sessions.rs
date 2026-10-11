@@ -502,7 +502,9 @@ mod reports {
             EventBody::SessionStarted(SessionStarted {
                 agent: AgentName::new("coder").unwrap(),
                 item: task,
-                role: SessionRole::Review { commit },
+                role: SessionRole::Review {
+                    commit: Some(commit),
+                },
             }),
         ));
         assert_eq!(

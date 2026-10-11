@@ -57,13 +57,13 @@ impl State {
         let first = |category| self.first_state_of(item, category);
         let move_to = |state: Option<StateName>| state.map_or(AfterEnd::Nothing, AfterEnd::MoveTo);
         Some(match reason {
-            EndReason::Submitted { commit: None } => move_to(first(StateCategory::Done)),
-            EndReason::Submitted { commit: Some(_) } => match self.effective_review_of(item) {
-                Some(_) => move_to(first(StateCategory::Blocked)),
-                None => match first(StateCategory::Done) {
+            EndReason::Submitted { commit } => match (self.needs_review(item), commit) {
+                (true, _) => move_to(first(StateCategory::Blocked)),
+                (false, Some(_)) => match first(StateCategory::Done) {
                     Some(done) => AfterEnd::MergeThen { done },
                     None => AfterEnd::Nothing,
                 },
+                (false, None) => move_to(first(StateCategory::Done)),
             },
             EndReason::Blocked | EndReason::Reviewed => AfterEnd::Nothing,
             EndReason::Released
@@ -130,11 +130,13 @@ impl State {
             .cloned()
     }
 
-    fn effective_review_of(&self, item: ItemId) -> Option<crate::name::ReviewName> {
-        let policy = &self.policy()?.policy;
-        let ItemView::Live(item) = self.item(item)? else {
-            return None;
+    fn needs_review(&self, item: ItemId) -> bool {
+        let Some(policy) = self.policy().map(|document| &document.policy) else {
+            return false;
         };
-        item.effective_review(policy).cloned()
+        match self.item(item) {
+            Some(ItemView::Live(item)) => item.needs_review(policy),
+            Some(ItemView::Archived(_)) | None => false,
+        }
     }
 }

@@ -62,7 +62,7 @@ impl World {
         wf.run(&["init", "--name", "demo", "--no-agents"]);
         let policy = wf.run(&["policy", "show"]);
         let path = wf.root.path().join("unreviewed-policy.toml");
-        std::fs::write(&path, policy.replace("review = \"human\"\n", "")).unwrap();
+        std::fs::write(&path, policy.replace("review = \"principal\"\n", "")).unwrap();
         wf.run(&["policy", "apply", path.to_str().unwrap()]);
         git(
             &wf.repository,
@@ -734,6 +734,63 @@ wf work submit
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(transcript.contains("Use humantime"), "{transcript}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_answer_under_review_counts_once_a_person_approves_it() {
+    let coder = "\
+wf work ask \"which crate?\"
+turn
+sh echo done > a.txt && git add a.txt && git commit -q -m a
+wf work submit
+";
+    let supervisor = "wf work submit --note \"Use humantime\"\n";
+    let world = World::agents(&[("coder", coder), ("supervisor", supervisor)]).await;
+    let policy = world.wf.run(&["policy", "show"]);
+    let path = world.wf.root.path().join("reviewed-questions.toml");
+    std::fs::write(
+        &path,
+        policy.replace(
+            "[types.question]\nreview = \"none\"",
+            "[types.question]\nreview = \"principal\"",
+        ),
+    )
+    .unwrap();
+    world.wf.run(&["policy", "apply", path.to_str().unwrap()]);
+    world.automate("coder", "default");
+    world.automate("supervisor", "supervision");
+    world.wf.run(&[
+        "device",
+        "edit",
+        "--max-sessions",
+        "2",
+        "--agent",
+        "coder=1",
+        "--agent",
+        "supervisor=1",
+    ]);
+    let item = world.wf.add(&["--title", "Parse durations"]);
+    world
+        .wait("the answer waiting for review", |world| {
+            world
+                .questions()
+                .first()
+                .is_some_and(|question| question["state"] == "needs_human")
+                && world
+                    .sessions()
+                    .iter()
+                    .any(|session| session["status"] == "submitted" && session["role"] == "work")
+        })
+        .await;
+    let question = world.questions()[0]["id"].as_str().unwrap().to_string();
+    assert_ne!(world.item(&item)["state"], "done");
+    world.wf.run(&["review", short(&question), "--approve"]);
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    assert_eq!(world.item(&question)["state"], "answered");
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -20,7 +20,7 @@ pub enum ReviewStatus {
     },
     ChangesRequested,
     Approved {
-        commit: CommitId,
+        commit: Option<CommitId>,
     },
     /// The reviewed commit went into the target branch as `commit`.
     Merged {
@@ -29,18 +29,16 @@ pub enum ReviewStatus {
 }
 
 impl State {
-    /// The commit the latest submitted work session of the item ended with, and when it ended.
-    pub fn submitted_commit(&self, item: ItemId) -> Option<(CommitId, Stamp)> {
+    /// What the latest submitted work session of the item handed in, and when it ended: its
+    /// commit, or `None` when the branch had no commits, as for the answer to a question.
+    pub fn submission(&self, item: ItemId) -> Option<(Option<CommitId>, Stamp)> {
         self.sessions()
             .filter(|session| session.item() == item && session.role() == SessionRole::Work)
             .filter_map(|session| {
                 let ended = session.ended()?;
                 match ended.reason {
-                    EndReason::Submitted {
-                        commit: Some(commit),
-                    } => Some((commit, ended.stamp)),
-                    EndReason::Submitted { commit: None }
-                    | EndReason::Reviewed
+                    EndReason::Submitted { commit } => Some((commit, ended.stamp)),
+                    EndReason::Reviewed
                     | EndReason::Released
                     | EndReason::Blocked
                     | EndReason::TimedOut
@@ -58,12 +56,12 @@ impl State {
         let ItemView::Live(live) = self.item(item)? else {
             return None;
         };
-        let (commit, submitted) = self.submitted_commit(item)?;
-        if let Some(merge) = live
-            .merges()
-            .values()
-            .find(|merge| merge.reviewed == commit)
-        {
+        let (commit, submitted) = self.submission(item)?;
+        if let Some(merge) = commit.and_then(|commit| {
+            live.merges()
+                .values()
+                .find(|merge| merge.reviewed == commit)
+        }) {
             return Some(ReviewStatus::Merged {
                 commit: merge.commit,
             });
@@ -105,7 +103,9 @@ impl State {
         self.live_items()
             .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
             .filter_map(|item| {
-                let (commit, _) = self.submitted_commit(item.id())?;
+                let (Some(commit), _) = self.submission(item.id())? else {
+                    return None;
+                };
                 let ready = match self.review_status(item.id()) {
                     Some(ReviewStatus::Approved { .. }) => true,
                     Some(
@@ -113,10 +113,32 @@ impl State {
                         | ReviewStatus::ChangesRequested
                         | ReviewStatus::Merged { .. },
                     ) => false,
-                    None => item.effective_review(policy).is_none(),
+                    None => !item.needs_review(policy),
                 };
                 ready.then_some((item.id(), commit))
             })
+            .collect()
+    }
+
+    /// Items with an approved answer that wait in a blocked state to be finished: the answer was
+    /// submitted without commits, so there is nothing to merge. An item that moved on after the
+    /// submission was moved by someone, and is left where it is.
+    pub fn pending_answers(&self) -> Vec<ItemId> {
+        let Some(policy) = self.policy().map(|document| &document.policy) else {
+            return Vec::new();
+        };
+        self.live_items()
+            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
+            .filter(|item| {
+                matches!(
+                    self.submission(item.id()),
+                    Some((None, submitted)) if item.moved() < submitted
+                ) && matches!(
+                    self.review_status(item.id()),
+                    Some(ReviewStatus::Approved { .. })
+                )
+            })
+            .map(Item::id)
             .collect()
     }
 
@@ -160,7 +182,7 @@ impl State {
 
     /// Items waiting for a review step that `agent` could take: the step names capabilities the
     /// agent has, the agent never did the work on the item, and no review session holds the step.
-    pub fn reviewable(&self, agent: &AgentId) -> Vec<(ItemId, CommitId)> {
+    pub fn reviewable(&self, agent: &AgentId) -> Vec<(ItemId, Option<CommitId>)> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
         };
@@ -168,11 +190,11 @@ impl State {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
-        let mut found: Vec<(&Item, CommitId)> = self
+        let mut found: Vec<(&Item, Option<CommitId>)> = self
             .live_items()
             .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
             .filter_map(|item| {
-                let (commit, _) = self.submitted_commit(item.id())?;
+                let (commit, _) = self.submission(item.id())?;
                 let Some(ReviewStatus::Awaiting {
                     step: ReviewStep::Agent { requires },
                 }) = self.review_status(item.id())

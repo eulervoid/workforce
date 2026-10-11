@@ -57,7 +57,7 @@ impl Fixture {
                 devices: vec![member_device.key()],
                 previous: vec![],
             }],
-            policy: DEFAULT_POLICY_TOML.replace("review = \"human\"\n", ""),
+            policy: DEFAULT_POLICY_TOML.replace("review = \"principal\"\n", ""),
             forked_from: None,
         };
         let body = EventBody::Genesis(Signed::sign(&founder, None, genesis).unwrap());
@@ -360,18 +360,20 @@ pub fn define_agent_with(name: &str, capabilities: &[&str]) -> EventBody {
 }
 
 /// A session of `agent` that reviews `commit` of `item`.
-pub fn start_review(agent: &str, item: ItemId, commit: CommitId) -> EventBody {
+pub fn start_review(agent: &str, item: ItemId, commit: impl Into<Option<CommitId>>) -> EventBody {
     EventBody::SessionStarted(SessionStarted {
         agent: AgentName::new(agent).unwrap(),
         item,
-        role: SessionRole::Review { commit },
+        role: SessionRole::Review {
+            commit: commit.into(),
+        },
     })
 }
 
-pub fn verdict(item: ItemId, commit: CommitId, verdict: Verdict) -> EventBody {
+pub fn verdict(item: ItemId, commit: impl Into<Option<CommitId>>, verdict: Verdict) -> EventBody {
     EventBody::Review(crate::event::Review {
         item,
-        commit,
+        commit: commit.into(),
         verdict,
         note: None,
     })

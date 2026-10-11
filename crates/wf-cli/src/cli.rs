@@ -598,12 +598,29 @@ pub struct ItemEditArgs {
     pub add_requires: Vec<Requirement>,
     #[arg(long = "remove-requires")]
     pub remove_requires: Vec<Requirement>,
-    /// The review level the work needs, a name from the policy's `[[review]]` list.
-    #[arg(long, conflicts_with = "no_review")]
-    pub review: Option<ReviewName>,
-    /// Drop the item's own review level, so its type's default applies.
+    /// The review level the work needs, a name from the policy's `[[review]]` list, or `default`
+    /// for the level of the item's type.
     #[arg(long)]
-    pub no_review: bool,
+    pub review: Option<ReviewChoice>,
+}
+
+/// What `wf item edit --review` sets.
+#[derive(Clone, Debug)]
+pub enum ReviewChoice {
+    /// The item follows the review level of its type.
+    Default,
+    Level(ReviewName),
+}
+
+impl std::str::FromStr for ReviewChoice {
+    type Err = <ReviewName as std::str::FromStr>::Err;
+
+    fn from_str(text: &str) -> Result<Self, Self::Err> {
+        match text {
+            "default" => Ok(ReviewChoice::Default),
+            level => level.parse().map(ReviewChoice::Level),
+        }
+    }
 }
 
 impl ItemEditArgs {
@@ -613,7 +630,6 @@ impl ItemEditArgs {
             || self.priority.is_some()
             || self.lane.is_some()
             || self.review.is_some()
-            || self.no_review
             || !self.add_labels.is_empty()
             || !self.remove_labels.is_empty()
             || !self.add_requires.is_empty()

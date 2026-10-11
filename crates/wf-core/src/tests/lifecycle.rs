@@ -98,6 +98,15 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     );
     scene.end(session, EndReason::Released);
 
+    let doubted = scene.item(create_reviewed("question", "unsure", "principal"));
+    let session = scene.start(doubted);
+    assert_eq!(
+        after(&scene, session, EndReason::Submitted { commit: None }),
+        AfterEnd::MoveTo(state_name("needs_human")),
+        "an answer under review does not count as answered"
+    );
+    scene.end(session, EndReason::Released);
+
     let blocked = scene.start(task);
     for reason in [
         EndReason::Released,
