@@ -369,6 +369,21 @@ pub struct CommentArgs {
     /// Write the comment in `$VISUAL` or `$EDITOR`, starting from the text given.
     #[arg(long)]
     pub edit: bool,
+    /// A blocker: the work cannot start or continue until someone else resolves it.
+    #[arg(long, conflicts_with = "request_change")]
+    pub block: bool,
+    /// A change request: the work has to do this before it is submitted.
+    #[arg(long)]
+    pub request_change: bool,
+    /// Resolve this blocker or change request of the item; repeat for several.
+    #[arg(long, value_name = "COMMENT")]
+    pub resolve: Vec<String>,
+    /// Resolve every open blocker of the item.
+    #[arg(long)]
+    pub resolve_blockers: bool,
+    /// Resolve every open change request of the item.
+    #[arg(long)]
+    pub resolve_change_requests: bool,
 }
 
 #[derive(Args)]

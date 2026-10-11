@@ -9,6 +9,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 const HASH_LEN: usize = 32;
 pub const MIN_PREFIX_LEN: usize = 3;
 pub const SHORT_ID_LEN: usize = 6;
+/// Comments are looked up among the comments of one item, so fewer characters tell them apart.
+pub const SHORT_COMMENT_ID_LEN: usize = 4;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IdError {
@@ -44,6 +46,9 @@ fn decode(text: &str) -> Result<[u8; HASH_LEN], IdError> {
 
 /// Implemented by every id type so prefix resolution works over any of them.
 pub trait HashId: Copy {
+    /// How many characters of the base32 text are shown.
+    const SHORT_LEN: usize = SHORT_ID_LEN;
+
     fn as_bytes(&self) -> &[u8; HASH_LEN];
 
     fn to_base32(&self) -> String {
@@ -51,7 +56,7 @@ pub trait HashId: Copy {
     }
 
     fn short(&self) -> String {
-        self.to_base32()[..SHORT_ID_LEN].to_string()
+        self.to_base32()[..Self::SHORT_LEN].to_string()
     }
 }
 
@@ -75,6 +80,9 @@ impl serde::de::Visitor<'_> for HashVisitor {
 
 macro_rules! hash_id {
     ($(#[$meta:meta])* $name:ident) => {
+        hash_id!($(#[$meta])* $name, short = SHORT_ID_LEN);
+    };
+    ($(#[$meta:meta])* $name:ident, short = $short:expr) => {
         $(#[$meta])*
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         pub struct $name([u8; HASH_LEN]);
@@ -86,6 +94,8 @@ macro_rules! hash_id {
         }
 
         impl HashId for $name {
+            const SHORT_LEN: usize = $short;
+
             fn as_bytes(&self) -> &[u8; HASH_LEN] {
                 &self.0
             }
@@ -150,6 +160,11 @@ hash_id!(
     /// A session is identified by the event that started it.
     SessionId
 );
+hash_id!(
+    /// A comment is identified by its event. Shown short within its item.
+    CommentId,
+    short = SHORT_COMMENT_ID_LEN
+);
 
 impl EventId {
     pub fn of(bytes: &[u8]) -> Self {
@@ -172,6 +187,18 @@ impl From<EventId> for ItemId {
 impl From<EventId> for SessionId {
     fn from(started_by: EventId) -> Self {
         Self(started_by.0)
+    }
+}
+
+impl From<EventId> for CommentId {
+    fn from(written_by: EventId) -> Self {
+        Self(written_by.0)
+    }
+}
+
+impl From<CommentId> for EventId {
+    fn from(comment: CommentId) -> Self {
+        Self(comment.0)
     }
 }
 

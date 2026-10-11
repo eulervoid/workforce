@@ -66,15 +66,19 @@ expression: "Envelope::new(&detail)"
     ],
     "notes": [
       {
-        "id": "j53rhhsig5dx6g7jau4xcegxlenmbdp25kormrknqxxl7oeu7h6q",
+        "id": "tlj6ic3ngckzis3bx7t2y64nultmrfz66tncze4nirowpti46dta",
+        "comment": "tlj6",
         "kind": "comment",
         "by": "@joshua",
         "at": "1970-01-01T00:00:09Z",
         "text": "see #5yszym, @joshua please check",
         "session": null,
-        "step": null
+        "step": null,
+        "resolves": [],
+        "resolved_by": null
       }
     ],
+    "open": [],
     "flags": []
   }
 }

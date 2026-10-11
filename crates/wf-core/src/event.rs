@@ -10,7 +10,7 @@ use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::encoding::{self, EncodingError};
 use crate::hlc::Hlc;
-use crate::id::{EventId, ItemId, SessionId, WorkforceId};
+use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
     Actor, DeviceKey, DeviceSigner, InviteKey, KeyError, MemberSeed, PrincipalKey, Signed,
 };
@@ -174,7 +174,41 @@ pub struct ItemRef {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Comment {
     pub item: ItemId,
-    pub body: String,
+    pub text: String,
+    pub kind: CommentKind,
+    /// Blockers and change requests of the item that this comment resolves.
+    pub resolves: Vec<CommentId>,
+}
+
+impl Comment {
+    pub fn plain(item: ItemId, text: impl Into<String>) -> Self {
+        Self {
+            item,
+            text: text.into(),
+            kind: CommentKind::Plain,
+            resolves: Vec::new(),
+        }
+    }
+}
+
+/// What a comment holds up until it is resolved.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CommentKind {
+    Plain,
+    /// The work cannot start or continue until someone else resolves it.
+    Blocker,
+    /// The work has to do this before it is submitted.
+    ChangeRequest,
+}
+
+impl CommentKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            CommentKind::Plain => "comment",
+            CommentKind::Blocker => "blocker",
+            CommentKind::ChangeRequest => "change_request",
+        }
+    }
 }
 
 /// A session starts. Its id is the id of this event, and the agent is one of the acting principal.

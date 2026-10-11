@@ -10,10 +10,10 @@ use std::collections::VecDeque;
 
 use crate::body::{Body, BodyError, StepId};
 use crate::event::{
-    AgentDefined, Change, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated, ItemEdited,
-    ItemLinked, ItemMoved, Link,
+    AgentDefined, Change, CommentKind, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated,
+    ItemEdited, ItemLinked, ItemMoved, Link,
 };
-use crate::id::{EventId, ItemId, SessionId, WorkforceId};
+use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, ReviewName, StateName, TypeName};
 use crate::policy::{Field, Policy, PolicyError, StateCategory};
@@ -175,6 +175,14 @@ pub enum PolicyViolation {
     ReportNotFromItsSession,
     #[error("a review session reports on the item, not on its steps")]
     StepInReviewReport,
+    #[error("a comment needs text unless it resolves something")]
+    EmptyComment,
+    #[error("{0} is not a blocker or change request of this item")]
+    NotResolvable(CommentId),
+    #[error("{0} is resolved already")]
+    AlreadyResolved(CommentId),
+    #[error("a session cannot resolve a blocker it wrote; someone else has to")]
+    SessionResolvesItsOwnBlocker,
 }
 
 enum Admission {
@@ -680,12 +688,28 @@ impl State {
                     Ok(())
                 }
             }
+            EventBody::Comment(comment) => {
+                let own_blocker = workforce.items.get(&comment.item).is_some_and(|item| {
+                    comment.resolves.iter().any(|resolved| {
+                        item.notes()
+                            .get(&EventId::from(*resolved))
+                            .is_some_and(|note| {
+                                note.comment_kind() == Some(CommentKind::Blocker)
+                                    && matches!(&note.by, Actor::Agent { session: writer, .. } if writer == session)
+                            })
+                    })
+                });
+                if own_blocker {
+                    Err(PolicyViolation::SessionResolvesItsOwnBlocker)
+                } else {
+                    Ok(())
+                }
+            }
             EventBody::DeviceProfile(_)
             | EventBody::ItemCreated(_)
             | EventBody::ItemLinked(_)
             | EventBody::ItemArchived(_)
             | EventBody::ItemUnarchived(_)
-            | EventBody::Comment(_)
             | EventBody::SessionEnded(_)
             | EventBody::Report(_)
             | EventBody::Unknown { .. } => Ok(()),
@@ -789,10 +813,29 @@ impl State {
         };
 
         match body {
-            EventBody::Genesis(_)
-            | EventBody::PolicySet(_)
-            | EventBody::Comment(_)
-            | EventBody::Unknown { .. } => Ok(()),
+            EventBody::Genesis(_) | EventBody::PolicySet(_) | EventBody::Unknown { .. } => Ok(()),
+            EventBody::Comment(comment) => {
+                if comment.text.trim().is_empty() && comment.resolves.is_empty() {
+                    return Err(PolicyViolation::EmptyComment);
+                }
+                let item = item_of(&comment.item)?;
+                for resolved in &comment.resolves {
+                    let note = item
+                        .notes()
+                        .get(&EventId::from(*resolved))
+                        .filter(|note| {
+                            matches!(
+                                note.comment_kind(),
+                                Some(CommentKind::Blocker | CommentKind::ChangeRequest)
+                            )
+                        })
+                        .ok_or(PolicyViolation::NotResolvable(*resolved))?;
+                    if note.resolved().is_some() {
+                        return Err(PolicyViolation::AlreadyResolved(*resolved));
+                    }
+                }
+                Ok(())
+            }
             EventBody::InviteCreated(_)
             | EventBody::DeviceBound(_)
             | EventBody::DeviceProfile(_)

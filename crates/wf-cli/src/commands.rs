@@ -6,10 +6,10 @@ use serde::Serialize;
 use wf_core::autonomy::Autonomy;
 use wf_core::crdt::SetChange;
 use wf_core::event::{
-    AgentDefined, Change, Comment, Event, EventBody, Genesis, ItemCreated, ItemLinked, ItemMoved,
-    ItemRef, Link, PolicySet, Report,
+    AgentDefined, Change, Comment, CommentKind, Event, EventBody, Genesis, ItemCreated, ItemLinked,
+    ItemMoved, ItemRef, Link, PolicySet, Report,
 };
-use wf_core::id::{HashId, ItemId, SessionId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
 use wf_core::item::{ItemView, Priority};
 use wf_core::name::{AgentName, Handle, HarnessName, LaneName, StateName};
@@ -1198,25 +1198,100 @@ fn comment(
     workspace: &mut Workspace,
     args: CommentArgs,
 ) -> anyhow::Result<()> {
-    let id = choose_item(workspace, mode, args.item, Scope::Any)?;
+    let id = choose_item(workspace, mode, args.item.clone(), Scope::Any)?;
+    let resolves = comments_to_resolve(workspace, id, &args)?;
     let mut text = args.text.join(" ");
-    if args.edit || (text.is_empty() && mode == Mode::Interactive) {
+    if args.edit || (text.is_empty() && resolves.is_empty() && mode == Mode::Interactive) {
         text = edit_in_editor(&text, ".md")?;
     }
     let text = text.trim();
-    if text.is_empty() {
+    if text.is_empty() && resolves.is_empty() {
         bail!("the comment is empty; nothing was sent");
     }
+    let kind = if args.block {
+        CommentKind::Blocker
+    } else if args.request_change {
+        CommentKind::ChangeRequest
+    } else {
+        CommentKind::Plain
+    };
     let event = workspace.author(EventBody::Comment(Comment {
         item: id,
-        body: text.to_string(),
+        text: text.to_string(),
+        kind,
+        resolves: resolves.clone(),
     }))?;
-    done(
-        json,
-        format!("commented on #{}", id.short()),
-        &event,
-        Some(id),
-    )
+    let comment = CommentId::from(event.id());
+    let mut message = match kind {
+        CommentKind::Plain => format!("commented on #{}", id.short()),
+        CommentKind::Blocker | CommentKind::ChangeRequest => {
+            format!(
+                "wrote {} {} on #{}",
+                kind.name().replace('_', " "),
+                comment.short(),
+                id.short()
+            )
+        }
+    };
+    if !resolves.is_empty() {
+        let ids: Vec<String> = resolves.iter().map(HashId::short).collect();
+        message.push_str(&format!(", resolving {}", ids.join(", ")));
+    }
+    done(json, message, &event, Some(id))
+}
+
+/// The blockers and change requests a comment resolves: those named, and every open one of the
+/// kinds asked for, as they are open right now. The event names them, so one written meanwhile
+/// on another device stays open.
+fn comments_to_resolve(
+    workspace: &Workspace,
+    item: ItemId,
+    args: &CommentArgs,
+) -> anyhow::Result<Vec<CommentId>> {
+    let state = workspace.state();
+    let Some(ItemView::Live(live)) = state.item(item) else {
+        if args.resolve.is_empty() && !args.resolve_blockers && !args.resolve_change_requests {
+            return Ok(Vec::new());
+        }
+        bail!(
+            "#{} is archived; its comments cannot be resolved",
+            item.short()
+        );
+    };
+    let mut resolves = Vec::new();
+    for prefix in &args.resolve {
+        let comments = live
+            .notes()
+            .iter()
+            .filter(|(_, note)| note.comment_kind().is_some())
+            .map(|(id, _)| CommentId::from(*id));
+        resolves.push(wf_core::id::resolve_prefix(prefix, comments)?);
+    }
+    for (wanted, flag) in [
+        (CommentKind::Blocker, args.resolve_blockers),
+        (CommentKind::ChangeRequest, args.resolve_change_requests),
+    ] {
+        if !flag {
+            continue;
+        }
+        let open: Vec<CommentId> = live
+            .open_comments()
+            .into_iter()
+            .filter(|(_, note)| note.comment_kind() == Some(wanted))
+            .map(|(id, _)| id)
+            .collect();
+        if open.is_empty() {
+            bail!(
+                "#{} has no open {}s",
+                item.short(),
+                wanted.name().replace('_', " ")
+            );
+        }
+        resolves.extend(open);
+    }
+    resolves.sort();
+    resolves.dedup();
+    Ok(resolves)
 }
 
 fn mentions(json: bool, workspace: &Workspace, target: &str) -> anyhow::Result<()> {

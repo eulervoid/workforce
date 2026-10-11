@@ -525,10 +525,7 @@ impl Daemon {
             self.author(
                 loaded,
                 actor.clone(),
-                EventBody::Comment(Comment {
-                    item,
-                    body: note.clone(),
-                }),
+                EventBody::Comment(Comment::plain(item, note.clone())),
             )
             .await?;
         }
@@ -723,7 +720,7 @@ impl Daemon {
             self.author(
                 loaded,
                 Actor::Human(principal),
-                EventBody::Comment(Comment { item, body }),
+                EventBody::Comment(Comment::plain(item, body)),
             )
         };
 
@@ -1202,7 +1199,7 @@ async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_ha
         .zip(events)
         .filter_map(|((_, note), event)| {
             let text = match &event?.content.body {
-                EventBody::Comment(comment) => comment.body.clone(),
+                EventBody::Comment(comment) => comment.text.clone(),
                 EventBody::Report(report) => report.note.clone(),
                 EventBody::Review(review) => review.note.clone()?,
                 EventBody::ItemMoved(moved) => moved.note.clone()?,

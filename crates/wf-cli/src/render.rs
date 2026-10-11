@@ -365,6 +365,27 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     for flag in &detail.flags {
         let _ = writeln!(out, "  {}", paint(WARNING, format!("! {flag}")));
     }
+    if !detail.open.is_empty() {
+        let open: Vec<String> = detail
+            .open
+            .iter()
+            .map(|comment| {
+                format!(
+                    "{} {} {} by {}",
+                    comment_marker(&comment.kind),
+                    comment.id,
+                    comment.kind.replace('_', " "),
+                    paint(style::actor(&comment.by), &comment.by)
+                )
+            })
+            .collect();
+        let _ = writeln!(
+            out,
+            "  {} {}",
+            paint(WARNING, format!("{} open:", detail.open.len())),
+            open.join(&format!(" {} ", paint(DIM, "·")))
+        );
+    }
 
     let links = |label: &str, links: &[crate::view::LinkView], out: &mut String| {
         for link in links {
@@ -422,15 +443,31 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             if index > 0 {
                 out.push('\n');
             }
-            let _ = writeln!(
-                out,
-                "  {} {} {} {} {}",
+            let mut header = vec![
                 paint(DIM, short_time(&note.at)),
-                paint(DIM, "·"),
                 paint(style::actor(&note.by), &note.by),
-                paint(DIM, "·"),
-                paint(DIM, &note.kind),
-            );
+            ];
+            match note.kind.as_str() {
+                "blocker" | "change_request" => header.push(paint(
+                    WARNING,
+                    format!(
+                        "{} {}",
+                        comment_marker(&note.kind),
+                        note.kind.replace('_', " ")
+                    ),
+                )),
+                kind => header.push(paint(DIM, kind)),
+            }
+            if !note.resolves.is_empty() {
+                header.push(paint(DIM, format!("resolves {}", note.resolves.join(", "))));
+            }
+            if let Some(by) = &note.resolved_by {
+                header.push(paint(DIM, format!("resolved by {by}")));
+            }
+            if let Some(comment) = &note.comment {
+                header.push(paint(DIM, comment));
+            }
+            let _ = writeln!(out, "  {}", header.join(&format!(" {} ", paint(DIM, "·"))));
             let text = note
                 .text
                 .as_deref()
@@ -459,6 +496,15 @@ pub fn item_detail(detail: &ItemDetail) -> String {
         }
     }
     out
+}
+
+/// Marks a blocker or change request: `⧗` waits on someone else, `△` waits on the work.
+fn comment_marker(kind: &str) -> &'static str {
+    match kind {
+        "blocker" => "⧗",
+        "change_request" => "△",
+        _ => "",
+    }
 }
 
 /// The body as markdown with each step's number before its text: `- [ ] 1. write parser`.

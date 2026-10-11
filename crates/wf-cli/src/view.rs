@@ -9,7 +9,7 @@ use wf_core::body::{Body, BodyPart, StepId};
 use wf_core::event::{Change, Event, EventBody, Link};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::hlc::Hlc;
-use wf_core::id::{EventId, HashId, ItemId};
+use wf_core::id::{CommentId, EventId, HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
 use wf_core::item::{Item, ItemView, NoteKind, Origin, Standing};
@@ -449,6 +449,8 @@ pub fn source_view(state: &State, source: &wf_core::resolve::Source) -> SourceVi
 #[derive(Serialize)]
 pub struct NoteView {
     pub id: String,
+    /// The short id comments are resolved and referenced by, for comments only.
+    pub comment: Option<String>,
     pub kind: String,
     pub by: String,
     pub at: String,
@@ -457,6 +459,19 @@ pub struct NoteView {
     pub session: Option<String>,
     /// Reports only: the step it is about.
     pub step: Option<StepRefView>,
+    /// The short ids of the blockers and change requests this comment resolves.
+    pub resolves: Vec<String>,
+    /// Blockers and change requests only: the short id of the comment that resolved it.
+    pub resolved_by: Option<String>,
+}
+
+/// A blocker or change request nothing has resolved yet.
+#[derive(Serialize)]
+pub struct OpenCommentView {
+    pub id: String,
+    /// `blocker` or `change_request`.
+    pub kind: String,
+    pub by: String,
 }
 
 #[derive(Serialize)]
@@ -520,6 +535,7 @@ pub struct ItemDetail {
     pub referenced_by: Vec<SourceView>,
     pub mentions: Vec<String>,
     pub notes: Vec<NoteView>,
+    pub open: Vec<OpenCommentView>,
     pub flags: Vec<String>,
 }
 
@@ -591,7 +607,7 @@ fn step_ref(body: &Body, step: StepId) -> StepRefView {
 
 pub fn note_text(event: &Event) -> Option<String> {
     match &event.content.body {
-        EventBody::Comment(comment) => Some(comment.body.clone()),
+        EventBody::Comment(comment) => Some(comment.text.clone()),
         EventBody::ItemMoved(moved) => moved.note.clone(),
         EventBody::Report(report) => Some(report.note.clone()),
         EventBody::Review(review) => review.note.clone(),
@@ -658,19 +674,38 @@ pub fn item_detail(
                     state.session(session).map(session_label),
                     step.map(|step| step_ref(&item.body(), step)),
                 ),
-                NoteKind::Comment | NoteKind::Move | NoteKind::Review { .. } => (None, None),
+                NoteKind::Comment { .. } | NoteKind::Move | NoteKind::Review { .. } => (None, None),
+            };
+            let event = load_event(id);
+            let resolves = match event.as_ref().map(|event| &event.content.body) {
+                Some(EventBody::Comment(comment)) => {
+                    comment.resolves.iter().map(HashId::short).collect()
+                }
+                _ => Vec::new(),
             };
             NoteView {
                 id: id.to_string(),
+                comment: note.comment_kind().map(|_| CommentId::from(*id).short()),
                 kind: note.kind.name().to_string(),
                 by: actor_label(state, &note.by),
                 at: timestamp(note.at),
-                text: load_event(id).as_ref().and_then(note_text),
+                text: event.as_ref().and_then(note_text),
                 session,
                 step,
+                resolves,
+                resolved_by: note.resolved().map(|resolved| resolved.by.short()),
             }
         })
         .collect::<Vec<_>>();
+    let open = item
+        .open_comments()
+        .into_iter()
+        .map(|(id, note)| OpenCommentView {
+            id: id.short(),
+            kind: note.kind.name().to_string(),
+            by: actor_label(state, &note.by),
+        })
+        .collect();
     let mut notes = notes;
     notes.sort_by(|left, right| left.at.cmp(&right.at).then(left.id.cmp(&right.id)));
 
@@ -704,6 +739,7 @@ pub fn item_detail(
             .map(|target| mention_label(state, target))
             .collect(),
         notes,
+        open,
         flags,
     }
 }

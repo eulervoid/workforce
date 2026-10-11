@@ -4,11 +4,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use crate::crdt::{Lww, Stamp};
-use crate::event::{Change, Event, EventBody, ItemLinked, Link};
-use crate::id::SessionId;
-use crate::id::{EventId, ItemId};
+use crate::event::{Change, CommentKind, Event, EventBody, ItemLinked, Link};
+use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::{AgentId, Role};
-use crate::item::{Item, Merge, Note, NoteKind, Verdicted};
+use crate::item::{Item, Merge, Note, NoteKind, Resolved, Verdicted};
 use crate::name::StateName;
 use crate::policy::Policy;
 use crate::refs;
@@ -448,12 +447,27 @@ impl State {
                     item.notes.insert(
                         id,
                         note_from(
-                            NoteKind::Comment,
+                            NoteKind::Comment { kind: comment.kind },
                             &content.actor,
                             content.hlc,
-                            &comment.body,
+                            &comment.text,
                         ),
                     );
+                    let by = CommentId::from(id);
+                    for resolved in &comment.resolves {
+                        let Some(note) = item.notes.get_mut(&EventId::from(*resolved)) else {
+                            continue;
+                        };
+                        if !matches!(
+                            note.comment_kind(),
+                            Some(CommentKind::Blocker | CommentKind::ChangeRequest)
+                        ) {
+                            continue;
+                        }
+                        if note.resolved.is_none_or(|earlier| stamp < earlier.stamp) {
+                            note.resolved = Some(Resolved { by, stamp });
+                        }
+                    }
                 }
             }
         }
@@ -470,6 +484,7 @@ fn note_from(kind: NoteKind, by: &crate::identity::Actor, at: crate::hlc::Hlc, t
         by: by.clone(),
         at,
         tokens: refs::parse(text),
+        resolved: None,
     }
 }
 

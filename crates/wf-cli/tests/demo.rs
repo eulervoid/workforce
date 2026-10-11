@@ -413,6 +413,64 @@ fn comments_need_text_or_the_editor() {
 }
 
 #[test]
+fn blockers_and_change_requests_stay_open_until_a_comment_resolves_them() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    let task = wf.add(&["--title", "a task"]);
+    let comment = |args: &[&str]| {
+        let mut all = vec!["comment", short(&task)];
+        all.extend_from_slice(args);
+        wf.json(&all)["event"].as_str().unwrap().to_string()
+    };
+    let blocker = comment(&["Which crate?", "--block"]);
+    comment(&["Handle empty input", "--request-change"]);
+    comment(&["Also negative numbers", "--request-change"]);
+    comment(&["Just a remark"]);
+
+    let open = |shown: &Value| -> Vec<String> {
+        shown["open"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|comment| comment["kind"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let shown = wf.json(&["item", "show", short(&task)]);
+    assert_eq!(
+        open(&shown),
+        ["blocker", "change_request", "change_request"],
+        "{shown}"
+    );
+    let printed = wf.run(&["item", "show", short(&task)]);
+    assert!(printed.contains("3 open:"), "{printed}");
+    assert!(printed.contains("⧗ blocker"), "{printed}");
+
+    comment(&["Use humantime", "--resolve", &blocker[..4]]);
+    assert_eq!(
+        open(&wf.json(&["item", "show", short(&task)])),
+        ["change_request", "change_request"]
+    );
+    assert!(
+        wf.fail(&["comment", short(&task), "again", "--resolve", &blocker[..4]])
+            .contains("resolved already")
+    );
+    assert!(
+        wf.fail(&["comment", short(&task), "--resolve-blockers"])
+            .contains("no open blockers")
+    );
+
+    comment(&["--resolve-change-requests"]);
+    let shown = wf.json(&["item", "show", short(&task)]);
+    assert!(open(&shown).is_empty(), "{shown}");
+    let resolving = shown["notes"].as_array().unwrap().last().unwrap().clone();
+    assert_eq!(
+        resolving["resolves"].as_array().unwrap().len(),
+        2,
+        "{resolving}"
+    );
+}
+
+#[test]
 fn missing_items_and_states_are_errors_without_a_terminal() {
     let wf = Sandbox::new();
     wf.run(&["init", "--name", "demo", "--no-agents"]);

@@ -51,8 +51,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use crate::body::{Body, StepId};
 use crate::crdt::{AddWinsSet, Lww, Stamp};
+use crate::event::CommentKind;
 use crate::hlc::Hlc;
-use crate::id::{EventId, ItemId, SessionId};
+use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::name::{Label, LaneName, Requirement, ReviewName, StateName, TypeName};
 use crate::policy::{Policy, StateCategory};
@@ -61,7 +62,9 @@ use crate::session::{CommitId, Verdict};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NoteKind {
-    Comment,
+    Comment {
+        kind: CommentKind,
+    },
     /// The note attached to a move.
     Move,
     /// A report by a session of the item. The step may no longer exist in the body.
@@ -78,7 +81,7 @@ pub enum NoteKind {
 impl NoteKind {
     pub fn name(&self) -> &'static str {
         match self {
-            NoteKind::Comment => "comment",
+            NoteKind::Comment { kind } => kind.name(),
             NoteKind::Move => "move",
             NoteKind::Report { .. } => "report",
             NoteKind::Review { .. } => "review",
@@ -94,6 +97,38 @@ pub struct Note {
     pub by: Actor,
     pub at: Hlc,
     pub tokens: BTreeSet<Token>,
+    /// The earliest comment that resolved this blocker or change request.
+    pub(crate) resolved: Option<Resolved>,
+}
+
+/// A blocker or change request was resolved by a later comment. Resolving is grow-only; of
+/// concurrent resolutions the earliest by stamp counts, so every peer shows the same one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Resolved {
+    pub by: CommentId,
+    pub(crate) stamp: Stamp,
+}
+
+impl Note {
+    /// The kind of comment this note is, when it is one.
+    pub fn comment_kind(&self) -> Option<CommentKind> {
+        match self.kind {
+            NoteKind::Comment { kind } => Some(kind),
+            NoteKind::Move | NoteKind::Report { .. } | NoteKind::Review { .. } => None,
+        }
+    }
+
+    pub fn resolved(&self) -> Option<Resolved> {
+        self.resolved
+    }
+
+    /// Whether this is a blocker or change request that nothing has resolved yet.
+    pub fn is_open(&self) -> bool {
+        matches!(
+            self.comment_kind(),
+            Some(CommentKind::Blocker | CommentKind::ChangeRequest)
+        ) && self.resolved.is_none()
+    }
 }
 
 /// A verdict on one commit of an item, by a review session or a person.
@@ -243,6 +278,25 @@ impl Item {
 
     pub fn notes(&self) -> &BTreeMap<EventId, Note> {
         &self.notes
+    }
+
+    /// The blockers and change requests nothing has resolved yet, oldest first.
+    pub fn open_comments(&self) -> Vec<(CommentId, &Note)> {
+        let mut open: Vec<(CommentId, &Note)> = self
+            .notes
+            .iter()
+            .filter(|(_, note)| note.is_open())
+            .map(|(id, note)| (CommentId::from(*id), note))
+            .collect();
+        open.sort_by_key(|(id, note)| (note.at, *id));
+        open
+    }
+
+    /// Whether an open blocker holds up the work on the item.
+    pub fn has_open_blocker(&self) -> bool {
+        self.notes
+            .values()
+            .any(|note| note.is_open() && note.comment_kind() == Some(CommentKind::Blocker))
     }
 
     pub fn verdicts(&self) -> &BTreeMap<EventId, Verdicted> {

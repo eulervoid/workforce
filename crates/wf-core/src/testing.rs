@@ -4,11 +4,11 @@ use crate::autonomy::Autonomy;
 use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::event::{
-    AgentDefined, Change, Comment, DeviceBound, Event, EventBody, EventBuilder, ForkPoint, Genesis,
-    InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemMoved, ItemRef, Link,
-    PolicySet, Report, SessionEnded, SessionStarted,
+    AgentDefined, Change, Comment, CommentKind, DeviceBound, Event, EventBody, EventBuilder,
+    ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemMoved,
+    ItemRef, Link, PolicySet, Report, SessionEnded, SessionStarted,
 };
-use crate::id::{ItemId, SessionId, WorkforceId};
+use crate::id::{CommentId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
     Actor, AgentId, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed,
 };
@@ -285,10 +285,28 @@ pub fn unarchive(item: ItemId) -> EventBody {
     EventBody::ItemUnarchived(ItemRef { item })
 }
 
-pub fn comment(item: ItemId, body: &str) -> EventBody {
+pub fn comment(item: ItemId, text: &str) -> EventBody {
+    EventBody::Comment(Comment::plain(item, text))
+}
+
+pub fn blocker(item: ItemId, text: &str) -> EventBody {
     EventBody::Comment(Comment {
-        item,
-        body: body.into(),
+        kind: CommentKind::Blocker,
+        ..Comment::plain(item, text)
+    })
+}
+
+pub fn change_request(item: ItemId, text: &str) -> EventBody {
+    EventBody::Comment(Comment {
+        kind: CommentKind::ChangeRequest,
+        ..Comment::plain(item, text)
+    })
+}
+
+pub fn resolving(item: ItemId, text: &str, resolves: &[CommentId]) -> EventBody {
+    EventBody::Comment(Comment {
+        resolves: resolves.to_vec(),
+        ..Comment::plain(item, text)
     })
 }
 
