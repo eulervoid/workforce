@@ -32,6 +32,24 @@ pub enum MachineConfigError {
 pub struct MachineConfig {
     #[serde(default)]
     pub permissions: PermissionsConfig,
+    /// Without it, agents run with the privileges of the daemon.
+    #[serde(default)]
+    pub sandbox: Option<SandboxConfig>,
+}
+
+/// Runs agents in [Fence](https://github.com/fencesandbox/fence), which has to be installed. An
+/// agent may write in its worktree and where it needs to commit and talk to the daemon, and
+/// reach the model APIs and package registries of Fence's `code` template; everything else is
+/// denied. What this adds is on top of that.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SandboxConfig {
+    /// More paths the agent may write to.
+    #[serde(default)]
+    pub allow_write: Vec<PathBuf>,
+    /// More domains the agent may reach, such as `*.example.com`.
+    #[serde(default)]
+    pub allow_domains: Vec<String>,
 }
 
 /// How the permission requests of agents that ask are decided on this machine.

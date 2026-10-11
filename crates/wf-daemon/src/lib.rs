@@ -10,6 +10,7 @@ mod peers;
 mod permissions;
 pub mod proto;
 mod runner;
+mod sandbox;
 mod server;
 mod storage;
 

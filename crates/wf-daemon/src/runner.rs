@@ -24,6 +24,7 @@ use wf_store::AuthorError;
 use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name};
 
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
+use crate::machine_config::MachineConfig;
 use crate::proto::Finish;
 use crate::{Daemon, Loaded, StorageClosed};
 
@@ -991,6 +992,30 @@ async fn run_session(
     daemon.held.forget(run.session);
 }
 
+/// The agent as the machine config says to run it: in a sandbox, or as it is. A config that is
+/// broken stops the session, so that an agent never runs unconfined by mistake.
+fn sandboxed(daemon: &Daemon, run: &Run, agent: AcpAgentConfig) -> Result<AcpAgentConfig, String> {
+    let Some(path) = &daemon.config.machine_config else {
+        return Ok(agent);
+    };
+    let Some(config) = MachineConfig::load(path)
+        .map_err(|error| error.to_string())?
+        .sandbox
+    else {
+        return Ok(agent);
+    };
+    let access = crate::sandbox::Access {
+        worktree: &run.worktree,
+        repository: &run.repository,
+        socket: &daemon.config.socket,
+    };
+    let settings = daemon
+        .workforce_directory(run.workforce)
+        .join("sandbox")
+        .join(format!("{}.json", run.session));
+    crate::sandbox::wrap(&config, &access, &agent, &settings).map_err(|error| error.to_string())
+}
+
 async fn drive(
     daemon: &Arc<Daemon>,
     loaded: &Arc<Loaded>,
@@ -1022,6 +1047,16 @@ async fn drive(
         .env("WF_SESSION", run.session.to_string())
         .env("WF_WORKFORCE", run.workforce.to_string())
         .env("PATH", path.to_string_lossy());
+    let agent = match sandboxed(daemon, run, agent) {
+        Ok(agent) => agent,
+        Err(problem) => {
+            eprintln!(
+                "could not sandbox {} for session {}: {problem}",
+                run.agent, run.session
+            );
+            return failed(format!("the sandbox could not be set up: {problem}"));
+        }
+    };
     let mut conversation = match Conversation::start(Launch {
         agent,
         model: run.model.clone(),
@@ -1035,10 +1070,8 @@ async fn drive(
         Err(error) => {
             let report = wf_core::report::report(&error);
             eprintln!(
-                "could not start {} for session {}: {}",
-                run.agent,
-                run.session,
-                wf_core::report::report(&error)
+                "could not start {} for session {}: {report}",
+                run.agent, run.session
             );
             return failed(format!("{} did not start: {report}", run.agent));
         }
