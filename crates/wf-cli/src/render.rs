@@ -412,11 +412,35 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     links("depends on", &detail.depends_on, &mut out);
     links("required by", &detail.required_by, &mut out);
     links("supersedes", detail.supersedes.as_slice(), &mut out);
-    links("references", &detail.references, &mut out);
-    for source in &detail.referenced_by {
+    for reference in &detail.references {
+        let link = &reference.item;
+        let what = match &reference.comment {
+            Some(comment) => format!("{} on ", paint(DIM, comment)),
+            None => String::new(),
+        };
         let _ = writeln!(
             out,
-            "  ↳ referenced by {} \"{}\" ({})",
+            "  ↳ references {what}{} \"{}\"",
+            item_label(
+                &link.id,
+                &link.item_type,
+                link.state.as_deref(),
+                link.state_category.as_deref(),
+                None,
+                ""
+            ),
+            link.title,
+        );
+    }
+    for backlink in &detail.referenced_by {
+        let source = &backlink.from;
+        let what = match &backlink.comment {
+            Some(comment) => format!("{} ", paint(DIM, comment)),
+            None => String::new(),
+        };
+        let _ = writeln!(
+            out,
+            "  ↳ {what}referenced by {} \"{}\" ({})",
             id_label(&source.item),
             source.title,
             origin(&source.origin)

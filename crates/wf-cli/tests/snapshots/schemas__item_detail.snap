@@ -56,7 +56,8 @@ expression: "Envelope::new(&detail)"
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
-        "ignored": false
+        "ignored": false,
+        "comment": null
       }
     ],
     "referenced_by": [],

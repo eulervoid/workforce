@@ -1,4 +1,4 @@
-//! Derived references (`#item`) and mentions (`@principal/agent/session`) in Markdown text.
+//! Derived references (`#item`, `#item/comment`) and mentions (`@principal/agent/session`) in Markdown text.
 //!
 //! The parser only finds candidate tokens, skipping code. Whether a token resolves to an item or
 //! principal depends on the whole state, so resolution happens at query time in `State`.
@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::MIN_PREFIX_LEN;
 
-pub const PARSER_VERSION: u16 = 3;
+pub const PARSER_VERSION: u16 = 4;
 
 /// `@joshua`, `@joshua/coder` or `@joshua/coder/s4k2`, as written.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -47,6 +47,11 @@ impl std::fmt::Display for Mention {
 pub enum Token {
     /// A candidate item id prefix, lowercase base32, at least [`MIN_PREFIX_LEN`] long.
     ItemRef(String),
+    /// `#k3f9a2/c7f2`: candidate id prefixes of an item and of a comment on it.
+    CommentRef {
+        item: String,
+        comment: String,
+    },
     Mention(Mention),
 }
 
@@ -110,13 +115,37 @@ fn run_length(text: &str, allowed: impl Fn(char) -> bool) -> usize {
         .map_or(text.len(), |(position, _)| position)
 }
 
-fn parse_item_ref(rest: &str) -> (Option<Token>, usize) {
-    let length = run_length(rest, |character| {
+/// The length of the id prefix at the start of `text`, and whether it is one: it may have digits
+/// that base32 lacks, so `#abc1` is skipped whole instead of read as `#abc`.
+fn id_prefix(text: &str) -> (usize, bool) {
+    let length = run_length(text, |character| {
         character.is_ascii_lowercase() || character.is_ascii_digit()
     });
-    let candidate = &rest[..length];
-    let valid = candidate.len() >= MIN_PREFIX_LEN && candidate.chars().all(is_base32);
-    (valid.then(|| Token::ItemRef(candidate.to_string())), length)
+    let candidate = &text[..length];
+    (
+        length,
+        candidate.len() >= MIN_PREFIX_LEN && candidate.chars().all(is_base32),
+    )
+}
+
+/// `#item`, or `#item/comment`. A `/` not followed by a comment id ends the item reference.
+fn parse_item_ref(rest: &str) -> (Option<Token>, usize) {
+    let (length, valid) = id_prefix(rest);
+    if !valid {
+        return (None, length);
+    }
+    let item = rest[..length].to_string();
+    if let Some(after) = rest[length..].strip_prefix('/') {
+        let (comment_length, comment_valid) = id_prefix(after);
+        if comment_valid {
+            let comment = after[..comment_length].to_string();
+            return (
+                Some(Token::CommentRef { item, comment }),
+                length + 1 + comment_length,
+            );
+        }
+    }
+    (Some(Token::ItemRef(item)), length)
 }
 
 fn parse_mention(rest: &str) -> (Option<Token>, usize) {
@@ -177,6 +206,20 @@ mod tests {
                     principal: "joshua".into(),
                     agent: "reviewer".into()
                 })
+            ])
+        );
+    }
+
+    #[test]
+    fn finds_comment_refs() {
+        assert_eq!(
+            parse("as #k3f7a2/c7f2 says, see #k3f7a2/ and #k3f7a2/c7"),
+            BTreeSet::from([
+                Token::CommentRef {
+                    item: "k3f7a2".into(),
+                    comment: "c7f2".into()
+                },
+                item("k3f7a2"),
             ])
         );
     }

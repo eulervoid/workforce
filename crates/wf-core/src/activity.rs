@@ -13,7 +13,7 @@ use crate::identity::Actor;
 use crate::item::ItemView;
 use crate::name::StateName;
 use crate::policy::StateCategory;
-use crate::refs::{self, Token};
+use crate::refs;
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::State;
 
@@ -79,8 +79,11 @@ pub enum Activity {
     Dependent(SetChange<ItemId>),
     /// Another item supersedes this one.
     SupersededBy(ItemId),
-    /// Another item's body or a comment on it refers to this one.
-    ReferencedIn(ItemId),
+    /// Another item's body or a comment on it refers to this one, or to `comment` on it.
+    ReferencedIn {
+        item: ItemId,
+        comment: Option<CommentId>,
+    },
 }
 
 impl State {
@@ -103,11 +106,14 @@ impl State {
             Some(ItemView::Archived(_)) | None => Vec::new(),
         };
         let resolver = self.resolver();
-        let refers_here = |text: &str| {
-            refs::parse(text).iter().any(|token| match token {
-                Token::ItemRef(prefix) => resolver.item(prefix) == Ok(item),
-                Token::Mention(_) => false,
-            })
+        // What of this item `text` refers to: the item itself (`None`) or its comments.
+        let referenced_here = |text: &str| -> BTreeSet<Option<CommentId>> {
+            refs::parse(text)
+                .iter()
+                .filter_map(|token| resolver.reference(token))
+                .filter(|reference| reference.item() == item)
+                .map(|reference| reference.comment())
+                .collect()
         };
         // The last move each session made: its end's, when it is not the start's.
         let mut session_moves: BTreeMap<SessionId, StateName> = BTreeMap::new();
@@ -133,10 +139,22 @@ impl State {
                     })
             };
             let mut by = content.actor.clone();
+            let mut referenced_in = |other: ItemId, referenced: BTreeSet<Option<CommentId>>| {
+                entries.extend(referenced.into_iter().map(|comment| Entry {
+                    event: event.id(),
+                    at: content.hlc,
+                    by: content.actor.clone(),
+                    activity: Activity::ReferencedIn {
+                        item: other,
+                        comment,
+                    },
+                }));
+            };
             let activity = match &content.body {
                 EventBody::ItemCreated(_) if ItemId::from(event.id()) == item => Activity::Created,
-                EventBody::ItemCreated(created) if refers_here(&created.body) => {
-                    Activity::ReferencedIn(event.id().into())
+                EventBody::ItemCreated(created) => {
+                    referenced_in(event.id().into(), referenced_here(&created.body));
+                    continue;
                 }
                 EventBody::Comment(comment) if comment.item == item => Activity::Commented {
                     comment: event.id().into(),
@@ -145,8 +163,9 @@ impl State {
                     resolves: comment.resolves.clone(),
                     step: comment.step,
                 },
-                EventBody::Comment(comment) if refers_here(&comment.text) => {
-                    Activity::ReferencedIn(comment.item)
+                EventBody::Comment(comment) => {
+                    referenced_in(comment.item, referenced_here(&comment.text));
+                    continue;
                 }
                 EventBody::ItemMoved(moved) if moved.item == item => match moved.by_session {
                     Some(_) => continue,
@@ -185,14 +204,16 @@ impl State {
                     continue;
                 }
                 EventBody::ItemEdited(edited) => {
-                    let refers = edited.changes.iter().any(|change| match change {
-                        Change::Body(body) => refers_here(body),
-                        _ => false,
-                    });
-                    if !refers {
-                        continue;
-                    }
-                    Activity::ReferencedIn(edited.item)
+                    let referenced = edited
+                        .changes
+                        .iter()
+                        .flat_map(|change| match change {
+                            Change::Body(body) => referenced_here(body),
+                            _ => BTreeSet::new(),
+                        })
+                        .collect();
+                    referenced_in(edited.item, referenced);
+                    continue;
                 }
                 EventBody::ItemLinked(linked) if linked.item == item => match &linked.link {
                     Link::DependsOn(change) => Activity::DependsOn(change.clone()),
@@ -250,9 +271,7 @@ impl State {
                     commit: merged.commit,
                 },
                 // Events of other items, and events that are not about items.
-                EventBody::ItemCreated(_)
-                | EventBody::Comment(_)
-                | EventBody::ItemMoved(_)
+                EventBody::ItemMoved(_)
                 | EventBody::ItemArchived(_)
                 | EventBody::ItemUnarchived(_)
                 | EventBody::SessionStarted(_)

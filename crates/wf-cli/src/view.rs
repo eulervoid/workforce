@@ -426,6 +426,24 @@ fn link_view(state: &State, id: ItemId, ignored: bool) -> LinkView {
     }
 }
 
+/// An item, or a comment on it, that this item refers to.
+#[derive(Serialize)]
+pub struct ReferenceView {
+    #[serde(flatten)]
+    pub item: LinkView,
+    /// The short id of the comment referenced, when the reference is to a comment.
+    pub comment: Option<String>,
+}
+
+/// Where this item, or a comment on it, is referenced.
+#[derive(Serialize)]
+pub struct BacklinkView {
+    #[serde(flatten)]
+    pub from: SourceView,
+    /// The short id of the comment of this item referenced, when it is one.
+    pub comment: Option<String>,
+}
+
 #[derive(Serialize)]
 pub struct SourceView {
     pub item: String,
@@ -552,8 +570,8 @@ pub struct ItemDetail {
     pub depends_on: Vec<LinkView>,
     pub required_by: Vec<LinkView>,
     pub supersedes: Option<LinkView>,
-    pub references: Vec<LinkView>,
-    pub referenced_by: Vec<SourceView>,
+    pub references: Vec<ReferenceView>,
+    pub referenced_by: Vec<BacklinkView>,
     pub mentions: Vec<String>,
     /// Everything that happened to the item, oldest first.
     pub activity: Vec<ActivityView>,
@@ -793,9 +811,13 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
             Activity::SupersededBy(other) => {
                 ("superseded_by", format!("superseded by {}", label(other)))
             }
-            Activity::ReferencedIn(other) => {
-                ("referenced_in", format!("referenced in {}", label(other)))
-            }
+            Activity::ReferencedIn { item: other, comment } => (
+                "referenced_in",
+                match comment {
+                    Some(comment) => format!("{} referenced in {}", comment.short(), label(other)),
+                    None => format!("referenced in {}", label(other)),
+                },
+            ),
         };
         views.push(ActivityView {
             at,
@@ -946,12 +968,18 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         references: state
             .references_from(item)
             .into_iter()
-            .map(|id| link_view(state, id, false))
+            .map(|reference| ReferenceView {
+                item: link_view(state, reference.item(), false),
+                comment: reference.comment().map(|comment| comment.short()),
+            })
             .collect(),
         referenced_by: state
             .backlinks(item.id())
             .iter()
-            .map(|source| source_view(state, source))
+            .map(|backlink| BacklinkView {
+                from: source_view(state, &backlink.from),
+                comment: backlink.comment.map(|comment| comment.short()),
+            })
             .collect(),
         mentions: state
             .mentions_in(item)

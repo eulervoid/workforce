@@ -678,7 +678,7 @@ Relations that change behaviour are explicit events. Informational ones are deri
 * `depends_on` is never derived from text: a stray `#ref` must not block work.
 
 ### Derived references and mentions
-* `#k3f9a2` for items (any unique prefix of at least 4 characters, like git), `#k3f9a2/c7f2` for a
+* `#k3f7a2` for items (any unique prefix of at least 4 characters, like git), `#k3f7a2/c7f2` for a
   comment on an item (section 10).
 * `@joshua` for principals, `@joshua/coder` for agents, `@joshua/coder/s4k2` for sessions. Short forms
   (`@coder`, `@s4k2`) work when unique in the workforce.

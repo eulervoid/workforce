@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::id::{HashId, ItemId, MIN_PREFIX_LEN, PrefixError, SessionId};
+use crate::id::{CommentId, HashId, ItemId, MIN_PREFIX_LEN, PrefixError, SessionId, resolve_prefix};
 use crate::identity::{AgentId, PrincipalKey};
 use crate::item::{Item, Origin};
 use crate::refs::{Mention, Token};
@@ -15,6 +15,38 @@ use crate::state::State;
 pub enum MentionTarget {
     Principal(PrincipalKey),
     Agent(AgentId),
+}
+
+/// What a `#` reference points at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Reference {
+    Item(ItemId),
+    Comment { item: ItemId, comment: CommentId },
+}
+
+impl Reference {
+    /// The item referenced, or the item of the comment referenced.
+    pub fn item(&self) -> ItemId {
+        match self {
+            Reference::Item(item) | Reference::Comment { item, .. } => *item,
+        }
+    }
+
+    /// The comment referenced, if it is one.
+    pub fn comment(&self) -> Option<CommentId> {
+        match self {
+            Reference::Item(_) => None,
+            Reference::Comment { comment, .. } => Some(*comment),
+        }
+    }
+}
+
+/// A reference to an item or one of its comments, and where it was written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct Backlink {
+    pub from: Source,
+    /// The comment referenced, when the reference is to a comment rather than the item.
+    pub comment: Option<CommentId>,
 }
 
 /// Where a token was written.
@@ -91,6 +123,35 @@ impl Resolver<'_> {
         }
     }
 
+    /// Resolves `#item/comment`: the item prefix as [`Resolver::item`] does, the comment prefix
+    /// among the comments of that item.
+    pub fn comment(
+        &self,
+        item_prefix: &str,
+        comment_prefix: &str,
+    ) -> Result<(ItemId, CommentId), PrefixError> {
+        let item = self.item(item_prefix)?;
+        let comments = self
+            .state
+            .raw_item(item)
+            .into_iter()
+            .flat_map(|item| item.comments().keys().copied());
+        let comment = resolve_prefix(comment_prefix, comments)?;
+        Ok((item, comment))
+    }
+
+    /// What an item or comment reference points at, if it resolves. Mentions are no references.
+    pub fn reference(&self, token: &Token) -> Option<Reference> {
+        match token {
+            Token::ItemRef(prefix) => self.item(prefix).ok().map(Reference::Item),
+            Token::CommentRef { item, comment } => self
+                .comment(item, comment)
+                .ok()
+                .map(|(item, comment)| Reference::Comment { item, comment }),
+            Token::Mention(_) => None,
+        }
+    }
+
     /// `@joshua` is a principal. Without a matching handle, a short `@coder` names an agent if
     /// exactly one agent has that name. Sessions arrive in M2 and never resolve yet.
     pub fn mention(&self, mention: &Mention) -> Option<MentionTarget> {
@@ -136,39 +197,36 @@ fn tokens_of(item: &Item) -> impl Iterator<Item = (Origin, &BTreeSet<Token>)> {
 }
 
 impl State {
-    /// Items referenced from the body and comments of `item`.
-    pub fn references_from(&self, item: &Item) -> BTreeSet<ItemId> {
+    /// Items, and comments on other items, referenced from the body and comments of `item`.
+    pub fn references_from(&self, item: &Item) -> BTreeSet<Reference> {
         let resolver = self.resolver();
         tokens_of(item)
             .flat_map(|(_, tokens)| tokens)
-            .filter_map(|token| match token {
-                Token::ItemRef(prefix) => resolver.item(prefix).ok(),
-                Token::Mention(_) => None,
-            })
-            .filter(|target| *target != item.id())
+            .filter_map(|token| resolver.reference(token))
+            .filter(|reference| reference.item() != item.id())
             .collect()
     }
 
-    /// Where `target` is referenced from, in live items only.
-    pub fn backlinks(&self, target: ItemId) -> Vec<Source> {
+    /// Where `target` or one of its comments is referenced from, in live items only.
+    pub fn backlinks(&self, target: ItemId) -> Vec<Backlink> {
         let resolver = self.resolver();
-        let mut sources = Vec::new();
+        let mut backlinks = BTreeSet::new();
         for item in self.live_items().filter(|item| item.id() != target) {
             for (origin, tokens) in tokens_of(item) {
-                let references = tokens.iter().any(|token| match token {
-                    Token::ItemRef(prefix) => resolver.item(prefix) == Ok(target),
-                    Token::Mention(_) => false,
-                });
-                if references {
-                    sources.push(Source {
-                        item: item.id(),
-                        origin,
-                    });
+                for reference in tokens.iter().filter_map(|token| resolver.reference(token)) {
+                    if reference.item() == target {
+                        backlinks.insert(Backlink {
+                            from: Source {
+                                item: item.id(),
+                                origin,
+                            },
+                            comment: reference.comment(),
+                        });
+                    }
                 }
             }
         }
-        sources.sort();
-        sources
+        backlinks.into_iter().collect()
     }
 
     /// Everyone mentioned in the body and comments of `item`.
@@ -178,7 +236,7 @@ impl State {
             .flat_map(|(_, tokens)| tokens)
             .filter_map(|token| match token {
                 Token::Mention(mention) => resolver.mention(mention),
-                Token::ItemRef(_) => None,
+                Token::ItemRef(_) | Token::CommentRef { .. } => None,
             })
             .collect()
     }
@@ -191,7 +249,7 @@ impl State {
             for (origin, tokens) in tokens_of(item) {
                 let mentioned = tokens.iter().any(|token| match token {
                     Token::Mention(mention) => resolver.mention(mention).as_ref() == Some(target),
-                    Token::ItemRef(_) => false,
+                    Token::ItemRef(_) | Token::CommentRef { .. } => false,
                 });
                 if mentioned {
                     sources.push(Source {

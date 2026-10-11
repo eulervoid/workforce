@@ -50,12 +50,14 @@ expression: "Envelope::new(&detail)"
       {
         "item": "luban6ypnhwlhzqkrrf6n5dbtslrp556wwcnp3dkqczskgofxh2a",
         "title": "Implement feed sync",
-        "origin": "body"
+        "origin": "body",
+        "comment": null
       },
       {
         "item": "luban6ypnhwlhzqkrrf6n5dbtslrp556wwcnp3dkqczskgofxh2a",
         "title": "Implement feed sync",
-        "origin": "4bls6ek7yxj3iffnauoliiu6d3wodyrfzjtg6rnp6yma7aiqlsaa"
+        "origin": "4bls6ek7yxj3iffnauoliiu6d3wodyrfzjtg6rnp6yma7aiqlsaa",
+        "comment": null
       }
     ],
     "mentions": [],

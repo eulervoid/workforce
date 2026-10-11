@@ -1,6 +1,6 @@
 use crate::activity::Activity;
 use crate::event::{Event, EventBody, ItemMoved};
-use crate::id::{HashId, ItemId, SessionId};
+use crate::id::{CommentId, HashId, ItemId, SessionId};
 use crate::name::StateName;
 use crate::session::EndReason;
 use crate::state::State;
@@ -101,11 +101,41 @@ fn what_other_items_do_shows_where_it_changes_this_one() {
         [
             Activity::DependsOn(crate::crdt::SetChange::Add(first)),
             Activity::Dependent(crate::crdt::SetChange::Add(later)),
-            Activity::ReferencedIn(later),
+            Activity::ReferencedIn {
+                item: later,
+                comment: None
+            },
             Activity::DependencyFinished {
                 item: first,
                 to: StateName::new("done").unwrap(),
                 category: crate::policy::StateCategory::Done,
+            },
+        ]
+    );
+}
+
+#[test]
+fn a_reference_to_a_comment_names_the_comment() {
+    let mut log = Log::new();
+    let task: ItemId = log.apply(create("task", "work")).id().into();
+    let said: CommentId = log.apply(comment(task, "use humantime")).id().into();
+    let other: ItemId = log.apply(create("task", "other")).id().into();
+    log.apply(comment(
+        other,
+        &format!("see #{t}/{c} and #{t}", t = task.short(), c = said.short()),
+    ));
+
+    let activity = log.activity(task);
+    assert_eq!(
+        activity[2..],
+        [
+            Activity::ReferencedIn {
+                item: other,
+                comment: None
+            },
+            Activity::ReferencedIn {
+                item: other,
+                comment: Some(said)
             },
         ]
     );

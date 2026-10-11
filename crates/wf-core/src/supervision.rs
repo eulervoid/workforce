@@ -39,7 +39,7 @@ impl State {
         let resolver = self.resolver();
         let mentioned = comment.tokens.iter().find_map(|token| match token {
             Token::Mention(mention) => resolver.mention(mention),
-            Token::ItemRef(_) => None,
+            Token::ItemRef(_) | Token::CommentRef { .. } => None,
         });
         match mentioned {
             Some(MentionTarget::Agent(agent)) => WaitsOn::Agent(agent),

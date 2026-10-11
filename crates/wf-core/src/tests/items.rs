@@ -6,7 +6,7 @@ use crate::item::{ItemView, Origin, Standing};
 use crate::name::{Label, StateName};
 use crate::policy::{DEFAULT_POLICY_TOML, StateCategory};
 use crate::refs::Mention;
-use crate::resolve::{MentionTarget, Source};
+use crate::resolve::{Backlink, MentionTarget, Reference, Source};
 use crate::state::State;
 use crate::testing::*;
 
@@ -449,19 +449,28 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
     let ItemView::Live(task_item) = state.item(task).unwrap() else {
         panic!()
     };
-    assert_eq!(state.references_from(task_item), [question].into());
+    assert_eq!(
+        state.references_from(task_item),
+        [Reference::Item(question)].into()
+    );
 
     let backlinks = state.backlinks(question);
     assert_eq!(
         backlinks,
         vec![
-            Source {
-                item: task,
-                origin: Origin::Body
+            Backlink {
+                from: Source {
+                    item: task,
+                    origin: Origin::Body
+                },
+                comment: None
             },
-            Source {
-                item: task,
-                origin: Origin::Comment(note.id().into())
+            Backlink {
+                from: Source {
+                    item: task,
+                    origin: Origin::Comment(note.id().into())
+                },
+                comment: None
             },
         ]
     );
@@ -509,6 +518,62 @@ fn item_prefixes_resolve_like_git() {
         Err(PrefixError::NotFound(_))
     ));
     let _ = StateName::new("open");
+}
+
+#[test]
+fn comment_references_resolve_among_the_comments_of_their_item() {
+    use crate::id::{CommentId, PrefixError};
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
+    let said: CommentId = fixture
+        .apply(&mut state, 0, 2_001, comment(task, "use humantime"))
+        .id()
+        .into();
+    let other = item_id(&fixture.apply(
+        &mut state,
+        0,
+        2_002,
+        create_with_body(
+            "task",
+            "b",
+            &format!("as #{}/{} says, and #{}/zzzz", task.short(), said.short(), task.short()),
+        ),
+    ));
+
+    let resolver = state.resolver();
+    assert_eq!(resolver.comment(&task.short(), &said.short()), Ok((task, said)));
+    assert!(matches!(
+        resolver.comment(&task.short(), "zzzz"),
+        Err(PrefixError::NotFound(_))
+    ));
+    assert!(matches!(
+        resolver.comment(&other.short(), &said.short()),
+        Err(PrefixError::NotFound(_))
+    ));
+
+    let ItemView::Live(other_item) = state.item(other).unwrap() else {
+        panic!()
+    };
+    assert_eq!(
+        state.references_from(other_item),
+        [Reference::Comment {
+            item: task,
+            comment: said
+        }]
+        .into(),
+        "a comment that does not resolve is plain text"
+    );
+    assert_eq!(
+        state.backlinks(task),
+        vec![Backlink {
+            from: Source {
+                item: other,
+                origin: Origin::Body
+            },
+            comment: Some(said)
+        }]
+    );
 }
 
 fn done_steps(state: &State, item: ItemId) -> Vec<bool> {

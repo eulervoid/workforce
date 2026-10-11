@@ -487,6 +487,10 @@ impl State {
         })
     }
 
+    pub(crate) fn raw_item(&self, id: ItemId) -> Option<&Item> {
+        self.workforce.as_ref()?.items.get(&id)
+    }
+
     pub(crate) fn raw_items(&self) -> impl Iterator<Item = &Item> {
         self.workforce
             .iter()
