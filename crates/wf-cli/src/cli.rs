@@ -423,6 +423,9 @@ pub struct ItemListArgs {
     /// Only open items whose dependencies are all done, so they can be worked on now.
     #[arg(short, long)]
     pub ready: bool,
+    /// Only the items this agent of yours would be given on this machine.
+    #[arg(long = "for", value_name = "AGENT", requires = "ready")]
+    pub for_agent: Option<AgentName>,
     /// Only open items waiting on dependencies that are not done yet.
     #[arg(long)]
     pub blocked: bool,

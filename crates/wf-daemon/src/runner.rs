@@ -161,9 +161,12 @@ impl Daemon {
 
     /// Where the repository of a workforce is on this machine, as the last `wf` run there said.
     pub(crate) fn repository_of(&self, workforce: WorkforceId) -> Option<PathBuf> {
-        let text =
-            std::fs::read_to_string(self.workforce_directory(workforce).join("repository")).ok()?;
-        Some(PathBuf::from(text.trim()))
+        let text = std::fs::read_to_string(
+            self.workforce_directory(workforce)
+                .join(crate::REPOSITORY_FILE),
+        )
+        .ok()?;
+        Some(PathBuf::from(text.trim())).filter(|path| !path.as_os_str().is_empty())
     }
 
     fn remember_repository(
@@ -171,9 +174,11 @@ impl Daemon {
         workforce: WorkforceId,
         repository: &Path,
     ) -> Result<(), SessionError> {
-        let path = self.workforce_directory(workforce).join("repository");
-        std::fs::write(&path, repository.to_string_lossy().as_bytes())
-            .map_err(|source| SessionError::Io { path, source })
+        let directory = self.workforce_directory(workforce);
+        crate::remember_repository(&directory, repository).map_err(|source| SessionError::Io {
+            path: directory,
+            source,
+        })
     }
 
     /// Starts a work session of `agent` on `item`: the worktree and the branch, the
@@ -211,18 +216,15 @@ impl Daemon {
             .workforce_directory(workforce)
             .join("worktrees")
             .join(item_name(item));
-        {
-            let (repository, branch, worktree, target) = (
-                repository.clone(),
-                branch.clone(),
-                worktree.clone(),
-                target.clone(),
-            );
+        let repository = {
+            let (branch, worktree, target) = (branch.clone(), worktree.clone(), target.clone());
             blocking(move || {
-                GitCli::open(&repository)?.prepare_worktree(&branch, &worktree, &target)
+                let git = GitCli::open(&repository)?;
+                git.prepare_worktree(&branch, &worktree, &target)?;
+                Ok::<_, VcsError>(git.repository().to_path_buf())
             })
-            .await??;
-        }
+            .await??
+        };
         self.remember_repository(workforce, &repository)?;
 
         let started = self
@@ -414,10 +416,18 @@ impl Daemon {
         match removed {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                eprintln!("could not remove the branch of #{}: {error}", item.short());
+                eprintln!(
+                    "could not remove the branch of #{}: {}",
+                    item.short(),
+                    wf_core::report::report(&error)
+                );
             }
             Err(error) => {
-                eprintln!("could not remove the branch of #{}: {error}", item.short());
+                eprintln!(
+                    "could not remove the branch of #{}: {}",
+                    item.short(),
+                    wf_core::report::report(&error)
+                );
             }
         }
     }
@@ -509,7 +519,6 @@ impl Daemon {
                     }),
                 )
                 .await?;
-                self.move_item(loaded, principal, item, done, note).await?;
                 let (branch, worktree) = (
                     item_branch(item),
                     self.workforce_directory(workforce)
@@ -523,8 +532,13 @@ impl Daemon {
                 })
                 .await?;
                 if let Err(error) = cleaned {
-                    eprintln!("could not remove the branch of #{}: {error}", item.short());
+                    eprintln!(
+                        "could not remove the branch of #{}: {}",
+                        item.short(),
+                        wf_core::report::report(&error)
+                    );
                 }
+                self.move_item(loaded, principal, item, done, note).await?;
             }
             MergeOutcome::Conflict { paths } => {
                 comment(format!(
@@ -930,5 +944,90 @@ async fn last_transition_note(loaded: &Loaded, item: &wf_core::item::Item) -> Op
     match event.content.body {
         EventBody::ItemTransitioned(transition) => transition.note,
         _ => None,
+    }
+}
+
+/// How often the dispatcher looks for work even when nothing changed.
+const DISPATCH_TICK: Duration = Duration::from_secs(30);
+
+/// Starts agents on the ready items of a workforce for as long as the daemon runs and the
+/// storage of the workforce does: whenever the log changes, and on a tick.
+pub(crate) async fn run_dispatcher(
+    daemon: std::sync::Weak<Daemon>,
+    workforce: WorkforceId,
+    loaded: Arc<Loaded>,
+) {
+    let mut heads = loaded.storage.watch_heads();
+    let mut failed: std::collections::BTreeSet<(ItemId, AgentName)> = Default::default();
+    loop {
+        let Some(strong) = daemon.upgrade() else {
+            return;
+        };
+        dispatch_once(&strong, workforce, &loaded, &mut failed).await;
+        drop(strong);
+        tokio::select! {
+            changed = heads.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+            () = tokio::time::sleep(DISPATCH_TICK) => {}
+        }
+    }
+}
+
+/// Gives every hosted auto agent with a free slot the first item it may take. An item that could
+/// not be started is not tried again by this daemon.
+async fn dispatch_once(
+    daemon: &Arc<Daemon>,
+    workforce: WorkforceId,
+    loaded: &Arc<Loaded>,
+    failed: &mut std::collections::BTreeSet<(ItemId, AgentName)>,
+) {
+    let Some(repository) = daemon.repository_of(workforce) else {
+        return;
+    };
+    let device = daemon.device();
+    let Ok(mut state) = daemon.snapshot(loaded).await else {
+        return;
+    };
+    let agents: Vec<_> = state
+        .auto_agents(device)
+        .into_iter()
+        .map(|(agent, _)| agent)
+        .collect();
+    for agent in agents {
+        while state.has_free_slot(device, &agent) {
+            let Some(item) = state
+                .dispatchable(device, &agent)
+                .into_iter()
+                .map(|item| item.id())
+                .find(|item| !failed.contains(&(*item, agent.name.clone())))
+            else {
+                break;
+            };
+            if let Err(error) = daemon
+                .start_session(
+                    workforce,
+                    loaded,
+                    agent.name.clone(),
+                    item,
+                    repository.clone(),
+                )
+                .await
+            {
+                failed.insert((item, agent.name.clone()));
+                eprintln!(
+                    "could not start {} on #{}: {}",
+                    agent.name,
+                    item.short(),
+                    wf_core::report::report(&error)
+                );
+            }
+            let Ok(fresh) = daemon.snapshot(loaded).await else {
+                return;
+            };
+            state = fresh;
+        }
     }
 }

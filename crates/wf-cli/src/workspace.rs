@@ -90,7 +90,14 @@ pub enum Replicated {
 impl Workspace {
     /// Uses the daemon when one is running, and opens the store otherwise.
     pub fn open(data: DataDir, start: &Path, refold: bool) -> anyhow::Result<Self> {
-        let (_, id) = find_workforce(start)?;
+        let (file, id) = find_workforce(start)?;
+        // The checkouts of sessions have the workforce file too, but they come and go.
+        if let Some(repository) = file
+            .parent()
+            .filter(|directory| directory.join(".git").is_dir())
+        {
+            data.remember_repository(&id, repository);
+        }
         let device = data
             .device(false)?
             .ok_or_else(|| anyhow!("no device key; this machine has not joined the workforce"))?;

@@ -3,6 +3,7 @@
 pub mod autonomy;
 pub mod body;
 pub mod crdt;
+pub mod dispatch;
 pub mod encoding;
 pub mod event;
 mod fold;

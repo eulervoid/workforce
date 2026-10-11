@@ -51,6 +51,15 @@ impl DataDir {
     pub fn workforce(&self, id: &WorkforceId) -> PathBuf {
         self.root.join(id.to_string())
     }
+
+    /// Tells the daemon where the repository of the workforce is on this machine, which is where
+    /// the last `wf` command ran. Best effort: the daemon only needs it to start sessions.
+    pub fn remember_repository(&self, id: &WorkforceId, repository: &Path) {
+        let directory = self.workforce(id);
+        if directory.is_dir() {
+            let _ = wf_daemon::remember_repository(&directory, repository);
+        }
+    }
 }
 
 fn read_secret(path: &Path) -> anyhow::Result<Option<[u8; 32]>> {

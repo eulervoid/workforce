@@ -39,7 +39,7 @@ fn git(directory: &Path, args: &[&str]) -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
-/// A workforce in a git repository, a daemon, and an agent `coder` that follows `script`.
+/// A workforce in a git repository, a daemon, and agents that follow their scripts.
 struct World {
     wf: Sandbox,
     daemon: Arc<Daemon>,
@@ -47,12 +47,16 @@ struct World {
 }
 
 impl World {
+    /// One agent `coder` that follows `script`.
     async fn new(script: &str) -> Self {
-        let world = Self::without_daemon(script);
-        world.start_daemon().await
+        Self::agents(&[("coder", script)]).await
     }
 
-    fn without_daemon(script: &str) -> WorldSetup {
+    async fn agents(agents: &[(&str, &str)]) -> Self {
+        Self::without_daemon(agents).start_daemon().await
+    }
+
+    fn without_daemon(agents: &[(&str, &str)]) -> WorldSetup {
         let wf = Sandbox::new();
         wf.run(&["init", "--name", "demo", "--no-agents"]);
         git(
@@ -66,10 +70,15 @@ impl World {
         );
         git(&wf.repository, &["add", "--all"]);
         git(&wf.repository, &["commit", "--quiet", "-m", "start"]);
-        let script_path = wf.root.path().join("script.txt");
-        std::fs::write(&script_path, script).unwrap();
-        wf.run(&["agent", "add", "coder", "--harness", "fake"]);
-        WorldSetup { wf, script_path }
+        let mut scripts = BTreeMap::new();
+        for (name, script) in agents {
+            let path = wf.root.path().join(format!("script-{name}.txt"));
+            std::fs::write(&path, script).unwrap();
+            let harness = format!("fake-{name}");
+            wf.run(&["agent", "add", name, "--harness", &harness]);
+            scripts.insert(harness, path);
+        }
+        WorldSetup { wf, scripts }
     }
 
     fn wf(&self, args: &[&str]) -> Value {
@@ -82,6 +91,12 @@ impl World {
 
     fn sessions(&self) -> Vec<Value> {
         self.wf(&["session", "list"]).as_array().unwrap().clone()
+    }
+
+    /// Lets the dispatcher start `agent`, which works items of `lane`, one session at a time.
+    fn automate(&self, agent: &str, lane: &str) {
+        self.wf
+            .run(&["agent", "edit", agent, "--start", "auto", "--lane", lane]);
     }
 
     /// Waits until `condition` holds.
@@ -121,7 +136,8 @@ impl World {
 
 struct WorldSetup {
     wf: Sandbox,
-    script_path: PathBuf,
+    /// The script of each harness.
+    scripts: BTreeMap<String, PathBuf>,
 }
 
 impl WorldSetup {
@@ -129,18 +145,20 @@ impl WorldSetup {
         let data = wf_cli::keys::DataDir::new(self.wf.data.join("workforce"));
         let device = data.device(false).unwrap().unwrap();
         let mut harnesses = BTreeMap::new();
-        harnesses.insert(
-            HarnessName::new("fake").unwrap(),
-            AcpAgentConfig::new(fake_agent())
-                .env("FAKE_AGENT_SCRIPT", self.script_path.to_string_lossy())
-                .env("WF_BIN", env!("CARGO_BIN_EXE_wf"))
-                .env("XDG_DATA_HOME", self.wf.data.to_string_lossy())
-                .env(
-                    "XDG_RUNTIME_DIR",
-                    self.wf.root.path().join("run").to_string_lossy(),
-                )
-                .env("USER", "joshua"),
-        );
+        for (harness, script) in &self.scripts {
+            harnesses.insert(
+                HarnessName::new(harness).unwrap(),
+                AcpAgentConfig::new(fake_agent())
+                    .env("FAKE_AGENT_SCRIPT", script.to_string_lossy())
+                    .env("WF_BIN", env!("CARGO_BIN_EXE_wf"))
+                    .env("XDG_DATA_HOME", self.wf.data.to_string_lossy())
+                    .env(
+                        "XDG_RUNTIME_DIR",
+                        self.wf.root.path().join("run").to_string_lossy(),
+                    )
+                    .env("USER", "joshua"),
+            );
+        }
         let socket = self.wf.root.path().join("run/workforce/daemon.sock");
         let daemon = Daemon::start(
             Config {
@@ -347,7 +365,7 @@ wf work submit
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_left_live_by_an_earlier_daemon_is_failed_when_the_next_one_starts() {
-    let setup = World::without_daemon("");
+    let setup = World::without_daemon(&[("coder", "")]);
     let item = setup.wf.add(&["--title", "Orphaned"]);
     {
         let data = wf_cli::keys::DataDir::new(setup.wf.data.join("workforce"));
@@ -478,4 +496,117 @@ async fn submitting_without_commits_answers_a_question_and_leaves_no_branch() {
     assert_eq!(session["status"], "submitted");
     assert_eq!(world.item(&question)["state"], "answered");
     assert!(git(&world.wf.repository, &["branch", "--list", "wf/*"]).is_empty());
+}
+
+const COMMIT_AND_SUBMIT: &str = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
+wf work submit
+";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_auto_agent_takes_the_ready_items_one_after_the_other() {
+    let script = "\
+sh f=$(date +%N).txt && echo hi > $f && git add $f && git commit -q -m work
+wf work submit
+";
+    let world = World::new(script).await;
+    world.automate("coder", "default");
+    world.wf.run(&["device", "edit", "--agent", "coder=1"]);
+    let first = world.wf.add(&["--title", "First"]);
+    let second = world.wf.add(&["--title", "Second"]);
+    world
+        .wait("both items done", |world| {
+            world.item(&first)["state"] == "done" && world.item(&second)["state"] == "done"
+        })
+        .await;
+    let sessions = world.sessions();
+    assert_eq!(sessions.len(), 2);
+    assert!(
+        sessions
+            .iter()
+            .all(|session| session["status"] == "submitted")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn nothing_is_started_for_agents_the_device_does_not_host() {
+    let world = World::new(COMMIT_AND_SUBMIT).await;
+    world.automate("coder", "default");
+    let item = world.wf.add(&["--title", "Unhosted"]);
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    assert!(world.sessions().is_empty());
+    assert_eq!(world.item(&item)["state"], "open");
+
+    world.wf.run(&["device", "edit", "--agent", "coder=1"]);
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_supervisor_answers_the_question_of_a_coder_and_the_coder_goes_on() {
+    let coder = "\
+wf work ask \"which crate?\"
+turn
+sh echo done > a.txt && git add a.txt && git commit -q -m a
+wf work submit
+";
+    let supervisor = "wf work submit --note \"Use humantime\"\n";
+    let world = World::agents(&[("coder", coder), ("supervisor", supervisor)]).await;
+    world.automate("coder", "default");
+    world.automate("supervisor", "supervision");
+    world.wf.run(&[
+        "device",
+        "edit",
+        "--max-sessions",
+        "2",
+        "--agent",
+        "coder=1",
+        "--agent",
+        "supervisor=1",
+    ]);
+    let item = world.wf.add(&["--title", "Parse durations"]);
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    let question = world.questions()[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(world.item(&question)["state"], "answered");
+    let sessions = world.sessions();
+    assert_eq!(sessions.len(), 2, "{sessions:?}");
+    assert!(
+        sessions
+            .iter()
+            .all(|session| session["status"] == "submitted")
+    );
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(transcript.contains("Use humantime"), "{transcript}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn only_the_items_an_agent_would_be_given_are_listed_for_it() {
+    let world = World::new("").await;
+    world.automate("coder", "default");
+    world.wf.add(&["--title", "Plain"]);
+    world
+        .wf
+        .add(&["--title", "Needs a gpu", "--requires", "gpu"]);
+    world.wf.run(&["device", "edit", "--hardware", "linux"]);
+    let listed = world.wf(&["item", "list", "--ready", "--for", "coder"]);
+    let titles: Vec<&str> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|item| item["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["Plain"]);
+    let message = world
+        .wf
+        .fail(&["item", "list", "--ready", "--for", "ghost"]);
+    assert!(message.contains("not an agent of yours"), "{message}");
 }

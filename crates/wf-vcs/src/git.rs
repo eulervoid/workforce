@@ -42,12 +42,21 @@ impl GitCli {
                 found: found.into(),
             });
         }
-        let top = Self::run_in(directory, ["rev-parse", "--show-toplevel"])?;
-        if !top.success {
+        let common = Self::run_in(
+            directory,
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?;
+        if !common.success {
             return Err(VcsError::NotARepository(directory.to_path_buf()));
         }
+        // Whichever worktree `directory` is in, the repository is the main checkout, which stays.
+        let common = PathBuf::from(common.stdout.trim());
+        let repository = match common.file_name() {
+            Some(name) if name == ".git" => common.parent().map(Path::to_path_buf),
+            _ => None,
+        };
         Ok(Self {
-            repository: PathBuf::from(top.stdout.trim()),
+            repository: repository.unwrap_or(common),
         })
     }
 
@@ -466,6 +475,18 @@ mod tests {
                 .map(str::to_string)
                 .collect()
         }
+    }
+
+    #[test]
+    fn opening_from_a_linked_worktree_finds_the_main_checkout() {
+        let repo = TestRepo::new();
+        let path = repo.worktree_path("wf/k3f9");
+        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        let opened = GitCli::open(&path).unwrap();
+        assert_eq!(
+            opened.repository().canonicalize().unwrap(),
+            repo.directory().canonicalize().unwrap()
+        );
     }
 
     #[test]

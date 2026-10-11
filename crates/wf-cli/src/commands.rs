@@ -485,6 +485,29 @@ fn item(
             let state = workspace.state();
             let graph = state.dependency_graph();
             let views = sorted_views(state, args.archived);
+            let dispatchable: Option<BTreeSet<String>> = match &args.for_agent {
+                None => None,
+                Some(name) => {
+                    let device = workspace.device_key();
+                    let principal = state
+                        .principal_of(&device)
+                        .context("this device is not bound to a member")?;
+                    if state.agent(name, principal).is_none() {
+                        bail!("{name} is not an agent of yours; see `wf agent list`");
+                    }
+                    let agent = wf_core::identity::AgentId {
+                        principal,
+                        name: name.clone(),
+                    };
+                    Some(
+                        state
+                            .dispatchable(device, &agent)
+                            .iter()
+                            .map(|item| item.id().to_base32())
+                            .collect(),
+                    )
+                }
+            };
             let entries: Vec<(ItemView<'_>, ItemSummary)> = views
                 .into_iter()
                 .map(|view| (view, view::summary(state, &graph, view)))
@@ -499,6 +522,11 @@ fn item(
                         .is_none_or(|wanted| summary.state.as_deref() == Some(wanted.as_str()))
                 })
                 .filter(|(_, summary)| args.accepts(summary.readiness))
+                .filter(|(_, summary)| {
+                    dispatchable
+                        .as_ref()
+                        .is_none_or(|offered| offered.contains(&summary.id))
+                })
                 .collect();
             match args.group_by {
                 None => {

@@ -29,6 +29,25 @@ pub use storage::{StorageClosed, StorageHandle};
 
 pub const STORE_FILE: &str = "store.redb";
 
+/// The file in the directory of a workforce that says where its repository is on this machine.
+pub const REPOSITORY_FILE: &str = "repository";
+
+/// Records where the repository of the workforce stored in `workforce_directory` is. The file is
+/// replaced in one step, so a reader sees the old path or the new one and never half of one.
+pub fn remember_repository(
+    workforce_directory: &std::path::Path,
+    repository: &std::path::Path,
+) -> std::io::Result<()> {
+    let path = workforce_directory.join(REPOSITORY_FILE);
+    let text = repository.to_string_lossy();
+    if std::fs::read_to_string(&path).is_ok_and(|current| current.trim() == text) {
+        return Ok(());
+    }
+    let temporary = workforce_directory.join(format!("{REPOSITORY_FILE}.{}", std::process::id()));
+    std::fs::write(&temporary, text.as_bytes())?;
+    std::fs::rename(temporary, path)
+}
+
 pub(crate) fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
@@ -225,8 +244,13 @@ impl Daemon {
         let entry = Arc::new(Loaded { storage });
         loaded.insert(id, Arc::clone(&entry));
         let daemon = Arc::clone(self);
-        let stale = Arc::clone(&entry);
-        tokio::spawn(async move { daemon.end_stale_sessions(id, &stale).await });
+        let started = Arc::clone(&entry);
+        tokio::spawn(async move {
+            daemon.end_stale_sessions(id, &started).await;
+            let weak = Arc::downgrade(&daemon);
+            drop(daemon);
+            runner::run_dispatcher(weak, id, started).await;
+        });
         Ok(entry)
     }
 
