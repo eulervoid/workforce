@@ -19,6 +19,7 @@ pub mod policy;
 pub mod refs;
 pub mod report;
 pub mod resolve;
+pub mod review;
 pub mod session;
 pub mod state;
 pub mod sync;

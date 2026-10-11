@@ -17,7 +17,7 @@ use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, ReviewName, StateName, TypeName};
 use crate::policy::{Field, Policy, PolicyError, StateCategory};
-use crate::session::SessionRole;
+use crate::session::{SessionRole, Verdict};
 use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -155,6 +155,14 @@ pub enum PolicyViolation {
     SessionEndsAnother,
     #[error("a session cannot move its own item to a done state; it submits the work instead")]
     SessionFinishesItsItem,
+    #[error(
+        "only a review session of the commit, by an agent that did not do the work, can review as an agent"
+    )]
+    NotTheReviewer,
+    #[error("only an agent can escalate a review")]
+    PersonCannotEscalate,
+    #[error("{0} was not submitted at that commit, so a verdict on it counts for nothing")]
+    StaleReview(ItemId),
     #[error("a session cannot answer a question it asked; someone else has to")]
     SessionAnswersItsOwnQuestion,
     #[error("there is no review level `{0}`")]
@@ -600,6 +608,9 @@ impl State {
         let Actor::Agent { session, .. } = actor else {
             return match body {
                 EventBody::Report(_) => Err(PolicyViolation::ReportNotFromItsSession),
+                EventBody::Review(review) if review.verdict == Verdict::Escalate => {
+                    Err(PolicyViolation::PersonCannotEscalate)
+                }
                 _ => Ok(()),
             };
         };
@@ -624,6 +635,20 @@ impl State {
             }
             EventBody::Report(report) if report.session != *session => {
                 Err(PolicyViolation::ReportNotFromItsSession)
+            }
+            EventBody::Review(review) => {
+                let reviewing = folded.item() == review.item
+                    && matches!(folded.role(), SessionRole::Review { commit } if commit == review.commit);
+                let did_the_work = workforce.sessions.values().any(|other| {
+                    other.agent() == folded.agent()
+                        && other.item() == review.item
+                        && other.role() == SessionRole::Work
+                });
+                if reviewing && !did_the_work {
+                    Ok(())
+                } else {
+                    Err(PolicyViolation::NotTheReviewer)
+                }
             }
             EventBody::ItemEdited(edited) => {
                 let lowers = edited
@@ -662,7 +687,6 @@ impl State {
             | EventBody::ItemUnarchived(_)
             | EventBody::Comment(_)
             | EventBody::SessionEnded(_)
-            | EventBody::Review(_)
             | EventBody::Report(_)
             | EventBody::Unknown { .. } => Ok(()),
         }
@@ -775,8 +799,14 @@ impl State {
             | EventBody::ForkAnnounced(_)
             | EventBody::SessionStarted(_)
             | EventBody::SessionEnded(_)
-            | EventBody::Review(_)
             | EventBody::Merged(_) => Ok(()),
+            EventBody::Review(review) => {
+                item_of(&review.item)?;
+                match self.submitted_commit(review.item) {
+                    Some((commit, _)) if commit == review.commit => Ok(()),
+                    Some(_) | None => Err(PolicyViolation::StaleReview(review.item)),
+                }
+            }
             EventBody::Report(report) => {
                 let session = workforce
                     .sessions

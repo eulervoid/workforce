@@ -57,6 +57,7 @@ use crate::identity::Actor;
 use crate::name::{Label, LaneName, Requirement, ReviewName, StateName, TypeName};
 use crate::policy::{Policy, StateCategory};
 use crate::refs::Token;
+use crate::session::{CommitId, Verdict};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NoteKind {
@@ -68,6 +69,10 @@ pub enum NoteKind {
         session: SessionId,
         step: Option<StepId>,
     },
+    /// The note of a verdict on the work of the item.
+    Review {
+        verdict: Verdict,
+    },
 }
 
 impl NoteKind {
@@ -76,6 +81,7 @@ impl NoteKind {
             NoteKind::Comment => "comment",
             NoteKind::Transition => "transition",
             NoteKind::Report { .. } => "report",
+            NoteKind::Review { .. } => "review",
         }
     }
 }
@@ -88,6 +94,24 @@ pub struct Note {
     pub by: Actor,
     pub at: Hlc,
     pub tokens: BTreeSet<Token>,
+}
+
+/// A verdict on one commit of an item, by a review session or a person.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Verdicted {
+    pub commit: CommitId,
+    pub verdict: Verdict,
+    pub by: Actor,
+    pub(crate) stamp: Stamp,
+}
+
+/// A commit of the item that went into the target branch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Merge {
+    /// What was reviewed.
+    pub reviewed: CommitId,
+    /// The merge commit on the target branch.
+    pub commit: CommitId,
 }
 
 /// Where a reference or mention was written.
@@ -140,6 +164,8 @@ pub struct Item {
     pub(crate) supersedes: Lww<Option<ItemId>>,
     pub(crate) archived: Lww<Option<Hlc>>,
     pub(crate) notes: BTreeMap<EventId, Note>,
+    pub(crate) verdicts: BTreeMap<EventId, Verdicted>,
+    pub(crate) merges: BTreeMap<EventId, Merge>,
 }
 
 impl Item {
@@ -219,6 +245,14 @@ impl Item {
         &self.notes
     }
 
+    pub fn verdicts(&self) -> &BTreeMap<EventId, Verdicted> {
+        &self.verdicts
+    }
+
+    pub fn merges(&self) -> &BTreeMap<EventId, Merge> {
+        &self.merges
+    }
+
     /// The lane the item is routed to: its own, else its type's.
     pub fn effective_lane<'a>(&'a self, policy: &'a Policy) -> Option<&'a LaneName> {
         self.lane().or_else(|| {
@@ -289,6 +323,8 @@ impl Item {
             supersedes: Lww::new(None, stamp),
             archived: Lww::new(None, stamp),
             notes: BTreeMap::new(),
+            verdicts: BTreeMap::new(),
+            merges: BTreeMap::new(),
         }
     }
 }

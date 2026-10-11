@@ -8,7 +8,7 @@ use crate::event::{Change, Event, EventBody, ItemLinked, Link};
 use crate::id::SessionId;
 use crate::id::{EventId, ItemId};
 use crate::identity::{AgentId, Role};
-use crate::item::{Item, Note, NoteKind};
+use crate::item::{Item, Merge, Note, NoteKind, Verdicted};
 use crate::name::StateName;
 use crate::policy::Policy;
 use crate::refs;
@@ -325,8 +325,45 @@ impl State {
                     });
                 }
             }
-            // Reviews and merges are folded with the review status (M2 items 7 and 8).
-            EventBody::Review(_) | EventBody::Merged(_) => {}
+            EventBody::Review(review) => {
+                if let Some(item) = workforce.items.get_mut(&review.item) {
+                    item.touch(content.hlc);
+                    item.verdicts.insert(
+                        id,
+                        Verdicted {
+                            commit: review.commit,
+                            verdict: review.verdict,
+                            by: content.actor.clone(),
+                            stamp,
+                        },
+                    );
+                    if let Some(text) = &review.note {
+                        item.notes.insert(
+                            id,
+                            note_from(
+                                NoteKind::Review {
+                                    verdict: review.verdict,
+                                },
+                                &content.actor,
+                                content.hlc,
+                                text,
+                            ),
+                        );
+                    }
+                }
+            }
+            EventBody::Merged(merged) => {
+                if let Some(item) = workforce.items.get_mut(&merged.item) {
+                    item.touch(content.hlc);
+                    item.merges.insert(
+                        id,
+                        Merge {
+                            reviewed: merged.reviewed,
+                            commit: merged.commit,
+                        },
+                    );
+                }
+            }
             EventBody::Report(report) => {
                 let item = workforce
                     .sessions

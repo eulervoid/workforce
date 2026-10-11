@@ -92,7 +92,9 @@ impl State {
             return TurnOutcome::Close;
         };
         let item = folded.item();
-        if self.category_of(item) == Some(StateCategory::Blocked) {
+        // An item under review is blocked on purpose: it waits for this very session.
+        let reviewing = matches!(folded.role(), SessionRole::Review { .. });
+        if !reviewing && self.category_of(item) == Some(StateCategory::Blocked) {
             return TurnOutcome::Close;
         }
         if !self.blockers(&self.dependency_graph(), item).is_empty() {

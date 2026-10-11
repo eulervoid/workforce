@@ -15,7 +15,7 @@ use crate::identity::{
 use crate::item::Priority;
 use crate::name::{AgentName, Handle, HarnessName, LaneName, ReviewName, StateName, TypeName};
 use crate::policy::DEFAULT_POLICY_TOML;
-use crate::session::{EndReason, SessionRole};
+use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::{State, Trust};
 
 /// A workforce founded by `@joshua` (an owner with several devices) plus a plain member `@ada`.
@@ -345,4 +345,42 @@ pub fn review_of(item: ItemId, review: Option<&str>) -> EventBody {
         item,
         Change::Review(review.map(|name| ReviewName::new(name).unwrap())),
     )
+}
+
+/// An agent with capabilities.
+pub fn define_agent_with(name: &str, capabilities: &[&str]) -> EventBody {
+    let EventBody::AgentDefined(mut defined) = define_agent(name) else {
+        unreachable!("`define_agent` makes an `AgentDefined`")
+    };
+    defined.capabilities = capabilities
+        .iter()
+        .map(|capability| crate::name::Requirement::new(*capability).unwrap())
+        .collect();
+    EventBody::AgentDefined(defined)
+}
+
+/// A session of `agent` that reviews `commit` of `item`.
+pub fn start_review(agent: &str, item: ItemId, commit: CommitId) -> EventBody {
+    EventBody::SessionStarted(SessionStarted {
+        agent: AgentName::new(agent).unwrap(),
+        item,
+        role: SessionRole::Review { commit },
+    })
+}
+
+pub fn verdict(item: ItemId, commit: CommitId, verdict: Verdict) -> EventBody {
+    EventBody::Review(crate::event::Review {
+        item,
+        commit,
+        verdict,
+        note: None,
+    })
+}
+
+pub fn merged(item: ItemId, reviewed: CommitId, commit: CommitId) -> EventBody {
+    EventBody::Merged(crate::event::Merged {
+        item,
+        reviewed,
+        commit,
+    })
 }
