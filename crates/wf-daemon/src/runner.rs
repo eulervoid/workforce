@@ -839,6 +839,7 @@ async fn drive(
         .harness
         .clone()
         .env("WF_SESSION", run.session.to_string())
+        .env("WF_WORKFORCE", run.workforce.to_string())
         .env("PATH", path.to_string_lossy());
     let mut conversation = match Conversation::start(Launch {
         agent,

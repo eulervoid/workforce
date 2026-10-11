@@ -938,3 +938,23 @@ async fn the_inbox_lists_what_waits_on_a_person() {
         "{text}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_belongs_to_its_workforce_whatever_its_committed_workforce_file_says() {
+    let world = World::new(COMMIT_AND_SUBMIT).await;
+    let repository = &world.wf.repository;
+    let file = repository.join(".workforce.toml");
+    let right = std::fs::read_to_string(&file).unwrap();
+    // The file was committed when an older workforce was here; the working copy is the new one.
+    std::fs::write(&file, format!("id = \"{}\"\n", "a".repeat(52))).unwrap();
+    git(
+        repository,
+        &["commit", "--quiet", "-am", "an older workforce"],
+    );
+    std::fs::write(&file, right).unwrap();
+
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+}

@@ -43,7 +43,13 @@ pub fn now_ms() -> u64 {
     u64::try_from(jiff::Timestamp::now().as_millisecond()).unwrap_or_default()
 }
 
-/// Looks for `.workforce.toml` in `start` and its parents.
+/// Set by the runner for the processes of a session: the workforce the session belongs to. The
+/// checkout of a session carries the workforce file as it was committed, which names an older
+/// workforce when this one was created after the commit.
+pub const WORKFORCE_VARIABLE: &str = "WF_WORKFORCE";
+
+/// Looks for `.workforce.toml` in `start` and its parents. Inside a session the workforce is the
+/// session's, whatever the file says.
 pub fn find_workforce(start: &Path) -> anyhow::Result<(PathBuf, WorkforceId)> {
     for directory in start.ancestors() {
         let path = directory.join(WORKFORCE_FILE);
@@ -51,7 +57,13 @@ pub fn find_workforce(start: &Path) -> anyhow::Result<(PathBuf, WorkforceId)> {
             let text = std::fs::read_to_string(&path)?;
             let file: WorkforceFile = toml::from_str(&text)
                 .with_context(|| format!("{} is not a valid workforce file", path.display()))?;
-            return Ok((path, file.id));
+            let id = match std::env::var(WORKFORCE_VARIABLE) {
+                Ok(id) => id
+                    .parse()
+                    .with_context(|| format!("{WORKFORCE_VARIABLE} is not a workforce id"))?,
+                Err(_) => file.id,
+            };
+            return Ok((path, id));
         }
     }
     bail!("no {WORKFORCE_FILE} found here or in a parent directory; run `wf init` first")
@@ -91,6 +103,7 @@ impl Workspace {
     /// Uses the daemon when one is running, and opens the store otherwise.
     pub fn open(data: DataDir, start: &Path, refold: bool) -> anyhow::Result<Self> {
         let (file, id) = find_workforce(start)?;
+        let named_by = file.clone();
         // The checkouts of sessions have the workforce file too, but they come and go.
         if let Some(repository) = file
             .parent()
@@ -102,7 +115,12 @@ impl Workspace {
             .device(false)?
             .ok_or_else(|| anyhow!("no device key; this machine has not joined the workforce"))?;
         if !refold && let Some(mut client) = DaemonClient::connect(&data.daemon_socket())? {
-            let state = client.state(id)?;
+            let state = client.state(id).with_context(|| {
+                format!(
+                    "the daemon cannot serve workforce {id}, named by {}",
+                    named_by.display()
+                )
+            })?;
             return Self::bound(
                 Source::Daemon {
                     client: RefCell::new(client),
