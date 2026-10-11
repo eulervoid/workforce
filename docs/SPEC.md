@@ -28,7 +28,7 @@ A laptop (sleeps, roams), a cloud VM (always on), a home desktop (GPU, behind a 
 * Prompt injection through issue text is a real risk on donor machines.
 
 ### Cross-cutting
-1. The only thing all peers must agree on is **project state**: items, claims, reports, decisions, membership.
+1. The only thing all peers must agree on is **project state**: items, claims, comments, decisions, membership.
 2. Authorization data replicates with the project and is checkable offline.
 3. "No external infrastructure" means none the user has to run. Public relays and discovery are
    defaults and can be swapped.
@@ -87,7 +87,7 @@ the same store, log and item model.
 * **State is folded into in-memory Rust structs** by `wf-core`. Queries are typed Rust, not SQL. Changing
   the state shape needs no migration, only a refold.
 * **Snapshots:** the folded state is serialized to redb, keyed by the heads it covers. Startup loads the
-  latest snapshot and applies newer events. Large bodies (comments, reports) stay in the log
+  latest snapshot and applies newer events. Large bodies (comments) stay in the log
   and are loaded on demand by `EventId`.
 * **Derived indexes** (search, M4) are rebuildable and never a second source of truth.
 * redb is single-process. The daemon owns the store; the CLI talks to the daemon and opens the store
@@ -138,7 +138,7 @@ capabilities = ["rust", "typescript"]
 lanes = ["default"]
 start = "manual"          # auto: the dispatcher starts sessions; manual: only `wf session start`
 nudges = 3                # "continue" prompts in a row without a new commit before giving up
-park_timeout = "2h"       # how long a session waits on a dependency (its question) before it ends
+park_timeout = "2h"       # how long a session waits on a blocker or dependency before it ends
 max_duration = "4h"       # optional limit per session
 permissions = "ask"       # allow | ask | deny: answers to the harness's permission requests
 ```
@@ -148,8 +148,9 @@ permissions = "ask"       # allow | ask | deny: answers to the harness's permiss
   change: a new `AgentDefined` for an existing name replaces the definition (last writer wins).
 * Agent definitions are work configuration, not authority, so a device key may sign them. Agent actors
   cannot write them, so an agent cannot raise its own autonomy.
-* An agent whose `lanes` include `supervision` is a **supervisor**: it answers the questions of other
-  agents or escalates them to the human. It has no other rights; lanes route, members are trusted.
+* An agent whose `lanes` include `supervision` is a **supervisor**: it resolves the blockers of other
+  agents or escalates them to the human (section 10). It has no other rights; lanes route, members are
+  trusted.
 
 ### Devices
 A device publishes a mutable, device-signed `DeviceProfile`:
@@ -173,22 +174,24 @@ holds a claim. Items are sized for a session: steps inside one are a checklist i
 split into several items only when the parts can run in parallel, need a different review level, or
 need different capabilities.
 
-* `SessionStarted{agent, item, role}` (device-signed), `role` = `Work` or `Review{commit}`. Its hash
-  prefix is the session id. `SessionEnded{reason}`, reason = `Submitted{commit} | Reviewed | Released |
-  Blocked | TimedOut | Failed | Cancelled`.
+* `SessionStarted{agent, item, role}` (device-signed), `role` = `Work`, `Review{commit}` or `Supervise`.
+  Its hash prefix is the session id. `SessionEnded{reason}`, reason = `Submitted{commit} | Reviewed |
+  Supervised | Released | TimedOut | Failed | Cancelled`.
 * One branch per **item** (`wf/<item>`, section 9) in one worktree. A session is an attempt: the next
   session on the item (after a release, a crash or requested changes) continues the branch.
 * **Ending moves the item first.** `after_end(session, reason)` in `wf-core` says what happens to the
-  item (back to open, to the blocked state for review, merged and done, or nothing), and the daemon does it
+  item (back to open, to the review state, merged and done, or nothing), and the daemon does it
   while the session still holds the item, then writes `SessionEnded`. Otherwise the dispatcher would see
   an open item without a live session in between and start another. An item that is no longer being
-  worked on is not reopened by a stale end.
-* A work session ends when the agent submits (`wf work submit`), releases (`wf work release`), escalates by moving
-  its item to a blocked state, or runs out of nudges or time. Waiting on a dependency, such as its own
-  question (`wf work ask`), **parks** it: the harness keeps its conversation and continues once the item is
-  ready again, or ends after the agent's `park_timeout`.
-* Context carries over within a session in the conversation, and across sessions through reports,
-  comments and review notes.
+  worked on is not reopened by a stale end. The daemon writes such a move as `ItemMoved{by_session}`
+  naming the session, so the move is attributed to the start or end that caused it. The same holds for
+  the move to the active state when a work session starts.
+* A work session ends when the agent submits (`wf work submit`), releases (`wf work release`), or runs out
+  of nudges or time. Waiting on a **blocker** (an open blocking comment, section 10, such as its own
+  question) or on a dependency **parks** it: the harness keeps its conversation and continues once the item
+  is ready again, or ends after the agent's `park_timeout`.
+* A supervise session ends when the supervisor resolves the blocker it was started for, or escalates it.
+* Context carries over within a session in the conversation, and across sessions through comments.
 * **Liveness:** on one machine (M2) a session is live from `SessionStarted` until `SessionEnded`; a
   restarting daemon ends its own leftover sessions as `Failed`. Across devices (M3) liveness is computed
   at query time from a lease: a session without a renewal within the lease counts as dead, even without
@@ -208,12 +211,13 @@ need different capabilities.
 | Role | Can do |
 |---|---|
 | `owner` | everything: invites, policy, `ForkAnnounced`, naming other owners |
-| `member` | items, claims, comments, reports, reviews, decisions |
+| `member` | items, claims, comments, reviews, decisions |
 
 Agent actors act for their principal with the member's rights, minus a few **guards** (authoring checks
-against mistakes and shortcuts, not attacks): a session cannot answer a question it asked, cannot lower
+against mistakes and shortcuts, not attacks): a session cannot resolve a blocker it wrote, cannot lower
 the review level of an item its agent worked on, cannot move its own item to a done state (it submits),
-and cannot write `AgentDefined` or authority bodies. A reviewer agent never worked on the item it reviews.
+and cannot write `AgentDefined` or authority bodies. A reviewer or supervisor agent never worked on the
+item it reviews or supervises.
 
 Hard rule: `policy.*`, `invite.*` and `owner.*` events are valid only when signed by a **principal key**
 (owner principal where the role requires it). A device binding carries a proof from a principal-signed
@@ -265,10 +269,11 @@ struct Event {
 | Authority | `Genesis`, `InviteCreated`, `MemberJoined`, `PolicySet`, `OwnerAdded`, `ForkAnnounced` | principal key (carried in a device feed) |
 | Binding | `DeviceBound` | invite key proof, the new device's first event |
 | Identity | `AgentDefined`, `DeviceProfile` | device |
-| Items | `ItemCreated`, `ItemEdited`, `ItemTransitioned`, `ItemLinked`, `ItemArchived`, `ItemUnarchived`, `Comment` | device |
-| Work | `SessionStarted`, `SessionEnded`, `Review`, `Merged`, `Report` (M2); `Assigned`, `Claim`, `Heartbeat` (M3) | device (`Assigned` by the anchor) |
+| Items | `ItemCreated`, `ItemEdited`, `ItemMoved`, `ItemLinked`, `ItemArchived`, `ItemUnarchived`, `Comment` | device |
+| Work | `SessionStarted`, `SessionEnded`, `Review`, `Merged` (M2); `Assigned`, `Claim`, `Heartbeat` (M3) | device (`Assigned` by the anchor) |
 
-Decisions and questions are item types, not separate event families.
+Decisions are an item type, not a separate event family. Questions, requested changes and reports are
+comments (section 10).
 
 ### Encoding and data format
 
@@ -360,17 +365,16 @@ event invalid.
 | 7 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` (M1) |
 | 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires`, `review: Option<ReviewName>` |
 | 11 | `ItemEdited` | `item`, `changes: Vec<Change>` (`Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires`, `Review`) |
-| 12 | `ItemTransitioned` | `item`, `to`, `note: Option<String>` |
+| 12 | `ItemMoved` | `item`, `to`, `by_session: Option<SessionId>` (the session whose start or end the move carries out), `because: Option<EventId>` (the comment that says why) |
 | 13 | `ItemLinked` | `item`, `link`: `DependsOn(SetChange<ItemId>)` or `Supersedes(ItemId)` |
 | 14 | `ItemArchived` | `item` |
 | 15 | `ItemUnarchived` | `item` |
-| 16 | `Comment` | `item`, `body` |
-| 17 | `ItemCheckpoint` | `item`, `state`: the folded item with stamps, add tags and note text (M6, see *Compaction*) |
-| 20 | `SessionStarted` | `agent: AgentName`, `item`, `role`: `Work` or `Review{commit: Option<CommitId>}` (M2) |
+| 16 | `Comment` | `item`, `text`, `kind`: `Plain`, `Blocker` or `ChangeRequest`, `resolves: Vec<EventId>`, `step: Option<StepId>` (see *Comments*) |
+| 17 | `ItemCheckpoint` | `item`, `state`: the folded item with stamps, add tags and comment text (M6, see *Compaction*) |
+| 20 | `SessionStarted` | `agent: AgentName`, `item`, `role`: `Work`, `Review{commit: Option<CommitId>}` or `Supervise` (M2) |
 | 21 | `SessionEnded` | `session: SessionId`, `reason: EndReason` (M2, see *Sessions*) |
-| 22 | `Review` | `item`, `commit: Option<CommitId>` (`None`: work submitted without commits), `verdict`: `Approve`, `RequestChanges` or `Escalate`, `note: Option<String>` (M2) |
+| 22 | `Review` | `item`, `commit: Option<CommitId>` (`None`: work submitted without commits), `verdict`: `Approve`, `RequestChanges` or `Escalate`, `because: Option<EventId>` (M2) |
 | 23 | `Merged` | `item`, `reviewed: CommitId`, `commit: CommitId` (M2) |
-| 24 | `Report` | `session: SessionId`, `note: String`, `step: Option<StepId>` (M2, see *Reports*) |
 
 * `Signed<T>` = `statement: T`, `signer: PrincipalKey`, `signature: Signature`.
 * `MemberSeed` = `principal`, `handle`, `devices: Vec<DeviceKey>`, `previous: Vec<PrincipalKey>`. The
@@ -381,7 +385,8 @@ event invalid.
 * An item id is the id of its `ItemCreated` event. Policy and `Genesis` carry TOML text, not a parsed
   structure, so the stored policy is exactly what the owner wrote.
 * `CommitId` = `Git(GitOid)`, the single `vcs` variant (section 9).
-* Bodies for later milestones (`Assigned`, `Claim`, `Heartbeat`, ...) take new tags.
+* Bodies for later milestones (`Assigned`, `Claim`, `Heartbeat`, ...) take new tags. Tag 24 (`Report`,
+  now a comment) is retired.
 
 #### Local storage (redb)
 One file per workforce at `$XDG_DATA_HOME/workforce/<workforce id>/store.redb`. Values are the postcard
@@ -433,14 +438,15 @@ state until moved.
 * Last-writer-wins registers: `title`, `body`, `state`, `priority`, `lane`, `supersedes`, archived.
 * Add-wins sets (`labels`, `requires`, `depends_on`) are observed-remove: each add is tagged with its
   event id and a removal lists the tags its author saw, so a concurrent add survives.
-* An item's `state` is empty until its first transition and means "the type's initial state under the
+* An item's `state` is empty until its first move and means "the type's initial state under the
   current policy", so item creation does not depend on concurrent policy changes.
 * `supersedes` also writes `superseded` into the target's `state` register with the link's stamp. It
   is the only link whose event changes another item, which compaction has to account for.
 * `depends_on` cycles from concurrent links are resolved at query time, not stored: edges are taken in
   `(hlc, EventId)` order and an edge that would close a cycle is ignored and flagged.
-* Comment and transition-note text stays in the log. The fold keeps who wrote it and the tokens parsed
-  from it. `#refs` and `@mentions` are stored as unresolved tokens and resolved against the whole state
+* Comment text stays in the log. The fold keeps who wrote each comment, its kind, what it resolves, its
+  step and the tokens parsed from it. Resolving is grow-only (a resolved comment never reopens), so
+  concurrent resolutions converge. `#refs` and `@mentions` are stored as unresolved tokens and resolved against the whole state
   at query time, because resolution depends on what is known.
 * The first device and the members' handles come from genesis (`founder`, `members`); handles are what
   `@mentions` resolve against. `DeviceBound` and `MemberJoined` arrive with invites in M1.
@@ -466,7 +472,7 @@ relayed like any other.
 * **Coverage is a version vector** `{author -> seq}`: feeds are chains, so a causal past holds each feed
   up to some seq. Events of an author flagged for equivocation are never covered and stay as events.
 * **State:** type, author, `created`, `updated`, every register with its stamp, every set element with
-  its add tags (stamp, author, seq), and notes including their text. An old item is then one event.
+  its add tags (stamp, author, seq), and comments including their text. An old item is then one event.
 * **Applying** a checkpoint merges it into the item: registers by stamp. In a set, a tag absent from the
   checkpoint whose event the checkpoint covers is removed. Plain union would bring back elements that
   the checkpoint had seen removed. Concurrent checkpoints of the same item, written by different devices,
@@ -525,7 +531,7 @@ struct ForkPoint { workforce: Hash, heads: Vec<EventId> }
 
 * Parent events up to `heads` are a read-only prefix, validated under the parent's rules. They are
   admitted only when fetched by id from a known descendant, so nothing after the fork point gets in.
-  Item ids, comments, reports and decisions carry over.
+  Item ids, comments and decisions carry over.
 * Parent events after the fork point are ignored.
 * After compaction the prefix is the parent's kept events plus its frontier, which the fork takes over.
   A fork point below a frontier needs an archive device that kept the full history.
@@ -548,9 +554,10 @@ wf fork list
 
 ## 8. Items
 
-The item is the **single universal document**: tasks, questions, decisions, meta work, and later
-discussions are all items. Types differ only in configured states and behaviour, so comments, mentions,
-references, search and inbox work the same everywhere. `items` is a reference for the model, not a
+The item is the **single universal document**: tasks, decisions, meta work, and later discussions are
+all items. Types differ only in configured states and behaviour, so comments, mentions, references,
+search and inbox work the same everywhere. A question is not an item: it is a blocking comment on the item
+it is about (section 10). `items` is a reference for the model, not a
 compatibility target.
 
 ### States and categories
@@ -562,22 +569,27 @@ Built-in behaviour keys on categories, never on state names.
 | `inactive` | exists, not actionable (backlog, draft) | not claimable |
 | `open` | actionable | claimable once dependencies are done |
 | `active` | being worked on | has a session/claim; when the session ends without submitting (or its lease expires) the item returns to the type's `open` state |
-| `blocked` | waiting on something **outside** the model (review, a human, CI, a vendor) | not claimable; entering it ends the session's claim; `@mentions`/`#refs` in the transition note say what it waits on; listed in `wf inbox` unless under review |
+| `review` | the work is submitted and waits for its review steps | not claimable; entering it ends the session's claim |
 | `done` | finished successfully | terminal; satisfies dependents |
 | `cancelled` | finished without success | terminal; open dependents become **stranded** (flagged, not unblocked) |
 
-Blocking on another item is **computed** from `depends_on`, never stored as a state.
+Being blocked is **computed**, never stored as a state: from `depends_on`, and from **blockers**, the
+open blocking comments on the item (section 10).
 
-\[\text{ready}(i) \iff \text{cat}(i) = \texttt{open} \wedge \forall d \in \text{depends\_on}(i): \text{cat}(d) = \texttt{done} \wedge \text{no live session on } i\]
+\[\text{ready}(i) \iff \text{cat}(i) = \texttt{open} \wedge \forall d \in \text{depends\_on}(i): \text{cat}(d) = \texttt{done} \wedge \text{no open blocker on } i \wedge \text{no live session on } i\]
 
-An open item that is not ready is **blocked** while some dependency is not done, and **stranded** when
-some dependency is `cancelled`: waiting will not free it, so someone has to remove the dependency or
-cancel the item. `wf item list` filters with `--ready`, `--blocked` and `--stranded` (combined, they match
-any), and `wf status` flags stranded items.
+The live-session condition ignores a session parked on the item: it is the one that continues once the
+item is ready again.
 
-`wf item show` prints an effective status, e.g. `open · blocked by #q7x2 (question, open)`.
+An open or active item is **blocked** while some dependency is not done or some blocker is open, and
+**stranded** when some dependency is `cancelled`: waiting will not free it, so someone has to remove the
+dependency or cancel the item. `wf item list` filters with `--ready`, `--blocked` and `--stranded`
+(combined, they match any), and `wf status` flags stranded items.
 
-A type's **open, active, blocked and done state** is the first state in its list with that category.
+`wf item show` prints an effective status, e.g. `open · blocked by #x7k2 (task, open)` or
+`in_progress · 1 blocker → supervisor (c7f2)`.
+
+A type's **open, active, review and done state** is the first state in its list with that category.
 The runner moves items with these (start, release, submit, merge), so built-in behaviour still keys on
 categories, never on state names.
 
@@ -599,7 +611,7 @@ categories, never on state names.
 [types.task]
 lane = "default"
 fields = ["priority", "labels", "requires"]
-depends_on = ["task", "question", "decision"]   # allowed target types
+depends_on = ["task", "decision"]               # allowed target types
 initial = "open"
 review = "standard"                              # optional default review level (section 9)
 transitions = "any"                              # later: explicit lists, guards, on_enter hooks
@@ -607,7 +619,7 @@ states = [
   { name = "backlog",     category = "inactive" },
   { name = "open",        category = "open" },
   { name = "in_progress", category = "active" },
-  { name = "in_review",   category = "blocked" },
+  { name = "in_review",   category = "review" },
   { name = "done",        category = "done" },
   { name = "dropped",     category = "cancelled" },
 ]
@@ -621,16 +633,15 @@ Types the code relies on. Shipped in the default policy, names reserved, states 
 
 | Type | States (category) | Purpose |
 |---|---|---|
-| `task` | backlog (inactive), open, in_progress (active), in_review (blocked), done, dropped (cancelled) | default unit of work; what agent sessions are assigned |
-| `question` | open, needs_human (blocked), answered (done), dropped (cancelled) | an agent that needs an answer asks with `wf work ask`: the question is created, its item depends on it, and its session parks until it is answered. Questions go to the `supervision` lane, where a supervisor answers or moves them to `needs_human`; `initial = "needs_human"` sends them straight to the human |
-| `decision` | proposed (blocked), ratified (done), rejected (cancelled), superseded (done) | project decisions; only `ratified` enters agent context |
+| `task` | backlog (inactive), open, in_progress (active), in_review (review), done, dropped (cancelled) | default unit of work; what agent sessions are assigned |
+| `decision` | proposed (review), ratified (done), rejected (cancelled), superseded (done) | project decisions; ratifying is the approval of the review level (`principal` by default), objections are change requests; only `ratified` enters agent context |
 | `distill` | open, in_progress (active), done | system-created meta work in the `meta` lane |
 
 Custom types (`bug`, `doc`, `spike`, ...) are fully configurable.
 
 ### Priority
-`priority` orders work; it is a field only of types that list it in `fields`. By default that is `task`
-and `question`. A decision records an outcome and `distill` is housekeeping, so ordering them means
+`priority` orders work; it is a field only of types that list it in `fields`. By default that is only
+`task`. A decision records an outcome and `distill` is housekeeping, so ordering them means
 nothing. A custom type opts in with `fields = ["priority", ...]`.
 
 | Level | Meaning |
@@ -658,7 +669,7 @@ Relations that change behaviour are explicit events. Informational ones are deri
 |---|---|---|---|
 | `depends_on` | explicit `ItemLinked` | many, acyclic | readiness; allowed targets per type |
 | `supersedes` | explicit `ItemLinked` | one, decisions only | moves the target to `superseded` |
-| `references` | derived from body and comments | many, cycles fine | backlinks only |
+| `references` | derived from body and comments | many, cycles fine | backlinks only, to an item or a comment |
 | `mentions` | derived from body and comments | many | inbox entries |
 
 * **No parent/child.** Decomposition is "the big task depends on its parts", which also makes it ready
@@ -667,7 +678,8 @@ Relations that change behaviour are explicit events. Informational ones are deri
 * `depends_on` is never derived from text: a stray `#ref` must not block work.
 
 ### Derived references and mentions
-* `#k3f9a2` for items (any unique prefix of at least 4 characters, like git).
+* `#k3f9a2` for items (any unique prefix of at least 4 characters, like git), `#k3f9a2/c7f2` for a
+  comment on an item (section 10).
 * `@joshua` for principals, `@joshua/coder` for agents, `@joshua/coder/s4k2` for sessions. Short forms
   (`@coder`, `@s4k2`) work when unique in the workforce.
 * Parsed with `pulldown-cmark`, skipping code spans and blocks. Tokens that do not resolve are plain text.
@@ -693,20 +705,20 @@ its inbox after each commit.
 | Field | Merge rule |
 |---|---|
 | `type` | set at creation, immutable |
-| `title`, `body`, `priority`, `lane`, `review` | last writer wins per field; losing concurrent body edits stay visible in `item show --history` |
+| `title`, `body`, `priority`, `lane`, `review` | last writer wins per field; losing concurrent body edits stay visible in the activity of `item show` (section 10) |
 | `state` | last writer wins. Not validated by peers: the author checks it against the policy before signing, and a state the policy does not know is flagged, not rejected (see *Admission and fold*) |
 | `labels`, `requires` | set with add/remove; add wins over concurrent remove |
 | `depends_on` | same set semantics; concurrent adds that form a cycle: the edge with the greatest `(hlc, EventId)` is ignored and flagged |
 
 Events: `ItemCreated` (id = short base32 prefix of the event hash), `ItemEdited{changes}`,
-`ItemTransitioned{to, note}`, `ItemLinked{kind, target, add|remove}`, `ItemArchived`, `ItemUnarchived`,
-`Comment{item, body}`.
+`ItemMoved{to, by_session, because}`, `ItemLinked{kind, target, add|remove}`, `ItemArchived`,
+`ItemUnarchived`, `Comment{item, text, kind, resolves, step}`.
 
 ### Stored vs computed
 
 | Stored (events) | Computed in the fold | Computed at query time |
 |---|---|---|
-| type, title, body, state, priority, lane, review, labels, requires, depends_on, supersedes, archived | category, author, created, updated, references, mentions, backlinks, `blocked_by`, cycle and unknown-state flags, sessions per item, claim holder, checklist progress (`- [ ]` items in the body) | session liveness, `ready`, review status, overlap notifications |
+| type, title, body, state, priority, lane, review, labels, requires, depends_on, supersedes, archived, comments | category, author, created, updated, references, mentions, backlinks, `blocked_by`, open blockers and change requests, cycle and unknown-state flags, sessions per item, claim holder, checklist progress (`- [ ]` items in the body) | session liveness, `ready`, review status, overlap notifications |
 
 The fold is a pure function of events and never reads the clock. Everything that depends on "now" is
 computed per query.
@@ -719,7 +731,8 @@ computed per query.
 | **requires** | who is *able* to | item `requires` vs. agent capabilities plus device hardware |
 
 * Every item is in exactly one lane. The lane may derive from the item type (`distill`, `triage` go to
-  `meta`, `question` to `supervision`). An agent takes items from the lanes in its definition.
+  `meta`). An agent takes items from the lanes in its definition. The `supervision` lane holds no items:
+  agents in it take blockers (section 10).
 * In v1 lanes are **routing, not security**: members are trusted.
 * `wf item list --ready --for <agent>` and the dispatcher apply the same lane and requires filter.
 * Judgment about what to work on next lives in items, not in the dispatcher: planner and supervisor
@@ -731,7 +744,9 @@ ended sessions and a slow tick. For each agent with `start = "auto"` and a free 
 per-agent `max_sessions`, parked sessions included) it starts, in this order:
 
 1. a review session for an item awaiting a review step the agent can take (section 9);
-2. a work session for the first ready item in the agent's lanes that its capabilities and the device's
+2. a supervise session for an item with an open blocker routed to supervisors, if the agent is in the
+   `supervision` lane and never worked on the item (section 10);
+3. a work session for the first ready item in the agent's lanes that its capabilities and the device's
    hardware meet, in `wf item list --ready` order.
 
 Agents with `start = "manual"` run only through `wf session start <item> --agent <name>`.
@@ -754,7 +769,7 @@ target is an **agent**; the dispatcher picks any device that hosts it and has a 
 * One worktree and branch per **item**, `wf/<item>`, continued by every session on the item, where
   `<item>` is the first 12 characters of the item id (short ids are too short to name a branch safely).
   Worktrees live outside the repo in `$XDG_DATA_HOME/workforce/<id>/worktrees/<item>` and are removed
-  after the merge, or at once when a session submits without commits (a question's answer). A review
+  after the merge, or at once when a session submits without commits. A review
   session gets a detached checkout of the commit it reviews in `worktrees/<item>-<commit prefix>`,
   removed when the session ends.
 * Git is called through the `git` CLI (2.38 or later) behind the adapter, and `wf-vcs` is the only
@@ -777,27 +792,29 @@ name = "critical"
 steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
 ```
 
-* An item names a level in its `review` field, defaulting to its type's `review` (`principal` for `task`,
-  `none` for `question`). A type without one, like an item on the level `none`, is not reviewed.
+* An item names a level in its `review` field, defaulting to its type's `review` (`principal` for `task`
+  and `decision`). A type without one, like an item on the level `none`, is not reviewed.
   `wf item edit --review <level>` sets it and `--review default` goes back to the type's level; `default`
   is therefore not a level name. The planner, a supervisor or the working agent set it; a session may
   raise it but not lower it for an item its agent worked on.
-* Submitting (`wf work submit`) moves the item to its type's blocked state and starts the level's first step.
-  A submission without commits is reviewed too: it is an answer. A question answered by an agent on a
-  level with steps waits in its blocked state, and counts as answered only once the last step approves:
-  the dispatcher then moves it to its done state, which unblocks what depends on it. `RequestChanges`
-  reopens it. An agent that is not sure of an answer can raise the level of its question to `principal`
-  before it submits. A reviewer of an answer gets the history of the item and an empty directory.
-  An item that someone moved after the submission is left where it is.
+* Submitting (`wf work submit`) moves the item to its type's review state and starts the level's first
+  step. It is refused while the item has an open change request. A submission without commits is
+  reviewed too; its reviewer gets the history of the item and an empty directory. When the last step
+  approves, the dispatcher moves the item to its done state (after the merge, if there are commits),
+  which unblocks what depends on it. An item that someone moved after the submission is left where it is.
   Steps run in order. A reviewer agent never did the work on the item; the same reviewer looks again
   after changes. The status (`Awaiting{step}`, `ChangesRequested`, `Approved`, `Merged`) is computed
   from the latest submitted commit, the level and the verdicts on that commit; nothing is stored.
 * `wf review <item>` writes the verdict; in a review session it also ends the session `Reviewed`. A
-  verdict on a commit other than the submitted one is refused, and a review session reports on the item,
+  verdict on a commit other than the submitted one is refused, and a review session comments on the item,
   not on its steps. `wf item diff` shows the work as a reviewer sees it.
-* Verdicts: `Approve` moves on to the next step; `RequestChanges` moves the item back to its open state,
-  and the next session continues the branch with the review notes; `Escalate` (agents only) inserts a
-  human step right after the current one. Human steps wait in `wf inbox`.
+* Verdicts: `Approve` moves on to the next step, and is refused while a change request is open;
+  `RequestChanges` needs at least one open change request, written by the reviewer (section 10), and
+  moves the item back to its open state; the next session continues the branch and resolves them;
+  `Escalate` (agents only) inserts a human step right after the current one. Human steps wait in
+  `wf inbox`. A verdict may carry a plain comment as its `because`.
+* On the next review, the reviewer sees how each change request was resolved. A resolution it does not
+  accept gets a new change request; resolved comments never reopen.
 * A verdict names the commit it reviewed. What was reviewed is what gets merged; a new submission starts
   the level again.
 * Merging needs no separate setting: a level with a human step waits for the human.
@@ -807,7 +824,7 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
 
 * **`local` (M2):** the daemon builds the merge with `git merge-tree --write-tree` and `git commit-tree`,
   without touching any checkout, then advances the target: fast-forward in a clean checkout of it, or a
-  compare-and-swap `git update-ref`. A dirty checkout makes the merge wait: the item sits in its blocked
+  compare-and-swap `git update-ref`. A dirty checkout makes the merge wait: the item sits in its review
   state with one comment, `wf inbox` shows it, and the dispatcher tries again on every change and
   tick without saying so again. A conflict sends the item back to work with a comment naming the
   files, and the next session merges the target into the branch first. Then `Merged{item, reviewed,
@@ -818,48 +835,138 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
   `wf/<item>` branch lands in the target.
 * **Later:** git bundles over iroh-blobs for peer-to-peer repositories; `git-remote-iroh` as prior art.
 
-## 10. Reports
+## 10. Comments
 
-What the working agent says about what it is doing and why: progress, decisions made, options rejected. A
-report belongs to the session that wrote it, and through the session to its item. An item can have several
-sessions (an agent gives up, a review requests changes), and each report says which one it came from.
+All text about an item is a comment: discussion, questions, requested changes, the reasons for a move or
+a verdict, and what the working agent reports. There is no second kind of note.
 
 ```rust
-struct Report {
-    session: SessionId,             // the item is the session's item
-    note: String,
+struct Comment {
+    item: ItemId,
+    text: String,
+    kind: CommentKind,
+    resolves: Vec<EventId>,         // blockers and change requests this comment resolves
     step: Option<StepId>,           // the step this is about, named by the hash of its text
 }
+enum CommentKind { Plain, Blocker, ChangeRequest }
 ```
 
-* Reports are written with `wf work report "<text>" [--step <number> [--done]]`, only inside a session.
-  `--step` takes the number `wf item show` prints for the step, and is stored as the step's id. `--done` requires `--step` and also writes `StepDone` for it. Work sessions only: a review session
-  reports without `--step`, since a reviewer does not tick the author's steps.
+```
+wf comment <item> "<text>"
+wf comment <item> "<text>" --block              # a blocker
+wf comment <item> "<text>" --request-change     # a change request
+wf comment <item> "<reply>" --resolve <comment> [--resolve <comment> ...]
+wf comment <item> "<reply>" --resolve-blockers | --resolve-change-requests
+wf comment <item> "<text>" --step <number> [--done]
+```
+
+### Blockers and change requests
+Both stay **open** until a later comment resolves them. They differ in what they hold up:
+
+| Kind | Purpose | While open | Goes to |
+|---|---|---|---|
+| **Blocker** | the work cannot start or continue until someone else answers or acts | the item is not ready; a work session on it parks (section 5) | whoever it `@mentions`; otherwise a supervisor; otherwise the principal of the agent that wrote it, or the author if human |
+| **Change request** | something the work must do before it is submitted | `wf work submit` and `Approve` are refused | whoever works on the item next; the work package lists it |
+
+* A question from an agent is a blocker on its own item: `wf comment <item> "<question>" --block`. Its
+  session parks, and resumes with every comment written while it was parked once the blocker is resolved.
+  So does a wait on something outside the model (credentials, CI, a vendor).
+* A blocker without a mention goes to the `supervision` lane: the dispatcher starts a **supervise
+  session** for an agent in that lane that never worked on the item. It gets the item's history and an
+  empty directory, and ends `Supervised` when it either resolves the blocker with an answer, or escalates
+  it with a new blocker that `@mentions` the human and resolves the old one. Without a supervisor, the
+  blocker goes straight to the human. Blockers waiting on a human are listed in `wf inbox`.
+* Change requests come from reviewers (section 9) and from anyone who wants something done before the
+  work is submitted. The working agent resolves each once it is done, saying how or naming the commit.
+* **Resolving:** any comment can resolve open blockers and change requests of its item, including a
+  blocker or change request itself (an escalation). `--resolve-blockers` and `--resolve-change-requests`
+  expand to the ids open when the command runs, and the event stores those ids: a blocker written
+  concurrently on another device is never resolved by a reply that did not see it. A resolving comment
+  may have empty text. Anyone may resolve, except that a session cannot resolve a blocker it wrote.
+* Resolution is grow-only: there is no reopening. A resolution someone does not accept gets a new
+  blocker or change request.
+
+### Comment ids
+A comment's id is its event id. It prints as the first **4** characters of its base32 hash, scoped to the
+item: `--resolve c7f2` on `#rpdhor`, or `#rpdhor/c7f2` from anywhere else, which also makes a backlink
+to the comment. A longer prefix is accepted, and an ambiguous one is refused, as with items.
+
+* Fixed length, not the shortest unique prefix: a shortest prefix grows when a later comment collides,
+  and ids already printed or pasted would stop matching.
+* Not sequence numbers (`c1`, `c2`): two devices commenting concurrently would both write the same
+  number, and the numbering would shift as their events sync.
+
+### Reports
+What the working agent says about what it is doing and why: progress, decisions made, options rejected. A
+report is a comment written by a work session, so it belongs to that session and through it to the item.
+An item can have several sessions (an agent gives up, a review requests changes), and the activity shows
+which one each comment came from.
+
+* `--step` takes the number `wf item show` prints for the step, and is stored as the step's id. `--done`
+  requires `--step` and also writes `StepDone` for it. Review and supervise sessions comment without
+  `--step`, since they do not tick the author's steps.
 * The step link is plain data and is not checked when read. `--step` is checked against the item's body
-  when the report is written, so a mistyped id writes nothing. If the step's text is edited later, the report
-  keeps pointing at a hash that is no longer in the body, and it is shown without a step.
-* The tick is its own event with its own rules, so a report never becomes invalid because a step changed.
-* Reports are encouraged and never required: `wf work submit` does not check for them. Agent instructions ask
-  for reports that stand on their own, saying what was chosen, what was rejected and why.
+  when the comment is written, so a mistyped number writes nothing. If the step's text is edited later,
+  the comment keeps pointing at a hash that is no longer in the body, and it is shown without a step.
+* The tick is its own event with its own rules, so a comment never becomes invalid because a step changed.
+* Reports are encouraged and never required: `wf work submit` does not check for them. Agent instructions
+  ask for reports that stand on their own, saying what was chosen, what was rejected and why.
 * Attribution comes from the event signature and the session.
-* Redaction happens before signing (M3; until then reports are signed as written).
-* `wf item show` lists the comments and reports of an item together in time order. Each report shows its
-  agent, role and short session id, and the step text while the step exists.
-* A work package includes the reports of earlier sessions of the item.
+* Redaction happens before signing (M3; until then comments are signed as written).
+* A work package includes the comments of earlier sessions of the item.
 * Nothing depends on commit messages. Overlap notifications (M3) come from the files commits touch, which
-  are read from the repository and are not part of a report.
+  are read from the repository and are not part of a comment.
+
+### Activity
+`wf item show` ends with the item's **activity**: one timeline of everything that happened to it, in
+fold order. It replaces a separate history listing.
+
+```
+activity · 2026-10-11
+  06:32  @joshua created the task
+  06:52  @joshua/coder/pp74s3 started work
+  06:52  @joshua/coder/pp74s3 ⧗ blocker → supervisor                            c7f2
+           Item has two steps with no concrete work … What change do you want made?
+  06:55  @joshua/supervisor/k3j1 ⧗ blocker → @joshua · resolves c7f2            a91d
+           No decision covers this; it's about intent.
+  06:59  @joshua resolved a91d                                                  e04b
+           Fix the formatting of the body, nothing else
+  06:59  @joshua/coder/pp74s3 resumed
+  07:04  @joshua/coder/pp74s3 submitted 3e8a1c → in_review
+  07:10  @joshua/reviewer/m2p9 requested changes on 3e8a1c
+           △ b2e4  parser.rs: the error path drops the span
+           △ d81c  missing test for empty input
+  07:31  @joshua/coder/pp74s3 resolved b2e4, d81c                               f13a
+           Kept the span in ParseError; added empty_input test.
+```
+
+* **Comments** take a header line (time, actor, kind, what they resolve, id) and their wrapped text.
+  Change requests written together with a verdict are listed under it.
+* **Events** take one line: moves (`moved to backlog`; with a `because`, the comment's text below),
+  edits (`set priority P1`, `labels +bug`, `review → principal`, `edited the body`, `checked step 2: …`),
+  links (`now depends on #x7k2`, `no longer depends on #x7k2`), sessions (`started work`,
+  `started review of 3e8a1c`, `released`, `timed out`), verdicts, merges and archiving.
+* **Moves carried out for a session** (`by_session`) are shown in the session's line, not on their own:
+  `started work`, `submitted 3e8a1c → in_review`, `released → open`.
+* **Other items** appear where they change this one: a dependency done (`#x7k2 done`) or cancelled
+  (`#x7k2 dropped · stranded`), a new dependent (`#abc now depends on this`), a reference
+  (`referenced in #abc`).
+* A body edit that lost to a concurrent edit is shown with its text, so nothing silently disappears.
+* The date heads the section and is repeated when the day changes; lines show the time only.
+* The item header lists what is open: `2 open: ⧗ c7f2 blocker → supervisor · △ d81c change request`.
+* `--json` gives the activity as a list of entries tagged by kind.
 
 ### Two kinds of decisions
 | | Item decisions | Project decisions |
 |---|---|---|
-| Where | the item's reports | the project decision log |
+| Where | the reports (comments) of the item's work sessions | the project decision log |
 | Written by | the working agent | agents, scribes, humans |
 | Ratified | no | yes |
 | Agent context | when working on that item | always, once ratified |
 
 ## 11. Project decisions and search (M4)
 
-* Distilling threads and reports into project decisions is **normal work**: a `distill` item in the
+* Distilling threads and comments into project decisions is **normal work**: a `distill` item in the
   `meta` lane, claimed like any other. This avoids duplicate scribes.
 * Decisions are items of the built-in `decision` type. Ratified decisions change only through a new
   decision that `supersedes` them.
@@ -877,8 +984,8 @@ authenticated) is *later*. wf never handles harness credentials.
 
 | ACP | Use |
 |---|---|
-| `session/new` + MCP servers | start in the item's worktree with `WF_SESSION` set; attach the `wf` MCP server (`item_show`, `report`, `inbox`, `search`, `decision_propose`, M3) |
-| `session/prompt` | send the work package: item, dependencies, answers, review notes of earlier attempts, the agent rules; later ratified decisions and search hits |
+| `session/new` + MCP servers | start in the item's worktree with `WF_SESSION` set; attach the `wf` MCP server (`item_show`, `comment`, `inbox`, `search`, `decision_propose`, M3) |
+| `session/prompt` | send the work package: item, dependencies, comments of earlier sessions, open change requests, the agent rules; later ratified decisions and search hits |
 | end of a prompt turn | decides the next step (below) |
 | `session/update` | transcript capture (local, `wf session watch`), redaction (M3), presence |
 | `session/request_permission` | answered by the agent's `permissions`: allow, deny, or ask, held in `wf inbox` until `wf session allow\|deny` |
@@ -889,9 +996,9 @@ authenticated) is *later*. wf never handles harness credentials.
 
 | Situation | Next |
 |---|---|
-| the session ended (`wf work submit`, `wf work release`) or the item entered a blocked state | close the harness |
-| the item waits on a dependency (its question) | park; prompt again with the answers once the item is ready, end `TimedOut` after `park_timeout` |
-| otherwise, nudges left | prompt "continue": submit, ask or release when done or stuck |
+| the session ended (`wf work submit`, `wf work release`, a verdict, a supervisor's resolution) | close the harness |
+| the item has an open blocker or waits on a dependency | park; prompt again with the comments written meanwhile once the item is ready, end `TimedOut` after `park_timeout` |
+| otherwise, nudges left | prompt "continue": submit, write a blocker or release when done or stuck |
 | `nudges` turns in a row without a new commit | end `Released`, with a comment |
 
 | Harness | ACP command |
@@ -918,7 +1025,7 @@ authenticated) is *later*. wf never handles harness credentials.
   references, the system keyring. Values are injected into the harness environment.
 * wf keeps the injected values in memory only and uses them to scrub: exact match plus base64, URL and hex
   encodings, then pattern scanning (gitleaks-style) as a second layer.
-* Reports always pass redaction before signing.
+* Comments written by agent sessions always pass redaction before signing.
 
 ## 14. Connectivity and lifecycle
 
@@ -1013,9 +1120,8 @@ claim = ["member"]
 [lanes.meta]
 claim = ["member"]
 types = ["distill", "triage"]
-[lanes.supervision]
+[lanes.supervision]      # holds no items: its agents supervise blockers
 claim = ["member"]
-types = ["question"]
 
 [transcripts]
 publish = "none"
@@ -1057,13 +1163,12 @@ wf device list|edit                       # name, hardware, hosted agents, max_s
 wf agent add|list|edit                    # profiles: harness, model, capabilities, lanes, autonomy
 wf session start|list|show|stop|watch     # live and recent sessions, transcripts
 wf session allow|deny <session>           # answer a held permission request
-wf work submit | ask <question> | release  # agents, inside a session
-wf work report "<text>" [--step <number> [--done]]
+wf work submit | release                  # agents, inside a session
 wf daemon | sync | status | log | export
 wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
-wf item add|list|show|edit|move|link|archive|diff   # all types: task, question, decision, ...
-wf comment <item> <text>
+wf item add|list|show|edit|move|link|archive|diff   # all types: task, decision, ...
+wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | --resolve-blockers | --resolve-change-requests] [--step <number> [--done]]
 wf inbox
 wf review <item> --approve|--request-changes|--escalate
 wf search <query>
@@ -1090,7 +1195,7 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
 |---|---|
 | **M0** | Event log with `actor`, `owner`/`member`, principal and device keys, agent definitions, item model (types, categories, built-in types, relations, derived refs and mentions, archiving), in-memory fold, redb event store with snapshots. Single peer. |
 | **M1** | iroh sync, equivocation handling, self-authorizing device invites and `wf join`, device profiles, daemon, gossip, `wf fork`. |
-| M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, questions and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress, `wf work report` and `Report` |
+| M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, blockers, change requests and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress, reports as comments, item activity |
 | M3 | Sessions across devices: anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, session inboxes, overlap notifications, secret brokering, redaction, merge mode `origin` with `Merged` from origin. **= UC1** |
 | M4 | Decision ratification flow, distill items, hybrid search |
 | M5 | Multiple principals, threads, scopes, `wf attach` |
