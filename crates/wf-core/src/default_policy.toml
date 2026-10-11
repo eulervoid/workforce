@@ -10,6 +10,26 @@ claim = ["member"]
 claim = ["member"]
 types = ["distill"]
 
+[lanes.supervision]
+claim = ["member"]
+types = ["question"]
+
+[merge]
+mode = "local"
+target = "main"
+
+[[review]]
+name = "light"
+steps = [{ agent = { requires = ["review"] } }]
+
+[[review]]
+name = "standard"
+steps = [{ agent = { requires = ["review", "strong-model"] } }]
+
+[[review]]
+name = "critical"
+steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
+
 [types.task]
 lane = "default"
 fields = ["priority", "labels", "requires"]
@@ -26,13 +46,14 @@ states = [
 ]
 
 [types.question]
-lane = "default"
+lane = "supervision"
 fields = ["priority", "labels"]
 depends_on = []
 initial = "open"
 transitions = "any"
 states = [
   { name = "open", category = "open" },
+  { name = "needs_human", category = "blocked" },
   { name = "answered", category = "done" },
   { name = "dropped", category = "cancelled" },
 ]

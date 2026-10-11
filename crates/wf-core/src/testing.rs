@@ -13,7 +13,7 @@ use crate::identity::{
     Actor, AgentId, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed,
 };
 use crate::item::Priority;
-use crate::name::{AgentName, Handle, HarnessName, StateName, TypeName};
+use crate::name::{AgentName, Handle, HarnessName, LaneName, ReviewName, StateName, TypeName};
 use crate::policy::DEFAULT_POLICY_TOML;
 use crate::session::{EndReason, SessionRole};
 use crate::state::{State, Trust};
@@ -320,4 +320,29 @@ pub fn report(session: SessionId, note: &str, step: Option<StepId>) -> EventBody
         note: note.into(),
         step,
     })
+}
+
+/// An item that needs the review level `review`.
+pub fn create_reviewed(item_type: &str, title: &str, review: &str) -> EventBody {
+    let EventBody::ItemCreated(mut created) = create(item_type, title) else {
+        unreachable!("`create` makes an `ItemCreated`")
+    };
+    created.review = Some(ReviewName::new(review).unwrap());
+    EventBody::ItemCreated(created)
+}
+
+/// An agent in the `supervision` lane.
+pub fn define_supervisor(name: &str) -> EventBody {
+    let EventBody::AgentDefined(mut defined) = define_agent(name) else {
+        unreachable!("`define_agent` makes an `AgentDefined`")
+    };
+    defined.lanes = vec![LaneName::new("supervision").unwrap()];
+    EventBody::AgentDefined(defined)
+}
+
+pub fn review_of(item: ItemId, review: Option<&str>) -> EventBody {
+    edit(
+        item,
+        Change::Review(review.map(|name| ReviewName::new(name).unwrap())),
+    )
 }

@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::identity::Role;
-use crate::name::{LaneName, StateName, TypeName};
+use crate::name::{LaneName, Requirement, ReviewName, StateName, TypeName};
 
 pub const DEFAULT_POLICY_TOML: &str = include_str!("default_policy.toml");
 
@@ -38,6 +38,17 @@ pub enum PolicyError {
         type_name: TypeName,
         target: TypeName,
     },
+    #[error("review level `{0}` is defined twice")]
+    DuplicateReviewLevel(ReviewName),
+    #[error("review level `{0}` has no steps")]
+    NoReviewSteps(ReviewName),
+    #[error("type `{type_name}` has the unknown review level `{level}`")]
+    UnknownReviewLevel {
+        type_name: TypeName,
+        level: ReviewName,
+    },
+    #[error("type `{0}` has a review level but no blocked state to wait in")]
+    ReviewWithoutBlocked(TypeName),
 }
 
 /// Fixed set of behavioural state categories. Built-in behaviour keys on these, never on state names.
@@ -112,9 +123,20 @@ pub struct TypeConfig {
     #[serde(default)]
     pub transitions: Transitions,
     pub states: Vec<StateConfig>,
+    /// The review level of items of this type that do not name one.
+    #[serde(default)]
+    pub review: Option<ReviewName>,
 }
 
 impl TypeConfig {
+    /// The first state with the category. The runner moves items to these states.
+    pub fn first_state(&self, state_category: StateCategory) -> Option<&StateName> {
+        self.states
+            .iter()
+            .find(|state| state.state_category == state_category)
+            .map(|state| &state.name)
+    }
+
     pub fn state_category_of(&self, state: &StateName) -> Option<StateCategory> {
         self.states
             .iter()
@@ -200,8 +222,57 @@ pub struct AssignmentConfig {
     pub lease: Lease,
 }
 
-/// Unknown top-level tables (`[review]`, `[transcripts]`, ...) are kept in the stored text but
-/// ignored here until a later milestone gives them meaning.
+/// How reviewed work gets into the target branch. `origin` (push, pull requests) comes in M3.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeMode {
+    #[default]
+    Local,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MergeConfig {
+    #[serde(default)]
+    pub mode: MergeMode,
+    /// The branch approved work is merged into.
+    #[serde(default = "MergeConfig::default_target")]
+    pub target: String,
+}
+
+impl MergeConfig {
+    fn default_target() -> String {
+        "main".to_string()
+    }
+}
+
+impl Default for MergeConfig {
+    fn default() -> Self {
+        Self {
+            mode: MergeMode::default(),
+            target: Self::default_target(),
+        }
+    }
+}
+
+/// One step of a review level: an agent chosen by capabilities, or the human.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewStep {
+    Agent { requires: BTreeSet<Requirement> },
+    Human,
+}
+
+/// A named sequence of review steps. Levels are listed from least to most strict.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewLevelConfig {
+    pub name: ReviewName,
+    pub steps: Vec<ReviewStep>,
+}
+
+/// Unknown top-level tables (`[transcripts]`, ...) are kept in the stored text but ignored here
+/// until a later milestone gives them meaning.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Policy {
     pub types: BTreeMap<TypeName, TypeConfig>,
@@ -209,6 +280,11 @@ pub struct Policy {
     pub lanes: BTreeMap<LaneName, LaneConfig>,
     #[serde(default)]
     pub assignment: AssignmentConfig,
+    #[serde(default)]
+    pub merge: MergeConfig,
+    /// Ordered from least to most strict: the position is what lowering and raising mean.
+    #[serde(default)]
+    pub review: Vec<ReviewLevelConfig>,
 }
 
 static DEFAULT_POLICY: LazyLock<Policy> = LazyLock::new(|| {
@@ -236,7 +312,25 @@ impl Policy {
         self.types.get(type_name)
     }
 
+    pub fn review_level(&self, name: &ReviewName) -> Option<&ReviewLevelConfig> {
+        self.review.iter().find(|level| &level.name == name)
+    }
+
+    /// How strict a level is: its position in the list.
+    pub fn review_rank(&self, name: &ReviewName) -> Option<usize> {
+        self.review.iter().position(|level| &level.name == name)
+    }
+
     fn validate(&self) -> Result<(), PolicyError> {
+        let mut levels = BTreeSet::new();
+        for level in &self.review {
+            if !levels.insert(&level.name) {
+                return Err(PolicyError::DuplicateReviewLevel(level.name.clone()));
+            }
+            if level.steps.is_empty() {
+                return Err(PolicyError::NoReviewSteps(level.name.clone()));
+            }
+        }
         for (name, builtin) in &DEFAULT_POLICY.types {
             let configured = self
                 .types
@@ -273,6 +367,17 @@ impl Policy {
             };
             if has(StateCategory::Active) && !has(StateCategory::Open) {
                 return Err(PolicyError::ActiveWithoutOpen(name.clone()));
+            }
+            if let Some(level) = &config.review {
+                if self.review_level(level).is_none() {
+                    return Err(PolicyError::UnknownReviewLevel {
+                        type_name: name.clone(),
+                        level: level.clone(),
+                    });
+                }
+                if !has(StateCategory::Blocked) {
+                    return Err(PolicyError::ReviewWithoutBlocked(name.clone()));
+                }
             }
             if let Some(target) = config
                 .depends_on
@@ -412,6 +517,111 @@ mod tests {
             Policy::parse(&unknown_target),
             Err(PolicyError::UnknownDependencyTarget { .. })
         ));
+    }
+
+    #[test]
+    fn default_policy_has_ordered_review_levels_and_a_supervision_lane() {
+        let policy = Policy::default_policy();
+        let names: Vec<_> = policy
+            .review
+            .iter()
+            .map(|level| level.name.as_str())
+            .collect();
+        assert_eq!(names, ["light", "standard", "critical"]);
+        let critical = policy
+            .review_level(&ReviewName::new("critical").unwrap())
+            .unwrap();
+        let requires: BTreeSet<_> = ["review", "strong-model"]
+            .into_iter()
+            .map(|name| Requirement::new(name).unwrap())
+            .collect();
+        assert_eq!(
+            critical.steps,
+            [ReviewStep::Agent { requires }, ReviewStep::Human]
+        );
+        assert_eq!(policy.merge, MergeConfig::default());
+        assert!(
+            policy
+                .lanes
+                .contains_key(&LaneName::new("supervision").unwrap())
+        );
+        let question = policy.type_config(&type_name("question")).unwrap();
+        assert_eq!(question.lane.as_str(), "supervision");
+        assert_eq!(
+            question
+                .first_state(StateCategory::Blocked)
+                .map(StateName::as_str),
+            Some("needs_human")
+        );
+        assert_eq!(question.review, None);
+        assert_eq!(
+            policy.review_rank(&ReviewName::new("standard").unwrap()),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn a_type_names_its_default_review_level() {
+        let source = DEFAULT_POLICY_TOML.replace(
+            "[types.task]\nlane = \"default\"",
+            "[types.task]\nreview = \"standard\"\nlane = \"default\"",
+        );
+        let policy = Policy::parse(&source).unwrap();
+        let task = policy.type_config(&type_name("task")).unwrap();
+        assert_eq!(task.review, Some(ReviewName::new("standard").unwrap()));
+    }
+
+    #[test]
+    fn rejects_review_levels_that_do_not_hold_together() {
+        let duplicate = with_custom("[[review]]\nname = \"light\"\nsteps = [\"human\"]\n");
+        assert_eq!(
+            Policy::parse(&duplicate),
+            Err(PolicyError::DuplicateReviewLevel(
+                ReviewName::new("light").unwrap()
+            ))
+        );
+        let empty = with_custom("[[review]]\nname = \"none\"\nsteps = []\n");
+        assert_eq!(
+            Policy::parse(&empty),
+            Err(PolicyError::NoReviewSteps(ReviewName::new("none").unwrap()))
+        );
+        let unknown = DEFAULT_POLICY_TOML.replace(
+            "[types.task]\nlane = \"default\"",
+            "[types.task]\nreview = \"ghost\"\nlane = \"default\"",
+        );
+        assert_eq!(
+            Policy::parse(&unknown),
+            Err(PolicyError::UnknownReviewLevel {
+                type_name: type_name("task"),
+                level: ReviewName::new("ghost").unwrap()
+            })
+        );
+        let unreviewable = with_custom(
+            "[types.bug]\nlane = \"default\"\ninitial = \"new\"\nreview = \"light\"\n\
+             states = [{ name = \"new\", category = \"open\" }, { name = \"fixed\", category = \"done\" }]\n",
+        );
+        assert_eq!(
+            Policy::parse(&unreviewable),
+            Err(PolicyError::ReviewWithoutBlocked(type_name("bug")))
+        );
+    }
+
+    #[test]
+    fn the_old_review_table_is_gone() {
+        let old = with_custom("[review]\napprovals = 2\n");
+        assert!(matches!(Policy::parse(&old), Err(PolicyError::Parse(_))));
+    }
+
+    #[test]
+    fn the_first_state_of_a_category_is_the_one_the_runner_uses() {
+        let task = Policy::default_policy()
+            .type_config(&type_name("task"))
+            .unwrap();
+        let first = |category| task.first_state(category).map(StateName::as_str);
+        assert_eq!(first(StateCategory::Open), Some("open"));
+        assert_eq!(first(StateCategory::Active), Some("in_progress"));
+        assert_eq!(first(StateCategory::Blocked), Some("in_review"));
+        assert_eq!(first(StateCategory::Done), Some("done"));
     }
 
     #[test]

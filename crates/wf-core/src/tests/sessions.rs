@@ -1,6 +1,7 @@
 use crate::event::Event;
 use crate::id::{ItemId, SessionId};
 use crate::item::ItemView;
+use crate::name::ReviewName;
 use crate::session::EndReason;
 use crate::state::{State, Trust};
 use crate::testing::*;
@@ -483,6 +484,140 @@ mod reports {
         assert_eq!(
             state.check_policy(&report(reviewer, "ticking", Some(StepId::of(STEP)))),
             Err(PolicyViolation::StepInReviewReport)
+        );
+    }
+}
+
+mod review_levels {
+    use super::*;
+    use crate::validate::PolicyViolation;
+
+    fn setup() -> (Fixture, State, ItemId) {
+        let fixture = Fixture::new(2);
+        let mut state = fixture.state();
+        fixture.apply(&mut state, 0, 2_000, define_agent("coder"));
+        fixture.apply(&mut state, 0, 2_001, define_supervisor("boss"));
+        let task = item_id(&fixture.apply(
+            &mut state,
+            0,
+            2_002,
+            create_reviewed("task", "reviewed work", "standard"),
+        ));
+        (fixture, state, task)
+    }
+
+    fn check_as(
+        fixture: &Fixture,
+        state: &State,
+        agent: &str,
+        session: SessionId,
+        body: &crate::event::EventBody,
+    ) -> Result<(), PolicyViolation> {
+        state.check_actor(
+            fixture.devices[0].key(),
+            &fixture.agent_actor(agent, session),
+            body,
+        )
+    }
+
+    #[test]
+    fn items_name_levels_that_exist() {
+        let (fixture, mut state, task) = setup();
+        let ghost = ReviewName::new("ghost").unwrap();
+        let mut created = create("task", "x");
+        if let crate::event::EventBody::ItemCreated(created) = &mut created {
+            created.review = Some(ghost.clone());
+        }
+        assert_eq!(
+            state.check_policy(&created),
+            Err(PolicyViolation::UnknownReviewLevel(ghost.clone()))
+        );
+        assert_eq!(
+            state.check_policy(&edit(
+                task,
+                crate::event::Change::Review(Some(ghost.clone()))
+            )),
+            Err(PolicyViolation::UnknownReviewLevel(ghost))
+        );
+        assert_eq!(
+            state.check_policy(&review_of(task, Some("critical"))),
+            Ok(())
+        );
+        assert_eq!(state.check_policy(&review_of(task, None)), Ok(()));
+
+        let distill = item_id(&fixture.apply(&mut state, 0, 2_003, create("distill", "sum up")));
+        assert_eq!(
+            state.check_policy(&review_of(distill, Some("light"))),
+            Err(PolicyViolation::ReviewWithoutBlockedState {
+                type_name: crate::name::TypeName::new("distill").unwrap()
+            })
+        );
+    }
+
+    #[test]
+    fn an_agent_that_worked_on_an_item_cannot_lower_its_review() {
+        let (fixture, mut state, task) = setup();
+        let session =
+            session_id(&fixture.apply(&mut state, 0, 3_000, start_session("coder", task)));
+        let lower = |level| review_of(task, level);
+        assert_eq!(
+            check_as(&fixture, &state, "coder", session, &lower(Some("light"))),
+            Err(PolicyViolation::AgentLowersReview(task))
+        );
+        assert_eq!(
+            check_as(&fixture, &state, "coder", session, &lower(None)),
+            Err(PolicyViolation::AgentLowersReview(task))
+        );
+        assert_eq!(
+            check_as(&fixture, &state, "coder", session, &lower(Some("standard"))),
+            Ok(())
+        );
+        assert_eq!(
+            check_as(&fixture, &state, "coder", session, &lower(Some("critical"))),
+            Ok(())
+        );
+    }
+
+    #[test]
+    fn other_items_supervisors_and_humans_may_lower_it() {
+        let (fixture, mut state, task) = setup();
+        let other = item_id(&fixture.apply(
+            &mut state,
+            0,
+            2_010,
+            create_reviewed("task", "someone else's", "critical"),
+        ));
+        let session =
+            session_id(&fixture.apply(&mut state, 0, 3_000, start_session("coder", task)));
+        assert_eq!(
+            check_as(
+                &fixture,
+                &state,
+                "coder",
+                session,
+                &review_of(other, Some("light"))
+            ),
+            Ok(())
+        );
+
+        let boss = session_id(&fixture.apply(&mut state, 0, 3_001, start_session("boss", task)));
+        assert_eq!(
+            check_as(
+                &fixture,
+                &state,
+                "boss",
+                boss,
+                &review_of(task, Some("light"))
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            state.check_actor(
+                fixture.devices[0].key(),
+                &fixture.founder_actor(),
+                &review_of(task, None)
+            ),
+            Ok(())
         );
     }
 }

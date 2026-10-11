@@ -1,12 +1,11 @@
 ---
 source: crates/wf-cli/tests/schemas.rs
-assertion_line: 88
 expression: "Envelope::new(&detail)"
 ---
 {
   "schema": 2,
   "data": {
-    "id": "vo4bd6tmax7codkm3bdqc65vsqnq4grbsaxwgbab4i4jz7qxmuwq",
+    "id": "5rmu3z54vpoz6c2ujimpplzuoiovzspbuewqkojjoeto3pmf434q",
     "type": "task",
     "title": "Implement feed sync",
     "state": "open",
@@ -14,7 +13,7 @@ expression: "Envelope::new(&detail)"
     "readiness": "blocked",
     "blocked_by": [
       {
-        "id": "e6sqjlg746yilt3rze65sggriuq4lf2eway55smruwfjccohm2ea",
+        "id": "v6yxirbf5gqtsvhactvqdnzewmtscachpvjvr7rum3zdf6drwnrq",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -28,7 +27,7 @@ expression: "Envelope::new(&detail)"
     "body": [
       {
         "kind": "markdown",
-        "text": "blocked on #e6sqjl, ask @coder"
+        "text": "blocked on #v6yxir, ask @coder"
       }
     ],
     "author": "@joshua",
@@ -39,7 +38,7 @@ expression: "Envelope::new(&detail)"
     "requires": [],
     "depends_on": [
       {
-        "id": "e6sqjlg746yilt3rze65sggriuq4lf2eway55smruwfjccohm2ea",
+        "id": "v6yxirbf5gqtsvhactvqdnzewmtscachpvjvr7rum3zdf6drwnrq",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -50,7 +49,7 @@ expression: "Envelope::new(&detail)"
     "supersedes": null,
     "references": [
       {
-        "id": "e6sqjlg746yilt3rze65sggriuq4lf2eway55smruwfjccohm2ea",
+        "id": "v6yxirbf5gqtsvhactvqdnzewmtscachpvjvr7rum3zdf6drwnrq",
         "type": "question",
         "title": "Which hash for event ids?",
         "state": "open",
@@ -64,11 +63,11 @@ expression: "Envelope::new(&detail)"
     ],
     "notes": [
       {
-        "id": "i2ietcv7liwvtcihi3xujlyuvldlgl7uli5lynovlrfjq4jeeska",
+        "id": "bxu4njxrqh4td6eimrw4lo2y2filajrffm3dzkq3qx5b3dhbezdq",
         "kind": "comment",
         "by": "@joshua",
         "at": "1970-01-01T00:00:09Z",
-        "text": "see #e6sqjl, @joshua please check",
+        "text": "see #v6yxir, @joshua please check",
         "session": null,
         "step": null
       }

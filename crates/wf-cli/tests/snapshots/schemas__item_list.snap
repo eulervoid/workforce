@@ -6,7 +6,7 @@ expression: "Envelope::new(&all)"
   "schema": 2,
   "data": [
     {
-      "id": "ezeiqy7nau5b4lwpjfepuo5cke3pu2tnd2klnwjjhypr5r4qcyca",
+      "id": "bejwn2hhptej6ei5iykk3pc6ohmxgmurpdeeto6g23punvk2esiq",
       "type": "task",
       "title": "Write spec",
       "state": "done",
@@ -19,7 +19,7 @@ expression: "Envelope::new(&all)"
       "archived": true
     },
     {
-      "id": "e6sqjlg746yilt3rze65sggriuq4lf2eway55smruwfjccohm2ea",
+      "id": "v6yxirbf5gqtsvhactvqdnzewmtscachpvjvr7rum3zdf6drwnrq",
       "type": "question",
       "title": "Which hash for event ids?",
       "state": "open",
@@ -28,7 +28,7 @@ expression: "Envelope::new(&all)"
       "blocked_by": [],
       "blocking": [
         {
-          "id": "vo4bd6tmax7codkm3bdqc65vsqnq4grbsaxwgbab4i4jz7qxmuwq",
+          "id": "5rmu3z54vpoz6c2ujimpplzuoiovzspbuewqkojjoeto3pmf434q",
           "type": "task",
           "title": "Implement feed sync",
           "state": "open",
@@ -36,11 +36,11 @@ expression: "Envelope::new(&all)"
         }
       ],
       "labels": [],
-      "lane": "default",
+      "lane": "supervision",
       "archived": false
     },
     {
-      "id": "vo4bd6tmax7codkm3bdqc65vsqnq4grbsaxwgbab4i4jz7qxmuwq",
+      "id": "5rmu3z54vpoz6c2ujimpplzuoiovzspbuewqkojjoeto3pmf434q",
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",
@@ -48,7 +48,7 @@ expression: "Envelope::new(&all)"
       "readiness": "blocked",
       "blocked_by": [
         {
-          "id": "e6sqjlg746yilt3rze65sggriuq4lf2eway55smruwfjccohm2ea",
+          "id": "v6yxirbf5gqtsvhactvqdnzewmtscachpvjvr7rum3zdf6drwnrq",
           "type": "question",
           "title": "Which hash for event ids?",
           "state": "open",

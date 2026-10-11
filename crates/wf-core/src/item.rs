@@ -228,6 +228,15 @@ impl Item {
         })
     }
 
+    /// The review level the item needs: its own, else its type's. `None` means no review.
+    pub fn effective_review<'a>(&'a self, policy: &'a Policy) -> Option<&'a ReviewName> {
+        self.review().or_else(|| {
+            policy
+                .type_config(&self.item_type)
+                .and_then(|config| config.review.as_ref())
+        })
+    }
+
     pub fn standing<'a>(&'a self, policy: &'a Policy) -> Standing<'a> {
         let explicit = self.state.value().as_ref();
         let Some(config) = policy.type_config(&self.item_type) else {

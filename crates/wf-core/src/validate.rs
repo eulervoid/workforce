@@ -15,7 +15,7 @@ use crate::event::{
 };
 use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
-use crate::name::{LaneName, StateName, TypeName};
+use crate::name::{LaneName, ReviewName, StateName, TypeName};
 use crate::policy::{Field, Policy, PolicyError, StateCategory};
 use crate::session::SessionRole;
 use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
@@ -155,6 +155,12 @@ pub enum PolicyViolation {
     SessionEndsAnother,
     #[error("a session cannot move its own item to a done state; it submits the work instead")]
     SessionFinishesItsItem,
+    #[error("there is no review level `{0}`")]
+    UnknownReviewLevel(ReviewName),
+    #[error("a `{type_name}` has no blocked state to wait in during review")]
+    ReviewWithoutBlockedState { type_name: TypeName },
+    #[error("an agent that worked on {0} cannot lower its review level")]
+    AgentLowersReview(ItemId),
     #[error("a report is written by its own session")]
     ReportNotFromItsSession,
     #[error("a review session reports on the item, not on its steps")]
@@ -617,6 +623,18 @@ impl State {
             EventBody::Report(report) if report.session != *session => {
                 Err(PolicyViolation::ReportNotFromItsSession)
             }
+            EventBody::ItemEdited(edited) => {
+                let lowers = edited
+                    .changes
+                    .iter()
+                    .any(|change| matches!(change, Change::Review(_)))
+                    && self.lowers_review(actor, edited);
+                if lowers {
+                    Err(PolicyViolation::AgentLowersReview(edited.item))
+                } else {
+                    Ok(())
+                }
+            }
             EventBody::ItemTransitioned(transition) if transition.item == folded.item() => {
                 let policy = &workforce.policy.value().policy;
                 let finishes = workforce
@@ -633,7 +651,6 @@ impl State {
             }
             EventBody::DeviceProfile(_)
             | EventBody::ItemCreated(_)
-            | EventBody::ItemEdited(_)
             | EventBody::ItemTransitioned(_)
             | EventBody::ItemLinked(_)
             | EventBody::ItemArchived(_)
@@ -644,6 +661,48 @@ impl State {
             | EventBody::Report(_)
             | EventBody::Unknown { .. } => Ok(()),
         }
+    }
+
+    /// Whether an edit by an agent lowers the review level of an item the agent has worked on.
+    /// Supervisors, agents in the `supervision` lane, may lower it.
+    fn lowers_review(&self, actor: &Actor, edited: &ItemEdited) -> bool {
+        let (Some(workforce), Actor::Agent { agent, .. }) = (&self.workforce, actor) else {
+            return false;
+        };
+        let supervision = LaneName::new("supervision").expect("a valid lane name");
+        let supervises = workforce
+            .agents
+            .get(agent)
+            .is_some_and(|definition| definition.value().lanes.contains(&supervision));
+        let worked_on = workforce
+            .sessions
+            .values()
+            .any(|session| session.agent() == agent && session.item() == edited.item);
+        let Some(item) = workforce.items.get(&edited.item) else {
+            return false;
+        };
+        if supervises || !worked_on {
+            return false;
+        }
+        let policy = &workforce.policy.value().policy;
+        // `None` ranks below every level, so removing the review lowers it.
+        let rank = |level: Option<&ReviewName>| {
+            level.and_then(|name| policy.review_rank(name).map(|rank| rank + 1))
+        };
+        let before = rank(item.effective_review(policy));
+        let type_default = policy
+            .type_config(item.item_type())
+            .and_then(|config| config.review.as_ref());
+        edited
+            .changes
+            .iter()
+            .filter_map(|change| {
+                let Change::Review(review) = change else {
+                    return None;
+                };
+                Some(review.as_ref().or(type_default))
+            })
+            .any(|after| rank(after).unwrap_or(0) < before.unwrap_or(0))
     }
 
     /// Checks the rules that depend on the current policy and item states. Run by the author
@@ -670,6 +729,24 @@ impl State {
             policy
                 .type_config(type_name)
                 .ok_or_else(|| PolicyViolation::UnknownType(type_name.clone()))
+        };
+        let known_review = |type_name: &TypeName, review: &Option<ReviewName>| {
+            let Some(level) = review else {
+                return Ok(());
+            };
+            if policy.review_level(level).is_none() {
+                return Err(PolicyViolation::UnknownReviewLevel(level.clone()));
+            }
+            let reviewable = type_of(type_name)?
+                .first_state(StateCategory::Blocked)
+                .is_some();
+            if reviewable {
+                Ok(())
+            } else {
+                Err(PolicyViolation::ReviewWithoutBlockedState {
+                    type_name: type_name.clone(),
+                })
+            }
         };
         let require_field = |type_name: &TypeName, field: Field| {
             if type_of(type_name)?.allows_field(field) {
@@ -736,6 +813,7 @@ impl State {
                     require_field(type_name, Field::Requires)?;
                 }
                 Body::parse(&created.body)?;
+                known_review(type_name, &created.review)?;
                 created.lane.iter().try_for_each(known_lane)
             }
             EventBody::ItemEdited(edited) => {
@@ -763,7 +841,7 @@ impl State {
                         Change::Lane(lane) => lane.iter().try_for_each(known_lane)?,
                         Change::Labels(_) => require_field(type_name, Field::Labels)?,
                         Change::Requires(_) => require_field(type_name, Field::Requires)?,
-                        Change::Review(_) => {}
+                        Change::Review(review) => known_review(type_name, review)?,
                     }
                 }
                 Ok(())
