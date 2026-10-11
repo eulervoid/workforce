@@ -596,13 +596,25 @@ impl Daemon {
             Finish::Supervised => (EndReason::Supervised, by_agent.clone(), None),
             Finish::Stop | Finish::MovedOn => (EndReason::Cancelled, by_device.clone(), None),
             Finish::TimedOut => (EndReason::TimedOut, by_device.clone(), None),
-            Finish::Failed => (EndReason::Failed, by_device.clone(), None),
-            Finish::GaveUp { turns } => (
+            Finish::Failed { because } => (
+                EndReason::Failed,
+                by_device.clone(),
+                Some(format!("The session failed: {because}")),
+            ),
+            Finish::GaveUp {
+                turns,
+                last_message,
+            } => (
                 EndReason::Released,
                 by_device.clone(),
-                Some(format!(
-                    "Gave up: {turns} turns in a row without a new commit."
-                )),
+                Some(if last_message.trim().is_empty() {
+                    format!("Gave up: {turns} turns in a row without a new commit.")
+                } else {
+                    format!(
+                        "Gave up: {turns} turns in a row without a new commit. The agent last said:\n\n{}",
+                        truncated(last_message.trim(), LAST_MESSAGE_LIMIT)
+                    )
+                }),
             ),
         };
         // A submission with open change requests is refused before anything is written.
@@ -665,7 +677,7 @@ impl Daemon {
             Finish::Stop
             | Finish::MovedOn
             | Finish::TimedOut
-            | Finish::Failed
+            | Finish::Failed { .. }
             | Finish::GaveUp { .. } => Stop::Now,
         };
         self.runners.stop(session, how);
@@ -919,7 +931,14 @@ impl Daemon {
             .collect();
         for session in stale {
             if let Err(error) = self
-                .finish_session(workforce, loaded, session, Finish::Failed)
+                .finish_session(
+                    workforce,
+                    loaded,
+                    session,
+                    Finish::Failed {
+                        because: "the daemon stopped while it ran".to_string(),
+                    },
+                )
                 .await
             {
                 eprintln!(
@@ -976,7 +995,10 @@ async fn drive(
         .append(true)
         .open(&run.transcript)
     else {
-        return End::Finish(Finish::Failed);
+        return failed(format!(
+            "the transcript {} cannot be written",
+            run.transcript.display()
+        ));
     };
     let mut path =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>();
@@ -1004,13 +1026,14 @@ async fn drive(
     {
         Ok(conversation) => conversation,
         Err(error) => {
+            let report = wf_core::report::report(&error);
             eprintln!(
                 "could not start {} for session {}: {}",
                 run.agent,
                 run.session,
                 wf_core::report::report(&error)
             );
-            return End::Finish(Finish::Failed);
+            return failed(format!("{} did not start: {report}", run.agent));
         }
     };
     let end = turns(daemon, loaded, run, stopped, &mut conversation).await;
@@ -1026,7 +1049,7 @@ async fn turns(
     conversation: &mut Conversation,
 ) -> End {
     let Ok(state) = daemon.snapshot(loaded).await else {
-        return End::Finish(Finish::Failed);
+        return failed("the workforce could not be read".to_string());
     };
     let mut prompt = match run.role {
         SessionRole::Work => work_package(daemon, loaded, run, &state).await,
@@ -1038,7 +1061,7 @@ async fn turns(
     let mut last_head = branch_head(run).await;
     let mut turns_without_commit = 0;
     loop {
-        let turn = conversation.prompt(prompt);
+        let turn = conversation.reply(prompt);
         tokio::pin!(turn);
         let result = tokio::select! {
             result = &mut turn => result,
@@ -1058,8 +1081,15 @@ async fn turns(
                 return End::Finish(Finish::TimedOut);
             }
         };
-        let Ok(_stop_reason) = result else {
-            return End::Finish(Finish::Failed);
+        let (_stop_reason, last_message) = match result {
+            Ok(reply) => reply,
+            Err(error) => {
+                return failed(format!(
+                    "{} stopped answering: {}",
+                    run.agent,
+                    wf_core::report::report(&error)
+                ));
+            }
         };
 
         let head = branch_head(run).await;
@@ -1070,7 +1100,7 @@ async fn turns(
             turns_without_commit += 1;
         }
         let Ok(state) = daemon.snapshot(loaded).await else {
-            return End::Finish(Finish::Failed);
+            return failed("the workforce could not be read".to_string());
         };
         match state.turn_outcome(run.session, turns_without_commit, run.nudges) {
             TurnOutcome::Close => {
@@ -1087,6 +1117,7 @@ async fn turns(
             TurnOutcome::GiveUp => {
                 return End::Finish(Finish::GaveUp {
                     turns: turns_without_commit,
+                    last_message,
                 });
             }
             TurnOutcome::Park => match park(daemon, loaded, run, stopped, &deadline).await {
@@ -1102,6 +1133,21 @@ async fn turns(
         }
     }
 }
+
+fn failed(because: String) -> End {
+    End::Finish(Finish::Failed { because })
+}
+
+/// At most `limit` characters of `text`, cut at a character boundary.
+fn truncated(text: &str, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_string(),
+    }
+}
+
+/// How much of the last words of an agent that gave up goes into the comment.
+const LAST_MESSAGE_LIMIT: usize = 600;
 
 async fn sleep_until(deadline: Option<Instant>) {
     match deadline {

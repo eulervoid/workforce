@@ -143,10 +143,10 @@ pub enum Finish {
     MovedOn,
     /// It waited too long or ran too long.
     TimedOut,
-    /// The harness failed or exited.
-    Failed,
-    /// The agent used up its nudges without a new commit.
-    GaveUp { turns: u32 },
+    /// The harness failed or exited, or the daemon could not run it.
+    Failed { because: String },
+    /// The agent used up its nudges without a new commit. `last_message` is what it said last.
+    GaveUp { turns: u32, last_message: String },
 }
 
 #[derive(Serialize, Deserialize)]
