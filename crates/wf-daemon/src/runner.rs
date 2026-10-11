@@ -43,6 +43,8 @@ pub enum SessionError {
     UnknownItem(ItemId),
     #[error("{0} is archived")]
     Archived(ItemId),
+    #[error("{0} already has a live session; stop it first")]
+    Claimed(ItemId),
     #[error("there is no session {0}")]
     UnknownSession(SessionId),
     #[error("the session runs on another machine")]
@@ -319,6 +321,9 @@ impl Daemon {
         match state.item(item).ok_or(SessionError::UnknownItem(item))? {
             ItemView::Live(_) => {}
             ItemView::Archived(_) => return Err(SessionError::Archived(item)),
+        }
+        if role == SessionRole::Work && state.claim(item).is_some() {
+            return Err(SessionError::Claimed(item));
         }
         let target = state
             .policy()

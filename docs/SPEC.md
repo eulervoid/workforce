@@ -176,8 +176,13 @@ need different capabilities.
 * `SessionStarted{agent, item, role}` (device-signed), `role` = `Work` or `Review{commit}`. Its hash
   prefix is the session id. `SessionEnded{reason}`, reason = `Submitted{commit} | Reviewed | Released |
   Blocked | TimedOut | Failed | Cancelled`.
-* One branch per **item** (`wf/<item>`) in one worktree. A session is an attempt: the next session on the
-  item (after a release, a crash or requested changes) continues the branch.
+* One branch per **item** (`wf/<item>`, section 9) in one worktree. A session is an attempt: the next
+  session on the item (after a release, a crash or requested changes) continues the branch.
+* **Ending moves the item first.** `after_end(session, reason)` in `wf-core` says what happens to the
+  item (back to open, to the blocked state for review, merged and done, or nothing), and the daemon does it
+  while the session still holds the item, then writes `SessionEnded`. Otherwise the dispatcher would see
+  an open item without a live session in between and start another. An item that is no longer being
+  worked on is not reopened by a stale end.
 * A work session ends when the agent submits (`wf work submit`), releases (`wf work release`), escalates by moving
   its item to a blocked state, or runs out of nudges or time. Waiting on a dependency, such as its own
   question (`wf work ask`), **parks** it: the harness keeps its conversation and continues once the item is
@@ -190,9 +195,11 @@ need different capabilities.
   `SessionEnded` (crash, sleeping laptop). Its claim expires and the item becomes assignable again,
   possibly to the same agent on another device.
 * The claim belongs to the earliest live work session of an item by `(hlc, EventId)`; a later one
-  cancels itself.
-* Agents run `wf` with `WF_SESSION` set by the runner, so their events carry
-  `Actor::Agent{agent, session}`.
+  cancels itself (M3: two daemons can only start sessions on one item at the same time across devices).
+  On one machine `wf session start` refuses an item that has a live work session.
+* Agents run `wf` with `WF_SESSION` and `WF_WORKFORCE` set by the runner, so their events carry
+  `Actor::Agent{agent, session}` and they address the workforce of the session, whatever the committed
+  `.workforce.toml` of their checkout says.
 * Location transparency stops at uncommitted work. Reassignment carries over only what was pushed, which
   is why agents commit small.
 * wf session ids are separate from ACP session ids; the ACP id is a local detail of the runner.
@@ -744,10 +751,17 @@ target is an **agent**; the dispatcher picks any device that hosts it and has a 
 
 * Git only. A `VcsAdapter` trait is a code boundary with one implementation. Events carry a `vcs` enum
   with a single variant, so jj can be added later without a format change.
-* One worktree and branch per **item**, `wf/<item>`, continued by every session on the item. Worktrees
-  live outside the repo in `$XDG_DATA_HOME/workforce/<id>/worktrees/<item>` and are removed after the
-  merge. A review session gets a detached checkout of the commit it reviews.
-* Git is called through the `git` CLI behind the adapter.
+* One worktree and branch per **item**, `wf/<item>`, continued by every session on the item, where
+  `<item>` is the first 12 characters of the item id (short ids are too short to name a branch safely).
+  Worktrees live outside the repo in `$XDG_DATA_HOME/workforce/<id>/worktrees/<item>` and are removed
+  after the merge, or at once when a session submits without commits (a question's answer). A review
+  session gets a detached checkout of the commit it reviews in `worktrees/<item>-<commit prefix>`,
+  removed when the session ends.
+* Git is called through the `git` CLI (2.38 or later) behind the adapter, and `wf-vcs` is the only
+  crate that does. Whichever worktree it is given, the adapter works on the main checkout of the
+  repository.
+* The daemon finds the repository from a file next to the store of the workforce, which every `wf`
+  command run in the main checkout refreshes. Checkouts of sessions do not count: they come and go.
 
 ### Review
 Review levels are an ordered list in the policy, from least to most strict. Each level is a sequence of
@@ -767,8 +781,12 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
   review. The planner, a supervisor or the working agent set it; a session may raise it but not lower it
   for an item its agent worked on.
 * Submitting (`wf work submit`) moves the item to its type's blocked state and starts the level's first step.
-  Steps run in order. A reviewer agent is always a different agent from the ones that worked on the
-  item.
+  Steps run in order. A reviewer agent never did the work on the item; the same reviewer looks again
+  after changes. The status (`Awaiting{step}`, `ChangesRequested`, `Approved`, `Merged`) is computed
+  from the latest submitted commit, the level and the verdicts on that commit; nothing is stored.
+* `wf review <item>` writes the verdict; in a review session it also ends the session `Reviewed`. A
+  verdict on a commit other than the submitted one is refused, and a review session reports on the item,
+  not on its steps. `wf item diff` shows the work as a reviewer sees it.
 * Verdicts: `Approve` moves on to the next step; `RequestChanges` moves the item back to its open state,
   and the next session continues the branch with the review notes; `Escalate` (agents only) inserts a
   human step right after the current one. Human steps wait in `wf inbox`.
@@ -781,8 +799,12 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
 
 * **`local` (M2):** the daemon builds the merge with `git merge-tree --write-tree` and `git commit-tree`,
   without touching any checkout, then advances the target: fast-forward in a clean checkout of it, or a
-  compare-and-swap `git update-ref`. A dirty checkout makes the merge wait (shown in `wf inbox`). A
-  conflict sends the item back to work. Then `Merged{item, reviewed, commit}` and the item is done.
+  compare-and-swap `git update-ref`. A dirty checkout makes the merge wait: the item sits in its blocked
+  state with one comment, `wf inbox` shows it, and the dispatcher tries again on every change and
+  tick without saying so again. A conflict sends the item back to work with a comment naming the
+  files, and the next session merges the target into the branch first. Then `Merged{item, reviewed,
+  commit}`, the branch and worktree are removed, and the item is done. Work without a review level
+  merges as its session ends; approved work is merged by the dispatcher, one merge per item at a time.
 * **`origin` (M3):** a central origin (GitHub etc.). wf pushes approved branches and opens pull requests;
   **the origin decides merging** (branch protection). `wf` observes it and emits `Merged` when a
   `wf/<item>` branch lands in the target.
@@ -812,7 +834,7 @@ struct Report {
 * Reports are encouraged and never required: `wf work submit` does not check for them. Agent instructions ask
   for reports that stand on their own, saying what was chosen, what was rejected and why.
 * Attribution comes from the event signature and the session.
-* Redaction happens before signing.
+* Redaction happens before signing (M3; until then reports are signed as written).
 * `wf item show` lists the comments and reports of an item together in time order. Each report shows its
   agent, role and short session id, and the step text while the step exists.
 * A work package includes the reports of earlier sessions of the item.
@@ -842,8 +864,8 @@ struct Report {
 The daemon is an ACP client (protocol v1). Each **wf session** drives one harness subprocess in its own
 worktree. A device runs as many sessions as its `max_sessions` allows.
 
-Harnesses are detected on `PATH` and probed with ACP `initialize` (installed, authenticated). wf never
-handles harness credentials.
+Harnesses are detected on `PATH` by their ACP command; probing them with ACP `initialize` (installed,
+authenticated) is *later*. wf never handles harness credentials.
 
 | ACP | Use |
 |---|---|
@@ -853,7 +875,7 @@ handles harness credentials.
 | `session/update` | transcript capture (local, `wf session watch`), redaction (M3), presence |
 | `session/request_permission` | answered by the agent's `permissions`: allow, deny, or ask, held in `wf inbox` until `wf session allow\|deny` |
 | `terminal/*`, `fs/*` | not offered in M2, harnesses use their own tools; later run inside wf's environment with secret injection |
-| `session/cancel` | `wf session stop`, `max_duration`, claim or lease lost, or item reassigned |
+| `session/cancel` | `wf session stop`, `max_duration`, claim or lease lost, or item reassigned. Not when the agent ended its own session (`submit`, `release`, a verdict): it then gets 20 seconds to finish its turn, because the command it ran is still waiting for its answer |
 
 **Turn end.** When a prompt turn returns, the runner looks at the session and its item:
 
@@ -1022,17 +1044,17 @@ wf agent add|list|edit                    # profiles: harness, model, capabiliti
 wf session start|list|show|stop|watch     # live and recent sessions, transcripts
 wf session allow|deny <session>           # answer a held permission request
 wf work submit | ask <question> | release  # agents, inside a session
+wf work report "<text>" [--step <number> [--done]]
 wf daemon | sync | status | log | export
 wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
 wf item add|list|show|edit|move|link|archive|diff   # all types: task, question, decision, ...
 wf comment <item> <text>
-wf work report "<text>" [--step <number> [--done]]
 wf activity | inbox
 wf review <item> --approve|--request-changes|--escalate
 wf search <query>
 ```
-All commands support `--json`. Output is `{"schema": 1, "data": ...}`; the schema number is bumped on
+All commands support `--json`. Output is `{"schema": 2, "data": ...}`; the schema number is bumped on
 incompatible changes and the shapes are snapshot-tested. Item ids print as the first 6 characters of their
 base32 hash and any unique prefix of at least 4 characters is accepted, with or without `#`.
 Without `--json`, lists (`item list`, `agent list`, `log`, `mentions`) print as borderless tables
@@ -1070,5 +1092,7 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
    month, the main source of log growth. Liveness is computed against the clock at query time anyway, so
    a lease renewed over gossip plus a final `SessionEnded` might be enough. M2 needs neither: on one
    machine the daemon knows its sessions. Settle this before M3; it decides how urgent compaction is.
-5. With several principals (M5), should review steps be able to require a different principal than
+5. What should the default review level be? The bundled policy sets none, so submitted work merges
+   at once. A `human` level (one human step) as the default for `task` would make a person the gate.
+6. With several principals (M5), should review steps be able to require a different principal than
    the author (the former `distinct_principal`)?

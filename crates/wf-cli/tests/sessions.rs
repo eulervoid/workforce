@@ -962,3 +962,15 @@ async fn a_session_belongs_to_its_workforce_whatever_its_committed_workforce_fil
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_item_with_a_live_session_is_not_started_twice() {
+    let world = World::new("hang\n").await;
+    let item = world.wf.add(&["--title", "Busy"]);
+    start_session(&world, &item);
+    let message = world
+        .wf
+        .fail(&["session", "start", short(&item), "--agent", "coder"]);
+    assert!(message.contains("already has a live session"), "{message}");
+    assert_eq!(world.sessions().len(), 1);
+}
