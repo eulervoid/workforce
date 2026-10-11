@@ -1,7 +1,7 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
-use clap::{ArgGroup, Args, Parser, Subcommand, ValueEnum};
+use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use wf_core::autonomy::{Autonomy, PermissionMode, StartMode};
 use wf_core::graph::Readiness;
 use wf_core::item::Priority;
@@ -22,6 +22,55 @@ pub struct Cli {
 
     #[command(subcommand)]
     pub command: Command,
+}
+
+/// How the commands are grouped in `wf --help`. Clap lists subcommands in one flat block.
+const COMMAND_GROUPS: &[(&str, &[&str])] = &[
+    ("Items", &["item", "comment", "mentions", "review", "inbox"]),
+    ("Agents", &["agent", "session", "work"]),
+    (
+        "Workforce",
+        &["init", "status", "policy", "log", "members", "fork"],
+    ),
+    ("Machines", &["daemon", "sync", "invite", "join", "device"]),
+];
+
+/// The command line, with the commands of `wf --help` in groups.
+pub fn command() -> clap::Command {
+    let command = Cli::command();
+    let styles = command.get_styles().clone();
+    let heading = styles.get_header();
+    let literal = styles.get_literal();
+    let width = COMMAND_GROUPS
+        .iter()
+        .flat_map(|(_, names)| names.iter())
+        .map(|name| name.len())
+        .max()
+        .unwrap_or_default();
+    let mut template = format!("{{about}}\n\n{heading}Usage:{heading:#} {{usage}}\n");
+    for (group, names) in COMMAND_GROUPS {
+        template.push_str(&format!("\n{heading}{group}:{heading:#}\n"));
+        for name in *names {
+            let about = command
+                .find_subcommand(name)
+                .and_then(|subcommand| subcommand.get_about())
+                .map(|about| about.to_string())
+                .unwrap_or_default();
+            let about = about.lines().next().unwrap_or_default();
+            template.push_str(&format!("  {literal}{name:<width$}{literal:#}  {about}\n"));
+        }
+    }
+    template.push_str(&format!(
+        "\n{heading}Options:{heading:#}\n{{options}}{{after-help}}"
+    ));
+    command.help_template(template)
+}
+
+/// Parses the arguments of this process, and exits with help or an error as clap does.
+pub fn parse() -> Cli {
+    let mut matches = command().get_matches();
+    Cli::from_arg_matches_mut(&mut matches)
+        .unwrap_or_else(|error| error.format(&mut command()).exit())
 }
 
 #[derive(Subcommand)]
@@ -46,7 +95,7 @@ pub enum Command {
     Policy(PolicyCommand),
     /// Print every event of the log, verified.
     Log,
-    /// Run an agent harness on a prompt and follow its transcript.
+    /// Start agents on items, and watch, stop or answer their sessions.
     #[command(subcommand)]
     Session(SessionCommand),
     /// Commands for agents, run inside a session.
@@ -58,8 +107,7 @@ pub enum Command {
     Inbox,
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
-    /// Run the background process of this machine: it serves sync and join to your other
-    /// machines and keeps the workforce up to date.
+    /// Run the background process of this machine
     Daemon(DaemonArgs),
     /// Invite another machine of yours to the workforce.
     #[command(subcommand)]
@@ -605,4 +653,36 @@ pub enum PolicyCommand {
     Edit,
     /// Replace the policy with a file. Needs the principal key of an owner.
     Apply { file: PathBuf },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_command_is_in_exactly_one_help_group() {
+        let command = Cli::command();
+        let grouped: Vec<&str> = COMMAND_GROUPS
+            .iter()
+            .flat_map(|(_, names)| names.iter().copied())
+            .collect();
+        let mut missing: Vec<_> = command
+            .get_subcommands()
+            .map(|subcommand| subcommand.get_name())
+            .filter(|name| *name != "help" && !grouped.contains(name))
+            .collect();
+        missing.sort();
+        assert!(missing.is_empty(), "not in a help group: {missing:?}");
+        for name in &grouped {
+            assert!(
+                command.find_subcommand(name).is_some(),
+                "no command `{name}`"
+            );
+            assert_eq!(
+                grouped.iter().filter(|other| *other == name).count(),
+                1,
+                "`{name}` twice"
+            );
+        }
+    }
 }
