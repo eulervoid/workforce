@@ -284,6 +284,7 @@ impl VcsAdapter for GitCli {
     }
 
     fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError> {
+        self.succeed(["worktree", "prune"])?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
         }

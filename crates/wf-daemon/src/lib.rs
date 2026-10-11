@@ -143,6 +143,7 @@ pub struct Daemon {
     node: Arc<Node<StorageHandle>>,
     presence: Presence,
     runners: runner::Runners,
+    merging: runner::Merging,
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
     /// Stores that failed to open, so each is reported once.
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
@@ -157,6 +158,7 @@ impl Daemon {
             node,
             presence: Presence::default(),
             runners: runner::Runners::default(),
+            merging: runner::Merging::default(),
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
         });

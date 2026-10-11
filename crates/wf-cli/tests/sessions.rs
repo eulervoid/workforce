@@ -33,7 +33,8 @@ fn git(directory: &Path, args: &[&str]) -> String {
         .unwrap();
     assert!(
         output.status.success(),
-        "git {args:?}: {}",
+        "git {args:?}: {}{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
     String::from_utf8(output.stdout).unwrap().trim().to_string()
@@ -68,6 +69,7 @@ impl World {
             &wf.repository,
             &["config", "user.email", "test@example.com"],
         );
+        std::fs::write(wf.repository.join("file.txt"), "one\ntwo\nthree\n").unwrap();
         git(&wf.repository, &["add", "--all"]);
         git(&wf.repository, &["commit", "--quiet", "-m", "start"]);
         let mut scripts = BTreeMap::new();
@@ -361,6 +363,31 @@ wf work submit
             .unwrap()
             .ends_with("# edited by a person\n")
     );
+
+    git(
+        &world.wf.repository,
+        &["checkout", "--quiet", "--", ".workforce.toml"],
+    );
+    world
+        .wf
+        .run(&["comment", short(&item), "the checkout is clean again"]);
+    world
+        .wait("the waiting merge", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    assert!(world.wf.repository.join("hello.txt").is_file());
+    let waits = world.item(&item)["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|note| {
+            note["text"]
+                .as_str()
+                .is_some_and(|text| text.starts_with("Waiting to merge"))
+        })
+        .count();
+    assert_eq!(waits, 1, "waiting again does not say so again");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -609,4 +636,212 @@ async fn only_the_items_an_agent_would_be_given_are_listed_for_it() {
         .wf
         .fail(&["item", "list", "--ready", "--for", "ghost"]);
     assert!(message.contains("not an agent of yours"), "{message}");
+}
+
+/// A coder and a reviewer, both started by the dispatcher.
+async fn review_world(coder: &str, reviewer: &str) -> World {
+    let world = World::agents(&[("coder", coder), ("reviewer", reviewer)]).await;
+    world.automate("coder", "default");
+    world.wf.run(&[
+        "agent",
+        "edit",
+        "reviewer",
+        "--start",
+        "auto",
+        "--capability",
+        "review",
+        "--capability",
+        "strong-model",
+    ]);
+    world.wf.run(&[
+        "device",
+        "edit",
+        "--max-sessions",
+        "2",
+        "--agent",
+        "coder=1",
+        "--agent",
+        "reviewer=1",
+    ]);
+    world
+}
+
+fn statuses(world: &World) -> Vec<String> {
+    let mut sessions = world.sessions();
+    sessions.reverse();
+    sessions
+        .iter()
+        .map(|session| {
+            format!(
+                "{} {}",
+                session["agent"]
+                    .as_str()
+                    .unwrap()
+                    .rsplit('/')
+                    .next()
+                    .unwrap(),
+                session["status"].as_str().unwrap()
+            )
+        })
+        .collect()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn work_approved_by_a_reviewer_agent_is_merged() {
+    let world = review_world(
+        COMMIT_AND_SUBMIT,
+        "wf review --approve --note \"looks good\"\n",
+    )
+    .await;
+    let item = world.wf.add(&["--title", "Add hello", "--review", "light"]);
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    let shown = world.item(&item);
+    assert_eq!(shown["review_status"]["status"], "merged", "{shown}");
+    assert!(
+        shown["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|note| note["kind"] == "review" && note["text"] == "looks good")
+    );
+    assert_eq!(statuses(&world), ["coder submitted", "reviewer reviewed"]);
+
+    let repository = &world.wf.repository;
+    assert!(repository.join("hello.txt").is_file());
+    assert_eq!(git(repository, &["worktree", "list"]).lines().count(), 1);
+    assert!(git(repository, &["branch", "--list", "wf/*"]).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn requested_changes_lead_to_a_second_session_on_the_same_branch() {
+    let coder = "\
+sh if [ -f hello.txt ]; then echo test > test.txt && git add test.txt && git commit -q -m test; else echo hi > hello.txt && git add hello.txt && git commit -q -m hello; fi
+wf work submit
+";
+    let reviewer = "\
+sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" review --request-changes --note \"add a test\"; fi
+";
+    let world = review_world(coder, reviewer).await;
+    let item = world
+        .wf
+        .add(&["--title", "Add hello", "--review", "standard"]);
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    assert_eq!(
+        statuses(&world),
+        [
+            "coder submitted",
+            "reviewer reviewed",
+            "coder submitted",
+            "reviewer reviewed"
+        ]
+    );
+    let repository = &world.wf.repository;
+    assert!(repository.join("hello.txt").is_file() && repository.join("test.txt").is_file());
+
+    let mut sessions = world.sessions();
+    sessions.reverse();
+    let second_work = sessions
+        .iter()
+        .filter(|session| session["role"] == "work")
+        .nth(1)
+        .unwrap();
+    let transcript = world.wf.run(&[
+        "session",
+        "watch",
+        short(second_work["id"].as_str().unwrap()),
+        "--no-follow",
+    ]);
+    assert!(
+        transcript.contains("add a test"),
+        "the reviewer's note reaches the next session"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_critical_item_waits_for_a_person_after_the_agent_approves() {
+    let world = review_world(COMMIT_AND_SUBMIT, "wf review --approve\n").await;
+    let item = world
+        .wf
+        .add(&["--title", "Add hello", "--review", "critical"]);
+    world
+        .wait("the human step", |world| {
+            world.item(&item)["review_status"]["step"] == "human"
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(world.item(&item)["state"], "in_review");
+    assert!(!world.wf.repository.join("hello.txt").exists());
+
+    world
+        .wf
+        .run(&["review", short(&item), "--approve", "--note", "ship it"]);
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    assert!(world.wf.repository.join("hello.txt").is_file());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn an_escalated_review_goes_to_a_person() {
+    let world = review_world(
+        COMMIT_AND_SUBMIT,
+        "wf review --escalate --note \"unsure\"\n",
+    )
+    .await;
+    let item = world
+        .wf
+        .add(&["--title", "Add hello", "--review", "standard"]);
+    world
+        .wait("the human step", |world| {
+            world.item(&item)["review_status"]["step"] == "human"
+        })
+        .await;
+    world
+        .wf
+        .run(&["review", short(&item), "--request-changes", "--note", "no"]);
+    assert_eq!(world.item(&item)["state"], "open");
+    let message = world.wf.fail(&["review", short(&item), "--escalate"]);
+    assert!(message.contains("only an agent can escalate"), "{message}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn work_that_conflicts_with_the_target_goes_back_to_open() {
+    let script = "\
+sh while [ ! -f \"$XDG_DATA_HOME/go\" ]; do sleep 0.1; done
+sh echo branch > file.txt && git add file.txt && git commit -q -m branch
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Change the file"]);
+    start_session(&world, &item);
+    let repository = &world.wf.repository;
+    std::fs::write(repository.join("file.txt"), "main\n").unwrap();
+    git(repository, &["commit", "--quiet", "-am", "main moves on"]);
+    let main = git(repository, &["rev-parse", "main"]);
+    std::fs::write(world.wf.data.join("go"), "").unwrap();
+
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted");
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "open", "{shown}");
+    assert!(shown["notes"].as_array().unwrap().iter().any(|note| {
+        note["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("conflicts in file.txt"))
+    }));
+    assert_eq!(git(repository, &["rev-parse", "main"]), main);
+    assert_eq!(
+        std::fs::read_to_string(repository.join("file.txt")).unwrap(),
+        "main\n"
+    );
 }

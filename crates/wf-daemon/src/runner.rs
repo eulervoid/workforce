@@ -18,7 +18,9 @@ use wf_core::lifecycle::{AfterEnd, TurnOutcome};
 use wf_core::name::{AgentName, HarnessName, StateName};
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
-use wf_harness::{AcpAgentConfig, Conversation, Launch, PermissionMode, WorkPackage};
+use wf_harness::{
+    AcpAgentConfig, Conversation, Launch, PermissionMode, ReviewPackage, WorkPackage,
+};
 use wf_store::AuthorError;
 use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name};
 
@@ -93,11 +95,66 @@ impl Runners {
     }
 }
 
+/// Whether a merge is the first try of a piece of work, or one more try of work that waited.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Attempt {
+    First,
+    /// Waiting again is not worth another comment.
+    Retry,
+}
+
+/// Reviewed work to merge into the target branch, and what to do with its item afterwards.
+pub(crate) struct MergeRequest {
+    item: ItemId,
+    /// The reviewed commit.
+    commit: CommitId,
+    /// Where the item goes once merged.
+    done: StateName,
+    /// Goes with that move.
+    note: Option<String>,
+    attempt: Attempt,
+}
+
+/// The items being merged right now, so that one merge is made once.
+#[derive(Default)]
+pub(crate) struct Merging {
+    items: Mutex<std::collections::BTreeSet<ItemId>>,
+}
+
+pub(crate) struct MergeGuard<'a> {
+    merging: &'a Merging,
+    item: ItemId,
+}
+
+impl Merging {
+    fn start(&self, item: ItemId) -> Option<MergeGuard<'_>> {
+        let mut items = self
+            .items
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        items.insert(item).then_some(MergeGuard {
+            merging: self,
+            item,
+        })
+    }
+}
+
+impl Drop for MergeGuard<'_> {
+    fn drop(&mut self) {
+        self.merging
+            .items
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .remove(&self.item);
+    }
+}
+
 /// What a session is, to run it.
 struct Run {
     workforce: WorkforceId,
     session: SessionId,
     item: ItemId,
+    role: SessionRole,
     agent: AgentName,
     harness: AcpAgentConfig,
     worktree: PathBuf,
@@ -191,6 +248,54 @@ impl Daemon {
         item: ItemId,
         repository: PathBuf,
     ) -> Result<SessionId, SessionError> {
+        self.begin_session(
+            workforce,
+            loaded,
+            agent,
+            item,
+            SessionRole::Work,
+            repository,
+        )
+        .await
+    }
+
+    /// Starts a review session of `agent` on `commit` of `item`, in a detached checkout of it.
+    pub(crate) async fn start_review(
+        self: &Arc<Self>,
+        workforce: WorkforceId,
+        loaded: &Arc<Loaded>,
+        agent: AgentName,
+        item: ItemId,
+        commit: CommitId,
+        repository: PathBuf,
+    ) -> Result<SessionId, SessionError> {
+        self.begin_session(
+            workforce,
+            loaded,
+            agent,
+            item,
+            SessionRole::Review { commit },
+            repository,
+        )
+        .await
+    }
+
+    /// Where a review session looks at a commit of an item.
+    fn review_worktree(&self, workforce: WorkforceId, item: ItemId, commit: CommitId) -> PathBuf {
+        self.workforce_directory(workforce)
+            .join("worktrees")
+            .join(format!("{}-{}", item_name(item), &commit.to_string()[..8]))
+    }
+
+    async fn begin_session(
+        self: &Arc<Self>,
+        workforce: WorkforceId,
+        loaded: &Arc<Loaded>,
+        agent: AgentName,
+        item: ItemId,
+        role: SessionRole,
+        repository: PathBuf,
+    ) -> Result<SessionId, SessionError> {
         let state = self.snapshot(loaded).await?;
         let principal = self.principal_of_device(&state)?;
         let definition = state
@@ -212,18 +317,35 @@ impl Daemon {
             .target
             .clone();
         let branch = item_branch(item);
-        let worktree = self
-            .workforce_directory(workforce)
-            .join("worktrees")
-            .join(item_name(item));
-        let repository = {
-            let (branch, worktree, target) = (branch.clone(), worktree.clone(), target.clone());
-            blocking(move || {
-                let git = GitCli::open(&repository)?;
-                git.prepare_worktree(&branch, &worktree, &target)?;
-                Ok::<_, VcsError>(git.repository().to_path_buf())
-            })
-            .await??
+        let (worktree, repository) = match role {
+            SessionRole::Work => {
+                let worktree = self
+                    .workforce_directory(workforce)
+                    .join("worktrees")
+                    .join(item_name(item));
+                let (branch, path, target) = (branch.clone(), worktree.clone(), target.clone());
+                let repository = blocking(move || {
+                    let git = GitCli::open(&repository)?;
+                    git.prepare_worktree(&branch, &path, &target)?;
+                    Ok::<_, VcsError>(git.repository().to_path_buf())
+                })
+                .await??;
+                (worktree, repository)
+            }
+            SessionRole::Review { commit } => {
+                let worktree = self.review_worktree(workforce, item, commit);
+                let path = worktree.clone();
+                let repository = blocking(move || {
+                    let git = GitCli::open(&repository)?;
+                    // A look at the same commit by an earlier review may have left its checkout.
+                    let _ = git.remove_worktree(&path);
+                    let _ = std::fs::remove_dir_all(&path);
+                    git.detached_worktree(&path, commit)?;
+                    Ok::<_, VcsError>(git.repository().to_path_buf())
+                })
+                .await??;
+                (worktree, repository)
+            }
         };
         self.remember_repository(workforce, &repository)?;
 
@@ -234,7 +356,7 @@ impl Daemon {
                 EventBody::SessionStarted(SessionStarted {
                     agent: agent.clone(),
                     item,
-                    role: SessionRole::Work,
+                    role,
                 }),
             )
             .await?;
@@ -254,6 +376,7 @@ impl Daemon {
             workforce,
             session,
             item,
+            role,
             agent,
             harness,
             worktree,
@@ -321,6 +444,7 @@ impl Daemon {
         }
         let principal = self.principal_of_device(&state)?;
         let item = folded.item();
+        let role = folded.role();
         let by_agent = Actor::Agent {
             agent: folded.agent().clone(),
             session,
@@ -337,6 +461,7 @@ impl Daemon {
                 )
             }
             Finish::Release { note } => (EndReason::Released, by_agent.clone(), note.clone()),
+            Finish::Reviewed => (EndReason::Reviewed, by_agent.clone(), None),
             Finish::Stop => (EndReason::Cancelled, by_device.clone(), None),
             Finish::Blocked => (EndReason::Blocked, by_device.clone(), None),
             Finish::TimedOut => (EndReason::TimedOut, by_device.clone(), None),
@@ -361,27 +486,16 @@ impl Daemon {
             )
             .await?;
         }
-        self.author(
-            loaded,
-            actor,
-            EventBody::SessionEnded(SessionEnded { session, reason }),
-        )
-        .await?;
-        self.runners.stop(session);
-
-        let state = self.snapshot(loaded).await?;
+        // The item moves while the session still holds it, so that it is never ready in between.
         let transition_note = match reason {
             EndReason::Submitted { .. } => note,
             _ => None,
         };
-        if matches!(reason, EndReason::Submitted { commit: None }) {
-            self.discard_branch(workforce, item).await;
-        }
-        match state.after_end(session) {
-            None | Some(AfterEnd::Nothing) => {}
+        let effect = match state.after_end(session, reason) {
+            None | Some(AfterEnd::Nothing) => Ok(()),
             Some(AfterEnd::MoveTo(to)) => {
                 self.move_item(loaded, principal, item, to, transition_note)
-                    .await?;
+                    .await
             }
             Some(AfterEnd::MergeThen { done }) => {
                 let EndReason::Submitted {
@@ -390,11 +504,56 @@ impl Daemon {
                 else {
                     unreachable!("only submitted work with commits is merged");
                 };
-                self.merge_item(workforce, loaded, item, commit, done, transition_note)
-                    .await?;
+                self.merge_item(
+                    workforce,
+                    loaded,
+                    MergeRequest {
+                        item,
+                        commit,
+                        done,
+                        note: transition_note,
+                        attempt: Attempt::First,
+                    },
+                )
+                .await
             }
+        };
+        self.author(
+            loaded,
+            actor,
+            EventBody::SessionEnded(SessionEnded { session, reason }),
+        )
+        .await?;
+        self.runners.stop(session);
+        if let SessionRole::Review { commit } = role {
+            self.discard_review_worktree(workforce, item, commit).await;
         }
+        if matches!(reason, EndReason::Submitted { commit: None }) {
+            self.discard_branch(workforce, item).await;
+        }
+        effect?;
         Ok(())
+    }
+
+    /// Removes the checkout a review session looked at.
+    async fn discard_review_worktree(
+        &self,
+        workforce: WorkforceId,
+        item: ItemId,
+        commit: CommitId,
+    ) {
+        let Some(repository) = self.repository_of(workforce) else {
+            return;
+        };
+        let worktree = self.review_worktree(workforce, item, commit);
+        let removed = blocking(move || GitCli::open(&repository)?.remove_worktree(&worktree)).await;
+        if let Ok(Err(error)) = removed {
+            eprintln!(
+                "could not remove the checkout of the review of #{}: {}",
+                item.short(),
+                wf_core::report::report(&error)
+            );
+        }
     }
 
     /// Removes the worktree and the branch of an item whose work left nothing to keep.
@@ -465,12 +624,25 @@ impl Daemon {
         &self,
         workforce: WorkforceId,
         loaded: &Loaded,
-        item: ItemId,
-        commit: CommitId,
-        done: StateName,
-        note: Option<String>,
+        request: MergeRequest,
     ) -> Result<(), SessionError> {
+        let MergeRequest {
+            item,
+            commit,
+            done,
+            note,
+            attempt,
+        } = request;
+        let Some(_merging) = self.merging.start(item) else {
+            return Ok(());
+        };
         let state = self.snapshot(loaded).await?;
+        if matches!(
+            state.review_status(item),
+            Some(wf_core::review::ReviewStatus::Merged { .. })
+        ) {
+            return Ok(());
+        }
         let principal = self.principal_of_device(&state)?;
         let Some(repository) = self.repository_of(workforce) else {
             return Ok(());
@@ -550,6 +722,8 @@ impl Daemon {
                     self.move_item(loaded, principal, item, open, None).await?;
                 }
             }
+            MergeOutcome::DirtyCheckout { .. } | MergeOutcome::TargetMoved
+                if attempt == Attempt::Retry => {}
             MergeOutcome::DirtyCheckout { worktree } => {
                 comment(format!(
                     "Waiting to merge: {target} is checked out in {} with changes.",
@@ -695,7 +869,10 @@ async fn turns(
     let Ok(state) = daemon.snapshot(loaded).await else {
         return End::Finish(Finish::Failed);
     };
-    let mut prompt = work_package(daemon, loaded, run, &state).await;
+    let mut prompt = match run.role {
+        SessionRole::Work => work_package(daemon, loaded, run, &state).await,
+        SessionRole::Review { commit } => review_package(loaded, run, &state, commit).await,
+    };
     let cancel = conversation.cancel();
     let deadline = run.max_duration.map(|duration| Instant::now() + duration);
     let mut last_head = branch_head(run).await;
@@ -864,6 +1041,55 @@ async fn work_package(
     .render()
 }
 
+async fn review_package(
+    loaded: &Arc<Loaded>,
+    run: &Run,
+    state: &State,
+    commit: CommitId,
+) -> String {
+    let Some(ItemView::Live(item)) = state.item(run.item) else {
+        return String::new();
+    };
+    let step = match state.review_status(run.item) {
+        Some(wf_core::review::ReviewStatus::Awaiting {
+            step: wf_core::policy::ReviewStep::Agent { requires },
+        }) => format!(
+            "the review by an agent with {}",
+            requires
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Some(
+            wf_core::review::ReviewStatus::Awaiting {
+                step: wf_core::policy::ReviewStep::Human,
+            }
+            | wf_core::review::ReviewStatus::ChangesRequested
+            | wf_core::review::ReviewStatus::Approved { .. }
+            | wf_core::review::ReviewStatus::Merged { .. },
+        )
+        | None => "a review".to_string(),
+    };
+    let (repository, target) = (run.repository.clone(), run.target.clone());
+    let diff = blocking(move || GitCli::open(&repository)?.diff(&target, commit))
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
+    ReviewPackage {
+        item: HashId::short(&run.item),
+        title: item.title().to_string(),
+        body: item.body().render_numbered(),
+        commit: commit.to_string(),
+        target: run.target.clone(),
+        step,
+        earlier: earlier_notes(loaded, item).await,
+        diff,
+    }
+    .render()
+}
+
 /// What to say when a parked session can go on.
 async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: &State) -> String {
     let mut text = String::from("What you were waiting for is done.");
@@ -908,6 +1134,7 @@ async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_ha
             let text = match &event?.content.body {
                 EventBody::Comment(comment) => comment.body.clone(),
                 EventBody::Report(report) => report.note.clone(),
+                EventBody::Review(review) => review.note.clone()?,
                 EventBody::ItemTransitioned(transition) => transition.note.clone()?,
                 _ => return None,
             };
@@ -976,8 +1203,9 @@ pub(crate) async fn run_dispatcher(
     }
 }
 
-/// Gives every hosted auto agent with a free slot the first item it may take. An item that could
-/// not be started is not tried again by this daemon.
+/// Merges what is ready, then gives every hosted auto agent with a free slot a review first and
+/// otherwise the first item it may take. Whatever could not be started is not tried again by
+/// this daemon.
 async fn dispatch_once(
     daemon: &Arc<Daemon>,
     workforce: WorkforceId,
@@ -991,6 +1219,44 @@ async fn dispatch_once(
     let Ok(mut state) = daemon.snapshot(loaded).await else {
         return;
     };
+    for (item, commit) in state.pending_merges() {
+        let Some(done) = state.item(item).and_then(|view| match view {
+            ItemView::Live(live) => state
+                .policy()?
+                .policy
+                .type_config(live.item_type())?
+                .first_state(wf_core::policy::StateCategory::Done)
+                .cloned(),
+            ItemView::Archived(_) => None,
+        }) else {
+            continue;
+        };
+        if let Err(error) = daemon
+            .merge_item(
+                workforce,
+                loaded,
+                MergeRequest {
+                    item,
+                    commit,
+                    done,
+                    note: None,
+                    attempt: Attempt::Retry,
+                },
+            )
+            .await
+        {
+            eprintln!(
+                "could not merge #{}: {}",
+                item.short(),
+                wf_core::report::report(&error)
+            );
+        }
+    }
+    let Ok(fresh) = daemon.snapshot(loaded).await else {
+        return;
+    };
+    state = fresh;
+
     let agents: Vec<_> = state
         .auto_agents(device)
         .into_iter()
@@ -998,24 +1264,48 @@ async fn dispatch_once(
         .collect();
     for agent in agents {
         while state.has_free_slot(device, &agent) {
-            let Some(item) = state
-                .dispatchable(device, &agent)
+            let review = state
+                .reviewable(&agent)
                 .into_iter()
-                .map(|item| item.id())
-                .find(|item| !failed.contains(&(*item, agent.name.clone())))
-            else {
-                break;
-            };
-            if let Err(error) = daemon
-                .start_session(
-                    workforce,
-                    loaded,
-                    agent.name.clone(),
+                .find(|(item, _)| !failed.contains(&(*item, agent.name.clone())));
+            let started = match review {
+                Some((item, commit)) => (
                     item,
-                    repository.clone(),
-                )
-                .await
-            {
+                    daemon
+                        .start_review(
+                            workforce,
+                            loaded,
+                            agent.name.clone(),
+                            item,
+                            commit,
+                            repository.clone(),
+                        )
+                        .await,
+                ),
+                None => {
+                    let Some(item) = state
+                        .dispatchable(device, &agent)
+                        .into_iter()
+                        .map(|item| item.id())
+                        .find(|item| !failed.contains(&(*item, agent.name.clone())))
+                    else {
+                        break;
+                    };
+                    (
+                        item,
+                        daemon
+                            .start_session(
+                                workforce,
+                                loaded,
+                                agent.name.clone(),
+                                item,
+                                repository.clone(),
+                            )
+                            .await,
+                    )
+                }
+            };
+            if let (item, Err(error)) = started {
                 failed.insert((item, agent.name.clone()));
                 eprintln!(
                     "could not start {} on #{}: {}",

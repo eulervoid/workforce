@@ -16,6 +16,7 @@ use wf_core::name::{AgentName, Handle, HarnessName, LaneName, StateName};
 use wf_core::policy::Field;
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
+use wf_core::session::{SessionRole, Verdict};
 use wf_core::state::{State, Trust};
 use wf_daemon::proto::Finish;
 use wf_store::{RedbStore, Replica};
@@ -109,6 +110,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                     crate::session::session(json, command, &mut workspace, cwd)
                 }
                 Command::Work(command) => work(json, command, &mut workspace),
+                Command::Review(args) => review(json, mode, &mut workspace, args),
                 Command::Agent(command) => agent(json, command, &mut workspace),
                 Command::Item(command) => item(json, mode, command, &mut workspace),
                 Command::Comment(args) => comment(json, mode, &mut workspace, args),
@@ -564,6 +566,10 @@ fn item(
             )
         }
         ItemCommand::Link(args) => link(json, mode, workspace, args),
+        ItemCommand::Diff { item } => {
+            let id = choose_item(workspace, mode, item, Scope::Live)?;
+            diff(json, mode, workspace, id)
+        }
         ItemCommand::Archive { item } => {
             let id = choose_item(workspace, mode, item, Scope::Live)?;
             let event = workspace.author(EventBody::ItemArchived(ItemRef { item: id }))?;
@@ -864,6 +870,115 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
             Finish::Release { note },
             "released",
         ),
+    }
+}
+
+fn review(
+    json: bool,
+    mode: Mode,
+    workspace: &mut Workspace,
+    args: ReviewArgs,
+) -> anyhow::Result<()> {
+    let own_session = workspace.session().and_then(|id| {
+        workspace
+            .state()
+            .session(id)
+            .map(|session| (id, session.item(), session.role()))
+    });
+    let item = match (&args.item, own_session) {
+        (Some(text), _) => workspace.resolve_item(text)?,
+        (None, Some((_, item, _))) => item,
+        (None, None) => choose_item(workspace, mode, None, Scope::Live)?,
+    };
+    let commit = match own_session {
+        Some((_, own, SessionRole::Review { commit })) if own == item => commit,
+        Some(_) | None => {
+            workspace
+                .state()
+                .submitted_commit(item)
+                .ok_or_else(|| anyhow!("#{} has no submitted work to review", item.short()))?
+                .0
+        }
+    };
+    let verdict = if args.approve {
+        Verdict::Approve
+    } else if args.request_changes {
+        Verdict::RequestChanges
+    } else {
+        Verdict::Escalate
+    };
+    let event = workspace.author(EventBody::Review(wf_core::event::Review {
+        item,
+        commit,
+        verdict,
+        note: args.note,
+    }))?;
+    if verdict == Verdict::RequestChanges {
+        let open = {
+            let state = workspace.state();
+            let policy = &state.policy().expect("a workforce has a policy").policy;
+            let ItemView::Live(live) = state.item(item).expect("resolved ids exist") else {
+                bail!("#{} is archived", item.short());
+            };
+            policy
+                .type_config(live.item_type())
+                .and_then(|config| config.first_state(wf_core::policy::StateCategory::Open))
+                .cloned()
+        };
+        if let Some(open) = open {
+            workspace.author(EventBody::ItemTransitioned(ItemTransitioned {
+                item,
+                to: open,
+                note: None,
+            }))?;
+        }
+    }
+    if let Some((session, _, SessionRole::Review { .. })) = own_session {
+        workspace.end_session(session, Finish::Reviewed)?;
+    }
+    let message = match verdict {
+        Verdict::Approve => format!("approved #{}", item.short()),
+        Verdict::RequestChanges => format!("requested changes on #{}", item.short()),
+        Verdict::Escalate => format!("escalated #{} to a person", item.short()),
+    };
+    done(json, message, &event, Some(item))
+}
+
+#[derive(Serialize)]
+struct DiffView {
+    item: String,
+    commit: String,
+    diff: String,
+}
+
+fn diff(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Result<()> {
+    let cwd = std::env::current_dir()?;
+    let (file, _) = workspace::find_workforce(&cwd)?;
+    let repository = file
+        .parent()
+        .ok_or_else(|| anyhow!("the workforce file has no directory"))?;
+    let target = workspace
+        .state()
+        .policy()
+        .expect("a workforce has a policy")
+        .policy
+        .merge
+        .target
+        .clone();
+    let git = wf_vcs::GitCli::open(repository)?;
+    let commit = match workspace.state().submitted_commit(id) {
+        Some((commit, _)) => commit,
+        None => wf_vcs::VcsAdapter::branch_head(&git, &wf_vcs::item_branch(id))?,
+    };
+    let diff = wf_vcs::VcsAdapter::diff(&git, &target, commit)?;
+    let view = DiffView {
+        item: id.to_base32(),
+        commit: commit.to_string(),
+        diff,
+    };
+    match mode {
+        Mode::Interactive => interactive::page(&view.diff),
+        Mode::Scripted => emit(json, &view, |view| view.diff.clone()),
     }
 }
 

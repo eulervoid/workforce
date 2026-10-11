@@ -91,6 +91,77 @@ impl WorkPackage {
     }
 }
 
+/// The diff is part of the prompt up to this many bytes; beyond that the reviewer reads it itself.
+pub const MAX_DIFF_LEN: usize = 60_000;
+
+/// The prompt that starts a review session.
+pub struct ReviewPackage {
+    /// The short id of the item.
+    pub item: String,
+    pub title: String,
+    pub body: String,
+    pub commit: String,
+    pub target: String,
+    /// Which step of the review level this is, in words.
+    pub step: String,
+    pub earlier: Vec<Earlier>,
+    pub diff: String,
+}
+
+impl ReviewPackage {
+    pub fn render(&self) -> String {
+        let mut text = format!(
+            "You are reviewing the work on item #{item}: {title}\n\n",
+            item = self.item,
+            title = self.title
+        );
+        if !self.body.trim().is_empty() {
+            let _ = writeln!(text, "{}\n", self.body.trim());
+        }
+        let _ = write!(
+            text,
+            "## The work\n\n\
+             Commit `{commit}` is checked out here. It is meant to go into `{target}`. \
+             This is {step}.\n\n",
+            commit = self.commit,
+            target = self.target,
+            step = self.step,
+        );
+        if self.diff.len() <= MAX_DIFF_LEN {
+            let _ = writeln!(text, "```diff\n{}\n```\n", self.diff.trim_end());
+        } else {
+            let _ = writeln!(
+                text,
+                "The diff is too large to show here; run `git diff {}...HEAD`.\n",
+                self.target
+            );
+        }
+        if !self.earlier.is_empty() {
+            text.push_str("## What was said before\n\n");
+            for earlier in &self.earlier {
+                let _ = writeln!(
+                    text,
+                    "- {} ({}): {}",
+                    earlier.by,
+                    earlier.kind,
+                    earlier.text.trim()
+                );
+            }
+            text.push('\n');
+        }
+        text.push_str(
+            "## How to review\n\n\
+             Read the change, and run the tests if the repository has them. Do not change the code. \
+             Then give exactly one verdict:\n\
+             - `wf review --approve --note \"...\"` if the work is good as it is.\n\
+             - `wf review --request-changes --note \"...\"` if it needs changes: the item goes back for \
+             another session, which reads your note, so say what to change.\n\
+             - `wf review --escalate --note \"...\"` if a person has to decide.\n",
+        );
+        text
+    }
+}
+
 /// The prompt that goes out when a turn ended and the session is still going.
 pub const CONTINUE: &str = "Continue. When you are done run `wf work submit`; if you need an answer run `wf work ask`; \
      if you are stuck run `wf work release`.";
@@ -134,6 +205,32 @@ mod tests {
         ] {
             assert!(text.contains(command), "{command}");
         }
+    }
+
+    #[test]
+    fn the_review_package_has_the_diff_and_the_verdicts() {
+        let package = ReviewPackage {
+            item: "k3f9ab".into(),
+            title: "Parse durations".into(),
+            body: String::new(),
+            commit: "abc123".into(),
+            target: "main".into(),
+            step: "step 1 of 2".into(),
+            earlier: vec![],
+            diff: "+added".into(),
+        };
+        let text = package.render();
+        assert!(text.contains("```diff\n+added\n```"));
+        assert!(text.contains("Commit `abc123`") && text.contains("step 1 of 2"));
+        for command in ["--approve", "--request-changes", "--escalate"] {
+            assert!(text.contains(command), "{command}");
+        }
+        let large = ReviewPackage {
+            diff: "x".repeat(MAX_DIFF_LEN + 1),
+            ..package
+        };
+        let text = large.render();
+        assert!(!text.contains("```diff") && text.contains("git diff main...HEAD"));
     }
 
     #[test]

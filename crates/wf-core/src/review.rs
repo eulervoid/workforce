@@ -121,7 +121,7 @@ impl State {
     }
 
     /// Items waiting for a review step that `agent` could take: the step names capabilities the
-    /// agent has, the agent never worked on the item, and no review session holds the step.
+    /// agent has, the agent never did the work on the item, and no review session holds the step.
     pub fn reviewable(&self, agent: &AgentId) -> Vec<(ItemId, CommitId)> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
@@ -142,14 +142,16 @@ impl State {
                     return None;
                 };
                 let capable = requires.iter().all(|need| offered.contains(need));
-                let involved = self
-                    .sessions()
-                    .any(|session| session.item() == item.id() && session.agent() == agent);
+                let did_the_work = self.sessions().any(|session| {
+                    session.item() == item.id()
+                        && session.agent() == agent
+                        && session.role() == SessionRole::Work
+                });
                 let held = self.live_sessions().any(|session| {
                     session.item() == item.id()
                         && matches!(session.role(), SessionRole::Review { .. })
                 });
-                (capable && !involved && !held).then_some((item, commit))
+                (capable && !did_the_work && !held).then_some((item, commit))
             })
             .collect();
         found.sort_by_key(|(item, _)| (item.created(), item.id()));

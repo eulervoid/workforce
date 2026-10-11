@@ -52,6 +52,8 @@ pub enum Command {
     /// Commands for agents, run inside a session.
     #[command(subcommand)]
     Work(WorkCommand),
+    /// Give a verdict on the submitted work of an item.
+    Review(ReviewArgs),
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
     /// Run the background process of this machine: it serves sync and join to your other
@@ -81,6 +83,25 @@ pub enum Command {
         #[arg(long)]
         refold: bool,
     },
+}
+
+#[derive(Args)]
+#[command(group(ArgGroup::new("verdict").required(true).args(["approve", "request_changes", "escalate"])))]
+pub struct ReviewArgs {
+    /// Defaults to the item of your review session.
+    pub item: Option<String>,
+    /// The work is good as it is.
+    #[arg(long)]
+    pub approve: bool,
+    /// The work needs changes. The item goes back to open for the next session.
+    #[arg(long)]
+    pub request_changes: bool,
+    /// A person has to decide. Only for agents.
+    #[arg(long)]
+    pub escalate: bool,
+    /// Why, for whoever works on it next or decides after you.
+    #[arg(long)]
+    pub note: Option<String>,
 }
 
 #[derive(Subcommand)]
@@ -377,6 +398,10 @@ pub enum ItemCommand {
         note: Option<String>,
     },
     Link(ItemLinkArgs),
+    /// Show what the work of an item changes in the repository, as a review sees it.
+    Diff {
+        item: Option<String>,
+    },
     Archive {
         item: Option<String>,
     },

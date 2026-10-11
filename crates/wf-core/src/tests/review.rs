@@ -218,10 +218,19 @@ fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
         "the author never reviews"
     );
 
-    scene.apply(start_review("reviewer", item, commit(1)));
+    let held: SessionId = scene
+        .apply(start_review("reviewer", item, commit(1)))
+        .id()
+        .into();
     assert!(
         offered(&scene, "reviewer").is_empty(),
         "a review session holds the step"
+    );
+    scene.apply(end_session(held, EndReason::Reviewed));
+    assert_eq!(
+        offered(&scene, "reviewer"),
+        [(item, commit(1))],
+        "after changes a reviewer looks again"
     );
 }
 

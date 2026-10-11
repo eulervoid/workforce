@@ -297,6 +297,17 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             format!("requires={}", detail.requires.join(",")),
         ));
     }
+    if let Some(review) = &detail.review_status {
+        let text = match (review.status.as_str(), &review.step, &review.commit) {
+            ("awaiting", Some(step), _) => format!("review: awaiting {step}"),
+            ("changes_requested", _, _) => "review: changes requested".to_string(),
+            (status, _, Some(commit)) => {
+                format!("review: {status} {}", &commit[..commit.len().min(8)])
+            }
+            (status, _, None) => format!("review: {status}"),
+        };
+        status.push(text);
+    }
     if !summary.blocked_by.is_empty() {
         let ids: Vec<String> = summary
             .blocked_by

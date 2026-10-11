@@ -4607,6 +4607,7 @@ dependencies = [
  "wf-harness",
  "wf-net",
  "wf-store",
+ "wf-vcs",
 ]
 
 [[package]]

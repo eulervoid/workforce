@@ -45,11 +45,11 @@ impl State {
         Some((session.item(), active))
     }
 
-    /// What happens to the item of `session`, which has ended. `None` for a session that is still
-    /// live, or that does not exist.
-    pub fn after_end(&self, session: SessionId) -> Option<AfterEnd> {
+    /// What happens to the item of `session` when it ends for `reason`. The daemon does it before
+    /// it writes the end, while the session still holds the item, so the item is never ready in
+    /// between. `None` for a session that does not exist.
+    pub fn after_end(&self, session: SessionId, reason: EndReason) -> Option<AfterEnd> {
         let session = self.session(session)?;
-        let reason = session.ended()?.reason;
         if session.role() != SessionRole::Work {
             return Some(AfterEnd::Nothing);
         }
@@ -70,8 +70,12 @@ impl State {
             | EndReason::TimedOut
             | EndReason::Failed
             | EndReason::Cancelled => {
-                if self.claim(item).is_some() {
-                    // Another session works the item now, so it is not open again.
+                let held_by_another = self
+                    .claim(item)
+                    .is_some_and(|holder| holder.id() != session.id());
+                // Only an item that is being worked on goes back: one that was moved on, to done
+                // or to a question, stays where it is.
+                if held_by_another || self.category_of(item) != Some(StateCategory::Active) {
                     AfterEnd::Nothing
                 } else {
                     move_to(first(StateCategory::Open))

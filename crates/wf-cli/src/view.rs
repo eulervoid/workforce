@@ -12,8 +12,9 @@ use wf_core::hlc::Hlc;
 use wf_core::id::{EventId, HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::item::{Item, ItemView, NoteKind, Origin, Standing};
-use wf_core::policy::{Field, StateCategory};
+use wf_core::policy::{Field, ReviewStep, StateCategory};
 use wf_core::resolve::MentionTarget;
+use wf_core::review::ReviewStatus;
 use wf_core::session::{EndReason, Session, SessionRole};
 use wf_core::state::State;
 
@@ -486,6 +487,8 @@ pub struct ItemDetail {
     pub lane: Option<String>,
     /// The review level the item needs: its own, or its type's default.
     pub review: Option<String>,
+    /// Where the review of the submitted work stands.
+    pub review_status: Option<ReviewStatusView>,
     pub labels: Vec<String>,
     pub requires: Vec<String>,
     pub depends_on: Vec<LinkView>,
@@ -496,6 +499,50 @@ pub struct ItemDetail {
     pub mentions: Vec<String>,
     pub notes: Vec<NoteView>,
     pub flags: Vec<String>,
+}
+
+#[derive(Serialize)]
+pub struct ReviewStatusView {
+    /// `awaiting`, `changes_requested`, `approved` or `merged`.
+    pub status: String,
+    /// What the awaited step is: `human`, or `agent: review, strong-model`.
+    pub step: Option<String>,
+    pub commit: Option<String>,
+}
+
+fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
+    match status {
+        ReviewStatus::Awaiting { step } => ReviewStatusView {
+            status: "awaiting".into(),
+            step: Some(match step {
+                ReviewStep::Human => "human".to_string(),
+                ReviewStep::Agent { requires } => format!(
+                    "agent: {}",
+                    requires
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+            }),
+            commit: None,
+        },
+        ReviewStatus::ChangesRequested => ReviewStatusView {
+            status: "changes_requested".into(),
+            step: None,
+            commit: None,
+        },
+        ReviewStatus::Approved { commit } => ReviewStatusView {
+            status: "approved".into(),
+            step: None,
+            commit: Some(commit.to_string()),
+        },
+        ReviewStatus::Merged { commit } => ReviewStatusView {
+            status: "merged".into(),
+            step: None,
+            commit: Some(commit.to_string()),
+        },
+    }
 }
 
 /// Text of a comment or transition note, read from the event that carries it.
@@ -525,6 +572,7 @@ pub fn note_text(event: &Event) -> Option<String> {
         EventBody::Comment(comment) => Some(comment.body.clone()),
         EventBody::ItemTransitioned(transition) => transition.note.clone(),
         EventBody::Report(report) => Some(report.note.clone()),
+        EventBody::Review(review) => review.note.clone(),
         _ => None,
     }
 }
@@ -588,7 +636,7 @@ pub fn item_detail(
                     state.session(session).map(session_label),
                     step.map(|step| step_ref(&item.body(), step)),
                 ),
-                NoteKind::Comment | NoteKind::Transition => (None, None),
+                NoteKind::Comment | NoteKind::Transition | NoteKind::Review { .. } => (None, None),
             };
             NoteView {
                 id: id.to_string(),
@@ -612,6 +660,7 @@ pub fn item_detail(
         updated: timestamp(item.updated()),
         lane: item.effective_lane(policy).map(ToString::to_string),
         review: item.effective_review(policy).map(ToString::to_string),
+        review_status: state.review_status(item.id()).map(review_status_view),
         labels: item.labels().values().map(ToString::to_string).collect(),
         requires: item.requires().values().map(ToString::to_string).collect(),
         depends_on,

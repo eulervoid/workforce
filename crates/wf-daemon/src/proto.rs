@@ -107,6 +107,8 @@ pub enum Finish {
     Submit { note: Option<String> },
     /// The agent gives up. By the agent.
     Release { note: Option<String> },
+    /// A review session has given its verdict. By the agent.
+    Reviewed,
     /// A person stops it.
     Stop,
     /// The item entered a blocked state while the agent worked.

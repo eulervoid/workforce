@@ -69,59 +69,80 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     let task = scene.item(create("task", "work"));
     let reviewed = scene.item(create_reviewed("task", "careful", "standard"));
     let question = scene.item(create("question", "why"));
-    let after = |scene: &Scene, session| scene.state.after_end(session).unwrap();
     let submitted = EndReason::Submitted {
         commit: Some(commit()),
     };
+    let after = |scene: &Scene, session, reason| scene.state.after_end(session, reason).unwrap();
 
     let session = scene.start(task);
-    assert_eq!(scene.state.after_end(session), None, "still live");
-    scene.end(session, submitted);
+    scene.apply(transition(task, "in_progress"));
     assert_eq!(
-        after(&scene, session),
+        after(&scene, session, submitted),
         AfterEnd::MergeThen {
             done: state_name("done")
         }
     );
+    scene.end(session, submitted);
 
     let session = scene.start(reviewed);
-    scene.end(session, submitted);
     assert_eq!(
-        after(&scene, session),
+        after(&scene, session, submitted),
         AfterEnd::MoveTo(state_name("in_review"))
     );
+    scene.end(session, submitted);
 
     let session = scene.start(question);
-    scene.end(session, EndReason::Submitted { commit: None });
     assert_eq!(
-        after(&scene, session),
+        after(&scene, session, EndReason::Submitted { commit: None }),
         AfterEnd::MoveTo(state_name("answered"))
     );
+    scene.end(session, EndReason::Released);
 
+    let blocked = scene.start(task);
     for reason in [
         EndReason::Released,
         EndReason::TimedOut,
         EndReason::Failed,
         EndReason::Cancelled,
     ] {
-        let session = scene.start(task);
-        scene.end(session, reason);
-        assert_eq!(after(&scene, session), AfterEnd::MoveTo(state_name("open")));
+        scene.apply(transition(task, "in_progress"));
+        assert_eq!(
+            after(&scene, blocked, reason),
+            AfterEnd::MoveTo(state_name("open")),
+            "{reason:?}"
+        );
     }
+    assert_eq!(
+        after(&scene, blocked, EndReason::Blocked),
+        AfterEnd::Nothing
+    );
+}
 
+#[test]
+fn an_item_that_is_not_being_worked_on_stays_where_it_is() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.end(session, EndReason::Blocked);
-    assert_eq!(after(&scene, session), AfterEnd::Nothing);
+    scene.apply(transition(task, "done"));
+    assert_eq!(
+        scene.state.after_end(session, EndReason::Failed),
+        Some(AfterEnd::Nothing),
+        "a stale session does not reopen finished work"
+    );
 }
 
 #[test]
 fn an_item_another_session_holds_is_not_reopened() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
-    let first = scene.start(task);
-    let _second = scene.start(task);
-    scene.end(first, EndReason::Cancelled);
-    assert_eq!(scene.state.after_end(first), Some(AfterEnd::Nothing));
+    scene.apply(transition(task, "in_progress"));
+    let _first = scene.start(task);
+    let second = scene.start(task);
+    assert_eq!(
+        scene.state.after_end(second, EndReason::Cancelled),
+        Some(AfterEnd::Nothing),
+        "the earlier session holds the item, the later one gives way"
+    );
 }
 
 #[test]
