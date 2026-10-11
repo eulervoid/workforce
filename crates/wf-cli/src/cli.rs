@@ -156,23 +156,23 @@ pub enum SessionCommand {
     List,
     /// Show one session.
     Show {
-        /// The start of a session id.
-        session: String,
+        /// The start of a session id. Without one, pick at a terminal.
+        session: Option<String>,
     },
     /// Stop a live session of this machine. Its item goes back to open.
     Stop {
-        /// The start of a session id.
-        session: String,
+        /// The start of a session id. Without one, pick at a terminal.
+        session: Option<String>,
     },
     /// Let a session do what it asked permission for.
     Allow {
-        /// The start of a session id.
-        session: String,
+        /// The start of a session id. Without one, pick at a terminal.
+        session: Option<String>,
     },
     /// Refuse what a session asked permission for.
     Deny {
-        /// The start of a session id.
-        session: String,
+        /// The start of a session id. Without one, pick at a terminal.
+        session: Option<String>,
     },
     /// Print a transcript and follow it while the agent is still writing.
     Watch(SessionWatchArgs),
@@ -180,16 +180,21 @@ pub enum SessionCommand {
 
 #[derive(Args)]
 pub struct SessionStartArgs {
-    pub item: String,
-    /// One of your agents, as listed by `wf agent list`.
+    /// Without one, pick at a terminal.
+    pub item: Option<String>,
+    /// One of your agents, as listed by `wf agent list`. Defaults to the policy's `default_agent`.
+    #[arg(short, long)]
+    pub agent: Option<AgentName>,
+    /// Follow the transcript right after starting. Quitting the watch leaves the session running.
     #[arg(long)]
-    pub agent: AgentName,
+    pub watch: bool,
 }
 
 #[derive(Args)]
 pub struct SessionWatchArgs {
-    /// The start of a session id, or of an item id for its latest session.
-    pub session: String,
+    /// The start of a session id, or of an item id for its latest session. Without one, pick at
+    /// a terminal.
+    pub session: Option<String>,
     /// Print what is there and stop, instead of waiting for more.
     #[arg(long)]
     pub no_follow: bool,

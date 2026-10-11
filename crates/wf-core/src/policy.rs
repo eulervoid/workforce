@@ -7,7 +7,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::identity::Role;
-use crate::name::{LaneName, Requirement, ReviewName, StateName, TypeName};
+use crate::name::{AgentName, LaneName, Requirement, ReviewName, StateName, TypeName};
 
 pub const DEFAULT_POLICY_TOML: &str = include_str!("default_policy.toml");
 
@@ -275,6 +275,9 @@ pub struct ReviewLevelConfig {
 /// until a later milestone gives them meaning.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Policy {
+    /// The agent `wf session start` uses when none is given.
+    #[serde(default)]
+    pub default_agent: Option<AgentName>,
     pub types: BTreeMap<TypeName, TypeConfig>,
     #[serde(default)]
     pub lanes: BTreeMap<LaneName, LaneConfig>,

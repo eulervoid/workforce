@@ -107,7 +107,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 | Command::Daemon(_)
                 | Command::Status { .. } => unreachable!("handled above"),
                 Command::Session(command) => {
-                    crate::session::session(json, command, &mut workspace, cwd)
+                    crate::session::session(json, mode, command, &mut workspace, cwd)
                 }
                 Command::Work(command) => work(json, command, &mut workspace),
                 Command::Review(args) => review(json, mode, &mut workspace, args),
@@ -340,7 +340,7 @@ fn sorted_views(state: &State, include_archived: bool) -> Vec<ItemView<'_>> {
 
 /// Which items a picker offers.
 #[derive(Clone, Copy)]
-enum Scope {
+pub(crate) enum Scope {
     Live,
     Archived,
     Any,
@@ -384,7 +384,7 @@ fn pick_item(
     workspace.resolve_item(&picked)
 }
 
-fn choose_item(
+pub(crate) fn choose_item(
     workspace: &Workspace,
     mode: Mode,
     given: Option<String>,

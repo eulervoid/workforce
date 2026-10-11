@@ -630,6 +630,18 @@ pub fn sessions(sessions: &[SessionView]) -> String {
     format!("{table}\n")
 }
 
+/// `a1b2c3 coder on #7ph6ds (live)  Title`. Pickers take plain text, so nothing is colored.
+pub fn session_choice(session: &SessionView) -> String {
+    format!(
+        "{} {} on #{} ({})  {}",
+        short(&session.id),
+        session.agent,
+        short(&session.item),
+        session.status,
+        session.title
+    )
+}
+
 pub fn session(session: &SessionView) -> String {
     let mut out = format!(
         "session {} of {} on #{} {}\n",
