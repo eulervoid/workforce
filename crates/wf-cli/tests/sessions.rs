@@ -697,6 +697,10 @@ wf work submit
 async fn nothing_is_started_for_agents_the_device_does_not_host() {
     let world = World::new(COMMIT_AND_SUBMIT).await;
     world.automate("coder", "default");
+    // Defining an automatic agent hosts it here; hosting only another agent takes it away again.
+    world
+        .wf
+        .run(&["device", "edit", "--agent", "someone-else=1"]);
     let item = world.wf.add(&["--title", "Unhosted"]);
     tokio::time::sleep(Duration::from_millis(1_000)).await;
     assert!(world.sessions().is_empty());

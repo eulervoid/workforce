@@ -6,6 +6,7 @@ use anyhow::{Context, bail};
 use serde::Serialize;
 use wf_core::event::{DeviceProfile, EventBody};
 use wf_core::identity::DeviceKey;
+use wf_core::name::AgentName;
 use wf_core::state::State;
 
 use crate::cli::{DeviceCommand, DeviceEditArgs};
@@ -121,6 +122,26 @@ pub fn device(json: bool, command: DeviceCommand, workspace: &mut Workspace) -> 
         }
         DeviceCommand::Edit(args) => edit(json, workspace, args),
     }
+}
+
+/// Lets this device run the agent (one session at a time) unless it already says how many. Returns
+/// whether the profile changed. A device without a profile is left alone.
+pub fn host_here(workspace: &mut Workspace, agent: &AgentName) -> anyhow::Result<bool> {
+    let own = workspace.device_key();
+    let Some(mut profile) = workspace
+        .state()
+        .devices()
+        .find(|info| info.device == own)
+        .and_then(|info| info.profile.cloned())
+    else {
+        return Ok(false);
+    };
+    if profile.agents.contains_key(agent) {
+        return Ok(false);
+    }
+    profile.agents.insert(agent.clone(), 1);
+    workspace.author(EventBody::DeviceProfile(profile))?;
+    Ok(true)
 }
 
 fn edit(json: bool, workspace: &mut Workspace, args: DeviceEditArgs) -> anyhow::Result<()> {

@@ -420,7 +420,9 @@ pub struct AgentAddArgs {
     pub model: Option<String>,
     #[arg(long = "capability")]
     pub capabilities: Vec<Requirement>,
-    #[arg(long = "lane")]
+    /// The lanes the agent takes items from. Defaults to `default`; `supervision` alone makes an
+    /// agent that only answers questions and holds no items
+    #[arg(long = "lane", default_value = "default")]
     pub lanes: Vec<LaneName>,
     #[command(flatten)]
     pub autonomy: AutonomyArgs,

@@ -1182,3 +1182,31 @@ command = ["/bin/sh", "-c", "echo '{\"permission\": \"deny\", \"reason\": \"neve
     let broken = wf.fail(&["permissions", "test", "--command", "ls"]);
     assert!(broken.contains("config.toml"), "{broken}");
 }
+
+#[test]
+fn an_agent_that_starts_automatically_is_hosted_here_and_status_flags_one_that_is_not() {
+    let wf = Sandbox::new();
+    wf.json(&["init", "--name", "demo", "--no-agents"]);
+    let added = wf.run(&[
+        "agent",
+        "add",
+        "worker",
+        "--harness",
+        "claude-code",
+        "--start",
+        "auto",
+    ]);
+    assert!(added.contains("this device runs it"), "{added}");
+    let devices = wf.json(&["device", "list"]);
+    assert_eq!(devices[0]["agents"]["worker"], 1, "{devices}");
+    let status = wf.json(&["status"]);
+    assert!(status["flagged"].as_array().unwrap().is_empty(), "{status}");
+
+    let manual = wf.run(&["agent", "add", "helper", "--harness", "claude-code"]);
+    assert!(!manual.contains("runs it"), "{manual}");
+
+    // Hosting something else replaces the list, which leaves the worker with no device.
+    wf.run(&["device", "edit", "--agent", "helper=1"]);
+    let flagged = wf.json(&["status"])["flagged"].to_string();
+    assert!(flagged.contains("no device hosts it"), "{flagged}");
+}

@@ -6,6 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::activity::{Activity, Entry};
+use wf_core::autonomy::StartMode;
 use wf_core::body::{Body, BodyPart, StepId};
 use wf_core::crdt::SetChange;
 use wf_core::event::{Change, CommentKind, Event, EventBody, Link};
@@ -1260,6 +1261,29 @@ pub fn status(
             "the review of #{} waits for an agent step that no agent started on this workforce can take",
             item.short()
         ));
+    }
+    for (id, definition) in state.agents() {
+        if definition.autonomy.start != StartMode::Auto {
+            continue;
+        }
+        if definition.lanes.is_empty() {
+            flagged.insert(format!(
+                "agent {0} starts automatically but has no lane, so it never takes an item; `wf agent edit {0} --lane default`",
+                id.name
+            ));
+        }
+        let hosted = state.devices().any(|device| {
+            device.principal == id.principal
+                && device
+                    .profile
+                    .is_some_and(|profile| profile.agents.contains_key(&id.name))
+        });
+        if !hosted {
+            flagged.insert(format!(
+                "agent {0} starts automatically but no device hosts it; `wf device edit --agent {0}=1`",
+                id.name
+            ));
+        }
     }
     for edge in graph.ignored() {
         flagged.insert(format!(

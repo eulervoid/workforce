@@ -29,6 +29,7 @@ use crate::keys::DataDir;
 use crate::render;
 use crate::view::{self, Envelope, ItemSummary, LogView, MentionsView};
 use crate::workspace::{self, WORKFORCE_FILE, WorkforceFile, Workspace};
+use wf_core::autonomy::StartMode;
 
 pub(crate) fn emit<T: Serialize>(
     json: bool,
@@ -293,15 +294,19 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
             if workspace.state().agent(&args.name, principal).is_some() {
                 bail!("agent `{}` already exists; use `wf agent edit`", args.name);
             }
+            let autonomy = args.autonomy.applied_to(Autonomy::default());
+            let start = autonomy.start;
             let event = workspace.author(EventBody::AgentDefined(AgentDefined {
                 name: args.name.clone(),
                 harness: args.harness,
                 model: args.model,
                 capabilities: args.capabilities,
                 lanes: args.lanes,
-                autonomy: args.autonomy.applied_to(Autonomy::default()),
+                autonomy,
             }))?;
-            done(json, format!("defined agent {}", args.name), &event, None)
+            let message = format!("defined agent {}", args.name);
+            let message = hosting_note(workspace, &args.name, start, message)?;
+            done(json, message, &event, None)
         }
         AgentCommand::Edit(args) => {
             let current = workspace
@@ -309,6 +314,8 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
                 .agent(&args.name, principal)
                 .ok_or_else(|| anyhow!("there is no agent `{}`", args.name))?
                 .clone();
+            let autonomy = args.autonomy.applied_to(current.autonomy);
+            let start = autonomy.start;
             let event = workspace.author(EventBody::AgentDefined(AgentDefined {
                 name: args.name.clone(),
                 harness: args.harness.unwrap_or(current.harness),
@@ -323,10 +330,28 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
                 } else {
                     args.lanes
                 },
-                autonomy: args.autonomy.applied_to(current.autonomy),
+                autonomy,
             }))?;
-            done(json, format!("updated agent {}", args.name), &event, None)
+            let message = format!("updated agent {}", args.name);
+            let message = hosting_note(workspace, &args.name, start, message)?;
+            done(json, message, &event, None)
         }
+    }
+}
+
+/// An agent that starts automatically is of no use until a device runs it, so this device does,
+/// and `message` says so.
+fn hosting_note(
+    workspace: &mut Workspace,
+    agent: &AgentName,
+    start: StartMode,
+    message: String,
+) -> anyhow::Result<String> {
+    match start {
+        StartMode::Auto if crate::devices::host_here(workspace, agent)? => Ok(format!(
+            "{message}; this device runs it, `wf device edit --agent` changes that"
+        )),
+        StartMode::Auto | StartMode::Manual => Ok(message),
     }
 }
 
