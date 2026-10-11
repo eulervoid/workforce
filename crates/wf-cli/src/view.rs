@@ -504,6 +504,59 @@ pub struct ActivityView {
     pub text: Option<String>,
 }
 
+/// One line of `wf watch`: what an event did, and to which item.
+#[derive(Serialize)]
+pub struct WatchLineView {
+    pub event: String,
+    pub item: Option<String>,
+    pub title: Option<String>,
+    #[serde(flatten)]
+    pub activity: ActivityView,
+}
+
+/// What the `new` events did, one line for each thing, read against `events`: all that is known
+/// so far, which the activity of an item needs.
+pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchLineView> {
+    let mut lines = Vec::new();
+    for event in new {
+        let live = state.item_of(event).and_then(|id| match state.item(id) {
+            Some(ItemView::Live(item)) => Some(item),
+            Some(ItemView::Archived(_)) | None => None,
+        });
+        match live {
+            Some(item) => {
+                let entries: Vec<Entry> = state
+                    .activity(item.id(), events)
+                    .into_iter()
+                    .filter(|entry| entry.event == event.id())
+                    .collect();
+                for activity in activity_views(state, item, &entries) {
+                    lines.push(WatchLineView {
+                        event: event.id().to_string(),
+                        item: Some(item.id().to_base32()),
+                        title: Some(item.title().to_string()),
+                        activity,
+                    });
+                }
+            }
+            None => lines.push(WatchLineView {
+                event: event.id().to_string(),
+                item: state.item_of(event).map(|id| id.to_base32()),
+                title: None,
+                activity: ActivityView {
+                    at: timestamp(event.content.hlc),
+                    by: actor_label(state, &event.content.actor),
+                    kind: event.content.body.name().to_string(),
+                    summary: describe(state, &event.content.body),
+                    comment: None,
+                    text: None,
+                },
+            }),
+        }
+    }
+    lines
+}
+
 /// A blocker or change request nothing has resolved yet.
 #[derive(Serialize)]
 pub struct OpenCommentView {

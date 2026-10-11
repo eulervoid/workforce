@@ -469,7 +469,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
 /// The activity of an item: one line per thing that happened, and the text of comments below
 /// their line. The date heads the section and is repeated when the day changes.
 fn activity(entries: &[crate::view::ActivityView]) -> String {
-    use style::{BOLD, DIM, WARNING, paint};
+    use style::{BOLD, DIM, paint};
     let mut out = String::new();
     let width = text_width();
     let mut day = None;
@@ -491,57 +491,82 @@ fn activity(entries: &[crate::view::ActivityView]) -> String {
             }
             day = Some(date);
         }
-        let mut parts = vec![paint(style::actor(&entry.by), &entry.by)];
-        match &entry.comment {
-            Some(comment) if entry.kind == "comment" => {
-                match comment.kind.as_str() {
-                    "blocker" | "change_request" => parts.push(paint(
-                        WARNING,
-                        format!(
-                            "{} {}",
-                            comment_marker(&comment.kind),
-                            comment.kind.replace('_', " ")
-                        ),
-                    )),
-                    _ if comment.resolves.is_empty() => parts.push(paint(DIM, "commented")),
-                    _ => {}
-                }
-                if !comment.resolves.is_empty() {
-                    parts.push(format!("resolved {}", comment.resolves.join(", ")));
-                }
-                if let Some(by) = &comment.resolved_by {
-                    parts.push(paint(DIM, format!("resolved by {by}")));
-                }
-                match &comment.step {
-                    Some(StepRefView {
-                        number: Some(number),
-                        ..
-                    }) => parts.push(paint(DIM, format!("on step {number}"))),
-                    Some(StepRefView { .. }) => parts.push(paint(DIM, "on a step since edited")),
-                    None => {}
-                }
-                parts.push(paint(DIM, &comment.short));
-            }
-            Some(_) | None => parts.push(entry.summary.clone()),
+        let (line, text) = activity_entry(entry, width);
+        let _ = writeln!(out, "  {}  {line}", paint(DIM, time));
+        if let Some(text) = text {
+            let _ = writeln!(out, "{text}");
         }
-        let _ = writeln!(
-            out,
-            "  {}  {}",
-            paint(DIM, time),
-            parts.join(&format!(" {} ", paint(DIM, "·")))
-        );
-        if let Some(text) = entry
-            .comment
-            .as_ref()
-            .and_then(|comment| comment.text.as_deref())
-            .or(entry.text.as_deref())
-            .filter(|text| !text.trim().is_empty())
-        {
+    }
+    out
+}
+
+/// One entry of an item's activity after its time: who did what, and the text of a comment
+/// wrapped to `width` and indented, if it has one.
+fn activity_entry(entry: &crate::view::ActivityView, width: usize) -> (String, Option<String>) {
+    use style::{DIM, WARNING, paint};
+    let mut parts = vec![paint(style::actor(&entry.by), &entry.by)];
+    match &entry.comment {
+        Some(comment) if entry.kind == "comment" => {
+            match comment.kind.as_str() {
+                "blocker" | "change_request" => parts.push(paint(
+                    WARNING,
+                    format!(
+                        "{} {}",
+                        comment_marker(&comment.kind),
+                        comment.kind.replace('_', " ")
+                    ),
+                )),
+                _ if comment.resolves.is_empty() => parts.push(paint(DIM, "commented")),
+                _ => {}
+            }
+            if !comment.resolves.is_empty() {
+                parts.push(format!("resolved {}", comment.resolves.join(", ")));
+            }
+            if let Some(by) = &comment.resolved_by {
+                parts.push(paint(DIM, format!("resolved by {by}")));
+            }
+            match &comment.step {
+                Some(StepRefView {
+                    number: Some(number),
+                    ..
+                }) => parts.push(paint(DIM, format!("on step {number}"))),
+                Some(StepRefView { .. }) => parts.push(paint(DIM, "on a step since edited")),
+                None => {}
+            }
+            parts.push(paint(DIM, &comment.short));
+        }
+        Some(_) | None => parts.push(entry.summary.clone()),
+    }
+    let line = parts.join(&format!(" {} ", paint(DIM, "·")));
+    let text = entry
+        .comment
+        .as_ref()
+        .and_then(|comment| comment.text.as_deref())
+        .or(entry.text.as_deref())
+        .filter(|text| !text.trim().is_empty())
+        .map(|text| {
             let options = textwrap::Options::new(width)
                 .initial_indent("         ")
                 .subsequent_indent("         ");
-            let _ = writeln!(out, "{}", textwrap::fill(text, options));
-        }
+            textwrap::fill(text, options)
+        });
+    (line, text)
+}
+
+/// One line of `wf watch`: `14:02  #k3f7ab  @joshua/coder · moved to done`, and the text of a
+/// comment below it.
+pub fn watch_line(line: &crate::view::WatchLineView) -> String {
+    use style::{DIM, paint};
+    let (_, time) = local_date_and_time(&line.activity.at);
+    let item = match &line.item {
+        Some(item) => format!("{}  ", id_label(item)),
+        None => String::new(),
+    };
+    let (what, text) = activity_entry(&line.activity, text_width());
+    let mut out = format!("{}  {item}{what}\n", paint(DIM, time));
+    if let Some(text) = text {
+        out.push_str(&text);
+        out.push('\n');
     }
     out
 }

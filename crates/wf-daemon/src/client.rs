@@ -93,10 +93,19 @@ impl DaemonClient {
 
     /// Every event, in the order the daemon applied them.
     pub fn events(&mut self, workforce: WorkforceId) -> Result<Vec<Event>, ClientError> {
+        self.events_since(workforce, 0)
+    }
+
+    /// The events from position `from` of the log on, in the order the daemon applied them.
+    pub fn events_since(
+        &mut self,
+        workforce: WorkforceId,
+        from: u64,
+    ) -> Result<Vec<Event>, ClientError> {
         let mut events = Vec::new();
         loop {
-            let from = events.len() as u64;
-            match self.call(workforce, Call::Events { from })? {
+            let position = from + events.len() as u64;
+            match self.call(workforce, Call::Events { from: position })? {
                 Response::Events(page) if page.is_empty() => return Ok(events),
                 Response::Events(page) => events.extend(page),
                 _ => return Err(ClientError::UnexpectedResponse),

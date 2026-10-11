@@ -44,6 +44,21 @@ pub(crate) fn emit<T: Serialize>(
 }
 
 /// Like [`emit`], but long text goes through the pager when a person is at the terminal.
+/// One JSON object per line with `--json`, so a reader can follow; otherwise `text`.
+pub(crate) fn emit_line<T: Serialize>(
+    json: bool,
+    data: &T,
+    text: impl FnOnce(&T) -> String,
+) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string(&Envelope::new(data))?);
+    } else {
+        anstream::print!("{}", text(data));
+    }
+    std::io::Write::flush(&mut std::io::stdout())?;
+    Ok(())
+}
+
 fn emit_paged<T: Serialize>(
     json: bool,
     mode: Mode,
@@ -113,6 +128,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 }
                 Command::Work(command) => work(json, command, &mut workspace),
                 Command::Review(args) => review(json, mode, &mut workspace, args),
+                Command::Watch(args) => crate::watch::watch(json, mode, &mut workspace, args),
                 Command::Inbox => {
                     let views = view::inbox_views(workspace.state(), &workspace.held_permissions());
                     emit(json, &views, |views| render::inbox(views))
@@ -815,7 +831,7 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
     }
 }
 
-fn review(
+pub(crate) fn review(
     json: bool,
     mode: Mode,
     workspace: &mut Workspace,
@@ -896,7 +912,7 @@ struct DiffView {
 }
 
 /// The repository of the workforce here: the directory of its `.workforce.toml`.
-fn repository() -> anyhow::Result<wf_vcs::GitCli> {
+pub(crate) fn repository() -> anyhow::Result<wf_vcs::GitCli> {
     let (file, _) = workspace::find_workforce(&std::env::current_dir()?)?;
     let repository = file
         .parent()
@@ -906,7 +922,7 @@ fn repository() -> anyhow::Result<wf_vcs::GitCli> {
 
 /// The latest commit of the work on an item: the head of its branch, or after the branch is
 /// gone, what was submitted. A merged item says where its work went.
-fn work_commit(
+pub(crate) fn work_commit(
     workspace: &Workspace,
     git: &wf_vcs::GitCli,
     id: ItemId,
@@ -934,7 +950,7 @@ fn work_commit(
     }
 }
 
-fn target(workspace: &Workspace) -> String {
+pub(crate) fn target(workspace: &Workspace) -> String {
     workspace
         .state()
         .policy()

@@ -298,6 +298,36 @@ impl State {
     }
 }
 
+impl State {
+    /// The item an event is about, if it is about one.
+    pub fn item_of(&self, event: &Event) -> Option<ItemId> {
+        match &event.content.body {
+            EventBody::ItemCreated(_) => Some(event.id().into()),
+            EventBody::Comment(comment) => Some(comment.item),
+            EventBody::ItemMoved(moved) => Some(moved.item),
+            EventBody::ItemEdited(edited) => Some(edited.item),
+            EventBody::ItemLinked(linked) => Some(linked.item),
+            EventBody::ItemArchived(reference) | EventBody::ItemUnarchived(reference) => {
+                Some(reference.item)
+            }
+            EventBody::SessionStarted(started) => Some(started.item),
+            EventBody::SessionEnded(ended) => {
+                self.session(ended.session).map(|session| session.item())
+            }
+            EventBody::Review(review) => Some(review.item),
+            EventBody::Merged(merged) => Some(merged.item),
+            EventBody::Genesis(_)
+            | EventBody::PolicySet(_)
+            | EventBody::AgentDefined(_)
+            | EventBody::InviteCreated(_)
+            | EventBody::DeviceBound(_)
+            | EventBody::DeviceProfile(_)
+            | EventBody::ForkAnnounced(_)
+            | EventBody::Unknown { .. } => None,
+        }
+    }
+}
+
 /// The body edits of `item` that lost to a concurrent edit: every one that is neither the edit
 /// that won, the latest by `(hlc, id)`, nor in its causal past. `events` are in fold order.
 fn overwritten_body_edits(item: ItemId, events: &[&Event]) -> BTreeSet<EventId> {

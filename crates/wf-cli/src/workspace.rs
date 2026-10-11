@@ -241,6 +241,24 @@ impl Workspace {
         }
     }
 
+    /// The events from position `from` of the log on, in the order this machine applied them.
+    pub fn events_since(&self, from: u64) -> anyhow::Result<Vec<Event>> {
+        match &self.source {
+            Source::Local(replica) => Ok(replica.store().log_since(from)?),
+            Source::Daemon { client, .. } => {
+                Ok(client.borrow_mut().events_since(self.workforce, from)?)
+            }
+        }
+    }
+
+    /// Whether the daemon serves this workspace, so that what others write shows up in it.
+    pub fn follows_daemon(&self) -> bool {
+        match &self.source {
+            Source::Daemon { .. } => true,
+            Source::Local(_) => false,
+        }
+    }
+
     /// Every event, in the order this machine applied them. That is a causal order, except that
     /// a fork has the history it was made from newest event first.
     pub fn events(&self) -> anyhow::Result<Vec<Event>> {

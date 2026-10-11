@@ -28,7 +28,7 @@ pub struct Cli {
 /// subcommands in one flat block.
 const COMMAND_GROUPS: &[&[&str]] = &[
     &["init", "status", "policy", "log", "members", "fork"],
-    &["item", "comment", "mentions", "review", "inbox"],
+    &["item", "comment", "mentions", "review", "inbox", "watch"],
     &["agent", "session", "work", "permissions"],
     &["daemon", "sync", "invite", "join", "device"],
 ];
@@ -105,6 +105,8 @@ pub enum Command {
     Review(ReviewArgs),
     /// What waits on you: blockers, reviews, merges and permission requests.
     Inbox,
+    /// Follow the events of the workforce, and answer what waits on you as it comes.
+    Watch(WatchArgs),
     /// Try out how this machine decides the permission requests of agents.
     #[command(subcommand)]
     Permissions(PermissionsCommand),
@@ -136,6 +138,13 @@ pub enum Command {
         #[arg(long)]
         refold: bool,
     },
+}
+
+#[derive(Args)]
+pub struct WatchArgs {
+    /// Follow only this item.
+    #[arg(long)]
+    pub item: Option<String>,
 }
 
 #[derive(Subcommand)]

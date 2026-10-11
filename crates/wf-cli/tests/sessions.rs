@@ -1116,6 +1116,57 @@ wf work release --note later
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn watch_prints_events_as_they_arrive() {
+    let world =
+        World::new("say hello\nwf comment {item} \"halfway there\"\nwf work release --note done\n")
+            .await;
+    let item = world.wf.add(&["--title", "Watched"]);
+    let mut watch = world
+        .wf
+        .command(&["watch", "--json"])
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let stdout = watch.stdout.take().unwrap();
+    let (lines, received) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)) {
+            let Ok(line) = line else { return };
+            if lines.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    // The backlog ends with the item.
+    loop {
+        let line = received.recv_timeout(Duration::from_secs(10)).unwrap();
+        if line.contains("\"created\"") {
+            break;
+        }
+    }
+
+    start_session(&world, &item);
+    world.ended_session().await;
+    let mut kinds = Vec::new();
+    while let Ok(line) = received.recv_timeout(Duration::from_secs(5)) {
+        let line: Value = serde_json::from_str(&line).unwrap();
+        kinds.push(line["data"]["kind"].as_str().unwrap().to_string());
+        if kinds.last().map(String::as_str) == Some("session_ended") {
+            break;
+        }
+    }
+    watch.kill().unwrap();
+    watch.wait().unwrap();
+    assert!(kinds.contains(&"session_started".to_string()), "{kinds:?}");
+    assert!(kinds.contains(&"comment".to_string()), "{kinds:?}");
+    assert_eq!(
+        kinds.last().map(String::as_str),
+        Some("session_ended"),
+        "{kinds:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn running_wf_is_allowed_without_asking_anyone() {
     let script = "\
 permission wf item show {item} 2>&1 | head -40
