@@ -382,10 +382,7 @@ wf work submit --note \"all done\"
     let transcript = world
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
-    assert!(
-        transcript.contains("You are working on item"),
-        "{transcript}"
-    );
+    assert!(transcript.contains("working on item"), "{transcript}");
     assert!(transcript.contains("hello"), "{transcript}");
     assert!(
         transcript.contains("end_turn") && !transcript.contains("cancelled"),
@@ -1371,13 +1368,13 @@ wf work submit
     let brief = git(&world.wf.repository, &["show", "main:brief.md"]);
     assert!(
         brief.starts_with(&format!(
-            "You are working on item #{}: Add hello\n",
+            "You are the agent `coder`, working on item #{}: Add hello\n",
             short(&item)
         )),
         "{brief}"
     );
     assert!(brief.contains("- [ ] 1. write the file"), "{brief}");
-    assert!(brief.contains("`wf work submit`"), "{brief}");
+    assert!(brief.contains("`wf work submit --note"), "{brief}");
 
     let outside = world.wf.fail(&["work", "brief"]);
     assert!(outside.contains("WF_SESSION"), "{outside}");

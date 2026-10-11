@@ -37,17 +37,21 @@ impl Brief {
             return None;
         };
         let target = state.policy()?.policy.merge.target.clone();
+        let agent = session.agent();
         Some(match session.role() {
             SessionRole::Work => Brief::Work(WorkBrief {
+                agent: agent.name.to_string(),
                 item: HashId::short(&item.id()),
                 title: item.title().to_string(),
                 body: item.body().render_numbered(),
                 branch: sources.branch(item.id()),
                 target,
                 dependencies: dependencies(state, item, sources),
+                change_requests: open_change_requests(item, sources),
                 earlier: earlier(item, sources),
             }),
             SessionRole::Review { commit } => Brief::Review(ReviewBrief {
+                agent: agent.name.to_string(),
                 item: HashId::short(&item.id()),
                 title: item.title().to_string(),
                 body: item.body().render_numbered(),
@@ -58,12 +62,11 @@ impl Brief {
                 earlier: earlier(item, sources),
             }),
             SessionRole::Supervise => {
-                let agent = session.agent();
                 let blockers = state
                     .open_blockers_of(item)
                     .into_iter()
                     .filter(|blocker| state.answers(agent, blocker))
-                    .map(|blocker| WaitingBlocker {
+                    .map(|blocker| OpenComment {
                         comment: blocker.comment.short(),
                         by: speaker(&item.comments()[&blocker.comment].by),
                         text: sources.text(blocker.comment).unwrap_or_default(),
@@ -75,6 +78,7 @@ impl Brief {
                     .map(|(_, member)| format!("@{}", member.handle))
                     .unwrap_or_default();
                 Brief::Supervise(SuperviseBrief {
+                    agent: agent.name.to_string(),
                     item: HashId::short(&item.id()),
                     title: item.title().to_string(),
                     body: item.body().render_numbered(),
@@ -116,6 +120,23 @@ fn earlier(item: &Item, sources: &impl Sources) -> Vec<Earlier> {
                 kind: comment.kind.name().replace('_', " "),
                 text: sources.text(*id)?,
             })
+        })
+        .collect()
+}
+
+/// The change requests on the item nothing has resolved yet, oldest first.
+fn open_change_requests(item: &Item, sources: &impl Sources) -> Vec<OpenComment> {
+    let mut open: Vec<_> = item
+        .comments()
+        .iter()
+        .filter(|(_, comment)| comment.kind == CommentKind::ChangeRequest && comment.is_open())
+        .collect();
+    open.sort_by_key(|(id, comment)| (comment.at, **id));
+    open.into_iter()
+        .map(|(id, comment)| OpenComment {
+            comment: id.short(),
+            by: speaker(&comment.by),
+            text: sources.text(*id).unwrap_or_default(),
         })
         .collect()
 }
@@ -186,6 +207,14 @@ pub struct Earlier {
     pub text: String,
 }
 
+/// A blocker or change request nothing has resolved yet.
+pub struct OpenComment {
+    /// The short id `--resolve` takes.
+    pub comment: String,
+    pub by: String,
+    pub text: String,
+}
+
 /// A dependency of the item, with what was said when it was finished.
 pub struct Dependency {
     pub item: String,
@@ -196,6 +225,8 @@ pub struct Dependency {
 
 /// The brief of a work session.
 pub struct WorkBrief {
+    /// The name of the agent of the session.
+    pub agent: String,
     /// The short id of the item, as `wf` commands take it.
     pub item: String,
     pub title: String,
@@ -204,19 +235,20 @@ pub struct WorkBrief {
     pub branch: String,
     pub target: String,
     pub dependencies: Vec<Dependency>,
+    /// The change requests the work has to resolve before it is submitted.
+    pub change_requests: Vec<OpenComment>,
     pub earlier: Vec<Earlier>,
 }
 
 impl WorkBrief {
     pub fn render(&self) -> String {
+        let item = &self.item;
         let mut text = format!(
-            "You are working on item #{item}: {title}\n\n",
-            item = self.item,
+            "You are the agent `{agent}`, working on item #{item}: {title}\n\n",
+            agent = self.agent,
             title = self.title
         );
-        if !self.body.trim().is_empty() {
-            let _ = writeln!(text, "{}\n", self.body.trim());
-        }
+        task(&mut text, &self.body);
         if !self.dependencies.is_empty() {
             text.push_str("## Dependencies\n\n");
             for dependency in &self.dependencies {
@@ -227,43 +259,46 @@ impl WorkBrief {
                 );
                 match &dependency.note {
                     Some(note) => {
-                        let _ = writeln!(text, ": {note}");
+                        let _ = writeln!(text, ": {}", note.trim());
                     }
                     None => text.push('\n'),
                 }
             }
             text.push('\n');
         }
-        if !self.earlier.is_empty() {
-            text.push_str("## What was said before\n\n");
-            for earlier in &self.earlier {
-                let _ = writeln!(
-                    text,
-                    "- {} ({}): {}",
-                    earlier.by,
-                    earlier.kind,
-                    earlier.text.trim()
-                );
-            }
-            text.push('\n');
+        if !self.change_requests.is_empty() {
+            text.push_str("## Open change requests\n\nResolve every one before you submit.\n\n");
+            open_comments(&mut text, &self.change_requests);
         }
-        let _ = write!(
+        history(&mut text, &self.earlier);
+        let _ = writeln!(
             text,
             "## How to work\n\n\
-             You are in a git worktree on the branch `{branch}`, which started from `{target}`. \
-             Work only here, and commit small and often.\n\
-             - Check off a step of the body when it is done: `wf item check {item} <number>`.\n\
-             - Say what you chose, what you rejected and why: `wf comment {item} \"...\"`. \
-             Add `--step <number>` when it is about a step, and `--done` to check the step off as well. \
-             Write comments that make sense on their own. They are encouraged, not required.\n\
-             - When the work is finished, run `wf work submit`. Your commits are reviewed and merged from there.\n\
-             - If you need an answer from someone, run `wf comment {item} \"<question>\" --block` and \
-             stop; you are prompted again when it is answered.\n\
-             - If you cannot make progress, run `wf work release --note \"<why>\"`.\n\
-             - To read this brief again, run `wf work brief`.\n",
+             - You are in a git worktree on the branch `{branch}`, started from `{target}`. Work only here.\n\
+             - Commit small and often: only commits carry over to a later session.\n\
+             - Tick each step as soon as it is done, not all at the end: `wf item check {item} <number>`\n\
+             - Report while you work: `wf comment {item} \"<what you chose, what you rejected, and why>\" --step <number>`\n  \
+             - Add `--done` to tick the step with the same command.\n  \
+             - Leave out `--step` for a report on the whole item.\n  \
+             - Write each report so that it makes sense on its own.",
             branch = self.branch,
             target = self.target,
-            item = self.item,
+        );
+        if !self.change_requests.is_empty() {
+            let _ = writeln!(
+                text,
+                "- Resolve a change request once it is done: \
+                 `wf comment {item} \"<what you did>\" --resolve <id>`"
+            );
+        }
+        let _ = writeln!(
+            text,
+            "- Need an answer from someone: `wf comment {item} \"<question>\" --block`, then end \
+             your turn. You are prompted again once it is answered.\n\
+             - Finished: `wf work submit --note \"<what the reviewer should know>\"`. Your commits \
+             are reviewed and merged from there.\n\
+             - Stuck: `wf work release --note \"<why>\"`\n\
+             {AGAIN}"
         );
         text
     }
@@ -274,6 +309,8 @@ pub const MAX_DIFF_LEN: usize = 60_000;
 
 /// The brief of a review session.
 pub struct ReviewBrief {
+    /// The name of the agent of the session.
+    pub agent: String,
     /// The short id of the item.
     pub item: String,
     pub title: String,
@@ -289,22 +326,21 @@ pub struct ReviewBrief {
 
 impl ReviewBrief {
     pub fn render(&self) -> String {
+        let item = &self.item;
         let mut text = format!(
-            "You are reviewing the work on item #{item}: {title}\n\n",
-            item = self.item,
+            "You are the agent `{agent}`, reviewing the work on item #{item}: {title}\n\n",
+            agent = self.agent,
             title = self.title
         );
-        if !self.body.trim().is_empty() {
-            let _ = writeln!(text, "{}\n", self.body.trim());
-        }
+        task(&mut text, &self.body);
+        text.push_str("## The work\n\n");
         match &self.commit {
             Some(commit) => {
-                let _ = write!(
+                let target = &self.target;
+                let _ = writeln!(
                     text,
-                    "## The work\n\n\
-                     Commit `{commit}` is checked out here. It is meant to go into `{target}`. \
-                     This is {step}.\n\n",
-                    target = self.target,
+                    "- Commit `{commit}` is checked out here. It is meant to go into `{target}`.\n\
+                     - This is {step}.\n",
                     step = self.step,
                 );
                 if self.diff.len() <= MAX_DIFF_LEN {
@@ -312,121 +348,84 @@ impl ReviewBrief {
                 } else {
                     let _ = writeln!(
                         text,
-                        "The diff is too large to show here; run `git diff {}...HEAD`.\n",
-                        self.target
+                        "The diff is too large to show here; run `git diff {target}...HEAD`.\n"
                     );
                 }
             }
             None => {
-                let _ = write!(
+                let _ = writeln!(
                     text,
-                    "## The work\n\n\
-                     This was submitted without commits: it is an answer, or the finding that \
-                     nothing has to change. What the author said is below, with the rest of the \
-                     history. Nothing is checked out here. This is {step}.\n\n",
+                    "- It was submitted without commits: it is an answer, or the finding that \
+                     nothing has to change. What the author said is in the history below.\n\
+                     - Nothing is checked out here.\n\
+                     - This is {step}.\n",
                     step = self.step,
                 );
             }
         }
-        if !self.earlier.is_empty() {
-            text.push_str("## What was said before\n\n");
-            for earlier in &self.earlier {
-                let _ = writeln!(
-                    text,
-                    "- {} ({}): {}",
-                    earlier.by,
-                    earlier.kind,
-                    earlier.text.trim()
-                );
-            }
-            text.push('\n');
-        }
-        let _ = write!(
+        history(&mut text, &self.earlier);
+        let _ = writeln!(
             text,
             "## How to review\n\n\
-             Read the change or the answer, and run the tests if there are any. Do not change anything. \
-             Then give exactly one verdict:\n\
-             - `wf review --approve --note \"...\"` if the work is good as it is.\n\
-             - If it needs changes, write each change on its own: \
+             - Read the change or the answer, and run the tests if there are any.\n\
+             - Do not change anything.\n\
+             - Request changes for anything that is wrong, also when it is small. Approve only \
+             what you would merge as it is.\n\
+             - Give exactly one verdict:\n  \
+             - Good as it is: `wf review --approve --note \"<what you checked>\"`\n  \
+             - Needs changes: write each change on its own with \
              `wf comment {item} \"<what to change>\" --request-change`, then run \
-             `wf review --request-changes`. The item goes back for another session, which has to \
-             resolve every change request before it submits again.\n\
-             - `wf review --escalate --note \"...\"` if a person has to decide.\n\
-             - To read this brief again, run `wf work brief`.\n",
-            item = self.item,
+             `wf review --request-changes`. The next session has to resolve every change request \
+             before it submits again.\n  \
+             - A person has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
+             {AGAIN}"
         );
         text
     }
 }
 
-/// A blocker the supervisor is asked to answer or escalate.
-pub struct WaitingBlocker {
-    /// The short id `--resolve` takes.
-    pub comment: String,
-    pub by: String,
-    pub text: String,
-}
-
 /// The brief of a supervise session.
 pub struct SuperviseBrief {
+    /// The name of the agent of the session.
+    pub agent: String,
     /// The short id of the item, as `wf` commands take it.
     pub item: String,
     pub title: String,
     pub body: String,
     pub earlier: Vec<Earlier>,
-    pub blockers: Vec<WaitingBlocker>,
+    /// The blockers the supervisor is asked to answer or escalate.
+    pub blockers: Vec<OpenComment>,
     /// The handle of the person to escalate to, as in `@joshua`.
     pub person: String,
 }
 
 impl SuperviseBrief {
     pub fn render(&self) -> String {
+        let item = &self.item;
         let mut text = format!(
-            "You are supervising item #{item}: {title}\n\n\
-             Work on it waits for an answer. Do not change any files.\n\n",
-            item = self.item,
+            "You are the agent `{agent}`, supervising item #{item}: {title}\n\n\
+             Work on it waits for an answer.\n\n",
+            agent = self.agent,
             title = self.title
         );
-        if !self.body.trim().is_empty() {
-            let _ = writeln!(text, "{}\n", self.body.trim());
-        }
-        if !self.earlier.is_empty() {
-            text.push_str("## What was said before\n\n");
-            for earlier in &self.earlier {
-                let _ = writeln!(
-                    text,
-                    "- {} ({}): {}",
-                    earlier.by,
-                    earlier.kind,
-                    earlier.text.trim()
-                );
-            }
-            text.push('\n');
-        }
+        task(&mut text, &self.body);
+        history(&mut text, &self.earlier);
         text.push_str("## Waiting on you\n\n");
-        for blocker in &self.blockers {
-            let _ = writeln!(
-                text,
-                "- {} by {}: {}",
-                blocker.comment,
-                blocker.by,
-                blocker.text.trim()
-            );
-        }
+        open_comments(&mut text, &self.blockers);
         let resolve: Vec<String> = self
             .blockers
             .iter()
             .map(|blocker| format!("--resolve {}", blocker.comment))
             .collect();
-        let _ = write!(
+        let _ = writeln!(
             text,
-            "\n## How to answer\n\n\
-             Answer everything above in one comment; your session ends with it.\n\
-             - If you can answer: `wf comment {item} \"<answer>\" {resolve}`.\n\
-             - If a person has to decide: `wf comment {item} \"{person} <what they have to decide>\" \
+            "## How to answer\n\n\
+             - Do not change any files.\n\
+             - Answer everything above in one comment; your session ends with it.\n\
+             - You can answer: `wf comment {item} \"<answer>\" {resolve}`\n\
+             - A person has to decide: `wf comment {item} \"{person} <what they have to decide>\" \
              --block {resolve}`. This hands the question to them.\n\
-             - To read this brief again, run `wf work brief`.\n",
-            item = self.item,
+             {AGAIN}",
             resolve = resolve.join(" "),
             person = self.person,
         );
@@ -434,13 +433,61 @@ impl SuperviseBrief {
     }
 }
 
+/// The last rule of every brief.
+const AGAIN: &str = "- Lost track: `wf work brief` prints this brief again.";
+
+fn task(text: &mut String, body: &str) {
+    if !body.trim().is_empty() {
+        let _ = writeln!(text, "## Task\n\n{}\n", body.trim());
+    }
+}
+
+fn history(text: &mut String, earlier: &[Earlier]) {
+    if earlier.is_empty() {
+        return;
+    }
+    text.push_str("## What was said before\n\n");
+    for earlier in earlier {
+        let _ = writeln!(
+            text,
+            "- {} ({}): {}",
+            earlier.by,
+            earlier.kind,
+            earlier.text.trim()
+        );
+    }
+    text.push('\n');
+}
+
+fn open_comments(text: &mut String, open: &[OpenComment]) {
+    for comment in open {
+        let _ = writeln!(
+            text,
+            "- {} by {}: {}",
+            comment.comment,
+            comment.by,
+            comment.text.trim()
+        );
+    }
+    text.push('\n');
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn earlier() -> Vec<Earlier> {
+        vec![Earlier {
+            by: "coder".into(),
+            kind: "comment".into(),
+            text: "tried serde first".into(),
+        }]
+    }
+
     #[test]
-    fn the_work_brief_names_the_item_the_branch_and_the_commands() {
+    fn the_work_brief_names_the_agent_the_item_the_branch_and_the_commands() {
         let brief = WorkBrief {
+            agent: "coder".into(),
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
             body: "- [ ] 1. write parser".into(),
@@ -452,18 +499,20 @@ mod tests {
                 state: "answered".into(),
                 note: Some("Use humantime".into()),
             }],
-            earlier: vec![Earlier {
-                by: "@joshua/coder".into(),
-                kind: "report".into(),
-                text: "tried serde first".into(),
-            }],
+            change_requests: vec![],
+            earlier: earlier(),
         };
         let text = brief.render();
-        assert!(text.starts_with("You are working on item #k3f9ab: Parse durations\n"));
-        assert!(text.contains("- [ ] 1. write parser"));
+        assert!(
+            text.starts_with(
+                "You are the agent `coder`, working on item #k3f9ab: Parse durations\n"
+            )
+        );
+        assert!(text.contains("## Task\n\n- [ ] 1. write parser\n"));
         assert!(text.contains("- #q7x2cd Which crate? (answered): Use humantime"));
-        assert!(text.contains("- @joshua/coder (report): tried serde first"));
+        assert!(text.contains("- coder (comment): tried serde first"));
         assert!(text.contains("`wf/k3f9ab`") && text.contains("`main`"));
+        assert!(!text.contains("change request"), "{text}");
         for command in [
             "wf item check k3f9ab",
             "wf comment k3f9ab",
@@ -477,8 +526,32 @@ mod tests {
     }
 
     #[test]
+    fn open_change_requests_are_listed_with_how_to_resolve_them() {
+        let brief = WorkBrief {
+            agent: "coder".into(),
+            item: "k3f9ab".into(),
+            title: "Parse durations".into(),
+            body: String::new(),
+            branch: "wf/k3f9ab".into(),
+            target: "main".into(),
+            dependencies: vec![],
+            change_requests: vec![OpenComment {
+                comment: "c4d2e1".into(),
+                by: "reviewer".into(),
+                text: "Exit with 2 on a missing file".into(),
+            }],
+            earlier: vec![],
+        };
+        let text = brief.render();
+        assert!(text.contains("## Open change requests\n"), "{text}");
+        assert!(text.contains("- c4d2e1 by reviewer: Exit with 2 on a missing file"));
+        assert!(text.contains("--resolve <id>"));
+    }
+
+    #[test]
     fn the_review_brief_has_the_diff_and_the_verdicts() {
         let brief = ReviewBrief {
+            agent: "reviewer".into(),
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
             body: String::new(),
@@ -505,15 +578,24 @@ mod tests {
     #[test]
     fn empty_sections_are_left_out() {
         let brief = WorkBrief {
+            agent: "coder".into(),
             item: "k3f9ab".into(),
             title: "Small".into(),
             body: String::new(),
             branch: "wf/k3f9ab".into(),
             target: "main".into(),
             dependencies: vec![],
+            change_requests: vec![],
             earlier: vec![],
         };
         let text = brief.render();
-        assert!(!text.contains("## Dependencies") && !text.contains("## What was said before"));
+        for heading in [
+            "## Task",
+            "## Dependencies",
+            "## Open change requests",
+            "## What was said before",
+        ] {
+            assert!(!text.contains(heading), "{heading}");
+        }
     }
 }
