@@ -1,4 +1,5 @@
-//! The first prompt of a session: what the agent is to do and how it reports back.
+//! What a session is told about its task: the item, what was said on it, and how to report back.
+//! The daemon sends it as the first prompt of a session.
 
 use std::fmt::Write;
 
@@ -17,8 +18,8 @@ pub struct Dependency {
     pub note: Option<String>,
 }
 
-/// The prompt that starts a work session.
-pub struct WorkPackage {
+/// The brief of a work session.
+pub struct WorkBrief {
     /// The short id of the item, as `wf` commands take it.
     pub item: String,
     pub title: String,
@@ -30,7 +31,7 @@ pub struct WorkPackage {
     pub earlier: Vec<Earlier>,
 }
 
-impl WorkPackage {
+impl WorkBrief {
     pub fn render(&self) -> String {
         let mut text = format!(
             "You are working on item #{item}: {title}\n\n",
@@ -91,11 +92,11 @@ impl WorkPackage {
     }
 }
 
-/// The diff is part of the prompt up to this many bytes; beyond that the reviewer reads it itself.
+/// The diff is part of the brief up to this many bytes; beyond that the reviewer reads it itself.
 pub const MAX_DIFF_LEN: usize = 60_000;
 
-/// The prompt that starts a review session.
-pub struct ReviewPackage {
+/// The brief of a review session.
+pub struct ReviewBrief {
     /// The short id of the item.
     pub item: String,
     pub title: String,
@@ -109,7 +110,7 @@ pub struct ReviewPackage {
     pub diff: String,
 }
 
-impl ReviewPackage {
+impl ReviewBrief {
     pub fn render(&self) -> String {
         let mut text = format!(
             "You are reviewing the work on item #{item}: {title}\n\n",
@@ -188,8 +189,8 @@ pub struct WaitingBlocker {
     pub text: String,
 }
 
-/// The prompt that starts a supervise session.
-pub struct SupervisePackage {
+/// The brief of a supervise session.
+pub struct SuperviseBrief {
     /// The short id of the item, as `wf` commands take it.
     pub item: String,
     pub title: String,
@@ -200,7 +201,7 @@ pub struct SupervisePackage {
     pub person: String,
 }
 
-impl SupervisePackage {
+impl SuperviseBrief {
     pub fn render(&self) -> String {
         let mut text = format!(
             "You are supervising item #{item}: {title}\n\n\
@@ -254,17 +255,13 @@ impl SupervisePackage {
     }
 }
 
-/// The prompt that goes out when a turn ended and the session is still going.
-pub const CONTINUE: &str = "Continue. When you are done run `wf work submit`; if you need an answer write a \
-     blocker with `wf comment <item> \"<question>\" --block`; if you are stuck run `wf work release`.";
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn the_package_names_the_item_the_branch_and_the_commands() {
-        let package = WorkPackage {
+    fn the_work_brief_names_the_item_the_branch_and_the_commands() {
+        let brief = WorkBrief {
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
             body: "- [ ] 1. write parser".into(),
@@ -282,7 +279,7 @@ mod tests {
                 text: "tried serde first".into(),
             }],
         };
-        let text = package.render();
+        let text = brief.render();
         assert!(text.starts_with("You are working on item #k3f9ab: Parse durations\n"));
         assert!(text.contains("- [ ] 1. write parser"));
         assert!(text.contains("- #q7x2cd Which crate? (answered): Use humantime"));
@@ -300,8 +297,8 @@ mod tests {
     }
 
     #[test]
-    fn the_review_package_has_the_diff_and_the_verdicts() {
-        let package = ReviewPackage {
+    fn the_review_brief_has_the_diff_and_the_verdicts() {
+        let brief = ReviewBrief {
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
             body: String::new(),
@@ -311,15 +308,15 @@ mod tests {
             earlier: vec![],
             diff: "+added".into(),
         };
-        let text = package.render();
+        let text = brief.render();
         assert!(text.contains("```diff\n+added\n```"));
         assert!(text.contains("Commit `abc123`") && text.contains("step 1 of 2"));
         for command in ["--approve", "--request-changes", "--escalate"] {
             assert!(text.contains(command), "{command}");
         }
-        let large = ReviewPackage {
+        let large = ReviewBrief {
             diff: "x".repeat(MAX_DIFF_LEN + 1),
-            ..package
+            ..brief
         };
         let text = large.render();
         assert!(!text.contains("```diff") && text.contains("git diff main...HEAD"));
@@ -327,7 +324,7 @@ mod tests {
 
     #[test]
     fn empty_sections_are_left_out() {
-        let package = WorkPackage {
+        let brief = WorkBrief {
             item: "k3f9ab".into(),
             title: "Small".into(),
             body: String::new(),
@@ -336,7 +333,7 @@ mod tests {
             dependencies: vec![],
             earlier: vec![],
         };
-        let text = package.render();
+        let text = brief.render();
         assert!(!text.contains("## Dependencies") && !text.contains("## What was said before"));
     }
 }

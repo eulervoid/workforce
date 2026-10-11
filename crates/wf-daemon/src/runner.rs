@@ -8,6 +8,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use wf_core::brief::{Dependency, Earlier, ReviewBrief, SuperviseBrief, WaitingBlocker, WorkBrief};
 use wf_core::event::{Comment, Event, EventBody, ItemMoved, Merged, SessionEnded, SessionStarted};
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
@@ -18,7 +19,6 @@ use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
 use wf_harness::{
     AcpAgentConfig, Conversation, Launch, PermissionMode, PermissionRequest, Permissions,
-    ReviewPackage, WorkPackage,
 };
 use wf_store::AuthorError;
 use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name};
@@ -1092,9 +1092,9 @@ async fn turns(
         return failed("the workforce could not be read".to_string());
     };
     let mut prompt = match run.role {
-        SessionRole::Work => work_package(daemon, loaded, run, &state).await,
-        SessionRole::Review { commit } => review_package(loaded, run, &state, commit).await,
-        SessionRole::Supervise => supervise_package(loaded, run, &state).await,
+        SessionRole::Work => work_brief(daemon, loaded, run, &state).await,
+        SessionRole::Review { commit } => review_brief(loaded, run, &state, commit).await,
+        SessionRole::Supervise => supervise_brief(loaded, run, &state).await,
     };
     let cancel = conversation.cancel();
     let deadline = run.max_duration.map(|duration| Instant::now() + duration);
@@ -1153,7 +1153,7 @@ async fn turns(
                     End::Over
                 };
             }
-            TurnOutcome::Continue => prompt = wf_harness::CONTINUE.to_string(),
+            TurnOutcome::Continue => prompt = CONTINUE.to_string(),
             TurnOutcome::GiveUp => {
                 return End::Finish(Finish::GaveUp {
                     turns: turns_without_commit,
@@ -1248,7 +1248,7 @@ async fn park(
     }
 }
 
-async fn work_package(
+async fn work_brief(
     daemon: &Arc<Daemon>,
     loaded: &Arc<Loaded>,
     run: &Run,
@@ -1267,7 +1267,7 @@ async fn work_package(
             continue;
         };
         let note = last_comment(loaded, dependency).await;
-        dependencies.push(wf_harness::Dependency {
+        dependencies.push(Dependency {
             item: HashId::short(&dependency.id()),
             title: dependency.title().to_string(),
             state: match dependency.standing(policy) {
@@ -1280,7 +1280,7 @@ async fn work_package(
         });
     }
     let _ = daemon;
-    WorkPackage {
+    WorkBrief {
         item: HashId::short(&run.item),
         title: item.title().to_string(),
         body,
@@ -1292,7 +1292,7 @@ async fn work_package(
     .render()
 }
 
-async fn review_package(
+async fn review_brief(
     loaded: &Arc<Loaded>,
     run: &Run,
     state: &State,
@@ -1331,7 +1331,7 @@ async fn review_package(
             .unwrap_or_default(),
         None => String::new(),
     };
-    ReviewPackage {
+    ReviewBrief {
         item: HashId::short(&run.item),
         title: item.title().to_string(),
         body: item.body().render_numbered(),
@@ -1344,8 +1344,8 @@ async fn review_package(
     .render()
 }
 
-/// The prompt of a supervise session: the blockers of the item it is to answer or escalate.
-async fn supervise_package(loaded: &Arc<Loaded>, run: &Run, state: &State) -> String {
+/// The brief of a supervise session: the blockers of the item it is to answer or escalate.
+async fn supervise_brief(loaded: &Arc<Loaded>, run: &Run, state: &State) -> String {
     let Some(ItemView::Live(item)) = state.item(run.item) else {
         return String::new();
     };
@@ -1368,7 +1368,7 @@ async fn supervise_package(loaded: &Arc<Loaded>, run: &Run, state: &State) -> St
     let blockers = waiting
         .iter()
         .zip(texts)
-        .map(|(blocker, text)| wf_harness::WaitingBlocker {
+        .map(|(blocker, text)| WaitingBlocker {
             comment: blocker.comment.short(),
             by: speaker(&item.comments()[&blocker.comment].by),
             text: text.unwrap_or_default(),
@@ -1379,7 +1379,7 @@ async fn supervise_package(loaded: &Arc<Loaded>, run: &Run, state: &State) -> St
         .find(|(principal, _)| **principal == agent.principal)
         .map(|(_, member)| format!("@{}", member.handle))
         .unwrap_or_default();
-    wf_harness::SupervisePackage {
+    SuperviseBrief {
         item: HashId::short(&run.item),
         title: item.title().to_string(),
         body: item.body().render_numbered(),
@@ -1426,6 +1426,10 @@ async fn comment_texts(loaded: &Loaded, comments: Vec<CommentId>) -> Vec<Option<
 
 /// What to say when a parked session can go on: what others wrote on the item since the session's
 /// last blocker, and what finished dependencies left.
+/// The prompt that goes out when a turn ended and the session is still going.
+const CONTINUE: &str = "Continue. When you are done run `wf work submit`; if you need an answer write a \
+     blocker with `wf comment <item> \"<question>\" --block`; if you are stuck run `wf work release`.";
+
 async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: &State) -> String {
     let mut text = String::from("What you were waiting for is resolved.");
     if let Some(ItemView::Live(item)) = state.item(run.item) {
@@ -1468,7 +1472,7 @@ async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: 
     text
 }
 
-async fn earlier_comments(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_harness::Earlier> {
+async fn earlier_comments(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<Earlier> {
     let mut comments: Vec<_> = item.comments().iter().collect();
     comments.sort_by_key(|(id, comment)| (comment.at, **id));
     let ids: Vec<EventId> = comments.iter().map(|(id, _)| EventId::from(**id)).collect();
@@ -1492,7 +1496,7 @@ async fn earlier_comments(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf
             let EventBody::Comment(written) = &event?.content.body else {
                 return None;
             };
-            Some(wf_harness::Earlier {
+            Some(Earlier {
                 by: speaker(&comment.by),
                 kind: comment.kind.name().replace('_', " "),
                 text: written.text.clone(),

@@ -869,7 +869,7 @@ Both stay **open** until a later comment resolves them. They differ in what they
 | Kind | Purpose | While open | Goes to |
 |---|---|---|---|
 | **Blocker** | the work cannot start or continue until someone else answers or acts | the item is not ready; a work session on it parks (section 5) | whoever it `@mentions`; otherwise a supervisor; otherwise the principal of the agent that wrote it, or the author if human |
-| **Change request** | something the work must do before it is submitted | `wf work submit` and `Approve` are refused | whoever works on the item next; the work package lists it |
+| **Change request** | something the work must do before it is submitted | `wf work submit` and `Approve` are refused | whoever works on the item next; the work brief lists it |
 
 * A question from an agent is a blocker on its own item: `wf comment <item> "<question>" --block`. Its
   session parks, and resumes with every comment written while it was parked once the blocker is resolved.
@@ -916,7 +916,7 @@ which one each comment came from.
   ask for reports that stand on their own, saying what was chosen, what was rejected and why.
 * Attribution comes from the event signature and the session.
 * Redaction happens before signing (M3; until then comments are signed as written).
-* A work package includes the comments of earlier sessions of the item.
+* A work brief includes the comments of earlier sessions of the item.
 * Nothing depends on commit messages. Overlap notifications (M3) come from the files commits touch, which
   are read from the repository and are not part of a comment.
 
@@ -988,7 +988,7 @@ authenticated) is *later*. wf never handles harness credentials.
 | ACP | Use |
 |---|---|
 | `session/new` + MCP servers | start in the item's worktree with `WF_SESSION` set; attach the `wf` MCP server (`item_show`, `comment`, `inbox`, `search`, `decision_propose`, M3) |
-| `session/prompt` | send the work package: item, dependencies, comments of earlier sessions, open change requests, the agent rules; later ratified decisions and search hits |
+| `session/prompt` | send the brief: item, dependencies, comments of earlier sessions, open change requests, the agent rules; later ratified decisions and search hits |
 | end of a prompt turn | decides the next step (below) |
 | `session/update` | transcript capture (local, `wf session watch`), redaction (M3), presence |
 | `session/request_permission` | answered by the agent's `permissions`: allow, deny, or ask, which goes through the permission chain below |
