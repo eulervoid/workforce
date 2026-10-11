@@ -179,6 +179,7 @@ struct Run {
     role: SessionRole,
     agent: AgentName,
     harness: AcpAgentConfig,
+    model: Option<String>,
     worktree: PathBuf,
     transcript: PathBuf,
     branch: String,
@@ -507,6 +508,7 @@ impl Daemon {
             role,
             agent,
             harness,
+            model: definition.model.clone(),
             worktree,
             transcript: transcripts.join(format!("{session}.jsonl")),
             branch,
@@ -993,6 +995,7 @@ async fn drive(
         .env("PATH", path.to_string_lossy());
     let mut conversation = match Conversation::start(Launch {
         agent,
+        model: run.model.clone(),
         directory: run.worktree.clone(),
         permissions: Arc::clone(&run.permissions),
         transcript,

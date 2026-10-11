@@ -5,7 +5,9 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
-    RequestPermissionRequest, RequestPermissionResponse, SessionNotification, SessionUpdate,
+    RequestPermissionRequest, RequestPermissionResponse, SessionConfigId, SessionConfigKind,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions,
+    SessionConfigValueId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
     TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
@@ -26,6 +28,44 @@ pub enum Error {
     Transcript(#[from] io::Error),
     #[error("the agent is gone")]
     Closed,
+    #[error("the agent does not offer the model {model:?}; it offers: {}", .available.join(", "))]
+    UnknownModel {
+        model: String,
+        available: Vec<String>,
+    },
+}
+
+/// The model option of the agent and the value of it that `wanted` names, by value or by name.
+fn choose_model(
+    options: &[SessionConfigOption],
+    wanted: &str,
+) -> Result<(SessionConfigId, SessionConfigValueId), Error> {
+    let mut available = Vec::new();
+    for option in options {
+        if option.category != Some(SessionConfigOptionCategory::Model) {
+            continue;
+        }
+        let SessionConfigKind::Select(select) = &option.kind else {
+            continue;
+        };
+        let choices: Vec<_> = match &select.options {
+            SessionConfigSelectOptions::Ungrouped(choices) => choices.iter().collect(),
+            SessionConfigSelectOptions::Grouped(groups) => {
+                groups.iter().flat_map(|group| &group.options).collect()
+            }
+            _ => Vec::new(),
+        };
+        for choice in choices {
+            if &*choice.value.0 == wanted || choice.name.eq_ignore_ascii_case(wanted) {
+                return Ok((option.id.clone(), choice.value.clone()));
+            }
+            available.push(format!("{} ({})", choice.value.0, choice.name));
+        }
+    }
+    Err(Error::UnknownModel {
+        model: wanted.to_string(),
+        available,
+    })
 }
 
 /// The command that starts a known harness in ACP mode.
@@ -43,6 +83,9 @@ pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
 /// line that crosses the connection is appended to `transcript`.
 pub struct Launch<W> {
     pub agent: AcpAgentConfig,
+    /// The model to prompt, as the agent names it: the value or the name of an option it offers.
+    /// Without one the agent keeps its own default.
+    pub model: Option<String>,
     pub directory: PathBuf,
     pub permissions: Arc<dyn Permissions>,
     pub transcript: W,
@@ -77,6 +120,8 @@ impl Conversation {
         });
         let permissions = launch.permissions;
         let directory = launch.directory;
+        let model = launch.model;
+        let (refused, mut refusal) = oneshot::channel();
         let (turns, mut incoming) = mpsc::channel::<Turn>(1);
         let (ready, opened) = oneshot::channel();
         let cancel = Arc::new(Notify::new());
@@ -123,6 +168,27 @@ impl Conversation {
                         .send_request(NewSessionRequest::new(directory))
                         .block_task()
                         .await?;
+                    if let Some(wanted) = &model {
+                        let options = session.config_options.as_deref().unwrap_or_default();
+                        match choose_model(options, wanted) {
+                            Ok((option, value)) => {
+                                connection
+                                    .send_request(SetSessionConfigOptionRequest::new(
+                                        session.session_id.clone(),
+                                        option,
+                                        &*value.0,
+                                    ))
+                                    .block_task()
+                                    .await?;
+                            }
+                            Err(error) => {
+                                let _ = refused.send(error);
+                                return Err(agent_client_protocol::util::internal_error(
+                                    "unknown model",
+                                ));
+                            }
+                        }
+                    }
                     let _ = ready.send(());
                     while let Some(turn) = incoming.recv().await {
                         said.lock()
@@ -168,7 +234,7 @@ impl Conversation {
                 task,
             }),
             Err(_) => Err(match task.await {
-                Ok(Err(error)) => error,
+                Ok(Err(error)) => refusal.try_recv().unwrap_or(error),
                 Ok(Ok(())) | Err(_) => Error::Closed,
             }),
         }
@@ -228,5 +294,76 @@ mod tests {
         let opencode = command_for("opencode").unwrap();
         assert_eq!(opencode.arguments(), ["acp"]);
         assert!(command_for("unknown").is_none());
+    }
+}
+
+#[cfg(test)]
+mod model_tests {
+    use agent_client_protocol::schema::v1::{SessionConfigSelect, SessionConfigSelectOption};
+
+    use super::*;
+
+    fn models() -> Vec<SessionConfigOption> {
+        fn choice(value: &str, name: &str) -> SessionConfigSelectOption {
+            SessionConfigSelectOption::new(value.to_string(), name.to_string())
+        }
+        fn select(current: &str, choices: Vec<SessionConfigSelectOption>) -> SessionConfigKind {
+            SessionConfigKind::Select(SessionConfigSelect::new(current.to_string(), choices))
+        }
+        vec![
+            SessionConfigOption::new(
+                "effort",
+                "Effort",
+                select("low", vec![choice("haiku", "not a model")]),
+            ),
+            SessionConfigOption::new(
+                "model",
+                "Model",
+                select(
+                    "default",
+                    vec![
+                        choice("default", "Default"),
+                        choice("sonnet", "Sonnet 5.5"),
+                        choice("haiku", "Haiku 5.5"),
+                    ],
+                ),
+            )
+            .category(SessionConfigOptionCategory::Model),
+        ]
+    }
+
+    #[test]
+    fn a_model_is_found_by_value_or_by_name() {
+        for wanted in ["haiku", "Haiku 5.5", "haiku 5.5"] {
+            let (option, value) = choose_model(&models(), wanted).unwrap();
+            assert_eq!(&*option.0, "model");
+            assert_eq!(&*value.0, "haiku");
+        }
+    }
+
+    #[test]
+    fn an_unknown_model_lists_what_the_agent_offers() {
+        let Err(Error::UnknownModel { model, available }) =
+            choose_model(&models(), "claude-haiku-5-5")
+        else {
+            panic!("expected the model to be refused");
+        };
+        assert_eq!(model, "claude-haiku-5-5");
+        assert_eq!(
+            available,
+            [
+                "default (Default)",
+                "sonnet (Sonnet 5.5)",
+                "haiku (Haiku 5.5)"
+            ]
+        );
+    }
+
+    #[test]
+    fn an_agent_without_a_model_option_offers_nothing() {
+        assert!(matches!(
+            choose_model(&[], "haiku"),
+            Err(Error::UnknownModel { available, .. }) if available.is_empty()
+        ));
     }
 }

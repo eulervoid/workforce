@@ -22,6 +22,7 @@ async fn run_fake_agent(permissions: PermissionMode) -> Vec<TranscriptEntry> {
     let buffer = SharedBuffer::default();
     let mut conversation = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        model: None,
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(permissions),
         transcript: buffer.clone(),
@@ -85,6 +86,7 @@ async fn one_session_takes_several_prompts() {
     let buffer = SharedBuffer::default();
     let mut conversation = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        model: None,
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(PermissionMode::Allow),
         transcript: buffer.clone(),
@@ -123,6 +125,7 @@ async fn a_reply_holds_what_the_agent_said_in_its_turn() {
     let directory = tempfile::tempdir().unwrap();
     let mut conversation = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        model: None,
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(PermissionMode::Deny),
         transcript: SharedBuffer::default(),
@@ -139,6 +142,7 @@ async fn a_reply_holds_what_the_agent_said_in_its_turn() {
 async fn an_agent_that_cannot_start_is_an_error() {
     let result = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new("/nonexistent/agent"),
+        model: None,
         directory: std::env::temp_dir(),
         permissions: Arc::new(PermissionMode::Allow),
         transcript: SharedBuffer::default(),

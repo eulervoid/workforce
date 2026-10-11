@@ -132,6 +132,7 @@ impl WorkforceJudges {
             .map_err(|error| format!("{}: {error}", transcript_path.display()))?;
         let conversation = Conversation::start(Launch {
             agent: command,
+            model: definition.model.clone(),
             directory,
             // A judge only reads what it is given; whatever it asks to do is refused.
             permissions: Arc::new(PermissionMode::Deny),
