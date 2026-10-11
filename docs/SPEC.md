@@ -1193,7 +1193,7 @@ wf session start|list|show|stop|watch     # live and recent sessions, transcript
 wf session allow|deny <session>           # answer a held permission request
 wf permissions test                       # run the permission chain on a request from stdin (M2.1)
 wf watch [--item <item>]                  # events as they arrive; prompts for what waits on you (M2.1)
-wf work submit | release                  # agents, inside a session
+wf work brief | submit | release          # agents, inside a session
 wf daemon | sync | status | log | export
 wf fork | fork accept | fork list
 wf policy edit|diff|apply|export

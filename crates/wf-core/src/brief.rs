@@ -1,7 +1,183 @@
 //! What a session is told about its task: the item, what was said on it, and how to report back.
-//! The daemon sends it as the first prompt of a session.
+//! The daemon sends it as the first prompt of a session, and `wf work brief` prints it again.
 
 use std::fmt::Write;
+
+use crate::event::CommentKind;
+use crate::id::{CommentId, HashId, ItemId, SessionId};
+use crate::identity::Actor;
+use crate::item::{Item, ItemView, Standing};
+use crate::policy::ReviewStep;
+use crate::review::ReviewStatus;
+use crate::session::{CommitId, SessionRole};
+use crate::state::State;
+
+/// What a brief tells that the state does not hold: the texts of comments, which only the log
+/// has, and the branch and diffs of the repository.
+pub trait Sources {
+    fn text(&self, comment: CommentId) -> Option<String>;
+    /// The branch the work on `item` is committed to.
+    fn branch(&self, item: ItemId) -> String;
+    /// What `commit` changes against `target`.
+    fn diff(&self, target: &str, commit: CommitId) -> String;
+}
+
+/// The brief of a session, by its role.
+pub enum Brief {
+    Work(WorkBrief),
+    Review(ReviewBrief),
+    Supervise(SuperviseBrief),
+}
+
+impl Brief {
+    /// The brief of `session`, or `None` when the session or its item is not known or archived.
+    pub fn of(state: &State, session: SessionId, sources: &impl Sources) -> Option<Self> {
+        let session = state.session(session)?;
+        let Some(ItemView::Live(item)) = state.item(session.item()) else {
+            return None;
+        };
+        let target = state.policy()?.policy.merge.target.clone();
+        Some(match session.role() {
+            SessionRole::Work => Brief::Work(WorkBrief {
+                item: HashId::short(&item.id()),
+                title: item.title().to_string(),
+                body: item.body().render_numbered(),
+                branch: sources.branch(item.id()),
+                target,
+                dependencies: dependencies(state, item, sources),
+                earlier: earlier(item, sources),
+            }),
+            SessionRole::Review { commit } => Brief::Review(ReviewBrief {
+                item: HashId::short(&item.id()),
+                title: item.title().to_string(),
+                body: item.body().render_numbered(),
+                commit: commit.map(|commit| commit.to_string()),
+                diff: commit.map_or_else(String::new, |commit| sources.diff(&target, commit)),
+                target,
+                step: review_step(state, item.id()),
+                earlier: earlier(item, sources),
+            }),
+            SessionRole::Supervise => {
+                let agent = session.agent();
+                let blockers = state
+                    .open_blockers_of(item)
+                    .into_iter()
+                    .filter(|blocker| state.answers(agent, blocker))
+                    .map(|blocker| WaitingBlocker {
+                        comment: blocker.comment.short(),
+                        by: speaker(&item.comments()[&blocker.comment].by),
+                        text: sources.text(blocker.comment).unwrap_or_default(),
+                    })
+                    .collect();
+                let person = state
+                    .members()
+                    .find(|(principal, _)| **principal == agent.principal)
+                    .map(|(_, member)| format!("@{}", member.handle))
+                    .unwrap_or_default();
+                Brief::Supervise(SuperviseBrief {
+                    item: HashId::short(&item.id()),
+                    title: item.title().to_string(),
+                    body: item.body().render_numbered(),
+                    earlier: earlier(item, sources),
+                    blockers,
+                    person,
+                })
+            }
+        })
+    }
+
+    pub fn render(&self) -> String {
+        match self {
+            Brief::Work(brief) => brief.render(),
+            Brief::Review(brief) => brief.render(),
+            Brief::Supervise(brief) => brief.render(),
+        }
+    }
+}
+
+/// Who wrote something, as an agent is told: the agent's name, or `someone` for a person.
+pub fn speaker(actor: &Actor) -> String {
+    match actor {
+        Actor::Human(_) => "someone".to_string(),
+        Actor::Daemon(_) => "the daemon".to_string(),
+        Actor::Agent { agent, .. } => agent.name.to_string(),
+    }
+}
+
+/// Everything said on the item, oldest first.
+fn earlier(item: &Item, sources: &impl Sources) -> Vec<Earlier> {
+    let mut comments: Vec<_> = item.comments().iter().collect();
+    comments.sort_by_key(|(id, comment)| (comment.at, **id));
+    comments
+        .into_iter()
+        .filter_map(|(id, comment)| {
+            Some(Earlier {
+                by: speaker(&comment.by),
+                kind: comment.kind.name().replace('_', " "),
+                text: sources.text(*id)?,
+            })
+        })
+        .collect()
+}
+
+/// The latest plain comment on an item: the answer, for a question.
+pub fn last_comment(item: &Item, sources: &impl Sources) -> Option<String> {
+    item.comments()
+        .iter()
+        .filter(|(_, comment)| comment.kind == CommentKind::Plain)
+        .max_by_key(|(id, comment)| (comment.at, **id))
+        .and_then(|(id, _)| sources.text(*id))
+}
+
+fn dependencies(state: &State, item: &Item, sources: &impl Sources) -> Vec<Dependency> {
+    let Some(policy) = state.policy().map(|doc| &doc.policy) else {
+        return Vec::new();
+    };
+    let graph = state.dependency_graph();
+    graph
+        .depends_on(item.id())
+        .filter_map(|dependency| match state.item(dependency) {
+            Some(ItemView::Live(dependency)) => Some(dependency),
+            Some(ItemView::Archived(_)) | None => None,
+        })
+        .map(|dependency| Dependency {
+            item: HashId::short(&dependency.id()),
+            title: dependency.title().to_string(),
+            state: match dependency.standing(policy) {
+                Standing::Known { state, .. } => state.to_string(),
+                Standing::Unknown { state } => {
+                    state.map_or_else(|| "unknown".to_string(), ToString::to_string)
+                }
+            },
+            note: last_comment(dependency, sources),
+        })
+        .collect()
+}
+
+/// Which step of the review level a review session is, in words.
+fn review_step(state: &State, item: ItemId) -> String {
+    match state.review_status(item) {
+        Some(ReviewStatus::Awaiting {
+            step: ReviewStep::Agent { requires },
+        }) => format!(
+            "the review by an agent with {}",
+            requires
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+        Some(
+            ReviewStatus::Awaiting {
+                step: ReviewStep::Human,
+            }
+            | ReviewStatus::ChangesRequested
+            | ReviewStatus::Approved { .. }
+            | ReviewStatus::Merged { .. },
+        )
+        | None => "a review".to_string(),
+    }
+}
 
 /// What was said on the item before: a comment, a blocker or a change request.
 pub struct Earlier {
@@ -83,7 +259,8 @@ impl WorkBrief {
              - When the work is finished, run `wf work submit`. Your commits are reviewed and merged from there.\n\
              - If you need an answer from someone, run `wf comment {item} \"<question>\" --block` and \
              stop; you are prompted again when it is answered.\n\
-             - If you cannot make progress, run `wf work release --note \"<why>\"`.\n",
+             - If you cannot make progress, run `wf work release --note \"<why>\"`.\n\
+             - To read this brief again, run `wf work brief`.\n",
             branch = self.branch,
             target = self.target,
             item = self.item,
@@ -174,7 +351,8 @@ impl ReviewBrief {
              `wf comment {item} \"<what to change>\" --request-change`, then run \
              `wf review --request-changes`. The item goes back for another session, which has to \
              resolve every change request before it submits again.\n\
-             - `wf review --escalate --note \"...\"` if a person has to decide.\n",
+             - `wf review --escalate --note \"...\"` if a person has to decide.\n\
+             - To read this brief again, run `wf work brief`.\n",
             item = self.item,
         );
         text
@@ -246,7 +424,8 @@ impl SuperviseBrief {
              Answer everything above in one comment; your session ends with it.\n\
              - If you can answer: `wf comment {item} \"<answer>\" {resolve}`.\n\
              - If a person has to decide: `wf comment {item} \"{person} <what they have to decide>\" \
-             --block {resolve}`. This hands the question to them.\n",
+             --block {resolve}`. This hands the question to them.\n\
+             - To read this brief again, run `wf work brief`.\n",
             item = self.item,
             resolve = resolve.join(" "),
             person = self.person,
@@ -291,6 +470,7 @@ mod tests {
             "wf work submit",
             "--block",
             "wf work release",
+            "wf work brief",
         ] {
             assert!(text.contains(command), "{command}");
         }

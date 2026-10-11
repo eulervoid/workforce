@@ -8,11 +8,11 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use wf_core::brief::{Dependency, Earlier, ReviewBrief, SuperviseBrief, WaitingBlocker, WorkBrief};
+use wf_core::brief::{Brief, Sources, last_comment, speaker};
 use wf_core::event::{Comment, Event, EventBody, ItemMoved, Merged, SessionEnded, SessionStarted};
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
-use wf_core::item::{ItemView, Standing};
+use wf_core::item::ItemView;
 use wf_core::lifecycle::{AfterEnd, TurnOutcome};
 use wf_core::name::{AgentName, HarnessName, StateName};
 use wf_core::session::{CommitId, EndReason, SessionRole};
@@ -20,7 +20,7 @@ use wf_core::state::State;
 use wf_harness::{
     AcpAgentConfig, Conversation, Launch, PermissionMode, PermissionRequest, Permissions,
 };
-use wf_store::AuthorError;
+use wf_store::{AuthorError, RedbStore};
 use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name};
 
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
@@ -1088,13 +1088,8 @@ async fn turns(
     stopped: &mut mpsc::UnboundedReceiver<Stop>,
     conversation: &mut Conversation,
 ) -> End {
-    let Ok(state) = daemon.snapshot(loaded).await else {
+    let Ok(mut prompt) = brief(loaded, run).await else {
         return failed("the workforce could not be read".to_string());
-    };
-    let mut prompt = match run.role {
-        SessionRole::Work => work_brief(daemon, loaded, run, &state).await,
-        SessionRole::Review { commit } => review_brief(loaded, run, &state, commit).await,
-        SessionRole::Supervise => supervise_brief(loaded, run, &state).await,
     };
     let cancel = conversation.cancel();
     let deadline = run.max_duration.map(|duration| Instant::now() + duration);
@@ -1162,8 +1157,7 @@ async fn turns(
             }
             TurnOutcome::Park => match park(daemon, loaded, run, stopped, &deadline).await {
                 Parked::Ready => {
-                    let state = daemon.snapshot(loaded).await.unwrap_or(state);
-                    prompt = resumed(daemon, loaded, run, &state).await;
+                    prompt = resumed(loaded, run).await;
                     turns_without_commit = 0;
                 }
                 Parked::Over => return End::Over,
@@ -1248,195 +1242,95 @@ async fn park(
     }
 }
 
-async fn work_brief(
-    daemon: &Arc<Daemon>,
-    loaded: &Arc<Loaded>,
-    run: &Run,
-    state: &State,
-) -> String {
-    let Some(ItemView::Live(item)) = state.item(run.item) else {
-        return String::new();
-    };
-    let body = item.body().render_numbered();
-    let earlier = earlier_comments(loaded, item).await;
-    let graph = state.dependency_graph();
-    let policy = &state.policy().expect("a workforce has a policy").policy;
-    let mut dependencies = Vec::new();
-    for dependency in graph.depends_on(run.item) {
-        let Some(ItemView::Live(dependency)) = state.item(dependency) else {
-            continue;
+/// What the runner reads a brief from: the log of the workforce, and the diff of the commit under
+/// review, which is read from git before the store is so that git does not hold the store up.
+struct Logged<'a> {
+    store: &'a RedbStore,
+    diff: String,
+}
+
+impl Sources for Logged<'_> {
+    fn text(&self, comment: CommentId) -> Option<String> {
+        let EventBody::Comment(written) =
+            wf_store::EventStore::event(self.store, &EventId::from(comment))
+                .ok()??
+                .content
+                .body
+        else {
+            return None;
         };
-        let note = last_comment(loaded, dependency).await;
-        dependencies.push(Dependency {
-            item: HashId::short(&dependency.id()),
-            title: dependency.title().to_string(),
-            state: match dependency.standing(policy) {
-                Standing::Known { state, .. } => state.to_string(),
-                Standing::Unknown { state } => {
-                    state.map_or_else(|| "unknown".to_string(), ToString::to_string)
-                }
-            },
-            note,
-        });
+        Some(written.text)
     }
-    let _ = daemon;
-    WorkBrief {
-        item: HashId::short(&run.item),
-        title: item.title().to_string(),
-        body,
-        branch: run.branch.clone(),
-        target: run.target.clone(),
-        dependencies,
-        earlier,
-    }
-    .render()
-}
 
-async fn review_brief(
-    loaded: &Arc<Loaded>,
-    run: &Run,
-    state: &State,
-    commit: Option<CommitId>,
-) -> String {
-    let Some(ItemView::Live(item)) = state.item(run.item) else {
-        return String::new();
-    };
-    let step = match state.review_status(run.item) {
-        Some(wf_core::review::ReviewStatus::Awaiting {
-            step: wf_core::policy::ReviewStep::Agent { requires },
-        }) => format!(
-            "the review by an agent with {}",
-            requires
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
-        Some(
-            wf_core::review::ReviewStatus::Awaiting {
-                step: wf_core::policy::ReviewStep::Human,
-            }
-            | wf_core::review::ReviewStatus::ChangesRequested
-            | wf_core::review::ReviewStatus::Approved { .. }
-            | wf_core::review::ReviewStatus::Merged { .. },
-        )
-        | None => "a review".to_string(),
-    };
-    let (repository, target) = (run.repository.clone(), run.target.clone());
-    let diff = match commit {
-        Some(commit) => blocking(move || GitCli::open(&repository)?.diff(&target, commit, &[]))
-            .await
-            .ok()
-            .and_then(Result::ok)
-            .unwrap_or_default(),
-        None => String::new(),
-    };
-    ReviewBrief {
-        item: HashId::short(&run.item),
-        title: item.title().to_string(),
-        body: item.body().render_numbered(),
-        commit: commit.map(|commit| commit.to_string()),
-        target: run.target.clone(),
-        step,
-        earlier: earlier_comments(loaded, item).await,
-        diff,
+    fn branch(&self, item: ItemId) -> String {
+        item_branch(item)
     }
-    .render()
-}
 
-/// The brief of a supervise session: the blockers of the item it is to answer or escalate.
-async fn supervise_brief(loaded: &Arc<Loaded>, run: &Run, state: &State) -> String {
-    let Some(ItemView::Live(item)) = state.item(run.item) else {
-        return String::new();
-    };
-    let Some(agent) = state
-        .session(run.session)
-        .map(|session| session.agent().clone())
-    else {
-        return String::new();
-    };
-    let waiting: Vec<_> = state
-        .open_blockers_of(item)
-        .into_iter()
-        .filter(|blocker| state.answers(&agent, blocker))
-        .collect();
-    let texts = comment_texts(
-        loaded,
-        waiting.iter().map(|blocker| blocker.comment).collect(),
-    )
-    .await;
-    let blockers = waiting
-        .iter()
-        .zip(texts)
-        .map(|(blocker, text)| WaitingBlocker {
-            comment: blocker.comment.short(),
-            by: speaker(&item.comments()[&blocker.comment].by),
-            text: text.unwrap_or_default(),
-        })
-        .collect();
-    let person = state
-        .members()
-        .find(|(principal, _)| **principal == agent.principal)
-        .map(|(_, member)| format!("@{}", member.handle))
-        .unwrap_or_default();
-    SuperviseBrief {
-        item: HashId::short(&run.item),
-        title: item.title().to_string(),
-        body: item.body().render_numbered(),
-        earlier: earlier_comments(loaded, item).await,
-        blockers,
-        person,
-    }
-    .render()
-}
-
-/// Who wrote something, as an agent is told: the agent's name, or `someone` for a person.
-fn speaker(actor: &Actor) -> String {
-    match actor {
-        Actor::Human(_) => "someone".to_string(),
-        Actor::Daemon(_) => "the daemon".to_string(),
-        Actor::Agent { agent, .. } => agent.name.to_string(),
+    fn diff(&self, _target: &str, _commit: CommitId) -> String {
+        self.diff.clone()
     }
 }
 
-/// The text of comments, read from the log, in the order asked for.
-async fn comment_texts(loaded: &Loaded, comments: Vec<CommentId>) -> Vec<Option<String>> {
-    let count = comments.len();
+/// The first prompt of a session: its brief.
+async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, StorageClosed> {
+    let diff = match run.role {
+        SessionRole::Review {
+            commit: Some(commit),
+        } => {
+            let (repository, target) = (run.repository.clone(), run.target.clone());
+            blocking(move || GitCli::open(&repository)?.diff(&target, commit, &[]))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .unwrap_or_default()
+        }
+        SessionRole::Review { commit: None } | SessionRole::Work | SessionRole::Supervise => {
+            String::new()
+        }
+    };
+    let session = run.session;
     loaded
         .storage
         .with(move |replica| {
-            comments
-                .iter()
-                .map(|comment| {
-                    match wf_store::EventStore::event(replica.store(), &EventId::from(*comment))
-                        .ok()
-                        .flatten()?
-                        .content
-                        .body
-                    {
-                        EventBody::Comment(written) => Some(written.text),
-                        _ => None,
-                    }
-                })
-                .collect()
+            let sources = Logged {
+                store: replica.store(),
+                diff,
+            };
+            Brief::of(replica.state(), session, &sources)
+                .map(|brief| brief.render())
+                .unwrap_or_default()
         })
         .await
-        .unwrap_or_else(|_| vec![None; count])
 }
 
-/// What to say when a parked session can go on: what others wrote on the item since the session's
-/// last blocker, and what finished dependencies left.
 /// The prompt that goes out when a turn ended and the session is still going.
 const CONTINUE: &str = "Continue. When you are done run `wf work submit`; if you need an answer write a \
      blocker with `wf comment <item> \"<question>\" --block`; if you are stuck run `wf work release`.";
 
-async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: &State) -> String {
+/// What to say when a parked session can go on: what others wrote on the item since the session's
+/// last blocker, and what finished dependencies left.
+async fn resumed(loaded: &Arc<Loaded>, run: &Run) -> String {
+    let (session, item) = (run.session, run.item);
+    loaded
+        .storage
+        .with(move |replica| {
+            let sources = Logged {
+                store: replica.store(),
+                diff: String::new(),
+            };
+            resumed_from(replica.state(), session, item, &sources)
+        })
+        .await
+        .unwrap_or_default()
+}
+
+fn resumed_from(state: &State, session: SessionId, item: ItemId, sources: &Logged) -> String {
     let mut text = String::from("What you were waiting for is resolved.");
-    if let Some(ItemView::Live(item)) = state.item(run.item) {
+    if let Some(ItemView::Live(item)) = state.item(item) {
         let asked = item
             .comments()
             .values()
-            .filter(|comment| comment.session() == Some(run.session))
+            .filter(|comment| comment.session() == Some(session))
             .filter(|comment| comment.kind == wf_core::event::CommentKind::Blocker)
             .map(|comment| comment.at)
             .max();
@@ -1444,23 +1338,22 @@ async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: 
             let mut since: Vec<_> = item
                 .comments()
                 .iter()
-                .filter(|(_, comment)| comment.at > asked && comment.session() != Some(run.session))
+                .filter(|(_, comment)| comment.at > asked && comment.session() != Some(session))
                 .collect();
             since.sort_by_key(|(id, comment)| (comment.at, **id));
-            let texts = comment_texts(loaded, since.iter().map(|(id, _)| **id).collect()).await;
-            for ((_, comment), written) in since.into_iter().zip(texts) {
-                if let Some(written) = written {
+            for (id, comment) in since {
+                if let Some(written) = sources.text(*id) {
                     text.push_str(&format!("\n- {}: {}", speaker(&comment.by), written.trim()));
                 }
             }
         }
     }
     let graph = state.dependency_graph();
-    for dependency in graph.depends_on(run.item) {
+    for dependency in graph.depends_on(item) {
         let Some(ItemView::Live(dependency)) = state.item(dependency) else {
             continue;
         };
-        if let Some(note) = last_comment(loaded, dependency).await {
+        if let Some(note) = last_comment(dependency, sources) {
             text.push_str(&format!(
                 "\n- #{} {}: {note}",
                 HashId::short(&dependency.id()),
@@ -1470,64 +1363,6 @@ async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: 
     }
     text.push_str("\nContinue.");
     text
-}
-
-async fn earlier_comments(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<Earlier> {
-    let mut comments: Vec<_> = item.comments().iter().collect();
-    comments.sort_by_key(|(id, comment)| (comment.at, **id));
-    let ids: Vec<EventId> = comments.iter().map(|(id, _)| EventId::from(**id)).collect();
-    let events = loaded
-        .storage
-        .with(move |replica| {
-            ids.iter()
-                .map(|id| {
-                    wf_store::EventStore::event(replica.store(), id)
-                        .ok()
-                        .flatten()
-                })
-                .collect::<Vec<_>>()
-        })
-        .await
-        .unwrap_or_default();
-    comments
-        .into_iter()
-        .zip(events)
-        .filter_map(|((_, comment), event)| {
-            let EventBody::Comment(written) = &event?.content.body else {
-                return None;
-            };
-            Some(Earlier {
-                by: speaker(&comment.by),
-                kind: comment.kind.name().replace('_', " "),
-                text: written.text.clone(),
-            })
-        })
-        .collect()
-}
-
-/// The latest plain comment on an item: the answer, for a question.
-async fn last_comment(loaded: &Loaded, item: &wf_core::item::Item) -> Option<String> {
-    let mut comments: Vec<_> = item
-        .comments()
-        .iter()
-        .filter(|(_, comment)| comment.kind == wf_core::event::CommentKind::Plain)
-        .collect();
-    comments.sort_by_key(|(id, comment)| (comment.at, **id));
-    let (id, _) = comments.last()?;
-    let id = EventId::from(**id);
-    let event = loaded
-        .storage
-        .with(move |replica| {
-            wf_store::EventStore::event(replica.store(), &id)
-                .ok()
-                .flatten()
-        })
-        .await
-        .ok()??;
-    match event.content.body {
-        EventBody::Comment(comment) => Some(comment.text),
-        _ => None,
-    }
 }
 
 /// How often the dispatcher looks for work even when nothing changed.

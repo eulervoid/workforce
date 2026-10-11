@@ -4,6 +4,7 @@ use std::path::Path;
 use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
 use wf_core::autonomy::Autonomy;
+use wf_core::brief::{Brief, Sources};
 use wf_core::crdt::SetChange;
 use wf_core::event::{
     AgentDefined, Change, Comment, CommentKind, Event, EventBody, Genesis, ItemCreated, ItemLinked,
@@ -16,7 +17,7 @@ use wf_core::name::{AgentName, Handle, HarnessName, LaneName, StateName};
 use wf_core::policy::Field;
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
-use wf_core::session::{SessionRole, Verdict};
+use wf_core::session::{CommitId, SessionRole, Verdict};
 use wf_core::state::{State, Trust};
 use wf_daemon::proto::Finish;
 use wf_store::{RedbStore, Replica};
@@ -839,6 +840,7 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
         )
     })?;
     match command {
+        WorkCommand::Brief => brief(json, workspace, session),
         WorkCommand::Submit { note } => end(
             json,
             workspace,
@@ -853,6 +855,55 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
             Finish::Release { note },
             "released",
         ),
+    }
+}
+
+#[derive(Serialize)]
+struct BriefView {
+    session: String,
+    brief: String,
+}
+
+fn brief(json: bool, workspace: &Workspace, session: SessionId) -> anyhow::Result<()> {
+    // The checkout of a session is a worktree of the repository, so git works from here.
+    let git = match repository() {
+        Ok(git) => Some(git),
+        Err(_) => wf_vcs::GitCli::open(&std::env::current_dir()?).ok(),
+    };
+    let sources = Here { workspace, git };
+    let brief = Brief::of(workspace.state(), session, &sources)
+        .ok_or_else(|| anyhow!("session {} has no item to brief on", session.short()))?;
+    let view = BriefView {
+        session: session.to_string(),
+        brief: brief.render(),
+    };
+    emit(json, &view, |view| view.brief.clone())
+}
+
+/// What `wf work brief` reads a brief from: the log, through the workspace, and git here.
+struct Here<'a> {
+    workspace: &'a Workspace,
+    git: Option<wf_vcs::GitCli>,
+}
+
+impl Sources for Here<'_> {
+    fn text(&self, comment: CommentId) -> Option<String> {
+        let EventBody::Comment(written) = self.workspace.event(&comment.into()).ok()??.content.body
+        else {
+            return None;
+        };
+        Some(written.text)
+    }
+
+    fn branch(&self, item: ItemId) -> String {
+        wf_vcs::item_branch(item)
+    }
+
+    fn diff(&self, target: &str, commit: CommitId) -> String {
+        self.git
+            .as_ref()
+            .and_then(|git| wf_vcs::VcsAdapter::diff(git, target, commit, &[]).ok())
+            .unwrap_or_default()
     }
 }
 

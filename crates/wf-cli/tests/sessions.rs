@@ -1356,6 +1356,34 @@ async fn a_session_belongs_to_its_workforce_whatever_its_committed_workforce_fil
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_agent_reads_its_brief_again_with_wf_work_brief() {
+    let script = "\
+sh \"$WF_BIN\" work brief > brief.md && git add brief.md && git commit -q -m brief
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world
+        .wf
+        .add(&["--title", "Add hello", "--body", "- [ ] write the file"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+    let brief = git(&world.wf.repository, &["show", "main:brief.md"]);
+    assert!(
+        brief.starts_with(&format!(
+            "You are working on item #{}: Add hello\n",
+            short(&item)
+        )),
+        "{brief}"
+    );
+    assert!(brief.contains("- [ ] 1. write the file"), "{brief}");
+    assert!(brief.contains("`wf work submit`"), "{brief}");
+
+    let outside = world.wf.fail(&["work", "brief"]);
+    assert!(outside.contains("WF_SESSION"), "{outside}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_item_with_a_live_session_is_not_started_twice() {
     let world = World::new("hang\n").await;
     let item = world.wf.add(&["--title", "Busy"]);

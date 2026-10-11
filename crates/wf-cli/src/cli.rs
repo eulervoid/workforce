@@ -179,6 +179,8 @@ pub struct ReviewArgs {
 
 #[derive(Subcommand)]
 pub enum WorkCommand {
+    /// What this session is to do and how it reports back: the first prompt it was given.
+    Brief,
     /// The work is finished: end the session and hand its commits on.
     Submit {
         /// What the next reader should know.
