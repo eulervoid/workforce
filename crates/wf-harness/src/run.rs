@@ -1,11 +1,12 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
-    RequestPermissionRequest, RequestPermissionResponse, SessionNotification, TextContent,
+    RequestPermissionRequest, RequestPermissionResponse, SessionNotification, SessionUpdate,
+    TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
 use jiff::Timestamp;
@@ -49,7 +50,7 @@ pub struct Launch<W> {
 
 struct Turn {
     prompt: String,
-    reply: oneshot::Sender<Result<StopReason, Error>>,
+    reply: oneshot::Sender<Result<(StopReason, String), Error>>,
 }
 
 /// A running agent with one ACP session, which is prompted turn after turn and keeps its context
@@ -80,12 +81,25 @@ impl Conversation {
         let (ready, opened) = oneshot::channel();
         let cancel = Arc::new(Notify::new());
         let cancelled = Arc::clone(&cancel);
+        // What the agent says in the turn that runs, as `reply` returns it.
+        let said = Arc::new(Mutex::new(String::new()));
+        let heard = Arc::clone(&said);
 
         let task = tokio::spawn(async move {
             let outcome = Client
                 .builder()
                 .on_receive_notification(
-                    async move |_notification: SessionNotification, _connection| Ok(()),
+                    async move |notification: SessionNotification, _connection| {
+                        if let SessionUpdate::AgentMessageChunk(chunk) = notification.update
+                            && let ContentBlock::Text(text) = chunk.content
+                        {
+                            heard
+                                .lock()
+                                .unwrap_or_else(|poisoned| poisoned.into_inner())
+                                .push_str(&text.text);
+                        }
+                        Ok(())
+                    },
                     agent_client_protocol::on_receive_notification!(),
                 )
                 .on_receive_request(
@@ -111,6 +125,9 @@ impl Conversation {
                         .await?;
                     let _ = ready.send(());
                     while let Some(turn) = incoming.recv().await {
+                        said.lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner())
+                            .clear();
                         let request = connection
                             .send_request(PromptRequest::new(
                                 session.session_id.clone(),
@@ -128,9 +145,12 @@ impl Conversation {
                                 }
                             }
                         };
+                        let text = std::mem::take(
+                            &mut *said.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
+                        );
                         let _ = turn.reply.send(
                             response
-                                .map(|response| response.stop_reason)
+                                .map(|response| (response.stop_reason, text))
                                 .map_err(Error::from),
                         );
                     }
@@ -156,6 +176,14 @@ impl Conversation {
 
     /// Sends a prompt and waits for the turn to end.
     pub async fn prompt(&mut self, prompt: impl Into<String>) -> Result<StopReason, Error> {
+        self.reply(prompt).await.map(|(stop, _)| stop)
+    }
+
+    /// Sends a prompt and waits for the turn to end, with what the agent said in it.
+    pub async fn reply(
+        &mut self,
+        prompt: impl Into<String>,
+    ) -> Result<(StopReason, String), Error> {
         let (reply, answer) = oneshot::channel();
         let turn = Turn {
             prompt: prompt.into(),

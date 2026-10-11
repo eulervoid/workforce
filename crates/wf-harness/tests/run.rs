@@ -119,6 +119,23 @@ async fn one_session_takes_several_prompts() {
 }
 
 #[tokio::test]
+async fn a_reply_holds_what_the_agent_said_in_its_turn() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut conversation = Conversation::start(Launch {
+        agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        directory: directory.path().to_path_buf(),
+        permissions: Arc::new(PermissionMode::Deny),
+        transcript: SharedBuffer::default(),
+    })
+    .await
+    .unwrap();
+    let (stop_reason, said) = conversation.reply("do the thing").await.unwrap();
+    assert!(matches!(stop_reason, StopReason::EndTurn));
+    assert!(said.contains("permission: no"), "{said}");
+    conversation.close().await.unwrap();
+}
+
+#[tokio::test]
 async fn an_agent_that_cannot_start_is_an_error() {
     let result = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new("/nonexistent/agent"),
