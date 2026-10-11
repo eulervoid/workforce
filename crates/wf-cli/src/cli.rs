@@ -54,6 +54,8 @@ pub enum Command {
     Work(WorkCommand),
     /// Give a verdict on the submitted work of an item.
     Review(ReviewArgs),
+    /// What waits on you: questions, reviews, merges and permission requests.
+    Inbox,
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
     /// Run the background process of this machine: it serves sync and join to your other
@@ -159,6 +161,16 @@ pub enum SessionCommand {
     },
     /// Stop a live session of this machine. Its item goes back to open.
     Stop {
+        /// The start of a session id.
+        session: String,
+    },
+    /// Let a session do what it asked permission for.
+    Allow {
+        /// The start of a session id.
+        session: String,
+    },
+    /// Refuse what a session asked permission for.
+    Deny {
         /// The start of a session id.
         session: String,
     },

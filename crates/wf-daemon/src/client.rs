@@ -13,8 +13,8 @@ use wf_core::state::State;
 
 use crate::peers::PeerSync;
 use crate::proto::{
-    Call, Finish, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request, Response, read_message,
-    write_message,
+    Answer, Call, Finish, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request,
+    Response, read_message, write_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -194,6 +194,30 @@ impl DaemonClient {
     ) -> Result<(), ClientError> {
         match self.call(workforce, Call::EndSession { session, finish })? {
             Response::SessionEnded => Ok(()),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    /// The permission requests that wait for a person.
+    pub fn permissions(
+        &mut self,
+        workforce: WorkforceId,
+    ) -> Result<Vec<HeldPermission>, ClientError> {
+        match self.call(workforce, Call::Permissions)? {
+            Response::Permissions(held) => Ok(held),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    /// Answers the oldest request of a session, and says which it was.
+    pub fn answer_permission(
+        &mut self,
+        workforce: WorkforceId,
+        session: SessionId,
+        answer: Answer,
+    ) -> Result<HeldPermission, ClientError> {
+        match self.call(workforce, Call::AnswerPermission { session, answer })? {
+            Response::PermissionAnswered(held) => Ok(held),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }

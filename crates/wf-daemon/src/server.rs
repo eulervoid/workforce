@@ -64,6 +64,8 @@ async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
         | Call::Fork(_)
         | Call::StartSession { .. }
         | Call::EndSession { .. }
+        | Call::Permissions
+        | Call::AnswerPermission { .. }
         | Call::LastSeen => daemon.workforce(request.workforce),
     };
     let loaded = match opened {
@@ -175,6 +177,12 @@ async fn call(
                 .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::SessionStarted(session))
         }
+        Call::Permissions => Ok(Response::Permissions(daemon.held.list(workforce))),
+        Call::AnswerPermission { session, answer } => daemon
+            .held
+            .answer(session, answer)
+            .map(Response::PermissionAnswered)
+            .ok_or_else(|| "that session is not waiting for an answer".to_string()),
         Call::EndSession { session, finish } => {
             daemon
                 .finish_session(workforce, loaded, session, finish)

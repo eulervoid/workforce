@@ -111,6 +111,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 }
                 Command::Work(command) => work(json, command, &mut workspace),
                 Command::Review(args) => review(json, mode, &mut workspace, args),
+                Command::Inbox => {
+                    let views = view::inbox_views(workspace.state(), &workspace.held_permissions());
+                    emit(json, &views, |views| render::inbox(views))
+                }
                 Command::Agent(command) => agent(json, command, &mut workspace),
                 Command::Item(command) => item(json, mode, command, &mut workspace),
                 Command::Comment(args) => comment(json, mode, &mut workspace, args),

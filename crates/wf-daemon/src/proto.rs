@@ -97,6 +97,30 @@ pub enum Call {
         session: SessionId,
         finish: Finish,
     },
+    /// The permission requests that sessions of this machine wait to have answered.
+    Permissions,
+    /// Answers the oldest permission request of a session.
+    AnswerPermission {
+        session: SessionId,
+        answer: Answer,
+    },
+}
+
+/// What a person says to a permission request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Answer {
+    Allow,
+    Deny,
+}
+
+/// A request of an agent for permission to do something, held until a person answers.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HeldPermission {
+    pub session: SessionId,
+    /// The tool call that wants permission.
+    pub what: String,
+    /// Milliseconds since the Unix epoch.
+    pub since_ms: u64,
 }
 
 /// How a session ends, and so who writes the end: the agent submits or releases, a person stops
@@ -133,6 +157,8 @@ pub enum Response {
     LastSeen(Vec<(DeviceKey, u64)>),
     SessionStarted(SessionId),
     SessionEnded,
+    Permissions(Vec<HeldPermission>),
+    PermissionAnswered(HeldPermission),
     Failed(String),
 }
 

@@ -8,8 +8,8 @@ use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
 use crate::view::{
-    AgentView, BodyPartView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView,
-    SessionView, StatusView, StepRefView, StepsView,
+    AgentView, BodyPartView, InboxEntryView, ItemDetail, ItemGroup, ItemSummary, LogView,
+    MentionsView, SessionView, StatusView, StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
 use wf_core::policy::StateCategory;
@@ -648,4 +648,23 @@ pub fn session(session: &SessionView) -> String {
         let _ = writeln!(out, "  commit   {commit}");
     }
     out
+}
+
+pub fn inbox(entries: &[InboxEntryView]) -> String {
+    if entries.is_empty() {
+        return "nothing waits on you\n".to_string();
+    }
+    let mut table = table(&["WAITING", "ITEM", "TITLE", "WHAT"]);
+    for entry in entries {
+        table.add_row([
+            entry.kind.clone(),
+            entry
+                .item
+                .as_deref()
+                .map_or_else(String::new, |item| format!("#{}", short(item))),
+            entry.title.clone(),
+            entry.what.clone(),
+        ]);
+    }
+    format!("{table}\n")
 }

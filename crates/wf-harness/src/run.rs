@@ -57,6 +57,20 @@ impl PermissionMode {
     }
 }
 
+/// Decides what a request of the agent for permission is answered with. A person may be asked,
+/// so it may take a long time; the agent waits meanwhile.
+pub trait Permissions: Send + Sync + 'static {
+    /// `what` names the tool call that wants permission.
+    fn decide(&self, what: &str) -> agent_client_protocol::BoxFuture<'_, PermissionMode>;
+}
+
+impl Permissions for PermissionMode {
+    fn decide(&self, _what: &str) -> agent_client_protocol::BoxFuture<'_, PermissionMode> {
+        let mode = *self;
+        Box::pin(async move { mode })
+    }
+}
+
 /// The command that starts a known harness in ACP mode.
 pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
     match harness {
@@ -73,7 +87,7 @@ pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
 pub struct Launch<W> {
     pub agent: AcpAgentConfig,
     pub directory: PathBuf,
-    pub permissions: PermissionMode,
+    pub permissions: Arc<dyn Permissions>,
     pub transcript: W,
 }
 
@@ -119,8 +133,15 @@ impl Conversation {
                 )
                 .on_receive_request(
                     async move |request: RequestPermissionRequest, responder, _connection| {
+                        let what = request
+                            .tool_call
+                            .fields
+                            .title
+                            .clone()
+                            .unwrap_or_else(|| "a tool call".to_string());
+                        let mode = permissions.decide(&what).await;
                         responder.respond(RequestPermissionResponse::new(
-                            permissions.answer(&request.options),
+                            mode.answer(&request.options),
                         ))
                     },
                     agent_client_protocol::on_receive_request!(),

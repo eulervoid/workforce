@@ -10,7 +10,7 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner, PrincipalSigner};
 use wf_core::state::State;
 use wf_daemon::client::DaemonClient;
-use wf_daemon::proto::Finish;
+use wf_daemon::proto::{Answer, Finish, HeldPermission};
 use wf_store::{EventStore, RedbStore, Replica};
 
 use crate::keys::DataDir;
@@ -240,6 +240,27 @@ impl Workspace {
         let session = client.start_session(workforce, agent, item, repository)?;
         *state = client.state(workforce)?;
         Ok(session)
+    }
+
+    /// The permission requests that wait for a person. Only a running daemon holds any.
+    pub fn held_permissions(&self) -> Vec<HeldPermission> {
+        match &self.source {
+            Source::Local(_) => Vec::new(),
+            Source::Daemon { client, .. } => client
+                .borrow_mut()
+                .permissions(self.workforce)
+                .unwrap_or_default(),
+        }
+    }
+
+    pub fn answer_permission(
+        &mut self,
+        session: SessionId,
+        answer: Answer,
+    ) -> anyhow::Result<HeldPermission> {
+        let workforce = self.workforce;
+        let (client, _) = self.daemon("answer permission requests")?;
+        Ok(client.answer_permission(workforce, session, answer)?)
     }
 
     /// Ends a session that runs in the daemon.

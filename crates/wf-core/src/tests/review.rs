@@ -354,3 +354,47 @@ mod guards {
         );
     }
 }
+
+mod inbox {
+    use super::*;
+    use crate::inbox::{InboxEntry, Waiting};
+
+    #[test]
+    fn what_waits_on_a_person_is_listed_newest_first() {
+        let mut scene = Scene::new();
+        let question: ItemId = scene.apply(create("question", "which crate?")).id().into();
+        assert!(
+            scene.state.inbox().is_empty(),
+            "an open question waits on a supervisor"
+        );
+
+        let careful = scene.submitted("critical");
+        assert!(
+            scene.state.inbox().is_empty(),
+            "an agent has the first step of the review"
+        );
+        scene.apply(verdict(careful, commit(1), Verdict::Approve));
+        scene.apply(transition(question, "needs_human"));
+
+        let light = scene.submitted("standard");
+        scene.apply(verdict(light, commit(1), Verdict::Approve));
+
+        assert_eq!(
+            scene.state.inbox(),
+            [
+                InboxEntry {
+                    item: light,
+                    waiting: Waiting::Merge { commit: commit(1) }
+                },
+                InboxEntry {
+                    item: question,
+                    waiting: Waiting::Blocked
+                },
+                InboxEntry {
+                    item: careful,
+                    waiting: Waiting::HumanReview { commit: commit(1) }
+                },
+            ]
+        );
+    }
+}

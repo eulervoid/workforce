@@ -845,3 +845,95 @@ wf work submit
         "main\n"
     );
 }
+
+fn inbox(world: &World) -> Vec<Value> {
+    world.wf(&["inbox"]).as_array().unwrap().clone()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_permission_request_waits_in_the_inbox_until_a_person_answers() {
+    let script = "\
+permission
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Needs permission"]);
+    start_session(&world, &item);
+    world
+        .wait("the request", |world| {
+            inbox(world)
+                .iter()
+                .any(|entry| entry["kind"] == "permission")
+        })
+        .await;
+    let entry = inbox(&world)
+        .into_iter()
+        .find(|entry| entry["kind"] == "permission")
+        .unwrap();
+    assert!(
+        entry["what"].as_str().unwrap().contains("Edit file"),
+        "{entry}"
+    );
+    assert_eq!(world.sessions()[0]["status"], "live");
+
+    let session = entry["session"].as_str().unwrap();
+    let said = world.wf.run(&["session", "allow", short(session)]);
+    assert!(said.contains("allowed: Edit file"), "{said}");
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted");
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(transcript.contains("permission: yes"), "{transcript}");
+    assert!(inbox(&world).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denied_permission_is_told_no_and_stopping_a_session_drops_its_requests() {
+    let world = World::new("permission\nsay done\nhang\n").await;
+    let item = world.wf.add(&["--title", "Needs permission"]);
+    start_session(&world, &item);
+    world
+        .wait("the request", |world| {
+            inbox(world)
+                .iter()
+                .any(|entry| entry["kind"] == "permission")
+        })
+        .await;
+    let id = world.sessions()[0]["id"].as_str().unwrap().to_string();
+    world.wf.run(&["session", "deny", short(&id)]);
+    let message = world.wf.fail(&["session", "deny", short(&id)]);
+    assert!(message.contains("not waiting for an answer"), "{message}");
+    world.wf.run(&["session", "stop", short(&id)]);
+    world.ended_session().await;
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(transcript.contains("permission: no"), "{transcript}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_inbox_lists_what_waits_on_a_person() {
+    let world = World::new("").await;
+    assert!(inbox(&world).is_empty());
+    let question = world
+        .wf
+        .add(&["--type", "question", "--title", "Which database?"]);
+    assert!(
+        inbox(&world).is_empty(),
+        "an open question waits on a supervisor"
+    );
+    world
+        .wf
+        .run(&["item", "move", short(&question), "needs_human"]);
+    let entries = inbox(&world);
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0]["kind"], "blocked");
+    assert_eq!(entries[0]["title"], "Which database?");
+    let text = world.wf.run(&["inbox"]);
+    assert!(
+        text.contains("Which database?") && text.contains("needs_human"),
+        "{text}"
+    );
+}

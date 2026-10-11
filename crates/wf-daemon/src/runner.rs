@@ -19,11 +19,12 @@ use wf_core::name::{AgentName, HarnessName, StateName};
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
 use wf_harness::{
-    AcpAgentConfig, Conversation, Launch, PermissionMode, ReviewPackage, WorkPackage,
+    AcpAgentConfig, Conversation, Launch, PermissionMode, Permissions, ReviewPackage, WorkPackage,
 };
 use wf_store::AuthorError;
 use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name};
 
+use crate::permissions::Asking;
 use crate::proto::Finish;
 use crate::{Daemon, Loaded, StorageClosed};
 
@@ -165,7 +166,7 @@ struct Run {
     nudges: u32,
     park_timeout: Duration,
     max_duration: Option<Duration>,
-    permissions: PermissionMode,
+    permissions: Arc<dyn Permissions>,
 }
 
 /// How the task of a session ends.
@@ -387,11 +388,14 @@ impl Daemon {
             nudges: autonomy.nudges,
             park_timeout: autonomy.park_timeout,
             max_duration: autonomy.max_duration,
-            // Held requests come with the inbox; until then `ask` refuses what it cannot ask.
             permissions: match autonomy.permissions {
-                wf_core::autonomy::PermissionMode::Allow => PermissionMode::Allow,
-                wf_core::autonomy::PermissionMode::Ask
-                | wf_core::autonomy::PermissionMode::Deny => PermissionMode::Deny,
+                wf_core::autonomy::PermissionMode::Allow => Arc::new(PermissionMode::Allow),
+                wf_core::autonomy::PermissionMode::Deny => Arc::new(PermissionMode::Deny),
+                wf_core::autonomy::PermissionMode::Ask => Arc::new(Asking {
+                    held: Arc::clone(&self.held),
+                    workforce,
+                    session,
+                }),
             },
         };
         let (stop, stopped) = mpsc::unbounded_channel();
@@ -806,6 +810,7 @@ async fn run_session(
         );
     }
     daemon.runners.stop(run.session);
+    daemon.held.forget(run.session);
 }
 
 async fn drive(
@@ -838,7 +843,7 @@ async fn drive(
     let mut conversation = match Conversation::start(Launch {
         agent,
         directory: run.worktree.clone(),
-        permissions: run.permissions,
+        permissions: Arc::clone(&run.permissions),
         transcript,
     })
     .await

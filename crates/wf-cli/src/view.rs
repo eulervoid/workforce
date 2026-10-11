@@ -11,12 +11,14 @@ use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::hlc::Hlc;
 use wf_core::id::{EventId, HashId, ItemId};
 use wf_core::identity::Actor;
+use wf_core::inbox::Waiting;
 use wf_core::item::{Item, ItemView, NoteKind, Origin, Standing};
 use wf_core::policy::{Field, ReviewStep, StateCategory};
 use wf_core::resolve::MentionTarget;
 use wf_core::review::ReviewStatus;
 use wf_core::session::{EndReason, Session, SessionRole};
 use wf_core::state::State;
+use wf_daemon::proto::HeldPermission;
 
 use crate::cli::ItemGrouping;
 
@@ -1083,4 +1085,85 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
             }
         })
         .collect()
+}
+
+#[derive(Serialize)]
+pub struct InboxEntryView {
+    /// `blocked`, `human_review`, `merge` or `permission`.
+    pub kind: String,
+    pub item: Option<String>,
+    pub session: Option<String>,
+    pub title: String,
+    pub what: String,
+}
+
+/// What waits on a person: what the state says, and the permission requests the daemon holds.
+pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView> {
+    let policy = &state.policy().expect("a workforce has a policy").policy;
+    let title_of = |item: ItemId| match state.item(item) {
+        Some(ItemView::Live(live)) => live.title().to_string(),
+        Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
+    };
+    let mut entries: Vec<InboxEntryView> = state
+        .inbox()
+        .into_iter()
+        .map(|entry| {
+            let (kind, what) = match entry.waiting {
+                Waiting::Blocked => {
+                    let state_name = match state.item(entry.item) {
+                        Some(ItemView::Live(live)) => match live.standing(policy) {
+                            Standing::Known { state, .. } => state.to_string(),
+                            Standing::Unknown { state } => state.map_or_else(
+                                || "an unknown state".to_string(),
+                                ToString::to_string,
+                            ),
+                        },
+                        Some(ItemView::Archived(_)) | None => "an unknown state".to_string(),
+                    };
+                    ("blocked", format!("{state_name}; `wf item move` it on"))
+                }
+                Waiting::HumanReview { commit } => (
+                    "human_review",
+                    format!(
+                        "review of {}: `wf item diff`, then `wf review`",
+                        &commit.to_string()[..8]
+                    ),
+                ),
+                Waiting::Merge { commit } => (
+                    "merge",
+                    format!(
+                        "{} is ready to merge, but {} is checked out with changes",
+                        &commit.to_string()[..8],
+                        policy.merge.target
+                    ),
+                ),
+            };
+            InboxEntryView {
+                kind: kind.to_string(),
+                item: Some(entry.item.to_base32()),
+                session: None,
+                title: title_of(entry.item),
+                what,
+            }
+        })
+        .collect();
+    entries.extend(held.iter().map(|request| {
+        let session = state.session(request.session);
+        InboxEntryView {
+            kind: "permission".to_string(),
+            item: session.map(|session| session.item().to_base32()),
+            session: Some(request.session.to_base32()),
+            title: session.map_or_else(String::new, |session| title_of(session.item())),
+            what: format!(
+                "{} asks to {}; `wf session allow` or `deny {}`",
+                session.map_or_else(
+                    || "an agent".to_string(),
+                    |session| session.agent().name.to_string()
+                ),
+                request.what,
+                request.session.short()
+            ),
+        }
+    }));
+    entries
 }

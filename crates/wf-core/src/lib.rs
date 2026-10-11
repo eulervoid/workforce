@@ -11,6 +11,7 @@ pub mod graph;
 pub mod hlc;
 pub mod id;
 pub mod identity;
+pub mod inbox;
 pub mod invite;
 pub mod item;
 pub mod lifecycle;

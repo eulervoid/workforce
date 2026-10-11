@@ -4,6 +4,7 @@
 
 pub mod client;
 mod peers;
+mod permissions;
 pub mod proto;
 mod runner;
 mod server;
@@ -144,6 +145,7 @@ pub struct Daemon {
     presence: Presence,
     runners: runner::Runners,
     merging: runner::Merging,
+    held: Arc<permissions::Held>,
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
     /// Stores that failed to open, so each is reported once.
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
@@ -159,6 +161,7 @@ impl Daemon {
             presence: Presence::default(),
             runners: runner::Runners::default(),
             merging: runner::Merging::default(),
+            held: Arc::default(),
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
         });

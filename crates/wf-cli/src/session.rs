@@ -5,7 +5,7 @@ use std::time::Duration;
 
 use anyhow::{Context, anyhow, bail};
 use wf_core::id::{HashId, SessionId};
-use wf_daemon::proto::Finish;
+use wf_daemon::proto::{Answer, Finish};
 use wf_harness::{Renderer, TranscriptEntry};
 
 use crate::cli::{SessionCommand, SessionStartArgs, SessionWatchArgs};
@@ -50,6 +50,8 @@ pub fn session(
                 |done| format!("{}\n", done.message),
             )
         }
+        SessionCommand::Allow { session } => answer(json, workspace, &session, Answer::Allow),
+        SessionCommand::Deny { session } => answer(json, workspace, &session, Answer::Deny),
         SessionCommand::Watch(args) => {
             if json {
                 bail!("`wf session watch` has no --json output; the transcript is JSON lines");
@@ -57,6 +59,29 @@ pub fn session(
             watch(workspace, args)
         }
     }
+}
+
+fn answer(
+    json: bool,
+    workspace: &mut Workspace,
+    session: &str,
+    answer: Answer,
+) -> anyhow::Result<()> {
+    let id = resolve(workspace, session)?;
+    let held = workspace.answer_permission(id, answer)?;
+    let verb = match answer {
+        Answer::Allow => "allowed",
+        Answer::Deny => "denied",
+    };
+    emit(
+        json,
+        &crate::commands::Done {
+            message: format!("{verb}: {}", held.what),
+            event: String::new(),
+            item: None,
+        },
+        |done| format!("{}\n", done.message),
+    )
 }
 
 fn resolve(workspace: &Workspace, text: &str) -> anyhow::Result<SessionId> {
