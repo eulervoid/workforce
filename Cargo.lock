@@ -4635,8 +4635,10 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "wf-core",
+ "wf-harness",
  "wf-net",
  "wf-store",
+ "wf-vcs",
 ]
 
 [[package]]

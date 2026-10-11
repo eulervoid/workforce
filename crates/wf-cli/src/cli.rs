@@ -87,6 +87,18 @@ pub enum Command {
 pub enum WorkCommand {
     /// Say what you did or decided, and why. Others read it under the item.
     Report(WorkReportArgs),
+    /// The work is finished: end the session and hand its commits on.
+    Submit {
+        /// What the next reader should know, such as the answer to a question.
+        #[arg(long)]
+        note: Option<String>,
+    },
+    /// Give up: end the session so the item can be picked up again.
+    Release {
+        /// Why, for whoever picks it up.
+        #[arg(long)]
+        note: Option<String>,
+    },
 }
 
 #[derive(Args)]
@@ -103,13 +115,36 @@ pub struct WorkReportArgs {
 
 #[derive(Subcommand)]
 pub enum SessionCommand {
+    /// Start an agent on an item, in its own worktree. Needs the daemon.
+    Start(SessionStartArgs),
+    /// List the sessions, live ones first.
+    List,
+    /// Show one session.
+    Show {
+        /// The start of a session id.
+        session: String,
+    },
+    /// Stop a live session of this machine. Its item goes back to open.
+    Stop {
+        /// The start of a session id.
+        session: String,
+    },
     /// Print a transcript and follow it while the agent is still writing.
     Watch(SessionWatchArgs),
 }
 
 #[derive(Args)]
+pub struct SessionStartArgs {
+    pub item: String,
+    /// One of your agents, as listed by `wf agent list`.
+    #[arg(long)]
+    pub agent: AgentName,
+}
+
+#[derive(Args)]
 pub struct SessionWatchArgs {
-    pub transcript: PathBuf,
+    /// The start of a session id, or of an item id for its latest session.
+    pub session: String,
     /// Print what is there and stop, instead of waiting for more.
     #[arg(long)]
     pub no_follow: bool,

@@ -36,4 +36,5 @@ anstream = "1.0.0"
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }
+wf-net.workspace = true
 insta = { version = "1", features = ["json"] }

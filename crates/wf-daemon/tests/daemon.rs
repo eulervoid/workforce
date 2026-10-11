@@ -47,6 +47,7 @@ async fn start() -> Running {
             data_dir: directory.path().to_path_buf(),
             socket: socket.clone(),
             network: Network::Direct,
+            harnesses: Default::default(),
         },
         fixture.devices[0].clone(),
     )
@@ -164,6 +165,7 @@ async fn a_second_daemon_on_the_same_socket_is_refused() {
             data_dir: running._directory.path().to_path_buf(),
             socket: running.socket.clone(),
             network: Network::Direct,
+            harnesses: Default::default(),
         },
         wf_core::identity::DeviceSigner::from_bytes(&[77; 32]).unwrap(),
     )
@@ -200,6 +202,7 @@ async fn start_peer_as(
             data_dir: directory.path().to_path_buf(),
             socket: socket.clone(),
             network: Network::Direct,
+            harnesses: Default::default(),
         },
         signer,
     )
@@ -391,6 +394,7 @@ async fn start_empty(
             data_dir: directory.path().to_path_buf(),
             socket: socket.clone(),
             network: Network::Direct,
+            harnesses: Default::default(),
         },
         signer,
     )
@@ -502,6 +506,7 @@ async fn a_log_longer_than_a_page_arrives_whole_and_in_order() {
             data_dir: directory.path().to_path_buf(),
             socket: socket.clone(),
             network: Network::Direct,
+            harnesses: Default::default(),
         },
         fixture.devices[0].clone(),
     )

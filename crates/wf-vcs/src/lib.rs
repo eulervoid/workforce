@@ -5,9 +5,23 @@ mod git;
 
 use std::path::{Path, PathBuf};
 
+use wf_core::id::{HashId, ItemId};
 use wf_core::session::CommitId;
 
 pub use git::GitCli;
+
+/// How much of an item's id names its branch and worktree.
+const NAME_LEN: usize = 12;
+
+/// The name of the branch that holds the work of an item. Sessions continue it.
+pub fn item_branch(item: ItemId) -> String {
+    format!("wf/{}", item_name(item))
+}
+
+/// The name of the directory of the worktree of an item.
+pub fn item_name(item: ItemId) -> String {
+    item.to_base32()[..NAME_LEN].to_string()
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum VcsError {

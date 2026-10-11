@@ -5,14 +5,15 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 
 use wf_core::event::{DeviceProfile, Event, EventBody};
-use wf_core::id::{EventId, WorkforceId};
+use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::invite::InviteCode;
+use wf_core::name::AgentName;
 use wf_core::state::State;
 
 use crate::peers::PeerSync;
 use crate::proto::{
-    Call, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request, Response, read_message,
+    Call, Finish, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request, Response, read_message,
     write_message,
 };
 
@@ -161,6 +162,38 @@ impl DaemonClient {
     ) -> Result<Vec<PeerSync>, ClientError> {
         match self.call(workforce, Call::Follow(devices))? {
             Response::Synced(peers) => Ok(peers),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    /// Has the daemon start a work session of `agent` on `item`.
+    pub fn start_session(
+        &mut self,
+        workforce: WorkforceId,
+        agent: AgentName,
+        item: ItemId,
+        repository: &Path,
+    ) -> Result<SessionId, ClientError> {
+        let call = Call::StartSession {
+            agent,
+            item,
+            repository: repository.to_path_buf(),
+        };
+        match self.call(workforce, call)? {
+            Response::SessionStarted(session) => Ok(session),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    /// Has the daemon end a session of this machine.
+    pub fn end_session(
+        &mut self,
+        workforce: WorkforceId,
+        session: SessionId,
+        finish: Finish,
+    ) -> Result<(), ClientError> {
+        match self.call(workforce, Call::EndSession { session, finish })? {
+            Response::SessionEnded => Ok(()),
             _ => Err(ClientError::UnexpectedResponse),
         }
     }

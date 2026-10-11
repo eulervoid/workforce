@@ -62,6 +62,8 @@ async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
         | Call::Author { .. }
         | Call::SyncNow
         | Call::Fork(_)
+        | Call::StartSession { .. }
+        | Call::EndSession { .. }
         | Call::LastSeen => daemon.workforce(request.workforce),
     };
     let loaded = match opened {
@@ -77,7 +79,7 @@ async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
 async fn call(
     daemon: &Arc<Daemon>,
     workforce: WorkforceId,
-    loaded: &Loaded,
+    loaded: &Arc<Loaded>,
     call: Call,
 ) -> Result<Response, String> {
     let storage = &loaded.storage;
@@ -162,5 +164,23 @@ async fn call(
             Ok(Response::Synced(results))
         }
         Call::LastSeen => Ok(Response::LastSeen(daemon.presence().snapshot())),
+        Call::StartSession {
+            agent,
+            item,
+            repository,
+        } => {
+            let session = daemon
+                .start_session(workforce, loaded, agent, item, repository)
+                .await
+                .map_err(|error| wf_core::report::report(&error))?;
+            Ok(Response::SessionStarted(session))
+        }
+        Call::EndSession { session, finish } => {
+            daemon
+                .finish_session(workforce, loaded, session, finish)
+                .await
+                .map_err(|error| wf_core::report::report(&error))?;
+            Ok(Response::SessionEnded)
+        }
     }
 }

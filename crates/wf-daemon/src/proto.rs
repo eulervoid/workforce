@@ -12,13 +12,14 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use wf_core::encoding;
 use wf_core::event::{DeviceProfile, Event, EventBody};
-use wf_core::id::{EventId, WorkforceId};
+use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
+use wf_core::name::AgentName;
 use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::peers::PeerSync;
 
-pub const PROTOCOL_VERSION: u32 = 2;
+pub const PROTOCOL_VERSION: u32 = 3;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -84,6 +85,38 @@ pub enum Call {
     Follow(Vec<DeviceKey>),
     /// When each device was last heard from, in milliseconds since the epoch.
     LastSeen,
+    /// Starts a work session of `agent` on `item`, in a worktree of the repository at
+    /// `repository` on this machine.
+    StartSession {
+        agent: AgentName,
+        item: ItemId,
+        repository: PathBuf,
+    },
+    /// Ends a live session of this machine and applies what follows from it to its item.
+    EndSession {
+        session: SessionId,
+        finish: Finish,
+    },
+}
+
+/// How a session ends, and so who writes the end: the agent submits or releases, a person stops
+/// it, and the daemon ends it when its limits are reached or the harness fails.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Finish {
+    /// The work is done. By the agent.
+    Submit { note: Option<String> },
+    /// The agent gives up. By the agent.
+    Release { note: Option<String> },
+    /// A person stops it.
+    Stop,
+    /// The item entered a blocked state while the agent worked.
+    Blocked,
+    /// It waited too long or ran too long.
+    TimedOut,
+    /// The harness failed or exited.
+    Failed,
+    /// The agent used up its nudges without a new commit.
+    GaveUp { turns: u32 },
 }
 
 #[derive(Serialize, Deserialize)]
@@ -96,6 +129,8 @@ pub enum Response {
     Forked,
     Joined,
     LastSeen(Vec<(DeviceKey, u64)>),
+    SessionStarted(SessionId),
+    SessionEnded,
     Failed(String),
 }
 

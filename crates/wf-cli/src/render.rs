@@ -8,8 +8,8 @@ use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
 use crate::view::{
-    AgentView, BodyPartView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, StatusView,
-    StepRefView,
+    AgentView, BodyPartView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView,
+    SessionView, StatusView, StepRefView,
 };
 use wf_core::graph::Readiness;
 use wf_core::policy::StateCategory;
@@ -575,6 +575,47 @@ pub fn status(view: &StatusView) -> String {
     }
     if view.refolded {
         let _ = writeln!(out, "refolded from the log and wrote a fresh snapshot");
+    }
+    out
+}
+
+pub fn sessions(sessions: &[SessionView]) -> String {
+    if sessions.is_empty() {
+        return "no sessions\n".to_string();
+    }
+    let mut table = table(&[
+        "SESSION", "AGENT", "ITEM", "TITLE", "ROLE", "STATUS", "STARTED",
+    ]);
+    for session in sessions {
+        table.add_row([
+            short(&session.id).to_string(),
+            session.agent.clone(),
+            format!("#{}", short(&session.item)),
+            session.title.clone(),
+            session.role.clone(),
+            session.status.clone(),
+            short_time(&session.started),
+        ]);
+    }
+    format!("{table}\n")
+}
+
+pub fn session(session: &SessionView) -> String {
+    let mut out = format!(
+        "session {} of {} on #{} {}\n",
+        short(&session.id),
+        session.agent,
+        short(&session.item),
+        session.title
+    );
+    let _ = writeln!(out, "  role     {}", session.role);
+    let _ = writeln!(out, "  status   {}", session.status);
+    let _ = writeln!(out, "  started  {}", short_time(&session.started));
+    if let Some(ended) = &session.ended {
+        let _ = writeln!(out, "  ended    {}", short_time(ended));
+    }
+    if let Some(commit) = &session.commit {
+        let _ = writeln!(out, "  commit   {commit}");
     }
     out
 }

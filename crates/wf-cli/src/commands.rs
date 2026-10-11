@@ -17,6 +17,7 @@ use wf_core::policy::Field;
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
 use wf_core::state::{State, Trust};
+use wf_daemon::proto::Finish;
 use wf_store::{RedbStore, Replica};
 
 use crate::cli::*;
@@ -84,7 +85,6 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             ..
         } => crate::fork::accept(json, data, cwd, &id, relay.as_deref()),
         Command::Daemon(args) => crate::network::daemon(json, args, data),
-        Command::Session(command) => crate::session::session(json, command, cwd),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
             emit(
@@ -104,8 +104,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Init(_)
                 | Command::Join(_)
                 | Command::Daemon(_)
-                | Command::Session(_)
                 | Command::Status { .. } => unreachable!("handled above"),
+                Command::Session(command) => {
+                    crate::session::session(json, command, &mut workspace, cwd)
+                }
                 Command::Work(command) => work(json, command, &mut workspace),
                 Command::Agent(command) => agent(json, command, &mut workspace),
                 Command::Item(command) => item(json, mode, command, &mut workspace),
@@ -819,7 +821,45 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
     })?;
     match command {
         WorkCommand::Report(args) => report(json, workspace, session, args),
+        WorkCommand::Submit { note } => end(
+            json,
+            workspace,
+            session,
+            Finish::Submit { note },
+            "submitted",
+        ),
+        WorkCommand::Release { note } => end(
+            json,
+            workspace,
+            session,
+            Finish::Release { note },
+            "released",
+        ),
     }
+}
+
+fn end(
+    json: bool,
+    workspace: &mut Workspace,
+    session: SessionId,
+    finish: Finish,
+    verb: &str,
+) -> anyhow::Result<()> {
+    let item = workspace
+        .state()
+        .session(session)
+        .expect("the session was resolved when the workspace was opened")
+        .item();
+    workspace.end_session(session, finish)?;
+    emit(
+        json,
+        &Done {
+            message: format!("{verb} #{}", item.short()),
+            event: String::new(),
+            item: Some(item.to_base32()),
+        },
+        |done| format!("{}\n", done.message),
+    )
 }
 
 fn report(

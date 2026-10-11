@@ -129,6 +129,20 @@ pub enum EndReason {
     Cancelled,
 }
 
+impl EndReason {
+    pub fn name(&self) -> &'static str {
+        match self {
+            EndReason::Submitted { .. } => "submitted",
+            EndReason::Reviewed => "reviewed",
+            EndReason::Released => "released",
+            EndReason::Blocked => "blocked",
+            EndReason::TimedOut => "timed_out",
+            EndReason::Failed => "failed",
+            EndReason::Cancelled => "cancelled",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Verdict {
     Approve,
@@ -141,6 +155,12 @@ pub enum Verdict {
 pub struct Ended {
     pub reason: EndReason,
     pub(crate) stamp: Stamp,
+}
+
+impl Ended {
+    pub fn at(&self) -> crate::hlc::Hlc {
+        self.stamp.hlc
+    }
 }
 
 /// A folded session: live from its `SessionStarted` until its `SessionEnded`.

@@ -14,7 +14,7 @@ use wf_core::identity::Actor;
 use wf_core::item::{Item, ItemView, NoteKind, Origin, Standing};
 use wf_core::policy::{Field, StateCategory};
 use wf_core::resolve::MentionTarget;
-use wf_core::session::{Session, SessionRole};
+use wf_core::session::{EndReason, Session, SessionRole};
 use wf_core::state::State;
 
 use crate::cli::ItemGrouping;
@@ -951,4 +951,60 @@ fn set_change<T: std::fmt::Display>(change: &wf_core::crdt::SetChange<T>) -> Str
         wf_core::crdt::SetChange::Add(value) => format!("+{value}"),
         wf_core::crdt::SetChange::Remove { value, .. } => format!("-{value}"),
     }
+}
+
+#[derive(Serialize)]
+pub struct SessionView {
+    pub id: String,
+    pub agent: String,
+    pub item: String,
+    pub title: String,
+    /// `work` or `review`.
+    pub role: String,
+    /// `live`, or why it ended.
+    pub status: String,
+    pub started: String,
+    pub ended: Option<String>,
+    /// What the session submitted, or the commit a review session reviews.
+    pub commit: Option<String>,
+}
+
+/// Live sessions first, then the others, each the newest first.
+pub fn session_views(state: &State) -> Vec<SessionView> {
+    let mut sessions: Vec<_> = state.sessions().collect();
+    sessions.sort_by_key(|session| (!session.is_live(), std::cmp::Reverse(session.started())));
+    sessions
+        .into_iter()
+        .map(|session| {
+            let title = match state.item(session.item()) {
+                Some(ItemView::Live(item)) => item.title().to_string(),
+                Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
+            };
+            let commit = match (session.role(), session.ended().map(|ended| ended.reason)) {
+                (SessionRole::Review { commit }, _) => Some(commit.to_string()),
+                (SessionRole::Work, Some(EndReason::Submitted { commit })) => {
+                    commit.map(|commit| commit.to_string())
+                }
+                (SessionRole::Work, _) => None,
+            };
+            SessionView {
+                id: session.id().to_base32(),
+                agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),
+                item: session.item().to_base32(),
+                title,
+                role: match session.role() {
+                    SessionRole::Work => "work",
+                    SessionRole::Review { .. } => "review",
+                }
+                .to_string(),
+                status: session
+                    .ended()
+                    .map_or("live", |ended| ended.reason.name())
+                    .to_string(),
+                started: timestamp(session.started().hlc),
+                ended: session.ended().map(|ended| timestamp(ended.at())),
+                commit,
+            }
+        })
+        .collect()
 }

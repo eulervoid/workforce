@@ -191,8 +191,19 @@ impl Body {
     }
 
     pub fn render(&self) -> String {
+        self.render_steps(false)
+    }
+
+    /// Like [`Body::render`], with each step's number after its checkbox, as `wf item check`
+    /// takes it: `- [ ](1) write parser`.
+    pub fn render_numbered(&self) -> String {
+        self.render_steps(true)
+    }
+
+    fn render_steps(&self, numbered: bool) -> String {
         let mut out = String::new();
         let mut previous_was_step = false;
+        let mut number = 0;
         for (index, part) in self.parts.iter().enumerate() {
             let is_step = matches!(part, BodyPart::Step { .. });
             if index > 0 {
@@ -205,7 +216,12 @@ impl Body {
             match part {
                 BodyPart::Markdown(text) => out.push_str(text),
                 BodyPart::Step { text, done } => {
-                    out.push_str(if *done { "- [x] " } else { "- [ ] " });
+                    number += 1;
+                    out.push_str(if *done { "- [x]" } else { "- [ ]" });
+                    if numbered {
+                        out.push_str(&format!("({number})"));
+                    }
+                    out.push(' ');
                     out.push_str(text);
                 }
             }

@@ -1,86 +1,12 @@
 //! Runs the real `wf` binary through the demo script of the M0 plan.
 
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
-use std::process::Command;
 
 use serde_json::Value;
-use tempfile::TempDir;
 
-struct Sandbox {
-    _root: TempDir,
-    repository: PathBuf,
-    data: PathBuf,
-    bin: PathBuf,
-}
+mod common;
 
-impl Sandbox {
-    fn new() -> Self {
-        let root = TempDir::new().unwrap();
-        let repository = root.path().join("repo");
-        let data = root.path().join("data");
-        let bin = root.path().join("bin");
-        std::fs::create_dir_all(&repository).unwrap();
-        std::fs::create_dir_all(&bin).unwrap();
-        for harness in ["claude", "opencode"] {
-            let path = bin.join(harness);
-            std::fs::write(&path, "#!/bin/sh\n").unwrap();
-            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
-        }
-        Self {
-            _root: root,
-            repository,
-            data,
-            bin,
-        }
-    }
-
-    fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_wf"));
-        command
-            .args(args)
-            .current_dir(&self.repository)
-            .env("XDG_DATA_HOME", &self.data)
-            .env("XDG_RUNTIME_DIR", self._root.path().join("run"))
-            .env("PATH", &self.bin)
-            .env("USER", "joshua");
-        command
-    }
-
-    fn run(&self, args: &[&str]) -> String {
-        let output = self.command(args).output().unwrap();
-        assert!(
-            output.status.success(),
-            "wf {args:?} failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap()
-    }
-
-    fn fail(&self, args: &[&str]) -> String {
-        let output = self.command(args).output().unwrap();
-        assert!(!output.status.success(), "wf {args:?} should fail");
-        String::from_utf8(output.stderr).unwrap()
-    }
-
-    fn json(&self, args: &[&str]) -> Value {
-        let mut all = args.to_vec();
-        all.push("--json");
-        let value: Value = serde_json::from_str(&self.run(&all)).unwrap();
-        assert_eq!(value["schema"], wf_cli::view::SCHEMA_VERSION);
-        value["data"].clone()
-    }
-
-    fn add(&self, args: &[&str]) -> String {
-        let mut all = vec!["item", "add"];
-        all.extend_from_slice(args);
-        self.json(&all)["id"].as_str().unwrap().to_string()
-    }
-}
-
-fn short(id: &str) -> &str {
-    &id[..6]
-}
+use common::{Sandbox, short};
 
 fn titles(items: &Value) -> Vec<String> {
     items
@@ -603,7 +529,7 @@ impl Sandbox {
             .stderr(std::process::Stdio::null())
             .spawn()
             .unwrap();
-        let socket = self._root.path().join("run/workforce/daemon.sock");
+        let socket = self.root.path().join("run/workforce/daemon.sock");
         for _ in 0..200 {
             if socket.exists() && std::os::unix::net::UnixStream::connect(&socket).is_ok() {
                 return RunningDaemon { child };

@@ -5,6 +5,7 @@
 pub mod client;
 mod peers;
 pub mod proto;
+mod runner;
 mod server;
 mod storage;
 
@@ -23,6 +24,7 @@ use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
+pub use runner::SessionError;
 pub use storage::{StorageClosed, StorageHandle};
 
 pub const STORE_FILE: &str = "store.redb";
@@ -70,6 +72,9 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub socket: PathBuf,
     pub network: Network,
+    /// Commands for harnesses, in place of the ones wf knows by name. Tests start fake agents
+    /// this way.
+    pub harnesses: BTreeMap<wf_core::name::HarnessName, wf_harness::AcpAgentConfig>,
 }
 
 pub(crate) struct Loaded {
@@ -118,6 +123,7 @@ pub struct Daemon {
     device: DeviceSigner,
     node: Arc<Node<StorageHandle>>,
     presence: Presence,
+    runners: runner::Runners,
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
     /// Stores that failed to open, so each is reported once.
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
@@ -131,6 +137,7 @@ impl Daemon {
             device,
             node,
             presence: Presence::default(),
+            runners: runner::Runners::default(),
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
         });
@@ -217,6 +224,9 @@ impl Daemon {
         ));
         let entry = Arc::new(Loaded { storage });
         loaded.insert(id, Arc::clone(&entry));
+        let daemon = Arc::clone(self);
+        let stale = Arc::clone(&entry);
+        tokio::spawn(async move { daemon.end_stale_sessions(id, &stale).await });
         Ok(entry)
     }
 

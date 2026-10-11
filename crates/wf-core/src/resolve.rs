@@ -5,7 +5,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::id::{HashId, ItemId, MIN_PREFIX_LEN, PrefixError};
+use crate::id::{HashId, ItemId, MIN_PREFIX_LEN, PrefixError, SessionId};
 use crate::identity::{AgentId, PrincipalKey};
 use crate::item::{Item, Origin};
 use crate::refs::{Mention, Token};
@@ -28,6 +28,7 @@ pub struct Resolver<'a> {
     state: &'a State,
     /// Base32 text of every item id, sorted, for prefix lookups.
     items: std::collections::BTreeMap<String, ItemId>,
+    sessions: std::collections::BTreeMap<String, SessionId>,
 }
 
 impl State {
@@ -37,6 +38,10 @@ impl State {
             items: self
                 .raw_items()
                 .map(|item| (item.id().to_base32(), item.id()))
+                .collect(),
+            sessions: self
+                .sessions()
+                .map(|session| (session.id().to_base32(), session.id()))
                 .collect(),
         }
     }
@@ -52,6 +57,27 @@ impl Resolver<'_> {
         }
         let mut matches = self
             .items
+            .range(prefix.clone()..)
+            .take_while(|(candidate, _)| candidate.starts_with(&prefix))
+            .map(|(_, id)| *id);
+        match (matches.next(), matches.next()) {
+            (None, _) => Err(PrefixError::NotFound(prefix)),
+            (Some(id), None) => Ok(id),
+            (Some(first), Some(second)) => Err(PrefixError::Ambiguous {
+                candidates: [first, second].iter().map(HashId::short).collect(),
+                prefix,
+            }),
+        }
+    }
+
+    /// Resolves a session id prefix the same way.
+    pub fn session(&self, prefix: &str) -> Result<SessionId, PrefixError> {
+        let prefix = prefix.to_ascii_lowercase();
+        if prefix.len() < MIN_PREFIX_LEN {
+            return Err(PrefixError::TooShort(prefix));
+        }
+        let mut matches = self
+            .sessions
             .range(prefix.clone()..)
             .take_while(|(candidate, _)| candidate.starts_with(&prefix))
             .map(|(_, id)| *id);

@@ -10,6 +10,7 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner, PrincipalSigner};
 use wf_core::state::State;
 use wf_daemon::client::DaemonClient;
+use wf_daemon::proto::Finish;
 use wf_store::{EventStore, RedbStore, Replica};
 
 use crate::keys::DataDir;
@@ -213,6 +214,40 @@ impl Workspace {
                 *state = client.state(self.workforce)?;
                 Ok(event)
             }
+        }
+    }
+
+    pub fn workforce(&self) -> WorkforceId {
+        self.workforce
+    }
+
+    /// Starts a work session of `agent` on `item`. Sessions run in the daemon.
+    pub fn start_session(
+        &mut self,
+        agent: wf_core::name::AgentName,
+        item: ItemId,
+        repository: &Path,
+    ) -> anyhow::Result<SessionId> {
+        let workforce = self.workforce;
+        let (client, state) = self.daemon("start sessions")?;
+        let session = client.start_session(workforce, agent, item, repository)?;
+        *state = client.state(workforce)?;
+        Ok(session)
+    }
+
+    /// Ends a session that runs in the daemon.
+    pub fn end_session(&mut self, session: SessionId, finish: Finish) -> anyhow::Result<()> {
+        let workforce = self.workforce;
+        let (client, state) = self.daemon("end sessions")?;
+        client.end_session(workforce, session, finish)?;
+        *state = client.state(workforce)?;
+        Ok(())
+    }
+
+    fn daemon(&mut self, what: &str) -> anyhow::Result<(&mut DaemonClient, &mut State)> {
+        match &mut self.source {
+            Source::Daemon { client, state } => Ok((client.get_mut(), state)),
+            Source::Local(_) => bail!("only the daemon can {what}; start it with `wf daemon`"),
         }
     }
 
