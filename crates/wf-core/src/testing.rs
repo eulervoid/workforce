@@ -315,6 +315,7 @@ pub fn define_agent(name: &str) -> EventBody {
         name: AgentName::new(name).unwrap(),
         harness: HarnessName::new("opencode").unwrap(),
         model: None,
+        instructions: None,
         capabilities: vec![],
         lanes: vec![],
         autonomy: Autonomy::default(),

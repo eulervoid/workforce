@@ -65,6 +65,8 @@ pub struct AgentDefined {
     pub capabilities: Vec<Requirement>,
     pub lanes: Vec<LaneName>,
     pub autonomy: Autonomy,
+    /// What the agent is told in every brief, before the item: how its owner wants it to work.
+    pub instructions: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

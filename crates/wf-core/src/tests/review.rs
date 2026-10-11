@@ -420,6 +420,7 @@ fn a_review_step_nobody_hosted_can_take_is_noticed() {
         name: AgentName::new("reviewer").unwrap(),
         harness: HarnessName::new("opencode").unwrap(),
         model: None,
+        instructions: None,
         capabilities: ["review", "strong-model"]
             .into_iter()
             .map(|name| Requirement::new(name).unwrap())

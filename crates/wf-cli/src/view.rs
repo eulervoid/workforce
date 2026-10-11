@@ -1068,6 +1068,7 @@ pub struct AgentView {
     pub nudges: u32,
     pub park_timeout: String,
     pub max_duration: Option<String>,
+    pub instructions: Option<String>,
 }
 
 pub fn agent_views(state: &State) -> Vec<AgentView> {
@@ -1091,6 +1092,7 @@ pub fn agent_views(state: &State) -> Vec<AgentView> {
                 .autonomy
                 .max_duration
                 .map(|duration| humantime::format_duration(duration).to_string()),
+            instructions: definition.instructions.clone(),
         })
         .collect()
 }

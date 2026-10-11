@@ -426,6 +426,9 @@ pub struct AgentAddArgs {
     /// agent that only answers questions and holds no items
     #[arg(long = "lane", default_value = "default")]
     pub lanes: Vec<LaneName>,
+    /// What the agent is told in every brief, such as how strictly to review.
+    #[arg(long)]
+    pub instructions: Option<String>,
     #[command(flatten)]
     pub autonomy: AutonomyArgs,
 }
@@ -474,6 +477,9 @@ pub struct AgentEditArgs {
     pub capabilities: Vec<Requirement>,
     #[arg(long = "lane")]
     pub lanes: Vec<LaneName>,
+    /// What the agent is told in every brief; an empty text removes them.
+    #[arg(long)]
+    pub instructions: Option<String>,
     #[command(flatten)]
     pub autonomy: AutonomyArgs,
 }

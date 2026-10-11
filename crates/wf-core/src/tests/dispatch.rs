@@ -18,6 +18,7 @@ fn agent(name: &str, lanes: &[&str], capabilities: &[&str], start: StartMode) ->
         name: AgentName::new(name).unwrap(),
         harness: HarnessName::new("opencode").unwrap(),
         model: None,
+        instructions: None,
         capabilities: capabilities
             .iter()
             .map(|name| Requirement::new(*name).unwrap())

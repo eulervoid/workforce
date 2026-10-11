@@ -141,6 +141,7 @@ nudges = 3                # "continue" prompts in a row without a new commit bef
 park_timeout = "2h"       # how long a session waits on a blocker or dependency before it ends
 max_duration = "4h"       # optional limit per session
 permissions = "ask"       # allow | ask | deny: answers to the harness's permission requests
+instructions = "..."      # optional: told in every brief, before the item (how strictly to review, ...)
 ```
 
 * Named by role, not by harness, so the harness can change later.

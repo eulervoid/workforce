@@ -38,9 +38,13 @@ impl Brief {
         };
         let target = state.policy()?.policy.merge.target.clone();
         let agent = session.agent();
+        let instructions = state
+            .agent(&agent.name, agent.principal)
+            .and_then(|definition| definition.instructions.clone());
         Some(match session.role() {
             SessionRole::Work => Brief::Work(WorkBrief {
                 agent: agent.name.to_string(),
+                instructions: instructions.clone(),
                 item: HashId::short(&item.id()),
                 title: item.title().to_string(),
                 body: item.body().render_numbered(),
@@ -52,6 +56,7 @@ impl Brief {
             }),
             SessionRole::Review { commit } => Brief::Review(ReviewBrief {
                 agent: agent.name.to_string(),
+                instructions: instructions.clone(),
                 item: HashId::short(&item.id()),
                 title: item.title().to_string(),
                 body: item.body().render_numbered(),
@@ -79,6 +84,7 @@ impl Brief {
                     .unwrap_or_default();
                 Brief::Supervise(SuperviseBrief {
                     agent: agent.name.to_string(),
+                    instructions,
                     item: HashId::short(&item.id()),
                     title: item.title().to_string(),
                     body: item.body().render_numbered(),
@@ -227,6 +233,8 @@ pub struct Dependency {
 pub struct WorkBrief {
     /// The name of the agent of the session.
     pub agent: String,
+    /// What the owner of the agent tells it in every brief.
+    pub instructions: Option<String>,
     /// The short id of the item, as `wf` commands take it.
     pub item: String,
     pub title: String,
@@ -248,6 +256,7 @@ impl WorkBrief {
             agent = self.agent,
             title = self.title
         );
+        instructions(&mut text, self.instructions.as_deref());
         task(&mut text, &self.body);
         if !self.dependencies.is_empty() {
             text.push_str("## Dependencies\n\n");
@@ -311,6 +320,8 @@ pub const MAX_DIFF_LEN: usize = 60_000;
 pub struct ReviewBrief {
     /// The name of the agent of the session.
     pub agent: String,
+    /// What the owner of the agent tells it in every brief.
+    pub instructions: Option<String>,
     /// The short id of the item.
     pub item: String,
     pub title: String,
@@ -332,6 +343,7 @@ impl ReviewBrief {
             agent = self.agent,
             title = self.title
         );
+        instructions(&mut text, self.instructions.as_deref());
         task(&mut text, &self.body);
         text.push_str("## The work\n\n");
         match &self.commit {
@@ -388,6 +400,8 @@ impl ReviewBrief {
 pub struct SuperviseBrief {
     /// The name of the agent of the session.
     pub agent: String,
+    /// What the owner of the agent tells it in every brief.
+    pub instructions: Option<String>,
     /// The short id of the item, as `wf` commands take it.
     pub item: String,
     pub title: String,
@@ -408,6 +422,7 @@ impl SuperviseBrief {
             agent = self.agent,
             title = self.title
         );
+        instructions(&mut text, self.instructions.as_deref());
         task(&mut text, &self.body);
         history(&mut text, &self.earlier);
         text.push_str("## Waiting on you\n\n");
@@ -435,6 +450,13 @@ impl SuperviseBrief {
 
 /// The last rule of every brief.
 const AGAIN: &str = "- Lost track: `wf work brief` prints this brief again.";
+
+fn instructions(text: &mut String, instructions: Option<&str>) {
+    if let Some(instructions) = instructions.filter(|instructions| !instructions.trim().is_empty())
+    {
+        let _ = writeln!(text, "## Instructions\n\n{}\n", instructions.trim());
+    }
+}
 
 fn task(text: &mut String, body: &str) {
     if !body.trim().is_empty() {
@@ -488,6 +510,7 @@ mod tests {
     fn the_work_brief_names_the_agent_the_item_the_branch_and_the_commands() {
         let brief = WorkBrief {
             agent: "coder".into(),
+            instructions: None,
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
             body: "- [ ] 1. write parser".into(),
@@ -529,6 +552,7 @@ mod tests {
     fn open_change_requests_are_listed_with_how_to_resolve_them() {
         let brief = WorkBrief {
             agent: "coder".into(),
+            instructions: None,
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
             body: String::new(),
@@ -544,14 +568,37 @@ mod tests {
         };
         let text = brief.render();
         assert!(text.contains("## Open change requests\n"), "{text}");
+        assert!(!text.contains("## Instructions"), "{text}");
         assert!(text.contains("- c4d2e1 by reviewer: Exit with 2 on a missing file"));
         assert!(text.contains("--resolve <id>"));
+    }
+
+    #[test]
+    fn the_instructions_of_the_agent_come_before_the_task() {
+        let brief = ReviewBrief {
+            agent: "reviewer".into(),
+            instructions: Some("Be strict about tests.\n".into()),
+            item: "k3f9ab".into(),
+            title: "Parse durations".into(),
+            body: "- [ ] 1. write parser".into(),
+            commit: None,
+            target: "main".into(),
+            step: "a review".into(),
+            earlier: vec![],
+            diff: String::new(),
+        };
+        let text = brief.render();
+        let instructions = text
+            .find("## Instructions\n\nBe strict about tests.\n\n")
+            .unwrap();
+        assert!(instructions < text.find("## Task").unwrap(), "{text}");
     }
 
     #[test]
     fn the_review_brief_has_the_diff_and_the_verdicts() {
         let brief = ReviewBrief {
             agent: "reviewer".into(),
+            instructions: None,
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
             body: String::new(),
@@ -579,6 +626,7 @@ mod tests {
     fn empty_sections_are_left_out() {
         let brief = WorkBrief {
             agent: "coder".into(),
+            instructions: None,
             item: "k3f9ab".into(),
             title: "Small".into(),
             body: String::new(),
@@ -590,6 +638,7 @@ mod tests {
         };
         let text = brief.render();
         for heading in [
+            "## Instructions",
             "## Task",
             "## Dependencies",
             "## Open change requests",

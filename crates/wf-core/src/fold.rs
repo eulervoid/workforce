@@ -285,6 +285,7 @@ impl State {
                     capabilities: defined.capabilities.clone(),
                     lanes: defined.lanes.clone(),
                     autonomy: defined.autonomy.clone(),
+                    instructions: defined.instructions.clone(),
                 };
                 match workforce.agents.get_mut(&agent) {
                     Some(existing) => {

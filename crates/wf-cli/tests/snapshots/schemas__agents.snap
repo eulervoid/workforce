@@ -15,7 +15,8 @@ expression: "Envelope::new(view::agent_views(&scenario.state))"
       "permissions": "ask",
       "nudges": 3,
       "park_timeout": "2h",
-      "max_duration": null
+      "max_duration": null,
+      "instructions": null
     }
   ]
 }

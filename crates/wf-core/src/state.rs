@@ -48,6 +48,7 @@ pub struct AgentDefinition {
     pub capabilities: Vec<Requirement>,
     pub lanes: Vec<LaneName>,
     pub autonomy: Autonomy,
+    pub instructions: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]

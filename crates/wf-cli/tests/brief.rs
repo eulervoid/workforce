@@ -22,6 +22,7 @@ fn briefs() -> Vec<String> {
     };
     let work = WorkBrief {
         agent: "coder".into(),
+        instructions: Some("Prefer the standard library.".into()),
         item: "k3f9ab".into(),
         title: "Add the summary command".into(),
         body: "- [ ] 1. parse the arguments".into(),
@@ -38,6 +39,7 @@ fn briefs() -> Vec<String> {
     };
     let review = |commit: Option<&str>| ReviewBrief {
         agent: "reviewer".into(),
+        instructions: None,
         item: "k3f9ab".into(),
         title: "Add the summary command".into(),
         body: String::new(),
@@ -49,6 +51,7 @@ fn briefs() -> Vec<String> {
     };
     let supervise = SuperviseBrief {
         agent: "supervisor".into(),
+        instructions: None,
         item: "k3f9ab".into(),
         title: "Add the summary command".into(),
         body: String::new(),

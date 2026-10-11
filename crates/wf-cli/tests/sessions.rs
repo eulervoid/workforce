@@ -1353,12 +1353,19 @@ async fn a_session_belongs_to_its_workforce_whatever_its_committed_workforce_fil
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_agent_reads_its_brief_again_with_wf_work_brief() {
+async fn an_agent_reads_its_brief_with_its_instructions_again_with_wf_work_brief() {
     let script = "\
 sh \"$WF_BIN\" work brief > brief.md && git add brief.md && git commit -q -m brief
 wf work submit
 ";
     let world = World::new(script).await;
+    world.wf.run(&[
+        "agent",
+        "edit",
+        "coder",
+        "--instructions",
+        "Prefer the standard library.",
+    ]);
     let item = world
         .wf
         .add(&["--title", "Add hello", "--body", "- [ ] write the file"]);
@@ -1366,6 +1373,10 @@ wf work submit
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
     let brief = git(&world.wf.repository, &["show", "main:brief.md"]);
+    assert!(
+        brief.contains("## Instructions\n\nPrefer the standard library.\n"),
+        "{brief}"
+    );
     assert!(
         brief.starts_with(&format!(
             "You are the agent `coder`, working on item #{}: Add hello\n",

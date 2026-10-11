@@ -246,6 +246,7 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
                     name: AgentName::new(&name)?,
                     harness: HarnessName::new(harness)?,
                     model: None,
+                    instructions: None,
                     capabilities: Vec::new(),
                     lanes: vec![LaneName::new("default")?],
                     autonomy: Autonomy::default(),
@@ -304,6 +305,7 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
                 capabilities: args.capabilities,
                 lanes: args.lanes,
                 autonomy,
+                instructions: args.instructions.and_then(instructions),
             }))?;
             let message = format!("defined agent {}", args.name);
             let message = hosting_note(workspace, &args.name, start, message)?;
@@ -332,12 +334,22 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
                     args.lanes
                 },
                 autonomy,
+                instructions: match args.instructions {
+                    Some(text) => instructions(text),
+                    None => current.instructions,
+                },
             }))?;
             let message = format!("updated agent {}", args.name);
             let message = hosting_note(workspace, &args.name, start, message)?;
             done(json, message, &event, None)
         }
     }
+}
+
+/// The instructions of an agent as given, or none for an empty text.
+fn instructions(text: String) -> Option<String> {
+    let text = text.trim();
+    (!text.is_empty()).then(|| text.to_string())
 }
 
 /// An agent that starts automatically is of no use until a device runs it, so this device does,
