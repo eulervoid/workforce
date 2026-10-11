@@ -44,12 +44,19 @@ mod style {
     pub const DIM: Style = Style::new().dimmed();
     pub const ID: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
     pub const PERSON: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Magenta)));
+    pub const AGENT: Style =
+        Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::BrightBlue)));
     pub const WARNING: Style = Style::new()
         .bold()
         .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Red)));
 
     pub fn color(color: AnsiColor) -> Style {
         Style::new().fg_color(Some(anstyle::Color::Ansi(color)))
+    }
+
+    /// Principals are `@name`; agents are `@name/agent`, with a session after that.
+    pub fn actor(handle: &str) -> Style {
+        if handle.contains('/') { AGENT } else { PERSON }
     }
 
     pub fn paint(style: Style, text: impl std::fmt::Display) -> String {
@@ -273,8 +280,15 @@ pub fn item_groups(grouping: ItemGrouping, groups: &[ItemGroup]) -> String {
     format!("{table}\n")
 }
 
+/// The width prose is wrapped to: the terminal's, but not so wide that lines are hard to read.
+fn text_width() -> usize {
+    terminal_size::terminal_size()
+        .map_or(100, |(width, _)| usize::from(width.0))
+        .clamp(40, 100)
+}
+
 pub fn item_detail(detail: &ItemDetail) -> String {
-    use style::{BOLD, DIM, PERSON, WARNING, paint};
+    use style::{BOLD, DIM, WARNING, paint};
 
     let summary = &detail.summary;
     let mut out = String::new();
@@ -338,17 +352,16 @@ pub fn item_detail(detail: &ItemDetail) -> String {
         let _ = writeln!(out, "  {}", status.join("  "));
     }
 
-    let mut attributes = Vec::new();
-    attributes.push(paint(PERSON, &detail.author));
-    attributes.push(paint(
-        DIM,
-        format!(
-            "created {} · updated {}",
-            short_time(&detail.created),
-            short_time(&detail.updated)
-        ),
-    ));
-    let _ = writeln!(out, "  {}", attributes.join("  "));
+    let _ = writeln!(
+        out,
+        "  {}",
+        [
+            paint(style::actor(&detail.author), &detail.author),
+            paint(DIM, format!("created {}", short_time(&detail.created))),
+            paint(DIM, format!("updated {}", short_time(&detail.updated))),
+        ]
+        .join(&format!(" {} ", paint(DIM, "·")))
+    );
     for flag in &detail.flags {
         let _ = writeln!(out, "  {}", paint(WARNING, format!("! {flag}")));
     }
@@ -392,7 +405,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
         let mentions: Vec<String> = detail
             .mentions
             .iter()
-            .map(|mention| paint(PERSON, mention))
+            .map(|mention| paint(style::actor(mention), mention))
             .collect();
         let _ = writeln!(out, "  ↳ mentions {}", mentions.join(" "));
     }
@@ -404,21 +417,28 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     }
     if !detail.notes.is_empty() {
         let _ = writeln!(out, "\n{}", paint(BOLD, "discussion"));
-        for note in &detail.notes {
-            let kind = match &note.session {
-                Some(session) => format!("({}: {session})", note.kind),
-                None => format!("({})", note.kind),
-            };
+        let width = text_width();
+        for (index, note) in detail.notes.iter().enumerate() {
+            if index > 0 {
+                out.push('\n');
+            }
             let _ = writeln!(
                 out,
-                "  {} {} {}: {}",
+                "  {} {} {} {} {}",
                 paint(DIM, short_time(&note.at)),
-                paint(PERSON, &note.by),
-                paint(DIM, kind),
-                note.text
-                    .as_deref()
-                    .unwrap_or("[text not in the local log]")
+                paint(DIM, "·"),
+                paint(style::actor(&note.by), &note.by),
+                paint(DIM, "·"),
+                paint(DIM, &note.kind),
             );
+            let text = note
+                .text
+                .as_deref()
+                .unwrap_or("[text not in the local log]");
+            let options = textwrap::Options::new(width)
+                .initial_indent("    ")
+                .subsequent_indent("    ");
+            let _ = writeln!(out, "{}", textwrap::fill(text, options));
             match &note.step {
                 Some(StepRefView {
                     number: Some(number),
