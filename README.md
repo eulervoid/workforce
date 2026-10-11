@@ -1,12 +1,14 @@
 # workforce (`wf`)
 
 A peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.
-Event-sourced, forkable, built on iroh. M0 (signed event log, item model, CLI) and M1 (sync between
-your machines, device invites, daemon, fork) are implemented; sessions and dispatch come next.
+Event-sourced, forkable, built on iroh. M0 (signed event log, item model, CLI), M1 (sync between
+your machines, device invites, daemon, fork) and M2 (agents at work on one machine: sessions, review
+and merge) are implemented; sessions across machines come next.
 
 - [docs/SPEC.md](docs/SPEC.md): the design
 - [docs/M0.md](docs/M0.md): plan for the first milestone
 - [docs/M1.md](docs/M1.md): sync, device invites, daemon and fork, with what was built
+- [docs/M2.md](docs/M2.md): agents at work on one machine, with what was built
 
 ## Try it
 ```sh
@@ -18,6 +20,29 @@ wf item add --title "Implement feed sync" --priority P1
 wf item list --ready
 wf log
 ```
+## Agents at work
+```sh
+wf agent add coder --harness opencode --capability rust --lane default --start auto
+wf agent add reviewer --harness claude-code --capability review --capability strong-model --start auto
+wf agent add supervisor --harness claude-code --lane supervision --start auto
+wf device edit --max-sessions 3 --agent coder=1 --agent reviewer=1 --agent supervisor=1
+wf item add --title "Parse durations in policy" --review standard
+wf daemon &                      # starts the agents on what is ready, and merges what is approved
+wf session list                  # live and finished sessions
+wf session watch <item>          # follow the transcript of the latest session on an item
+wf inbox                         # what waits on you: questions, reviews, merges, permission requests
+wf session allow <session>       # or `deny`, for a permission request an agent is waiting on
+wf review <item> --approve       # your step of a review level that has one
+wf item diff <item>              # what the work changes, as a review sees it
+```
+A session runs one agent on one item in its own git worktree and branch (`wf/<item>`), started by the
+daemon over ACP (`opencode acp`, `claude-agent-acp`, `codex-acp`, `gemini --experimental-acp`). Inside a
+session the agent works with `wf work report`, `wf work ask`, `wf work submit` and `wf work release`.
+Submitted work is reviewed at the level the item names, then merged into the target branch of the
+`[merge]` policy. Agents start with `--start manual` and `--permissions ask`; `wf session start <item>
+--agent <name>` runs one by hand. The harnesses named above have not all been run against this build
+yet: see *As built* in [docs/M2.md](docs/M2.md).
+
 ## Several machines
 ```sh
 # laptop, where `wf init` ran (it holds your principal key)

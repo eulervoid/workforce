@@ -24,7 +24,7 @@ impl Sandbox {
         let bin = root.path().join("bin");
         std::fs::create_dir_all(&repository).unwrap();
         std::fs::create_dir_all(&bin).unwrap();
-        for harness in ["claude", "opencode"] {
+        for harness in ["claude-agent-acp", "opencode"] {
             let path = bin.join(harness);
             std::fs::write(&path, "#!/bin/sh\n").unwrap();
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
