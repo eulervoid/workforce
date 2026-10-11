@@ -129,7 +129,22 @@ pub struct ItemSummary {
     pub labels: Vec<String>,
     /// The item's lane, or its type's default lane.
     pub lane: Option<String>,
+    /// How many steps of the body are checked off; `None` without steps.
+    pub steps: Option<StepsView>,
     pub archived: bool,
+}
+
+#[derive(Clone, Copy, Serialize)]
+pub struct StepsView {
+    pub done: usize,
+    pub total: usize,
+}
+
+fn steps_view(body: &Body) -> Option<StepsView> {
+    let (done, total) = body.steps().fold((0, 0), |(done, total), step| {
+        (done + usize::from(step.done), total + 1)
+    });
+    (total > 0).then_some(StepsView { done, total })
 }
 
 fn standing_parts(standing: Standing<'_>) -> (Option<String>, Option<String>) {
@@ -184,6 +199,10 @@ fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<It
 pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> ItemSummary {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let (state_name, state_category) = standing_parts(view.standing(policy));
+    let steps = match view {
+        ItemView::Live(item) => steps_view(&item.body()),
+        ItemView::Archived(_) => None,
+    };
     let (priority, readiness, blocked_by, blocking, labels, lane, archived) = match view {
         ItemView::Live(item) => (
             item.priority().map(|priority| priority.to_string()),
@@ -214,6 +233,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
         blocking,
         labels,
         lane,
+        steps,
         archived,
     }
 }
@@ -1016,6 +1036,8 @@ pub struct SessionView {
     pub ended: Option<String>,
     /// What the session submitted, or the commit a review session reviews.
     pub commit: Option<String>,
+    /// How many steps of the item are checked off.
+    pub steps: Option<StepsView>,
 }
 
 /// Live sessions first, then the others, each the newest first.
@@ -1036,6 +1058,10 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                 }
                 (SessionRole::Work, _) => None,
             };
+            let steps = match state.item(session.item()) {
+                Some(ItemView::Live(item)) => steps_view(&item.body()),
+                Some(ItemView::Archived(_)) | None => None,
+            };
             SessionView {
                 id: session.id().to_base32(),
                 agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),
@@ -1053,6 +1079,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                 started: timestamp(session.started().hlc),
                 ended: session.ended().map(|ended| timestamp(ended.at())),
                 commit,
+                steps,
             }
         })
         .collect()

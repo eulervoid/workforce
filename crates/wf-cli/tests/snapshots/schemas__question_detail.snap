@@ -23,6 +23,7 @@ expression: "Envelope::new(&detail)"
     ],
     "labels": [],
     "lane": "supervision",
+    "steps": null,
     "archived": false,
     "body": [],
     "author": "@joshua",

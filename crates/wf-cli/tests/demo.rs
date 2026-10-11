@@ -911,6 +911,12 @@ fn steps_are_checked_and_unchecked_by_number() {
 
     let shown = wf.run(&["item", "show", short(&task)]);
     assert!(shown.contains("- [x](1) write parser") && shown.contains("- [ ](2) add tests"));
+    assert!(shown.contains("steps 1/3"), "{shown}");
+    let listed = wf.run(&["item", "list"]);
+    assert!(listed.contains("1/3"), "{listed}");
+    let json = wf.json(&["item", "list"]);
+    assert_eq!(json[0]["steps"]["done"], 1);
+    assert_eq!(json[0]["steps"]["total"], 3);
 
     assert!(
         wf.fail(&["item", "check", short(&task), "4"])

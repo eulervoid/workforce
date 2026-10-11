@@ -23,6 +23,7 @@ expression: "Envelope::new(&detail)"
     "blocking": [],
     "labels": [],
     "lane": "default",
+    "steps": null,
     "archived": false,
     "body": [
       {

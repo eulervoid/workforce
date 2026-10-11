@@ -9,7 +9,7 @@ use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
 use crate::view::{
     AgentView, BodyPartView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView,
-    SessionView, StatusView, StepRefView,
+    SessionView, StatusView, StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
 use wf_core::policy::StateCategory;
@@ -164,9 +164,15 @@ fn id_label(id: &str) -> String {
     style::paint(style::ID, format!("#{}", short(id)))
 }
 
-const ITEM_COLUMNS: [&str; 4] = ["ITEM (TYPE:STATE)", "PRIORITY", "TITLE", "BLOCKING"];
+const ITEM_COLUMNS: [&str; 5] = [
+    "ITEM (TYPE:STATE)",
+    "PRIORITY",
+    "TITLE",
+    "STEPS",
+    "BLOCKING",
+];
 
-fn item_row(item: &ItemSummary) -> [String; 4] {
+fn item_row(item: &ItemSummary) -> [String; 5] {
     let suffix = if item.archived { " · archived" } else { "" };
     let priority = item.priority.as_deref().map_or_else(
         || style::paint(style::DIM, "-"),
@@ -192,8 +198,16 @@ fn item_row(item: &ItemSummary) -> [String; 4] {
         ),
         priority,
         item.title.clone(),
+        steps_label(item.steps),
         blocking,
     ]
+}
+
+/// `2/5`, or nothing for an item without steps.
+fn steps_label(steps: Option<StepsView>) -> String {
+    steps.map_or_else(String::new, |steps| {
+        format!("{}/{}", steps.done, steps.total)
+    })
 }
 
 pub fn item_list(items: &[ItemSummary]) -> String {
@@ -243,10 +257,11 @@ pub fn item_groups(grouping: ItemGrouping, groups: &[ItemGroup]) -> String {
     let mut table = table(&ITEM_COLUMNS);
     for (index, group) in groups.iter().enumerate() {
         if index > 0 {
-            table.add_row([""; 4]);
+            table.add_row([""; 5]);
         }
         table.add_row([
             group_heading(grouping, group),
+            String::new(),
             String::new(),
             String::new(),
             String::new(),
@@ -296,6 +311,9 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             DIM,
             format!("requires={}", detail.requires.join(",")),
         ));
+    }
+    if let Some(steps) = summary.steps {
+        status.push(format!("steps {}", steps_label(Some(steps))));
     }
     if let Some(review) = &detail.review_status {
         let text = match (review.status.as_str(), &review.step, &review.commit) {
@@ -595,7 +613,7 @@ pub fn sessions(sessions: &[SessionView]) -> String {
         return "no sessions\n".to_string();
     }
     let mut table = table(&[
-        "SESSION", "AGENT", "ITEM", "TITLE", "ROLE", "STATUS", "STARTED",
+        "SESSION", "AGENT", "ITEM", "TITLE", "STEPS", "ROLE", "STATUS", "STARTED",
     ]);
     for session in sessions {
         table.add_row([
@@ -603,6 +621,7 @@ pub fn sessions(sessions: &[SessionView]) -> String {
             session.agent.clone(),
             format!("#{}", short(&session.item)),
             session.title.clone(),
+            steps_label(session.steps),
             session.role.clone(),
             session.status.clone(),
             short_time(&session.started),

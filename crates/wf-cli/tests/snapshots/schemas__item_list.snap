@@ -16,6 +16,7 @@ expression: "Envelope::new(&all)"
       "blocking": [],
       "labels": [],
       "lane": null,
+      "steps": null,
       "archived": true
     },
     {
@@ -37,6 +38,7 @@ expression: "Envelope::new(&all)"
       ],
       "labels": [],
       "lane": "supervision",
+      "steps": null,
       "archived": false
     },
     {
@@ -58,6 +60,7 @@ expression: "Envelope::new(&all)"
       "blocking": [],
       "labels": [],
       "lane": "default",
+      "steps": null,
       "archived": false
     }
   ]
