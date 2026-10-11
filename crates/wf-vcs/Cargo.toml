@@ -1,0 +1,12 @@
+[package]
+name = "wf-vcs"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+wf-core.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

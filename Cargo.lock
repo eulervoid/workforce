@@ -4683,6 +4683,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "wf-vcs"
+version = "0.0.0"
+dependencies = [
+ "tempfile",
+ "thiserror 2.0.21",
+ "wf-core",
+]
+
+[[package]]
 name = "widestring"
 version = "1.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"

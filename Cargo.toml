@@ -13,6 +13,7 @@ wf-store = { path = "crates/wf-store" }
 wf-net = { path = "crates/wf-net" }
 wf-daemon = { path = "crates/wf-daemon" }
 wf-harness = { path = "crates/wf-harness" }
+wf-vcs = { path = "crates/wf-vcs" }
 anyhow = "1"
 blake3 = "1"
 clap = { version = "4", features = ["derive"] }
