@@ -372,6 +372,9 @@ impl Daemon {
             EndReason::Submitted { .. } => note,
             _ => None,
         };
+        if matches!(reason, EndReason::Submitted { commit: None }) {
+            self.discard_branch(workforce, item).await;
+        }
         match state.after_end(session) {
             None | Some(AfterEnd::Nothing) => {}
             Some(AfterEnd::MoveTo(to)) => {
@@ -390,6 +393,33 @@ impl Daemon {
             }
         }
         Ok(())
+    }
+
+    /// Removes the worktree and the branch of an item whose work left nothing to keep.
+    async fn discard_branch(&self, workforce: WorkforceId, item: ItemId) {
+        let Some(repository) = self.repository_of(workforce) else {
+            return;
+        };
+        let branch = item_branch(item);
+        let worktree = self
+            .workforce_directory(workforce)
+            .join("worktrees")
+            .join(item_name(item));
+        let removed = blocking(move || {
+            let git = GitCli::open(&repository)?;
+            git.remove_worktree(&worktree)?;
+            git.delete_branch(&branch)
+        })
+        .await;
+        match removed {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => {
+                eprintln!("could not remove the branch of #{}: {error}", item.short());
+            }
+            Err(error) => {
+                eprintln!("could not remove the branch of #{}: {error}", item.short());
+            }
+        }
     }
 
     /// The head of the branch of `item`, if it has commits of its own.

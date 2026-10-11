@@ -155,6 +155,8 @@ pub enum PolicyViolation {
     SessionEndsAnother,
     #[error("a session cannot move its own item to a done state; it submits the work instead")]
     SessionFinishesItsItem,
+    #[error("a session cannot answer a question it asked; someone else has to")]
+    SessionAnswersItsOwnQuestion,
     #[error("there is no review level `{0}`")]
     UnknownReviewLevel(ReviewName),
     #[error("a `{type_name}` has no blocked state to wait in during review")]
@@ -635,23 +637,26 @@ impl State {
                     Ok(())
                 }
             }
-            EventBody::ItemTransitioned(transition) if transition.item == folded.item() => {
+            EventBody::ItemTransitioned(transition) => {
                 let policy = &workforce.policy.value().policy;
-                let finishes = workforce
-                    .items
-                    .get(&transition.item)
+                let item = workforce.items.get(&transition.item);
+                let finishes = item
                     .and_then(|item| policy.type_config(item.item_type()))
                     .and_then(|config| config.state_category_of(&transition.to))
                     == Some(StateCategory::Done);
-                if finishes {
+                let asked_by_session = item.is_some_and(|item| {
+                    matches!(item.author(), Actor::Agent { session: asker, .. } if asker == session)
+                });
+                if finishes && transition.item == folded.item() {
                     Err(PolicyViolation::SessionFinishesItsItem)
+                } else if finishes && asked_by_session {
+                    Err(PolicyViolation::SessionAnswersItsOwnQuestion)
                 } else {
                     Ok(())
                 }
             }
             EventBody::DeviceProfile(_)
             | EventBody::ItemCreated(_)
-            | EventBody::ItemTransitioned(_)
             | EventBody::ItemLinked(_)
             | EventBody::ItemArchived(_)
             | EventBody::ItemUnarchived(_)

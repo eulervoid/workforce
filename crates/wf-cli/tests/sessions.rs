@@ -84,6 +84,24 @@ impl World {
         self.wf(&["session", "list"]).as_array().unwrap().clone()
     }
 
+    /// Waits until `condition` holds.
+    async fn wait(&self, what: &str, condition: impl Fn(&World) -> bool) {
+        for _ in 0..400 {
+            if condition(self) {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        panic!("timed out waiting for {what}");
+    }
+
+    fn questions(&self) -> Vec<Value> {
+        self.wf(&["item", "list", "--type", "question"])
+            .as_array()
+            .unwrap()
+            .clone()
+    }
+
     /// Waits until the only session is not live any more and returns it.
     async fn ended_session(&self) -> Value {
         for _ in 0..400 {
@@ -379,4 +397,85 @@ async fn sessions_need_a_known_agent_and_harness() {
         message.contains("not one wf knows how to start"),
         "{message}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_question_parks_the_session_until_it_is_answered() {
+    let script = "\
+wf work ask \"which crate?\" --body \"for durations\"
+turn
+sh echo done > a.txt && git add a.txt && git commit -q -m a
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Parse durations"]);
+    start_session(&world, &item);
+    world
+        .wait("the question", |world| !world.questions().is_empty())
+        .await;
+    let question = world.questions()[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(world.item(&question)["state"], "open");
+    let waiting = world.item(&item);
+    assert_eq!(waiting["state"], "in_progress");
+    assert_eq!(waiting["depends_on"].as_array().unwrap().len(), 1);
+
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    assert_eq!(world.sessions()[0]["status"], "live", "parked, not ended");
+
+    world.wf.run(&[
+        "item",
+        "move",
+        short(&question),
+        "answered",
+        "--note",
+        "Use humantime",
+    ]);
+    let session = world.ended_session().await;
+    assert_eq!(world.sessions().len(), 1, "the same session continued");
+    assert_eq!(session["status"], "submitted", "{session}");
+    assert_eq!(world.item(&item)["state"], "done");
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(transcript.contains("Use humantime"), "{transcript}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_that_waits_too_long_for_an_answer_times_out() {
+    let script = "wf work ask \"anyone there?\"\n";
+    let world = World::new(script).await;
+    world
+        .wf
+        .run(&["agent", "edit", "coder", "--park-timeout", "1s"]);
+    let item = world.wf.add(&["--title", "Waits"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "timed_out", "{session}");
+    assert_eq!(world.item(&item)["state"], "open");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_that_runs_too_long_is_cancelled_and_times_out() {
+    let world = World::new("hang\n").await;
+    world
+        .wf
+        .run(&["agent", "edit", "coder", "--max-duration", "1s"]);
+    let item = world.wf.add(&["--title", "Slow"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "timed_out", "{session}");
+    assert_eq!(world.item(&item)["state"], "open");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn submitting_without_commits_answers_a_question_and_leaves_no_branch() {
+    let world = World::new("wf work submit --note \"Use humantime\"\n").await;
+    let question = world
+        .wf
+        .add(&["--type", "question", "--title", "Which crate?"]);
+    start_session(&world, &question);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted");
+    assert_eq!(world.item(&question)["state"], "answered");
+    assert!(git(&world.wf.repository, &["branch", "--list", "wf/*"]).is_empty());
 }

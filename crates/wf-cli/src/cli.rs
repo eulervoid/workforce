@@ -87,6 +87,9 @@ pub enum Command {
 pub enum WorkCommand {
     /// Say what you did or decided, and why. Others read it under the item.
     Report(WorkReportArgs),
+    /// Ask a question you need answered. The item waits for it, and you are prompted again once
+    /// it is answered. Stop working after asking.
+    Ask(WorkAskArgs),
     /// The work is finished: end the session and hand its commits on.
     Submit {
         /// What the next reader should know, such as the answer to a question.
@@ -99,6 +102,15 @@ pub enum WorkCommand {
         #[arg(long)]
         note: Option<String>,
     },
+}
+
+#[derive(Args)]
+pub struct WorkAskArgs {
+    /// The question, as a title.
+    pub question: String,
+    /// What the answerer needs to know.
+    #[arg(long, allow_hyphen_values = true)]
+    pub body: Option<String>,
 }
 
 #[derive(Args)]

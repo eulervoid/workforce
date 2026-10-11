@@ -821,6 +821,7 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
     })?;
     match command {
         WorkCommand::Report(args) => report(json, workspace, session, args),
+        WorkCommand::Ask(args) => ask(json, workspace, session, args),
         WorkCommand::Submit { note } => end(
             json,
             workspace,
@@ -836,6 +837,44 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
             "released",
         ),
     }
+}
+
+fn ask(
+    json: bool,
+    workspace: &mut Workspace,
+    session: SessionId,
+    args: WorkAskArgs,
+) -> anyhow::Result<()> {
+    let item = workspace
+        .state()
+        .session(session)
+        .expect("the session was resolved when the workspace was opened")
+        .item();
+    let created = workspace.author(EventBody::ItemCreated(ItemCreated {
+        item_type: wf_core::name::TypeName::new("question")?,
+        title: args.question,
+        body: args.body.unwrap_or_default(),
+        priority: Some(Priority::DEFAULT),
+        lane: None,
+        labels: Vec::new(),
+        requires: Vec::new(),
+        review: None,
+    }))?;
+    let question = ItemId::from(created.id());
+    workspace.author(EventBody::ItemLinked(ItemLinked {
+        item,
+        link: Link::DependsOn(SetChange::Add(question)),
+    }))?;
+    done(
+        json,
+        format!(
+            "asked #{}; #{} waits for the answer. Stop here: you are prompted again once it is answered",
+            question.short(),
+            item.short()
+        ),
+        &created,
+        Some(question),
+    )
 }
 
 fn end(
