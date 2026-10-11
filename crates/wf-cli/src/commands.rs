@@ -1075,17 +1075,12 @@ fn comment(
         }))?;
     }
     let comment = CommentId::from(event.id());
-    let mut message = match kind {
-        CommentKind::Plain => format!("commented on #{}", id.short()),
-        CommentKind::Blocker | CommentKind::ChangeRequest => {
-            format!(
-                "wrote {} {} on #{}",
-                kind.name().replace('_', " "),
-                comment.short(),
-                id.short()
-            )
-        }
-    };
+    let mut message = format!(
+        "wrote {} {} on #{}",
+        kind.name().replace('_', " "),
+        comment.short(),
+        id.short()
+    );
     if !resolves.is_empty() {
         let ids: Vec<String> = resolves.iter().map(HashId::short).collect();
         message.push_str(&format!(", resolving {}", ids.join(", ")));
