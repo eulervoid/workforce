@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::MIN_PREFIX_LEN;
 
-pub const PARSER_VERSION: u16 = 2;
+pub const PARSER_VERSION: u16 = 3;
 
 /// `@joshua`, `@joshua/coder` or `@joshua/coder/s4k2`, as written.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
