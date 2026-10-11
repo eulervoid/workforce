@@ -4,9 +4,8 @@ use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PermissionOption,
-    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
-    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, TextContent,
+    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
+    RequestPermissionRequest, RequestPermissionResponse, SessionNotification, TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
 use jiff::Timestamp;
@@ -15,6 +14,7 @@ use tokio::task::JoinHandle;
 
 pub use agent_client_protocol::schema::v1::StopReason;
 
+use crate::permission::{PermissionRequest, Permissions};
 use crate::transcript::{Direction, TranscriptEntry, TranscriptWriter};
 
 #[derive(Debug, thiserror::Error)]
@@ -25,50 +25,6 @@ pub enum Error {
     Transcript(#[from] io::Error),
     #[error("the agent is gone")]
     Closed,
-}
-
-/// How permission requests from the agent are answered.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PermissionMode {
-    Allow,
-    Deny,
-}
-
-impl PermissionMode {
-    fn answer(self, options: &[PermissionOption]) -> RequestPermissionOutcome {
-        let wanted = match self {
-            PermissionMode::Allow => [
-                PermissionOptionKind::AllowOnce,
-                PermissionOptionKind::AllowAlways,
-            ],
-            PermissionMode::Deny => [
-                PermissionOptionKind::RejectOnce,
-                PermissionOptionKind::RejectAlways,
-            ],
-        };
-        wanted
-            .iter()
-            .find_map(|kind| options.iter().find(|option| option.kind == *kind))
-            .map_or(RequestPermissionOutcome::Cancelled, |option| {
-                RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
-                    option.option_id.clone(),
-                ))
-            })
-    }
-}
-
-/// Decides what a request of the agent for permission is answered with. A person may be asked,
-/// so it may take a long time; the agent waits meanwhile.
-pub trait Permissions: Send + Sync + 'static {
-    /// `what` names the tool call that wants permission.
-    fn decide(&self, what: &str) -> agent_client_protocol::BoxFuture<'_, PermissionMode>;
-}
-
-impl Permissions for PermissionMode {
-    fn decide(&self, _what: &str) -> agent_client_protocol::BoxFuture<'_, PermissionMode> {
-        let mode = *self;
-        Box::pin(async move { mode })
-    }
 }
 
 /// The command that starts a known harness in ACP mode.
@@ -109,6 +65,7 @@ impl Conversation {
     pub async fn start<W: Write + Send + 'static>(launch: Launch<W>) -> Result<Self, Error> {
         let writer = Arc::new(TranscriptWriter::new(launch.transcript));
         let recorder = Arc::clone(&writer);
+        let decided = Arc::clone(&writer);
         let agent = AcpAgent::new(launch.agent).with_debug(move |line, direction| {
             let direction = Direction::from(direction);
             recorder.record(&TranscriptEntry::from_line(
@@ -133,15 +90,12 @@ impl Conversation {
                 )
                 .on_receive_request(
                     async move |request: RequestPermissionRequest, responder, _connection| {
-                        let what = request
-                            .tool_call
-                            .fields
-                            .title
-                            .clone()
-                            .unwrap_or_else(|| "a tool call".to_string());
-                        let mode = permissions.decide(&what).await;
+                        let decision = permissions
+                            .decide(PermissionRequest::of(&request.tool_call.fields))
+                            .await;
+                        decided.record(&TranscriptEntry::decision(Timestamp::now(), &decision));
                         responder.respond(RequestPermissionResponse::new(
-                            mode.answer(&request.options),
+                            decision.permission.answer(&request.options),
                         ))
                     },
                     agent_client_protocol::on_receive_request!(),
@@ -240,39 +194,6 @@ impl CancelHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn options() -> Vec<PermissionOption> {
-        vec![
-            PermissionOption::new("always", "Always", PermissionOptionKind::AllowAlways),
-            PermissionOption::new("reject", "Reject", PermissionOptionKind::RejectOnce),
-            PermissionOption::new("once", "Once", PermissionOptionKind::AllowOnce),
-        ]
-    }
-
-    fn selected(outcome: RequestPermissionOutcome) -> String {
-        match outcome {
-            RequestPermissionOutcome::Selected(selected) => selected.option_id.to_string(),
-            other => panic!("expected a selection, got {other:?}"),
-        }
-    }
-
-    #[test]
-    fn allow_prefers_once_over_always() {
-        assert_eq!(selected(PermissionMode::Allow.answer(&options())), "once");
-    }
-
-    #[test]
-    fn deny_picks_a_reject_option() {
-        assert_eq!(selected(PermissionMode::Deny.answer(&options())), "reject");
-    }
-
-    #[test]
-    fn missing_options_cancel() {
-        assert!(matches!(
-            PermissionMode::Deny.answer(&options()[..1]),
-            RequestPermissionOutcome::Cancelled
-        ));
-    }
 
     #[test]
     fn known_harnesses_have_commands() {

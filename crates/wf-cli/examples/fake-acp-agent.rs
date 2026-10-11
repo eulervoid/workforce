@@ -10,6 +10,7 @@
 //!
 //! In `sh` and `wf` lines, `{item}` is the item named in the prompt, as in `item #k3f9ab`.
 //! - `permission`: asks for a permission and says what the answer was.
+//! - `permission <command>`: asks to run the command, with `{item}` replaced.
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
 //! - `turn`: ends the turn.
@@ -129,11 +130,20 @@ fn main() {
                             ));
                         }
                         "permission" => {
+                            let tool_call = if rest.is_empty() {
+                                json!({"toolCallId": "call-1", "title": "Edit file"})
+                            } else {
+                                let command = rest.replace("{item}", &item);
+                                json!({
+                                    "toolCallId": "call-1", "title": command, "kind": "execute",
+                                    "rawInput": {"command": command},
+                                })
+                            };
                             send(json!({
                                 "jsonrpc": "2.0", "id": 100, "method": "session/request_permission",
                                 "params": {
                                     "sessionId": "fake",
-                                    "toolCall": {"toolCallId": "call-1", "title": "Edit file"},
+                                    "toolCall": tool_call,
                                     "options": [
                                         {"optionId": "yes", "name": "Yes", "kind": "allow_once"},
                                         {"optionId": "no", "name": "No", "kind": "reject_once"},

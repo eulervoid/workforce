@@ -1,10 +1,10 @@
 //! Permission requests that agents make and a person answers.
 
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 
 use tokio::sync::oneshot;
 use wf_core::id::{SessionId, WorkforceId};
-use wf_harness::{PermissionMode, Permissions};
+use wf_harness::PermissionMode;
 
 use crate::proto::{Answer, HeldPermission};
 
@@ -28,7 +28,7 @@ impl Held {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
-    fn hold(
+    pub(crate) fn hold(
         &self,
         workforce: WorkforceId,
         session: SessionId,
@@ -73,19 +73,5 @@ impl Held {
     pub(crate) fn forget(&self, session: SessionId) {
         self.lock()
             .retain(|request| request.held.session != session);
-    }
-}
-
-/// Asks a person, through `wf inbox` and `wf session allow|deny`.
-pub(crate) struct Asking {
-    pub(crate) held: Arc<Held>,
-    pub(crate) workforce: WorkforceId,
-    pub(crate) session: SessionId,
-}
-
-impl Permissions for Asking {
-    fn decide(&self, what: &str) -> wf_harness::BoxFuture<'_, PermissionMode> {
-        let answer = self.held.hold(self.workforce, self.session, what);
-        Box::pin(async move { answer.await.unwrap_or(PermissionMode::Deny) })
     }
 }

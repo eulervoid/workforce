@@ -3,6 +3,7 @@
 //! with them, and serves the replica to the CLI over a unix socket.
 
 pub mod client;
+mod decide;
 mod peers;
 mod permissions;
 pub mod proto;

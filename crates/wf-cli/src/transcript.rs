@@ -223,6 +223,7 @@ impl Renderer {
                 Some("session/prompt") => (Block::Other, self.prompt(message)),
                 _ => (Block::Nothing, String::new()),
             },
+            Direction::Wf => (Block::Other, self.decision(&message["decision"])),
             Direction::FromAgent => match method {
                 Some("session/update") => self.update(&message["params"]["update"]),
                 Some("session/request_permission") => {
@@ -258,6 +259,20 @@ impl Renderer {
         out.push_str(&self.begin(block));
         out.push_str(&body);
         out
+    }
+
+    /// `✓ allowed by rules: ...` or `✗ denied by a person`.
+    fn decision(&self, decision: &Value) -> String {
+        let (label, verb, style) = match decision["permission"].as_str() {
+            Some("allow") => ("✓", "allowed", color(AnsiColor::Green)),
+            _ => ("✗", "denied", color(AnsiColor::Red)),
+        };
+        let by = decision["by"].as_str().unwrap_or("?");
+        let text = match decision["reason"].as_str() {
+            Some(reason) => format!("{verb} by {by}: {}", first_line(reason)),
+            None => format!("{verb} by {by}"),
+        };
+        self.header(label, &text, style)
     }
 
     fn prompt(&self, message: &Value) -> String {

@@ -1076,6 +1076,24 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn running_wf_is_allowed_without_asking_anyone() {
+    let script = "\
+permission wf item show {item} 2>&1 | head -40
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Reads itself"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted");
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(transcript.contains("allowed by rules"), "{transcript}");
+    assert!(transcript.contains("permission: yes"), "{transcript}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_denied_permission_is_told_no_and_stopping_a_session_drops_its_requests() {
     let world = World::new("permission\nsay done\nhang\n").await;
     let item = world.wf.add(&["--title", "Needs permission"]);

@@ -22,7 +22,7 @@ use wf_harness::{
 use wf_store::AuthorError;
 use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name};
 
-use crate::permissions::Asking;
+use crate::decide::Deciding;
 use crate::proto::Finish;
 use crate::{Daemon, Loaded, StorageClosed};
 
@@ -467,7 +467,7 @@ impl Daemon {
             permissions: match autonomy.permissions {
                 wf_core::autonomy::PermissionMode::Allow => Arc::new(PermissionMode::Allow),
                 wf_core::autonomy::PermissionMode::Deny => Arc::new(PermissionMode::Deny),
-                wf_core::autonomy::PermissionMode::Ask => Arc::new(Asking {
+                wf_core::autonomy::PermissionMode::Ask => Arc::new(Deciding {
                     held: Arc::clone(&self.held),
                     workforce,
                     session,

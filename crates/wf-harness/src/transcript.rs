@@ -13,6 +13,8 @@ pub enum Direction {
     ToAgent,
     FromAgent,
     AgentLog,
+    /// Written by wf itself, not crossing the connection: who answered a permission request.
+    Wf,
 }
 
 impl From<LineDirection> for Direction {
@@ -35,9 +37,18 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
+    /// `{"decision": {"permission": "allow", "by": "rules", "reason": ...}}`.
+    pub fn decision(at: Timestamp, decision: &crate::permission::Decision) -> Self {
+        TranscriptEntry {
+            at,
+            direction: Direction::Wf,
+            message: serde_json::json!({ "decision": decision }),
+        }
+    }
+
     pub fn from_line(at: Timestamp, direction: Direction, line: &str) -> Self {
         let message = match direction {
-            Direction::AgentLog => Value::String(line.to_owned()),
+            Direction::AgentLog | Direction::Wf => Value::String(line.to_owned()),
             Direction::ToAgent | Direction::FromAgent => {
                 serde_json::from_str(line).unwrap_or_else(|_| Value::String(line.to_owned()))
             }
