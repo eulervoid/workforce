@@ -3,7 +3,8 @@
 //! with them, and serves the replica to the CLI over a unix socket.
 
 pub mod client;
-mod decide;
+pub mod decide;
+pub mod machine_config;
 mod peers;
 mod permissions;
 pub mod proto;
@@ -96,6 +97,8 @@ pub struct Config {
     /// Commands for harnesses, in place of the ones wf knows by name. Tests start fake agents
     /// this way.
     pub harnesses: BTreeMap<wf_core::name::HarnessName, wf_harness::AcpAgentConfig>,
+    /// The machine config, read for each permission request. `None` uses the defaults.
+    pub machine_config: Option<PathBuf>,
 }
 
 pub(crate) struct Loaded {

@@ -803,7 +803,10 @@ pub fn inbox(entries: &[InboxEntryView]) -> String {
                 .as_deref()
                 .map_or_else(String::new, |item| format!("#{}", short(item))),
             entry.title.clone(),
-            entry.what.clone(),
+            std::iter::once(entry.what.clone())
+                .chain(entry.passed.iter().map(|why| format!("  passed by {why}")))
+                .collect::<Vec<_>>()
+                .join("\n"),
         ]);
     }
     format!("{table}\n")

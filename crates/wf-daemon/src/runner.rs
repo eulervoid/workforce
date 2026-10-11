@@ -17,12 +17,13 @@ use wf_core::name::{AgentName, HarnessName, StateName};
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
 use wf_harness::{
-    AcpAgentConfig, Conversation, Launch, PermissionMode, Permissions, ReviewPackage, WorkPackage,
+    AcpAgentConfig, Conversation, Launch, PermissionMode, PermissionRequest, Permissions,
+    ReviewPackage, WorkPackage,
 };
 use wf_store::AuthorError;
 use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name};
 
-use crate::decide::Deciding;
+use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
 use crate::proto::Finish;
 use crate::{Daemon, Loaded, StorageClosed};
 
@@ -363,10 +364,24 @@ impl Daemon {
         let harness = self
             .harness_command(&definition.harness)
             .ok_or_else(|| SessionError::UnknownHarness(definition.harness.clone()))?;
-        match state.item(item).ok_or(SessionError::UnknownItem(item))? {
-            ItemView::Live(_) => {}
+        let item_context = match state.item(item).ok_or(SessionError::UnknownItem(item))? {
+            ItemView::Live(live) => {
+                let policy = &state.policy().expect("a workforce has a policy").policy;
+                let state_name = match live.standing(policy) {
+                    wf_core::item::Standing::Known { state, .. } => state.to_string(),
+                    wf_core::item::Standing::Unknown { state } => {
+                        state.map(ToString::to_string).unwrap_or_default()
+                    }
+                };
+                ItemContext {
+                    id: item.to_base32(),
+                    title: live.title().to_string(),
+                    item_type: live.item_type().to_string(),
+                    state: state_name,
+                }
+            }
             ItemView::Archived(_) => return Err(SessionError::Archived(item)),
-        }
+        };
         if role == SessionRole::Work && state.claim(item).is_some() {
             return Err(SessionError::Claimed(item));
         }
@@ -449,6 +464,38 @@ impl Daemon {
             source,
         })?;
         let autonomy = definition.autonomy;
+        let permissions: Arc<dyn Permissions> = match autonomy.permissions {
+            wf_core::autonomy::PermissionMode::Allow => Arc::new(PermissionMode::Allow),
+            wf_core::autonomy::PermissionMode::Deny => Arc::new(PermissionMode::Deny),
+            wf_core::autonomy::PermissionMode::Ask => Arc::new(Deciding {
+                held: Arc::clone(&self.held),
+                workforce,
+                session,
+                machine_config: self.config.machine_config.clone(),
+                context: DeciderRequest {
+                    hook: "permission".to_string(),
+                    version: 1,
+                    workforce: workforce.to_base32(),
+                    item: item_context,
+                    session: session.to_base32(),
+                    agent: AgentContext {
+                        name: agent.to_string(),
+                        capabilities: definition
+                            .capabilities
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect(),
+                    },
+                    directory: worktree.clone(),
+                    tool: PermissionRequest {
+                        kind: None,
+                        title: String::new(),
+                        input: None,
+                    },
+                    guidance: None,
+                },
+            }),
+        };
         let run = Run {
             workforce,
             session,
@@ -464,15 +511,7 @@ impl Daemon {
             nudges: autonomy.nudges,
             park_timeout: autonomy.park_timeout,
             max_duration: autonomy.max_duration,
-            permissions: match autonomy.permissions {
-                wf_core::autonomy::PermissionMode::Allow => Arc::new(PermissionMode::Allow),
-                wf_core::autonomy::PermissionMode::Deny => Arc::new(PermissionMode::Deny),
-                wf_core::autonomy::PermissionMode::Ask => Arc::new(Deciding {
-                    held: Arc::clone(&self.held),
-                    workforce,
-                    session,
-                }),
-            },
+            permissions,
         };
         let (stop, stopped) = mpsc::unbounded_channel();
         self.runners.add(session, stop);

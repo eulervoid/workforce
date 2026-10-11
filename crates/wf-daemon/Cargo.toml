@@ -13,7 +13,10 @@ wf-harness.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["process"] }
+toml.workspace = true
+humantime.workspace = true
+url = { version = "2", features = ["serde"] }
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }

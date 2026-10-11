@@ -87,7 +87,10 @@ pub trait Permissions: Send + Sync + 'static {
 }
 
 impl Permissions for PermissionMode {
-    fn decide(&self, _request: PermissionRequest) -> agent_client_protocol::BoxFuture<'_, Decision> {
+    fn decide(
+        &self,
+        _request: PermissionRequest,
+    ) -> agent_client_protocol::BoxFuture<'_, Decision> {
         let decision = Decision {
             permission: *self,
             by: "the agent's permissions".to_string(),

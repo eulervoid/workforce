@@ -811,7 +811,10 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
             Activity::SupersededBy(other) => {
                 ("superseded_by", format!("superseded by {}", label(other)))
             }
-            Activity::ReferencedIn { item: other, comment } => (
+            Activity::ReferencedIn {
+                item: other,
+                comment,
+            } => (
                 "referenced_in",
                 match comment {
                     Some(comment) => format!("{} referenced in {}", comment.short(), label(other)),
@@ -1353,6 +1356,8 @@ pub struct InboxEntryView {
     pub session: Option<String>,
     pub title: String,
     pub what: String,
+    /// Permission requests only: why each decider of the machine passed it on, as `decider: why`.
+    pub passed: Vec<String>,
 }
 
 /// What waits on a person: what the state says, and the permission requests the daemon holds.
@@ -1416,6 +1421,7 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
                 session: None,
                 title: title_of(entry.item),
                 what,
+                passed: Vec::new(),
             }
         })
         .collect();
@@ -1435,6 +1441,7 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
                 request.what,
                 request.session.short()
             ),
+            passed: request.passed.clone(),
         }
     }));
     entries

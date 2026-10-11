@@ -33,6 +33,7 @@ impl Held {
         workforce: WorkforceId,
         session: SessionId,
         what: &str,
+        passed: Vec<String>,
     ) -> oneshot::Receiver<PermissionMode> {
         let (reply, answer) = oneshot::channel();
         self.lock().push(Request {
@@ -40,6 +41,7 @@ impl Held {
             held: HeldPermission {
                 session,
                 what: what.to_string(),
+                passed,
                 since_ms: crate::now_ms(),
             },
             reply,

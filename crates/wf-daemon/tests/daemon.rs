@@ -48,6 +48,7 @@ async fn start() -> Running {
             socket: socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
+            machine_config: None,
         },
         fixture.devices[0].clone(),
     )
@@ -166,6 +167,7 @@ async fn a_second_daemon_on_the_same_socket_is_refused() {
             socket: running.socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
+            machine_config: None,
         },
         wf_core::identity::DeviceSigner::from_bytes(&[77; 32]).unwrap(),
     )
@@ -203,6 +205,7 @@ async fn start_peer_as(
             socket: socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
+            machine_config: None,
         },
         signer,
     )
@@ -395,6 +398,7 @@ async fn start_empty(
             socket: socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
+            machine_config: None,
         },
         signer,
     )
@@ -507,6 +511,7 @@ async fn a_log_longer_than_a_page_arrives_whole_and_in_order() {
             socket: socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
+            machine_config: None,
         },
         fixture.devices[0].clone(),
     )

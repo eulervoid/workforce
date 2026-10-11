@@ -12,7 +12,9 @@ const SESSION_COMMANDS: &[&str] = &[
 ];
 
 /// Commands that may follow `wf` in a pipe: they only filter what it prints.
-const FILTERS: &[&str] = &["head", "tail", "grep", "rg", "wc", "sort", "uniq", "cut", "jq"];
+const FILTERS: &[&str] = &[
+    "head", "tail", "grep", "rg", "wc", "sort", "uniq", "cut", "jq",
+];
 
 /// Redirections that write nowhere.
 const HARMLESS_REDIRECTIONS: &[&str] = &["2>&1", ">/dev/null", "2>/dev/null", "1>/dev/null"];

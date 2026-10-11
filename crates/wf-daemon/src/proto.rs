@@ -19,7 +19,7 @@ use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::peers::PeerSync;
 
-pub const PROTOCOL_VERSION: u32 = 4;
+pub const PROTOCOL_VERSION: u32 = 5;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -119,6 +119,8 @@ pub struct HeldPermission {
     pub session: SessionId,
     /// The tool call that wants permission.
     pub what: String,
+    /// Why each decider of the machine passed it on to a person, as `decider: why`.
+    pub passed: Vec<String>,
     /// Milliseconds since the Unix epoch.
     pub since_ms: u64,
 }

@@ -176,6 +176,7 @@ impl WorldSetup {
                 socket: socket.clone(),
                 network: Network::Direct,
                 harnesses,
+                machine_config: Some(self.wf.root.path().join("config.toml")),
             },
             device,
         )
@@ -1091,6 +1092,66 @@ wf work submit
         .run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(transcript.contains("allowed by rules"), "{transcript}");
     assert!(transcript.contains("permission: yes"), "{transcript}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_hook_of_the_machine_config_decides_before_a_person_is_asked() {
+    let script = "\
+permission
+say done
+wf work release --note done
+";
+    let world = World::new(script).await;
+    std::fs::write(
+        world.wf.root.path().join("config.toml"),
+        r#"
+[[permissions.decider]]
+kind = "rules"
+
+[[permissions.decider]]
+kind = "hook"
+command = ["sh", "-c", "grep -q '\"title\":\"Edit file\"' && echo '{\"permission\":\"deny\",\"reason\":\"no edits today\"}'"]
+"#,
+    )
+    .unwrap();
+    let item = world.wf.add(&["--title", "Wants to edit"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(
+        transcript.contains("denied by hook sh: no edits today"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("permission: no"), "{transcript}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_request_every_decider_passes_on_says_why_in_the_inbox() {
+    let world = World::new("permission\nsay done\nhang\n").await;
+    std::fs::write(
+        world.wf.root.path().join("config.toml"),
+        "[[permissions.decider]]\nkind = \"hook\"\ncommand = [\"sh\", \"-c\", \"echo '{\\\"permission\\\":\\\"ask\\\",\\\"reason\\\":\\\"not sure\\\"}'\"]\n",
+    )
+    .unwrap();
+    let item = world.wf.add(&["--title", "Unsure"]);
+    start_session(&world, &item);
+    world
+        .wait("the request", |world| {
+            inbox(world)
+                .iter()
+                .any(|entry| entry["kind"] == "permission")
+        })
+        .await;
+    let entry = inbox(&world)
+        .into_iter()
+        .find(|entry| entry["kind"] == "permission")
+        .unwrap();
+    assert_eq!(entry["passed"], serde_json::json!(["hook sh: not sure"]));
+    world
+        .wf
+        .run(&["session", "deny", short(entry["session"].as_str().unwrap())]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

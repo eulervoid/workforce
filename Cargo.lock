@@ -4735,11 +4735,14 @@ dependencies = [
 name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
+ "humantime",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.21",
  "tokio",
+ "toml",
+ "url",
  "wf-core",
  "wf-harness",
  "wf-net",

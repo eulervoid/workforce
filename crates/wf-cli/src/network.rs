@@ -456,6 +456,7 @@ pub fn daemon(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()>
             network_for(args.relay.as_deref())?
         },
         harnesses: Default::default(),
+        machine_config: wf_daemon::machine_config::MachineConfig::path_from_env(),
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
