@@ -1031,9 +1031,11 @@ machine config lists them, until one answers. Each one allows, denies or passes 
 * **`rules`**: built-in. Running `wf` alone is allowed, because it is how a session reports back.
 * **`hook`**: a program that gets the request on stdin and prints
   `{"permission": "allow" | "deny" | "ask", "reason": ...}`. `ask`, a crash or a timeout passes on.
-* **`model`**: a decision model, Jev by TypeSafe for now. It is asked whether the call should be
-  allowed, and the probability it answers with is compared against two thresholds: allow above one,
-  deny below the other, pass on in between. Its API key comes from an environment variable.
+* **`model`**: a decision model such as Jev, called over the System One API at a configured
+  `base_url` (TypeSafe, OpenRouter, Cloudflare, ...). Asked as a `noul`, its probability that the call
+  should be allowed is compared with two thresholds: allow above one, deny below the other, pass on in
+  between. Asked as a `choice` between allow, deny and ask, its pick is taken above a minimum
+  confidence. Its API key comes from an environment variable.
 * **`agent`**: an agent that the daemon keeps one live session of, prompted with the request, the
   item and the guidance. It answers like a hook.
 
