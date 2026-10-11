@@ -253,6 +253,10 @@ wf work submit --note \"all done\"
         "{transcript}"
     );
     assert!(transcript.contains("hello"), "{transcript}");
+    assert!(
+        transcript.contains("end_turn") && !transcript.contains("cancelled"),
+        "an agent that submits finishes its turn: {transcript}"
+    );
 
     let repository = &world.wf.repository;
     assert_eq!(

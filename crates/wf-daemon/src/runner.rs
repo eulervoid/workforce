@@ -64,7 +64,17 @@ pub enum SessionError {
 }
 
 /// Tells the task of a running session that it has ended and its harness is to be stopped.
-struct Stop;
+#[derive(Clone, Copy)]
+enum Stop {
+    /// Cancel the turn that is running.
+    Now,
+    /// The agent ended the session from inside its turn, so it is still waiting for the answer
+    /// of the command that did: let it finish the turn, within a grace period.
+    AfterTurn,
+}
+
+/// How long an agent that ended its own session gets to finish its turn.
+const GRACE: Duration = Duration::from_secs(20);
 
 /// The sessions this daemon is running. Lost with the process, which is why a daemon that starts
 /// ends every live session of its machine.
@@ -79,9 +89,9 @@ impl Runners {
     }
 
     /// Stops the task of `session`, if it runs here.
-    fn stop(&self, session: SessionId) {
+    fn stop(&self, session: SessionId, how: Stop) {
         if let Some(stop) = self.lock().remove(&session) {
-            let _ = stop.send(Stop);
+            let _ = stop.send(how);
         }
     }
 
@@ -443,7 +453,7 @@ impl Daemon {
             return Err(SessionError::NotOurs(session));
         }
         if !folded.is_live() {
-            self.runners.stop(session);
+            self.runners.stop(session, Stop::Now);
             return Ok(());
         }
         let principal = self.principal_of_device(&state)?;
@@ -528,7 +538,15 @@ impl Daemon {
             EventBody::SessionEnded(SessionEnded { session, reason }),
         )
         .await?;
-        self.runners.stop(session);
+        let how = match finish {
+            Finish::Submit { .. } | Finish::Release { .. } | Finish::Reviewed => Stop::AfterTurn,
+            Finish::Stop
+            | Finish::Blocked
+            | Finish::TimedOut
+            | Finish::Failed
+            | Finish::GaveUp { .. } => Stop::Now,
+        };
+        self.runners.stop(session, how);
         if let SessionRole::Review { commit } = role {
             self.discard_review_worktree(workforce, item, commit).await;
         }
@@ -809,7 +827,7 @@ async fn run_session(
             wf_core::report::report(&error)
         );
     }
-    daemon.runners.stop(run.session);
+    daemon.runners.stop(run.session, Stop::Now);
     daemon.held.forget(run.session);
 }
 
@@ -888,7 +906,12 @@ async fn turns(
         tokio::pin!(turn);
         let result = tokio::select! {
             result = &mut turn => result,
-            Some(Stop) = stopped.recv() => {
+            Some(how) = stopped.recv() => {
+                if matches!(how, Stop::AfterTurn)
+                    && tokio::time::timeout(GRACE, &mut turn).await.is_ok()
+                {
+                    return End::Over;
+                }
                 cancel.cancel();
                 let _ = (&mut turn).await;
                 return End::Over;
@@ -996,7 +1019,7 @@ async fn park(
                     return Parked::Over;
                 }
             }
-            Some(Stop) = stopped.recv() => return Parked::Over,
+            Some(_) = stopped.recv() => return Parked::Over,
             () = tokio::time::sleep_until(wake) => return Parked::TimedOut,
             () = sleep_until(*deadline) => return Parked::TimedOut,
         }
