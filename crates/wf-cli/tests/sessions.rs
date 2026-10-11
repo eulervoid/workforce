@@ -363,7 +363,7 @@ wf work submit --note \"all done\"
     assert!(
         notes
             .iter()
-            .any(|note| note["kind"] == "move" && note["text"] == "all done")
+            .any(|note| note["kind"] == "comment" && note["text"] == "all done")
     );
     let steps: Vec<bool> = shown["body"]
         .as_array()
@@ -547,8 +547,8 @@ async fn a_session_left_live_by_an_earlier_daemon_is_failed_when_the_next_one_st
                 wf_core::event::ItemMoved {
                     item: id,
                     to: wf_core::name::StateName::new("in_progress").unwrap(),
-                    note: None,
                     by_session: None,
+                    because: None,
                 },
             ))
             .unwrap();
@@ -898,7 +898,7 @@ async fn work_approved_by_a_reviewer_agent_is_merged() {
             .as_array()
             .unwrap()
             .iter()
-            .any(|note| note["kind"] == "review" && note["text"] == "looks good")
+            .any(|note| note["kind"] == "comment" && note["text"] == "looks good")
     );
     assert_eq!(statuses(&world), ["coder submitted", "reviewer reviewed"]);
 

@@ -251,8 +251,8 @@ pub fn moved(item: ItemId, to: &str) -> EventBody {
     EventBody::ItemMoved(ItemMoved {
         item,
         to: StateName::new(to).unwrap(),
-        note: None,
         by_session: None,
+        because: None,
     })
 }
 
@@ -394,7 +394,7 @@ pub fn verdict(item: ItemId, commit: impl Into<Option<CommitId>>, verdict: Verdi
         item,
         commit: commit.into(),
         verdict,
-        note: None,
+        because: None,
     })
 }
 

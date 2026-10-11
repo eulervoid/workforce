@@ -583,7 +583,6 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
     }
 }
 
-/// Text of a comment or move note, read from the event that carries it.
 fn session_label(session: &Session) -> String {
     let role = match session.role() {
         SessionRole::Work => "work",
@@ -605,12 +604,11 @@ fn step_ref(body: &Body, step: StepId) -> StepRefView {
     }
 }
 
+/// Text of a comment or report, read from the event that carries it.
 pub fn note_text(event: &Event) -> Option<String> {
     match &event.content.body {
         EventBody::Comment(comment) => Some(comment.text.clone()),
-        EventBody::ItemMoved(moved) => moved.note.clone(),
         EventBody::Report(report) => Some(report.note.clone()),
-        EventBody::Review(review) => review.note.clone(),
         _ => None,
     }
 }
@@ -674,7 +672,7 @@ pub fn item_detail(
                     state.session(session).map(session_label),
                     step.map(|step| step_ref(&item.body(), step)),
                 ),
-                NoteKind::Comment { .. } | NoteKind::Move | NoteKind::Review { .. } => (None, None),
+                NoteKind::Comment { .. } => (None, None),
             };
             let event = load_event(id);
             let resolves = match event.as_ref().map(|event| &event.content.body) {
@@ -1057,8 +1055,8 @@ pub fn history_entry(state: &State, event: &Event) -> EventView {
             .collect();
         entry.summary = format!("edited: {}", changes.join("; "));
     } else if let EventBody::ItemMoved(moved) = &event.content.body {
-        entry.summary = match &moved.note {
-            Some(note) => format!("moved to {} ({note})", moved.to),
+        entry.summary = match moved.because {
+            Some(comment) => format!("moved to {} because of {}", moved.to, comment.short()),
             None => format!("moved to {}", moved.to),
         };
     }

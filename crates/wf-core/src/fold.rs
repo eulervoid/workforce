@@ -336,19 +336,6 @@ impl State {
                             stamp,
                         },
                     );
-                    if let Some(text) = &review.note {
-                        item.notes.insert(
-                            id,
-                            note_from(
-                                NoteKind::Review {
-                                    verdict: review.verdict,
-                                },
-                                &content.actor,
-                                content.hlc,
-                                text,
-                            ),
-                        );
-                    }
                 }
             }
             EventBody::Merged(merged) => {
@@ -403,12 +390,6 @@ impl State {
                 if let Some(item) = workforce.items.get_mut(&moved.item) {
                     item.touch(content.hlc);
                     item.state.set(Some(moved.to.clone()), stamp);
-                    if let Some(note) = &moved.note {
-                        item.notes.insert(
-                            id,
-                            note_from(NoteKind::Move, &content.actor, content.hlc, note),
-                        );
-                    }
                 }
             }
             EventBody::ItemLinked(ItemLinked { item, link }) => match link {

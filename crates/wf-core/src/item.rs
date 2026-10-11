@@ -65,16 +65,10 @@ pub enum NoteKind {
     Comment {
         kind: CommentKind,
     },
-    /// The note attached to a move.
-    Move,
     /// A report by a session of the item. The step may no longer exist in the body.
     Report {
         session: SessionId,
         step: Option<StepId>,
-    },
-    /// The note of a verdict on the work of the item.
-    Review {
-        verdict: Verdict,
     },
 }
 
@@ -82,9 +76,7 @@ impl NoteKind {
     pub fn name(&self) -> &'static str {
         match self {
             NoteKind::Comment { kind } => kind.name(),
-            NoteKind::Move => "move",
             NoteKind::Report { .. } => "report",
-            NoteKind::Review { .. } => "review",
         }
     }
 }
@@ -114,7 +106,7 @@ impl Note {
     pub fn comment_kind(&self) -> Option<CommentKind> {
         match self.kind {
             NoteKind::Comment { kind } => Some(kind),
-            NoteKind::Move | NoteKind::Report { .. } | NoteKind::Review { .. } => None,
+            NoteKind::Report { .. } => None,
         }
     }
 

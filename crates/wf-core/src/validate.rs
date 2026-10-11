@@ -175,6 +175,8 @@ pub enum PolicyViolation {
     ReportNotFromItsSession,
     #[error("a review session reports on the item, not on its steps")]
     StepInReviewReport,
+    #[error("{0} is not a comment of this item")]
+    UnknownComment(CommentId),
     #[error("a comment needs text unless it resolves something")]
     EmptyComment,
     #[error("{0} is not a blocker or change request of this item")]
@@ -801,6 +803,12 @@ impl State {
                 })
             }
         };
+        let because_on = |item: &crate::item::Item, because: Option<CommentId>| match because {
+            Some(comment) if !item.notes().contains_key(&EventId::from(comment)) => {
+                Err(PolicyViolation::UnknownComment(comment))
+            }
+            Some(_) | None => Ok(()),
+        };
         let require_field = |type_name: &TypeName, field: Field| {
             if type_of(type_name)?.allows_field(field) {
                 Ok(())
@@ -844,7 +852,7 @@ impl State {
             | EventBody::SessionEnded(_)
             | EventBody::Merged(_) => Ok(()),
             EventBody::Review(review) => {
-                item_of(&review.item)?;
+                because_on(item_of(&review.item)?, review.because)?;
                 match self.submission(review.item) {
                     Some((commit, _)) if commit == review.commit => Ok(()),
                     Some(_) | None => Err(PolicyViolation::StaleReview(review.item)),
@@ -926,6 +934,7 @@ impl State {
             }
             EventBody::ItemMoved(moved) => {
                 let item = item_of(&moved.item)?;
+                because_on(item, moved.because)?;
                 let config = type_of(item.item_type())?;
                 match config.state_category_of(&moved.to) {
                     Some(_) => Ok(()),

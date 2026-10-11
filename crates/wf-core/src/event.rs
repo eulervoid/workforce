@@ -147,9 +147,10 @@ pub struct ItemEdited {
 pub struct ItemMoved {
     pub item: ItemId,
     pub to: StateName,
-    pub note: Option<String>,
     /// The session whose start or end this move carries out, when the daemon makes it for one.
     pub by_session: Option<SessionId>,
+    /// The comment on the item that says why, written just before.
+    pub because: Option<CommentId>,
 }
 
 /// Relations that change behaviour. Informational relations are derived from text instead.
@@ -232,7 +233,8 @@ pub struct Review {
     /// The submitted commit, or `None` for work submitted without commits.
     pub commit: Option<CommitId>,
     pub verdict: Verdict,
-    pub note: Option<String>,
+    /// The comment on the item that says why, written just before.
+    pub because: Option<CommentId>,
 }
 
 /// The reviewed commit of an item went into the target branch as `commit`.
@@ -589,7 +591,7 @@ mod tests {
                 item,
                 commit: Some(commit),
                 verdict: Verdict::RequestChanges,
-                note: Some("tests".into()),
+                because: Some(CommentId::from(EventId::of(b"tests"))),
             }),
             EventBody::Merged(Merged {
                 item,
@@ -609,7 +611,7 @@ mod tests {
     const GOLDEN_SESSION_BODIES: [&str; 5] = [
         "143f05636f6465722001010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
         "15392002020202020202020202020202020202020202020202020202020202020202020001001400112233445566778899aabbccddeeff00112233",
-        "164020010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff001122330101057465737473",
+        "165b20010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff0011223301012065e27c6eb2ae7ce97aceb1a372b6fb11fbc5bbffd95ee6fa17949cd148c6f730",
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
         "18352002020202020202020202020202020202020202020202020202020202020202020a63686f7365207265646201b67b3441c138056f",
     ];

@@ -557,11 +557,12 @@ fn item(
         ItemCommand::Move { item, state, note } => {
             let id = choose_item(workspace, mode, item, Scope::Live)?;
             let state = choose_state(workspace, mode, id, state)?;
+            let because = comment_why(workspace, id, note)?;
             let event = workspace.author(EventBody::ItemMoved(ItemMoved {
                 item: id,
                 to: state.clone(),
-                note,
                 by_session: None,
+                because,
             }))?;
             done(
                 json,
@@ -911,11 +912,12 @@ fn review(
     } else {
         Verdict::Escalate
     };
+    let because = comment_why(workspace, item, args.note)?;
     let event = workspace.author(EventBody::Review(wf_core::event::Review {
         item,
         commit,
         verdict,
-        note: args.note,
+        because,
     }))?;
     if verdict == Verdict::RequestChanges {
         let open = {
@@ -933,8 +935,8 @@ fn review(
             workspace.author(EventBody::ItemMoved(ItemMoved {
                 item,
                 to: open,
-                note: None,
                 by_session: None,
+                because: None,
             }))?;
         }
     }
@@ -1238,6 +1240,20 @@ fn comment(
         message.push_str(&format!(", resolving {}", ids.join(", ")));
     }
     done(json, message, &event, Some(id))
+}
+
+/// Writes why a move or verdict is made as a plain comment on the item, for the move or verdict
+/// to name.
+fn comment_why(
+    workspace: &mut Workspace,
+    item: ItemId,
+    why: Option<String>,
+) -> anyhow::Result<Option<CommentId>> {
+    let Some(why) = why.filter(|why| !why.trim().is_empty()) else {
+        return Ok(None);
+    };
+    let written = workspace.author(EventBody::Comment(Comment::plain(item, why.trim())))?;
+    Ok(Some(CommentId::from(written.id())))
 }
 
 /// The blockers and change requests a comment resolves: those named, and every open one of the

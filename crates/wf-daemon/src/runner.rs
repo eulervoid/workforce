@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use wf_core::event::{Comment, Event, EventBody, ItemMoved, Merged, SessionEnded, SessionStarted};
-use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{ItemView, Standing};
 use wf_core::lifecycle::{AfterEnd, TurnOutcome};
@@ -131,8 +131,8 @@ pub(crate) struct MergeRequest {
     commit: CommitId,
     /// Where the item goes once merged.
     done: StateName,
-    /// Goes with that move.
-    note: Option<String>,
+    /// The comment that says why, for that move.
+    because: Option<CommentId>,
     attempt: Attempt,
 }
 
@@ -451,7 +451,7 @@ impl Daemon {
         principal: wf_core::identity::PrincipalKey,
         item: ItemId,
         to: StateName,
-        note: Option<String>,
+        because: Option<CommentId>,
         by_session: Option<SessionId>,
     ) -> Result<(), SessionError> {
         self.author(
@@ -460,8 +460,8 @@ impl Daemon {
             EventBody::ItemMoved(ItemMoved {
                 item,
                 to,
-                note,
                 by_session,
+                because,
             }),
         )
         .await?;
@@ -521,23 +521,24 @@ impl Daemon {
             ),
         };
         // The comment comes first: once the session has ended it can no longer write.
-        if let (EndReason::Released, Some(note)) = (reason, &note) {
-            self.author(
-                loaded,
-                actor.clone(),
-                EventBody::Comment(Comment::plain(item, note.clone())),
-            )
-            .await?;
-        }
-        // The item moves while the session still holds it, so that it is never ready in between.
-        let move_note = match reason {
-            EndReason::Submitted { .. } => note,
-            _ => None,
+        let because = match note {
+            Some(note) => {
+                let written = self
+                    .author(
+                        loaded,
+                        actor.clone(),
+                        EventBody::Comment(Comment::plain(item, note)),
+                    )
+                    .await?;
+                Some(CommentId::from(written.id()))
+            }
+            None => None,
         };
+        // The item moves while the session still holds it, so that it is never ready in between.
         let effect = match state.after_end(session, reason) {
             None | Some(AfterEnd::Nothing) => Ok(()),
             Some(AfterEnd::MoveTo(to)) => {
-                self.move_item(loaded, principal, item, to, move_note, Some(session))
+                self.move_item(loaded, principal, item, to, because, Some(session))
                     .await
             }
             Some(AfterEnd::MergeThen { done }) => {
@@ -554,7 +555,7 @@ impl Daemon {
                         item,
                         commit,
                         done,
-                        note: move_note,
+                        because,
                         attempt: Attempt::First { session },
                     },
                 )
@@ -685,7 +686,7 @@ impl Daemon {
             item,
             commit,
             done,
-            note,
+            because,
             attempt,
         } = request;
         let Some(_merging) = self.merging.start(item) else {
@@ -765,7 +766,7 @@ impl Daemon {
                         wf_core::report::report(&error)
                     );
                 }
-                self.move_item(loaded, principal, item, done, note, attempt.by_session())
+                self.move_item(loaded, principal, item, done, because, attempt.by_session())
                     .await?;
             }
             MergeOutcome::Conflict { paths } => {
@@ -1079,7 +1080,7 @@ async fn work_package(
         let Some(ItemView::Live(dependency)) = state.item(dependency) else {
             continue;
         };
-        let note = last_move_note(loaded, dependency).await;
+        let note = last_comment(loaded, dependency).await;
         dependencies.push(wf_harness::Dependency {
             item: HashId::short(&dependency.id()),
             title: dependency.title().to_string(),
@@ -1165,7 +1166,7 @@ async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: 
         let Some(ItemView::Live(dependency)) = state.item(dependency) else {
             continue;
         };
-        if let Some(note) = last_move_note(loaded, dependency).await {
+        if let Some(note) = last_comment(loaded, dependency).await {
             text.push_str(&format!(
                 "\n- #{} {}: {note}",
                 HashId::short(&dependency.id()),
@@ -1201,8 +1202,6 @@ async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_ha
             let text = match &event?.content.body {
                 EventBody::Comment(comment) => comment.text.clone(),
                 EventBody::Report(report) => report.note.clone(),
-                EventBody::Review(review) => review.note.clone()?,
-                EventBody::ItemMoved(moved) => moved.note.clone()?,
                 _ => return None,
             };
             Some(wf_harness::Earlier {
@@ -1217,11 +1216,12 @@ async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_ha
         .collect()
 }
 
-async fn last_move_note(loaded: &Loaded, item: &wf_core::item::Item) -> Option<String> {
+/// The latest plain comment on an item: the answer, for a question.
+async fn last_comment(loaded: &Loaded, item: &wf_core::item::Item) -> Option<String> {
     let mut notes: Vec<_> = item
         .notes()
         .iter()
-        .filter(|(_, note)| note.kind == wf_core::item::NoteKind::Move)
+        .filter(|(_, note)| note.comment_kind() == Some(wf_core::event::CommentKind::Plain))
         .collect();
     notes.sort_by_key(|(id, note)| (note.at, **id));
     let (id, _) = notes.last()?;
@@ -1236,7 +1236,7 @@ async fn last_move_note(loaded: &Loaded, item: &wf_core::item::Item) -> Option<S
         .await
         .ok()??;
     match event.content.body {
-        EventBody::ItemMoved(moved) => moved.note,
+        EventBody::Comment(comment) => Some(comment.text),
         _ => None,
     }
 }
@@ -1306,7 +1306,7 @@ async fn dispatch_once(
                     item,
                     commit,
                     done,
-                    note: None,
+                    because: None,
                     attempt: Attempt::Retry,
                 },
             )

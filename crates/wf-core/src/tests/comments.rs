@@ -135,3 +135,28 @@ fn a_session_cannot_resolve_its_own_blocker() {
         Ok(())
     );
 }
+
+#[test]
+fn a_move_names_a_comment_of_its_item_as_its_reason() {
+    let (fixture, mut state, task) = with_task();
+    let other = fixture.apply(&mut state, 0, 2_001, create("task", "other"));
+    let elsewhere = comment_id(&fixture.apply(
+        &mut state,
+        0,
+        2_002,
+        comment(other.id().into(), "not about this one"),
+    ));
+    let why = comment_id(&fixture.apply(&mut state, 0, 2_003, comment(task, "not needed")));
+    let move_because = |because| match moved(task, "dropped") {
+        EventBody::ItemMoved(moved) => EventBody::ItemMoved(crate::event::ItemMoved {
+            because: Some(because),
+            ..moved
+        }),
+        _ => unreachable!(),
+    };
+    assert_eq!(state.check_policy(&move_because(why)), Ok(()));
+    assert_eq!(
+        state.check_policy(&move_because(elsewhere)),
+        Err(PolicyViolation::UnknownComment(elsewhere))
+    );
+}
