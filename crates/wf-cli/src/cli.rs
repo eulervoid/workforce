@@ -24,15 +24,13 @@ pub struct Cli {
     pub command: Command,
 }
 
-/// How the commands are grouped in `wf --help`. Clap lists subcommands in one flat block.
-const COMMAND_GROUPS: &[(&str, &[&str])] = &[
-    ("Items", &["item", "comment", "mentions", "review", "inbox"]),
-    ("Agents", &["agent", "session", "work"]),
-    (
-        "Workforce",
-        &["init", "status", "policy", "log", "members", "fork"],
-    ),
-    ("Machines", &["daemon", "sync", "invite", "join", "device"]),
+/// How the commands are grouped in `wf --help`, a blank line between groups. Clap lists
+/// subcommands in one flat block.
+const COMMAND_GROUPS: &[&[&str]] = &[
+    &["init", "status", "policy", "log", "members", "fork"],
+    &["item", "comment", "mentions", "review", "inbox"],
+    &["agent", "session", "work"],
+    &["daemon", "sync", "invite", "join", "device"],
 ];
 
 /// The command line, with the commands of `wf --help` in groups.
@@ -43,13 +41,15 @@ pub fn command() -> clap::Command {
     let literal = styles.get_literal();
     let width = COMMAND_GROUPS
         .iter()
-        .flat_map(|(_, names)| names.iter())
+        .flat_map(|names| names.iter())
         .map(|name| name.len())
         .max()
         .unwrap_or_default();
-    let mut template = format!("{{about}}\n\n{heading}Usage:{heading:#} {{usage}}\n");
-    for (group, names) in COMMAND_GROUPS {
-        template.push_str(&format!("\n{heading}{group}:{heading:#}\n"));
+    let mut template = format!(
+        "{{about}}\n\n{heading}Usage:{heading:#} {{usage}}\n\n{heading}Commands:{heading:#}"
+    );
+    for names in COMMAND_GROUPS {
+        template.push('\n');
         for name in *names {
             let about = command
                 .find_subcommand(name)
@@ -664,7 +664,7 @@ mod tests {
         let command = Cli::command();
         let grouped: Vec<&str> = COMMAND_GROUPS
             .iter()
-            .flat_map(|(_, names)| names.iter().copied())
+            .flat_map(|names| names.iter().copied())
             .collect();
         let mut missing: Vec<_> = command
             .get_subcommands()
