@@ -211,6 +211,17 @@ impl Workspace {
         }
     }
 
+    /// Refreshes the cached state from the daemon while a long-running command follows it.
+    pub fn refresh(&mut self) -> anyhow::Result<()> {
+        match &mut self.source {
+            Source::Daemon { client, state } => {
+                *state = client.get_mut().state(self.workforce)?;
+            }
+            Source::Local(_) => {}
+        }
+        Ok(())
+    }
+
     pub fn event(&self, id: &EventId) -> anyhow::Result<Option<Event>> {
         match &self.source {
             Source::Local(replica) => Ok(replica.store().event(id)?),

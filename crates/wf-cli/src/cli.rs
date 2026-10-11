@@ -188,6 +188,12 @@ pub struct SessionStartArgs {
     /// Follow the transcript right after starting. Quitting the watch leaves the session running.
     #[arg(long)]
     pub watch: bool,
+    /// Show all tool output and diff lines when watching.
+    #[arg(long, requires = "watch")]
+    pub full: bool,
+    /// Use plain text layout without markdown rendering or color when watching.
+    #[arg(long, requires = "watch")]
+    pub raw: bool,
 }
 
 #[derive(Args)]
@@ -198,6 +204,12 @@ pub struct SessionWatchArgs {
     /// Print what is there and stop, instead of waiting for more.
     #[arg(long)]
     pub no_follow: bool,
+    /// Show all tool output and diff lines.
+    #[arg(long)]
+    pub full: bool,
+    /// Use plain text layout without markdown rendering or color.
+    #[arg(long)]
+    pub raw: bool,
 }
 
 #[derive(Args)]

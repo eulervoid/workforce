@@ -46,7 +46,14 @@ yet: see *As built* in [docs/M2.md](docs/M2.md).
 Set `default_agent = "coder"` at the top of the policy (before any `[table]`) to omit `--agent`.
 Use `-a <name>` to override it. Missing item/session arguments open a picker at a terminal;
 stop offers local live sessions, permission commands offer pending requests, and watch offers
-sessions with a local transcript.
+sessions with a local transcript. Add `--watch` to `session start` to follow immediately: Ctrl-C
+detaches without stopping the agent, and the watcher exits after the session ends.
+
+Watch renders basic markdown, distinguishes thoughts with dim styling, and shows tool results,
+plans, and unified diffs supplied by the agent. Tool output and diffs are capped at 20 lines per
+block; use `--full` for everything. Use `--raw` for unrendered markdown with plain, color-free
+layout. Both options also work with `session start --watch`. Markdown is buffered until a
+paragraph or event boundary; raw mode streams text chunks immediately.
 
 ## Several machines
 ```sh

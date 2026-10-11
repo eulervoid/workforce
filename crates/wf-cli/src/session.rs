@@ -3,10 +3,11 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
+use crate::transcript::Renderer;
 use anyhow::{Context, anyhow, bail};
 use wf_core::id::{HashId, SessionId};
 use wf_daemon::proto::{Answer, Finish};
-use wf_harness::{Renderer, TranscriptEntry};
+use wf_harness::TranscriptEntry;
 
 use crate::cli::{SessionCommand, SessionStartArgs};
 use crate::commands::{Scope, choose_item, emit};
@@ -60,7 +61,7 @@ pub fn session(
                 bail!("`wf session watch` has no --json output; the transcript is JSON lines");
             }
             let id = choose_session_or_item(workspace, mode, args.session)?;
-            watch(workspace, id, args.no_follow)
+            watch(workspace, id, args.no_follow, args.raw, args.full)
         }
     }
 }
@@ -211,7 +212,7 @@ fn start(
     )?;
     if args.watch {
         wait_for_transcript(&transcript_path(workspace, session))?;
-        watch(workspace, session, false)?;
+        watch(workspace, session, false, args.raw, args.full)?;
     }
     Ok(())
 }
@@ -239,7 +240,13 @@ fn transcript_path(workspace: &Workspace, session: SessionId) -> std::path::Path
         .join(format!("{session}.jsonl"))
 }
 
-fn watch(workspace: &Workspace, session: SessionId, no_follow: bool) -> anyhow::Result<()> {
+fn watch(
+    workspace: &mut Workspace,
+    session: SessionId,
+    no_follow: bool,
+    raw: bool,
+    full: bool,
+) -> anyhow::Result<()> {
     let path = transcript_path(workspace, session);
     let mut file = File::open(&path).with_context(|| {
         format!(
@@ -247,15 +254,31 @@ fn watch(workspace: &Workspace, session: SessionId, no_follow: bool) -> anyhow::
             path.display()
         )
     })?;
-    let mut renderer = Renderer::default();
+    let mut renderer = Renderer::new(raw, full);
     let mut pending = String::new();
     let mut buffer = [0u8; 8192];
     let mut unfinished_bytes = Vec::new();
+    let mut ended = false;
+    let mut last_refresh = std::time::Instant::now();
     loop {
         let read = file.read(&mut buffer)?;
         if read == 0 {
-            if no_follow {
+            if no_follow || ended {
+                anstream::print!("{}", renderer.finish());
+                std::io::stdout().flush()?;
                 return Ok(());
+            }
+            if last_refresh.elapsed() >= Duration::from_secs(1) {
+                workspace.refresh()?;
+                ended = workspace
+                    .state()
+                    .session(session)
+                    .is_some_and(|session| !session.is_live());
+                last_refresh = std::time::Instant::now();
+                // Read again after observing the end to drain the final transcript entries.
+                if ended {
+                    continue;
+                }
             }
             std::thread::sleep(FOLLOW_INTERVAL);
             continue;

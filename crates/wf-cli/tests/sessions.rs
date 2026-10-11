@@ -234,6 +234,89 @@ async fn manual_start_uses_the_policy_agent_unless_overridden() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn interrupting_start_watch_detaches_without_stopping_the_agent() {
+    use std::process::Stdio;
+
+    let world = World::new(
+        "say watching\nsh while [ ! -f \"$XDG_DATA_HOME/go\" ]; do sleep 0.1; done\nwf work release --note finished\n",
+    ).await;
+    let item = world.wf.add(&["--title", "Keep running after detach"]);
+    let error = world.wf.fail(&[
+        "session",
+        "start",
+        short(&item),
+        "-a",
+        "coder",
+        "--watch",
+        "--raw",
+        "--json",
+    ]);
+    assert!(error.contains("--json"), "{error}");
+    assert!(
+        world.sessions().is_empty(),
+        "JSON rejection must not start a session"
+    );
+
+    let output_path = world.wf.root.path().join("watch.txt");
+    let mut watcher = world
+        .wf
+        .command(&[
+            "session",
+            "start",
+            short(&item),
+            "-a",
+            "coder",
+            "--watch",
+            "--raw",
+        ])
+        .stdout(Stdio::from(std::fs::File::create(&output_path).unwrap()))
+        .spawn()
+        .unwrap();
+    world
+        .wait("watch output", |_| {
+            std::fs::read_to_string(&output_path)
+                .unwrap()
+                .contains("watching")
+        })
+        .await;
+    assert!(
+        Command::new("/bin/kill")
+            .args(["-INT", &watcher.id().to_string()])
+            .status()
+            .unwrap()
+            .success()
+    );
+    watcher.wait().unwrap();
+    assert_eq!(world.sessions()[0]["status"], "live");
+    std::fs::write(world.wf.data.join("go"), "").unwrap();
+    let ended = world.ended_session().await;
+    assert_eq!(ended["status"], "released", "{ended}");
+    let mut completed_watch = world
+        .wf
+        .command(&["session", "watch", short(&item)])
+        .stdout(Stdio::from(std::fs::File::create(&output_path).unwrap()))
+        .spawn()
+        .unwrap();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = completed_watch.try_wait().unwrap() {
+            assert!(status.success());
+            break;
+        }
+        if std::time::Instant::now() >= deadline {
+            completed_watch.kill().unwrap();
+            completed_watch.wait().unwrap();
+            panic!("watch must finish after draining an ended session");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+    let transcript = std::fs::read_to_string(&output_path).unwrap();
+    assert!(
+        transcript.contains("finished"),
+        "the detached agent must continue: {transcript}"
+    );
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn submitted_work_without_review_is_merged_and_the_item_is_done() {
@@ -278,7 +361,7 @@ wf work submit --note \"all done\"
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(
-        transcript.contains("prompt You are working on item"),
+        transcript.contains("You are working on item"),
         "{transcript}"
     );
     assert!(transcript.contains("hello"), "{transcript}");

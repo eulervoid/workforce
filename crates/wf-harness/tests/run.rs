@@ -1,9 +1,7 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use wf_harness::{
-    Conversation, Direction, Launch, PermissionMode, Renderer, StopReason, TranscriptEntry,
-};
+use wf_harness::{Conversation, Direction, Launch, PermissionMode, StopReason, TranscriptEntry};
 
 #[derive(Clone, Default)]
 struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
@@ -42,11 +40,6 @@ async fn run_fake_agent(permissions: PermissionMode) -> Vec<TranscriptEntry> {
         .collect()
 }
 
-fn rendered(entries: &[TranscriptEntry]) -> String {
-    let mut renderer = Renderer::default();
-    entries.iter().map(|entry| renderer.render(entry)).collect()
-}
-
 #[tokio::test]
 async fn records_both_directions_and_the_agent_log() {
     let entries = run_fake_agent(PermissionMode::Allow).await;
@@ -63,27 +56,27 @@ async fn records_both_directions_and_the_agent_log() {
 }
 
 #[tokio::test]
-async fn allowed_permissions_are_granted_and_rendered() {
+async fn allowed_permissions_are_granted() {
     let entries = run_fake_agent(PermissionMode::Allow).await;
     let protocol_only: Vec<_> = entries
         .into_iter()
         .filter(|entry| entry.direction != Direction::AgentLog)
         .collect();
-    assert_eq!(
-        rendered(&protocol_only),
-        "prompt do the thing\n\
-         Working on it. \n\
-         tool  Edit file (pending)\n\
-         ask   permission for Edit file\n\
-         permission: yes\n\
-         end   end_turn\n"
-    );
+    assert!(protocol_only.iter().any(|entry| {
+        entry.message["params"]["update"]["content"]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("permission: yes"))
+    }));
 }
 
 #[tokio::test]
 async fn denied_permissions_are_rejected() {
     let entries = run_fake_agent(PermissionMode::Deny).await;
-    assert!(rendered(&entries).contains("permission: no"));
+    assert!(entries.iter().any(|entry| {
+        entry.message["params"]["update"]["content"]["text"]
+            .as_str()
+            .is_some_and(|text| text.contains("permission: no"))
+    }));
 }
 
 #[tokio::test]
