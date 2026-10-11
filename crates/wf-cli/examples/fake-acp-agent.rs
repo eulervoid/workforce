@@ -6,7 +6,8 @@
 //!
 //! - `say <text>`: an agent message.
 //! - `sh <command>`: runs the command with `sh -c` in the directory of the session.
-//! - `wf <args>`: runs `$WF_BIN` with the arguments; double quotes group words.
+//! - `wf <args>`: runs `$WF_BIN` with the arguments; double quotes group words, and `{item}` is
+//!   the item named in the prompt, as in `You are working on item #k3f9ab`.
 //! - `permission`: asks for a permission and says what the answer was.
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
@@ -76,6 +77,7 @@ fn main() {
         .into_iter();
     let mut lines = std::io::stdin().lock().lines();
     let mut directory = std::env::current_dir().unwrap();
+    let mut item = String::new();
     while let Some(Ok(line)) = lines.next() {
         let request: Value = serde_json::from_str(&line).unwrap();
         let id = request["id"].clone();
@@ -91,6 +93,13 @@ fn main() {
                 send(json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": "fake"}}));
             }
             Some("session/prompt") => {
+                let prompt = request["params"]["prompt"].to_string();
+                if let Some((_, rest)) = prompt.split_once("item #") {
+                    item = rest
+                        .chars()
+                        .take_while(char::is_ascii_alphanumeric)
+                        .collect();
+                }
                 let mut stop = "end_turn";
                 for operation in operations.by_ref() {
                     let (name, rest) = operation.split_once(' ').unwrap_or((&operation, ""));
@@ -108,7 +117,7 @@ fn main() {
                         }
                         "wf" => {
                             let output = Command::new(std::env::var("WF_BIN").unwrap())
-                                .args(words(rest))
+                                .args(words(&rest.replace("{item}", &item)))
                                 .current_dir(&directory)
                                 .output()
                                 .unwrap();

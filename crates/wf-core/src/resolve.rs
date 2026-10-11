@@ -129,14 +129,14 @@ impl Resolver<'_> {
 
 fn tokens_of(item: &Item) -> impl Iterator<Item = (Origin, &BTreeSet<Token>)> {
     std::iter::once((Origin::Body, item.body_tokens())).chain(
-        item.notes()
+        item.comments()
             .iter()
-            .map(|(id, note)| (Origin::Note(*id), &note.tokens)),
+            .map(|(id, comment)| (Origin::Comment(*id), &comment.tokens)),
     )
 }
 
 impl State {
-    /// Items referenced from the body and notes of `item`.
+    /// Items referenced from the body and comments of `item`.
     pub fn references_from(&self, item: &Item) -> BTreeSet<ItemId> {
         let resolver = self.resolver();
         tokens_of(item)
@@ -171,7 +171,7 @@ impl State {
         sources
     }
 
-    /// Everyone mentioned in the body and notes of `item`.
+    /// Everyone mentioned in the body and comments of `item`.
     pub fn mentions_in(&self, item: &Item) -> BTreeSet<MentionTarget> {
         let resolver = self.resolver();
         tokens_of(item)

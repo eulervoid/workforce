@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use wf_core::event::{Comment, Event, EventBody, ItemMoved, Merged, SessionEnded, SessionStarted};
-use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
+use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{ItemView, Standing};
 use wf_core::lifecycle::{AfterEnd, TurnOutcome};
@@ -1072,7 +1072,7 @@ async fn work_package(
         return String::new();
     };
     let body = item.body().render_numbered();
-    let earlier = earlier_notes(loaded, item).await;
+    let earlier = earlier_comments(loaded, item).await;
     let graph = state.dependency_graph();
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut dependencies = Vec::new();
@@ -1152,7 +1152,7 @@ async fn review_package(
         commit: commit.map(|commit| commit.to_string()),
         target: run.target.clone(),
         step,
-        earlier: earlier_notes(loaded, item).await,
+        earlier: earlier_comments(loaded, item).await,
         diff,
     }
     .render()
@@ -1178,10 +1178,10 @@ async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: 
     text
 }
 
-async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_harness::Earlier> {
-    let mut notes: Vec<_> = item.notes().iter().collect();
-    notes.sort_by_key(|(id, note)| (note.at, **id));
-    let ids: Vec<_> = notes.iter().map(|(id, _)| **id).collect();
+async fn earlier_comments(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_harness::Earlier> {
+    let mut comments: Vec<_> = item.comments().iter().collect();
+    comments.sort_by_key(|(id, comment)| (comment.at, **id));
+    let ids: Vec<EventId> = comments.iter().map(|(id, _)| EventId::from(**id)).collect();
     let events = loaded
         .storage
         .with(move |replica| {
@@ -1195,22 +1195,20 @@ async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_ha
         })
         .await
         .unwrap_or_default();
-    notes
+    comments
         .into_iter()
         .zip(events)
-        .filter_map(|((_, note), event)| {
-            let text = match &event?.content.body {
-                EventBody::Comment(comment) => comment.text.clone(),
-                EventBody::Report(report) => report.note.clone(),
-                _ => return None,
+        .filter_map(|((_, comment), event)| {
+            let EventBody::Comment(written) = &event?.content.body else {
+                return None;
             };
             Some(wf_harness::Earlier {
-                by: match &note.by {
+                by: match &comment.by {
                     Actor::Human(_) => "someone".to_string(),
                     Actor::Agent { agent, .. } => agent.name.to_string(),
                 },
-                kind: note.kind.name().to_string(),
-                text,
+                kind: comment.kind.name().replace('_', " "),
+                text: written.text.clone(),
             })
         })
         .collect()
@@ -1218,14 +1216,14 @@ async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_ha
 
 /// The latest plain comment on an item: the answer, for a question.
 async fn last_comment(loaded: &Loaded, item: &wf_core::item::Item) -> Option<String> {
-    let mut notes: Vec<_> = item
-        .notes()
+    let mut comments: Vec<_> = item
+        .comments()
         .iter()
-        .filter(|(_, note)| note.comment_kind() == Some(wf_core::event::CommentKind::Plain))
+        .filter(|(_, comment)| comment.kind == wf_core::event::CommentKind::Plain)
         .collect();
-    notes.sort_by_key(|(id, note)| (note.at, **id));
-    let (id, _) = notes.last()?;
-    let id = **id;
+    comments.sort_by_key(|(id, comment)| (comment.at, **id));
+    let (id, _) = comments.last()?;
+    let id = EventId::from(**id);
     let event = loaded
         .storage
         .with(move |replica| {

@@ -171,10 +171,8 @@ pub enum PolicyViolation {
     ReviewWithoutBlockedState { type_name: TypeName },
     #[error("an agent that worked on {0} cannot lower its review level")]
     AgentLowersReview(ItemId),
-    #[error("a report is written by its own session")]
-    ReportNotFromItsSession,
-    #[error("a review session reports on the item, not on its steps")]
-    StepInReviewReport,
+    #[error("a review session comments on the item, not on its steps")]
+    StepInReviewComment,
     #[error("{0} is not a comment of this item")]
     UnknownComment(CommentId),
     #[error("a comment needs text unless it resolves something")]
@@ -505,13 +503,6 @@ impl State {
                     Err(Invalid::UnknownSession(ended.session))
                 }
             }
-            EventBody::Report(report) => {
-                if workforce.sessions.contains_key(&report.session) {
-                    Ok(())
-                } else {
-                    Err(Invalid::UnknownSession(report.session))
-                }
-            }
             EventBody::Review(crate::event::Review { item, .. })
             | EventBody::Merged(crate::event::Merged { item, .. }) => known_item(item),
             EventBody::ItemEdited(ItemEdited { item, .. })
@@ -617,7 +608,6 @@ impl State {
         };
         let Actor::Agent { session, .. } = actor else {
             return match body {
-                EventBody::Report(_) => Err(PolicyViolation::ReportNotFromItsSession),
                 EventBody::Review(review) if review.verdict == Verdict::Escalate => {
                     Err(PolicyViolation::PersonCannotEscalate)
                 }
@@ -642,9 +632,6 @@ impl State {
             | EventBody::Merged(_) => Err(PolicyViolation::AgentCannotWrite(body.name())),
             EventBody::SessionEnded(ended) if ended.session != *session => {
                 Err(PolicyViolation::SessionEndsAnother)
-            }
-            EventBody::Report(report) if report.session != *session => {
-                Err(PolicyViolation::ReportNotFromItsSession)
             }
             EventBody::Review(review) => {
                 let reviewing = folded.item() == review.item
@@ -693,16 +680,18 @@ impl State {
             EventBody::Comment(comment) => {
                 let own_blocker = workforce.items.get(&comment.item).is_some_and(|item| {
                     comment.resolves.iter().any(|resolved| {
-                        item.notes()
-                            .get(&EventId::from(*resolved))
-                            .is_some_and(|note| {
-                                note.comment_kind() == Some(CommentKind::Blocker)
-                                    && matches!(&note.by, Actor::Agent { session: writer, .. } if writer == session)
-                            })
+                        item.comments().get(resolved).is_some_and(|target| {
+                            target.kind == CommentKind::Blocker
+                                && target.session() == Some(*session)
+                        })
                     })
                 });
+                let on_a_step_in_review =
+                    comment.step.is_some() && matches!(folded.role(), SessionRole::Review { .. });
                 if own_blocker {
                     Err(PolicyViolation::SessionResolvesItsOwnBlocker)
+                } else if on_a_step_in_review {
+                    Err(PolicyViolation::StepInReviewComment)
                 } else {
                     Ok(())
                 }
@@ -713,7 +702,6 @@ impl State {
             | EventBody::ItemArchived(_)
             | EventBody::ItemUnarchived(_)
             | EventBody::SessionEnded(_)
-            | EventBody::Report(_)
             | EventBody::Unknown { .. } => Ok(()),
         }
     }
@@ -804,7 +792,7 @@ impl State {
             }
         };
         let because_on = |item: &crate::item::Item, because: Option<CommentId>| match because {
-            Some(comment) if !item.notes().contains_key(&EventId::from(comment)) => {
+            Some(comment) if !item.comments().contains_key(&comment) => {
                 Err(PolicyViolation::UnknownComment(comment))
             }
             Some(_) | None => Ok(()),
@@ -828,21 +816,21 @@ impl State {
                 }
                 let item = item_of(&comment.item)?;
                 for resolved in &comment.resolves {
-                    let note = item
-                        .notes()
-                        .get(&EventId::from(*resolved))
-                        .filter(|note| {
-                            matches!(
-                                note.comment_kind(),
-                                Some(CommentKind::Blocker | CommentKind::ChangeRequest)
-                            )
-                        })
+                    let target = item
+                        .comments()
+                        .get(resolved)
+                        .filter(|target| target.kind != CommentKind::Plain)
                         .ok_or(PolicyViolation::NotResolvable(*resolved))?;
-                    if note.resolved().is_some() {
+                    if target.resolved().is_some() {
                         return Err(PolicyViolation::AlreadyResolved(*resolved));
                     }
                 }
-                Ok(())
+                match comment.step {
+                    Some(step) if item.body().step(step).is_none() => {
+                        Err(PolicyViolation::UnknownStep(step))
+                    }
+                    Some(_) | None => Ok(()),
+                }
             }
             EventBody::InviteCreated(_)
             | EventBody::DeviceBound(_)
@@ -856,27 +844,6 @@ impl State {
                 match self.submission(review.item) {
                     Some((commit, _)) if commit == review.commit => Ok(()),
                     Some(_) | None => Err(PolicyViolation::StaleReview(review.item)),
-                }
-            }
-            EventBody::Report(report) => {
-                let session = workforce
-                    .sessions
-                    .get(&report.session)
-                    .ok_or(PolicyViolation::UnknownSession(report.session))?;
-                let Some(step) = report.step else {
-                    return Ok(());
-                };
-                if matches!(session.role(), SessionRole::Review { .. }) {
-                    return Err(PolicyViolation::StepInReviewReport);
-                }
-                let has_step = workforce
-                    .items
-                    .get(&session.item())
-                    .is_some_and(|item| item.body().step(step).is_some());
-                if has_step {
-                    Ok(())
-                } else {
-                    Err(PolicyViolation::UnknownStep(step))
                 }
             }
             EventBody::AgentDefined(defined) => defined.lanes.iter().try_for_each(known_lane),

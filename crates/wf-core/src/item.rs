@@ -60,34 +60,15 @@ use crate::policy::{Policy, StateCategory};
 use crate::refs::Token;
 use crate::session::{CommitId, Verdict};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum NoteKind {
-    Comment {
-        kind: CommentKind,
-    },
-    /// A report by a session of the item. The step may no longer exist in the body.
-    Report {
-        session: SessionId,
-        step: Option<StepId>,
-    },
-}
-
-impl NoteKind {
-    pub fn name(&self) -> &'static str {
-        match self {
-            NoteKind::Comment { kind } => kind.name(),
-            NoteKind::Report { .. } => "report",
-        }
-    }
-}
-
-/// What the fold keeps of a comment or move note. The text itself stays in the log and is
-/// loaded on demand by event id; the fold keeps who wrote it and the tokens found in it.
+/// What the fold keeps of a comment. The text stays in the log and is loaded on demand by id;
+/// the fold keeps who wrote it, what it holds up and the tokens found in it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Note {
-    pub kind: NoteKind,
+pub struct Comment {
+    pub kind: CommentKind,
     pub by: Actor,
     pub at: Hlc,
+    /// The step it is about. It may no longer exist in the body.
+    pub step: Option<StepId>,
     pub tokens: BTreeSet<Token>,
     /// The earliest comment that resolved this blocker or change request.
     pub(crate) resolved: Option<Resolved>,
@@ -101,25 +82,22 @@ pub struct Resolved {
     pub(crate) stamp: Stamp,
 }
 
-impl Note {
-    /// The kind of comment this note is, when it is one.
-    pub fn comment_kind(&self) -> Option<CommentKind> {
-        match self.kind {
-            NoteKind::Comment { kind } => Some(kind),
-            NoteKind::Report { .. } => None,
-        }
-    }
-
+impl Comment {
     pub fn resolved(&self) -> Option<Resolved> {
         self.resolved
     }
 
     /// Whether this is a blocker or change request that nothing has resolved yet.
     pub fn is_open(&self) -> bool {
-        matches!(
-            self.comment_kind(),
-            Some(CommentKind::Blocker | CommentKind::ChangeRequest)
-        ) && self.resolved.is_none()
+        self.kind != CommentKind::Plain && self.resolved.is_none()
+    }
+
+    /// The session that wrote it, when an agent did: a report on the work of that session.
+    pub fn session(&self) -> Option<SessionId> {
+        match self.by {
+            Actor::Agent { session, .. } => Some(session),
+            Actor::Human(_) => None,
+        }
     }
 }
 
@@ -145,7 +123,7 @@ pub struct Merge {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Origin {
     Body,
-    Note(EventId),
+    Comment(CommentId),
 }
 
 /// The effective state of an item under the current policy.
@@ -190,7 +168,7 @@ pub struct Item {
     pub(crate) depends_on: AddWinsSet<ItemId>,
     pub(crate) supersedes: Lww<Option<ItemId>>,
     pub(crate) archived: Lww<Option<Hlc>>,
-    pub(crate) notes: BTreeMap<EventId, Note>,
+    pub(crate) comments: BTreeMap<CommentId, Comment>,
     pub(crate) verdicts: BTreeMap<EventId, Verdicted>,
     pub(crate) merges: BTreeMap<EventId, Merge>,
 }
@@ -268,27 +246,27 @@ impl Item {
         *self.archived.value()
     }
 
-    pub fn notes(&self) -> &BTreeMap<EventId, Note> {
-        &self.notes
+    pub fn comments(&self) -> &BTreeMap<CommentId, Comment> {
+        &self.comments
     }
 
     /// The blockers and change requests nothing has resolved yet, oldest first.
-    pub fn open_comments(&self) -> Vec<(CommentId, &Note)> {
-        let mut open: Vec<(CommentId, &Note)> = self
-            .notes
+    pub fn open_comments(&self) -> Vec<(CommentId, &Comment)> {
+        let mut open: Vec<(CommentId, &Comment)> = self
+            .comments
             .iter()
-            .filter(|(_, note)| note.is_open())
-            .map(|(id, note)| (CommentId::from(*id), note))
+            .filter(|(_, comment)| comment.is_open())
+            .map(|(id, comment)| (*id, comment))
             .collect();
-        open.sort_by_key(|(id, note)| (note.at, *id));
+        open.sort_by_key(|(id, comment)| (comment.at, *id));
         open
     }
 
     /// Whether an open blocker holds up the work on the item.
     pub fn has_open_blocker(&self) -> bool {
-        self.notes
+        self.comments
             .values()
-            .any(|note| note.is_open() && note.comment_kind() == Some(CommentKind::Blocker))
+            .any(|comment| comment.is_open() && comment.kind == CommentKind::Blocker)
     }
 
     pub fn verdicts(&self) -> &BTreeMap<EventId, Verdicted> {
@@ -380,7 +358,7 @@ impl Item {
             depends_on: AddWinsSet::default(),
             supersedes: Lww::new(None, stamp),
             archived: Lww::new(None, stamp),
-            notes: BTreeMap::new(),
+            comments: BTreeMap::new(),
             verdicts: BTreeMap::new(),
             merges: BTreeMap::new(),
         }

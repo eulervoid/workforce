@@ -7,7 +7,7 @@ use wf_core::autonomy::Autonomy;
 use wf_core::crdt::SetChange;
 use wf_core::event::{
     AgentDefined, Change, Comment, CommentKind, Event, EventBody, Genesis, ItemCreated, ItemLinked,
-    ItemMoved, ItemRef, Link, PolicySet, Report,
+    ItemMoved, ItemRef, Link, PolicySet,
 };
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
@@ -696,9 +696,6 @@ fn event_touches(state: &State, event: &Event, id: ItemId) -> bool {
             .is_some_and(|session| session.item() == id),
         EventBody::Review(review) => review.item == id,
         EventBody::Merged(merged) => merged.item == id,
-        EventBody::Report(report) => state
-            .session(report.session)
-            .is_some_and(|session| session.item() == id),
         EventBody::Genesis(_)
         | EventBody::PolicySet(_)
         | EventBody::AgentDefined(_)
@@ -859,7 +856,6 @@ fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::
         )
     })?;
     match command {
-        WorkCommand::Report(args) => report(json, workspace, session, args),
         WorkCommand::Ask(args) => ask(json, workspace, session, args),
         WorkCommand::Submit { note } => end(
             json,
@@ -1055,56 +1051,6 @@ fn end(
     )
 }
 
-fn report(
-    json: bool,
-    workspace: &mut Workspace,
-    session: SessionId,
-    args: WorkReportArgs,
-) -> anyhow::Result<()> {
-    let item = workspace
-        .state()
-        .session(session)
-        .expect("the session was resolved when the workspace was opened")
-        .item();
-    let step = match args.step {
-        None => None,
-        Some(number) => {
-            let ItemView::Live(live) = workspace.state().item(item).expect("sessions have items")
-            else {
-                bail!("#{} is archived", item.short());
-            };
-            let body = live.body();
-            let steps: Vec<_> = body.steps().collect();
-            match steps.get(number.get() - 1) {
-                Some(step) => Some(step.id),
-                None if steps.is_empty() => bail!("#{} has no steps", item.short()),
-                None => bail!(
-                    "#{} has {} steps, there is no step {number}",
-                    item.short(),
-                    steps.len()
-                ),
-            }
-        }
-    };
-    let event = workspace.author(EventBody::Report(Report {
-        session,
-        note: args.text,
-        step,
-    }))?;
-    if let (Some(step), true) = (step, args.done) {
-        workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {
-            item,
-            changes: vec![Change::StepDone { step, done: true }],
-        }))?;
-    }
-    let message = match (args.step, args.done) {
-        (Some(number), true) => format!("reported on #{} and checked step {number}", item.short()),
-        (Some(number), false) => format!("reported on step {number} of #{}", item.short()),
-        (None, _) => format!("reported on #{}", item.short()),
-    };
-    done(json, message, &event, Some(item))
-}
-
 fn link(
     json: bool,
     mode: Mode,
@@ -1217,12 +1163,23 @@ fn comment(
     } else {
         CommentKind::Plain
     };
+    let step = args
+        .step
+        .map(|number| step_numbered(workspace, id, number))
+        .transpose()?;
     let event = workspace.author(EventBody::Comment(Comment {
         item: id,
         text: text.to_string(),
         kind,
         resolves: resolves.clone(),
+        step,
     }))?;
+    if let (Some(step), true) = (step, args.done) {
+        workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {
+            item: id,
+            changes: vec![Change::StepDone { step, done: true }],
+        }))?;
+    }
     let comment = CommentId::from(event.id());
     let mut message = match kind {
         CommentKind::Plain => format!("commented on #{}", id.short()),
@@ -1239,7 +1196,35 @@ fn comment(
         let ids: Vec<String> = resolves.iter().map(HashId::short).collect();
         message.push_str(&format!(", resolving {}", ids.join(", ")));
     }
+    match (args.step, args.done) {
+        (Some(number), true) => message.push_str(&format!(", and checked step {number}")),
+        (Some(number), false) => message.push_str(&format!(", on step {number}")),
+        (None, _) => {}
+    }
     done(json, message, &event, Some(id))
+}
+
+/// The id of a step of the item's body, numbered as `wf item show` prints them.
+fn step_numbered(
+    workspace: &Workspace,
+    item: ItemId,
+    number: std::num::NonZeroUsize,
+) -> anyhow::Result<wf_core::body::StepId> {
+    let state = workspace.state();
+    let Some(ItemView::Live(live)) = state.item(item) else {
+        bail!("#{} is archived", item.short());
+    };
+    let body = live.body();
+    let steps: Vec<_> = body.steps().collect();
+    match steps.get(number.get() - 1) {
+        Some(step) => Ok(step.id),
+        None if steps.is_empty() => bail!("#{} has no steps", item.short()),
+        None => bail!(
+            "#{} has {} steps, there is no step {number}",
+            item.short(),
+            steps.len()
+        ),
+    }
 }
 
 /// Writes why a move or verdict is made as a plain comment on the item, for the move or verdict
@@ -1276,11 +1261,7 @@ fn comments_to_resolve(
     };
     let mut resolves = Vec::new();
     for prefix in &args.resolve {
-        let comments = live
-            .notes()
-            .iter()
-            .filter(|(_, note)| note.comment_kind().is_some())
-            .map(|(id, _)| CommentId::from(*id));
+        let comments = live.comments().keys().copied();
         resolves.push(wf_core::id::resolve_prefix(prefix, comments)?);
     }
     for (wanted, flag) in [
@@ -1293,7 +1274,7 @@ fn comments_to_resolve(
         let open: Vec<CommentId> = live
             .open_comments()
             .into_iter()
-            .filter(|(_, note)| note.comment_kind() == Some(wanted))
+            .filter(|(_, comment)| comment.kind == wanted)
             .map(|(id, _)| id)
             .collect();
         if open.is_empty() {

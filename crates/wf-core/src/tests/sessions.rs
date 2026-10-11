@@ -330,7 +330,6 @@ mod reports {
     use super::*;
     use crate::body::StepId;
     use crate::event::{EventBody, SessionStarted};
-    use crate::item::NoteKind;
     use crate::name::AgentName;
     use crate::session::SessionRole;
     use crate::validate::PolicyViolation;
@@ -366,19 +365,20 @@ mod reports {
         event
     }
 
-    fn reports(state: &State, task: ItemId) -> Vec<NoteKind> {
+    /// The steps the comments of sessions on the item are about.
+    fn reports(state: &State, task: ItemId) -> Vec<(Option<SessionId>, Option<StepId>)> {
         let ItemView::Live(item) = state.item(task).unwrap() else {
             panic!("live")
         };
-        item.notes()
+        item.comments()
             .values()
-            .map(|note| note.kind)
-            .filter(|kind| matches!(kind, NoteKind::Report { .. }))
+            .filter(|comment| comment.session().is_some())
+            .map(|comment| (comment.session(), comment.step))
             .collect()
     }
 
     #[test]
-    fn a_report_belongs_to_the_item_of_its_session() {
+    fn a_report_is_a_comment_of_a_session_that_may_name_a_step() {
         let (fixture, mut state, task, session) = working();
         let step = StepId::of(STEP);
         write(
@@ -386,36 +386,20 @@ mod reports {
             &mut state,
             session,
             3_001,
-            report(session, "chose redb", Some(step)),
+            on_step(task, "chose redb", step),
         );
         write(
             &fixture,
             &mut state,
             session,
             3_002,
-            report(session, "halfway", None),
+            comment(task, "halfway"),
         );
-        let kinds = reports(&state, task);
-        assert_eq!(kinds.len(), 2);
-        assert!(kinds.contains(&NoteKind::Report {
-            session,
-            step: Some(step)
-        }));
-        assert!(kinds.contains(&NoteKind::Report {
-            session,
-            step: None
-        }));
-    }
-
-    #[test]
-    fn a_report_for_an_unknown_session_is_refused() {
-        let (fixture, mut state, _, _) = working();
-        let missing = SessionId::from(crate::id::EventId::of(b"missing"));
-        let event = fixture.author(&state, 0, 3_001, report(missing, "ghost", None));
-        assert_eq!(
-            state.receive(event, Trust::Untrusted).unwrap_err(),
-            Invalid::UnknownSession(missing)
-        );
+        fixture.apply(&mut state, 0, 3_003, comment(task, "a person's remark"));
+        let reports = reports(&state, task);
+        assert_eq!(reports.len(), 2);
+        assert!(reports.contains(&(Some(session), Some(step))));
+        assert!(reports.contains(&(Some(session), None)));
     }
 
     #[test]
@@ -427,7 +411,7 @@ mod reports {
             &mut state,
             session,
             3_001,
-            report(session, "chose redb", Some(step)),
+            on_step(task, "chose redb", step),
         );
         fixture.apply(
             &mut state,
@@ -446,45 +430,21 @@ mod reports {
     }
 
     #[test]
-    fn only_the_session_itself_reports() {
-        let (fixture, mut state, task, session) = working();
-        let other = session_id(&fixture.apply(&mut state, 0, 3_002, start_session("coder", task)));
-        let actor = fixture.agent_actor("coder", session);
-        let device = fixture.devices[0].key();
+    fn a_step_must_exist_when_the_comment_is_written() {
+        let (_, state, task, _) = working();
         assert_eq!(
-            state.check_actor(device, &actor, &report(other, "not mine", None)),
-            Err(PolicyViolation::ReportNotFromItsSession)
-        );
-        assert_eq!(
-            state.check_actor(device, &actor, &report(session, "mine", None)),
-            Ok(())
-        );
-        assert_eq!(
-            state.check_actor(
-                device,
-                &fixture.founder_actor(),
-                &report(session, "from a human", None)
-            ),
-            Err(PolicyViolation::ReportNotFromItsSession)
-        );
-    }
-
-    #[test]
-    fn a_step_must_exist_when_the_report_is_written() {
-        let (_, state, _, session) = working();
-        assert_eq!(
-            state.check_policy(&report(session, "ok", Some(StepId::of(STEP)))),
+            state.check_policy(&on_step(task, "ok", StepId::of(STEP))),
             Ok(())
         );
         let missing = StepId::of("no such step");
         assert_eq!(
-            state.check_policy(&report(session, "bad", Some(missing))),
+            state.check_policy(&on_step(task, "bad", missing)),
             Err(PolicyViolation::UnknownStep(missing))
         );
     }
 
     #[test]
-    fn a_review_session_reports_without_steps() {
+    fn a_review_session_comments_without_steps() {
         let (fixture, mut state, task, _) = working();
         let commit = crate::session::CommitId::Git(
             "00112233445566778899aabbccddeeff00112233".parse().unwrap(),
@@ -501,13 +461,15 @@ mod reports {
                 },
             }),
         ));
+        let actor = fixture.agent_actor("coder", reviewer);
+        let device = fixture.devices[0].key();
         assert_eq!(
-            state.check_policy(&report(reviewer, "looks fine", None)),
+            state.check_actor(device, &actor, &comment(task, "looks fine")),
             Ok(())
         );
         assert_eq!(
-            state.check_policy(&report(reviewer, "ticking", Some(StepId::of(STEP)))),
-            Err(PolicyViolation::StepInReviewReport)
+            state.check_actor(device, &actor, &on_step(task, "ticking", StepId::of(STEP))),
+            Err(PolicyViolation::StepInReviewComment)
         );
     }
 }

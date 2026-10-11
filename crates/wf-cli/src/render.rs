@@ -436,39 +436,40 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             let _ = writeln!(out, "  {line}");
         }
     }
-    if !detail.notes.is_empty() {
+    if !detail.comments.is_empty() {
         let _ = writeln!(out, "\n{}", paint(BOLD, "discussion"));
         let width = text_width();
-        for (index, note) in detail.notes.iter().enumerate() {
+        for (index, comment) in detail.comments.iter().enumerate() {
             if index > 0 {
                 out.push('\n');
             }
             let mut header = vec![
-                paint(DIM, short_time(&note.at)),
-                paint(style::actor(&note.by), &note.by),
+                paint(DIM, short_time(&comment.at)),
+                paint(style::actor(&comment.by), &comment.by),
             ];
-            match note.kind.as_str() {
+            match comment.kind.as_str() {
                 "blocker" | "change_request" => header.push(paint(
                     WARNING,
                     format!(
                         "{} {}",
-                        comment_marker(&note.kind),
-                        note.kind.replace('_', " ")
+                        comment_marker(&comment.kind),
+                        comment.kind.replace('_', " ")
                     ),
                 )),
                 kind => header.push(paint(DIM, kind)),
             }
-            if !note.resolves.is_empty() {
-                header.push(paint(DIM, format!("resolves {}", note.resolves.join(", "))));
+            if !comment.resolves.is_empty() {
+                header.push(paint(
+                    DIM,
+                    format!("resolves {}", comment.resolves.join(", ")),
+                ));
             }
-            if let Some(by) = &note.resolved_by {
+            if let Some(by) = &comment.resolved_by {
                 header.push(paint(DIM, format!("resolved by {by}")));
             }
-            if let Some(comment) = &note.comment {
-                header.push(paint(DIM, comment));
-            }
+            header.push(paint(DIM, &comment.short));
             let _ = writeln!(out, "  {}", header.join(&format!(" {} ", paint(DIM, "·"))));
-            let text = note
+            let text = comment
                 .text
                 .as_deref()
                 .unwrap_or("[text not in the local log]");
@@ -476,7 +477,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
                 .initial_indent("    ")
                 .subsequent_indent("    ");
             let _ = writeln!(out, "{}", textwrap::fill(text, options));
-            match &note.step {
+            match &comment.step {
                 Some(StepRefView {
                     number: Some(number),
                     text: Some(text),

@@ -7,7 +7,7 @@ use crate::crdt::{Lww, Stamp};
 use crate::event::{Change, CommentKind, Event, EventBody, ItemLinked, Link};
 use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::{AgentId, Role};
-use crate::item::{Item, Merge, Note, NoteKind, Resolved, Verdicted};
+use crate::item::{Comment, Item, Merge, Resolved, Verdicted};
 use crate::name::StateName;
 use crate::policy::Policy;
 use crate::refs;
@@ -187,7 +187,6 @@ impl State {
                     | EventBody::SessionEnded(_)
                     | EventBody::Review(_)
                     | EventBody::Merged(_)
-                    | EventBody::Report(_)
                     | EventBody::Unknown { .. }
             )
         {
@@ -350,27 +349,6 @@ impl State {
                     );
                 }
             }
-            EventBody::Report(report) => {
-                let item = workforce
-                    .sessions
-                    .get(&report.session)
-                    .and_then(|session| workforce.items.get_mut(&session.item));
-                if let Some(item) = item {
-                    item.touch(content.hlc);
-                    item.notes.insert(
-                        id,
-                        note_from(
-                            NoteKind::Report {
-                                session: report.session,
-                                step: report.step,
-                            },
-                            &content.actor,
-                            content.hlc,
-                            &report.note,
-                        ),
-                    );
-                }
-            }
             EventBody::ItemCreated(created) => {
                 let item_id = ItemId::from(id);
                 workforce.items.insert(
@@ -425,28 +403,27 @@ impl State {
             EventBody::Comment(comment) => {
                 if let Some(item) = workforce.items.get_mut(&comment.item) {
                     item.touch(content.hlc);
-                    item.notes.insert(
-                        id,
-                        note_from(
-                            NoteKind::Comment { kind: comment.kind },
-                            &content.actor,
-                            content.hlc,
-                            &comment.text,
-                        ),
-                    );
                     let by = CommentId::from(id);
+                    item.comments.insert(
+                        by,
+                        Comment {
+                            kind: comment.kind,
+                            by: content.actor.clone(),
+                            at: content.hlc,
+                            step: comment.step,
+                            tokens: refs::parse(&comment.text),
+                            resolved: None,
+                        },
+                    );
                     for resolved in &comment.resolves {
-                        let Some(note) = item.notes.get_mut(&EventId::from(*resolved)) else {
+                        let Some(target) = item.comments.get_mut(resolved) else {
                             continue;
                         };
-                        if !matches!(
-                            note.comment_kind(),
-                            Some(CommentKind::Blocker | CommentKind::ChangeRequest)
-                        ) {
+                        if target.kind == CommentKind::Plain {
                             continue;
                         }
-                        if note.resolved.is_none_or(|earlier| stamp < earlier.stamp) {
-                            note.resolved = Some(Resolved { by, stamp });
+                        if target.resolved.is_none_or(|earlier| stamp < earlier.stamp) {
+                            target.resolved = Some(Resolved { by, stamp });
                         }
                     }
                 }
@@ -457,16 +434,6 @@ impl State {
 
 fn superseded_state() -> StateName {
     StateName::new("superseded").expect("a valid built-in state name")
-}
-
-fn note_from(kind: NoteKind, by: &crate::identity::Actor, at: crate::hlc::Hlc, text: &str) -> Note {
-    Note {
-        kind,
-        by: by.clone(),
-        at,
-        tokens: refs::parse(text),
-        resolved: None,
-    }
 }
 
 fn apply_change(item: &mut Item, change: &Change, stamp: Stamp) {

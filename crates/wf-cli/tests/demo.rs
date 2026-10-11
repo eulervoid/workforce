@@ -103,7 +103,7 @@ fn the_demo_script_works_end_to_end() {
     assert_eq!(shown["references"][0]["id"], question);
     assert_eq!(shown["mentions"][0], "@joshua/coder");
     assert_eq!(
-        shown["notes"][0]["text"],
+        shown["comments"][0]["text"],
         format!("see #{}, @coder please keep it small", short(&question))
     );
     assert_eq!(
@@ -462,7 +462,12 @@ fn blockers_and_change_requests_stay_open_until_a_comment_resolves_them() {
     comment(&["--resolve-change-requests"]);
     let shown = wf.json(&["item", "show", short(&task)]);
     assert!(open(&shown).is_empty(), "{shown}");
-    let resolving = shown["notes"].as_array().unwrap().last().unwrap().clone();
+    let resolving = shown["comments"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone();
     assert_eq!(
         resolving["resolves"].as_array().unwrap().len(),
         2,
@@ -806,7 +811,7 @@ mod forking {
         let child = fork["workforce"].as_str().unwrap().to_string();
         let through_daemon = sandbox.json(&["item", "show", short(&item)]);
         assert_eq!(through_daemon["title"], "Renamed");
-        assert_eq!(through_daemon["notes"].as_array().unwrap().len(), 1);
+        assert_eq!(through_daemon["comments"].as_array().unwrap().len(), 1);
         sandbox.add(&["--title", "After the fork", "--priority", "P2"]);
         let log = sandbox.json(&["log"]);
         let unverified = log["events"]
@@ -1027,7 +1032,7 @@ mod work {
     }
 
     #[test]
-    fn an_agent_reports_on_its_item_and_on_its_steps() {
+    fn an_agent_comments_on_its_item_and_on_its_steps() {
         let wf = Sandbox::new();
         wf.run(&["init", "--name", "demo", "--no-agents"]);
         wf.run(&["agent", "add", "coder", "--harness", "opencode"]);
@@ -1039,17 +1044,14 @@ mod work {
         ]);
         let session = start_session(&wf, short(&task));
 
-        let outside = wf.fail(&["work", "report", "no session"]);
-        assert!(outside.contains("WF_SESSION"), "{outside}");
-
-        let output = as_session(&wf, &session, &["work", "report", "halfway there"]);
+        let output = as_session(&wf, &session, &["comment", short(&task), "halfway there"]);
         assert!(output.status.success());
         let output = as_session(
             &wf,
             &session,
             &[
-                "work",
-                "report",
+                "comment",
+                short(&task),
                 "chose redb over sqlite",
                 "--step",
                 "1",
@@ -1071,11 +1073,11 @@ mod work {
             .map(|part| part["done"].as_bool().unwrap())
             .collect();
         assert_eq!(steps, [true, false]);
-        let reports: Vec<&Value> = shown["notes"]
+        let reports: Vec<&Value> = shown["comments"]
             .as_array()
             .unwrap()
             .iter()
-            .filter(|note| note["kind"] == "report")
+            .filter(|note| note["session"].is_string())
             .collect();
         assert_eq!(reports.len(), 2);
         let on_step = reports
@@ -1107,18 +1109,22 @@ mod work {
     }
 
     #[test]
-    fn a_report_names_a_step_that_exists() {
+    fn a_comment_names_a_step_that_exists() {
         let wf = Sandbox::new();
         wf.run(&["init", "--name", "demo", "--no-agents"]);
         wf.run(&["agent", "add", "coder", "--harness", "opencode"]);
         let task = wf.add(&["--title", "Build it", "--body", "- [ ] only step"]);
         let session = start_session(&wf, short(&task));
-        let output = as_session(&wf, &session, &["work", "report", "x", "--step", "2"]);
+        let output = as_session(
+            &wf,
+            &session,
+            &["comment", short(&task), "x", "--step", "2"],
+        );
         assert!(!output.status.success());
         assert!(
             String::from_utf8_lossy(&output.stderr).contains("has 1 steps, there is no step 2")
         );
-        let output = as_session(&wf, &session, &["work", "report", "x", "--done"]);
+        let output = as_session(&wf, &session, &["comment", short(&task), "x", "--done"]);
         assert!(!output.status.success(), "--done needs --step");
     }
 }

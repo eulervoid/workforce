@@ -6,7 +6,7 @@ use crate::crdt::SetChange;
 use crate::event::{
     AgentDefined, Change, Comment, CommentKind, DeviceBound, Event, EventBody, EventBuilder,
     ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemMoved,
-    ItemRef, Link, PolicySet, Report, SessionEnded, SessionStarted,
+    ItemRef, Link, PolicySet, SessionEnded, SessionStarted,
 };
 use crate::id::{CommentId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
@@ -333,11 +333,11 @@ pub fn end_session(session: SessionId, reason: EndReason) -> EventBody {
     EventBody::SessionEnded(SessionEnded { session, reason })
 }
 
-pub fn report(session: SessionId, note: &str, step: Option<StepId>) -> EventBody {
-    EventBody::Report(Report {
-        session,
-        note: note.into(),
-        step,
+/// A comment about a step of the item's body: a report, when a session writes it.
+pub fn on_step(item: ItemId, text: &str, step: StepId) -> EventBody {
+    EventBody::Comment(Comment {
+        step: Some(step),
+        ..Comment::plain(item, text)
     })
 }
 

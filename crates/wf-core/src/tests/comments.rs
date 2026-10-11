@@ -48,7 +48,7 @@ fn blockers_and_change_requests_stay_open_until_resolved() {
     ));
     assert_eq!(open(&state, task), [change]);
     assert!(!live(&state, task).has_open_blocker());
-    let note = &live(&state, task).notes()[&question.into()];
+    let note = &live(&state, task).comments()[&question];
     assert_eq!(note.resolved().map(|resolved| resolved.by), Some(answer));
 
     fixture.apply(&mut state, 0, 2_005, resolving(task, "", &[change]));
@@ -71,7 +71,7 @@ fn concurrent_resolutions_agree_on_the_earliest() {
         other.receive(event.clone(), Trust::Untrusted).unwrap();
     }
     for state in [&one, &other] {
-        let note = &live(state, task).notes()[&question.into()];
+        let note = &live(state, task).comments()[&question];
         assert_eq!(
             note.resolved().map(|resolved| resolved.by),
             Some(comment_id(&first))

@@ -76,9 +76,9 @@ impl WorkPackage {
              You are in a git worktree on the branch `{branch}`, which started from `{target}`. \
              Work only here, and commit small and often.\n\
              - Check off a step of the body when it is done: `wf item check {item} <number>`.\n\
-             - Say what you chose, what you rejected and why: `wf work report \"...\"`. \
+             - Say what you chose, what you rejected and why: `wf comment {item} \"...\"`. \
              Add `--step <number>` when it is about a step, and `--done` to check the step off as well. \
-             Write reports that make sense on their own. They are encouraged, not required.\n\
+             Write comments that make sense on their own. They are encouraged, not required.\n\
              - When the work is finished, run `wf work submit`. Your commits are reviewed and merged from there.\n\
              - If you need an answer from someone, run `wf work ask \"<question>\"` and stop; \
              you are prompted again when it is answered.\n\
@@ -212,7 +212,7 @@ mod tests {
         assert!(text.contains("`wf/k3f9ab`") && text.contains("`main`"));
         for command in [
             "wf item check k3f9ab",
-            "wf work report",
+            "wf comment k3f9ab",
             "wf work submit",
             "wf work ask",
             "wf work release",

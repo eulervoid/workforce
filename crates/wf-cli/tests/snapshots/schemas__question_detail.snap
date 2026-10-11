@@ -55,11 +55,11 @@ expression: "Envelope::new(&detail)"
       {
         "item": "jr6sxwcakmtp4aexix74sciie3chckzbgzitlbpfwtsvhdov6arq",
         "title": "Implement feed sync",
-        "origin": "tlj6ic3ngckzis3bx7t2y64nultmrfz66tncze4nirowpti46dta"
+        "origin": "hykrndnhlpowitlowmcyxpydg4zzohxotifwzwyaibw4yteaccdq"
       }
     ],
     "mentions": [],
-    "notes": [],
+    "comments": [],
     "open": [],
     "flags": []
   }

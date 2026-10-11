@@ -284,7 +284,10 @@ fn the_items_of_a_fork_are_those_of_the_parent_as_they_were_written() {
     let mut state = child(&scenario);
     fetch_history(&mut state, &scenario.history);
     assert_eq!(items_of(&state), items_of(&scenario.parent));
-    let notes: usize = items_of(&state).iter().map(|item| item.notes().len()).sum();
+    let notes: usize = items_of(&state)
+        .iter()
+        .map(|item| item.comments().len())
+        .sum();
     assert_eq!(notes, 2, "both comments carry over");
     assert!(
         items_of(&state)

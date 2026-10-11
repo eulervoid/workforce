@@ -156,8 +156,6 @@ pub struct ReviewArgs {
 
 #[derive(Subcommand)]
 pub enum WorkCommand {
-    /// Say what you did or decided, and why. Others read it under the item.
-    Report(WorkReportArgs),
     /// Ask a question you need answered. The item waits for it, and you are prompted again once
     /// it is answered. Stop working after asking.
     Ask(WorkAskArgs),
@@ -182,18 +180,6 @@ pub struct WorkAskArgs {
     /// What the answerer needs to know.
     #[arg(long, allow_hyphen_values = true)]
     pub body: Option<String>,
-}
-
-#[derive(Args)]
-pub struct WorkReportArgs {
-    /// What was chosen, what was rejected and why. It should make sense on its own.
-    pub text: String,
-    /// The step the report is about, numbered as `wf item show` prints them.
-    #[arg(long, value_name = "NUMBER")]
-    pub step: Option<NonZeroUsize>,
-    /// The report concludes the step, so it is checked off too.
-    #[arg(long, requires = "step")]
-    pub done: bool,
 }
 
 #[derive(Subcommand)]
@@ -384,6 +370,12 @@ pub struct CommentArgs {
     /// Resolve every open change request of the item.
     #[arg(long)]
     pub resolve_change_requests: bool,
+    /// The step the comment is about, numbered as `wf item show` prints them.
+    #[arg(long, value_name = "NUMBER")]
+    pub step: Option<NonZeroUsize>,
+    /// The comment concludes the step, so it is checked off too.
+    #[arg(long, requires = "step")]
+    pub done: bool,
 }
 
 #[derive(Args)]

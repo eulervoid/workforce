@@ -9,10 +9,10 @@ use wf_core::body::{Body, BodyPart, StepId};
 use wf_core::event::{Change, Event, EventBody, Link};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::hlc::Hlc;
-use wf_core::id::{CommentId, EventId, HashId, ItemId};
+use wf_core::id::{EventId, HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
-use wf_core::item::{Item, ItemView, NoteKind, Origin, Standing};
+use wf_core::item::{Item, ItemView, Origin, Standing};
 use wf_core::policy::{Field, ReviewStep, StateCategory};
 use wf_core::resolve::MentionTarget;
 use wf_core::review::ReviewStatus;
@@ -441,23 +441,24 @@ pub fn source_view(state: &State, source: &wf_core::resolve::Source) -> SourceVi
             .unwrap_or_default(),
         origin: match source.origin {
             Origin::Body => "body".to_string(),
-            Origin::Note(id) => id.to_string(),
+            Origin::Comment(id) => id.to_string(),
         },
     }
 }
 
 #[derive(Serialize)]
-pub struct NoteView {
+pub struct CommentView {
     pub id: String,
-    /// The short id comments are resolved and referenced by, for comments only.
-    pub comment: Option<String>,
+    /// The short id the comment is resolved and referenced by within its item.
+    pub short: String,
+    /// `comment`, `blocker` or `change_request`.
     pub kind: String,
     pub by: String,
     pub at: String,
     pub text: Option<String>,
-    /// Reports only: the session that wrote it, such as `coder work 7c2k`.
+    /// The session that wrote it, such as `coder work 7c2k`, when an agent did.
     pub session: Option<String>,
-    /// Reports only: the step it is about.
+    /// The step it is about.
     pub step: Option<StepRefView>,
     /// The short ids of the blockers and change requests this comment resolves.
     pub resolves: Vec<String>,
@@ -534,7 +535,7 @@ pub struct ItemDetail {
     pub references: Vec<LinkView>,
     pub referenced_by: Vec<SourceView>,
     pub mentions: Vec<String>,
-    pub notes: Vec<NoteView>,
+    pub comments: Vec<CommentView>,
     pub open: Vec<OpenCommentView>,
     pub flags: Vec<String>,
 }
@@ -604,11 +605,10 @@ fn step_ref(body: &Body, step: StepId) -> StepRefView {
     }
 }
 
-/// Text of a comment or report, read from the event that carries it.
-pub fn note_text(event: &Event) -> Option<String> {
+/// Text of a comment, read from the event that carries it.
+pub fn comment_text(event: &Event) -> Option<String> {
     match &event.content.body {
         EventBody::Comment(comment) => Some(comment.text.clone()),
-        EventBody::Report(report) => Some(report.note.clone()),
         _ => None,
     }
 }
@@ -663,49 +663,44 @@ pub fn item_detail(
         );
     }
 
-    let notes = item
-        .notes()
+    let mut comments = item
+        .comments()
         .iter()
-        .map(|(id, note)| {
-            let (session, step) = match note.kind {
-                NoteKind::Report { session, step } => (
-                    state.session(session).map(session_label),
-                    step.map(|step| step_ref(&item.body(), step)),
-                ),
-                NoteKind::Comment { .. } => (None, None),
-            };
-            let event = load_event(id);
+        .map(|(id, comment)| {
+            let event = load_event(&EventId::from(*id));
             let resolves = match event.as_ref().map(|event| &event.content.body) {
-                Some(EventBody::Comment(comment)) => {
-                    comment.resolves.iter().map(HashId::short).collect()
+                Some(EventBody::Comment(written)) => {
+                    written.resolves.iter().map(HashId::short).collect()
                 }
                 _ => Vec::new(),
             };
-            NoteView {
+            CommentView {
                 id: id.to_string(),
-                comment: note.comment_kind().map(|_| CommentId::from(*id).short()),
-                kind: note.kind.name().to_string(),
-                by: actor_label(state, &note.by),
-                at: timestamp(note.at),
-                text: event.as_ref().and_then(note_text),
-                session,
-                step,
+                short: id.short(),
+                kind: comment.kind.name().to_string(),
+                by: actor_label(state, &comment.by),
+                at: timestamp(comment.at),
+                text: event.as_ref().and_then(comment_text),
+                session: comment
+                    .session()
+                    .and_then(|session| state.session(session))
+                    .map(session_label),
+                step: comment.step.map(|step| step_ref(&item.body(), step)),
                 resolves,
-                resolved_by: note.resolved().map(|resolved| resolved.by.short()),
+                resolved_by: comment.resolved().map(|resolved| resolved.by.short()),
             }
         })
         .collect::<Vec<_>>();
+    comments.sort_by(|left, right| left.at.cmp(&right.at).then(left.id.cmp(&right.id)));
     let open = item
         .open_comments()
         .into_iter()
-        .map(|(id, note)| OpenCommentView {
+        .map(|(id, comment)| OpenCommentView {
             id: id.short(),
-            kind: note.kind.name().to_string(),
-            by: actor_label(state, &note.by),
+            kind: comment.kind.name().to_string(),
+            by: actor_label(state, &comment.by),
         })
         .collect();
-    let mut notes = notes;
-    notes.sort_by(|left, right| left.at.cmp(&right.at).then(left.id.cmp(&right.id)));
 
     ItemDetail {
         summary: summary(state, &graph, ItemView::Live(item)),
@@ -736,7 +731,7 @@ pub fn item_detail(
             .iter()
             .map(|target| mention_label(state, target))
             .collect(),
-        notes,
+        comments,
         open,
         flags,
     }
@@ -866,10 +861,6 @@ pub fn describe(state: &State, body: &EventBody) -> String {
             format!("{} reviewed: {:?}", item(&review.item), review.verdict)
         }
         EventBody::Merged(merged) => format!("{} merged as {}", item(&merged.item), merged.commit),
-        EventBody::Report(report) => match state.session(report.session) {
-            Some(session) => format!("{} reported", item(&session.item())),
-            None => format!("session {} reported", report.session.short()),
-        },
         EventBody::Unknown { tag, .. } => {
             let _ = state;
             format!("unknown body {tag}")

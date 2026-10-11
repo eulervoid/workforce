@@ -462,7 +462,7 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
             },
             Source {
                 item: task,
-                origin: Origin::Note(note.id())
+                origin: Origin::Comment(note.id().into())
             },
         ]
     );
@@ -480,7 +480,7 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
         sources,
         vec![Source {
             item: task,
-            origin: Origin::Note(note.id())
+            origin: Origin::Comment(note.id().into())
         }]
     );
 

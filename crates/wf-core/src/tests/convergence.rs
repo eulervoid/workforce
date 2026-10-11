@@ -265,13 +265,13 @@ impl Simulation {
                 }
             }
             (14, _) if second % 4 == 1 => {
-                let sessions: Vec<_> = self.replicas[device]
+                let items: Vec<_> = self.replicas[device]
                     .sessions()
-                    .map(|session| session.id())
+                    .map(|session| session.item())
                     .collect();
-                if !sessions.is_empty() {
-                    let session = sessions[usize::from(first) % sessions.len()];
-                    self.submit(device, report(session, &format!("report {second}"), None));
+                if !items.is_empty() {
+                    let item = items[usize::from(first) % items.len()];
+                    self.submit(device, comment(item, &format!("report {second}")));
                 }
             }
             (14, _) => match second % 3 {
