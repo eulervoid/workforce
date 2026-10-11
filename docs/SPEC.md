@@ -807,7 +807,9 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
   from the latest submitted commit, the level and the verdicts on that commit; nothing is stored.
 * `wf review <item>` writes the verdict; in a review session it also ends the session `Reviewed`. A
   verdict on a commit other than the submitted one is refused, and a review session comments on the item,
-  not on its steps. `wf item diff` shows the work as a reviewer sees it.
+  not on its steps. `wf item diff` shows the work as a reviewer sees it, `wf item checkout` puts the
+  main checkout on it (detached, since the branch is checked out in the item's worktree), and
+  `wf review --annotate` turns comments written in a diff tool such as lumen into change requests.
 * Verdicts: `Approve` moves on to the next step, and is refused while a change request is open;
   `RequestChanges` needs at least one open change request, written by the reviewer (section 10), and
   moves the item back to its open state; the next session continues the branch and resolves them;
@@ -988,7 +990,7 @@ authenticated) is *later*. wf never handles harness credentials.
 | `session/prompt` | send the work package: item, dependencies, comments of earlier sessions, open change requests, the agent rules; later ratified decisions and search hits |
 | end of a prompt turn | decides the next step (below) |
 | `session/update` | transcript capture (local, `wf session watch`), redaction (M3), presence |
-| `session/request_permission` | answered by the agent's `permissions`: allow, deny, or ask, held in `wf inbox` until `wf session allow\|deny` |
+| `session/request_permission` | answered by the agent's `permissions`: allow, deny, or ask, which goes through the permission chain below |
 | `terminal/*`, `fs/*` | not offered in M2, harnesses use their own tools; later run inside wf's environment with secret injection |
 | `session/cancel` | `wf session stop`, `max_duration`, claim or lease lost, or item reassigned. Not when the agent ended its own session (`submit`, `release`, a verdict): it then gets 20 seconds to finish its turn, because the command it ran is still waiting for its answer |
 
@@ -1014,8 +1016,23 @@ authenticated) is *later*. wf never handles harness credentials.
   (donor mode, *later*).
 * `wf attach <session>` over an iroh ALPN `wf/acp/1` (M5).
 * The CLI stays. MCP tools and CLI are thin wrappers over the same daemon API.
-* *Later:* a scheduler hook, an external program asked over JSON lines at the dispatch, turn-end and
-  permission decisions, for policies the agent settings cannot express.
+* *Later:* a scheduler hook, an external program asked over JSON lines at the dispatch and turn-end
+  decisions, for policies the agent settings cannot express.
+
+### Permission requests (M2.1)
+A request of an agent whose permissions are `ask` passes through deciders, in order, until one
+answers:
+
+1. **Built-in rules.** Running `wf` alone is allowed: it is how a session reports back.
+2. **The hook** of the machine: a program that gets the request as JSON on stdin and prints
+   `{"decision": "allow" | "deny" | "ask", "reason": ...}`. A crash, a timeout or `ask` passes on.
+3. **The judge**: an agent in the `permissions` lane, which the daemon keeps one live session of and
+   prompts with the request, the item and the machine's guidance. It answers like the hook.
+4. **A person**, through `wf inbox`, `wf watch` or `wf session allow|deny`.
+
+Hooks and the judge are configured in the machine config (`$XDG_CONFIG_HOME/workforce/config.toml`),
+never in the signed policy, because policy that syncs must not make other machines run programs.
+Each decision and its reason go into the transcript of the session that asked.
 
 ## 13. Secrets and transcripts
 
@@ -1163,14 +1180,17 @@ wf device list|edit                       # name, hardware, hosted agents, max_s
 wf agent add|list|edit                    # profiles: harness, model, capabilities, lanes, autonomy
 wf session start|list|show|stop|watch     # live and recent sessions, transcripts
 wf session allow|deny <session>           # answer a held permission request
+wf permissions test                       # run the permission chain on a request from stdin (M2.1)
+wf watch [--item <item>]                  # events as they arrive; prompts for what waits on you (M2.1)
 wf work submit | release                  # agents, inside a session
 wf daemon | sync | status | log | export
 wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
 wf item add|list|show|edit|move|link|archive|diff   # all types: task, decision, ...
+wf item checkout|path <item>              # the main checkout on the item's head; its worktree (M2.1)
 wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | --resolve-blockers | --resolve-change-requests] [--step <number> [--done]]
 wf inbox
-wf review <item> --approve|--request-changes|--escalate
+wf review <item> --approve|--request-changes|--escalate|--annotate
 wf search <query>
 ```
 All commands support `--json`. Output is `{"schema": 2, "data": ...}`; the schema number is bumped on
@@ -1196,11 +1216,14 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
 | **M0** | Event log with `actor`, `owner`/`member`, principal and device keys, agent definitions, item model (types, categories, built-in types, relations, derived refs and mentions, archiving), in-memory fold, redb event store with snapshots. Single peer. |
 | **M1** | iroh sync, equivocation handling, self-authorizing device invites and `wf join`, device profiles, daemon, gossip, `wf fork`. |
 | M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, blockers, change requests and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress, reports as comments, item activity |
+| M2.1 | Convenience at the CLI: permission chain with hook and judge, machine config, `wf item diff\|checkout\|path`, annotated review, `wf watch` |
 | M3 | Sessions across devices: anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, session inboxes, overlap notifications, secret brokering, redaction, merge mode `origin` with `Merged` from origin. **= UC1** |
 | M4 | Decision ratification flow, distill items, hybrid search |
 | M5 | Multiple principals, threads, scopes, `wf attach` |
 | M6 | Git bundles over iroh-blobs, peer-to-peer repos, compaction (item checkpoints, frontier) |
 | M7 | Donors: revocation, rate limits, sandbox, transcript publishing, governance |
+
+A TUI with the live state of the workforce comes after M2.1, built on what `wf watch` shows.
 
 ## 19. Open questions
 1. Should merges to the main branch require a human key once origin-side protection is not enough?
