@@ -39,7 +39,7 @@ pub fn permissions(json: bool, command: PermissionsCommand, cwd: &Path) -> anyho
             let runtime = tokio::runtime::Builder::new_current_thread()
                 .enable_all()
                 .build()?;
-            let result = runtime.block_on(run_chain(&config.permissions.deciders, &request));
+            let result = runtime.block_on(run_chain(&config.permissions.deciders, &request, None));
             let view = ChainView {
                 config: path.display().to_string(),
                 passed: result

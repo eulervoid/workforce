@@ -4,6 +4,7 @@
 
 pub mod client;
 pub mod decide;
+mod judges;
 pub mod machine_config;
 mod peers;
 mod permissions;
@@ -150,6 +151,7 @@ pub struct Daemon {
     runners: runner::Runners,
     merging: runner::Merging,
     held: Arc<permissions::Held>,
+    judges: judges::Judges,
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
     /// Stores that failed to open, so each is reported once.
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
@@ -166,6 +168,7 @@ impl Daemon {
             runners: runner::Runners::default(),
             merging: runner::Merging::default(),
             held: Arc::default(),
+            judges: judges::Judges::default(),
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
         });
@@ -264,7 +267,7 @@ impl Daemon {
     }
 
     /// The loaded workforce, if it is one and its storage is running: nothing is opened.
-    fn loaded_workforce(&self, id: &WorkforceId) -> Option<Arc<Loaded>> {
+    pub(crate) fn loaded_workforce(&self, id: &WorkforceId) -> Option<Arc<Loaded>> {
         self.loaded
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

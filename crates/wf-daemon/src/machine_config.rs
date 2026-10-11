@@ -81,7 +81,12 @@ pub enum DeciderConfig {
         timeout: Duration,
     },
     /// An agent of the workforce that the daemon keeps a session of.
-    Agent { agent: AgentName },
+    Agent {
+        agent: AgentName,
+        /// Prompts before its session is replaced, so its context stays small.
+        #[serde(default = "default_turns")]
+        turns: u32,
+    },
 }
 
 impl DeciderConfig {
@@ -93,7 +98,7 @@ impl DeciderConfig {
                 format!("hook {}", command.first().map_or("", String::as_str))
             }
             DeciderConfig::Model { model, .. } => format!("model {model}"),
-            DeciderConfig::Agent { agent } => format!("agent {agent}"),
+            DeciderConfig::Agent { agent, .. } => format!("agent {agent}"),
         }
     }
 }
@@ -107,6 +112,10 @@ pub enum QuestionConfig {
     Noul { allow_above: f64, deny_below: f64 },
     /// Which of allow, deny and ask fits, taken when its confidence is at least `min_confidence`.
     Choice { min_confidence: f64 },
+}
+
+fn default_turns() -> u32 {
+    50
 }
 
 fn default_timeout() -> Duration {

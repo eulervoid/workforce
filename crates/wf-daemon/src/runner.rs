@@ -217,7 +217,7 @@ impl Daemon {
             .await??)
     }
 
-    fn principal_of_device(
+    pub(crate) fn principal_of_device(
         &self,
         state: &State,
     ) -> Result<wf_core::identity::PrincipalKey, SessionError> {
@@ -226,7 +226,7 @@ impl Daemon {
             .ok_or(SessionError::NotBound)
     }
 
-    fn harness_command(&self, harness: &HarnessName) -> Option<AcpAgentConfig> {
+    pub(crate) fn harness_command(&self, harness: &HarnessName) -> Option<AcpAgentConfig> {
         self.config
             .harnesses
             .get(harness)
@@ -234,7 +234,7 @@ impl Daemon {
             .or_else(|| wf_harness::command_for(harness.as_str()))
     }
 
-    fn workforce_directory(&self, workforce: WorkforceId) -> PathBuf {
+    pub(crate) fn workforce_directory(&self, workforce: WorkforceId) -> PathBuf {
         self.config.data_dir.join(workforce.to_string())
     }
 
@@ -472,6 +472,10 @@ impl Daemon {
                 workforce,
                 session,
                 machine_config: self.config.machine_config.clone(),
+                agents: crate::judges::WorkforceJudges {
+                    daemon: Arc::downgrade(self),
+                    workforce,
+                },
                 context: DeciderRequest {
                     hook: "permission".to_string(),
                     version: 1,

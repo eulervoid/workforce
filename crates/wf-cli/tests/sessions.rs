@@ -1128,6 +1128,40 @@ command = ["sh", "-c", "grep -q '\"title\":\"Edit file\"' && echo '{\"permission
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_agent_of_the_workforce_can_decide() {
+    let world = World::agents(&[
+        (
+            "coder",
+            "permission\nsay done\nwf work release --note done\n",
+        ),
+        (
+            "judge",
+            "say Editing files is what the item is for.\n\
+             say {\"permission\": \"allow\", \"reason\": \"edits serve the item\"}\n",
+        ),
+    ])
+    .await;
+    std::fs::write(
+        world.wf.root.path().join("config.toml"),
+        "[[permissions.decider]]\nkind = \"agent\"\nagent = \"judge\"\n",
+    )
+    .unwrap();
+    let item = world.wf.add(&["--title", "Wants to edit"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(
+        transcript.contains("allowed by agent judge: edits serve the item"),
+        "{transcript}"
+    );
+    assert!(transcript.contains("permission: yes"), "{transcript}");
+    let sessions = world.sessions();
+    assert_eq!(sessions.len(), 1, "a judge is no wf session: {sessions:?}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_request_every_decider_passes_on_says_why_in_the_inbox() {
     let world = World::new("permission\nsay done\nhang\n").await;
     std::fs::write(

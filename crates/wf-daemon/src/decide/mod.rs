@@ -9,6 +9,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use wf_core::id::{SessionId, WorkforceId};
+use wf_core::name::AgentName;
 use wf_harness::{Decision, PermissionMode, PermissionRequest, Permissions};
 
 use crate::machine_config::{DeciderConfig, MachineConfig};
@@ -65,11 +66,25 @@ pub struct ChainResult {
     pub passed: Vec<(String, String)>,
 }
 
-/// Runs the deciders in order until one decides.
-pub async fn run_chain(deciders: &[DeciderConfig], request: &DeciderRequest) -> ChainResult {
+/// Asks the agents that decide, which only the daemon can run.
+pub trait AgentDeciders: Send + Sync {
+    fn ask<'a>(
+        &'a self,
+        agent: &'a AgentName,
+        turns: u32,
+        request: &'a DeciderRequest,
+    ) -> wf_harness::BoxFuture<'a, Outcome>;
+}
+
+/// Runs the deciders in order until one decides. Agent deciders pass on without `agents`.
+pub async fn run_chain(
+    deciders: &[DeciderConfig],
+    request: &DeciderRequest,
+    agents: Option<&dyn AgentDeciders>,
+) -> ChainResult {
     let mut passed = Vec::new();
     for decider in deciders {
-        let outcome = ask(decider, request).await;
+        let outcome = ask(decider, request, agents).await;
         match outcome {
             Outcome::Decided { permission, reason } => {
                 return ChainResult {
@@ -90,7 +105,11 @@ pub async fn run_chain(deciders: &[DeciderConfig], request: &DeciderRequest) -> 
     }
 }
 
-async fn ask(decider: &DeciderConfig, request: &DeciderRequest) -> Outcome {
+async fn ask(
+    decider: &DeciderConfig,
+    request: &DeciderRequest,
+    agents: Option<&dyn AgentDeciders>,
+) -> Outcome {
     match decider {
         DeciderConfig::Rules {} => match rules::allows(&request.tool) {
             Some(reason) => Outcome::Decided {
@@ -119,8 +138,11 @@ async fn ask(decider: &DeciderConfig, request: &DeciderRequest) -> Outcome {
             .ask(request)
             .await
         }
-        DeciderConfig::Agent { .. } => Outcome::Passed {
-            why: "this kind of decider is not built yet".to_string(),
+        DeciderConfig::Agent { agent, turns } => match agents {
+            Some(agents) => agents.ask(agent, *turns, request).await,
+            None => Outcome::Passed {
+                why: "an agent decides only in the daemon".to_string(),
+            },
         },
     }
 }
@@ -141,7 +163,7 @@ struct AnswerLine {
 }
 
 /// Reads `{"permission": "allow" | "deny" | "ask", "reason": ...}`.
-fn read_answer(text: &str) -> Outcome {
+pub(crate) fn read_answer(text: &str) -> Outcome {
     match serde_json::from_str::<AnswerLine>(text.trim()) {
         Ok(AnswerLine {
             permission: Answer::Allow,
@@ -179,6 +201,7 @@ pub(crate) struct Deciding {
     pub(crate) machine_config: Option<PathBuf>,
     /// Everything of the request but the tool call, which is filled in for each.
     pub(crate) context: DeciderRequest,
+    pub(crate) agents: crate::judges::WorkforceJudges,
 }
 
 impl Permissions for Deciding {
@@ -197,7 +220,7 @@ impl Permissions for Deciding {
                         ..self.context.clone()
                     };
                     (
-                        run_chain(&config.permissions.deciders, &request).await,
+                        run_chain(&config.permissions.deciders, &request, Some(&self.agents)).await,
                         None,
                     )
                 }
