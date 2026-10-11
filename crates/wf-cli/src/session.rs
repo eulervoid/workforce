@@ -1,57 +1,22 @@
-use std::fs::{File, OpenOptions};
+use std::fs::File;
 use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
 use anyhow::{Context, bail};
-use wf_harness::{PermissionMode, Renderer, Run, TranscriptEntry};
+use wf_harness::{Renderer, TranscriptEntry};
 
-use crate::cli::{Permissions, SessionCommand, SessionRunArgs, SessionWatchArgs};
+use crate::cli::{SessionCommand, SessionWatchArgs};
 
 const FOLLOW_INTERVAL: Duration = Duration::from_millis(200);
 
-pub fn session(json: bool, command: SessionCommand, cwd: &Path) -> anyhow::Result<()> {
+pub fn session(json: bool, command: SessionCommand, _cwd: &Path) -> anyhow::Result<()> {
     if json {
         bail!("`wf session` has no --json output yet; the transcript file is JSON lines");
     }
     match command {
-        SessionCommand::Run(args) => run(args, cwd),
         SessionCommand::Watch(args) => watch(args),
     }
-}
-
-fn run(args: SessionRunArgs, cwd: &Path) -> anyhow::Result<()> {
-    let Some(agent) = wf_harness::command_for(args.harness.as_str()) else {
-        bail!("unknown harness {}", args.harness);
-    };
-    let transcript = OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&args.transcript)
-        .with_context(|| format!("opening {}", args.transcript.display()))?;
-    let directory = match &args.directory {
-        Some(directory) => cwd.join(directory),
-        None => cwd.to_path_buf(),
-    };
-    let permissions = match args.permissions {
-        Permissions::Allow => PermissionMode::Allow,
-        Permissions::Deny => PermissionMode::Deny,
-    };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    let stop_reason = runtime.block_on(
-        Run {
-            agent,
-            directory: &directory,
-            prompt: &args.prompt,
-            permissions,
-            transcript,
-        }
-        .execute(),
-    )?;
-    println!("stopped: {stop_reason:?}");
-    Ok(())
 }
 
 fn watch(args: SessionWatchArgs) -> anyhow::Result<()> {

@@ -1,15 +1,17 @@
 use std::io::{self, Write};
-use std::path::Path;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    ContentBlock, InitializeRequest, NewSessionRequest, PermissionOption, PermissionOptionKind,
-    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
-    SelectedPermissionOutcome, SessionNotification, TextContent,
+    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PermissionOption,
+    PermissionOptionKind, PromptRequest, RequestPermissionOutcome, RequestPermissionRequest,
+    RequestPermissionResponse, SelectedPermissionOutcome, SessionNotification, TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
 use jiff::Timestamp;
+use tokio::sync::{Notify, mpsc, oneshot};
+use tokio::task::JoinHandle;
 
 pub use agent_client_protocol::schema::v1::StopReason;
 
@@ -21,6 +23,8 @@ pub enum Error {
     Protocol(#[from] agent_client_protocol::Error),
     #[error("writing the transcript failed")]
     Transcript(#[from] io::Error),
+    #[error("the agent is gone")]
+    Closed,
 }
 
 /// How permission requests from the agent are answered.
@@ -64,22 +68,34 @@ pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
     }
 }
 
-/// One prompt to one agent in one directory. Every line that crosses the connection is appended
-/// to `transcript`.
-pub struct Run<'a, W> {
+/// What it takes to start an agent: the command, where it works and how it is answered. Every
+/// line that crosses the connection is appended to `transcript`.
+pub struct Launch<W> {
     pub agent: AcpAgentConfig,
-    pub directory: &'a Path,
-    pub prompt: &'a str,
+    pub directory: PathBuf,
     pub permissions: PermissionMode,
     pub transcript: W,
 }
 
-impl<W: Write + Send + 'static> Run<'_, W> {
-    /// Starts the agent, sends the prompt, waits for the turn to end and stops the agent.
-    pub async fn execute(self) -> Result<StopReason, Error> {
-        let writer = Arc::new(TranscriptWriter::new(self.transcript));
+struct Turn {
+    prompt: String,
+    reply: oneshot::Sender<Result<StopReason, Error>>,
+}
+
+/// A running agent with one ACP session, which is prompted turn after turn and keeps its context
+/// between them. Dropping it stops the agent.
+pub struct Conversation {
+    turns: mpsc::Sender<Turn>,
+    cancel: Arc<Notify>,
+    task: JoinHandle<Result<(), Error>>,
+}
+
+impl Conversation {
+    /// Starts the agent and opens the session, ready for the first prompt.
+    pub async fn start<W: Write + Send + 'static>(launch: Launch<W>) -> Result<Self, Error> {
+        let writer = Arc::new(TranscriptWriter::new(launch.transcript));
         let recorder = Arc::clone(&writer);
-        let agent = AcpAgent::new(self.agent).with_debug(move |line, direction| {
+        let agent = AcpAgent::new(launch.agent).with_debug(move |line, direction| {
             let direction = Direction::from(direction);
             recorder.record(&TranscriptEntry::from_line(
                 Timestamp::now(),
@@ -87,46 +103,116 @@ impl<W: Write + Send + 'static> Run<'_, W> {
                 line,
             ));
         });
-        let permissions = self.permissions;
-        let directory = self.directory.to_path_buf();
-        let prompt = self.prompt.to_owned();
+        let permissions = launch.permissions;
+        let directory = launch.directory;
+        let (turns, mut incoming) = mpsc::channel::<Turn>(1);
+        let (ready, opened) = oneshot::channel();
+        let cancel = Arc::new(Notify::new());
+        let cancelled = Arc::clone(&cancel);
 
-        let outcome = Client
-            .builder()
-            .on_receive_notification(
-                async move |_notification: SessionNotification, _connection| Ok(()),
-                agent_client_protocol::on_receive_notification!(),
-            )
-            .on_receive_request(
-                async move |request: RequestPermissionRequest, responder, _connection| {
-                    responder.respond(RequestPermissionResponse::new(
-                        permissions.answer(&request.options),
-                    ))
-                },
-                agent_client_protocol::on_receive_request!(),
-            )
-            .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
-                connection
-                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
-                    .block_task()
-                    .await?;
-                let session = connection
-                    .send_request(NewSessionRequest::new(directory))
-                    .block_task()
-                    .await?;
-                let response = connection
-                    .send_request(PromptRequest::new(
-                        session.session_id,
-                        vec![ContentBlock::Text(TextContent::new(prompt))],
-                    ))
-                    .block_task()
-                    .await?;
-                Ok(response.stop_reason)
-            })
-            .await;
+        let task = tokio::spawn(async move {
+            let outcome = Client
+                .builder()
+                .on_receive_notification(
+                    async move |_notification: SessionNotification, _connection| Ok(()),
+                    agent_client_protocol::on_receive_notification!(),
+                )
+                .on_receive_request(
+                    async move |request: RequestPermissionRequest, responder, _connection| {
+                        responder.respond(RequestPermissionResponse::new(
+                            permissions.answer(&request.options),
+                        ))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
+                    connection
+                        .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                        .block_task()
+                        .await?;
+                    let session = connection
+                        .send_request(NewSessionRequest::new(directory))
+                        .block_task()
+                        .await?;
+                    let _ = ready.send(());
+                    while let Some(turn) = incoming.recv().await {
+                        let request = connection
+                            .send_request(PromptRequest::new(
+                                session.session_id.clone(),
+                                vec![ContentBlock::Text(TextContent::new(turn.prompt))],
+                            ))
+                            .block_task();
+                        tokio::pin!(request);
+                        let response = loop {
+                            tokio::select! {
+                                response = &mut request => break response,
+                                () = cancelled.notified() => {
+                                    connection.send_notification(
+                                        CancelNotification::new(session.session_id.clone()),
+                                    )?;
+                                }
+                            }
+                        };
+                        let _ = turn.reply.send(
+                            response
+                                .map(|response| response.stop_reason)
+                                .map_err(Error::from),
+                        );
+                    }
+                    Ok(())
+                })
+                .await;
+            writer.finish()?;
+            Ok(outcome?)
+        });
 
-        writer.finish()?;
-        Ok(outcome?)
+        match opened.await {
+            Ok(()) => Ok(Self {
+                turns,
+                cancel,
+                task,
+            }),
+            Err(_) => Err(match task.await {
+                Ok(Err(error)) => error,
+                Ok(Ok(())) | Err(_) => Error::Closed,
+            }),
+        }
+    }
+
+    /// Sends a prompt and waits for the turn to end.
+    pub async fn prompt(&mut self, prompt: impl Into<String>) -> Result<StopReason, Error> {
+        let (reply, answer) = oneshot::channel();
+        let turn = Turn {
+            prompt: prompt.into(),
+            reply,
+        };
+        self.turns.send(turn).await.map_err(|_| Error::Closed)?;
+        answer.await.map_err(|_| Error::Closed)?
+    }
+
+    /// Asks the agent to stop the turn that is running. The turn then ends with
+    /// [`StopReason::Cancelled`]. Does nothing between turns.
+    pub fn cancel(&self) -> CancelHandle {
+        CancelHandle(Arc::clone(&self.cancel))
+    }
+
+    /// Stops the agent and waits until it is gone.
+    pub async fn close(self) -> Result<(), Error> {
+        drop(self.turns);
+        match self.task.await {
+            Ok(result) => result,
+            Err(_) => Err(Error::Closed),
+        }
+    }
+}
+
+/// Cancels the turn of a conversation that is being prompted, from another task.
+#[derive(Clone)]
+pub struct CancelHandle(Arc<Notify>);
+
+impl CancelHandle {
+    pub fn cancel(&self) {
+        self.0.notify_waiters();
     }
 }
 

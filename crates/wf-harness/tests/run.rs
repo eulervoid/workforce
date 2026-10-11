@@ -1,7 +1,9 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use wf_harness::{Direction, PermissionMode, Renderer, Run, StopReason, TranscriptEntry};
+use wf_harness::{
+    Conversation, Direction, Launch, PermissionMode, Renderer, StopReason, TranscriptEntry,
+};
 
 #[derive(Clone, Default)]
 struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
@@ -20,17 +22,17 @@ impl io::Write for SharedBuffer {
 async fn run_fake_agent(permissions: PermissionMode) -> Vec<TranscriptEntry> {
     let directory = tempfile::tempdir().unwrap();
     let buffer = SharedBuffer::default();
-    let stop_reason = Run {
+    let mut conversation = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
-        directory: directory.path(),
-        prompt: "do the thing",
+        directory: directory.path().to_path_buf(),
         permissions,
         transcript: buffer.clone(),
-    }
-    .execute()
+    })
     .await
     .unwrap();
+    let stop_reason = conversation.prompt("do the thing").await.unwrap();
     assert!(matches!(stop_reason, StopReason::EndTurn));
+    conversation.close().await.unwrap();
 
     let bytes = buffer.0.lock().unwrap().clone();
     String::from_utf8(bytes)
@@ -82,4 +84,55 @@ async fn allowed_permissions_are_granted_and_rendered() {
 async fn denied_permissions_are_rejected() {
     let entries = run_fake_agent(PermissionMode::Deny).await;
     assert!(rendered(&entries).contains("permission: no"));
+}
+
+#[tokio::test]
+async fn one_session_takes_several_prompts() {
+    let directory = tempfile::tempdir().unwrap();
+    let buffer = SharedBuffer::default();
+    let mut conversation = Conversation::start(Launch {
+        agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        directory: directory.path().to_path_buf(),
+        permissions: PermissionMode::Allow,
+        transcript: buffer.clone(),
+    })
+    .await
+    .unwrap();
+    for prompt in ["first", "second"] {
+        let stop_reason = conversation.prompt(prompt).await.unwrap();
+        assert!(matches!(stop_reason, StopReason::EndTurn));
+    }
+    conversation.close().await.unwrap();
+
+    let text = String::from_utf8(buffer.0.lock().unwrap().clone()).unwrap();
+    let entries: Vec<TranscriptEntry> = text
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    let methods: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.direction == Direction::ToAgent)
+        .filter_map(|entry| entry.message["method"].as_str())
+        .collect();
+    assert_eq!(
+        methods,
+        [
+            "initialize",
+            "session/new",
+            "session/prompt",
+            "session/prompt"
+        ]
+    );
+}
+
+#[tokio::test]
+async fn an_agent_that_cannot_start_is_an_error() {
+    let result = Conversation::start(Launch {
+        agent: agent_client_protocol::AcpAgentConfig::new("/nonexistent/agent"),
+        directory: std::env::temp_dir(),
+        permissions: PermissionMode::Allow,
+        transcript: SharedBuffer::default(),
+    })
+    .await;
+    assert!(result.is_err());
 }

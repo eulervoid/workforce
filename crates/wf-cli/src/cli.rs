@@ -103,33 +103,8 @@ pub struct WorkReportArgs {
 
 #[derive(Subcommand)]
 pub enum SessionCommand {
-    /// Run one prompt on a harness in a directory and record the transcript.
-    Run(SessionRunArgs),
     /// Print a transcript and follow it while the agent is still writing.
     Watch(SessionWatchArgs),
-}
-
-#[derive(Args)]
-pub struct SessionRunArgs {
-    /// The harness to start, such as `opencode`.
-    #[arg(long)]
-    pub harness: HarnessName,
-    /// Where the transcript is appended, one JSON object per line.
-    #[arg(long, value_name = "FILE")]
-    pub transcript: PathBuf,
-    /// The directory the agent works in. Defaults to the current directory.
-    #[arg(long, value_name = "DIR")]
-    pub directory: Option<PathBuf>,
-    /// How the permission requests of the agent are answered.
-    #[arg(long, value_enum)]
-    pub permissions: Permissions,
-    pub prompt: String,
-}
-
-#[derive(Clone, Copy, ValueEnum)]
-pub enum Permissions {
-    Allow,
-    Deny,
 }
 
 #[derive(Args)]
