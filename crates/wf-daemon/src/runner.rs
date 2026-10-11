@@ -519,6 +519,12 @@ impl Daemon {
             max_duration: autonomy.max_duration,
             permissions,
         };
+        eprintln!(
+            "session {}: {} started on item {}",
+            session.short(),
+            run.agent,
+            item.short()
+        );
         let (stop, stopped) = mpsc::unbounded_channel();
         self.runners.add(session, stop);
         tokio::spawn(run_session(
@@ -669,6 +675,7 @@ impl Daemon {
             EventBody::SessionEnded(SessionEnded { session, reason }),
         )
         .await?;
+        eprintln!("session {}: ended, {reason:?}", session.short());
         let how = match finish {
             Finish::Submit { .. }
             | Finish::Release { .. }
