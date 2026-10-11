@@ -196,7 +196,7 @@ impl Workspace {
     pub fn session(&self) -> Option<SessionId> {
         match &self.actor {
             Actor::Agent { session, .. } => Some(*session),
-            Actor::Human(_) => None,
+            Actor::Human(_) | Actor::Daemon(_) => None,
         }
     }
 

@@ -443,7 +443,7 @@ impl Daemon {
         let started = self
             .author(
                 loaded,
-                Actor::Human(principal),
+                Actor::Daemon(principal),
                 EventBody::SessionStarted(SessionStarted {
                     agent: agent.clone(),
                     item,
@@ -539,7 +539,7 @@ impl Daemon {
     ) -> Result<(), SessionError> {
         self.author(
             loaded,
-            Actor::Human(principal),
+            Actor::Daemon(principal),
             EventBody::ItemMoved(ItemMoved {
                 item,
                 to,
@@ -578,7 +578,7 @@ impl Daemon {
             agent: folded.agent().clone(),
             session,
         };
-        let by_device = Actor::Human(principal);
+        let by_device = Actor::Daemon(principal);
 
         let (reason, actor, note) = match &finish {
             Finish::Submit { note } => {
@@ -816,7 +816,7 @@ impl Daemon {
         let comment = |body: String| {
             self.author(
                 loaded,
-                Actor::Human(principal),
+                Actor::Daemon(principal),
                 EventBody::Comment(Comment::plain(item, body)),
             )
         };
@@ -835,7 +835,7 @@ impl Daemon {
             MergeOutcome::Merged { commit: merged } => {
                 self.author(
                     loaded,
-                    Actor::Human(principal),
+                    Actor::Daemon(principal),
                     EventBody::Merged(Merged {
                         item,
                         reviewed: commit,
@@ -1305,6 +1305,7 @@ async fn supervise_package(loaded: &Arc<Loaded>, run: &Run, state: &State) -> St
 fn speaker(actor: &Actor) -> String {
     match actor {
         Actor::Human(_) => "someone".to_string(),
+        Actor::Daemon(_) => "the daemon".to_string(),
         Actor::Agent { agent, .. } => agent.name.to_string(),
     }
 }

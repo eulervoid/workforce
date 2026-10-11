@@ -96,7 +96,7 @@ impl Comment {
     pub fn session(&self) -> Option<SessionId> {
         match self.by {
             Actor::Agent { session, .. } => Some(session),
-            Actor::Human(_) => None,
+            Actor::Human(_) | Actor::Daemon(_) => None,
         }
     }
 }

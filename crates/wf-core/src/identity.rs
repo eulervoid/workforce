@@ -241,14 +241,20 @@ pub struct AgentId {
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Actor {
     Human(PrincipalKey),
-    Agent { agent: AgentId, session: SessionId },
+    Agent {
+        agent: AgentId,
+        session: SessionId,
+    },
+    /// The daemon of a device of the principal, for what it does by itself: starting and ending
+    /// sessions, merging, moving items on. The event says which device.
+    Daemon(PrincipalKey),
 }
 
 impl Actor {
     /// The accountable principal, whoever acts.
     pub fn principal(&self) -> PrincipalKey {
         match self {
-            Actor::Human(principal) => *principal,
+            Actor::Human(principal) | Actor::Daemon(principal) => *principal,
             Actor::Agent { agent, .. } => agent.principal,
         }
     }
@@ -362,6 +368,7 @@ mod tests {
         };
         assert_eq!(agent.principal(), principal);
         assert_eq!(Actor::Human(principal).principal(), principal);
+        assert_eq!(Actor::Daemon(principal).principal(), principal);
     }
 }
 

@@ -691,6 +691,16 @@ wf work submit
             .iter()
             .all(|session| session["status"] == "submitted")
     );
+    // What the daemon does by itself is not written in the name of the person.
+    let log = world.wf.run(&["log"]);
+    for kind in ["SessionStarted", "Merged", "ItemMoved"] {
+        let lines: Vec<&str> = log.lines().filter(|line| line.contains(kind)).collect();
+        assert!(!lines.is_empty(), "{kind}: {log}");
+        assert!(
+            lines.iter().all(|line| line.contains("daemon")),
+            "{lines:?}"
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]

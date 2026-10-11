@@ -62,6 +62,7 @@ pub fn actor_label(state: &State, actor: &Actor) -> String {
     };
     match actor {
         Actor::Human(key) => principal(key),
+        Actor::Daemon(_) => "daemon".to_string(),
         Actor::Agent { agent, session } => {
             format!(
                 "{}/{}/{}",
