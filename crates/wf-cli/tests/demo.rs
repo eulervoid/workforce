@@ -1146,3 +1146,39 @@ fn items_name_a_review_level_from_the_policy() {
     ]);
     assert!(message.contains("no review state"), "{message}");
 }
+
+#[test]
+fn permissions_test_runs_the_deciders_of_the_machine_config() {
+    let wf = Sandbox::new();
+    let allowed = wf.json(&["permissions", "test", "--command", "wf item list | head"]);
+    assert_eq!(allowed["permission"], "allow");
+    assert_eq!(allowed["by"], "rules");
+
+    let config = wf.root.path().join("config/workforce");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(
+        config.join("config.toml"),
+        r#"
+[[permissions.decider]]
+kind = "rules"
+
+[[permissions.decider]]
+kind = "hook"
+command = ["/bin/sh", "-c", "echo '{\"permission\": \"deny\", \"reason\": \"never rm\"}'"]
+"#,
+    )
+    .unwrap();
+    let denied = wf.run(&["permissions", "test", "--command", "rm -rf /"]);
+    assert_eq!(
+        denied,
+        "passed by rules: no rule covers it\ndenied by hook /bin/sh: never rm\n"
+    );
+
+    std::fs::write(
+        config.join("config.toml"),
+        "[[permissions.decider]]\nkind = \"shell\"\n",
+    )
+    .unwrap();
+    let broken = wf.fail(&["permissions", "test", "--command", "ls"]);
+    assert!(broken.contains("config.toml"), "{broken}");
+}

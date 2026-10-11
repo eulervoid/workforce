@@ -29,7 +29,7 @@ pub struct Cli {
 const COMMAND_GROUPS: &[&[&str]] = &[
     &["init", "status", "policy", "log", "members", "fork"],
     &["item", "comment", "mentions", "review", "inbox"],
-    &["agent", "session", "work"],
+    &["agent", "session", "work", "permissions"],
     &["daemon", "sync", "invite", "join", "device"],
 ];
 
@@ -105,6 +105,9 @@ pub enum Command {
     Review(ReviewArgs),
     /// What waits on you: blockers, reviews, merges and permission requests.
     Inbox,
+    /// Try out how this machine decides the permission requests of agents.
+    #[command(subcommand)]
+    Permissions(PermissionsCommand),
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
     /// Run the background process of this machine
@@ -132,6 +135,17 @@ pub enum Command {
         /// Ignore the snapshot and fold the whole log again.
         #[arg(long)]
         refold: bool,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum PermissionsCommand {
+    /// Run the deciders of the machine config on a request, given as JSON on stdin as hooks get
+    /// it, or made up around a command.
+    Test {
+        /// A shell command the request asks to run.
+        #[arg(long)]
+        command: Option<String>,
     },
 }
 
