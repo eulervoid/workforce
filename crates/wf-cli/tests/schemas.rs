@@ -54,7 +54,7 @@ fn scenario() -> Scenario {
             &format!("see #{}, @joshua please check", question.short()),
         ),
     );
-    apply(&mut state, transition(done, "done"));
+    apply(&mut state, moved(done, "done"));
     apply(&mut state, archive(done));
     Scenario {
         state,

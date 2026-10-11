@@ -88,7 +88,7 @@ impl Cluster {
                     Priority::P3
                 })),
             ),
-            (3, Some(item)) => transition(item, "done"),
+            (3, Some(item)) => moved(item, "done"),
             _ => create("task", &format!("task {}", self.clock)),
         };
         self.clock += 1;

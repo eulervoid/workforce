@@ -428,7 +428,7 @@ fn link_view(state: &State, id: ItemId, ignored: bool) -> LinkView {
 pub struct SourceView {
     pub item: String,
     pub title: String,
-    /// `body`, or the id of the comment or transition note.
+    /// `body`, or the id of the comment or move note.
     pub origin: String,
 }
 
@@ -567,7 +567,7 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
     }
 }
 
-/// Text of a comment or transition note, read from the event that carries it.
+/// Text of a comment or move note, read from the event that carries it.
 fn session_label(session: &Session) -> String {
     let role = match session.role() {
         SessionRole::Work => "work",
@@ -592,7 +592,7 @@ fn step_ref(body: &Body, step: StepId) -> StepRefView {
 pub fn note_text(event: &Event) -> Option<String> {
     match &event.content.body {
         EventBody::Comment(comment) => Some(comment.body.clone()),
-        EventBody::ItemTransitioned(transition) => transition.note.clone(),
+        EventBody::ItemMoved(moved) => moved.note.clone(),
         EventBody::Report(report) => Some(report.note.clone()),
         EventBody::Review(review) => review.note.clone(),
         _ => None,
@@ -658,7 +658,7 @@ pub fn item_detail(
                     state.session(session).map(session_label),
                     step.map(|step| step_ref(&item.body(), step)),
                 ),
-                NoteKind::Comment | NoteKind::Transition | NoteKind::Review { .. } => (None, None),
+                NoteKind::Comment | NoteKind::Move | NoteKind::Review { .. } => (None, None),
             };
             NoteView {
                 id: id.to_string(),
@@ -793,9 +793,15 @@ pub fn describe(state: &State, body: &EventBody) -> String {
                 .collect();
             format!("{} {}", item(&edited.item), fields.join(", "))
         }
-        EventBody::ItemTransitioned(transition) => {
-            format!("{} -> {}", item(&transition.item), transition.to)
-        }
+        EventBody::ItemMoved(moved) => match moved.by_session {
+            Some(session) => format!(
+                "{} -> {} for session {}",
+                item(&moved.item),
+                moved.to,
+                session.short()
+            ),
+            None => format!("{} -> {}", item(&moved.item), moved.to),
+        },
         EventBody::ItemLinked(linked) => match &linked.link {
             Link::DependsOn(wf_core::crdt::SetChange::Add(target)) => {
                 format!("{} depends on {}", item(&linked.item), item(target))
@@ -1014,10 +1020,10 @@ pub fn history_entry(state: &State, event: &Event) -> EventView {
             })
             .collect();
         entry.summary = format!("edited: {}", changes.join("; "));
-    } else if let EventBody::ItemTransitioned(transition) = &event.content.body {
-        entry.summary = match &transition.note {
-            Some(note) => format!("moved to {} ({note})", transition.to),
-            None => format!("moved to {}", transition.to),
+    } else if let EventBody::ItemMoved(moved) = &event.content.body {
+        entry.summary = match &moved.note {
+            Some(note) => format!("moved to {} ({note})", moved.to),
+            None => format!("moved to {}", moved.to),
         };
     }
     entry

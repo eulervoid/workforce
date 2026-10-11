@@ -86,17 +86,17 @@ expression: "Envelope::new(&events)"
       "verified": true
     },
     {
-      "id": "qwvddcsvbzjd2tj2m3qgd3ayz57ilgnt3aodbniifr7utp3xnm4q",
+      "id": "hnqoncgsxkxapuhq2lrev4g7xyz6ispjbr6s5jgmrtenfje6oqca",
       "seq": 9,
       "device": "43a72e7144",
       "actor": "@joshua",
       "at": "1970-01-01T00:00:10Z",
-      "kind": "ItemTransitioned",
+      "kind": "ItemMoved",
       "summary": "#vujba6 -> done",
       "verified": true
     },
     {
-      "id": "ml7x4ztjvq62cv6a64lj6u7rargtblkuhfxvdlqrhjjpja6bmyha",
+      "id": "vvxph3dfbmm353kr5kfd37qhhhx4zhrtr4ckjr4mrkm7affkgixa",
       "seq": 10,
       "device": "43a72e7144",
       "actor": "@joshua",

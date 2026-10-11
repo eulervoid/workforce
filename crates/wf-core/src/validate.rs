@@ -11,7 +11,7 @@ use std::collections::VecDeque;
 use crate::body::{Body, BodyError, StepId};
 use crate::event::{
     AgentDefined, Change, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated, ItemEdited,
-    ItemLinked, ItemTransitioned, Link,
+    ItemLinked, ItemMoved, Link,
 };
 use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
@@ -505,7 +505,7 @@ impl State {
             EventBody::Review(crate::event::Review { item, .. })
             | EventBody::Merged(crate::event::Merged { item, .. }) => known_item(item),
             EventBody::ItemEdited(ItemEdited { item, .. })
-            | EventBody::ItemTransitioned(ItemTransitioned { item, .. })
+            | EventBody::ItemMoved(ItemMoved { item, .. })
             | EventBody::Comment(crate::event::Comment { item, .. })
             | EventBody::ItemArchived(crate::event::ItemRef { item })
             | EventBody::ItemUnarchived(crate::event::ItemRef { item }) => known_item(item),
@@ -662,17 +662,17 @@ impl State {
                     Ok(())
                 }
             }
-            EventBody::ItemTransitioned(transition) => {
+            EventBody::ItemMoved(moved) => {
                 let policy = &workforce.policy.value().policy;
-                let item = workforce.items.get(&transition.item);
+                let item = workforce.items.get(&moved.item);
                 let finishes = item
                     .and_then(|item| policy.type_config(item.item_type()))
-                    .and_then(|config| config.state_category_of(&transition.to))
+                    .and_then(|config| config.state_category_of(&moved.to))
                     == Some(StateCategory::Done);
                 let asked_by_session = item.is_some_and(|item| {
                     matches!(item.author(), Actor::Agent { session: asker, .. } if asker == session)
                 });
-                if finishes && transition.item == folded.item() {
+                if finishes && moved.item == folded.item() {
                     Err(PolicyViolation::SessionFinishesItsItem)
                 } else if finishes && asked_by_session {
                     Err(PolicyViolation::SessionAnswersItsOwnQuestion)
@@ -881,14 +881,14 @@ impl State {
                 }
                 Ok(())
             }
-            EventBody::ItemTransitioned(transition) => {
-                let item = item_of(&transition.item)?;
+            EventBody::ItemMoved(moved) => {
+                let item = item_of(&moved.item)?;
                 let config = type_of(item.item_type())?;
-                match config.state_category_of(&transition.to) {
+                match config.state_category_of(&moved.to) {
                     Some(_) => Ok(()),
                     None => Err(PolicyViolation::UnknownState {
                         type_name: item.item_type().clone(),
-                        state: transition.to.clone(),
+                        state: moved.to.clone(),
                     }),
                 }
             }

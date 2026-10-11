@@ -31,7 +31,7 @@ fn scenario(new_principal: bool) -> Scenario {
     let second = parent.items().nth(1).expect("two items exist").id();
     let later = [
         edit(first, Change::Title("renamed in the parent".into())),
-        transition(second, "done"),
+        moved(second, "done"),
         depends_on(first, second),
         comment(second, "a second note"),
         archive(second),

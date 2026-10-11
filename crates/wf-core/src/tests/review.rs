@@ -62,7 +62,7 @@ impl Scene {
                 commit: Some(commit),
             },
         ));
-        self.apply(transition(item, "in_review"));
+        self.apply(moved(item, "in_review"));
     }
 
     fn status(&self, item: ItemId) -> Option<ReviewStatus> {
@@ -382,7 +382,7 @@ mod inbox {
             "an agent has the first step of the review"
         );
         scene.apply(verdict(careful, commit(1), Verdict::Approve));
-        scene.apply(transition(question, "needs_human"));
+        scene.apply(moved(question, "needs_human"));
 
         let light = scene.submitted("standard");
         scene.apply(verdict(light, commit(1), Verdict::Approve));
@@ -457,7 +457,7 @@ fn an_answer_is_reviewed_and_finished_by_its_approval() {
         .id()
         .into();
     let session: SessionId = scene.apply(start_session("coder", question)).id().into();
-    scene.apply(transition(question, "needs_human"));
+    scene.apply(moved(question, "needs_human"));
     scene.apply(end_session(session, EndReason::Submitted { commit: None }));
     assert_eq!(scene.status(question), Some(awaiting_human()));
     assert!(scene.state.pending_answers().is_empty());
@@ -470,7 +470,7 @@ fn an_answer_is_reviewed_and_finished_by_its_approval() {
     assert_eq!(scene.state.pending_answers(), [question]);
     assert!(scene.state.pending_merges().is_empty());
 
-    scene.apply(transition(question, "answered"));
+    scene.apply(moved(question, "answered"));
     assert!(scene.state.pending_answers().is_empty());
 }
 
@@ -482,10 +482,10 @@ fn an_approved_answer_does_not_finish_an_item_that_was_moved_since() {
         .id()
         .into();
     let session: SessionId = scene.apply(start_session("coder", question)).id().into();
-    scene.apply(transition(question, "needs_human"));
+    scene.apply(moved(question, "needs_human"));
     scene.apply(end_session(session, EndReason::Submitted { commit: None }));
     scene.apply(verdict(question, None, Verdict::Approve));
-    scene.apply(transition(question, "open"));
-    scene.apply(transition(question, "needs_human"));
+    scene.apply(moved(question, "open"));
+    scene.apply(moved(question, "needs_human"));
     assert!(scene.state.pending_answers().is_empty());
 }

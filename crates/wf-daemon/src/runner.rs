@@ -8,9 +8,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use wf_core::event::{
-    Comment, Event, EventBody, ItemTransitioned, Merged, SessionEnded, SessionStarted,
-};
+use wf_core::event::{Comment, Event, EventBody, ItemMoved, Merged, SessionEnded, SessionStarted};
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{ItemView, Standing};
@@ -111,9 +109,19 @@ impl Runners {
 /// Whether a merge is the first try of a piece of work, or one more try of work that waited.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Attempt {
-    First,
+    /// Made as the session that did the work ends, so the item moves for that session.
+    First { session: SessionId },
     /// Waiting again is not worth another comment.
     Retry,
+}
+
+impl Attempt {
+    fn by_session(self) -> Option<SessionId> {
+        match self {
+            Attempt::First { session } => Some(session),
+            Attempt::Retry => None,
+        }
+    }
 }
 
 /// Reviewed work to merge into the target branch, and what to do with its item afterwards.
@@ -391,7 +399,8 @@ impl Daemon {
         let session = SessionId::from(started.id());
         let state = self.snapshot(loaded).await?;
         if let Some((item, to)) = state.start_move(session) {
-            self.move_item(loaded, principal, item, to, None).await?;
+            self.move_item(loaded, principal, item, to, None, Some(session))
+                .await?;
         }
 
         let transcripts = self.workforce_directory(workforce).join("transcripts");
@@ -443,11 +452,17 @@ impl Daemon {
         item: ItemId,
         to: StateName,
         note: Option<String>,
+        by_session: Option<SessionId>,
     ) -> Result<(), SessionError> {
         self.author(
             loaded,
             Actor::Human(principal),
-            EventBody::ItemTransitioned(ItemTransitioned { item, to, note }),
+            EventBody::ItemMoved(ItemMoved {
+                item,
+                to,
+                note,
+                by_session,
+            }),
         )
         .await?;
         Ok(())
@@ -518,14 +533,14 @@ impl Daemon {
             .await?;
         }
         // The item moves while the session still holds it, so that it is never ready in between.
-        let transition_note = match reason {
+        let move_note = match reason {
             EndReason::Submitted { .. } => note,
             _ => None,
         };
         let effect = match state.after_end(session, reason) {
             None | Some(AfterEnd::Nothing) => Ok(()),
             Some(AfterEnd::MoveTo(to)) => {
-                self.move_item(loaded, principal, item, to, transition_note)
+                self.move_item(loaded, principal, item, to, move_note, Some(session))
                     .await
             }
             Some(AfterEnd::MergeThen { done }) => {
@@ -542,8 +557,8 @@ impl Daemon {
                         item,
                         commit,
                         done,
-                        note: transition_note,
-                        attempt: Attempt::First,
+                        note: move_note,
+                        attempt: Attempt::First { session },
                     },
                 )
                 .await
@@ -753,7 +768,8 @@ impl Daemon {
                         wf_core::report::report(&error)
                     );
                 }
-                self.move_item(loaded, principal, item, done, note).await?;
+                self.move_item(loaded, principal, item, done, note, attempt.by_session())
+                    .await?;
             }
             MergeOutcome::Conflict { paths } => {
                 comment(format!(
@@ -762,7 +778,8 @@ impl Daemon {
                 ))
                 .await?;
                 if let Some(open) = open {
-                    self.move_item(loaded, principal, item, open, None).await?;
+                    self.move_item(loaded, principal, item, open, None, attempt.by_session())
+                        .await?;
                 }
             }
             MergeOutcome::DirtyCheckout { .. } | MergeOutcome::TargetMoved
@@ -774,14 +791,14 @@ impl Daemon {
                 ))
                 .await?;
                 if let Some(blocked) = blocked {
-                    self.move_item(loaded, principal, item, blocked, None)
+                    self.move_item(loaded, principal, item, blocked, None, attempt.by_session())
                         .await?;
                 }
             }
             MergeOutcome::TargetMoved => {
                 comment(format!("Waiting to merge: {target} kept moving.")).await?;
                 if let Some(blocked) = blocked {
-                    self.move_item(loaded, principal, item, blocked, None)
+                    self.move_item(loaded, principal, item, blocked, None, attempt.by_session())
                         .await?;
                 }
             }
@@ -1065,7 +1082,7 @@ async fn work_package(
         let Some(ItemView::Live(dependency)) = state.item(dependency) else {
             continue;
         };
-        let note = last_transition_note(loaded, dependency).await;
+        let note = last_move_note(loaded, dependency).await;
         dependencies.push(wf_harness::Dependency {
             item: HashId::short(&dependency.id()),
             title: dependency.title().to_string(),
@@ -1151,7 +1168,7 @@ async fn resumed(_daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run, state: 
         let Some(ItemView::Live(dependency)) = state.item(dependency) else {
             continue;
         };
-        if let Some(note) = last_transition_note(loaded, dependency).await {
+        if let Some(note) = last_move_note(loaded, dependency).await {
             text.push_str(&format!(
                 "\n- #{} {}: {note}",
                 HashId::short(&dependency.id()),
@@ -1188,7 +1205,7 @@ async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_ha
                 EventBody::Comment(comment) => comment.body.clone(),
                 EventBody::Report(report) => report.note.clone(),
                 EventBody::Review(review) => review.note.clone()?,
-                EventBody::ItemTransitioned(transition) => transition.note.clone()?,
+                EventBody::ItemMoved(moved) => moved.note.clone()?,
                 _ => return None,
             };
             Some(wf_harness::Earlier {
@@ -1203,11 +1220,11 @@ async fn earlier_notes(loaded: &Loaded, item: &wf_core::item::Item) -> Vec<wf_ha
         .collect()
 }
 
-async fn last_transition_note(loaded: &Loaded, item: &wf_core::item::Item) -> Option<String> {
+async fn last_move_note(loaded: &Loaded, item: &wf_core::item::Item) -> Option<String> {
     let mut notes: Vec<_> = item
         .notes()
         .iter()
-        .filter(|(_, note)| note.kind == wf_core::item::NoteKind::Transition)
+        .filter(|(_, note)| note.kind == wf_core::item::NoteKind::Move)
         .collect();
     notes.sort_by_key(|(id, note)| (note.at, **id));
     let (id, _) = notes.last()?;
@@ -1222,7 +1239,7 @@ async fn last_transition_note(loaded: &Loaded, item: &wf_core::item::Item) -> Op
         .await
         .ok()??;
     match event.content.body {
-        EventBody::ItemTransitioned(transition) => transition.note,
+        EventBody::ItemMoved(moved) => moved.note,
         _ => None,
     }
 }
@@ -1318,7 +1335,10 @@ async fn dispatch_once(
         let (Some(done), Ok(principal)) = (done, daemon.principal_of_device(&state)) else {
             continue;
         };
-        if let Err(error) = daemon.move_item(loaded, principal, item, done, None).await {
+        if let Err(error) = daemon
+            .move_item(loaded, principal, item, done, None, None)
+            .await
+        {
             eprintln!(
                 "could not finish #{}: {}",
                 item.short(),

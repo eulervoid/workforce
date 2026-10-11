@@ -5,8 +5,8 @@ use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::event::{
     AgentDefined, Change, Comment, DeviceBound, Event, EventBody, EventBuilder, ForkPoint, Genesis,
-    InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemRef, ItemTransitioned,
-    Link, PolicySet, Report, SessionEnded, SessionStarted,
+    InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemMoved, ItemRef, Link,
+    PolicySet, Report, SessionEnded, SessionStarted,
 };
 use crate::id::{ItemId, SessionId, WorkforceId};
 use crate::identity::{
@@ -247,11 +247,12 @@ pub fn create_with_body(item_type: &str, title: &str, body: &str) -> EventBody {
     EventBody::ItemCreated(created)
 }
 
-pub fn transition(item: ItemId, to: &str) -> EventBody {
-    EventBody::ItemTransitioned(ItemTransitioned {
+pub fn moved(item: ItemId, to: &str) -> EventBody {
+    EventBody::ItemMoved(ItemMoved {
         item,
         to: StateName::new(to).unwrap(),
         note: None,
+        by_session: None,
     })
 }
 

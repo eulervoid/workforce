@@ -437,7 +437,7 @@ fn items_must_exist() {
             .id(),
     );
     for body in [
-        transition(ghost, "done"),
+        moved(ghost, "done"),
         comment(ghost, "hello"),
         archive(ghost),
         EventBody::ItemUnarchived(ItemRef { item: ghost }),

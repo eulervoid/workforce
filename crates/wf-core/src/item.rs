@@ -62,8 +62,8 @@ use crate::session::{CommitId, Verdict};
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum NoteKind {
     Comment,
-    /// The note attached to a state transition.
-    Transition,
+    /// The note attached to a move.
+    Move,
     /// A report by a session of the item. The step may no longer exist in the body.
     Report {
         session: SessionId,
@@ -79,14 +79,14 @@ impl NoteKind {
     pub fn name(&self) -> &'static str {
         match self {
             NoteKind::Comment => "comment",
-            NoteKind::Transition => "transition",
+            NoteKind::Move => "move",
             NoteKind::Report { .. } => "report",
             NoteKind::Review { .. } => "review",
         }
     }
 }
 
-/// What the fold keeps of a comment or transition note. The text itself stays in the log and is
+/// What the fold keeps of a comment or move note. The text itself stays in the log and is
 /// loaded on demand by event id; the fold keeps who wrote it and the tokens found in it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Note {
@@ -153,7 +153,7 @@ pub struct Item {
     pub(crate) body: Lww<Body>,
     /// Ticks of steps. One counts only while it is newer than the body it was made against.
     pub(crate) step_marks: BTreeMap<StepId, Lww<bool>>,
-    /// `None` until the first transition: the type's initial state under the current policy.
+    /// `None` until the first move: the type's initial state under the current policy.
     pub(crate) state: Lww<Option<StateName>>,
     pub(crate) priority: Lww<Option<Priority>>,
     pub(crate) lane: Lww<Option<LaneName>>,

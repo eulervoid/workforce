@@ -327,7 +327,7 @@ fn startup_with_100k_events_and_a_snapshot_is_fast() {
             }
             (3..=5, Some(item)) => edit(item, Change::Title(format!("renamed {index}"))),
             (6..=7, Some(item)) => comment(item, "progress note @joshua"),
-            (_, Some(item)) => transition(item, "in_progress"),
+            (_, Some(item)) => moved(item, "in_progress"),
         };
         let event = fixture.author(&state, 0, now, body);
         state.receive(event.clone(), Trust::Stored).unwrap();

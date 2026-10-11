@@ -400,14 +400,14 @@ impl State {
                     }
                 }
             }
-            EventBody::ItemTransitioned(transition) => {
-                if let Some(item) = workforce.items.get_mut(&transition.item) {
+            EventBody::ItemMoved(moved) => {
+                if let Some(item) = workforce.items.get_mut(&moved.item) {
                     item.touch(content.hlc);
-                    item.state.set(Some(transition.to.clone()), stamp);
-                    if let Some(note) = &transition.note {
+                    item.state.set(Some(moved.to.clone()), stamp);
+                    if let Some(note) = &moved.note {
                         item.notes.insert(
                             id,
-                            note_from(NoteKind::Transition, &content.actor, content.hlc, note),
+                            note_from(NoteKind::Move, &content.actor, content.hlc, note),
                         );
                     }
                 }

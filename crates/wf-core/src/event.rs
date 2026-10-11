@@ -144,10 +144,12 @@ pub struct ItemEdited {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct ItemTransitioned {
+pub struct ItemMoved {
     pub item: ItemId,
     pub to: StateName,
     pub note: Option<String>,
+    /// The session whose start or end this move carries out, when the daemon makes it for one.
+    pub by_session: Option<SessionId>,
 }
 
 /// Relations that change behaviour. Informational relations are derived from text instead.
@@ -228,7 +230,7 @@ pub enum EventBody {
     ForkAnnounced(Signed<ForkAnnounced>),
     ItemCreated(ItemCreated),
     ItemEdited(ItemEdited),
-    ItemTransitioned(ItemTransitioned),
+    ItemMoved(ItemMoved),
     ItemLinked(ItemLinked),
     ItemArchived(ItemRef),
     ItemUnarchived(ItemRef),
@@ -255,7 +257,7 @@ mod tag {
     pub const FORK_ANNOUNCED: u16 = 7;
     pub const ITEM_CREATED: u16 = 10;
     pub const ITEM_EDITED: u16 = 11;
-    pub const ITEM_TRANSITIONED: u16 = 12;
+    pub const ITEM_MOVED: u16 = 12;
     pub const ITEM_LINKED: u16 = 13;
     pub const ITEM_ARCHIVED: u16 = 14;
     pub const ITEM_UNARCHIVED: u16 = 15;
@@ -287,7 +289,7 @@ impl EventBody {
             EventBody::ForkAnnounced(_) => "ForkAnnounced",
             EventBody::ItemCreated(_) => "ItemCreated",
             EventBody::ItemEdited(_) => "ItemEdited",
-            EventBody::ItemTransitioned(_) => "ItemTransitioned",
+            EventBody::ItemMoved(_) => "ItemMoved",
             EventBody::ItemLinked(_) => "ItemLinked",
             EventBody::ItemArchived(_) => "ItemArchived",
             EventBody::ItemUnarchived(_) => "ItemUnarchived",
@@ -312,7 +314,7 @@ impl EventBody {
             EventBody::ForkAnnounced(body) => (tag::FORK_ANNOUNCED, encoding::encode(body)?),
             EventBody::ItemCreated(body) => (tag::ITEM_CREATED, encoding::encode(body)?),
             EventBody::ItemEdited(body) => (tag::ITEM_EDITED, encoding::encode(body)?),
-            EventBody::ItemTransitioned(body) => (tag::ITEM_TRANSITIONED, encoding::encode(body)?),
+            EventBody::ItemMoved(body) => (tag::ITEM_MOVED, encoding::encode(body)?),
             EventBody::ItemLinked(body) => (tag::ITEM_LINKED, encoding::encode(body)?),
             EventBody::ItemArchived(body) => (tag::ITEM_ARCHIVED, encoding::encode(body)?),
             EventBody::ItemUnarchived(body) => (tag::ITEM_UNARCHIVED, encoding::encode(body)?),
@@ -339,7 +341,7 @@ impl EventBody {
             tag::FORK_ANNOUNCED => EventBody::ForkAnnounced(encoding::decode(payload)?),
             tag::ITEM_CREATED => EventBody::ItemCreated(encoding::decode(payload)?),
             tag::ITEM_EDITED => EventBody::ItemEdited(encoding::decode(payload)?),
-            tag::ITEM_TRANSITIONED => EventBody::ItemTransitioned(encoding::decode(payload)?),
+            tag::ITEM_MOVED => EventBody::ItemMoved(encoding::decode(payload)?),
             tag::ITEM_LINKED => EventBody::ItemLinked(encoding::decode(payload)?),
             tag::ITEM_ARCHIVED => EventBody::ItemArchived(encoding::decode(payload)?),
             tag::ITEM_UNARCHIVED => EventBody::ItemUnarchived(encoding::decode(payload)?),

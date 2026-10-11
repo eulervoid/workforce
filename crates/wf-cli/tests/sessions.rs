@@ -338,6 +338,19 @@ wf work submit --note \"all done\"
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
     assert!(session["commit"].is_string());
+    let moves: Vec<String> = world.wf(&["log"])["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|event| event["kind"] == "ItemMoved")
+        .map(|event| event["summary"].as_str().unwrap().to_string())
+        .collect();
+    let for_session = format!("for session {}", short(session["id"].as_str().unwrap()));
+    assert_eq!(moves.len(), 2, "{moves:?}");
+    assert!(
+        moves.iter().all(|summary| summary.ends_with(&for_session)),
+        "the start and the end move the item for the session: {moves:?}"
+    );
 
     let shown = world.item(&item);
     assert_eq!(shown["state"], "done", "{shown}");
@@ -350,7 +363,7 @@ wf work submit --note \"all done\"
     assert!(
         notes
             .iter()
-            .any(|note| note["kind"] == "transition" && note["text"] == "all done")
+            .any(|note| note["kind"] == "move" && note["text"] == "all done")
     );
     let steps: Vec<bool> = shown["body"]
         .as_array()
@@ -530,11 +543,12 @@ async fn a_session_left_live_by_an_earlier_daemon_is_failed_when_the_next_one_st
             ))
             .unwrap();
         workspace
-            .author(wf_core::event::EventBody::ItemTransitioned(
-                wf_core::event::ItemTransitioned {
+            .author(wf_core::event::EventBody::ItemMoved(
+                wf_core::event::ItemMoved {
                     item: id,
                     to: wf_core::name::StateName::new("in_progress").unwrap(),
                     note: None,
+                    by_session: None,
                 },
             ))
             .unwrap();

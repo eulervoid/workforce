@@ -6,8 +6,8 @@ use serde::Serialize;
 use wf_core::autonomy::Autonomy;
 use wf_core::crdt::SetChange;
 use wf_core::event::{
-    AgentDefined, Change, Comment, Event, EventBody, Genesis, ItemCreated, ItemLinked, ItemRef,
-    ItemTransitioned, Link, PolicySet, Report,
+    AgentDefined, Change, Comment, Event, EventBody, Genesis, ItemCreated, ItemLinked, ItemMoved,
+    ItemRef, Link, PolicySet, Report,
 };
 use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
@@ -557,10 +557,11 @@ fn item(
         ItemCommand::Move { item, state, note } => {
             let id = choose_item(workspace, mode, item, Scope::Live)?;
             let state = choose_state(workspace, mode, id, state)?;
-            let event = workspace.author(EventBody::ItemTransitioned(ItemTransitioned {
+            let event = workspace.author(EventBody::ItemMoved(ItemMoved {
                 item: id,
                 to: state.clone(),
                 note,
+                by_session: None,
             }))?;
             done(
                 json,
@@ -682,7 +683,7 @@ fn event_touches(state: &State, event: &Event, id: ItemId) -> bool {
     match &event.content.body {
         EventBody::ItemCreated(_) => ItemId::from(event.id()) == id,
         EventBody::ItemEdited(edited) => edited.item == id,
-        EventBody::ItemTransitioned(transition) => transition.item == id,
+        EventBody::ItemMoved(moved) => moved.item == id,
         EventBody::ItemLinked(linked) => linked.item == id,
         EventBody::ItemArchived(reference) | EventBody::ItemUnarchived(reference) => {
             reference.item == id
@@ -929,10 +930,11 @@ fn review(
                 .cloned()
         };
         if let Some(open) = open {
-            workspace.author(EventBody::ItemTransitioned(ItemTransitioned {
+            workspace.author(EventBody::ItemMoved(ItemMoved {
                 item,
                 to: open,
                 note: None,
+                by_session: None,
             }))?;
         }
     }

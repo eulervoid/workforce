@@ -61,7 +61,7 @@ fn a_task_waits_for_the_question_it_depends_on() {
     assert_eq!(blockers[0].state_category, Some(StateCategory::Open));
     assert_eq!(graph.dependents(question).collect::<Vec<_>>(), vec![task]);
 
-    fixture.apply(&mut state, 0, 2_003, transition(question, "answered"));
+    fixture.apply(&mut state, 0, 2_003, moved(question, "answered"));
     assert_eq!(ready_ids(&state), vec![task]);
 }
 
@@ -79,12 +79,7 @@ fn only_open_items_are_ready() {
         ("dropped", StateCategory::Cancelled, false),
     ];
     for (offset, (target, expected_state_category, ready)) in expectations.into_iter().enumerate() {
-        fixture.apply(
-            &mut state,
-            0,
-            3_000 + offset as u64,
-            transition(task, target),
-        );
+        fixture.apply(&mut state, 0, 3_000 + offset as u64, moved(task, target));
         assert_eq!(
             state_category(&state, task),
             Some(expected_state_category),
@@ -111,7 +106,7 @@ fn done_satisfies_dependents_but_cancelled_strands_them() {
     fixture.apply(&mut state, 0, 2_002, depends_on(whole, part));
     assert_eq!(readiness(&state, whole), Some(Readiness::Blocked));
 
-    fixture.apply(&mut state, 0, 2_003, transition(part, "dropped"));
+    fixture.apply(&mut state, 0, 2_003, moved(part, "dropped"));
     let graph = state.dependency_graph();
     let blockers = state.blockers(&graph, whole);
     assert_eq!(blockers.len(), 1);
@@ -120,7 +115,7 @@ fn done_satisfies_dependents_but_cancelled_strands_them() {
     assert_eq!(readiness(&state, whole), Some(Readiness::Stranded));
     assert_eq!(readiness(&state, part), None);
 
-    fixture.apply(&mut state, 0, 2_004, transition(part, "done"));
+    fixture.apply(&mut state, 0, 2_004, moved(part, "done"));
     assert!(ready_ids(&state).contains(&whole));
     assert_eq!(readiness(&state, whole), Some(Readiness::Ready));
 }
@@ -132,7 +127,7 @@ fn archiving_leaves_a_stub_and_keeps_dependencies_resolving() {
     let part = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "part")));
     let whole = item_id(&fixture.apply(&mut state, 0, 2_001, create("task", "whole")));
     fixture.apply(&mut state, 0, 2_002, depends_on(whole, part));
-    fixture.apply(&mut state, 0, 2_003, transition(part, "done"));
+    fixture.apply(&mut state, 0, 2_003, moved(part, "done"));
     fixture.apply(&mut state, 0, 2_004, archive(part));
 
     let ItemView::Archived(stub) = state.item(part).unwrap() else {
@@ -165,7 +160,7 @@ fn archive_rules_are_checked_by_the_author() {
         state.check_policy(&unarchive(task)),
         Err(PolicyViolation::NotArchived(task))
     );
-    fixture.apply(&mut state, 0, 2_001, transition(task, "dropped"));
+    fixture.apply(&mut state, 0, 2_001, moved(task, "dropped"));
     assert_eq!(state.check_policy(&archive(task)), Ok(()));
     fixture.apply(&mut state, 0, 2_002, archive(task));
     assert_eq!(
@@ -180,7 +175,7 @@ fn superseding_moves_the_target_decision_to_superseded() {
     let mut state = fixture.state();
     let old = item_id(&fixture.apply(&mut state, 0, 2_000, create("decision", "use sha1")));
     let new = item_id(&fixture.apply(&mut state, 0, 2_001, create("decision", "use blake3")));
-    fixture.apply(&mut state, 0, 2_002, transition(old, "ratified"));
+    fixture.apply(&mut state, 0, 2_002, moved(old, "ratified"));
     assert_eq!(state.check_policy(&supersedes(new, old)), Ok(()));
     fixture.apply(&mut state, 0, 2_003, supersedes(new, old));
     let policy = &state.policy().unwrap().policy;
@@ -225,7 +220,7 @@ fn removed_states_are_flagged_not_lost() {
         fixture.policy_set(&fixture.founder, &custom),
     );
     let bug = item_id(&fixture.apply(&mut state, 0, 2_001, create("bug", "crash")));
-    fixture.apply(&mut state, 0, 2_002, transition(bug, "triaged"));
+    fixture.apply(&mut state, 0, 2_002, moved(bug, "triaged"));
     assert_eq!(state_category(&state, bug), Some(StateCategory::Open));
 
     let shrunk = custom.replace(r#"{ name = "triaged", category = "open" }, "#, "");
@@ -260,7 +255,7 @@ fn author_checks_follow_the_policy() {
         Err(PolicyViolation::UnknownType(_))
     ));
     assert!(matches!(
-        state.check_policy(&transition(task, "answered")),
+        state.check_policy(&moved(task, "answered")),
         Err(PolicyViolation::UnknownState { .. })
     ));
     assert!(matches!(

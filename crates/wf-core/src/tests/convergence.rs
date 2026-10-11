@@ -162,7 +162,7 @@ impl Simulation {
                 } else {
                     own_states[usize::from(second) % own_states.len()].clone()
                 };
-                self.submit(device, transition(item, &state));
+                self.submit(device, moved(item, &state));
             }
             (10, Some(item)) => {
                 if let Some(target) = other {
@@ -437,7 +437,7 @@ fn the_generator_exercises_real_histories() {
     let transitions = simulation
         .authored
         .iter()
-        .filter(|event| matches!(event.content.body, EventBody::ItemTransitioned(_)))
+        .filter(|event| matches!(event.content.body, EventBody::ItemMoved(_)))
         .count();
     assert!(transitions > 30);
     let archived = state

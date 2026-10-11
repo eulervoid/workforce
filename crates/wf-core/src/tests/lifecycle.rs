@@ -75,7 +75,7 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     let after = |scene: &Scene, session, reason| scene.state.after_end(session, reason).unwrap();
 
     let session = scene.start(task);
-    scene.apply(transition(task, "in_progress"));
+    scene.apply(moved(task, "in_progress"));
     assert_eq!(
         after(&scene, session, submitted),
         AfterEnd::MergeThen {
@@ -114,7 +114,7 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
         EndReason::Failed,
         EndReason::Cancelled,
     ] {
-        scene.apply(transition(task, "in_progress"));
+        scene.apply(moved(task, "in_progress"));
         assert_eq!(
             after(&scene, blocked, reason),
             AfterEnd::MoveTo(state_name("open")),
@@ -132,7 +132,7 @@ fn an_item_that_is_not_being_worked_on_stays_where_it_is() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.apply(transition(task, "done"));
+    scene.apply(moved(task, "done"));
     assert_eq!(
         scene.state.after_end(session, EndReason::Failed),
         Some(AfterEnd::Nothing),
@@ -144,7 +144,7 @@ fn an_item_that_is_not_being_worked_on_stays_where_it_is() {
 fn an_item_another_session_holds_is_not_reopened() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
-    scene.apply(transition(task, "in_progress"));
+    scene.apply(moved(task, "in_progress"));
     let _first = scene.start(task);
     let second = scene.start(task);
     assert_eq!(
@@ -159,7 +159,7 @@ fn a_turn_continues_until_the_nudges_are_used_up() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.apply(transition(task, "in_progress"));
+    scene.apply(moved(task, "in_progress"));
     let outcome = |scene: &Scene, used| scene.state.turn_outcome(session, used, 3);
     assert_eq!(outcome(&scene, 0), TurnOutcome::Continue);
     assert_eq!(outcome(&scene, 3), TurnOutcome::Continue);
@@ -171,10 +171,10 @@ fn a_turn_closes_when_the_session_ended_or_the_item_is_blocked() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.apply(transition(task, "in_review"));
+    scene.apply(moved(task, "in_review"));
     assert_eq!(scene.state.turn_outcome(session, 0, 3), TurnOutcome::Close);
 
-    scene.apply(transition(task, "in_progress"));
+    scene.apply(moved(task, "in_progress"));
     assert_eq!(
         scene.state.turn_outcome(session, 0, 3),
         TurnOutcome::Continue
@@ -188,12 +188,12 @@ fn a_turn_parks_while_the_item_waits_on_a_dependency() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.apply(transition(task, "in_progress"));
+    scene.apply(moved(task, "in_progress"));
     let question = scene.item(create("question", "which database?"));
     scene.apply(depends_on(task, question));
     assert_eq!(scene.state.turn_outcome(session, 0, 3), TurnOutcome::Park);
 
-    scene.apply(transition(question, "answered"));
+    scene.apply(moved(question, "answered"));
     assert_eq!(
         scene.state.turn_outcome(session, 0, 3),
         TurnOutcome::Continue

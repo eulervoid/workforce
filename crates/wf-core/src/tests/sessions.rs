@@ -238,15 +238,15 @@ mod actors {
         let (fixture, mut state, task, session) = working();
         let other = item_id(&fixture.apply(&mut state, 0, 3_002, create("task", "other")));
         assert_eq!(
-            check(&fixture, &state, 0, session, &transition(task, "done")),
+            check(&fixture, &state, 0, session, &moved(task, "done")),
             Err(PolicyViolation::SessionFinishesItsItem)
         );
         assert_eq!(
-            check(&fixture, &state, 0, session, &transition(task, "in_review")),
+            check(&fixture, &state, 0, session, &moved(task, "in_review")),
             Ok(())
         );
         assert_eq!(
-            check(&fixture, &state, 0, session, &transition(other, "done")),
+            check(&fixture, &state, 0, session, &moved(other, "done")),
             Ok(())
         );
     }
@@ -260,21 +260,15 @@ mod actors {
         let asked = item_id(&asked);
         let other = item_id(&fixture.apply(&mut state, 0, 3_003, create("question", "not mine")));
         assert_eq!(
-            check(&fixture, &state, 0, session, &transition(asked, "answered")),
+            check(&fixture, &state, 0, session, &moved(asked, "answered")),
             Err(PolicyViolation::SessionAnswersItsOwnQuestion)
         );
         assert_eq!(
-            check(
-                &fixture,
-                &state,
-                0,
-                session,
-                &transition(asked, "needs_human")
-            ),
+            check(&fixture, &state, 0, session, &moved(asked, "needs_human")),
             Ok(())
         );
         assert_eq!(
-            check(&fixture, &state, 0, session, &transition(other, "answered")),
+            check(&fixture, &state, 0, session, &moved(other, "answered")),
             Ok(())
         );
     }
