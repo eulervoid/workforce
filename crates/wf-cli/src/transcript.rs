@@ -215,6 +215,7 @@ impl Renderer {
             }
         }
         let (block, body) = match entry.direction {
+            Direction::AgentLog if !self.full => (Block::Nothing, String::new()),
             Direction::AgentLog => (
                 Block::Other,
                 self.header("log", message.as_str().unwrap_or(""), DIM),
@@ -223,6 +224,14 @@ impl Renderer {
                 Some("session/prompt") => (Block::Other, self.prompt(message)),
                 _ => (Block::Nothing, String::new()),
             },
+            // An allow nobody weighed goes without saying; the request above says what was asked.
+            Direction::Wf
+                if !self.full
+                    && message["decision"]["permission"] == "allow"
+                    && message["decision"]["reason"].is_null() =>
+            {
+                (Block::Nothing, String::new())
+            }
             Direction::Wf => (Block::Other, self.decision(&message["decision"])),
             Direction::FromAgent => match method {
                 Some("session/update") => self.update(&message["params"]["update"]),
@@ -670,6 +679,36 @@ mod tests {
             "{output}"
         );
         assert!(output.contains("  │ second"));
+    }
+
+    #[test]
+    fn harness_logs_and_unweighed_allows_show_only_with_full() {
+        let entry = |direction, message| TranscriptEntry {
+            at: jiff::Timestamp::UNIX_EPOCH,
+            direction,
+            message,
+        };
+        let log = entry(Direction::AgentLog, serde_json::json!("[session/create] x"));
+        let allow = entry(
+            Direction::Wf,
+            serde_json::json!({"decision": {"permission": "allow", "by": "the agent's permissions"}}),
+        );
+        let weighed = entry(
+            Direction::Wf,
+            serde_json::json!({"decision": {"permission": "allow", "by": "rules", "reason": "safe"}}),
+        );
+        let denied = entry(
+            Direction::Wf,
+            serde_json::json!({"decision": {"permission": "deny", "by": "rules"}}),
+        );
+        let mut quiet = Renderer::new(false, false);
+        assert_eq!(quiet.render(&log), "");
+        assert_eq!(quiet.render(&allow), "");
+        assert!(plain(&quiet.render(&weighed)).contains("allowed by rules: safe"));
+        assert!(plain(&quiet.render(&denied)).contains("denied by rules"));
+        let mut full = Renderer::new(false, true);
+        assert!(plain(&full.render(&log)).contains("[session/create] x"));
+        assert!(plain(&full.render(&allow)).contains("allowed by the agent's permissions"));
     }
 
     #[test]
