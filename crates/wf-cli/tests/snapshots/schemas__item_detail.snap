@@ -1,5 +1,6 @@
 ---
 source: crates/wf-cli/tests/schemas.rs
+assertion_line: 88
 expression: "Envelope::new(&detail)"
 ---
 {
@@ -67,7 +68,9 @@ expression: "Envelope::new(&detail)"
         "kind": "comment",
         "by": "@joshua",
         "at": "1970-01-01T00:00:09Z",
-        "text": "see #e6sqjl, @joshua please check"
+        "text": "see #e6sqjl, @joshua please check",
+        "session": null,
+        "step": null
       }
     ],
     "flags": []

@@ -7,9 +7,9 @@ use wf_core::autonomy::Autonomy;
 use wf_core::crdt::SetChange;
 use wf_core::event::{
     AgentDefined, Change, Comment, Event, EventBody, Genesis, ItemCreated, ItemLinked, ItemRef,
-    ItemTransitioned, Link, PolicySet,
+    ItemTransitioned, Link, PolicySet, Report,
 };
-use wf_core::id::{HashId, ItemId};
+use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
 use wf_core::item::{ItemView, Priority};
 use wf_core::name::{AgentName, Handle, HarnessName, LaneName, StateName};
@@ -106,6 +106,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 | Command::Daemon(_)
                 | Command::Session(_)
                 | Command::Status { .. } => unreachable!("handled above"),
+                Command::Work(command) => work(json, command, &mut workspace),
                 Command::Agent(command) => agent(json, command, &mut workspace),
                 Command::Item(command) => item(json, mode, command, &mut workspace),
                 Command::Comment(args) => comment(json, mode, &mut workspace, args),
@@ -652,6 +653,9 @@ fn event_touches(state: &State, event: &Event, id: ItemId) -> bool {
             .is_some_and(|session| session.item() == id),
         EventBody::Review(review) => review.item == id,
         EventBody::Merged(merged) => merged.item == id,
+        EventBody::Report(report) => state
+            .session(report.session)
+            .is_some_and(|session| session.item() == id),
         EventBody::Genesis(_)
         | EventBody::PolicySet(_)
         | EventBody::AgentDefined(_)
@@ -797,6 +801,68 @@ fn check(json: bool, workspace: &mut Workspace, args: ItemCheckArgs) -> anyhow::
         changes,
     }))?;
     done(json, message, &event, Some(id))
+}
+
+fn work(json: bool, command: WorkCommand, workspace: &mut Workspace) -> anyhow::Result<()> {
+    let session = workspace.session().ok_or_else(|| {
+        anyhow!(
+            "`wf work` is for agents inside a session; {} is not set",
+            workspace::SESSION_VARIABLE
+        )
+    })?;
+    match command {
+        WorkCommand::Report(args) => report(json, workspace, session, args),
+    }
+}
+
+fn report(
+    json: bool,
+    workspace: &mut Workspace,
+    session: SessionId,
+    args: WorkReportArgs,
+) -> anyhow::Result<()> {
+    let item = workspace
+        .state()
+        .session(session)
+        .expect("the session was resolved when the workspace was opened")
+        .item();
+    let step = match args.step {
+        None => None,
+        Some(number) => {
+            let ItemView::Live(live) = workspace.state().item(item).expect("sessions have items")
+            else {
+                bail!("#{} is archived", item.short());
+            };
+            let body = live.body();
+            let steps: Vec<_> = body.steps().collect();
+            match steps.get(number.get() - 1) {
+                Some(step) => Some(step.id),
+                None if steps.is_empty() => bail!("#{} has no steps", item.short()),
+                None => bail!(
+                    "#{} has {} steps, there is no step {number}",
+                    item.short(),
+                    steps.len()
+                ),
+            }
+        }
+    };
+    let event = workspace.author(EventBody::Report(Report {
+        session,
+        note: args.text,
+        step,
+    }))?;
+    if let (Some(step), true) = (step, args.done) {
+        workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {
+            item,
+            changes: vec![Change::StepDone { step, done: true }],
+        }))?;
+    }
+    let message = match (args.step, args.done) {
+        (Some(number), true) => format!("reported on #{} and checked step {number}", item.short()),
+        (Some(number), false) => format!("reported on step {number} of #{}", item.short()),
+        (None, _) => format!("reported on #{}", item.short()),
+    };
+    done(json, message, &event, Some(item))
 }
 
 fn link(

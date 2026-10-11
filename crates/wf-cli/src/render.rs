@@ -9,6 +9,7 @@ use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
 use crate::view::{
     AgentView, BodyPartView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, StatusView,
+    StepRefView,
 };
 use wf_core::graph::Readiness;
 use wf_core::policy::StateCategory;
@@ -372,16 +373,37 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     if !detail.notes.is_empty() {
         let _ = writeln!(out, "\n{}", paint(BOLD, "discussion"));
         for note in &detail.notes {
+            let kind = match &note.session {
+                Some(session) => format!("({}: {session})", note.kind),
+                None => format!("({})", note.kind),
+            };
             let _ = writeln!(
                 out,
                 "  {} {} {}: {}",
                 paint(DIM, short_time(&note.at)),
                 paint(PERSON, &note.by),
-                paint(DIM, format!("({})", note.kind)),
+                paint(DIM, kind),
                 note.text
                     .as_deref()
                     .unwrap_or("[text not in the local log]")
             );
+            match &note.step {
+                Some(StepRefView {
+                    number: Some(number),
+                    text: Some(text),
+                }) => {
+                    let first_line = text.lines().next().unwrap_or_default();
+                    let _ = writeln!(
+                        out,
+                        "    {}",
+                        paint(DIM, format!("↳ step {number}: {first_line}"))
+                    );
+                }
+                Some(StepRefView { .. }) => {
+                    let _ = writeln!(out, "    {}", paint(DIM, "↳ a step since edited"));
+                }
+                None => {}
+            }
         }
     }
     out

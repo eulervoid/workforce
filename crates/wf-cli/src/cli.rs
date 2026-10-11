@@ -47,6 +47,9 @@ pub enum Command {
     /// Run an agent harness on a prompt and follow its transcript.
     #[command(subcommand)]
     Session(SessionCommand),
+    /// Commands for agents, run inside a session.
+    #[command(subcommand)]
+    Work(WorkCommand),
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
     /// Run the background process of this machine: it serves sync and join to your other
@@ -76,6 +79,24 @@ pub enum Command {
         #[arg(long)]
         refold: bool,
     },
+}
+
+#[derive(Subcommand)]
+pub enum WorkCommand {
+    /// Say what you did or decided, and why. Others read it under the item.
+    Report(WorkReportArgs),
+}
+
+#[derive(Args)]
+pub struct WorkReportArgs {
+    /// What was chosen, what was rejected and why. It should make sense on its own.
+    pub text: String,
+    /// The step the report is about, numbered as `wf item show` prints them.
+    #[arg(long, value_name = "NUMBER")]
+    pub step: Option<NonZeroUsize>,
+    /// The report concludes the step, so it is checked off too.
+    #[arg(long, requires = "step")]
+    pub done: bool,
 }
 
 #[derive(Subcommand)]

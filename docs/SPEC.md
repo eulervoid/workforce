@@ -802,8 +802,8 @@ struct Report {
 }
 ```
 
-* Reports are written with `wf work report "<text>" [--step <id> [--done]]`, only inside a session.
-  `--done` requires `--step` and also writes `StepDone` for it. Work sessions only: a review session
+* Reports are written with `wf work report "<text>" [--step <number> [--done]]`, only inside a session.
+  `--step` takes the number `wf item show` prints for the step, and is stored as the step's id. `--done` requires `--step` and also writes `StepDone` for it. Work sessions only: a review session
   reports without `--step`, since a reviewer does not tick the author's steps.
 * The step link is plain data and is not checked when read. `--step` is checked against the item's body
   when the report is written, so a mistyped id writes nothing. If the step's text is edited later, the report
@@ -1027,7 +1027,7 @@ wf fork | fork accept | fork list
 wf policy edit|diff|apply|export
 wf item add|list|show|edit|move|link|archive|diff   # all types: task, question, decision, ...
 wf comment <item> <text>
-wf work report "<text>" [--step <id> [--done]]
+wf work report "<text>" [--step <number> [--done]]
 wf activity | inbox
 wf review <item> --approve|--request-changes|--escalate
 wf search <query>

@@ -1001,3 +1001,134 @@ fn steps_are_checked_and_unchecked_by_number() {
         .contains("appears twice")
     );
 }
+
+mod work {
+    use super::*;
+    use wf_cli::keys::DataDir;
+    use wf_cli::workspace::Workspace;
+    use wf_core::event::{EventBody, SessionStarted};
+    use wf_core::name::AgentName;
+    use wf_core::session::SessionRole;
+
+    /// Starts a session of `coder` on the task the way the daemon will, and returns its id.
+    fn start_session(wf: &Sandbox, task: &str) -> String {
+        let mut workspace = Workspace::open(
+            DataDir::new(wf.data.join("workforce")),
+            &wf.repository,
+            false,
+        )
+        .unwrap();
+        let item = workspace.resolve_item(task).unwrap();
+        let started = workspace
+            .author(EventBody::SessionStarted(SessionStarted {
+                agent: AgentName::new("coder").unwrap(),
+                item,
+                role: SessionRole::Work,
+            }))
+            .unwrap();
+        wf_core::id::SessionId::from(started.id()).to_string()
+    }
+
+    fn as_session(wf: &Sandbox, session: &str, args: &[&str]) -> std::process::Output {
+        wf.command(args)
+            .env("WF_SESSION", session)
+            .output()
+            .unwrap()
+    }
+
+    #[test]
+    fn an_agent_reports_on_its_item_and_on_its_steps() {
+        let wf = Sandbox::new();
+        wf.run(&["init", "--name", "demo", "--no-agents"]);
+        wf.run(&["agent", "add", "coder", "--harness", "opencode"]);
+        let task = wf.add(&[
+            "--title",
+            "Build it",
+            "--body",
+            "- [ ] pick storage\n- [ ] write it",
+        ]);
+        let session = start_session(&wf, short(&task));
+
+        let outside = wf.fail(&["work", "report", "no session"]);
+        assert!(outside.contains("WF_SESSION"), "{outside}");
+
+        let output = as_session(&wf, &session, &["work", "report", "halfway there"]);
+        assert!(output.status.success());
+        let output = as_session(
+            &wf,
+            &session,
+            &[
+                "work",
+                "report",
+                "chose redb over sqlite",
+                "--step",
+                "1",
+                "--done",
+            ],
+        );
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+
+        let shown = wf.json(&["item", "show", short(&task)]);
+        let steps: Vec<bool> = shown["body"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|part| part["kind"] == "step")
+            .map(|part| part["done"].as_bool().unwrap())
+            .collect();
+        assert_eq!(steps, [true, false]);
+        let reports: Vec<&Value> = shown["notes"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|note| note["kind"] == "report")
+            .collect();
+        assert_eq!(reports.len(), 2);
+        let on_step = reports
+            .iter()
+            .find(|note| note["step"].is_object())
+            .expect("a report on a step");
+        assert_eq!(on_step["text"], "chose redb over sqlite");
+        assert_eq!(on_step["step"]["number"], 1);
+        assert!(
+            on_step["session"]
+                .as_str()
+                .unwrap()
+                .starts_with("coder work")
+        );
+
+        let text = wf.run(&["item", "show", short(&task)]);
+        assert!(text.contains("↳ step 1: pick storage"), "{text}");
+
+        wf.run(&[
+            "item",
+            "edit",
+            short(&task),
+            "--body",
+            "- [ ] pick a database",
+        ]);
+        let text = wf.run(&["item", "show", short(&task)]);
+        assert!(text.contains("chose redb over sqlite"), "{text}");
+        assert!(text.contains("a step since edited"), "{text}");
+    }
+
+    #[test]
+    fn a_report_names_a_step_that_exists() {
+        let wf = Sandbox::new();
+        wf.run(&["init", "--name", "demo", "--no-agents"]);
+        wf.run(&["agent", "add", "coder", "--harness", "opencode"]);
+        let task = wf.add(&["--title", "Build it", "--body", "- [ ] only step"]);
+        let session = start_session(&wf, short(&task));
+        let output = as_session(&wf, &session, &["work", "report", "x", "--step", "2"]);
+        assert!(!output.status.success());
+        assert!(
+            String::from_utf8_lossy(&output.stderr).contains("has 1 steps, there is no step 2")
+        );
+        let output = as_session(&wf, &session, &["work", "report", "x", "--done"]);
+        assert!(!output.status.success(), "--done needs --step");
+    }
+}

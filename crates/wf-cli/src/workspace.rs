@@ -154,6 +154,14 @@ impl Workspace {
         (replicated, self.device, self.workforce)
     }
 
+    /// The session this process works in, when `WF_SESSION` names one.
+    pub fn session(&self) -> Option<SessionId> {
+        match &self.actor {
+            Actor::Agent { session, .. } => Some(*session),
+            Actor::Human(_) => None,
+        }
+    }
+
     pub fn device_key(&self) -> wf_core::identity::DeviceKey {
         self.device.key()
     }

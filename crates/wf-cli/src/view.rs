@@ -5,15 +5,16 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use serde::Serialize;
-use wf_core::body::{Body, BodyPart};
+use wf_core::body::{Body, BodyPart, StepId};
 use wf_core::event::{Change, Event, EventBody, Link};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::hlc::Hlc;
 use wf_core::id::{EventId, HashId, ItemId};
 use wf_core::identity::Actor;
-use wf_core::item::{Item, ItemView, Origin, Standing};
+use wf_core::item::{Item, ItemView, NoteKind, Origin, Standing};
 use wf_core::policy::{Field, StateCategory};
 use wf_core::resolve::MentionTarget;
+use wf_core::session::{Session, SessionRole};
 use wf_core::state::State;
 
 use crate::cli::ItemGrouping;
@@ -429,6 +430,17 @@ pub struct NoteView {
     pub by: String,
     pub at: String,
     pub text: Option<String>,
+    /// Reports only: the session that wrote it, such as `coder work 7c2k`.
+    pub session: Option<String>,
+    /// Reports only: the step it is about.
+    pub step: Option<StepRefView>,
+}
+
+#[derive(Serialize)]
+pub struct StepRefView {
+    /// `None` when the step was edited since: the report then points at nothing.
+    pub number: Option<usize>,
+    pub text: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -485,10 +497,32 @@ pub struct ItemDetail {
 }
 
 /// Text of a comment or transition note, read from the event that carries it.
+fn session_label(session: &Session) -> String {
+    let role = match session.role() {
+        SessionRole::Work => "work",
+        SessionRole::Review { .. } => "review",
+    };
+    format!("{} {role} {}", session.agent().name, session.id().short())
+}
+
+fn step_ref(body: &Body, step: StepId) -> StepRefView {
+    match body.step(step) {
+        Some(found) => StepRefView {
+            number: Some(found.number),
+            text: Some(found.text.to_string()),
+        },
+        None => StepRefView {
+            number: None,
+            text: None,
+        },
+    }
+}
+
 pub fn note_text(event: &Event) -> Option<String> {
     match &event.content.body {
         EventBody::Comment(comment) => Some(comment.body.clone()),
         EventBody::ItemTransitioned(transition) => transition.note.clone(),
+        EventBody::Report(report) => Some(report.note.clone()),
         _ => None,
     }
 }
@@ -546,12 +580,23 @@ pub fn item_detail(
     let notes = item
         .notes()
         .iter()
-        .map(|(id, note)| NoteView {
-            id: id.to_string(),
-            kind: format!("{:?}", note.kind).to_lowercase(),
-            by: actor_label(state, &note.by),
-            at: timestamp(note.at),
-            text: load_event(id).as_ref().and_then(note_text),
+        .map(|(id, note)| {
+            let (session, step) = match note.kind {
+                NoteKind::Report { session, step } => (
+                    state.session(session).map(session_label),
+                    step.map(|step| step_ref(&item.body(), step)),
+                ),
+                NoteKind::Comment | NoteKind::Transition => (None, None),
+            };
+            NoteView {
+                id: id.to_string(),
+                kind: note.kind.name().to_string(),
+                by: actor_label(state, &note.by),
+                at: timestamp(note.at),
+                text: load_event(id).as_ref().and_then(note_text),
+                session,
+                step,
+            }
         })
         .collect::<Vec<_>>();
     let mut notes = notes;
@@ -707,6 +752,10 @@ pub fn describe(state: &State, body: &EventBody) -> String {
             format!("{} reviewed: {:?}", item(&review.item), review.verdict)
         }
         EventBody::Merged(merged) => format!("{} merged as {}", item(&merged.item), merged.commit),
+        EventBody::Report(report) => match state.session(report.session) {
+            Some(session) => format!("{} reported", item(&session.item())),
+            None => format!("session {} reported", report.session.short()),
+        },
         EventBody::Unknown { tag, .. } => {
             let _ = state;
             format!("unknown body {tag}")
