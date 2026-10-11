@@ -58,34 +58,8 @@ pub(super) async fn ask(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::decide::{AgentContext, ItemContext};
-    use wf_harness::{PermissionMode, PermissionRequest};
-
-    fn request() -> DeciderRequest {
-        DeciderRequest {
-            hook: "permission".into(),
-            version: 1,
-            workforce: "w".into(),
-            item: ItemContext {
-                id: "k3f7".into(),
-                title: "t".into(),
-                item_type: "task".into(),
-                state: "in_progress".into(),
-            },
-            session: "s".into(),
-            agent: AgentContext {
-                name: "coder".into(),
-                capabilities: vec![],
-            },
-            directory: std::env::temp_dir(),
-            tool: PermissionRequest {
-                kind: Some("execute".into()),
-                title: "cargo test".into(),
-                input: Some(serde_json::json!({"command": "cargo test"})),
-            },
-            guidance: None,
-        }
-    }
+    use crate::decide::tests::request;
+    use wf_harness::PermissionMode;
 
     fn sh(script: &str) -> Vec<String> {
         vec!["sh".into(), "-c".into(), script.into()]

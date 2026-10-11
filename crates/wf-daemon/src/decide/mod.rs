@@ -1,6 +1,7 @@
 //! The chain of deciders a permission request passes through before a person is asked.
 
 mod hook;
+mod model;
 pub mod rules;
 
 use std::path::PathBuf;
@@ -101,7 +102,24 @@ async fn ask(decider: &DeciderConfig, request: &DeciderRequest) -> Outcome {
             },
         },
         DeciderConfig::Hook { command, timeout } => hook::ask(command, *timeout, request).await,
-        DeciderConfig::Model { .. } | DeciderConfig::Agent { .. } => Outcome::Passed {
+        DeciderConfig::Model {
+            url,
+            model,
+            api_key_env,
+            question,
+            timeout,
+        } => {
+            model::ModelDecider {
+                url,
+                model,
+                api_key_env,
+                question: *question,
+                timeout: *timeout,
+            }
+            .ask(request)
+            .await
+        }
+        DeciderConfig::Agent { .. } => Outcome::Passed {
             why: "this kind of decider is not built yet".to_string(),
         },
     }
@@ -213,8 +231,34 @@ impl Permissions for Deciding {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+
+    pub(crate) fn request() -> DeciderRequest {
+        DeciderRequest {
+            hook: "permission".into(),
+            version: 1,
+            workforce: "w".into(),
+            item: ItemContext {
+                id: "k3f7".into(),
+                title: "t".into(),
+                item_type: "task".into(),
+                state: "in_progress".into(),
+            },
+            session: "s".into(),
+            agent: AgentContext {
+                name: "coder".into(),
+                capabilities: vec![],
+            },
+            directory: std::env::temp_dir(),
+            tool: PermissionRequest {
+                kind: Some("execute".into()),
+                title: "cargo test".into(),
+                input: Some(serde_json::json!({"command": "cargo test"})),
+            },
+            guidance: None,
+        }
+    }
 
     #[test]
     fn answers_are_json() {

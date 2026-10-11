@@ -3371,6 +3371,8 @@ dependencies = [
  "rustls",
  "rustls-pki-types",
  "rustls-platform-verifier",
+ "serde",
+ "serde_json",
  "sync_wrapper",
  "tokio",
  "tokio-rustls",
@@ -4736,6 +4738,8 @@ name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
  "humantime",
+ "reqwest",
+ "rustls",
  "serde",
  "serde_json",
  "tempfile",
