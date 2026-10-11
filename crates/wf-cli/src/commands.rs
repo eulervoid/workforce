@@ -548,9 +548,9 @@ fn item(
                 }
             }
         }
-        ItemCommand::Show { item, history } => {
+        ItemCommand::Show { item } => {
             let id = choose_item(workspace, mode, item, Scope::Any)?;
-            show(json, mode, workspace, id, history)
+            show(json, mode, workspace, id)
         }
         ItemCommand::Edit(args) => edit(json, mode, workspace, args),
         ItemCommand::Check(args) => check(json, workspace, args),
@@ -605,21 +605,11 @@ struct ArchivedShown {
 #[derive(Serialize)]
 #[serde(untagged)]
 enum Shown {
-    Live {
-        #[serde(flatten)]
-        detail: Box<view::ItemDetail>,
-        history: Option<Vec<view::EventView>>,
-    },
+    Live(Box<view::ItemDetail>),
     Archived(Box<ArchivedShown>),
 }
 
-fn show(
-    json: bool,
-    mode: Mode,
-    workspace: &Workspace,
-    id: ItemId,
-    history: bool,
-) -> anyhow::Result<()> {
+fn show(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Result<()> {
     let state = workspace.state();
     match state.item(id).expect("resolved ids exist") {
         ItemView::Archived(stub) => {
@@ -636,74 +626,17 @@ fn show(
                     archived.archived_at,
                     archived.note
                 ),
-                Shown::Live { .. } => unreachable!(),
+                Shown::Live(_) => unreachable!(),
             })
         }
         ItemView::Live(item) => {
-            let detail = view::item_detail(state, item, |event_id| {
-                workspace.event(event_id).ok().flatten()
-            });
-            let history = if history {
-                let mut entries = Vec::new();
-                let mut events = workspace.events()?;
-                events.sort_by_key(|event| (event.content.hlc, event.id()));
-                for event in events {
-                    if event_touches(state, &event, id) {
-                        entries.push(view::history_entry(state, &event));
-                    }
-                }
-                Some(entries)
-            } else {
-                None
-            };
-            let shown = Shown::Live {
-                detail: Box::new(detail),
-                history,
-            };
+            let events = workspace.events()?;
+            let shown = Shown::Live(Box::new(view::item_detail(state, item, &events)));
             emit_paged(json, mode, &shown, |shown| match shown {
-                Shown::Live { detail, history } => {
-                    let mut out = render::item_detail(detail);
-                    if let Some(history) = history {
-                        out.push_str("\nhistory:\n");
-                        for entry in history {
-                            out.push_str(&format!(
-                                "  {} {} {}\n",
-                                entry.at, entry.actor, entry.summary
-                            ));
-                        }
-                    }
-                    out
-                }
+                Shown::Live(detail) => render::item_detail(detail),
                 Shown::Archived(_) => unreachable!(),
             })
         }
-    }
-}
-
-fn event_touches(state: &State, event: &Event, id: ItemId) -> bool {
-    match &event.content.body {
-        EventBody::ItemCreated(_) => ItemId::from(event.id()) == id,
-        EventBody::ItemEdited(edited) => edited.item == id,
-        EventBody::ItemMoved(moved) => moved.item == id,
-        EventBody::ItemLinked(linked) => linked.item == id,
-        EventBody::ItemArchived(reference) | EventBody::ItemUnarchived(reference) => {
-            reference.item == id
-        }
-        EventBody::Comment(comment) => comment.item == id,
-        EventBody::SessionStarted(started) => started.item == id,
-        EventBody::SessionEnded(ended) => state
-            .session(ended.session)
-            .is_some_and(|session| session.item() == id),
-        EventBody::Review(review) => review.item == id,
-        EventBody::Merged(merged) => merged.item == id,
-        EventBody::Genesis(_)
-        | EventBody::PolicySet(_)
-        | EventBody::AgentDefined(_)
-        | EventBody::InviteCreated(_)
-        | EventBody::DeviceBound(_)
-        | EventBody::DeviceProfile(_)
-        | EventBody::ForkAnnounced(_)
-        | EventBody::Unknown { .. } => false,
     }
 }
 

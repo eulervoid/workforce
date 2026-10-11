@@ -15,7 +15,7 @@ use wf_net::Network;
 
 mod common;
 
-use common::{Sandbox, short};
+use common::{Sandbox, comments, short};
 
 fn fake_agent() -> PathBuf {
     let test = std::env::current_exe().unwrap();
@@ -357,7 +357,8 @@ wf work submit --note \"all done\"
 
     let shown = world.item(&item);
     assert_eq!(shown["state"], "done", "{shown}");
-    let notes = shown["comments"].as_array().unwrap();
+    let notes = comments(&shown);
+    let notes = notes.as_array().unwrap();
     assert!(
         notes
             .iter()
@@ -420,7 +421,7 @@ wf work release --note \"I cannot do this\"
     let shown = world.item(&item);
     assert_eq!(shown["state"], "open");
     assert!(
-        shown["comments"]
+        comments(&shown)
             .as_array()
             .unwrap()
             .iter()
@@ -438,7 +439,7 @@ async fn an_agent_that_never_commits_or_submits_is_released_after_its_nudges() {
     assert_eq!(session["status"], "released");
     let shown = world.item(&item);
     assert_eq!(shown["state"], "open");
-    let gave_up = shown["comments"].as_array().unwrap().iter().any(|note| {
+    let gave_up = comments(&shown).as_array().unwrap().iter().any(|note| {
         note["text"]
             .as_str()
             .is_some_and(|text| text.starts_with("Gave up"))
@@ -490,7 +491,7 @@ wf work submit
     assert_eq!(session["status"], "submitted");
     let shown = world.item(&item);
     assert_eq!(shown["state"], "in_review", "{shown}");
-    assert!(shown["comments"].as_array().unwrap().iter().any(|note| {
+    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
         note["text"]
             .as_str()
             .is_some_and(|text| text.starts_with("Waiting to merge"))
@@ -514,7 +515,7 @@ wf work submit
         })
         .await;
     assert!(world.wf.repository.join("hello.txt").is_file());
-    let waits = world.item(&item)["comments"]
+    let waits = comments(&world.item(&item))
         .as_array()
         .unwrap()
         .iter()
@@ -879,7 +880,7 @@ async fn work_approved_by_a_reviewer_agent_is_merged() {
     let shown = world.item(&item);
     assert_eq!(shown["review_status"]["status"], "merged", "{shown}");
     assert!(
-        shown["comments"]
+        comments(&shown)
             .as_array()
             .unwrap()
             .iter()
@@ -1019,7 +1020,7 @@ wf work submit
     assert_eq!(session["status"], "submitted");
     let shown = world.item(&item);
     assert_eq!(shown["state"], "open", "{shown}");
-    assert!(shown["comments"].as_array().unwrap().iter().any(|note| {
+    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
         note["text"]
             .as_str()
             .is_some_and(|text| text.contains("conflicts in file.txt"))

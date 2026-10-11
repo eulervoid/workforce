@@ -457,9 +457,6 @@ pub enum ItemCommand {
     List(ItemListArgs),
     Show {
         item: Option<String>,
-        /// Print every event behind the item, including edits that lost a concurrent write.
-        #[arg(long)]
-        history: bool,
     },
     Edit(ItemEditArgs),
     Check(ItemCheckArgs),

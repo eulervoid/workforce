@@ -83,3 +83,17 @@ impl Sandbox {
 pub fn short(id: &str) -> &str {
     &id[..6]
 }
+
+/// The comments in the activity of an item `wf item show --json` printed, oldest first: comments
+/// of their own and the reasons given with moves and verdicts.
+pub fn comments(shown: &Value) -> Value {
+    Value::Array(
+        shown["activity"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|entry| entry["comment"].is_object())
+            .map(|entry| entry["comment"].clone())
+            .collect(),
+    )
+}

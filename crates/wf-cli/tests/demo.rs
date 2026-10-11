@@ -6,7 +6,7 @@ use serde_json::Value;
 
 mod common;
 
-use common::{Sandbox, short};
+use common::{Sandbox, comments, short};
 
 fn titles(items: &Value) -> Vec<String> {
     items
@@ -97,7 +97,7 @@ fn the_demo_script_works_end_to_end() {
     assert_eq!(shown["references"][0]["id"], first);
     assert_eq!(shown["mentions"][0], "@joshua/coder");
     assert_eq!(
-        shown["comments"][0]["text"],
+        comments(&shown)[0]["text"],
         format!("see #{}, @coder please keep it small", short(&first))
     );
     assert_eq!(
@@ -237,15 +237,15 @@ fn item_edit_by_flags_and_by_editor() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    let shown = wf.json(&["item", "show", short(&task), "--history"]);
+    let shown = wf.json(&["item", "show", short(&task)]);
     assert_eq!(shown["title"], "Edited in editor");
     assert_eq!(shown["priority"], "P0");
-    let history = shown["history"].as_array().unwrap();
-    assert!(history.iter().any(|entry| {
+    let activity = shown["activity"].as_array().unwrap();
+    assert!(activity.iter().any(|entry| {
         entry["summary"]
             .as_str()
             .unwrap()
-            .contains("title = \"New title\"")
+            .contains("renamed it to \"New title\"")
     }));
 
     let remover = wf.bin.join("priority-remover");
@@ -455,12 +455,7 @@ fn blockers_and_change_requests_stay_open_until_a_comment_resolves_them() {
     comment(&["--resolve-change-requests"]);
     let shown = wf.json(&["item", "show", short(&task)]);
     assert!(open(&shown).is_empty(), "{shown}");
-    let resolving = shown["comments"]
-        .as_array()
-        .unwrap()
-        .last()
-        .unwrap()
-        .clone();
+    let resolving = comments(&shown).as_array().unwrap().last().unwrap().clone();
     assert_eq!(
         resolving["resolves"].as_array().unwrap().len(),
         2,
@@ -804,7 +799,7 @@ mod forking {
         let child = fork["workforce"].as_str().unwrap().to_string();
         let through_daemon = sandbox.json(&["item", "show", short(&item)]);
         assert_eq!(through_daemon["title"], "Renamed");
-        assert_eq!(through_daemon["comments"].as_array().unwrap().len(), 1);
+        assert_eq!(comments(&through_daemon).as_array().unwrap().len(), 1);
         sandbox.add(&["--title", "After the fork", "--priority", "P2"]);
         let log = sandbox.json(&["log"]);
         let unverified = log["events"]
@@ -1066,7 +1061,8 @@ mod work {
             .map(|part| part["done"].as_bool().unwrap())
             .collect();
         assert_eq!(steps, [true, false]);
-        let reports: Vec<&Value> = shown["comments"]
+        let comments = comments(&shown);
+        let reports: Vec<&Value> = comments
             .as_array()
             .unwrap()
             .iter()
@@ -1087,7 +1083,7 @@ mod work {
         );
 
         let text = wf.run(&["item", "show", short(&task)]);
-        assert!(text.contains("↳ step 1: pick storage"), "{text}");
+        assert!(text.contains("on step 1"), "{text}");
 
         wf.run(&[
             "item",

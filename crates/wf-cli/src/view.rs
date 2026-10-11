@@ -5,18 +5,20 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use jiff::Timestamp;
 use serde::Serialize;
+use wf_core::activity::{Activity, Entry};
 use wf_core::body::{Body, BodyPart, StepId};
-use wf_core::event::{Change, Event, EventBody, Link};
+use wf_core::crdt::SetChange;
+use wf_core::event::{Change, CommentKind, Event, EventBody, Link};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::hlc::Hlc;
-use wf_core::id::{EventId, HashId, ItemId};
+use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
 use wf_core::item::{Item, ItemView, Origin, Standing};
 use wf_core::policy::{Field, ReviewStep, StateCategory};
 use wf_core::resolve::MentionTarget;
 use wf_core::review::ReviewStatus;
-use wf_core::session::{EndReason, Session, SessionRole};
+use wf_core::session::{CommitId, EndReason, Session, SessionRole, Verdict};
 use wf_core::state::State;
 use wf_daemon::proto::HeldPermission;
 
@@ -466,6 +468,24 @@ pub struct CommentView {
     pub resolved_by: Option<String>,
 }
 
+/// One thing that happened to an item.
+#[derive(Serialize)]
+pub struct ActivityView {
+    pub at: String,
+    pub by: String,
+    /// `created`, `comment`, `moved`, `edited`, `body_overwritten`, `depends_on`, `supersedes`,
+    /// `archived`,
+    /// `unarchived`, `session_started`, `session_ended`, `reviewed`, `merged`,
+    /// `dependency_finished`, `dependent`, `superseded_by` or `referenced_in`.
+    pub kind: String,
+    /// What happened, in a few words: `moved to done`, `#k3f9ab now depends on this`.
+    pub summary: String,
+    /// The comment, for a comment, or the comment that says why for a move or a verdict.
+    pub comment: Option<CommentView>,
+    /// What an overwritten body edit said, so it is not lost silently.
+    pub text: Option<String>,
+}
+
 /// A blocker or change request nothing has resolved yet.
 #[derive(Serialize)]
 pub struct OpenCommentView {
@@ -535,7 +555,8 @@ pub struct ItemDetail {
     pub references: Vec<LinkView>,
     pub referenced_by: Vec<SourceView>,
     pub mentions: Vec<String>,
-    pub comments: Vec<CommentView>,
+    /// Everything that happened to the item, oldest first.
+    pub activity: Vec<ActivityView>,
     pub open: Vec<OpenCommentView>,
     pub flags: Vec<String>,
 }
@@ -601,6 +622,242 @@ fn role_name(role: SessionRole) -> &'static str {
     }
 }
 
+fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<ActivityView> {
+    let short_commit = |commit: &CommitId| commit.to_string()[..8].to_string();
+    let label = |id: &ItemId| format!("#{}", id.short());
+    let body = item.body();
+    let mut views: Vec<ActivityView> = Vec::new();
+    for entry in entries {
+        let by = actor_label(state, &entry.by);
+        let at = timestamp(entry.at);
+        let (kind, summary) = match &entry.activity {
+            Activity::Created => ("created", format!("created the {}", item.item_type())),
+            Activity::Commented {
+                comment,
+                kind,
+                text,
+                resolves,
+                step,
+            } => {
+                let view = CommentView {
+                    id: comment.to_string(),
+                    short: comment.short(),
+                    kind: kind.name().to_string(),
+                    by: by.clone(),
+                    at: at.clone(),
+                    text: Some(text.clone()),
+                    session: item
+                        .comments()
+                        .get(comment)
+                        .and_then(|folded| folded.session())
+                        .and_then(|session| state.session(session))
+                        .map(session_label),
+                    step: step.map(|step| step_ref(&body, step)),
+                    resolves: resolves.iter().map(HashId::short).collect(),
+                    resolved_by: item
+                        .comments()
+                        .get(comment)
+                        .and_then(|folded| folded.resolved())
+                        .map(|resolved| resolved.by.short()),
+                };
+                views.push(ActivityView {
+                    at,
+                    by,
+                    kind: "comment".into(),
+                    summary: kind.name().replace('_', " "),
+                    comment: Some(view),
+                    text: None,
+                });
+                continue;
+            }
+            Activity::Moved { to, because } => {
+                let mut view = ActivityView {
+                    at,
+                    by,
+                    kind: "moved".into(),
+                    summary: format!("moved to {to}"),
+                    comment: None,
+                    text: None,
+                };
+                attach_reason(&mut views, &mut view, *because);
+                views.push(view);
+                continue;
+            }
+            Activity::Reviewed {
+                commit,
+                verdict,
+                because,
+            } => {
+                let on = commit
+                    .as_ref()
+                    .map_or_else(|| "the work without commits".to_string(), short_commit);
+                let summary = match verdict {
+                    Verdict::Approve => format!("approved {on}"),
+                    Verdict::RequestChanges => format!("requested changes on {on}"),
+                    Verdict::Escalate => format!("escalated {on} to a person"),
+                };
+                let mut view = ActivityView {
+                    at,
+                    by,
+                    kind: "reviewed".into(),
+                    summary,
+                    comment: None,
+                    text: None,
+                };
+                attach_reason(&mut views, &mut view, *because);
+                views.push(view);
+                continue;
+            }
+            Activity::Edited(change) => ("edited", edit_summary(&body, change)),
+            Activity::BodyOverwritten { body: lost } => {
+                views.push(ActivityView {
+                    at,
+                    by,
+                    kind: "body_overwritten".into(),
+                    summary: "edited the body, overwritten by a concurrent edit".into(),
+                    comment: None,
+                    text: Some(lost.clone()),
+                });
+                continue;
+            }
+            Activity::DependsOn(SetChange::Add(target)) => {
+                ("depends_on", format!("now depends on {}", label(target)))
+            }
+            Activity::DependsOn(SetChange::Remove { value, .. }) => (
+                "depends_on",
+                format!("no longer depends on {}", label(value)),
+            ),
+            Activity::Supersedes(target) => ("supersedes", format!("supersedes {}", label(target))),
+            Activity::Archived => ("archived", "archived".to_string()),
+            Activity::Unarchived => ("unarchived", "unarchived".to_string()),
+            Activity::SessionStarted { role, .. } => (
+                "session_started",
+                match role {
+                    SessionRole::Work => "started work".to_string(),
+                    SessionRole::Review {
+                        commit: Some(commit),
+                    } => {
+                        format!("started a review of {}", short_commit(commit))
+                    }
+                    SessionRole::Review { commit: None } => "started a review".to_string(),
+                    SessionRole::Supervise => "started supervising".to_string(),
+                },
+            ),
+            Activity::SessionEnded {
+                reason, moved_to, ..
+            } => {
+                let ended = match reason {
+                    EndReason::Submitted {
+                        commit: Some(commit),
+                    } => {
+                        format!("submitted {}", short_commit(commit))
+                    }
+                    EndReason::Submitted { commit: None } => "submitted without commits".into(),
+                    EndReason::Reviewed => "finished the review".into(),
+                    EndReason::Supervised => "finished supervising".into(),
+                    EndReason::Released => "released the item".into(),
+                    EndReason::TimedOut => "timed out".into(),
+                    EndReason::Failed => "failed".into(),
+                    EndReason::Cancelled => "was stopped".into(),
+                };
+                let summary = match moved_to {
+                    Some(to) => format!("{ended} → {to}"),
+                    None => ended,
+                };
+                ("session_ended", summary)
+            }
+            Activity::Merged { commit } => {
+                ("merged", format!("merged as {}", short_commit(commit)))
+            }
+            Activity::DependencyFinished { item, to, category } => (
+                "dependency_finished",
+                match category {
+                    StateCategory::Cancelled => {
+                        format!("{} {to} · this item is stranded", label(item))
+                    }
+                    StateCategory::Inactive
+                    | StateCategory::Open
+                    | StateCategory::Active
+                    | StateCategory::Review
+                    | StateCategory::Done => format!("{} {to}", label(item)),
+                },
+            ),
+            Activity::Dependent(SetChange::Add(dependent)) => (
+                "dependent",
+                format!("{} now depends on this", label(dependent)),
+            ),
+            Activity::Dependent(SetChange::Remove { value, .. }) => (
+                "dependent",
+                format!("{} no longer depends on this", label(value)),
+            ),
+            Activity::SupersededBy(other) => {
+                ("superseded_by", format!("superseded by {}", label(other)))
+            }
+            Activity::ReferencedIn(other) => {
+                ("referenced_in", format!("referenced in {}", label(other)))
+            }
+        };
+        views.push(ActivityView {
+            at,
+            by,
+            kind: kind.to_string(),
+            summary,
+            comment: None,
+            text: None,
+        });
+    }
+    views
+}
+
+/// A move or verdict names the comment that says why; written just before, it is shown with the
+/// move or verdict instead of on its own.
+fn attach_reason(
+    views: &mut Vec<ActivityView>,
+    view: &mut ActivityView,
+    because: Option<CommentId>,
+) {
+    let Some(because) = because else {
+        return;
+    };
+    let names_it = views
+        .last()
+        .and_then(|last| last.comment.as_ref())
+        .is_some_and(|comment| {
+            comment.short == because.short() && comment.kind == CommentKind::Plain.name()
+        });
+    if names_it {
+        view.comment = views.pop().and_then(|last| last.comment);
+    }
+}
+
+fn edit_summary(body: &Body, change: &Change) -> String {
+    match change {
+        Change::Title(title) => format!("renamed it to \"{title}\""),
+        Change::Body(_) => "edited the body".to_string(),
+        Change::Priority(Some(priority)) => format!("set priority {priority}"),
+        Change::Priority(None) => "cleared the priority".to_string(),
+        Change::Lane(Some(lane)) => format!("moved it to lane {lane}"),
+        Change::Lane(None) => "moved it to its type's lane".to_string(),
+        Change::Labels(change) => format!("labels {}", set_change(change)),
+        Change::Requires(change) => format!("requires {}", set_change(change)),
+        Change::Review(Some(level)) => format!("review → {level}"),
+        Change::Review(None) => "review → its type's level".to_string(),
+        Change::StepDone { step, done } => {
+            let verb = if *done { "checked" } else { "unchecked" };
+            match step_ref(body, *step) {
+                StepRefView {
+                    number: Some(number),
+                    text: Some(text),
+                } => format!(
+                    "{verb} step {number}: {}",
+                    text.lines().next().unwrap_or_default()
+                ),
+                StepRefView { .. } => format!("{verb} a step since edited"),
+            }
+        }
+    }
+}
+
 fn step_ref(body: &Body, step: StepId) -> StepRefView {
     match body.step(step) {
         Some(found) => StepRefView {
@@ -614,19 +871,8 @@ fn step_ref(body: &Body, step: StepId) -> StepRefView {
     }
 }
 
-/// Text of a comment, read from the event that carries it.
-pub fn comment_text(event: &Event) -> Option<String> {
-    match &event.content.body {
-        EventBody::Comment(comment) => Some(comment.text.clone()),
-        _ => None,
-    }
-}
-
-pub fn item_detail(
-    state: &State,
-    item: &Item,
-    load_event: impl Fn(&EventId) -> Option<Event>,
-) -> ItemDetail {
+/// The detail of a live item. `events` is the log, for the item's activity.
+pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
     let graph = state.dependency_graph();
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut flags = Vec::new();
@@ -672,35 +918,7 @@ pub fn item_detail(
         );
     }
 
-    let mut comments = item
-        .comments()
-        .iter()
-        .map(|(id, comment)| {
-            let event = load_event(&EventId::from(*id));
-            let resolves = match event.as_ref().map(|event| &event.content.body) {
-                Some(EventBody::Comment(written)) => {
-                    written.resolves.iter().map(HashId::short).collect()
-                }
-                _ => Vec::new(),
-            };
-            CommentView {
-                id: id.to_string(),
-                short: id.short(),
-                kind: comment.kind.name().to_string(),
-                by: actor_label(state, &comment.by),
-                at: timestamp(comment.at),
-                text: event.as_ref().and_then(comment_text),
-                session: comment
-                    .session()
-                    .and_then(|session| state.session(session))
-                    .map(session_label),
-                step: comment.step.map(|step| step_ref(&item.body(), step)),
-                resolves,
-                resolved_by: comment.resolved().map(|resolved| resolved.by.short()),
-            }
-        })
-        .collect::<Vec<_>>();
-    comments.sort_by(|left, right| left.at.cmp(&right.at).then(left.id.cmp(&right.id)));
+    let activity = activity_views(state, item, &state.activity(item.id(), events));
     let open = item
         .open_comments()
         .into_iter()
@@ -740,7 +958,7 @@ pub fn item_detail(
             .iter()
             .map(|target| mention_label(state, target))
             .collect(),
-        comments,
+        activity,
         open,
         flags,
     }
@@ -1022,47 +1240,6 @@ pub fn status(
 
 /// A history line for `wf item show --history`: like [`event_view`] but with the values written,
 /// so an edit that lost a concurrent write is still readable.
-pub fn history_entry(state: &State, event: &Event) -> EventView {
-    let mut entry = event_view(state, event, true);
-    if let EventBody::ItemEdited(edited) = &event.content.body {
-        let changes: Vec<String> = edited
-            .changes
-            .iter()
-            .map(|change| match change {
-                Change::Title(title) => format!("title = {title:?}"),
-                Change::Body(body) => format!("body = {body:?}"),
-                Change::Priority(priority) => format!(
-                    "priority = {}",
-                    priority.map_or("none".to_string(), |p| p.to_string())
-                ),
-                Change::Lane(lane) => format!(
-                    "lane = {}",
-                    lane.as_ref()
-                        .map_or("none".to_string(), ToString::to_string)
-                ),
-                Change::Labels(change) => format!("labels {}", set_change(change)),
-                Change::Requires(change) => format!("requires {}", set_change(change)),
-                Change::Review(review) => format!(
-                    "review = {}",
-                    review
-                        .as_ref()
-                        .map_or("none".to_string(), ToString::to_string)
-                ),
-                Change::StepDone { step, done } => {
-                    format!("step {step} {}", if *done { "done" } else { "not done" })
-                }
-            })
-            .collect();
-        entry.summary = format!("edited: {}", changes.join("; "));
-    } else if let EventBody::ItemMoved(moved) = &event.content.body {
-        entry.summary = match moved.because {
-            Some(comment) => format!("moved to {} because of {}", moved.to, comment.short()),
-            None => format!("moved to {}", moved.to),
-        };
-    }
-    entry
-}
-
 fn set_change<T: std::fmt::Display>(change: &wf_core::crdt::SetChange<T>) -> String {
     match change {
         wf_core::crdt::SetChange::Add(value) => format!("+{value}"),

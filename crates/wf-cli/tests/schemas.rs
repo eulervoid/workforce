@@ -84,7 +84,8 @@ fn live_item_detail() {
     let ItemView::Live(item) = state.item(scenario.task).unwrap() else {
         panic!()
     };
-    let detail = view::item_detail(state, item, |id| scenario.events.get(id).cloned());
+    let events: Vec<_> = scenario.events.values().cloned().collect();
+    let detail = view::item_detail(state, item, &events);
     insta::assert_json_snapshot!("item_detail", Envelope::new(&detail));
 }
 
@@ -95,7 +96,8 @@ fn dependency_detail_shows_backlinks_and_dependents() {
     let ItemView::Live(item) = state.item(scenario.dependency).unwrap() else {
         panic!()
     };
-    let detail = view::item_detail(state, item, |id| scenario.events.get(id).cloned());
+    let events: Vec<_> = scenario.events.values().cloned().collect();
+    let detail = view::item_detail(state, item, &events);
     insta::assert_json_snapshot!("dependency_detail", Envelope::new(&detail));
 }
 

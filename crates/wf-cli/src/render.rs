@@ -436,67 +436,104 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             let _ = writeln!(out, "  {line}");
         }
     }
-    if !detail.comments.is_empty() {
-        let _ = writeln!(out, "\n{}", paint(BOLD, "discussion"));
-        let width = text_width();
-        for (index, comment) in detail.comments.iter().enumerate() {
-            if index > 0 {
-                out.push('\n');
-            }
-            let mut header = vec![
-                paint(DIM, short_time(&comment.at)),
-                paint(style::actor(&comment.by), &comment.by),
-            ];
-            match comment.kind.as_str() {
-                "blocker" | "change_request" => header.push(paint(
-                    WARNING,
-                    format!(
-                        "{} {}",
-                        comment_marker(&comment.kind),
-                        comment.kind.replace('_', " ")
-                    ),
-                )),
-                kind => header.push(paint(DIM, kind)),
-            }
-            if !comment.resolves.is_empty() {
-                header.push(paint(
-                    DIM,
-                    format!("resolves {}", comment.resolves.join(", ")),
-                ));
-            }
-            if let Some(by) = &comment.resolved_by {
-                header.push(paint(DIM, format!("resolved by {by}")));
-            }
-            header.push(paint(DIM, &comment.short));
-            let _ = writeln!(out, "  {}", header.join(&format!(" {} ", paint(DIM, "·"))));
-            let text = comment
-                .text
-                .as_deref()
-                .unwrap_or("[text not in the local log]");
-            let options = textwrap::Options::new(width)
-                .initial_indent("    ")
-                .subsequent_indent("    ");
-            let _ = writeln!(out, "{}", textwrap::fill(text, options));
-            match &comment.step {
-                Some(StepRefView {
-                    number: Some(number),
-                    text: Some(text),
-                }) => {
-                    let first_line = text.lines().next().unwrap_or_default();
+    if !detail.activity.is_empty() {
+        out.push_str(&activity(&detail.activity));
+    }
+    out
+}
+
+/// The activity of an item: one line per thing that happened, and the text of comments below
+/// their line. The date heads the section and is repeated when the day changes.
+fn activity(entries: &[crate::view::ActivityView]) -> String {
+    use style::{BOLD, DIM, WARNING, paint};
+    let mut out = String::new();
+    let width = text_width();
+    let mut day = None;
+    for entry in entries {
+        let (date, time) = local_date_and_time(&entry.at);
+        if day.as_ref() != Some(&date) {
+            match day {
+                None => {
                     let _ = writeln!(
                         out,
-                        "    {}",
-                        paint(DIM, format!("↳ step {number}: {first_line}"))
+                        "\n{} {}",
+                        paint(BOLD, "activity"),
+                        paint(DIM, format!("· {date}"))
                     );
                 }
-                Some(StepRefView { .. }) => {
-                    let _ = writeln!(out, "    {}", paint(DIM, "↳ a step since edited"));
+                Some(_) => {
+                    let _ = writeln!(out, "  {}", paint(DIM, format!("· {date}")));
                 }
-                None => {}
             }
+            day = Some(date);
+        }
+        let mut parts = vec![paint(style::actor(&entry.by), &entry.by)];
+        match &entry.comment {
+            Some(comment) if entry.kind == "comment" => {
+                match comment.kind.as_str() {
+                    "blocker" | "change_request" => parts.push(paint(
+                        WARNING,
+                        format!(
+                            "{} {}",
+                            comment_marker(&comment.kind),
+                            comment.kind.replace('_', " ")
+                        ),
+                    )),
+                    _ if comment.resolves.is_empty() => parts.push(paint(DIM, "commented")),
+                    _ => {}
+                }
+                if !comment.resolves.is_empty() {
+                    parts.push(format!("resolved {}", comment.resolves.join(", ")));
+                }
+                if let Some(by) = &comment.resolved_by {
+                    parts.push(paint(DIM, format!("resolved by {by}")));
+                }
+                match &comment.step {
+                    Some(StepRefView {
+                        number: Some(number),
+                        ..
+                    }) => parts.push(paint(DIM, format!("on step {number}"))),
+                    Some(StepRefView { .. }) => parts.push(paint(DIM, "on a step since edited")),
+                    None => {}
+                }
+                parts.push(paint(DIM, &comment.short));
+            }
+            Some(_) | None => parts.push(entry.summary.clone()),
+        }
+        let _ = writeln!(
+            out,
+            "  {}  {}",
+            paint(DIM, time),
+            parts.join(&format!(" {} ", paint(DIM, "·")))
+        );
+        if let Some(text) = entry
+            .comment
+            .as_ref()
+            .and_then(|comment| comment.text.as_deref())
+            .or(entry.text.as_deref())
+            .filter(|text| !text.trim().is_empty())
+        {
+            let options = textwrap::Options::new(width)
+                .initial_indent("         ")
+                .subsequent_indent("         ");
+            let _ = writeln!(out, "{}", textwrap::fill(text, options));
         }
     }
     out
+}
+
+/// The date and the time of a timestamp in the local time zone.
+fn local_date_and_time(timestamp: &str) -> (String, String) {
+    match timestamp.parse::<jiff::Timestamp>() {
+        Ok(time) => {
+            let local = time.to_zoned(jiff::tz::TimeZone::system());
+            (
+                local.strftime("%Y-%m-%d").to_string(),
+                local.strftime("%H:%M").to_string(),
+            )
+        }
+        Err(_) => (timestamp.to_string(), String::new()),
+    }
 }
 
 /// Marks a blocker or change request: `⧗` waits on someone else, `△` waits on the work.
