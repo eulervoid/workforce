@@ -910,7 +910,7 @@ fn steps_are_checked_and_unchecked_by_number() {
     assert_eq!(steps(&wf), [true, false, false]);
 
     let shown = wf.run(&["item", "show", short(&task)]);
-    assert!(shown.contains("- [x](1) write parser") && shown.contains("- [ ](2) add tests"));
+    assert!(shown.contains("- [x] 1. write parser") && shown.contains("- [ ] 2. add tests"));
     assert!(shown.contains("steps 1/3"), "{shown}");
     let listed = wf.run(&["item", "list"]);
     assert!(listed.contains("1/3"), "{listed}");

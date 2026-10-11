@@ -50,10 +50,12 @@ fn normalize(text: &str) -> String {
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum BodyError {
-    #[error("the step \"{0}\" appears twice; steps need different text")]
+    #[error("step \"{0}\" appears twice; steps need unique text per item")]
     DuplicateStep(String),
-    #[error("the step \"{0}\" cannot be nested in another element")]
+    #[error("step \"{0}\" cannot be nested in another element")]
     NestedStep(String),
+    #[error("step \"{0}\" cannot start with a number; steps are numbered automatically")]
+    NumberedStep(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -115,6 +117,9 @@ impl Body {
                     let step = text[range.end..top_level_item.end].trim();
                     if step.is_empty() {
                         continue;
+                    }
+                    if starts_with_number(step) {
+                        return Err(BodyError::NumberedStep(normalize(step)));
                     }
                     if !seen.insert(StepId::of(step)) {
                         return Err(BodyError::DuplicateStep(normalize(step)));
@@ -194,8 +199,8 @@ impl Body {
         self.render_steps(false)
     }
 
-    /// Like [`Body::render`], with each step's number after its checkbox, as `wf item check`
-    /// takes it: `- [ ](1) write parser`.
+    /// Like [`Body::render`], with each step's number before its text, as `wf item check`
+    /// takes it: `- [ ] 1. write parser`.
     pub fn render_numbered(&self) -> String {
         self.render_steps(true)
     }
@@ -218,10 +223,10 @@ impl Body {
                 BodyPart::Step { text, done } => {
                     number += 1;
                     out.push_str(if *done { "- [x]" } else { "- [ ]" });
-                    if numbered {
-                        out.push_str(&format!("({number})"));
-                    }
                     out.push(' ');
+                    if numbered {
+                        out.push_str(&format!("{number}. "));
+                    }
                     out.push_str(text);
                 }
             }
@@ -229,6 +234,13 @@ impl Body {
         }
         out
     }
+}
+
+/// `2. foo` or `2) foo`: what a list marker looks like, and so what the number in front of a step
+/// would be mistaken for.
+fn starts_with_number(step: &str) -> bool {
+    let rest = step.trim_start_matches(|character: char| character.is_ascii_digit());
+    rest.len() < step.len() && rest.starts_with(['.', ')'])
 }
 
 fn push_markdown(parts: &mut Vec<BodyPart>, text: &str) {
@@ -340,6 +352,23 @@ mod tests {
         let body = Body::parse("intro\n\n- [ ] a\n\nmiddle\n\n- [x] b\n").unwrap();
         let numbered: Vec<_> = body.steps().map(|step| (step.number, step.text)).collect();
         assert_eq!(numbered, [(1, "a"), (2, "b")]);
+    }
+
+    #[test]
+    fn steps_cannot_start_with_a_list_number() {
+        assert_eq!(
+            Body::parse("- [ ] 2. run tests\n"),
+            Err(BodyError::NumberedStep("2. run tests".into()))
+        );
+        assert!(Body::parse("- [ ] 2) run tests\n").is_err());
+        // Only what reads as a list marker counts.
+        assert!(Body::parse("- [ ] 3 retries and 2.5 seconds\n- [ ] v2. done\n").is_ok());
+    }
+
+    #[test]
+    fn numbered_steps_show_their_number_before_the_text() {
+        let body = Body::parse("intro\n\n- [ ] a\n- [x] b\n").unwrap();
+        assert_eq!(body.render_numbered(), "intro\n\n- [ ] 1. a\n- [x] 2. b");
     }
 
     #[test]

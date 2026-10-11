@@ -619,6 +619,10 @@ fn authors_cannot_write_duplicate_steps_or_tick_missing_ones() {
         state.check_policy(&create_with_body("task", "Dup", "- [ ] x\n- [ ] x")),
         Err(PolicyViolation::Body(_))
     ));
+    assert!(matches!(
+        state.check_policy(&create_with_body("task", "Numbered", "- [ ] 2. x")),
+        Err(PolicyViolation::Body(_))
+    ));
     let missing = StepId::of("not there");
     assert_eq!(
         state.check_policy(&edit(

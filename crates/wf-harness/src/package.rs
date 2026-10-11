@@ -175,7 +175,7 @@ mod tests {
         let package = WorkPackage {
             item: "k3f9ab".into(),
             title: "Parse durations".into(),
-            body: "- [ ](1) write parser".into(),
+            body: "- [ ] 1. write parser".into(),
             branch: "wf/k3f9ab".into(),
             target: "main".into(),
             dependencies: vec![Dependency {
@@ -192,7 +192,7 @@ mod tests {
         };
         let text = package.render();
         assert!(text.starts_with("You are working on item #k3f9ab: Parse durations\n"));
-        assert!(text.contains("- [ ](1) write parser"));
+        assert!(text.contains("- [ ] 1. write parser"));
         assert!(text.contains("- #q7x2cd Which crate? (answered): Use humantime"));
         assert!(text.contains("- @joshua/coder (report): tried serde first"));
         assert!(text.contains("`wf/k3f9ab`") && text.contains("`main`"));

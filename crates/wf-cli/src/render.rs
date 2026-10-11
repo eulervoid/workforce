@@ -441,7 +441,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     out
 }
 
-/// The body as markdown with each step's number after its checkbox: `- [ ](1) write parser`.
+/// The body as markdown with each step's number before its text: `- [ ] 1. write parser`.
 fn body(parts: &[BodyPartView]) -> String {
     let mut out = String::new();
     let mut previous_was_step = false;
@@ -458,8 +458,8 @@ fn body(parts: &[BodyPartView]) -> String {
             BodyPartView::Markdown { text } => out.push_str(text),
             BodyPartView::Step { number, done, text } => {
                 let checkbox = if *done { "[x]" } else { "[ ]" };
-                let number = style::paint(style::DIM, format!("({number})"));
-                let _ = write!(out, "- {checkbox}{number} {text}");
+                let number = style::paint(style::DIM, format!("{number}."));
+                let _ = write!(out, "- {checkbox} {number} {text}");
             }
         }
         previous_was_step = is_step;
