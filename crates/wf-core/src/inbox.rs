@@ -11,9 +11,9 @@ use crate::supervision::WaitsOn;
 pub enum Waiting {
     /// A blocker on the item waits on this person: resolving it is the answer.
     Blocker { comment: CommentId },
-    /// The item is in a blocked state that is not a review, such as a proposed decision. Moving
-    /// it on is the answer.
-    Blocked,
+    /// The item waits in its review state without submitted work, such as a proposed decision.
+    /// Moving it on decides.
+    Proposal,
     /// The review of the work has reached a step for a person: `wf review`.
     HumanReview { commit: Option<CommitId> },
     /// The work is ready to merge, but the target branch is checked out with changes.
@@ -36,7 +36,7 @@ impl State {
         let merges = self.pending_merges();
         let mut entries: Vec<_> = self
             .live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
+            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
             .filter_map(|item| {
                 let waiting = match self.review_status(item.id()) {
                     Some(ReviewStatus::Awaiting {
@@ -53,7 +53,7 @@ impl State {
                     | Some(ReviewStatus::Merged { .. })
                     | None => match merges.iter().find(|(merging, _)| *merging == item.id()) {
                         Some((_, commit)) => Waiting::Merge { commit: *commit },
-                        None => Waiting::Blocked,
+                        None => Waiting::Proposal,
                     },
                 };
                 Some((

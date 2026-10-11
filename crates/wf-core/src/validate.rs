@@ -165,8 +165,8 @@ pub enum PolicyViolation {
     StaleReview(ItemId),
     #[error("there is no review level `{0}`")]
     UnknownReviewLevel(ReviewName),
-    #[error("a `{type_name}` has no blocked state to wait in during review")]
-    ReviewWithoutBlockedState { type_name: TypeName },
+    #[error("a `{type_name}` has no review state to wait in during review")]
+    ReviewWithoutReviewState { type_name: TypeName },
     #[error("an agent that worked on {0} cannot lower its review level")]
     AgentLowersReview(ItemId),
     #[error("a review session comments on the item, not on its steps")]
@@ -789,12 +789,12 @@ impl State {
                 return Err(PolicyViolation::UnknownReviewLevel(level.clone()));
             }
             let reviewable = type_of(type_name)?
-                .first_state(StateCategory::Blocked)
+                .first_state(StateCategory::Review)
                 .is_some();
             if reviewable {
                 Ok(())
             } else {
-                Err(PolicyViolation::ReviewWithoutBlockedState {
+                Err(PolicyViolation::ReviewWithoutReviewState {
                     type_name: type_name.clone(),
                 })
             }

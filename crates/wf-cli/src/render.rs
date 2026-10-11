@@ -69,7 +69,7 @@ fn state_style(state_category: Option<&str>) -> anstyle::Style {
     match state_category {
         Some("open") => style::color(AnsiColor::Green),
         Some("active") => style::color(AnsiColor::Blue),
-        Some("blocked") => style::color(AnsiColor::Red),
+        Some("review") => style::color(AnsiColor::Yellow),
         Some("done") => style::color(AnsiColor::Magenta),
         Some("cancelled") => style::color(AnsiColor::BrightBlack),
         _ => style::DIM,
@@ -82,7 +82,7 @@ fn state_icon(state_category: Option<&str>) -> &'static str {
         Some("inactive") => "◌",
         Some("open") => "○",
         Some("active") => "◐",
-        Some("blocked") => "⊘",
+        Some("review") => "◎",
         Some("done") => "✓",
         Some("cancelled") => "✗",
         _ => "?",
@@ -241,7 +241,7 @@ fn group_heading(grouping: ItemGrouping, group: &ItemGroup) -> String {
         ItemGrouping::Readiness => match first.readiness {
             Some(Readiness::Ready) => ("○", state_style(Some("open"))),
             Some(Readiness::Claimed) => ("◐", state_style(Some("active"))),
-            Some(Readiness::Blocked) => ("⊘", state_style(Some("blocked"))),
+            Some(Readiness::Blocked) => ("⊘", style::color(anstyle::AnsiColor::Red)),
             Some(Readiness::Stranded) => ("⚠", style::WARNING),
             None => ("·", style::DIM),
         },

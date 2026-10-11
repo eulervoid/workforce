@@ -1148,5 +1148,5 @@ fn items_name_a_review_level_from_the_policy() {
     let message = wf.fail(&[
         "item", "add", "--type", "distill", "--title", "x", "--review", "light",
     ]);
-    assert!(message.contains("no blocked state"), "{message}");
+    assert!(message.contains("no review state"), "{message}");
 }

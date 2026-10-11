@@ -49,7 +49,7 @@ states = [
   { name = "backlog", category = "inactive" },
   { name = "open", category = "open" },
   { name = "in_progress", category = "active" },
-  { name = "in_review", category = "blocked" },
+  { name = "in_review", category = "review" },
   { name = "done", category = "done" },
   { name = "dropped", category = "cancelled" },
 ]
@@ -61,7 +61,7 @@ depends_on = []
 initial = "proposed"
 transitions = "any"
 states = [
-  { name = "proposed", category = "blocked" },
+  { name = "proposed", category = "review" },
   { name = "ratified", category = "done" },
   { name = "rejected", category = "cancelled" },
   { name = "superseded", category = "done" },

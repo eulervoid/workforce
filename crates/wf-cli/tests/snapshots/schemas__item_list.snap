@@ -6,7 +6,29 @@ expression: "Envelope::new(&all)"
   "schema": 2,
   "data": [
     {
-      "id": "nbj47gaeq3yzfauniozao2k6gd3acf3igumzjqksrofe7lgobuua",
+      "id": "b2wxqncyogiis2wkfzq7dufzifoc6o45rw5uxbgxiemtlwemja7a",
+      "type": "task",
+      "title": "Pick a hash for event ids",
+      "state": "open",
+      "priority": "P2",
+      "readiness": "ready",
+      "blocked_by": [],
+      "blocking": [
+        {
+          "id": "luban6ypnhwlhzqkrrf6n5dbtslrp556wwcnp3dkqczskgofxh2a",
+          "type": "task",
+          "title": "Implement feed sync",
+          "state": "open",
+          "priority": "P1"
+        }
+      ],
+      "labels": [],
+      "lane": "default",
+      "steps": null,
+      "archived": false
+    },
+    {
+      "id": "luban6ypnhwlhzqkrrf6n5dbtslrp556wwcnp3dkqczskgofxh2a",
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",
@@ -14,7 +36,7 @@ expression: "Envelope::new(&all)"
       "readiness": "blocked",
       "blocked_by": [
         {
-          "id": "virvfl5ntv4t52lrlcoco32c3m3fligxyyndce6b6kxpsnl7kq2q",
+          "id": "b2wxqncyogiis2wkfzq7dufzifoc6o45rw5uxbgxiemtlwemja7a",
           "type": "task",
           "title": "Pick a hash for event ids",
           "state": "open",
@@ -28,7 +50,7 @@ expression: "Envelope::new(&all)"
       "archived": false
     },
     {
-      "id": "ovpobx6c34fov2mlmu76ocdp4hdxkom67szbneqldqgjosxk4aqq",
+      "id": "y7rsbxr4y65fyxskv3piwdy4ubvg7zieeqvvybiz6tl53fqh3tda",
       "type": "task",
       "title": "Write spec",
       "state": "done",
@@ -40,28 +62,6 @@ expression: "Envelope::new(&all)"
       "lane": null,
       "steps": null,
       "archived": true
-    },
-    {
-      "id": "virvfl5ntv4t52lrlcoco32c3m3fligxyyndce6b6kxpsnl7kq2q",
-      "type": "task",
-      "title": "Pick a hash for event ids",
-      "state": "open",
-      "priority": "P2",
-      "readiness": "ready",
-      "blocked_by": [],
-      "blocking": [
-        {
-          "id": "nbj47gaeq3yzfauniozao2k6gd3acf3igumzjqksrofe7lgobuua",
-          "type": "task",
-          "title": "Implement feed sync",
-          "state": "open",
-          "priority": "P1"
-        }
-      ],
-      "labels": [],
-      "lane": "default",
-      "steps": null,
-      "archived": false
     }
   ]
 }

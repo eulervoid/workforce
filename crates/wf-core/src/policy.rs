@@ -47,7 +47,7 @@ pub enum PolicyError {
         type_name: TypeName,
         level: ReviewName,
     },
-    #[error("type `{0}` has a review level but no blocked state to wait in")]
+    #[error("type `{0}` has a review level but no review state to wait in")]
     ReviewWithoutBlocked(TypeName),
 }
 
@@ -58,7 +58,8 @@ pub enum StateCategory {
     Inactive,
     Open,
     Active,
-    Blocked,
+    /// The work is submitted and waits for its review steps.
+    Review,
     Done,
     Cancelled,
 }
@@ -70,7 +71,7 @@ impl StateCategory {
             StateCategory::Inactive
             | StateCategory::Open
             | StateCategory::Active
-            | StateCategory::Blocked => false,
+            | StateCategory::Review => false,
         }
     }
 }
@@ -81,7 +82,7 @@ impl std::fmt::Display for StateCategory {
             StateCategory::Inactive => "inactive",
             StateCategory::Open => "open",
             StateCategory::Active => "active",
-            StateCategory::Blocked => "blocked",
+            StateCategory::Review => "review",
             StateCategory::Done => "done",
             StateCategory::Cancelled => "cancelled",
         })
@@ -382,7 +383,7 @@ impl Policy {
                 let reviews = self
                     .review_level(level)
                     .is_some_and(|level| !level.steps.is_empty());
-                if reviews && !has(StateCategory::Blocked) {
+                if reviews && !has(StateCategory::Review) {
                     return Err(PolicyError::ReviewWithoutBlocked(name.clone()));
                 }
             }
@@ -425,7 +426,7 @@ mod tests {
         let task = policy.type_config(&type_name("task")).unwrap();
         let state_category = |state: &str| task.state_category_of(&StateName::new(state).unwrap());
         assert_eq!(state_category("backlog"), Some(StateCategory::Inactive));
-        assert_eq!(state_category("in_review"), Some(StateCategory::Blocked));
+        assert_eq!(state_category("in_review"), Some(StateCategory::Review));
         assert_eq!(state_category("dropped"), Some(StateCategory::Cancelled));
         assert_eq!(state_category("nope"), None);
     }
@@ -467,7 +468,7 @@ mod tests {
     fn rejects_changed_builtin_states() {
         let source = DEFAULT_POLICY_TOML.replace(
             r#"{ name = "ratified", category = "done" }"#,
-            r#"{ name = "ratified", category = "blocked" }"#,
+            r#"{ name = "ratified", category = "review" }"#,
         );
         assert_eq!(
             Policy::parse(&source),
@@ -621,7 +622,7 @@ mod tests {
         let first = |category| task.first_state(category).map(StateName::as_str);
         assert_eq!(first(StateCategory::Open), Some("open"));
         assert_eq!(first(StateCategory::Active), Some("in_progress"));
-        assert_eq!(first(StateCategory::Blocked), Some("in_review"));
+        assert_eq!(first(StateCategory::Review), Some("in_review"));
         assert_eq!(first(StateCategory::Done), Some("done"));
     }
 

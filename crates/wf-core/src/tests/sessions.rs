@@ -512,7 +512,7 @@ mod review_levels {
         let distill = item_id(&fixture.apply(&mut state, 0, 2_003, create("distill", "sum up")));
         assert_eq!(
             state.check_policy(&review_of(distill, Some("light"))),
-            Err(PolicyViolation::ReviewWithoutBlockedState {
+            Err(PolicyViolation::ReviewWithoutReviewState {
                 type_name: crate::name::TypeName::new("distill").unwrap()
             })
         );

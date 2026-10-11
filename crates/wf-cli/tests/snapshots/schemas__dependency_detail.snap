@@ -5,7 +5,7 @@ expression: "Envelope::new(&detail)"
 {
   "schema": 2,
   "data": {
-    "id": "virvfl5ntv4t52lrlcoco32c3m3fligxyyndce6b6kxpsnl7kq2q",
+    "id": "b2wxqncyogiis2wkfzq7dufzifoc6o45rw5uxbgxiemtlwemja7a",
     "type": "task",
     "title": "Pick a hash for event ids",
     "state": "open",
@@ -14,7 +14,7 @@ expression: "Envelope::new(&detail)"
     "blocked_by": [],
     "blocking": [
       {
-        "id": "nbj47gaeq3yzfauniozao2k6gd3acf3igumzjqksrofe7lgobuua",
+        "id": "luban6ypnhwlhzqkrrf6n5dbtslrp556wwcnp3dkqczskgofxh2a",
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
@@ -37,7 +37,7 @@ expression: "Envelope::new(&detail)"
     "depends_on": [],
     "required_by": [
       {
-        "id": "nbj47gaeq3yzfauniozao2k6gd3acf3igumzjqksrofe7lgobuua",
+        "id": "luban6ypnhwlhzqkrrf6n5dbtslrp556wwcnp3dkqczskgofxh2a",
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
@@ -48,14 +48,14 @@ expression: "Envelope::new(&detail)"
     "references": [],
     "referenced_by": [
       {
-        "item": "nbj47gaeq3yzfauniozao2k6gd3acf3igumzjqksrofe7lgobuua",
+        "item": "luban6ypnhwlhzqkrrf6n5dbtslrp556wwcnp3dkqczskgofxh2a",
         "title": "Implement feed sync",
         "origin": "body"
       },
       {
-        "item": "nbj47gaeq3yzfauniozao2k6gd3acf3igumzjqksrofe7lgobuua",
+        "item": "luban6ypnhwlhzqkrrf6n5dbtslrp556wwcnp3dkqczskgofxh2a",
         "title": "Implement feed sync",
-        "origin": "47vvyummc23qaka2smgixpvmalcz5a6pf5jk32bdx2hwt6kah3ma"
+        "origin": "4bls6ek7yxj3iffnauoliiu6d3wodyrfzjtg6rnp6yma7aiqlsaa"
       }
     ],
     "mentions": [],

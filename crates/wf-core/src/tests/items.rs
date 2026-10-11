@@ -32,7 +32,7 @@ fn new_items_start_in_the_initial_state_of_their_type() {
     assert_eq!(state_category(&state, task), Some(StateCategory::Open));
     assert_eq!(
         state_category(&state, decision),
-        Some(StateCategory::Blocked)
+        Some(StateCategory::Review)
     );
     let policy = &state.policy().unwrap().policy;
     let ItemView::Live(item) = state.item(task).unwrap() else {
@@ -74,7 +74,7 @@ fn only_open_items_are_ready() {
         ("backlog", StateCategory::Inactive, false),
         ("open", StateCategory::Open, true),
         ("in_progress", StateCategory::Active, false),
-        ("in_review", StateCategory::Blocked, false),
+        ("in_review", StateCategory::Review, false),
         ("done", StateCategory::Done, false),
         ("dropped", StateCategory::Cancelled, false),
     ];

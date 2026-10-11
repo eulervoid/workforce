@@ -766,9 +766,9 @@ impl Daemon {
             .type_config(live.item_type())
             .and_then(|config| config.first_state(wf_core::policy::StateCategory::Open))
             .cloned();
-        let blocked = policy
+        let review = policy
             .type_config(live.item_type())
-            .and_then(|config| config.first_state(wf_core::policy::StateCategory::Blocked))
+            .and_then(|config| config.first_state(wf_core::policy::StateCategory::Review))
             .cloned();
         let comment = |body: String| {
             self.author(
@@ -841,15 +841,15 @@ impl Daemon {
                     worktree.display()
                 ))
                 .await?;
-                if let Some(blocked) = blocked {
-                    self.move_item(loaded, principal, item, blocked, None, attempt.by_session())
+                if let Some(review) = review.clone() {
+                    self.move_item(loaded, principal, item, review, None, attempt.by_session())
                         .await?;
                 }
             }
             MergeOutcome::TargetMoved => {
                 comment(format!("Waiting to merge: {target} kept moving.")).await?;
-                if let Some(blocked) = blocked {
-                    self.move_item(loaded, principal, item, blocked, None, attempt.by_session())
+                if let Some(review) = review {
+                    self.move_item(loaded, principal, item, review, None, attempt.by_session())
                         .await?;
                 }
             }

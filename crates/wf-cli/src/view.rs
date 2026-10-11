@@ -1142,7 +1142,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
 
 #[derive(Serialize)]
 pub struct InboxEntryView {
-    /// `blocker`, `blocked`, `human_review`, `merge` or `permission`.
+    /// `blocker`, `proposal`, `human_review`, `merge` or `permission`.
     pub kind: String,
     pub item: Option<String>,
     pub session: Option<String>,
@@ -1171,7 +1171,7 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
                         comment.short()
                     ),
                 ),
-                Waiting::Blocked => {
+                Waiting::Proposal => {
                     let state_name = match state.item(entry.item) {
                         Some(ItemView::Live(live)) => match live.standing(policy) {
                             Standing::Known { state, .. } => state.to_string(),
@@ -1182,7 +1182,7 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
                         },
                         Some(ItemView::Archived(_)) | None => "an unknown state".to_string(),
                     };
-                    ("blocked", format!("{state_name}; `wf item move` it on"))
+                    ("proposal", format!("{state_name}; `wf item move` it on"))
                 }
                 Waiting::HumanReview { commit } => (
                     "human_review",

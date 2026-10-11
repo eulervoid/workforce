@@ -95,13 +95,13 @@ impl State {
     }
 
     /// Items whose work is ready to merge and not merged yet: approved, or needing no review,
-    /// and waiting in a blocked state.
+    /// and waiting in a review state.
     pub fn pending_merges(&self) -> Vec<(ItemId, CommitId)> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
         self.live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
+            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
             .filter_map(|item| {
                 let (Some(commit), _) = self.submission(item.id())? else {
                     return None;
@@ -120,7 +120,7 @@ impl State {
             .collect()
     }
 
-    /// Items with approved work that wait in a blocked state to be finished: the work was
+    /// Items with approved work that wait in a review state to be finished: the work was
     /// submitted without commits, so there is nothing to merge. An item that moved on after the
     /// submission was moved by someone, and is left where it is.
     pub fn approved_without_commits(&self) -> Vec<ItemId> {
@@ -128,7 +128,7 @@ impl State {
             return Vec::new();
         };
         self.live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
+            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
             .filter(|item| {
                 matches!(
                     self.submission(item.id()),
@@ -162,7 +162,7 @@ impl State {
             .map(|(_, definition)| definition)
             .collect();
         self.live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
+            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
             .filter(|item| {
                 let Some(ReviewStatus::Awaiting {
                     step: ReviewStep::Agent { requires },
@@ -192,7 +192,7 @@ impl State {
         };
         let mut found: Vec<(&Item, Option<CommitId>)> = self
             .live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Blocked))
+            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
             .filter_map(|item| {
                 let (commit, _) = self.submission(item.id())?;
                 let Some(ReviewStatus::Awaiting {

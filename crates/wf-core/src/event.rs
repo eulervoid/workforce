@@ -614,8 +614,8 @@ mod tests {
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
     ];
 
-    const GOLDEN_LEN: usize = 1987;
-    const GOLDEN_ID: &str = "xccb7codidyljoe5uoekmcbmwatge3t7h4wwdyuwdz24da5znnxa";
+    const GOLDEN_LEN: usize = 1985;
+    const GOLDEN_ID: &str = "j3flm66joavnlcqky2vri5tcbhmiyeppkwsfpwshjk5f2x6x4atq";
 
     #[test]
     fn round_trips_and_verifies() {
