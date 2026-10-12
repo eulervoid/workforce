@@ -275,7 +275,11 @@ impl Default for MergeConfig {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewStep {
-    Agent { requires: BTreeSet<Requirement> },
+    Agent {
+        requires: BTreeSet<Requirement>,
+    },
+    /// Policies stored before the step was renamed say `human`.
+    #[serde(alias = "human")]
     Principal,
 }
 
@@ -630,6 +634,20 @@ mod tests {
         let policy = Policy::parse(&source).unwrap();
         let task = policy.type_config(&type_name("task")).unwrap();
         assert_eq!(task.review, Some(ReviewName::new("standard").unwrap()));
+    }
+
+    #[test]
+    fn stored_policies_that_name_the_human_step_still_parse() {
+        let old = DEFAULT_POLICY_TOML.replace(
+            "name = \"manual\"\nsteps = [\"principal\"]",
+            "name = \"manual\"\nsteps = [\"human\"]",
+        );
+        assert!(old.contains("[\"human\"]"));
+        let policy = Policy::parse(&old).unwrap();
+        let manual = policy
+            .review_level(&ReviewName::new("manual").unwrap())
+            .unwrap();
+        assert_eq!(manual.steps, [ReviewStep::Principal]);
     }
 
     #[test]
