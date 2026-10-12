@@ -28,7 +28,7 @@ wf agent add reviewer --harness claude-code --capability review --capability str
 wf agent add supervisor --harness claude-code --lane supervision --start auto
 wf device edit --max-sessions 3 --agent coder=1 --agent reviewer=1 --agent supervisor=1
 wf item add --title "Parse durations in policy" --review standard
-wf daemon &                      # starts the agents on what is ready, and merges what is approved
+wf daemon start                  # starts the agents on what is ready, and merges what is approved
 wf session list                  # live and finished sessions
 wf session watch <item>          # follow the transcript of the latest session on an item
 wf watch                         # events as they arrive; answer what waits on you right there
@@ -107,11 +107,11 @@ session says who decided each request and why.
 ## Several machines
 ```sh
 # laptop, where `wf init` ran (it holds your principal key)
-wf daemon &                      # serves sync and join, follows gossip
+wf daemon start                  # serves sync and join, follows gossip
 wf invite device                 # prints wfi1...
 # vm, inside a clone of the repository
 wf join wfi1... --name vm        # binds this machine to you and takes in the log
-wf daemon &
+wf daemon start
 wf item add --title "Try sync" --priority P1
 # anywhere
 wf sync                          # one shot, without a daemon: `wf sync --serve` listens meanwhile
@@ -126,8 +126,12 @@ workforce before this was the case, move `~/.local/share/workforce/keys/principa
 
 Without a daemon the CLI opens the store itself; with one it asks the daemon, which owns the store.
 Devices find each other through iroh (relays and address lookup from n0; `--relay <url>` replaces the
-relay). Run the daemon as a service yourself, for example as a systemd user unit or a launchd agent
-running `wf daemon`.
+relay). `wf daemon start` runs the daemon in the background and logs to
+`~/.local/share/workforce/daemon.log` (`WF_LOG` takes a `tracing` filter); `wf daemon stop` and
+`wf daemon status` do what they say. To run it as a service, have a systemd user unit or a launchd
+agent run `wf daemon run`, which stays in the foreground and stops on SIGTERM. Agents call the copy of
+`wf` the daemon made when it started, so rebuilding `wf` does not change what running agents call;
+restart the daemon to give them the new one.
 
 `just check` runs formatting, clippy and all tests. Property tests default to 128 cases; for the
 10k-case run use `PROPTEST_CASES=10000 cargo test --release -p wf-core`. The 100k-event startup check

@@ -30,7 +30,7 @@ pub fn watch(
     args: WatchArgs,
 ) -> anyhow::Result<()> {
     if !workspace.follows_daemon() {
-        bail!("`wf watch` follows the daemon; start it with `wf daemon`");
+        bail!("`wf watch` follows the daemon; start it with `wf daemon start`");
     }
     let only = args
         .item

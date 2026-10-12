@@ -546,7 +546,7 @@ impl Daemon {
                     .finish_session(workforce, loaded, session, Finish::Failed { because })
                     .await
                 {
-                    eprintln!(
+                    tracing::warn!(
                         "could not end session {session} after it failed to start: {}",
                         wf_core::report::report(&ending)
                     );
@@ -620,7 +620,7 @@ impl Daemon {
                 wf_core::autonomy::PermissionMode::Ask | wf_core::autonomy::PermissionMode::Deny,
             ) => " without a sandbox",
         };
-        eprintln!(
+        tracing::info!(
             "session {}: {} started on item {}{isolation}",
             session.short(),
             run.agent,
@@ -788,7 +788,7 @@ impl Daemon {
             EventBody::SessionEnded(SessionEnded { session, reason }),
         )
         .await?;
-        eprintln!("session {}: ended, {reason:?}", session.short());
+        tracing::info!("session {}: ended, {reason:?}", session.short());
         let how = match finish {
             Finish::Submit { .. }
             | Finish::Release { .. }
@@ -839,7 +839,7 @@ impl Daemon {
         })
         .await;
         if let Ok(Err(error)) = removed {
-            eprintln!(
+            tracing::warn!(
                 "could not remove the checkout of the review of #{}: {}",
                 item.short(),
                 wf_core::report::report(&error)
@@ -866,14 +866,14 @@ impl Daemon {
         match removed {
             Ok(Ok(())) => {}
             Ok(Err(error)) => {
-                eprintln!(
+                tracing::warn!(
                     "could not remove the branch of #{}: {}",
                     item.short(),
                     wf_core::report::report(&error)
                 );
             }
             Err(error) => {
-                eprintln!(
+                tracing::warn!(
                     "could not remove the branch of #{}: {}",
                     item.short(),
                     wf_core::report::report(&error)
@@ -1024,7 +1024,7 @@ impl Daemon {
                 })
                 .await?;
                 if let Err(error) = cleaned {
-                    eprintln!(
+                    tracing::warn!(
                         "could not remove the branch of #{}: {}",
                         item.short(),
                         wf_core::report::report(&error)
@@ -1088,7 +1088,7 @@ impl Daemon {
                 .finish_session(workforce, loaded, session, Finish::Interrupted)
                 .await
             {
-                eprintln!(
+                tracing::warn!(
                     "could not end stale session {session}: {}",
                     wf_core::report::report(&error)
                 );
@@ -1121,7 +1121,7 @@ async fn run_session(
             .finish_session(run.workforce, &loaded, run.session, finish)
             .await
     {
-        eprintln!(
+        tracing::warn!(
             "could not end session {}: {}",
             run.session,
             wf_core::report::report(&error)
@@ -1187,9 +1187,10 @@ async fn drive(
     let agent = match sandboxed(daemon, run, agent) {
         Ok(agent) => agent,
         Err(problem) => {
-            eprintln!(
+            tracing::warn!(
                 "could not sandbox {} for session {}: {problem}",
-                run.agent, run.session
+                run.agent,
+                run.session
             );
             return failed(format!("the sandbox could not be set up: {problem}"));
         }
@@ -1218,9 +1219,10 @@ async fn drive(
         Ok(conversation) => conversation,
         Err(error) => {
             let report = wf_core::report::report(&error);
-            eprintln!(
+            tracing::warn!(
                 "could not start {} for session {}: {report}",
-                run.agent, run.session
+                run.agent,
+                run.session
             );
             return failed(format!("{} did not start: {report}", run.agent));
         }
@@ -1589,7 +1591,7 @@ async fn dispatch_once(
             )
             .await
         {
-            eprintln!(
+            tracing::warn!(
                 "could not merge #{}: {}",
                 item.short(),
                 wf_core::report::report(&error)
@@ -1613,7 +1615,7 @@ async fn dispatch_once(
             .move_item(loaded, principal, item, done, None, None)
             .await
         {
-            eprintln!(
+            tracing::warn!(
                 "could not finish #{}: {}",
                 item.short(),
                 wf_core::report::report(&error)
@@ -1707,7 +1709,7 @@ async fn dispatch_once(
             };
             if let (item, Err(error)) = started {
                 failed.insert((item, agent.name.clone()));
-                eprintln!(
+                tracing::warn!(
                     "could not start {} on #{}: {}",
                     agent.name,
                     item.short(),

@@ -18,7 +18,7 @@ use wf_net::replica::{self, Joined};
 use wf_net::{NetError, Network, Node, SharedReplica};
 use wf_store::{RedbStore, Replica};
 
-use crate::cli::{DaemonArgs, InviteDeviceArgs, JoinArgs, SyncArgs};
+use crate::cli::{InviteDeviceArgs, JoinArgs, SyncArgs};
 use crate::commands::emit;
 use crate::interactive::Mode;
 use crate::keys::DataDir;
@@ -239,7 +239,7 @@ pub fn invite_device(
         },
         |view| {
             format!(
-                "{}\nvalid until {}; on the new machine, inside a clone of this repository, run:\n  wf join <code> --name <machine>\nthis machine must be online: run `wf daemon` or `wf sync --serve`\n",
+                "{}\nvalid until {}; on the new machine, inside a clone of this repository, run:\n  wf join <code> --name <machine>\nthis machine must be online: run `wf daemon start` or `wf sync --serve`\n",
                 view.code, view.expires
             )
         },
@@ -434,54 +434,4 @@ pub(crate) fn host_name() -> String {
             (!name.is_empty()).then_some(name)
         })
         .unwrap_or_else(|| "this-machine".to_string())
-}
-
-#[derive(Serialize)]
-struct DaemonView {
-    device: String,
-    socket: String,
-}
-
-pub fn daemon(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
-    let device = data
-        .device(false)?
-        .context("no device key; run `wf init` or `wf join` first")?;
-    let socket = data.daemon_socket();
-    let config = wf_daemon::Config {
-        data_dir: data.root().to_path_buf(),
-        socket: socket.clone(),
-        network: if args.no_network {
-            Network::Direct
-        } else {
-            network_for(args.relay.as_deref())?
-        },
-        harnesses: Default::default(),
-        machine_config: wf_daemon::machine_config::MachineConfig::path_from_env(),
-        wf_binary: Some(std::env::current_exe().context("finding the wf binary")?),
-    };
-    let runtime = tokio::runtime::Builder::new_multi_thread()
-        .enable_all()
-        .build()?;
-    runtime.block_on(async {
-        let daemon = wf_daemon::Daemon::start(config, device.clone()).await?;
-        emit(
-            json,
-            &DaemonView {
-                device: device.key().to_string(),
-                socket: socket.display().to_string(),
-            },
-            |view| {
-                format!(
-                    "daemon of device {} listening on {}; interrupt to stop\n",
-                    view.device, view.socket
-                )
-            },
-        )?;
-        daemon
-            .serve(async {
-                let _ = tokio::signal::ctrl_c().await;
-            })
-            .await?;
-        Ok(())
-    })
 }

@@ -102,7 +102,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             command: Some(ForkCommand::Accept { id, relay }),
             ..
         } => crate::fork::accept(json, data, cwd, &id, relay.as_deref()),
-        Command::Daemon(args) => crate::network::daemon(json, args, data),
+        Command::Daemon(command) => crate::daemon::daemon(json, command, data),
         Command::Permissions(command) => crate::permissions::permissions(json, command, cwd),
         Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
         Command::Status { refold } => {

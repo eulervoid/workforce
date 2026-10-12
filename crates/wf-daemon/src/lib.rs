@@ -250,7 +250,7 @@ impl Daemon {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .insert(id);
                 if first_time {
-                    eprintln!(
+                    tracing::warn!(
                         "not serving workforce {id}: {}; if it is from an older build, remove {}",
                         wf_core::report::report(&error),
                         self.config.data_dir.join(id.to_string()).display()

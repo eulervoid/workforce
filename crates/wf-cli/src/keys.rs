@@ -44,6 +44,16 @@ impl DataDir {
         wf_daemon::proto::socket_path(&self.root, runtime.as_deref())
     }
 
+    /// The process id of the daemon of this machine, while it runs.
+    pub fn daemon_pid(&self) -> PathBuf {
+        self.root.join("daemon.pid")
+    }
+
+    /// What a daemon started with `wf daemon start` writes.
+    pub fn daemon_log(&self) -> PathBuf {
+        self.root.join("daemon.log")
+    }
+
     pub fn root(&self) -> &Path {
         &self.root
     }

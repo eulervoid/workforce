@@ -334,7 +334,9 @@ impl Workspace {
     fn daemon(&mut self, what: &str) -> anyhow::Result<(&mut DaemonClient, &mut State)> {
         match &mut self.source {
             Source::Daemon { client, state } => Ok((client.get_mut(), state)),
-            Source::Local(_) => bail!("only the daemon can {what}; start it with `wf daemon`"),
+            Source::Local(_) => {
+                bail!("only the daemon can {what}; start it with `wf daemon start`")
+            }
         }
     }
 

@@ -573,7 +573,7 @@ impl Sandbox {
     #[allow(clippy::zombie_processes)]
     fn start_daemon(&self) -> RunningDaemon {
         let child = self
-            .command(&["daemon", "--no-network"])
+            .command(&["daemon", "run", "--no-network"])
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null())
             .spawn()
@@ -634,9 +634,42 @@ fn a_second_daemon_is_refused() {
     let sandbox = Sandbox::new();
     sandbox.run(&["init", "--name", "demo"]);
     let daemon = sandbox.start_daemon();
-    let error = sandbox.fail(&["daemon", "--no-network"]);
+    let error = sandbox.fail(&["daemon", "run", "--no-network"]);
     assert!(error.contains("already listening"), "{error}");
     daemon.stop();
+}
+
+/// Stops a daemon started with `wf daemon start`, also when the test fails.
+struct BackgroundDaemon<'a>(&'a Sandbox);
+
+impl Drop for BackgroundDaemon<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.command(&["daemon", "stop"]).output();
+    }
+}
+
+#[test]
+fn the_daemon_starts_in_the_background_and_stops() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&["init", "--name", "demo"]);
+    let stopped = sandbox.json(&["daemon", "status"]);
+    assert_eq!(stopped["running"], false);
+    assert!(sandbox.run(&["daemon", "status"]).contains("wf daemon start"));
+
+    let started = sandbox.json(&["daemon", "start", "--no-network"]);
+    let _guard = BackgroundDaemon(&sandbox);
+    assert_eq!(started["running"], true);
+    assert!(started["pid"].as_u64().is_some(), "{started}");
+    let error = sandbox.fail(&["daemon", "start", "--no-network"]);
+    assert!(error.contains("already runs"), "{error}");
+    sandbox.add(&["--title", "Written through the daemon"]);
+
+    let after = sandbox.json(&["daemon", "stop"]);
+    assert_eq!(after["running"], false);
+    let log = std::fs::read_to_string(started["log"].as_str().unwrap()).unwrap();
+    assert!(log.contains("the daemon runs"), "{log}");
+    assert!(log.contains("the daemon stops"), "{log}");
+    assert_eq!(sandbox.json(&["item", "list"]).as_array().unwrap().len(), 1);
 }
 
 mod forking {

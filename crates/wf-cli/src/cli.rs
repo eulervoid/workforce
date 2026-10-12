@@ -116,8 +116,9 @@ pub enum Command {
     Harness(HarnessCommand),
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
-    /// Run the background process of this machine
-    Daemon(DaemonArgs),
+    /// Start, stop or run the background process of this machine.
+    #[command(subcommand)]
+    Daemon(DaemonCommand),
     /// Invite another machine of yours to the workforce.
     #[command(subcommand)]
     Invite(InviteCommand),
@@ -304,6 +305,19 @@ pub enum ForkCommand {
     },
     /// Show what this workforce was forked from and the forks announced in it.
     List,
+}
+
+#[derive(Subcommand)]
+pub enum DaemonCommand {
+    /// Start the daemon in the background; it logs to `daemon.log` in the data directory.
+    Start(DaemonArgs),
+    /// Stop the daemon of this machine. Its sessions stop; when it starts again, they end as
+    /// interrupted and their items are ready again.
+    Stop,
+    /// Whether the daemon of this machine runs, and where it logs.
+    Status,
+    /// Run the daemon in this terminal until it is interrupted.
+    Run(DaemonArgs),
 }
 
 #[derive(Args)]
