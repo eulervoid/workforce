@@ -36,10 +36,11 @@ impl DaemonClient {
     pub fn connect(socket: &Path) -> Result<Option<Self>, ClientError> {
         let stream = match UnixStream::connect(socket) {
             Ok(stream) => stream,
+            // A path longer than a socket address holds cannot be listened on either.
             Err(error)
                 if matches!(
                     error.kind(),
-                    ErrorKind::NotFound | ErrorKind::ConnectionRefused
+                    ErrorKind::NotFound | ErrorKind::ConnectionRefused | ErrorKind::InvalidInput
                 ) =>
             {
                 return Ok(None);
@@ -239,5 +240,17 @@ impl DaemonClient {
             Response::LastSeen(seen) => Ok(seen),
             _ => Err(ClientError::UnexpectedResponse),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn no_daemon_listens_on_a_socket_path_too_long_for_one() {
+        let directory = tempfile::tempdir().unwrap();
+        let socket = directory.path().join("d".repeat(200)).join("daemon.sock");
+        assert!(matches!(DaemonClient::connect(&socket), Ok(None)));
     }
 }
