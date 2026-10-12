@@ -702,7 +702,8 @@ impl Drop for BackgroundDaemon<'_> {
 fn the_daemon_starts_in_the_background_and_stops() {
     let sandbox = Sandbox::new();
     sandbox.run(&["init", "--name", "demo"]);
-    assert!(sandbox.run(&["status"]).contains("daemon: does not run"));
+    let text = sandbox.run(&["status"]);
+    assert!(text.contains("daemon: stopped"), "{text}");
     let stopped = sandbox.json(&["daemon", "status"]);
     assert_eq!(stopped["running"], false);
     assert!(
