@@ -152,33 +152,32 @@ pub(crate) struct MergeRequest {
     attempt: Attempt,
 }
 
-/// The items being merged right now, so that one merge is made once.
+/// The items one kind of operation runs on right now, such as merging, so that it runs on an
+/// item once at a time.
 #[derive(Default)]
-pub(crate) struct Merging {
+pub(crate) struct ItemLocks {
     items: Mutex<std::collections::BTreeSet<ItemId>>,
 }
 
-pub(crate) struct MergeGuard<'a> {
-    merging: &'a Merging,
+pub(crate) struct ItemLock<'a> {
+    locks: &'a ItemLocks,
     item: ItemId,
 }
 
-impl Merging {
-    fn start(&self, item: ItemId) -> Option<MergeGuard<'_>> {
+impl ItemLocks {
+    /// The lock of `item`, or `None` while someone else holds it.
+    fn take(&self, item: ItemId) -> Option<ItemLock<'_>> {
         let mut items = self
             .items
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        items.insert(item).then_some(MergeGuard {
-            merging: self,
-            item,
-        })
+        items.insert(item).then_some(ItemLock { locks: self, item })
     }
 }
 
-impl Drop for MergeGuard<'_> {
+impl Drop for ItemLock<'_> {
     fn drop(&mut self) {
-        self.merging
+        self.locks
             .items
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -402,6 +401,16 @@ impl Daemon {
         role: SessionRole,
         repository: PathBuf,
     ) -> Result<SessionId, SessionError> {
+        // A start by hand and one by the dispatcher must not both see the item free: the state is
+        // read and the claim checked under a lock held until `SessionStarted` is written.
+        let _starting = match role {
+            SessionRole::Work => Some(
+                self.starting
+                    .take(item)
+                    .ok_or(SessionError::Claimed(item))?,
+            ),
+            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
+        };
         let state = self.snapshot(loaded).await?;
         let principal = self.principal_of_device(&state)?;
         let definition = state
@@ -660,6 +669,7 @@ impl Daemon {
         session: SessionId,
         finish: Finish,
     ) -> Result<(), SessionError> {
+        let _ending = self.ending.lock().await;
         let state = self.snapshot(loaded).await?;
         let folded = state
             .session(session)
@@ -914,7 +924,7 @@ impl Daemon {
             because,
             attempt,
         } = request;
-        let Some(_merging) = self.merging.start(item) else {
+        let Some(_merging) = self.merging.take(item) else {
             return Ok(());
         };
         let state = self.snapshot(loaded).await?;

@@ -150,7 +150,11 @@ pub struct Daemon {
     node: Arc<Node<StorageHandle>>,
     presence: Presence,
     runners: runner::Runners,
-    merging: runner::Merging,
+    merging: runner::ItemLocks,
+    starting: runner::ItemLocks,
+    /// Taken while a session ends, so that two ends of one session, such as the agent's submit
+    /// and a timeout, do not both act.
+    ending: tokio::sync::Mutex<()>,
     held: Arc<permissions::Held>,
     judges: judges::Judges,
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
@@ -167,7 +171,9 @@ impl Daemon {
             node,
             presence: Presence::default(),
             runners: runner::Runners::default(),
-            merging: runner::Merging::default(),
+            merging: runner::ItemLocks::default(),
+            starting: runner::ItemLocks::default(),
+            ending: tokio::sync::Mutex::new(()),
             held: Arc::default(),
             judges: judges::Judges::default(),
             loaded: Mutex::new(BTreeMap::new()),
