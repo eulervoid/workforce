@@ -706,6 +706,42 @@ fn item(
                 Some(id),
             )
         }
+        ItemCommand::Cancel { item, note } => {
+            let id = choose_item(workspace, mode, item, Scope::Live)?;
+            let cancelled = {
+                let state = workspace.state();
+                let policy = &state.policy().expect("a workforce has a policy").policy;
+                let ItemView::Live(live) = state.item(id).expect("resolved ids exist") else {
+                    bail!("#{} is archived", id.short());
+                };
+                let config = policy
+                    .type_config(live.item_type())
+                    .with_context(|| format!("the policy has no type `{}`", live.item_type()))?;
+                config
+                    .first_state(wf_core::policy::StateCategory::Cancelled)
+                    .cloned()
+                    .with_context(|| {
+                        format!(
+                            "type `{}` has no cancelled state; move the item with `wf item move`, {}",
+                            live.item_type(),
+                            OneOf::new(config.states.iter().map(|state| &state.name))
+                        )
+                    })?
+            };
+            let because = comment_why(workspace, id, note)?;
+            let event = workspace.author(EventBody::ItemMoved(ItemMoved {
+                item: id,
+                to: cancelled.clone(),
+                by_session: None,
+                because,
+            }))?;
+            done(
+                json,
+                format!("cancelled #{}: {cancelled}", id.short()),
+                &event,
+                Some(id),
+            )
+        }
         ItemCommand::Link(args) => link(json, mode, workspace, args),
         ItemCommand::Diff { item, git_args } => {
             // `--json` after the item is wf's, not git's, though clap passes it on.

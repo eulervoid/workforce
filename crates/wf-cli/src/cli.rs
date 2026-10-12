@@ -573,6 +573,15 @@ pub enum ItemCommand {
         #[arg(long)]
         note: Option<String>,
     },
+    /// Move an item to the cancelled state of its type, such as `dropped`. A session working on
+    /// it stops after its current turn.
+    Cancel {
+        /// The start of an item id. Without one, pick at a terminal.
+        item: Option<String>,
+        /// Why, kept with the move.
+        #[arg(long)]
+        note: Option<String>,
+    },
     /// Add or remove a dependency, or say a decision supersedes another.
     Link(ItemLinkArgs),
     /// Show the work of an item, through git: its pager, colors and diff settings apply.

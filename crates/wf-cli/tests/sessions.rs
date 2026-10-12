@@ -683,6 +683,24 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn cancelling_an_item_stops_its_session() {
+    let world = World::new("wf comment {item} \"which crate?\" --block\n").await;
+    let item = world.wf.add(&["--title", "Not needed after all"]);
+    start_session(&world, &item);
+    world
+        .wait("the blocker", |world| {
+            !world.item(&item)["open"].as_array().unwrap().is_empty()
+        })
+        .await;
+    world
+        .wf
+        .run(&["item", "cancel", short(&item), "--note", "done elsewhere"]);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "cancelled", "{session}");
+    assert_eq!(world.item(&item)["state"], "dropped");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_session_that_waits_too_long_for_an_answer_times_out() {
     let script = "wf comment {item} \"anyone there?\" --block\n";
     let world = World::new(script).await;
