@@ -5,7 +5,8 @@
 - Don't be afraid to question previous assumptions if something does not click
 - Consider future implications of your changes, but lean towards simplicity and **don't over-engineer**
 - Use precise language and take great care that the names and concepts you use are descriptive and consistent 
-- Types that do things (call, sample, judge, measure) get the plain name (`Provider`, `Target`, `Judge`); what is read from `soundings.toml` is marked with a `Config` suffix (`ProviderConfig`). Say "config", never "settings"
+- Types that do things (call, sample, judge, measure) get the plain name (`Provider`, `Target`, `Judge`); what is read from the policy or the machine config is marked with a `Config` suffix (`ReviewLevelConfig`, `MachineConfig`). Say "config", never "settings"
+- *Principal* always means the accountable person (SPEC §5); never say human, user or person for it in code, CLI or docs
 - When two concepts compete for one name, don't separate them with a synonym or a prefix (`Settings` vs `Config`, `Raw*`, `Ready*`). Step back, state the purpose of each in one sentence and name it for that purpose; if you can't state two distinct purposes, they should be one concept
 - Practice type driven design and make illegal states unrepresentable
 - Model domain states with algebraic data types (enums) so each variant carries only the data valid for that state

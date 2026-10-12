@@ -2,12 +2,30 @@
 
 > A peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.
 
-Status: draft. Scope of the first implementation is **UC1** (one developer, many machines). Everything
-marked *later* is designed for, but not built.
+Status: draft. wf grows through four **stages**, each trusting more parties than the one before.
+The current target is **stage 1**; everything marked *later* is designed for, but not built.
 
-## 1. Use cases
+## 1. Stages
 
-### UC1: one developer, many machines (first target)
+| Stage | Who | Machines | Milestones |
+|---|---|---|---|
+| **1** | single user | a single machine | M0, M2, M2.1 built; M2.2 makes it fit for daily use |
+| **2** | single user | several trusted machines | M1 (sync, invites, fork) built; M3 (sessions across machines) next |
+| **3** | a trusted team | several trusted machines | M5 |
+| **4** | untrusted participants | several, possibly untrusted machines | M7, a possible end goal |
+
+Stage 4 is far off and may never happen. Designs keep it in mind, so that they do not rule it out,
+but it does not drive them: until then members and their machines are trusted (section 5).
+
+### Stage 1: single user, single machine (current)
+One developer with agents on their own machine, working on a real project every day.
+
+* Nothing to run besides `wf daemon`; no network is needed.
+* Off-path cases are handled visibly: a session that fails, stalls or is interrupted never leaves an
+  item stuck without saying so.
+* A daemon restart (for example after rebuilding wf) costs agent context at most, never work.
+
+### Stage 2: single user, several trusted machines
 A laptop (sleeps, roams), a cloud VM (always on), a home desktop (GPU, behind a NAT). Each runs agents.
 
 * Machines sit behind different NATs with changing IPs. No port forwarding, no VPN.
@@ -16,14 +34,14 @@ A laptop (sleeps, roams), a cloud VM (always on), a home desktop (GPU, behind a 
 * Work should go to the machine that fits (GPU, OS, harness, model).
 * Two agents should not silently pick up the same item.
 
-### UC2: several developers, humans and agents mixed (later)
-* Every change traces back to a human principal.
+### Stage 3: a trusted team, several trusted machines
+* Every change traces back to a principal.
 * Review by a different principal than the author is a useful default.
 * Async, multi-timezone: lots of "why did we decide X?" lookups.
 * Not every transcript is meant for everyone.
 
-### UC3: donated agent work (later)
-* Untrusted participants: needs revocation, rate limits, sandboxing, probation.
+### Stage 4: untrusted participants, possibly untrusted machines
+* Donated agent work: needs revocation, rate limits, sandboxing, probation.
 * Donors can take part in discussions. Governance is advisory.
 * Prompt injection through issue text is a real risk on donor machines.
 
@@ -107,6 +125,12 @@ the same store, log and item model.
 | **Session** | minutes to hours | who is working on which item right now, where, in which worktree | `@joshua/coder/s4k2` |
 | **Device** | long-lived infrastructure | where things run; mostly invisible | not mentionable |
 
+**Principal always means the accountable person**, and nothing else: who owns the keys, whom agents
+act for, who decides a `principal` step of a review or recovery level, whom blockers escalate to.
+Stages 1 and 2 have one principal; a team (stage 3) has several. Code, CLI and docs say *principal*
+for this concept, never *human*, *user* or *person*; a step that waits on a principal names no
+particular one until stage 3, when it may (`{ principal = "@joshua" }`).
+
 * **Principal key** (ed25519): one per human. Signs authority events: owner actions, invites,
   device bindings, policy. Kept on disk for M0 (`$XDG_DATA_HOME/workforce/keys/`); a 1Password or
   ssh-agent hook comes later.
@@ -116,8 +140,9 @@ the same store, log and item model.
 
 ```rust
 enum Actor {
-    Human(PrincipalKey),
+    Principal(PrincipalKey),
     Agent { agent: AgentId, session: SessionId },
+    Daemon(PrincipalKey),     // what the daemon of a principal's device does by itself
 }
 ```
 
@@ -151,7 +176,7 @@ instructions = "..."      # optional: told in every brief, before the item (how 
 * Agent definitions are work configuration, not authority, so a device key may sign them. Agent actors
   cannot write them, so an agent cannot raise its own autonomy.
 * An agent whose `lanes` include `supervision` is a **supervisor**: it resolves the blockers of other
-  agents or escalates them to the human (section 10). It has no other rights; lanes route, members are
+  agents or escalates them to the principal (section 10). It has no other rights; lanes route, members are
   trusted.
 
 ### Devices
@@ -242,7 +267,7 @@ struct Event {
     v: u16,
     workforce: Hash,
     author: DeviceKey,
-    actor: Actor,            // human or agent session acting through this device
+    actor: Actor,            // principal, agent session or daemon acting through this device
     seq: u64,                // per author, gapless, starting at 1
     prev: Option<EventId>,   // author's previous event
     seen: Vec<EventRef>,     // heads seen when writing, with author and seq
@@ -327,7 +352,7 @@ Event        = EventContent, sig: Signature
 EventContent = v: u16 (currently 1)
                workforce: Option<WorkforceId>     // None only in genesis
                author: DeviceKey
-               actor: Actor                       // Human(PrincipalKey) | Agent{agent: AgentId, session: SessionId}
+               actor: Actor                       // Principal(PrincipalKey) | Agent{agent: AgentId, session: SessionId} | Daemon(PrincipalKey)
                seq: u64                           // per author, from 1
                prev: Option<EventId>              // None exactly when seq == 1
                seen: Vec<EventRef>                // sorted by id, deduplicated
@@ -636,7 +661,7 @@ Types the code relies on. Shipped in the default policy, names reserved, states 
 | Type | States (category) | Purpose |
 |---|---|---|
 | `task` | backlog (inactive), open, in_progress (active), in_review (review), done, dropped (cancelled) | default unit of work; what agent sessions are assigned |
-| `decision` | proposed (review), ratified (done), rejected (cancelled), superseded (done) | project decisions; ratifying is the approval of the review level (`principal` by default), objections are change requests; only `ratified` enters agent context |
+| `decision` | proposed (review), ratified (done), rejected (cancelled), superseded (done) | project decisions; ratifying is the approval of the review level (`manual` by default), objections are change requests; only `ratified` enters agent context |
 | `distill` | open, in_progress (active), done | system-created meta work in the `meta` lane |
 
 Custom types (`bug`, `doc`, `spike`, ...) are fully configurable.
@@ -782,7 +807,7 @@ target is an **agent**; the dispatcher picks any device that hosts it and has a 
 
 ### Review
 Review levels are an ordered list in the policy, from least to most strict. Each level is a sequence of
-steps; a step is an agent matched by capabilities or the human:
+steps; a step is an agent matched by capabilities or the principal:
 
 ```toml
 [[review]]
@@ -791,10 +816,10 @@ steps = [{ agent = { requires = ["review"] } }]
 
 [[review]]
 name = "critical"
-steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
+steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
 ```
 
-* An item names a level in its `review` field, defaulting to its type's `review` (`principal` for `task`
+* An item names a level in its `review` field, defaulting to its type's `review` (`manual` for `task`
   and `decision`). A type without one, like an item on the level `none`, is not reviewed.
   `wf item edit --review <level>` sets it and `--review default` goes back to the type's level; `default`
   is therefore not a level name. The planner, a supervisor or the working agent set it; a session may
@@ -816,13 +841,13 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
 * Verdicts: `Approve` moves on to the next step, and is refused while a change request is open;
   `RequestChanges` needs at least one open change request, written by the reviewer (section 10), and
   moves the item back to its open state; the next session continues the branch and resolves them;
-  `Escalate` (agents only) inserts a human step right after the current one. Human steps wait in
+  `Escalate` (agents only) inserts a principal step right after the current one. Principal steps wait in
   `wf inbox`. A verdict may carry a plain comment as its `because`.
 * On the next review, the reviewer sees how each change request was resolved. A resolution it does not
   accept gets a new change request; resolved comments never reopen.
 * A verdict names the commit it reviewed. What was reviewed is what gets merged; a new submission starts
   the level again.
-* Merging needs no separate setting: a level with a human step waits for the human.
+* Merging needs no separate setting: a level with a principal step waits for the principal.
 
 ### Merge
 `[merge] mode` decides how an approved item lands in `target`:
@@ -870,7 +895,7 @@ Both stay **open** until a later comment resolves them. They differ in what they
 
 | Kind | Purpose | While open | Goes to |
 |---|---|---|---|
-| **Blocker** | the work cannot start or continue until someone else answers or acts | the item is not ready; a work session on it parks (section 5) | whoever it `@mentions`; otherwise a supervisor; otherwise the principal of the agent that wrote it, or the author if human |
+| **Blocker** | the work cannot start or continue until someone else answers or acts | the item is not ready; a work session on it parks (section 5) | whoever it `@mentions`; otherwise a supervisor; otherwise the principal of the agent that wrote it, or the author if a principal |
 | **Change request** | something the work must do before it is submitted | `wf work submit` and `Approve` are refused | whoever works on the item next; the work brief lists it |
 
 * A question from an agent is a blocker on its own item: `wf comment <item> "<question>" --block`. Its
@@ -879,8 +904,8 @@ Both stay **open** until a later comment resolves them. They differ in what they
 * A blocker without a mention goes to the `supervision` lane: the dispatcher starts a **supervise
   session** for an agent in that lane that never worked on the item. It gets the item's history and an
   empty directory, and ends `Supervised` when it either resolves the blocker with an answer, or escalates
-  it with a new blocker that `@mentions` the human and resolves the old one. Without a supervisor, the
-  blocker goes straight to the human. Blockers waiting on a human are listed in `wf inbox`.
+  it with a new blocker that `@mentions` the principal and resolves the old one. Without a supervisor, the
+  blocker goes straight to the principal. Blockers waiting on a principal are listed in `wf inbox`.
 * Change requests come from reviewers (section 9) and from anyone who wants something done before the
   work is submitted. The working agent resolves each once it is done, saying how or naming the commit.
 * **Resolving:** any comment can resolve open blockers and change requests of its item, including a
@@ -1143,10 +1168,10 @@ name = "standard"
 steps = [{ agent = { requires = ["review", "strong-model"] } }]
 [[review]]
 name = "critical"
-steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
+steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
 [[review]]
-name = "principal"       # the strictest: a principal decides alone
-steps = ["human"]
+name = "manual"          # the strictest: a principal decides alone
+steps = ["principal"]
 
 [lanes.default]
 claim = ["member"]
@@ -1234,17 +1259,18 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
 | **M1** | iroh sync, equivocation handling, self-authorizing device invites and `wf join`, device profiles, daemon, gossip, `wf fork`. |
 | M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, blockers, change requests and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress, reports as comments, item activity |
 | M2.1 | Convenience at the CLI: machine config, permission chain (rules, hooks, decision models, agents), `wf item diff` through git, `wf item checkout\|path`, `wf watch` |
-| M3 | Sessions across devices: anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, session inboxes, overlap notifications, secret brokering, redaction, merge mode `origin` with `Merged` from origin. **= UC1** |
+| M2.2 | Daily use on one machine: recovery levels, no silent stalls, daemon management, export, network off for a single device, CLI polish. **= stage 1** |
+| M3 | Sessions across devices: anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, session inboxes, overlap notifications, secret brokering, redaction, merge mode `origin` with `Merged` from origin. **= stage 2** |
 | M4 | Decision ratification flow, distill items, hybrid search |
-| M5 | Multiple principals, threads, scopes, `wf attach` |
+| M5 | Multiple principals, threads, scopes, `wf attach`. **= stage 3** |
 | M6 | Git bundles over iroh-blobs, peer-to-peer repos, compaction (item checkpoints, frontier) |
-| M7 | Donors: revocation, rate limits, sandbox, transcript publishing, governance |
+| M7 | Donors: revocation, rate limits, sandbox, transcript publishing, governance. **= stage 4** |
 
 A TUI with the live state of the workforce comes after M2.1, built on what `wf watch` shows.
 
 ## 19. Open questions
-1. Should merges to the main branch require a human key once origin-side protection is not enough?
-   (v1: a review level with a human step in `local` mode, the origin in `origin` mode.)
+1. Should merges to the main branch require a principal key once origin-side protection is not enough?
+   (v1: a review level with a principal step in `local` mode, the origin in `origin` mode.)
 2. Fork following for non-owner forks: ask-first UX.
 3. Prior art to read: **Radicle**, **p2panda**, Keyhive, Matrix state resolution (before M7).
 4. Do heartbeats belong in the log (M3)? One per minute for three sessions is about 130k events a
