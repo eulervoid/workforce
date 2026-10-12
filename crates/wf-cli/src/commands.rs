@@ -107,14 +107,18 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
+            let waiting_on_you =
+                view::inbox_views(workspace.state(), &workspace.held_permissions()).len();
+            let context = view::StatusContext {
+                own: Some(workspace.device_key()),
+                last_seen: &workspace.last_seen(),
+                daemon: workspace.follows_daemon(),
+                waiting_on_you,
+                refolded: refold,
+            };
             emit(
                 json,
-                &view::status(
-                    workspace.state(),
-                    Some(workspace.device_key()),
-                    &workspace.last_seen(),
-                    refold,
-                ),
+                &view::status(workspace.state(), context),
                 render::status,
             )
         }

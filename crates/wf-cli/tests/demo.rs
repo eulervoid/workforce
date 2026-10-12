@@ -619,7 +619,17 @@ fn the_cli_gives_the_same_output_through_the_daemon_as_through_the_store() {
     daemon.stop();
 
     assert_eq!(sandbox.json(&["item", "list"]), list);
-    assert_eq!(sandbox.json(&["status"]), status);
+    // Only whether the daemon answered differs.
+    let without_daemon = |mut status: serde_json::Value| {
+        status["daemon"].take();
+        status["next"].take();
+        status
+    };
+    assert_eq!(status["daemon"], true);
+    assert_eq!(
+        without_daemon(sandbox.json(&["status"])),
+        without_daemon(status)
+    );
     assert_eq!(
         sandbox.json(&["item", "show", short(&through_daemon)]),
         item
@@ -652,9 +662,14 @@ impl Drop for BackgroundDaemon<'_> {
 fn the_daemon_starts_in_the_background_and_stops() {
     let sandbox = Sandbox::new();
     sandbox.run(&["init", "--name", "demo"]);
+    assert!(sandbox.run(&["status"]).contains("daemon: does not run"));
     let stopped = sandbox.json(&["daemon", "status"]);
     assert_eq!(stopped["running"], false);
-    assert!(sandbox.run(&["daemon", "status"]).contains("wf daemon start"));
+    assert!(
+        sandbox
+            .run(&["daemon", "status"])
+            .contains("wf daemon start")
+    );
 
     let started = sandbox.json(&["daemon", "start", "--no-network"]);
     let _guard = BackgroundDaemon(&sandbox);

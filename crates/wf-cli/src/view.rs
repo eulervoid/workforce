@@ -1241,7 +1241,28 @@ pub struct StatusView {
     pub archived_items: usize,
     pub forked_from: Option<String>,
     pub devices: Vec<DeviceStatus>,
+    /// Whether this command was answered by the daemon of this machine, which starts the agents.
+    pub daemon: bool,
+    pub ready_items: usize,
+    pub live_sessions: usize,
+    /// Live work sessions whose item waits on a dependency or an open blocker.
+    pub parked_sessions: usize,
+    /// Items whose sessions did not finish and whose recovery level leaves them to the principal.
+    pub after_failures: Vec<String>,
+    /// What waits on the principal, as `wf inbox` lists it.
+    pub waiting_on_you: usize,
     pub flagged: Vec<String>,
+    /// What to do next, if anything stands out.
+    pub next: Option<String>,
+    pub refolded: bool,
+}
+
+/// What `wf status` knows besides the state.
+pub struct StatusContext<'a> {
+    pub own: Option<wf_core::identity::DeviceKey>,
+    pub last_seen: &'a std::collections::BTreeMap<wf_core::identity::DeviceKey, u64>,
+    pub daemon: bool,
+    pub waiting_on_you: usize,
     pub refolded: bool,
 }
 
@@ -1253,12 +1274,14 @@ pub struct DeviceStatus {
     pub last_seen: Option<String>,
 }
 
-pub fn status(
-    state: &State,
-    own: Option<wf_core::identity::DeviceKey>,
-    last_seen: &std::collections::BTreeMap<wf_core::identity::DeviceKey, u64>,
-    refolded: bool,
-) -> StatusView {
+pub fn status(state: &State, context: StatusContext) -> StatusView {
+    let StatusContext {
+        own,
+        last_seen,
+        daemon,
+        waiting_on_you,
+        refolded,
+    } = context;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let graph = state.dependency_graph();
     let mut flagged = BTreeSet::new();
@@ -1360,6 +1383,56 @@ pub fn status(
             announcement.to
         ));
     }
+    let live: Vec<_> = state
+        .sessions()
+        .filter(|session| session.is_live())
+        .collect();
+    let parked_sessions = live
+        .iter()
+        .filter(|session| is_parked(state, &graph, session))
+        .count();
+    let after_failures: Vec<String> = state
+        .inbox()
+        .into_iter()
+        .filter_map(|entry| match entry.waiting {
+            Waiting::Recovery {
+                role,
+                failures,
+                last,
+            } => {
+                let title = match state.item(entry.item) {
+                    Some(ItemView::Live(item)) => item.title().to_string(),
+                    Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
+                };
+                Some(format!(
+                    "#{} \"{title}\": {}",
+                    entry.item.short(),
+                    recovery_waits(state, entry.item, role, failures, last)
+                ))
+            }
+            Waiting::Blocker { .. }
+            | Waiting::Proposal
+            | Waiting::HumanReview { .. }
+            | Waiting::Merge { .. } => None,
+        })
+        .collect();
+    let ready_items = state.ready_items().len();
+    let auto_agents = state
+        .agents()
+        .any(|(_, definition)| definition.autonomy.start == StartMode::Auto);
+    let next = if state.agents().next().is_none() {
+        Some("add an agent: `wf agent add`".to_string())
+    } else if !daemon && auto_agents {
+        Some("start the daemon, which starts the agents: `wf daemon start`".to_string())
+    } else if waiting_on_you > 0 {
+        Some(format!("{waiting_on_you} waiting on you: `wf inbox`"))
+    } else if !live.is_empty() {
+        Some("follow the agents: `wf watch`".to_string())
+    } else if ready_items == 0 {
+        Some("add an item: `wf item add`".to_string())
+    } else {
+        None
+    };
     StatusView {
         name: state.name().unwrap_or_default().to_string(),
         id: state
@@ -1377,7 +1450,14 @@ pub fn status(
         archived_items,
         forked_from: state.fork_point().map(|(parent, _)| parent.to_string()),
         devices,
+        daemon,
+        ready_items,
+        live_sessions: live.len(),
+        parked_sessions,
+        after_failures,
+        waiting_on_you,
         flagged: flagged.into_iter().collect(),
+        next,
         refolded,
     }
 }
@@ -1409,6 +1489,22 @@ pub struct SessionView {
     pub steps: Option<StepsView>,
 }
 
+/// Whether `session` is a live work session whose item waits on a dependency or on an open
+/// blocker, such as its own question.
+fn is_parked(
+    state: &State,
+    graph: &wf_core::graph::DependencyGraph,
+    session: &wf_core::session::Session,
+) -> bool {
+    let blocked = match state.item(session.item()) {
+        Some(ItemView::Live(item)) => item.has_open_blocker(),
+        Some(ItemView::Archived(_)) | None => false,
+    };
+    session.is_live()
+        && session.role() == SessionRole::Work
+        && (blocked || !state.blockers(graph, session.item()).is_empty())
+}
+
 /// Live sessions first, then the others, each the newest first.
 pub fn session_views(state: &State) -> Vec<SessionView> {
     let graph = state.dependency_graph();
@@ -1432,15 +1528,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                 Some(ItemView::Live(item)) => steps_view(&item.body()),
                 Some(ItemView::Archived(_)) | None => None,
             };
-            // A work session whose item waits on a dependency or on an open blocker, such as its
-            // own question.
-            let blocked = match state.item(session.item()) {
-                Some(ItemView::Live(item)) => item.has_open_blocker(),
-                Some(ItemView::Archived(_)) | None => false,
-            };
-            let parked = session.is_live()
-                && session.role() == SessionRole::Work
-                && (blocked || !state.blockers(&graph, session.item()).is_empty());
+            let parked = is_parked(state, &graph, session);
             SessionView {
                 id: session.id().to_base32(),
                 agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),

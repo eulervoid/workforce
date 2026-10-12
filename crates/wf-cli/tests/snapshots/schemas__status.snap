@@ -1,6 +1,6 @@
 ---
 source: crates/wf-cli/tests/schemas.rs
-expression: "Envelope::new(view::status(&scenario.state, None, &Default::default(), false))"
+expression: "Envelope::new(view::status(&scenario.state, view::StatusContext\n{\n    own: None, last_seen: &Default::default(), daemon: false, waiting_on_you:\n    0, refolded: false,\n}))"
 ---
 {
   "schema": 2,
@@ -29,7 +29,14 @@ expression: "Envelope::new(view::status(&scenario.state, None, &Default::default
         "last_seen": null
       }
     ],
+    "daemon": false,
+    "ready_items": 1,
+    "live_sessions": 0,
+    "parked_sessions": 0,
+    "after_failures": [],
+    "waiting_on_you": 0,
     "flagged": [],
+    "next": null,
     "refolded": false
   }
 }

@@ -758,8 +758,21 @@ pub fn status(view: &StatusView) -> String {
         })
         .collect();
     let _ = writeln!(out, "devices: {}", devices.join(", "));
+    let daemon = if view.daemon { "runs" } else { "does not run" };
+    let _ = writeln!(out, "daemon: {daemon}");
+    let _ = writeln!(
+        out,
+        "sessions: {} live, {} of them parked  ready items: {}  waiting on you: {}",
+        view.live_sessions, view.parked_sessions, view.ready_items, view.waiting_on_you
+    );
+    for line in &view.after_failures {
+        let _ = writeln!(out, "waits for you: {line}");
+    }
     for flag in &view.flagged {
         let _ = writeln!(out, "! {flag}");
+    }
+    if let Some(next) = &view.next {
+        let _ = writeln!(out, "next: {next}");
     }
     if view.refolded {
         let _ = writeln!(out, "refolded from the log and wrote a fresh snapshot");

@@ -115,9 +115,13 @@ fn events_and_status() {
         "status",
         Envelope::new(view::status(
             &scenario.state,
-            None,
-            &Default::default(),
-            false
+            view::StatusContext {
+                own: None,
+                last_seen: &Default::default(),
+                daemon: false,
+                waiting_on_you: 0,
+                refolded: false,
+            }
         ))
     );
     insta::assert_json_snapshot!("agents", Envelope::new(view::agent_views(&scenario.state)));

@@ -868,6 +868,17 @@ async fn a_diagnosis_comes_before_the_retry_and_the_principal_decides_after() {
     let shown = world.wf.run(&["item", "show", short(&item)]);
     assert!(shown.contains("vendor the package"), "{shown}");
     assert!(shown.contains("waits for you"), "{shown}");
+    let status = world.wf.json(&["status"]);
+    assert_eq!(status["daemon"], true);
+    assert_eq!(
+        status["after_failures"].as_array().unwrap().len(),
+        1,
+        "{status}"
+    );
+    assert!(
+        status["next"].as_str().unwrap().contains("wf inbox"),
+        "{status}"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
