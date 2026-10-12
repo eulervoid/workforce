@@ -332,6 +332,9 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     if let Some(steps) = summary.steps {
         status.push(format!("steps {}", steps_label(Some(steps))));
     }
+    if let Some(waits) = &detail.waits_after_failures {
+        status.push(paint(style::WARNING, format!("waits for you: {waits}")));
+    }
     if let Some(review) = &detail.review_status {
         let text = match (review.status.as_str(), &review.step, &review.commit) {
             ("awaiting", Some(step), _) => format!("review: awaiting {step}"),

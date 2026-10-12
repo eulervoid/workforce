@@ -326,7 +326,7 @@ impl State {
             }
             EventBody::Review(review) => {
                 if let Some(item) = workforce.items.get_mut(&review.item) {
-                    item.touch(content.hlc);
+                    item.touch(stamp, &content.actor);
                     item.verdicts.insert(
                         id,
                         Verdicted {
@@ -340,7 +340,7 @@ impl State {
             }
             EventBody::Merged(merged) => {
                 if let Some(item) = workforce.items.get_mut(&merged.item) {
-                    item.touch(content.hlc);
+                    item.touch(stamp, &content.actor);
                     item.merges.insert(
                         id,
                         Merge {
@@ -359,7 +359,7 @@ impl State {
             }
             EventBody::ItemEdited(edited) => {
                 if let Some(item) = workforce.items.get_mut(&edited.item) {
-                    item.touch(content.hlc);
+                    item.touch(stamp, &content.actor);
                     for change in &edited.changes {
                         apply_change(item, change, stamp);
                     }
@@ -367,43 +367,43 @@ impl State {
             }
             EventBody::ItemMoved(moved) => {
                 if let Some(item) = workforce.items.get_mut(&moved.item) {
-                    item.touch(content.hlc);
+                    item.touch(stamp, &content.actor);
                     item.state.set(Some(moved.to.clone()), stamp);
                 }
             }
             EventBody::ItemLinked(ItemLinked { item, link }) => match link {
                 Link::DependsOn(change) => {
                     if let Some(item) = workforce.items.get_mut(item) {
-                        item.touch(content.hlc);
+                        item.touch(stamp, &content.actor);
                         item.depends_on.apply(change, stamp);
                     }
                 }
                 Link::Supersedes(target) => {
                     if let Some(item) = workforce.items.get_mut(item) {
-                        item.touch(content.hlc);
+                        item.touch(stamp, &content.actor);
                         item.supersedes.set(Some(*target), stamp);
                     }
                     if let Some(target) = workforce.items.get_mut(target) {
-                        target.touch(content.hlc);
+                        target.touch(stamp, &content.actor);
                         target.state.set(Some(superseded_state()), stamp);
                     }
                 }
             },
             EventBody::ItemArchived(reference) => {
                 if let Some(item) = workforce.items.get_mut(&reference.item) {
-                    item.touch(content.hlc);
+                    item.touch(stamp, &content.actor);
                     item.archived.set(Some(content.hlc), stamp);
                 }
             }
             EventBody::ItemUnarchived(reference) => {
                 if let Some(item) = workforce.items.get_mut(&reference.item) {
-                    item.touch(content.hlc);
+                    item.touch(stamp, &content.actor);
                     item.archived.set(None, stamp);
                 }
             }
             EventBody::Comment(comment) => {
                 if let Some(item) = workforce.items.get_mut(&comment.item) {
-                    item.touch(content.hlc);
+                    item.touch(stamp, &content.actor);
                     let by = CommentId::from(id);
                     item.comments.insert(
                         by,

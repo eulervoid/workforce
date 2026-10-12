@@ -1,9 +1,10 @@
 //! What waits on a person, worked out from the state.
 
-use crate::id::{CommentId, ItemId};
+use crate::id::{CommentId, ItemId, SessionId};
+use crate::lifecycle::Recovery;
 use crate::policy::{ReviewStep, StateCategory};
 use crate::review::ReviewStatus;
-use crate::session::CommitId;
+use crate::session::{CommitId, SessionRole};
 use crate::state::State;
 use crate::supervision::WaitsOn;
 
@@ -18,6 +19,13 @@ pub enum Waiting {
     HumanReview { commit: Option<CommitId> },
     /// The work is ready to merge, but the target branch is checked out with changes.
     Merge { commit: CommitId },
+    /// Sessions of `role` on the item ended without finishing, and its recovery level leaves the
+    /// next step to the principal: starting a session, commenting, editing or moving the item.
+    Recovery {
+        role: SessionRole,
+        failures: usize,
+        last: SessionId,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -65,6 +73,36 @@ impl State {
                 ))
             })
             .collect();
+        for item in self.live_items() {
+            let category = item.standing(policy).state_category();
+            let roles = match category {
+                Some(StateCategory::Open | StateCategory::Active) => {
+                    vec![SessionRole::Work, SessionRole::Supervise]
+                }
+                Some(StateCategory::Review) => {
+                    vec![SessionRole::Review { commit: None }, SessionRole::Supervise]
+                }
+                Some(StateCategory::Inactive | StateCategory::Done | StateCategory::Cancelled)
+                | None => Vec::new(),
+            };
+            for role in roles {
+                if let Recovery::WaitsForPrincipal { failures, last } =
+                    self.recovery(item.id(), role)
+                {
+                    entries.push((
+                        item.updated(),
+                        InboxEntry {
+                            item: item.id(),
+                            waiting: Waiting::Recovery {
+                                role,
+                                failures,
+                                last,
+                            },
+                        },
+                    ));
+                }
+            }
+        }
         for blocker in self.open_blockers() {
             if let WaitsOn::Person(_) = blocker.waits_on {
                 let Some(crate::item::ItemView::Live(item)) = self.item(blocker.item) else {

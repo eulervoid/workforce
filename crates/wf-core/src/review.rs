@@ -212,7 +212,10 @@ impl State {
                     session.item() == item.id()
                         && matches!(session.role(), SessionRole::Review { .. })
                 });
-                (capable && !did_the_work && !held).then_some((item, commit))
+                let waits = self
+                    .recovery(item.id(), SessionRole::Review { commit })
+                    .waits_for_principal();
+                (capable && !did_the_work && !held && !waits).then_some((item, commit))
             })
             .collect();
         found.sort_by_key(|(item, _)| (item.created(), item.id()));

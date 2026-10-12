@@ -172,6 +172,8 @@ pub struct Item {
     pub(crate) comments: BTreeMap<CommentId, Comment>,
     pub(crate) verdicts: BTreeMap<EventId, Verdicted>,
     pub(crate) merges: BTreeMap<EventId, Merge>,
+    /// When the principal last did something to the item. It starts its recovery level again.
+    pub(crate) principal_touched: Option<Hlc>,
 }
 
 impl Item {
@@ -338,8 +340,17 @@ impl Item {
         }
     }
 
-    pub(crate) fn touch(&mut self, hlc: Hlc) {
-        self.updated = self.updated.max(hlc);
+    /// When the principal last did something to the item: created, edited, moved, linked,
+    /// archived or commented on it, or gave a verdict.
+    pub fn principal_touched(&self) -> Option<Hlc> {
+        self.principal_touched
+    }
+
+    pub(crate) fn touch(&mut self, stamp: Stamp, actor: &Actor) {
+        self.updated = self.updated.max(stamp.hlc);
+        if let Actor::Principal(_) = actor {
+            self.principal_touched = self.principal_touched.max(Some(stamp.hlc));
+        }
     }
 
     pub(crate) fn new(
@@ -348,6 +359,10 @@ impl Item {
         stamp: Stamp,
         created: &crate::event::ItemCreated,
     ) -> Self {
+        let principal_touched = match &author {
+            Actor::Principal(_) => Some(stamp.hlc),
+            Actor::Agent { .. } | Actor::Daemon(_) => None,
+        };
         let mut labels = AddWinsSet::default();
         for label in &created.labels {
             labels.add(label.clone(), stamp);
@@ -378,6 +393,7 @@ impl Item {
             comments: BTreeMap::new(),
             verdicts: BTreeMap::new(),
             merges: BTreeMap::new(),
+            principal_touched,
         }
     }
 }

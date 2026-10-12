@@ -6,7 +6,7 @@ use crate::item::{Comment, Item};
 use crate::name::LaneName;
 use crate::refs::Token;
 use crate::resolve::MentionTarget;
-use crate::session::{EndReason, SessionRole};
+use crate::session::SessionRole;
 use crate::state::State;
 
 /// Whoever has to resolve a blocker.
@@ -105,16 +105,10 @@ impl State {
             let supervised_now = sessions
                 .iter()
                 .any(|session| session.is_live() && session.role() == SessionRole::Supervise);
-            let gave_up = sessions.iter().any(|session| {
-                session.agent() == agent
-                    && session.role() == SessionRole::Supervise
-                    && session.started().hlc > oldest
-                    && matches!(
-                        session.ended().map(|ended| ended.reason),
-                        Some(EndReason::Released | EndReason::TimedOut | EndReason::Failed)
-                    )
-            });
-            if !worked_on && !supervised_now && !gave_up {
+            let waits = self
+                .recovery(item.id(), SessionRole::Supervise)
+                .waits_for_principal();
+            if !worked_on && !supervised_now && !waits {
                 items.push((oldest, item.id()));
             }
         }

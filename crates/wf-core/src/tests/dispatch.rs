@@ -4,8 +4,9 @@ use crate::autonomy::{Autonomy, StartMode};
 use crate::event::{AgentDefined, DeviceProfile, EventBody, ItemCreated};
 use crate::id::ItemId;
 use crate::identity::AgentId;
+use crate::lifecycle::Recovery;
 use crate::name::{AgentName, HarnessName, LaneName, Requirement};
-use crate::session::EndReason;
+use crate::session::{EndReason, SessionRole};
 use crate::state::State;
 use crate::testing::*;
 
@@ -145,38 +146,55 @@ fn an_item_a_session_holds_is_not_offered() {
 }
 
 #[test]
-fn an_agent_does_not_retry_what_it_gave_up_on() {
+fn sessions_that_do_not_finish_are_retried_as_the_recovery_level_says() {
     let mut scene = Scene::new();
     scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
-    let task: ItemId = scene.apply(create("task", "released")).id().into();
-    let timed_out: ItemId = scene.apply(create("task", "too slow")).id().into();
-    let crashing: ItemId = scene.apply(create("task", "crashes")).id().into();
-    let submitted: ItemId = scene.apply(create("task", "changes requested")).id().into();
+    let twice: ItemId = scene.apply(create("task", "released twice")).id().into();
+    let thrice: ItemId = scene.apply(create("task", "fails three times")).id().into();
+    let interrupted: ItemId = scene.apply(create("task", "interrupted")).id().into();
+    let fragile: ItemId = scene.apply(create("task", "fragile")).id().into();
+    scene.apply(edit(
+        fragile,
+        crate::event::Change::Recovery(Some("none".parse().unwrap())),
+    ));
     scene.apply(create("task", "untouched"));
 
     let end = |scene: &mut Scene, item: ItemId, reason: EndReason| {
         let session = scene.apply(start_session("coder", item)).id().into();
         scene.apply(end_session(session, reason));
     };
-    end(&mut scene, task, EndReason::Released);
-    end(&mut scene, timed_out, EndReason::TimedOut);
-    end(&mut scene, submitted, EndReason::Cancelled);
+    end(&mut scene, twice, EndReason::Released);
+    end(&mut scene, twice, EndReason::TimedOut);
     for _ in 0..3 {
-        end(&mut scene, crashing, EndReason::Interrupted);
+        end(&mut scene, thrice, EndReason::Failed);
+        end(&mut scene, interrupted, EndReason::Interrupted);
     }
-    for _ in 0..2 {
-        end(&mut scene, crashing, EndReason::Failed);
-    }
-    assert_eq!(
-        scene.offered().len(),
-        3,
-        "crashing twice, or being interrupted, is still tried again: {:?}",
-        scene.offered()
-    );
-    end(&mut scene, crashing, EndReason::Failed);
+    end(&mut scene, fragile, EndReason::Failed);
+
     let mut offered = scene.offered();
     offered.sort();
-    assert_eq!(offered, ["changes requested", "untouched"]);
+    assert_eq!(offered, ["interrupted", "released twice", "untouched"]);
+    assert_eq!(
+        scene.state.recovery(twice, SessionRole::Work),
+        Recovery::Retry { failures: 2 }
+    );
+    assert!(
+        scene
+            .state
+            .recovery(thrice, SessionRole::Work)
+            .waits_for_principal()
+    );
+
+    // Anything the principal does to the item starts its level again.
+    scene.apply(comment(
+        thrice,
+        "the tests need a database; use the docker one",
+    ));
+    assert_eq!(
+        scene.state.recovery(thrice, SessionRole::Work),
+        Recovery::Fresh
+    );
+    assert!(scene.offered().contains(&"fails three times".to_string()));
 }
 
 #[test]

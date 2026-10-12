@@ -1,10 +1,11 @@
 //! What follows from a session starting, ending and finishing a turn. Pure functions of the
 //! state: the daemon asks and then writes the events.
 
+use crate::hlc::Hlc;
 use crate::id::{ItemId, SessionId};
-use crate::item::ItemView;
+use crate::item::{Item, ItemView};
 use crate::name::StateName;
-use crate::policy::StateCategory;
+use crate::policy::{RecoveryStep, StateCategory};
 use crate::session::{EndReason, SessionRole};
 use crate::state::State;
 
@@ -31,6 +32,28 @@ pub enum TurnOutcome {
     Continue,
     /// The nudges are used up without a new commit.
     GiveUp,
+}
+
+/// Where an item stands after the sessions of one role that ended without finishing (released,
+/// timed out or failed) since it last moved on, as its recovery level says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Recovery {
+    /// No session of the role has ended without finishing since the item last moved on.
+    Fresh,
+    /// The level says to try again after `failures` sessions that did not finish.
+    Retry { failures: usize },
+    /// The principal decides, because the level says so or its steps are used up. `last` is the
+    /// session that ended last.
+    WaitsForPrincipal { failures: usize, last: SessionId },
+}
+
+impl Recovery {
+    pub fn waits_for_principal(self) -> bool {
+        match self {
+            Recovery::WaitsForPrincipal { .. } => true,
+            Recovery::Fresh | Recovery::Retry { .. } => false,
+        }
+    }
 }
 
 impl State {
@@ -118,6 +141,94 @@ impl State {
         } else {
             TurnOutcome::Continue
         }
+    }
+
+    /// Where `item` stands after the sessions of `role` that ended without finishing. Only
+    /// what happened since the item last moved on counts: since the principal last did something
+    /// to it, and for work since the last submission, for review since the submission and its
+    /// latest verdict, for supervision since its open blockers were written. The commit of a
+    /// review role does not matter.
+    pub fn recovery(&self, item: ItemId, role: SessionRole) -> Recovery {
+        let (Some(policy), Some(ItemView::Live(live))) = (
+            self.policy().map(|document| &document.policy),
+            self.item(item),
+        ) else {
+            return Recovery::Fresh;
+        };
+        let since = self.moved_on(live, role);
+        let same_role = |other: SessionRole| match (role, other) {
+            (SessionRole::Work, SessionRole::Work)
+            | (SessionRole::Review { .. }, SessionRole::Review { .. })
+            | (SessionRole::Supervise, SessionRole::Supervise) => true,
+            (SessionRole::Work, _)
+            | (SessionRole::Review { .. }, _)
+            | (SessionRole::Supervise, _) => false,
+        };
+        let mut failed: Vec<(Hlc, SessionId)> = self
+            .sessions()
+            .filter(|session| session.item() == item && same_role(session.role()))
+            .filter_map(|session| {
+                let ended = session.ended()?;
+                let unfinished = match ended.reason {
+                    EndReason::Released | EndReason::TimedOut | EndReason::Failed => true,
+                    EndReason::Submitted { .. }
+                    | EndReason::Reviewed
+                    | EndReason::Supervised
+                    | EndReason::Cancelled
+                    | EndReason::Interrupted => false,
+                };
+                (unfinished && since.is_none_or(|since| ended.at() > since))
+                    .then(|| (ended.at(), session.id()))
+            })
+            .collect();
+        failed.sort();
+        let Some(&(_, last)) = failed.last() else {
+            return Recovery::Fresh;
+        };
+        let failures = failed.len();
+        let steps = live
+            .effective_recovery(policy)
+            .and_then(|name| policy.recovery_level(name))
+            .map(|level| level.steps.as_slice())
+            .unwrap_or_default();
+        // The step taken after the latest failure; once the principal decides, it stays so.
+        let waits = steps
+            .iter()
+            .take(failures)
+            .chain(std::iter::repeat(&RecoveryStep::Principal))
+            .take(failures)
+            .any(|step| match step {
+                RecoveryStep::Principal => true,
+                RecoveryStep::Retry => false,
+            });
+        if waits {
+            Recovery::WaitsForPrincipal { failures, last }
+        } else {
+            Recovery::Retry { failures }
+        }
+    }
+
+    /// Since when the sessions of `role` on `item` count for its recovery.
+    fn moved_on(&self, item: &Item, role: SessionRole) -> Option<Hlc> {
+        let submitted = self.submission(item.id()).map(|(_, stamp)| stamp.hlc);
+        let by_role = match role {
+            SessionRole::Work => submitted,
+            SessionRole::Review { .. } => {
+                let verdict = item
+                    .verdicts()
+                    .values()
+                    .map(|verdict| verdict.stamp.hlc)
+                    .max();
+                submitted.max(verdict)
+            }
+            SessionRole::Supervise => item
+                .open_comments()
+                .into_iter()
+                .filter(|(_, comment)| comment.kind == crate::event::CommentKind::Blocker)
+                .map(|(_, comment)| comment.at)
+                .min(),
+        };
+        item.principal_touched().max(by_role)
     }
 
     fn category_of(&self, item: ItemId) -> Option<StateCategory> {

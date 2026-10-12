@@ -136,6 +136,14 @@ fn prompts(workspace: &Workspace, only: Option<ItemId>) -> Vec<Prompt> {
                     &commit.to_string()[..8]
                 ),
             },
+            Waiting::Recovery {
+                role,
+                failures,
+                last,
+            } => Prompt::Notice {
+                item: entry.item,
+                what: view::recovery_waits(state, entry.item, role, failures, last),
+            },
         });
     }
     prompts

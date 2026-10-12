@@ -243,6 +243,42 @@ fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
 }
 
 #[test]
+fn reviewers_that_do_not_finish_are_retried_until_the_principal_decides() {
+    let mut scene = Scene::new();
+    let item = scene.submitted("standard");
+    let offered = |scene: &Scene| scene.state.reviewable(&scene.agent("reviewer"));
+    for attempt in 1..=3 {
+        assert_eq!(
+            offered(&scene),
+            [(item, Some(commit(1)))],
+            "attempt {attempt}"
+        );
+        let session: SessionId = scene
+            .apply(start_review("reviewer", item, commit(1)))
+            .id()
+            .into();
+        scene.apply(end_session(session, EndReason::Released));
+    }
+    assert!(
+        offered(&scene).is_empty(),
+        "the standard level gives up after three"
+    );
+    let waiting: Vec<_> = scene
+        .state
+        .inbox()
+        .into_iter()
+        .map(|entry| entry.waiting)
+        .collect();
+    assert!(
+        matches!(
+            waiting.as_slice(),
+            [crate::inbox::Waiting::Recovery { failures: 3, .. }]
+        ),
+        "{waiting:?}"
+    );
+}
+
+#[test]
 fn human_steps_are_not_offered_to_agents() {
     let mut scene = Scene::new();
     let item = scene.submitted("critical");

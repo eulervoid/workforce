@@ -8,11 +8,8 @@ use crate::event::DeviceProfile;
 use crate::identity::{AgentId, DeviceKey};
 use crate::item::Item;
 use crate::name::Requirement;
-use crate::session::EndReason;
+use crate::session::SessionRole;
 use crate::state::{AgentDefinition, State};
-
-/// Failed sessions of an agent on an item before the dispatcher stops trying it.
-const MAX_FAILED_SESSIONS: usize = 3;
 
 impl State {
     /// What the device says about itself, if it has said anything.
@@ -69,7 +66,7 @@ impl State {
 
     /// The ready items `agent` may take on `device`, most urgent first: in a lane of the agent,
     /// with every requirement met by its capabilities or the hardware of the device, and not
-    /// given up on by this agent before.
+    /// waiting for the principal after sessions that did not finish.
     pub fn dispatchable(&self, device: DeviceKey, agent: &AgentId) -> Vec<&Item> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
@@ -97,31 +94,11 @@ impl State {
                     .is_some_and(|lane| definition.lanes.contains(lane))
             })
             .filter(|item| item.requires().values().all(|need| offered.contains(need)))
-            .filter(|item| !self.given_up_on(agent, item))
+            .filter(|item| {
+                !self
+                    .recovery(item.id(), SessionRole::Work)
+                    .waits_for_principal()
+            })
             .collect()
-    }
-
-    /// Whether the agent released the item or ran out of time on it, or its sessions kept
-    /// failing. A person starts it again with `wf session start`.
-    fn given_up_on(&self, agent: &AgentId, item: &Item) -> bool {
-        let mut failed = 0;
-        for session in self
-            .sessions()
-            .filter(|session| session.agent() == agent && session.item() == item.id())
-        {
-            match session.ended().map(|ended| ended.reason) {
-                Some(EndReason::Released | EndReason::TimedOut) => return true,
-                Some(EndReason::Failed) => failed += 1,
-                Some(
-                    EndReason::Submitted { .. }
-                    | EndReason::Reviewed
-                    | EndReason::Supervised
-                    | EndReason::Cancelled
-                    | EndReason::Interrupted,
-                )
-                | None => {}
-            }
-        }
-        failed >= MAX_FAILED_SESSIONS
     }
 }

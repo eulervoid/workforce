@@ -12,7 +12,7 @@ use wf_core::crdt::SetChange;
 use wf_core::event::{Change, CommentKind, Event, EventBody, Link};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::hlc::Hlc;
-use wf_core::id::{CommentId, HashId, ItemId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
 use wf_core::item::{Item, ItemView, Origin, Standing};
@@ -622,6 +622,8 @@ pub struct ItemDetail {
     pub review_status: Option<ReviewStatusView>,
     /// What happens when a session ends without finishing: its own level, or its type's.
     pub recovery: Option<String>,
+    /// Sessions ended without finishing and the recovery level leaves the item to the principal.
+    pub waits_after_failures: Option<String>,
     pub labels: Vec<String>,
     pub requires: Vec<String>,
     pub depends_on: Vec<LinkView>,
@@ -1024,6 +1026,21 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         review: item.effective_review(policy).map(ToString::to_string),
         review_status: state.review_status(item.id()).map(review_status_view),
         recovery: item.effective_recovery(policy).map(ToString::to_string),
+        waits_after_failures: state
+            .inbox()
+            .into_iter()
+            .filter(|entry| entry.item == item.id())
+            .find_map(|entry| match entry.waiting {
+                Waiting::Recovery {
+                    role,
+                    failures,
+                    last,
+                } => Some(recovery_waits(state, item.id(), role, failures, last)),
+                Waiting::Blocker { .. }
+                | Waiting::Proposal
+                | Waiting::HumanReview { .. }
+                | Waiting::Merge { .. } => None,
+            }),
         labels: item.labels().values().map(ToString::to_string).collect(),
         requires: item.requires().values().map(ToString::to_string).collect(),
         depends_on,
@@ -1437,7 +1454,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
 
 #[derive(Serialize)]
 pub struct InboxEntryView {
-    /// `blocker`, `proposal`, `human_review`, `merge` or `permission`.
+    /// `blocker`, `proposal`, `human_review`, `merge`, `recovery` or `permission`.
     pub kind: String,
     pub item: Option<String>,
     pub session: Option<String>,
@@ -1445,6 +1462,42 @@ pub struct InboxEntryView {
     pub what: String,
     /// Permission requests only: why each decider of the machine passed it on, as `decider: why`.
     pub passed: Vec<String>,
+}
+
+/// What a recovery step that waits on the principal says: who ended last and how, and what to do.
+pub fn recovery_waits(
+    state: &State,
+    item: ItemId,
+    role: SessionRole,
+    failures: usize,
+    last: SessionId,
+) -> String {
+    let sessions = match (role, failures) {
+        (SessionRole::Work, 1) => "a session".to_string(),
+        (SessionRole::Work, _) => format!("{failures} sessions"),
+        (SessionRole::Review { .. }, 1) => "a review session".to_string(),
+        (SessionRole::Review { .. }, _) => format!("{failures} review sessions"),
+        (SessionRole::Supervise, 1) => "a supervise session".to_string(),
+        (SessionRole::Supervise, _) => format!("{failures} supervise sessions"),
+    };
+    let ended = state
+        .session(last)
+        .and_then(|session| {
+            let reason = session.ended()?.reason.name().replace('_', " ");
+            Some(format!("@{} {reason}", session.agent().name))
+        })
+        .unwrap_or_else(|| "the last one ended".to_string());
+    let next = match role {
+        SessionRole::Work => format!(
+            "comment with what to do differently, or `wf session start {}`",
+            item.short()
+        ),
+        SessionRole::Review { .. } => {
+            "review it yourself, or comment to have it tried again".into()
+        }
+        SessionRole::Supervise => "answer the blocker, or comment to have it tried again".into(),
+    };
+    format!("{sessions} did not finish (last: {ended}); {next}")
 }
 
 /// What waits on the principal: what the state says, and the permission requests the daemon holds.
@@ -1500,6 +1553,14 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
                         &commit.to_string()[..8],
                         policy.merge.target
                     ),
+                ),
+                Waiting::Recovery {
+                    role,
+                    failures,
+                    last,
+                } => (
+                    "recovery",
+                    recovery_waits(state, entry.item, role, failures, last),
                 ),
             };
             InboxEntryView {
