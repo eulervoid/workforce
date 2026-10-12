@@ -105,10 +105,10 @@ impl State {
             let supervised_now = sessions
                 .iter()
                 .any(|session| session.is_live() && session.role() == SessionRole::Supervise);
-            let waits = self
+            let allowed = self
                 .recovery(item.id(), SessionRole::Supervise)
-                .waits_for_principal();
-            if !worked_on && !supervised_now && !waits {
+                .allows_attempt();
+            if !worked_on && !supervised_now && allowed {
                 items.push((oldest, item.id()));
             }
         }

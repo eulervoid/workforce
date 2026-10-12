@@ -294,6 +294,9 @@ pub struct ReviewLevelConfig {
 pub enum RecoveryStep {
     /// The item may be started again, by any agent that can take it.
     Retry,
+    /// An agent with these capabilities says what went wrong, in a diagnose session, before the
+    /// next step. Only work is diagnosed: for reviews and supervision this step retries.
+    Agent { requires: BTreeSet<Requirement> },
     /// The item waits for the principal.
     Principal,
 }

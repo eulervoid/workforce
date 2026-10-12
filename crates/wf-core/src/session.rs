@@ -115,6 +115,9 @@ pub enum SessionRole {
     },
     /// Answers or escalates the blockers of the item that wait on a supervisor or on this agent.
     Supervise,
+    /// Says what went wrong in the work sessions of the item that did not finish, for the next
+    /// attempt: a step of the item's recovery level.
+    Diagnose,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -135,6 +138,8 @@ pub enum EndReason {
     Cancelled,
     /// The daemon that ran it stopped, such as for a restart. Not a failure of the attempt.
     Interrupted,
+    /// A diagnose session said what went wrong.
+    Diagnosed,
 }
 
 impl EndReason {
@@ -148,6 +153,7 @@ impl EndReason {
             EndReason::Failed => "failed",
             EndReason::Cancelled => "cancelled",
             EndReason::Interrupted => "interrupted",
+            EndReason::Diagnosed => "diagnosed",
         }
     }
 }

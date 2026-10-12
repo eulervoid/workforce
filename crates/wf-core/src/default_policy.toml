@@ -47,6 +47,11 @@ steps = ["principal"]
 name = "standard"
 steps = ["retry", "retry", "principal"]
 
+# A reviewer says what went wrong before the one retry.
+[[recovery]]
+name = "diagnose"
+steps = [{ agent = { requires = ["review"] } }, "retry", "principal"]
+
 [types.task]
 review = "manual"
 recovery = "standard"

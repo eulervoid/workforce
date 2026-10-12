@@ -6,7 +6,21 @@ expression: "Envelope::new(&all)"
   "schema": 2,
   "data": [
     {
-      "id": "i546xzi4gy56gpd2tlzxobzw6xzbuhu5epnwu7fgaykdm7cg5v6a",
+      "id": "gmra36xrx5pup7gjpf2lgh7pkij7gb546bkkcftredyr5llqshra",
+      "type": "task",
+      "title": "Write spec",
+      "state": "done",
+      "priority": null,
+      "readiness": null,
+      "blocked_by": [],
+      "blocking": [],
+      "labels": [],
+      "lane": null,
+      "steps": null,
+      "archived": true
+    },
+    {
+      "id": "n7ftyxzwhjp5rhhj4s5sbrlmpgja3did4jo2qhe5f7ub7cinwesq",
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",
@@ -14,7 +28,7 @@ expression: "Envelope::new(&all)"
       "readiness": "blocked",
       "blocked_by": [
         {
-          "id": "tzum6wrnloq6nbozjwlifh74vzn3n2yho5hcsoidetaaygfvuveq",
+          "id": "2idxhqxiscvhbvcdpviq72mxhegkt4vu2mgh6zuw2tgr2mfmvlta",
           "type": "task",
           "title": "Pick a hash for event ids",
           "state": "open",
@@ -28,7 +42,7 @@ expression: "Envelope::new(&all)"
       "archived": false
     },
     {
-      "id": "tzum6wrnloq6nbozjwlifh74vzn3n2yho5hcsoidetaaygfvuveq",
+      "id": "2idxhqxiscvhbvcdpviq72mxhegkt4vu2mgh6zuw2tgr2mfmvlta",
       "type": "task",
       "title": "Pick a hash for event ids",
       "state": "open",
@@ -37,7 +51,7 @@ expression: "Envelope::new(&all)"
       "blocked_by": [],
       "blocking": [
         {
-          "id": "i546xzi4gy56gpd2tlzxobzw6xzbuhu5epnwu7fgaykdm7cg5v6a",
+          "id": "n7ftyxzwhjp5rhhj4s5sbrlmpgja3did4jo2qhe5f7ub7cinwesq",
           "type": "task",
           "title": "Implement feed sync",
           "state": "open",
@@ -48,20 +62,6 @@ expression: "Envelope::new(&all)"
       "lane": "default",
       "steps": null,
       "archived": false
-    },
-    {
-      "id": "xofaq375xpit7suguv2duuj53xm7gi4ty4sfq33yv3herut7ilsq",
-      "type": "task",
-      "title": "Write spec",
-      "state": "done",
-      "priority": null,
-      "readiness": null,
-      "blocked_by": [],
-      "blocking": [],
-      "labels": [],
-      "lane": null,
-      "steps": null,
-      "archived": true
     }
   ]
 }

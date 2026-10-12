@@ -94,11 +94,7 @@ impl State {
                     .is_some_and(|lane| definition.lanes.contains(lane))
             })
             .filter(|item| item.requires().values().all(|need| offered.contains(need)))
-            .filter(|item| {
-                !self
-                    .recovery(item.id(), SessionRole::Work)
-                    .waits_for_principal()
-            })
+            .filter(|item| self.recovery(item.id(), SessionRole::Work).allows_attempt())
             .collect()
     }
 }

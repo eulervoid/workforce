@@ -1,8 +1,8 @@
 //! What waits on a person, worked out from the state.
 
 use crate::id::{CommentId, ItemId, SessionId};
-use crate::lifecycle::Recovery;
 use crate::policy::{ReviewStep, StateCategory};
+use crate::recovery::Recovery;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, SessionRole};
 use crate::state::State;

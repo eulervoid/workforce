@@ -19,7 +19,7 @@ use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::peers::PeerSync;
 
-pub const PROTOCOL_VERSION: u32 = 6;
+pub const PROTOCOL_VERSION: u32 = 7;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -137,6 +137,8 @@ pub enum Finish {
     Reviewed,
     /// A supervise session has resolved or escalated what it was started for. By the agent.
     Supervised,
+    /// A diagnose session has said what went wrong. By the agent.
+    Diagnosed,
     /// The principal stops it.
     Stop,
     /// Someone moved the item to a state where it waits, such as review, while the agent worked.

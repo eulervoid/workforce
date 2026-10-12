@@ -1367,6 +1367,16 @@ fn comment(
     if let (Some(session), false) = (supervising, resolves.is_empty()) {
         workspace.end_session(session, Finish::Supervised)?;
     }
+    // A diagnose session is over once it has said what went wrong.
+    let diagnosing = workspace.session().filter(|session| {
+        workspace
+            .state()
+            .session(*session)
+            .is_some_and(|session| session.item() == id && session.role() == SessionRole::Diagnose)
+    });
+    if let Some(session) = diagnosing {
+        workspace.end_session(session, Finish::Diagnosed)?;
+    }
     done(json, message, &event, Some(id))
 }
 

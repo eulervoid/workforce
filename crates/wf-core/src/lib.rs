@@ -19,6 +19,7 @@ pub mod item;
 pub mod lifecycle;
 pub mod name;
 pub mod policy;
+pub mod recovery;
 pub mod refs;
 pub mod report;
 pub mod resolve;

@@ -342,11 +342,33 @@ impl Daemon {
         .await
     }
 
-    /// The empty directory a supervise session runs in. One supervise session runs per item.
-    fn supervision_directory(&self, workforce: WorkforceId, item: ItemId) -> PathBuf {
+    /// Starts a diagnose session of `agent` on `item`, to say what went wrong in the work that
+    /// did not finish, in an empty directory.
+    pub(crate) async fn start_diagnosis(
+        self: &Arc<Self>,
+        workforce: WorkforceId,
+        loaded: &Arc<Loaded>,
+        agent: AgentName,
+        item: ItemId,
+        repository: PathBuf,
+    ) -> Result<SessionId, SessionError> {
+        self.begin_session(
+            workforce,
+            loaded,
+            agent,
+            item,
+            SessionRole::Diagnose,
+            repository,
+        )
+        .await
+    }
+
+    /// The empty directory a supervise or diagnose session runs in. One session of each runs per
+    /// item.
+    fn empty_directory(&self, workforce: WorkforceId, item: ItemId, purpose: &str) -> PathBuf {
         self.workforce_directory(workforce)
             .join("worktrees")
-            .join(format!("{}-supervise", item_name(item)))
+            .join(format!("{}-{purpose}", item_name(item)))
     }
 
     /// Where a review session looks at a commit of an item.
@@ -448,8 +470,14 @@ impl Daemon {
                 .await??;
                 (worktree, repository)
             }
-            SessionRole::Supervise => {
-                let worktree = self.supervision_directory(workforce, item);
+            SessionRole::Supervise | SessionRole::Diagnose => {
+                let purpose = match role {
+                    SessionRole::Diagnose => "diagnose",
+                    SessionRole::Work | SessionRole::Review { .. } | SessionRole::Supervise => {
+                        "supervise"
+                    }
+                };
+                let worktree = self.empty_directory(workforce, item, purpose);
                 let path = worktree.clone();
                 let repository = blocking(move || {
                     let git = GitCli::open(&repository)?;
@@ -633,6 +661,7 @@ impl Daemon {
             Finish::Release { note } => (EndReason::Released, by_agent.clone(), note.clone()),
             Finish::Reviewed => (EndReason::Reviewed, by_agent.clone(), None),
             Finish::Supervised => (EndReason::Supervised, by_agent.clone(), None),
+            Finish::Diagnosed => (EndReason::Diagnosed, by_agent.clone(), None),
             Finish::Stop | Finish::MovedOn => (EndReason::Cancelled, by_device.clone(), None),
             Finish::TimedOut => (EndReason::TimedOut, by_device.clone(), None),
             Finish::Interrupted => (EndReason::Interrupted, by_device.clone(), None),
@@ -649,6 +678,7 @@ impl Daemon {
                     SessionRole::Work => "a new commit",
                     SessionRole::Review { .. } => "a verdict",
                     SessionRole::Supervise => "an answer",
+                    SessionRole::Diagnose => "a report",
                 };
                 let gave_up = format!("Gave up: {turns} turns in a row without {without}.");
                 (
@@ -722,7 +752,8 @@ impl Daemon {
             Finish::Submit { .. }
             | Finish::Release { .. }
             | Finish::Reviewed
-            | Finish::Supervised => Stop::AfterTurn,
+            | Finish::Supervised
+            | Finish::Diagnosed => Stop::AfterTurn,
             Finish::Stop
             | Finish::MovedOn
             | Finish::TimedOut
@@ -737,7 +768,10 @@ impl Daemon {
                 self.discard_review_worktree(workforce, item, commit).await;
             }
             SessionRole::Supervise => {
-                let _ = std::fs::remove_dir_all(self.supervision_directory(workforce, item));
+                let _ = std::fs::remove_dir_all(self.empty_directory(workforce, item, "supervise"));
+            }
+            SessionRole::Diagnose => {
+                let _ = std::fs::remove_dir_all(self.empty_directory(workforce, item, "diagnose"));
             }
         }
         if matches!(reason, EndReason::Submitted { commit: None }) {
@@ -1320,9 +1354,10 @@ async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, StorageClosed>
                 .and_then(Result::ok)
                 .unwrap_or_default()
         }
-        SessionRole::Review { commit: None } | SessionRole::Work | SessionRole::Supervise => {
-            String::new()
-        }
+        SessionRole::Review { commit: None }
+        | SessionRole::Work
+        | SessionRole::Supervise
+        | SessionRole::Diagnose => String::new(),
     };
     let session = run.session;
     loaded
@@ -1427,7 +1462,7 @@ pub(crate) async fn run_dispatcher(
 }
 
 /// Merges what is ready, then gives every hosted auto agent with a free slot a review first, then
-/// a blocker to supervise, and otherwise the first item it may take. Whatever could not be started is not tried again by
+/// a blocker to supervise, then work to diagnose, and otherwise the first item it may take. Whatever could not be started is not tried again by
 /// this daemon.
 async fn dispatch_once(
     daemon: &Arc<Daemon>,
@@ -1519,8 +1554,12 @@ async fn dispatch_once(
                 .supervisable(&agent)
                 .into_iter()
                 .find(|item| !failed.contains(&(*item, agent.name.clone())));
-            let started = match (review, supervision) {
-                (Some((item, commit)), _) => (
+            let diagnosis = state
+                .diagnosable(&agent)
+                .into_iter()
+                .find(|item| !failed.contains(&(*item, agent.name.clone())));
+            let started = match (review, supervision, diagnosis) {
+                (Some((item, commit)), _, _) => (
                     item,
                     daemon
                         .start_review(
@@ -1533,7 +1572,19 @@ async fn dispatch_once(
                         )
                         .await,
                 ),
-                (None, Some(item)) => (
+                (None, None, Some(item)) => (
+                    item,
+                    daemon
+                        .start_diagnosis(
+                            workforce,
+                            loaded,
+                            agent.name.clone(),
+                            item,
+                            repository.clone(),
+                        )
+                        .await,
+                ),
+                (None, Some(item), _) => (
                     item,
                     daemon
                         .start_supervision(
@@ -1545,7 +1596,7 @@ async fn dispatch_once(
                         )
                         .await,
                 ),
-                (None, None) => {
+                (None, None, None) => {
                     let Some(item) = state
                         .dispatchable(device, &agent)
                         .into_iter()

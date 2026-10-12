@@ -201,9 +201,10 @@ holds a claim. Items are sized for a session: steps inside one are a checklist i
 split into several items only when the parts can run in parallel, need a different review level, or
 need different capabilities.
 
-* `SessionStarted{agent, item, role}` (device-signed), `role` = `Work`, `Review{commit}` or `Supervise`.
+* `SessionStarted{agent, item, role}` (device-signed), `role` = `Work`, `Review{commit}`, `Supervise`
+  or `Diagnose` (a step of a recovery level, M2.2).
   Its hash prefix is the session id. `SessionEnded{reason}`, reason = `Submitted{commit} | Reviewed |
-  Supervised | Released | TimedOut | Failed | Cancelled | Interrupted`.
+  Supervised | Released | TimedOut | Failed | Cancelled | Interrupted | Diagnosed`.
 * One branch per **item** (`wf/<item>`, section 9) in one worktree. A session is an attempt: the next
   session on the item (after a release, a crash or requested changes) continues the branch.
 * **Ending moves the item first.** `after_end(session, reason)` in `wf-core` says what happens to the
@@ -1179,6 +1180,9 @@ steps = ["principal"]
 [[recovery]]
 name = "standard"        # tasks: try twice more, then the principal decides
 steps = ["retry", "retry", "principal"]
+[[recovery]]
+name = "diagnose"        # an agent says what went wrong, before the one retry
+steps = [{ agent = { requires = ["review"] } }, "retry", "principal"]
 
 [lanes.default]
 claim = ["member"]

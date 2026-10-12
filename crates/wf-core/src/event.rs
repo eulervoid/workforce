@@ -540,7 +540,8 @@ mod tests {
             name: "demo".into(),
             founder: seed,
             members: vec![],
-            policy: crate::policy::DEFAULT_POLICY_TOML.into(),
+            // Fixed text, so the golden event pins the encoding, not the default policy.
+            policy: "[merge]\ntarget = \"main\"\n".into(),
             forked_from: None,
         };
         let body = EventBody::Genesis(Signed::sign(&principal, None, genesis).unwrap());
@@ -619,8 +620,8 @@ mod tests {
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
     ];
 
-    const GOLDEN_LEN: usize = 2242;
-    const GOLDEN_ID: &str = "xeoko2kk5yieo7zfh4w6xkkwwydeo5ptps4hazdawfy2ehkinc7q";
+    const GOLDEN_LEN: usize = 346;
+    const GOLDEN_ID: &str = "3jkx6ttzy4aogbqzz7wbac7ywc3m7jatkkfurqhwwmyynterg2pa";
 
     #[test]
     fn round_trips_and_verifies() {

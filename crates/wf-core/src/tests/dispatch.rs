@@ -4,8 +4,8 @@ use crate::autonomy::{Autonomy, StartMode};
 use crate::event::{AgentDefined, DeviceProfile, EventBody, ItemCreated};
 use crate::id::ItemId;
 use crate::identity::AgentId;
-use crate::lifecycle::Recovery;
 use crate::name::{AgentName, HarnessName, LaneName, Requirement};
+use crate::recovery::Recovery;
 use crate::session::{EndReason, SessionRole};
 use crate::state::State;
 use crate::testing::*;
@@ -178,12 +178,10 @@ fn sessions_that_do_not_finish_are_retried_as_the_recovery_level_says() {
         scene.state.recovery(twice, SessionRole::Work),
         Recovery::Retry { failures: 2 }
     );
-    assert!(
-        scene
-            .state
-            .recovery(thrice, SessionRole::Work)
-            .waits_for_principal()
-    );
+    assert!(matches!(
+        scene.state.recovery(thrice, SessionRole::Work),
+        Recovery::WaitsForPrincipal { failures: 3, .. }
+    ));
 
     // Anything the principal does to the item starts its level again.
     scene.apply(comment(
@@ -237,4 +235,60 @@ fn only_hosted_auto_agents_are_started_by_the_dispatcher() {
         .map(|(id, _)| id.name.to_string())
         .collect();
     assert_eq!(hosted, ["coder"]);
+}
+
+#[test]
+fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
+    let mut scene = Scene::new();
+    scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
+    scene.apply(agent(
+        "doctor",
+        &["supervision"],
+        &["review"],
+        StartMode::Auto,
+    ));
+    let doctor = AgentId {
+        principal: scene.fixture.founder.key(),
+        name: AgentName::new("doctor").unwrap(),
+    };
+    let item: ItemId = scene.apply(create("task", "flaky")).id().into();
+    scene.apply(edit(
+        item,
+        crate::event::Change::Recovery(Some("diagnose".parse().unwrap())),
+    ));
+    let work: crate::id::SessionId = scene.apply(start_session("coder", item)).id().into();
+    scene.apply(end_session(work, EndReason::Failed));
+
+    assert!(matches!(
+        scene.state.recovery(item, SessionRole::Work),
+        Recovery::Diagnose { failures: 1, .. }
+    ));
+    assert!(scene.offered().is_empty(), "no work before the diagnosis");
+    assert_eq!(scene.state.diagnosable(&doctor), [item]);
+    assert!(
+        scene.state.diagnosable(&scene.coder).is_empty(),
+        "the coder lacks the capability"
+    );
+
+    let diagnosis: crate::id::SessionId = scene
+        .apply(start_session_as("doctor", item, SessionRole::Diagnose))
+        .id()
+        .into();
+    assert!(
+        scene.state.diagnosable(&doctor).is_empty(),
+        "one diagnosis at a time"
+    );
+    scene.apply(end_session(diagnosis, EndReason::Diagnosed));
+    assert_eq!(
+        scene.state.recovery(item, SessionRole::Work),
+        Recovery::Retry { failures: 1 }
+    );
+    assert_eq!(scene.offered(), ["flaky"]);
+
+    let again: crate::id::SessionId = scene.apply(start_session("coder", item)).id().into();
+    scene.apply(end_session(again, EndReason::Released));
+    assert!(matches!(
+        scene.state.recovery(item, SessionRole::Work),
+        Recovery::WaitsForPrincipal { failures: 2, .. }
+    ));
 }

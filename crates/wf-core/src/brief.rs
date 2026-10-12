@@ -9,7 +9,7 @@ use crate::identity::Actor;
 use crate::item::{Item, ItemView, Standing};
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
-use crate::session::{CommitId, SessionRole};
+use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::State;
 
 /// What a brief tells that the state does not hold: the texts of comments, which only the log
@@ -27,6 +27,7 @@ pub enum Brief {
     Work(WorkBrief),
     Review(ReviewBrief),
     Supervise(SuperviseBrief),
+    Diagnose(DiagnoseBrief),
 }
 
 impl Brief {
@@ -93,6 +94,39 @@ impl Brief {
                     person,
                 })
             }
+            SessionRole::Diagnose => {
+                let attempts = state
+                    .sessions()
+                    .filter(|other| other.item() == item.id() && other.role() == SessionRole::Work)
+                    .filter_map(|other| {
+                        let ended = other.ended()?;
+                        match ended.reason {
+                            EndReason::Released | EndReason::TimedOut | EndReason::Failed => {
+                                Some(format!(
+                                    "{} {}",
+                                    other.agent().name,
+                                    ended.reason.name().replace('_', " ")
+                                ))
+                            }
+                            EndReason::Submitted { .. }
+                            | EndReason::Reviewed
+                            | EndReason::Supervised
+                            | EndReason::Cancelled
+                            | EndReason::Interrupted
+                            | EndReason::Diagnosed => None,
+                        }
+                    })
+                    .collect();
+                Brief::Diagnose(DiagnoseBrief {
+                    agent: agent.name.to_string(),
+                    instructions,
+                    item: HashId::short(&item.id()),
+                    title: item.title().to_string(),
+                    body: item.body().render_numbered(),
+                    earlier: earlier(item, sources),
+                    attempts,
+                })
+            }
         })
     }
 
@@ -101,6 +135,7 @@ impl Brief {
             Brief::Work(brief) => brief.render(),
             Brief::Review(brief) => brief.render(),
             Brief::Supervise(brief) => brief.render(),
+            Brief::Diagnose(brief) => brief.render(),
         }
     }
 }
@@ -448,6 +483,55 @@ impl SuperviseBrief {
     }
 }
 
+/// The brief of a diagnose session.
+pub struct DiagnoseBrief {
+    /// The name of the agent of the session.
+    pub agent: String,
+    /// What the owner of the agent tells it in every brief.
+    pub instructions: Option<String>,
+    /// The short id of the item, as `wf` commands take it.
+    pub item: String,
+    pub title: String,
+    pub body: String,
+    pub earlier: Vec<Earlier>,
+    /// The work sessions that did not finish, oldest first, as `coder released`.
+    pub attempts: Vec<String>,
+}
+
+impl DiagnoseBrief {
+    pub fn render(&self) -> String {
+        let item = &self.item;
+        let mut text = format!(
+            "You are the agent `{agent}`, looking into item #{item}: {title}\n\n\
+             Work on it did not finish. Find out why, so that the next attempt goes better.\n\n",
+            agent = self.agent,
+            title = self.title
+        );
+        instructions(&mut text, self.instructions.as_deref());
+        task(&mut text, &self.body);
+        history(&mut text, &self.earlier);
+        if !self.attempts.is_empty() {
+            text.push_str("## Attempts that did not finish\n\n");
+            for attempt in &self.attempts {
+                let _ = writeln!(text, "- {attempt}");
+            }
+            text.push('\n');
+        }
+        let _ = writeln!(
+            text,
+            "## How to report\n\n\
+             - Do not change any files. Nothing is checked out here.\n\
+             - Say in one comment what went wrong and what the next attempt should do \
+             differently; your session ends with it: \
+             `wf comment {item} \"<what went wrong, and what to do differently>\"`\n\
+             - Nothing can go on without a person's decision: \
+             `wf comment {item} \"<what they have to decide>\" --block`\n\
+             {AGAIN}"
+        );
+        text
+    }
+}
+
 /// The prompt that goes out when a turn ended and the session on `item` is still going: how a
 /// session of `role` ends.
 pub fn nudge(item: ItemId, role: SessionRole) -> String {
@@ -466,6 +550,11 @@ pub fn nudge(item: ItemId, role: SessionRole) -> String {
              - Needs changes: `wf comment {item} \"<what to change>\" --request-change` for each, \
              then `wf review --request-changes`\n\
              - A person has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
+             {AGAIN}"
+        ),
+        SessionRole::Diagnose => format!(
+            "Continue, and report in one comment.\n\
+             - `wf comment {item} \"<what went wrong, and what to do differently>\"`\n\
              {AGAIN}"
         ),
         SessionRole::Supervise => format!(

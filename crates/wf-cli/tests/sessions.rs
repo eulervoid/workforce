@@ -779,6 +779,57 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_diagnosis_comes_before_the_retry_and_the_principal_decides_after() {
+    let coder = "wf work release --note \"npm cannot reach the registry\"\n";
+    let doctor = "wf comment {item} \"The sandbox blocks the registry; vendor the package\"\n";
+    let world = World::agents(&[("coder", coder), ("doctor", doctor)]).await;
+    world.automate("coder", "default");
+    world.automate("doctor", "supervision");
+    world
+        .wf
+        .run(&["agent", "edit", "doctor", "--capability", "review"]);
+    world.wf.run(&[
+        "device",
+        "edit",
+        "--max-sessions",
+        "2",
+        "--agent",
+        "coder=1",
+        "--agent",
+        "doctor=1",
+    ]);
+    let item = world
+        .wf
+        .add(&["--title", "Install the parser", "--recovery", "diagnose"]);
+    world
+        .wait("the item left to the principal", |world| {
+            world
+                .wf
+                .json(&["inbox"])
+                .as_array()
+                .is_some_and(|entries| entries.iter().any(|entry| entry["kind"] == "recovery"))
+        })
+        .await;
+    let mut statuses: Vec<String> = world
+        .sessions()
+        .iter()
+        .map(|session| format!("{} {}", session["role"], session["status"]))
+        .collect();
+    statuses.sort();
+    assert_eq!(
+        statuses,
+        [
+            "\"diagnose\" \"diagnosed\"",
+            "\"work\" \"released\"",
+            "\"work\" \"released\""
+        ]
+    );
+    let shown = world.wf.run(&["item", "show", short(&item)]);
+    assert!(shown.contains("vendor the package"), "{shown}");
+    assert!(shown.contains("waits for you"), "{shown}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_supervisor_escalates_a_blocker_to_a_person() {
     let coder = "\
 wf comment {item} \"is this still wanted?\" --block

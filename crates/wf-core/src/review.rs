@@ -44,7 +44,8 @@ impl State {
                     | EndReason::TimedOut
                     | EndReason::Failed
                     | EndReason::Cancelled
-                    | EndReason::Interrupted => None,
+                    | EndReason::Interrupted
+                    | EndReason::Diagnosed => None,
                 }
             })
             .max_by_key(|(_, stamp)| *stamp)
@@ -212,10 +213,10 @@ impl State {
                     session.item() == item.id()
                         && matches!(session.role(), SessionRole::Review { .. })
                 });
-                let waits = self
+                let allowed = self
                     .recovery(item.id(), SessionRole::Review { commit })
-                    .waits_for_principal();
-                (capable && !did_the_work && !held && !waits).then_some((item, commit))
+                    .allows_attempt();
+                (capable && !did_the_work && !held && allowed).then_some((item, commit))
             })
             .collect();
         found.sort_by_key(|(item, _)| (item.created(), item.id()));

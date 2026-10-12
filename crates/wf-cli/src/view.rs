@@ -696,6 +696,7 @@ fn role_name(role: SessionRole) -> &'static str {
         SessionRole::Work => "work",
         SessionRole::Review { .. } => "review",
         SessionRole::Supervise => "supervise",
+        SessionRole::Diagnose => "diagnose",
     }
 }
 
@@ -818,6 +819,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                     }
                     SessionRole::Review { commit: None } => "started a review".to_string(),
                     SessionRole::Supervise => "started supervising".to_string(),
+                    SessionRole::Diagnose => "started looking into what went wrong".to_string(),
                 },
             ),
             Activity::SessionEnded {
@@ -837,6 +839,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                     EndReason::Failed => "failed".into(),
                     EndReason::Cancelled => "was stopped".into(),
                     EndReason::Interrupted => "was interrupted".into(),
+                    EndReason::Diagnosed => "said what went wrong".into(),
                 };
                 let summary = match moved_to {
                     Some(to) => format!("{ended} → {to}"),
@@ -1417,7 +1420,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                 (SessionRole::Work, Some(EndReason::Submitted { commit })) => {
                     commit.map(|commit| commit.to_string())
                 }
-                (SessionRole::Work | SessionRole::Supervise, _) => None,
+                (SessionRole::Work | SessionRole::Supervise | SessionRole::Diagnose, _) => None,
             };
             let steps = match state.item(session.item()) {
                 Some(ItemView::Live(item)) => steps_view(&item.body()),
@@ -1479,6 +1482,8 @@ pub fn recovery_waits(
         (SessionRole::Review { .. }, _) => format!("{failures} review sessions"),
         (SessionRole::Supervise, 1) => "a supervise session".to_string(),
         (SessionRole::Supervise, _) => format!("{failures} supervise sessions"),
+        (SessionRole::Diagnose, 1) => "a diagnose session".to_string(),
+        (SessionRole::Diagnose, _) => format!("{failures} diagnose sessions"),
     };
     let ended = state
         .session(last)
@@ -1488,7 +1493,7 @@ pub fn recovery_waits(
         })
         .unwrap_or_else(|| "the last one ended".to_string());
     let next = match role {
-        SessionRole::Work => format!(
+        SessionRole::Work | SessionRole::Diagnose => format!(
             "comment with what to do differently, or `wf session start {}`",
             item.short()
         ),

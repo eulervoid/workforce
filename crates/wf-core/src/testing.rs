@@ -328,10 +328,14 @@ pub fn define_agent(name: &str) -> EventBody {
 }
 
 pub fn start_session(agent: &str, item: ItemId) -> EventBody {
+    start_session_as(agent, item, SessionRole::Work)
+}
+
+pub fn start_session_as(agent: &str, item: ItemId, role: SessionRole) -> EventBody {
     EventBody::SessionStarted(SessionStarted {
         agent: AgentName::new(agent).unwrap(),
         item,
-        role: SessionRole::Work,
+        role,
     })
 }
 
