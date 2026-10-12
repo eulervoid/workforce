@@ -128,7 +128,7 @@ pub fn fork(
     }
 
     let founder_key = if args.new_principal {
-        PrincipalSigner::generate()
+        PrincipalSigner::generate(rand::random())
     } else {
         signer.clone()
     };

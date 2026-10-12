@@ -321,7 +321,7 @@ mod joining {
         let forged = InviteCode::new(
             fixture.workforce(),
             invited.code.invite,
-            &InviteSigner::generate(),
+            &InviteSigner::generate([7; 32]),
             invited.code.bootstrap.clone(),
         );
         let vm = DeviceSigner::from_bytes(&[94; 32]).unwrap();

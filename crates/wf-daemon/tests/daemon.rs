@@ -448,7 +448,7 @@ async fn a_running_daemon_joins_a_workforce_with_its_own_key() {
         .remember(laptop.node().await.unwrap().local_addr());
     let workforce = fixture.workforce();
 
-    let secret = InviteSigner::generate();
+    let secret = InviteSigner::generate([7; 32]);
     let statement = InviteCreated {
         kind: InviteKind::Device,
         invite: secret.key(),

@@ -209,7 +209,7 @@ pub fn invite_device(
     let lifetime = u64::try_from(Duration::from(args.expires).as_millis()).unwrap_or(u64::MAX);
     let expires_ms = now.saturating_add(lifetime);
 
-    let secret = InviteSigner::generate();
+    let secret = InviteSigner::generate(rand::random());
     let statement = InviteCreated {
         kind: InviteKind::Device,
         invite: secret.key(),

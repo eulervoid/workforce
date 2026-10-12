@@ -119,8 +119,9 @@ macro_rules! key_pair {
         pub struct $signer(SecretKey);
 
         impl $signer {
-            pub fn generate() -> Self {
-                Self(SecretKey::generate())
+            /// A new key from 32 random bytes, which the caller draws; wf-core has no randomness.
+            pub fn generate(random: [u8; 32]) -> Self {
+                Self(SecretKey::from_bytes(&random))
             }
 
             pub fn from_bytes(bytes: &[u8]) -> Result<Self, KeyError> {
@@ -319,7 +320,7 @@ mod tests {
 
     #[test]
     fn signatures_verify_and_are_domain_separated() {
-        let principal = PrincipalSigner::generate();
+        let principal = PrincipalSigner::generate([1; 32]);
         let message = b"statement";
         let signature = principal.sign(message);
         assert!(principal.key().verify(message, &signature).is_ok());
@@ -331,7 +332,7 @@ mod tests {
 
     #[test]
     fn signed_statements_are_bound_to_a_workforce() {
-        let principal = PrincipalSigner::generate();
+        let principal = PrincipalSigner::generate([2; 32]);
         let workforce = WorkforceId::from(EventId::of(b"one"));
         let other = WorkforceId::from(EventId::of(b"two"));
         let signed = Signed::sign(&principal, Some(workforce), "policy".to_string()).unwrap();
@@ -342,7 +343,7 @@ mod tests {
 
     #[test]
     fn signed_statements_detect_tampering() {
-        let principal = PrincipalSigner::generate();
+        let principal = PrincipalSigner::generate([3; 32]);
         let mut signed = Signed::sign(&principal, None, "policy".to_string()).unwrap();
         signed.statement = "forged".to_string();
         assert!(signed.verify(None).is_err());
@@ -350,7 +351,7 @@ mod tests {
 
     #[test]
     fn secret_key_round_trip() {
-        let signer = DeviceSigner::generate();
+        let signer = DeviceSigner::generate([4; 32]);
         let restored = DeviceSigner::from_bytes(&signer.to_bytes()).unwrap();
         assert_eq!(signer.key(), restored.key());
         assert!(DeviceSigner::from_bytes(&[0; 5]).is_err());
@@ -358,7 +359,7 @@ mod tests {
 
     #[test]
     fn actor_resolves_to_principal() {
-        let principal = PrincipalSigner::generate().key();
+        let principal = PrincipalSigner::generate([5; 32]).key();
         let agent = Actor::Agent {
             agent: AgentId {
                 principal,
@@ -378,17 +379,17 @@ mod invite_tests {
 
     #[test]
     fn proofs_cover_workforce_invite_and_device() {
-        let invite = InviteSigner::generate();
+        let invite = InviteSigner::generate([6; 32]);
         let workforce = WorkforceId::from(EventId::of(b"one"));
         let invite_id = EventId::of(b"invite");
-        let device = DeviceSigner::generate().key();
+        let device = DeviceSigner::generate([7; 32]).key();
         let proof = invite.prove(workforce, invite_id, device).unwrap();
         let key = invite.key();
         assert!(
             key.verify_proof(workforce, invite_id, device, &proof)
                 .is_ok()
         );
-        let other_device = DeviceSigner::generate().key();
+        let other_device = DeviceSigner::generate([8; 32]).key();
         assert!(
             key.verify_proof(workforce, invite_id, other_device, &proof)
                 .is_err()

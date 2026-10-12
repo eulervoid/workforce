@@ -94,7 +94,7 @@ fn binding_rules() {
     );
 
     // A proof from a key that is not the invite's.
-    let impostor = InviteSigner::generate();
+    let impostor = InviteSigner::generate([7; 32]);
     let wrong_key = forged(&vm, &|content| {
         content.body = EventBody::DeviceBound(DeviceBound {
             invite: invite.id(),
@@ -165,7 +165,7 @@ fn only_members_can_publish_invites() {
     let EventBody::InviteCreated(signed) = &invite.content.body else {
         unreachable!()
     };
-    let outsider = crate::identity::PrincipalSigner::generate();
+    let outsider = crate::identity::PrincipalSigner::generate([8; 32]);
     let forged_body = EventBody::InviteCreated(
         crate::identity::Signed::sign(
             &outsider,
@@ -293,7 +293,7 @@ fn a_device_bound_twice_by_forked_roots_has_one_principal_everywhere() {
 #[test]
 fn invite_codes_round_trip() {
     let fixture = Fixture::new(2);
-    let secret = InviteSigner::generate();
+    let secret = InviteSigner::generate([7; 32]);
     let invite = crate::id::EventId::of(b"invite");
     let code = InviteCode::new(
         fixture.workforce(),

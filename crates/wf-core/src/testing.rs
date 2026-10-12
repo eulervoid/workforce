@@ -175,7 +175,10 @@ impl Fixture {
 
     /// An invite for the founder's principal, authored on device 0.
     pub fn invite(&self, state: &State, now_ms: u64, expires_ms: u64) -> (Event, InviteSigner) {
-        let secret = InviteSigner::generate();
+        // Seeded by the time, so two invites made at different times differ.
+        let mut random = [3; 32];
+        random[..8].copy_from_slice(&now_ms.to_le_bytes());
+        let secret = InviteSigner::generate(random);
         let body = EventBody::InviteCreated(
             Signed::sign(
                 &self.founder,

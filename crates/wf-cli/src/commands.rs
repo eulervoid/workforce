@@ -214,7 +214,7 @@ fn init(json: bool, mode: Mode, args: InitArgs, data: DataDir, cwd: &Path) -> an
         Some(handle) => Handle::new(handle)?,
         None => handle_from_environment(),
     };
-    let principal = PrincipalSigner::generate();
+    let principal = PrincipalSigner::generate(rand::random());
     let device = data.device(true)?.expect("created on demand");
 
     let genesis = Genesis {

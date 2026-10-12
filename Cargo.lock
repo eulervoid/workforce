@@ -4734,6 +4734,7 @@ dependencies = [
  "jiff",
  "nucleo-picker",
  "pulldown-cmark",
+ "rand 0.10.3",
  "rustix",
  "serde",
  "serde_json",

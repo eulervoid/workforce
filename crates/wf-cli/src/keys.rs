@@ -122,7 +122,7 @@ impl DataDir {
             self.keys().join("device.key"),
             create,
             || {
-                let signer = DeviceSigner::generate();
+                let signer = DeviceSigner::generate(rand::random());
                 (signer.to_bytes(), signer)
             },
             |secret| DeviceSigner::from_bytes(secret).expect("32 bytes"),
@@ -177,7 +177,7 @@ mod tests {
         let first = WorkforceId::from(wf_core::id::EventId::of(b"first"));
         let second = WorkforceId::from(wf_core::id::EventId::of(b"second"));
         assert!(data.principal(&first).unwrap().is_none());
-        let signer = PrincipalSigner::generate();
+        let signer = PrincipalSigner::generate(rand::random());
         data.store_principal(&first, &signer).unwrap();
         assert_eq!(
             data.principal(&first).unwrap().unwrap().to_bytes(),

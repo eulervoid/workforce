@@ -38,6 +38,7 @@ nucleo-picker = "0.12"
 anstyle = "1.0.14"
 anstream = "1.0.0"
 pulldown-cmark = "0.13"
+rand.workspace = true
 similar = "3.2"
 textwrap = "0.16"
 cliclack = "0.5"
