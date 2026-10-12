@@ -311,7 +311,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     if let Some(priority) = &summary.priority {
         status.push(paint(priority_style(priority), priority));
     }
-    if let Some(lane) = &detail.lane {
+    if let Some(lane) = &detail.summary.lane {
         status.push(paint(DIM, format!("lane={lane}")));
     }
     if let Some(review) = &detail.review {
@@ -320,8 +320,11 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     if let Some(recovery) = &detail.recovery {
         status.push(paint(DIM, format!("recovery={recovery}")));
     }
-    if !detail.labels.is_empty() {
-        status.push(paint(DIM, format!("labels={}", detail.labels.join(","))));
+    if !detail.summary.labels.is_empty() {
+        status.push(paint(
+            DIM,
+            format!("labels={}", detail.summary.labels.join(",")),
+        ));
     }
     if !detail.requires.is_empty() {
         status.push(paint(
@@ -747,7 +750,6 @@ pub fn status(view: &StatusView) -> String {
         "events: {}  heads: {}  pending: {}  agents: {}",
         view.events, view.heads, view.pending, view.agents
     );
-    let _ = writeln!(out, "archived items: {}", view.archived_items);
     let devices: Vec<String> = view
         .devices
         .iter()
@@ -758,12 +760,17 @@ pub fn status(view: &StatusView) -> String {
         })
         .collect();
     let _ = writeln!(out, "devices: {}", devices.join(", "));
-    let daemon = if view.daemon { "runs" } else { "does not run" };
+    let daemon = if view.daemon { "running" } else { "stopped" };
     let _ = writeln!(out, "daemon: {daemon}");
     let _ = writeln!(
         out,
-        "sessions: {} live, {} of them parked  ready items: {}  waiting on you: {}",
-        view.live_sessions, view.parked_sessions, view.ready_items, view.waiting_on_you
+        "sessions: {} live, {} parked",
+        view.live_sessions, view.parked_sessions,
+    );
+    let _ = writeln!(
+        out,
+        "items: {} ready, {} waiting, {} archived",
+        view.ready_items, view.waiting_on_you, view.archived_items,
     );
     for line in &view.after_failures {
         let _ = writeln!(out, "waits for you: {line}");

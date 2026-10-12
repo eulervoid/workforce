@@ -29,12 +29,10 @@ expression: "Envelope::new(&detail)"
     "author": "@joshua",
     "created": "1970-01-01T00:00:04Z",
     "updated": "1970-01-01T00:00:04Z",
-    "lane": "default",
     "review": null,
     "review_status": null,
     "recovery": "standard",
     "waits_after_failures": null,
-    "labels": [],
     "requires": [],
     "depends_on": [],
     "required_by": [

@@ -615,7 +615,6 @@ pub struct ItemDetail {
     pub author: String,
     pub created: String,
     pub updated: String,
-    pub lane: Option<String>,
     /// The review level the item needs: its own, or its type's default.
     pub review: Option<String>,
     /// Where the review of the submitted work stands.
@@ -624,7 +623,6 @@ pub struct ItemDetail {
     pub recovery: Option<String>,
     /// Sessions ended without finishing and the recovery level leaves the item to the principal.
     pub waits_after_failures: Option<String>,
-    pub labels: Vec<String>,
     pub requires: Vec<String>,
     pub depends_on: Vec<LinkView>,
     pub required_by: Vec<LinkView>,
@@ -1025,7 +1023,6 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         author: actor_label(state, item.author()),
         created: timestamp(item.created()),
         updated: timestamp(item.updated()),
-        lane: item.effective_lane(policy).map(ToString::to_string),
         review: item.effective_review(policy).map(ToString::to_string),
         review_status: state.review_status(item.id()).map(review_status_view),
         recovery: item.effective_recovery(policy).map(ToString::to_string),
@@ -1044,7 +1041,6 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
                 | Waiting::HumanReview { .. }
                 | Waiting::Merge { .. } => None,
             }),
-        labels: item.labels().values().map(ToString::to_string).collect(),
         requires: item.requires().values().map(ToString::to_string).collect(),
         depends_on,
         required_by,
