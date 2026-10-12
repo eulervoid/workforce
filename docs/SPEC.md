@@ -203,7 +203,7 @@ need different capabilities.
 
 * `SessionStarted{agent, item, role}` (device-signed), `role` = `Work`, `Review{commit}` or `Supervise`.
   Its hash prefix is the session id. `SessionEnded{reason}`, reason = `Submitted{commit} | Reviewed |
-  Supervised | Released | TimedOut | Failed | Cancelled`.
+  Supervised | Released | TimedOut | Failed | Cancelled | Interrupted`.
 * One branch per **item** (`wf/<item>`, section 9) in one worktree. A session is an attempt: the next
   session on the item (after a release, a crash or requested changes) continues the branch.
 * **Ending moves the item first.** `after_end(session, reason)` in `wf-core` says what happens to the
@@ -220,7 +220,7 @@ need different capabilities.
 * A supervise session ends when the supervisor resolves the blocker it was started for, or escalates it.
 * Context carries over within a session in the conversation, and across sessions through comments.
 * **Liveness:** on one machine (M2) a session is live from `SessionStarted` until `SessionEnded`; a
-  restarting daemon ends its own leftover sessions as `Failed`. Across devices (M3) liveness is computed
+  restarting daemon ends its own leftover sessions as `Interrupted`, no failure of the attempt. Across devices (M3) liveness is computed
   at query time from a lease: a session without a renewal within the lease counts as dead, even without
   `SessionEnded` (crash, sleeping laptop). Its claim expires and the item becomes assignable again,
   possibly to the same agent on another device.

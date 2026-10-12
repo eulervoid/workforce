@@ -635,6 +635,7 @@ impl Daemon {
             Finish::Supervised => (EndReason::Supervised, by_agent.clone(), None),
             Finish::Stop | Finish::MovedOn => (EndReason::Cancelled, by_device.clone(), None),
             Finish::TimedOut => (EndReason::TimedOut, by_device.clone(), None),
+            Finish::Interrupted => (EndReason::Interrupted, by_device.clone(), None),
             Finish::Failed { because } => (
                 EndReason::Failed,
                 by_device.clone(),
@@ -717,6 +718,7 @@ impl Daemon {
             Finish::Stop
             | Finish::MovedOn
             | Finish::TimedOut
+            | Finish::Interrupted
             | Finish::Failed { .. }
             | Finish::GaveUp { .. } => Stop::Now,
         };
@@ -971,14 +973,7 @@ impl Daemon {
             .collect();
         for session in stale {
             if let Err(error) = self
-                .finish_session(
-                    workforce,
-                    loaded,
-                    session,
-                    Finish::Failed {
-                        because: "the daemon stopped while it ran".to_string(),
-                    },
-                )
+                .finish_session(workforce, loaded, session, Finish::Interrupted)
                 .await
             {
                 eprintln!(

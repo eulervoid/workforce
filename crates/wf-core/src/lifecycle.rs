@@ -69,7 +69,8 @@ impl State {
             EndReason::Released
             | EndReason::TimedOut
             | EndReason::Failed
-            | EndReason::Cancelled => {
+            | EndReason::Cancelled
+            | EndReason::Interrupted => {
                 let held_by_another = self
                     .claim(item)
                     .is_some_and(|holder| holder.id() != session.id());

@@ -145,6 +145,8 @@ pub enum Finish {
     TimedOut,
     /// The harness failed or exited, or the daemon could not run it.
     Failed { because: String },
+    /// The daemon that ran it stopped. By the daemon, for sessions a previous daemon left live.
+    Interrupted,
     /// The agent used up its nudges without a new commit. `last_message` is what it said last.
     GaveUp { turns: u32, last_message: String },
 }

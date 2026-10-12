@@ -43,7 +43,8 @@ impl State {
                     | EndReason::Supervised
                     | EndReason::TimedOut
                     | EndReason::Failed
-                    | EndReason::Cancelled => None,
+                    | EndReason::Cancelled
+                    | EndReason::Interrupted => None,
                 }
             })
             .max_by_key(|(_, stamp)| *stamp)

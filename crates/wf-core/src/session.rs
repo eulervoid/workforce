@@ -129,10 +129,12 @@ pub enum EndReason {
     Released,
     /// Parked for too long, or `max_duration` reached.
     TimedOut,
-    /// The harness exited or failed, or the daemon restarted.
+    /// The harness exited or failed, or the daemon could not run it.
     Failed,
     /// Stopped by the principal, or the claim went to another session.
     Cancelled,
+    /// The daemon that ran it stopped, such as for a restart. Not a failure of the attempt.
+    Interrupted,
 }
 
 impl EndReason {
@@ -145,6 +147,7 @@ impl EndReason {
             EndReason::TimedOut => "timed_out",
             EndReason::Failed => "failed",
             EndReason::Cancelled => "cancelled",
+            EndReason::Interrupted => "interrupted",
         }
     }
 }

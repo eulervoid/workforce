@@ -161,13 +161,16 @@ fn an_agent_does_not_retry_what_it_gave_up_on() {
     end(&mut scene, task, EndReason::Released);
     end(&mut scene, timed_out, EndReason::TimedOut);
     end(&mut scene, submitted, EndReason::Cancelled);
+    for _ in 0..3 {
+        end(&mut scene, crashing, EndReason::Interrupted);
+    }
     for _ in 0..2 {
         end(&mut scene, crashing, EndReason::Failed);
     }
     assert_eq!(
         scene.offered().len(),
         3,
-        "crashing twice is still tried again: {:?}",
+        "crashing twice, or being interrupted, is still tried again: {:?}",
         scene.offered()
     );
     end(&mut scene, crashing, EndReason::Failed);

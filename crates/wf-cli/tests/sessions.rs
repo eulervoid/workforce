@@ -540,7 +540,7 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_session_left_live_by_an_earlier_daemon_is_failed_when_the_next_one_starts() {
+async fn a_session_left_live_by_an_earlier_daemon_is_interrupted_when_the_next_one_starts() {
     let setup = World::without_daemon(&[("coder", "")]);
     let item = setup.wf.add(&["--title", "Orphaned"]);
     {
@@ -570,7 +570,7 @@ async fn a_session_left_live_by_an_earlier_daemon_is_failed_when_the_next_one_st
     }
     let world = setup.start_daemon().await;
     let session = world.ended_session().await;
-    assert_eq!(session["status"], "failed");
+    assert_eq!(session["status"], "interrupted");
     assert_eq!(world.item(&item)["state"], "open");
 }
 

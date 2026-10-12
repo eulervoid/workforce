@@ -116,7 +116,8 @@ impl State {
                     EndReason::Submitted { .. }
                     | EndReason::Reviewed
                     | EndReason::Supervised
-                    | EndReason::Cancelled,
+                    | EndReason::Cancelled
+                    | EndReason::Interrupted,
                 )
                 | None => {}
             }

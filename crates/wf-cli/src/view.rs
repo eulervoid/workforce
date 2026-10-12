@@ -832,6 +832,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                     EndReason::TimedOut => "timed out".into(),
                     EndReason::Failed => "failed".into(),
                     EndReason::Cancelled => "was stopped".into(),
+                    EndReason::Interrupted => "was interrupted".into(),
                 };
                 let summary = match moved_to {
                     Some(to) => format!("{ended} → {to}"),
