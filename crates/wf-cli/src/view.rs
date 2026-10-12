@@ -61,7 +61,7 @@ pub fn actor_label(state: &State, actor: &Actor) -> String {
             .map_or_else(|| key.fmt_short(), |member| format!("@{}", member.handle))
     };
     match actor {
-        Actor::Human(key) => principal(key),
+        Actor::Principal(key) => principal(key),
         Actor::Daemon(_) => "daemon".to_string(),
         Actor::Agent { agent, session } => {
             format!(
@@ -79,7 +79,7 @@ pub fn device_label(state: &State, device: wf_core::identity::DeviceKey) -> Stri
     match state.principal_of(&device) {
         Some(principal) => format!(
             "{} ({})",
-            actor_label(state, &Actor::Human(principal)),
+            actor_label(state, &Actor::Principal(principal)),
             device.fmt_short()
         ),
         None => device.fmt_short(),
@@ -92,7 +92,7 @@ pub fn timestamp_now() -> String {
 
 pub fn mention_label(state: &State, target: &MentionTarget) -> String {
     match target {
-        MentionTarget::Principal(key) => actor_label(state, &Actor::Human(*key)),
+        MentionTarget::Principal(key) => actor_label(state, &Actor::Principal(*key)),
         MentionTarget::Agent(agent) => {
             let handle = state.member(&agent.principal).map_or_else(
                 || agent.principal.fmt_short(),
@@ -638,7 +638,7 @@ pub struct ItemDetail {
 pub struct ReviewStatusView {
     /// `awaiting`, `changes_requested`, `approved` or `merged`.
     pub status: String,
-    /// What the awaited step is: `human`, or `agent: review, strong-model`.
+    /// What the awaited step is: `principal`, or `agent: review, strong-model`.
     pub step: Option<String>,
     pub commit: Option<String>,
 }
@@ -648,7 +648,7 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
         ReviewStatus::Awaiting { step } => ReviewStatusView {
             status: "awaiting".into(),
             step: Some(match step {
-                ReviewStep::Human => "human".to_string(),
+                ReviewStep::Principal => "principal".to_string(),
                 ReviewStep::Agent { requires } => format!(
                     "agent: {}",
                     requires
@@ -767,7 +767,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                 let summary = match verdict {
                     Verdict::Approve => format!("approved {on}"),
                     Verdict::RequestChanges => format!("requested changes on {on}"),
-                    Verdict::Escalate => format!("escalated {on} to a person"),
+                    Verdict::Escalate => format!("escalated {on} to the principal"),
                 };
                 let mut view = ActivityView {
                     at,
@@ -1322,7 +1322,7 @@ pub fn status(
     for announcement in state.announcements() {
         flagged.insert(format!(
             "{} forked this workforce to {}; `wf fork accept {}` follows it",
-            actor_label(state, &Actor::Human(announcement.by)),
+            actor_label(state, &Actor::Principal(announcement.by)),
             announcement.to,
             announcement.to
         ));
@@ -1440,7 +1440,7 @@ pub struct InboxEntryView {
     pub passed: Vec<String>,
 }
 
-/// What waits on a person: what the state says, and the permission requests the daemon holds.
+/// What waits on the principal: what the state says, and the permission requests the daemon holds.
 pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView> {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let title_of = |item: ItemId| match state.item(item) {

@@ -256,12 +256,12 @@ impl Default for MergeConfig {
     }
 }
 
-/// One step of a review level: an agent chosen by capabilities, or the human.
+/// One step of a review level: an agent chosen by capabilities, or the principal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ReviewStep {
     Agent { requires: BTreeSet<Requirement> },
-    Human,
+    Principal,
 }
 
 /// A named sequence of review steps. Levels are listed from least to most strict. A level without
@@ -535,10 +535,7 @@ mod tests {
             .iter()
             .map(|level| level.name.as_str())
             .collect();
-        assert_eq!(
-            names,
-            ["none", "light", "standard", "critical", "principal"]
-        );
+        assert_eq!(names, ["none", "light", "standard", "critical", "manual"]);
         let critical = policy
             .review_level(&ReviewName::new("critical").unwrap())
             .unwrap();
@@ -548,7 +545,7 @@ mod tests {
             .collect();
         assert_eq!(
             critical.steps,
-            [ReviewStep::Agent { requires }, ReviewStep::Human]
+            [ReviewStep::Agent { requires }, ReviewStep::Principal]
         );
         assert_eq!(policy.merge, MergeConfig::default());
         assert!(
@@ -557,7 +554,7 @@ mod tests {
                 .contains_key(&LaneName::new("supervision").unwrap())
         );
         let task = policy.type_config(&type_name("task")).unwrap();
-        assert_eq!(task.review, Some(ReviewName::new("principal").unwrap()));
+        assert_eq!(task.review, Some(ReviewName::new("manual").unwrap()));
         assert_eq!(
             policy.review_rank(&ReviewName::new("standard").unwrap()),
             Some(2)
@@ -567,7 +564,7 @@ mod tests {
     #[test]
     fn a_type_names_its_default_review_level() {
         let source = DEFAULT_POLICY_TOML.replace(
-            "[types.task]\nreview = \"principal\"\nlane",
+            "[types.task]\nreview = \"manual\"\nlane",
             "[types.task]\nreview = \"standard\"\nlane",
         );
         let policy = Policy::parse(&source).unwrap();
@@ -577,7 +574,7 @@ mod tests {
 
     #[test]
     fn rejects_review_levels_that_do_not_hold_together() {
-        let duplicate = with_custom("[[review]]\nname = \"light\"\nsteps = [\"human\"]\n");
+        let duplicate = with_custom("[[review]]\nname = \"light\"\nsteps = [\"principal\"]\n");
         assert_eq!(
             Policy::parse(&duplicate),
             Err(PolicyError::DuplicateReviewLevel(
@@ -590,7 +587,7 @@ mod tests {
             Err(PolicyError::ReservedReviewLevel)
         );
         let unknown =
-            DEFAULT_POLICY_TOML.replace("review = \"principal\"\nlane", "review = \"ghost\"\nlane");
+            DEFAULT_POLICY_TOML.replace("review = \"manual\"\nlane", "review = \"ghost\"\nlane");
         assert_eq!(
             Policy::parse(&unknown),
             Err(PolicyError::UnknownReviewLevel {

@@ -6,7 +6,7 @@ expression: "Envelope::new(view::status(&scenario.state, None, &Default::default
   "schema": 2,
   "data": {
     "name": "demo",
-    "id": "46bliictrkca42ei2ydwr4n4zmvrgfkvq6dkceroqd4hj4er66jq",
+    "id": "trdsw6hlel6dg73rwg4ebd7th6xm5kvb2n2vn3ultotjiekh7yya",
     "members": [
       "@ada (member)",
       "@joshua (owner)"

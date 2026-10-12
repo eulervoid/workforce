@@ -1,4 +1,4 @@
-//! Permission requests that agents make and a person answers.
+//! Permission requests that agents make and the principal answers.
 
 use std::sync::Mutex;
 
@@ -14,7 +14,7 @@ struct Request {
     reply: oneshot::Sender<PermissionMode>,
 }
 
-/// The requests that wait for a person. Runtime state: a request does not outlive its session,
+/// The requests that wait for the principal. Runtime state: a request does not outlive its session,
 /// nor the daemon, and its agent is told no when it goes.
 #[derive(Default)]
 pub(crate) struct Held {

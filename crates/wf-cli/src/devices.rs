@@ -47,7 +47,7 @@ pub fn device_views(state: &State, own: DeviceKey, last_seen: &LastSeen) -> Vec<
             DeviceView {
                 device: info.device.to_string(),
                 name: info.profile.map(|profile| profile.name.clone()),
-                principal: actor_label(state, &wf_core::identity::Actor::Human(info.principal)),
+                principal: actor_label(state, &wf_core::identity::Actor::Principal(info.principal)),
                 hardware: info.profile.map(|profile| profile.hardware.clone()),
                 max_sessions: info.profile.map(|profile| profile.max_sessions),
                 agents: info

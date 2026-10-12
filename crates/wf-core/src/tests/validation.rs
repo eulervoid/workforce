@@ -213,7 +213,7 @@ fn pending_events_that_turn_out_invalid_are_reported() {
         let mut content = fixture
             .author(&author, 0, 2_001, create("task", "b"))
             .content;
-        content.actor = Actor::Human(fixture.member.key());
+        content.actor = Actor::Principal(fixture.member.key());
         Event::sign_content(content, &fixture.devices[0]).unwrap()
     };
 
@@ -340,7 +340,7 @@ fn author_must_be_a_bound_device_acting_for_its_own_principal() {
     );
 
     let impersonation = forged(&fixture, &state, |content| {
-        content.actor = Actor::Human(fixture.member.key())
+        content.actor = Actor::Principal(fixture.member.key())
     });
     assert_eq!(
         receive(&mut state, impersonation),
@@ -363,7 +363,7 @@ fn author_must_be_a_bound_device_acting_for_its_own_principal() {
 fn a_member_may_write_items_but_not_policy() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
-    let member_actor = Actor::Human(fixture.member.key());
+    let member_actor = Actor::Principal(fixture.member.key());
     let build = |state: &State, body| {
         state
             .builder(fixture.member_device.key(), member_actor.clone(), 5_000)

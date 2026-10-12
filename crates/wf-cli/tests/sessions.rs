@@ -65,7 +65,7 @@ impl World {
         wf.run(&["init", "--name", "demo"]);
         let policy = wf.run(&["policy", "show"]);
         let path = wf.root.path().join("unreviewed-policy.toml");
-        std::fs::write(&path, policy.replace("review = \"principal\"\n", "")).unwrap();
+        std::fs::write(&path, policy.replace("review = \"manual\"\n", "")).unwrap();
         wf.run(&["policy", "apply", path.to_str().unwrap()]);
         git(
             &wf.repository,
@@ -975,8 +975,8 @@ async fn a_critical_item_waits_for_a_person_after_the_agent_approves() {
         .wf
         .add(&["--title", "Add hello", "--review", "critical"]);
     world
-        .wait("the human step", |world| {
-            world.item(&item)["review_status"]["step"] == "human"
+        .wait("the principal step", |world| {
+            world.item(&item)["review_status"]["step"] == "principal"
         })
         .await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -1005,8 +1005,8 @@ async fn an_escalated_review_goes_to_a_person() {
         .wf
         .add(&["--title", "Add hello", "--review", "standard"]);
     world
-        .wait("the human step", |world| {
-            world.item(&item)["review_status"]["step"] == "human"
+        .wait("the principal step", |world| {
+            world.item(&item)["review_status"]["step"] == "principal"
         })
         .await;
     let refused = world

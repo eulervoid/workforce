@@ -270,7 +270,7 @@ impl Renderer {
         out
     }
 
-    /// `✓ allowed by rules: ...` or `✗ denied by a person`.
+    /// `✓ allowed by rules: ...` or `✗ denied by the principal`.
     fn decision(&self, decision: &Value) -> String {
         let (label, verb, style) = match decision["permission"].as_str() {
             Some("allow") => ("✓", "allowed", color(AnsiColor::Green)),

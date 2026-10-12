@@ -17,7 +17,7 @@ struct ChainView {
     config: String,
     /// `decider: why` for each decider that passed it on.
     passed: Vec<String>,
-    /// `allow` or `deny`, or `None` when a person would be asked.
+    /// `allow` or `deny`, or `None` when the principal would be asked.
     permission: Option<PermissionMode>,
     by: Option<String>,
     reason: Option<String>,
@@ -64,7 +64,7 @@ fn render(view: &ChainView) -> String {
     let verdict = match (view.permission, &view.by) {
         (Some(PermissionMode::Allow), Some(by)) => format!("allowed by {by}"),
         (Some(PermissionMode::Deny), Some(by)) => format!("denied by {by}"),
-        (Some(_), None) | (None, _) => "a person would be asked".to_string(),
+        (Some(_), None) | (None, _) => "the principal would be asked".to_string(),
     };
     match &view.reason {
         Some(reason) => out.push_str(&format!("{verdict}: {reason}\n")),

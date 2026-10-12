@@ -90,7 +90,7 @@ fn awaiting_agent() -> ReviewStatus {
 
 fn awaiting_human() -> ReviewStatus {
     ReviewStatus::Awaiting {
-        step: ReviewStep::Human,
+        step: ReviewStep::Principal,
     }
 }
 
@@ -149,7 +149,7 @@ fn escalating_puts_a_human_step_right_after_the_current_one() {
     assert_eq!(
         scene.status(item),
         Some(awaiting_human()),
-        "the original human step is still to come"
+        "the original principal step is still to come"
     );
     scene.apply(verdict(item, commit(1), Verdict::Approve));
     assert_eq!(
@@ -451,7 +451,7 @@ fn a_review_step_nobody_hosted_can_take_is_noticed() {
 fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
     let mut scene = Scene::new();
     let finding = scene
-        .apply(create_reviewed("task", "check the parser", "principal"))
+        .apply(create_reviewed("task", "check the parser", "manual"))
         .id()
         .into();
     let session: SessionId = scene.apply(start_session("coder", finding)).id().into();
@@ -476,7 +476,7 @@ fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
 fn approved_work_without_commits_does_not_finish_an_item_that_was_moved_since() {
     let mut scene = Scene::new();
     let finding = scene
-        .apply(create_reviewed("task", "check the parser", "principal"))
+        .apply(create_reviewed("task", "check the parser", "manual"))
         .id()
         .into();
     let session: SessionId = scene.apply(start_session("coder", finding)).id().into();

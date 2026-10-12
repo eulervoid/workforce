@@ -199,7 +199,7 @@ pub fn fork(
     let genesis_event = state
         .fork_genesis_builder(
             own_device,
-            Actor::Human(founder_key.key()),
+            Actor::Principal(founder_key.key()),
             workspace::now_ms(),
         )
         .context("the workforce has no genesis")?
@@ -242,18 +242,20 @@ pub fn fork(
             excluded_devices: excluded_devices.iter().map(describe).collect(),
             excluded_members: excluded_members
                 .iter()
-                .map(|principal| actor_label(&state, &Actor::Human(*principal)))
+                .map(|principal| actor_label(&state, &Actor::Principal(*principal)))
                 .collect(),
             members: kept
                 .iter()
                 .map(|principal| {
                     actor_label(
                         &state,
-                        &Actor::Human(if args.new_principal && *principal == founder_key.key() {
-                            own_principal
-                        } else {
-                            *principal
-                        }),
+                        &Actor::Principal(
+                            if args.new_principal && *principal == founder_key.key() {
+                                own_principal
+                            } else {
+                                *principal
+                            },
+                        ),
                     )
                 })
                 .collect(),
@@ -438,11 +440,11 @@ pub fn list(json: bool, workspace: &Workspace) -> anyhow::Result<()> {
             .announcements()
             .map(|announcement| ForkedView {
                 workforce: announcement.to.to_string(),
-                announced_by: actor_label(state, &Actor::Human(announcement.by)),
+                announced_by: actor_label(state, &Actor::Principal(announcement.by)),
                 members: announcement
                     .members
                     .iter()
-                    .map(|principal| actor_label(state, &Actor::Human(*principal)))
+                    .map(|principal| actor_label(state, &Actor::Principal(*principal)))
                     .collect(),
             })
             .collect(),

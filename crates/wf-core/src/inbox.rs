@@ -40,7 +40,7 @@ impl State {
             .filter_map(|item| {
                 let waiting = match self.review_status(item.id()) {
                     Some(ReviewStatus::Awaiting {
-                        step: ReviewStep::Human,
+                        step: ReviewStep::Principal,
                     }) => {
                         let (commit, _) = self.submission(item.id())?;
                         Waiting::HumanReview { commit }

@@ -675,7 +675,7 @@ mod forking {
         let mut replica =
             Replica::open(RedbStore::open(store).unwrap(), id.parse().unwrap()).unwrap();
         let workforce = replica.state().workforce_id().unwrap();
-        let actor = Actor::Human(principal.key());
+        let actor = Actor::Principal(principal.key());
         let secret = InviteSigner::generate();
         let invite = replica
             .author(
@@ -1103,7 +1103,7 @@ fn items_name_a_review_level_from_the_policy() {
     wf.run(&["item", "edit", short(&task), "--review", "critical"]);
     assert_eq!(review(&wf), "critical");
     wf.run(&["item", "edit", short(&task), "--review", "default"]);
-    assert_eq!(review(&wf), "principal", "the task type's default applies");
+    assert_eq!(review(&wf), "manual", "the task type's default applies");
     wf.run(&["item", "edit", short(&task), "--review", "none"]);
     assert_eq!(review(&wf), "none");
 

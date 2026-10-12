@@ -178,7 +178,7 @@ pub struct ReviewArgs {
     /// The work needs changes. The item goes back to open for the next session.
     #[arg(long)]
     pub request_changes: bool,
-    /// A person has to decide. Only for agents.
+    /// The principal has to decide. Only for agents.
     #[arg(long)]
     pub escalate: bool,
     /// Why, for whoever works on it next or decides after you.
@@ -443,7 +443,7 @@ pub struct AgentAddArgs {
     pub autonomy: AutonomyArgs,
 }
 
-/// How much the agent does without a person. Fields that are not given keep their default, or
+/// How much the agent does without the principal. Fields that are not given keep their default, or
 /// with `wf agent edit` their current value.
 #[derive(Args)]
 pub struct AutonomyArgs {

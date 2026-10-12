@@ -222,7 +222,7 @@ fn init(json: bool, mode: Mode, args: InitArgs, data: DataDir, cwd: &Path) -> an
         forked_from: None,
     };
     let body = EventBody::Genesis(Signed::sign(&principal, None, genesis)?);
-    let actor = Actor::Human(principal.key());
+    let actor = Actor::Principal(principal.key());
     let genesis_event =
         wf_core::event::EventBuilder::genesis(device.key(), actor.clone(), workspace::now_ms())
             .sign(&device, body)?;
@@ -1014,7 +1014,7 @@ pub(crate) fn review(
     let message = match verdict {
         Verdict::Approve => format!("approved #{}", item.short()),
         Verdict::RequestChanges => format!("requested changes on #{}", item.short()),
-        Verdict::Escalate => format!("escalated #{} to a person", item.short()),
+        Verdict::Escalate => format!("escalated #{} to the principal", item.short()),
     };
     done(json, message, &event, Some(item))
 }

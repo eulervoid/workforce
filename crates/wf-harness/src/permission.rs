@@ -74,13 +74,13 @@ impl PermissionRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Decision {
     pub permission: PermissionMode,
-    /// Which decider answered: `rules`, a hook, a model, an agent, a person, or the agent's
+    /// Which decider answered: `rules`, a hook, a model, an agent, the principal, or the agent's
     /// fixed permissions.
     pub by: String,
     pub reason: Option<String>,
 }
 
-/// Decides what a request of the agent for permission is answered with. A person may be asked,
+/// Decides what a request of the agent for permission is answered with. The principal may be asked,
 /// so it may take a long time; the agent waits meanwhile.
 pub trait Permissions: Send + Sync + 'static {
     fn decide(&self, request: PermissionRequest) -> agent_client_protocol::BoxFuture<'_, Decision>;

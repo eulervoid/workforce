@@ -149,7 +149,7 @@ fn binding_rules() {
 
     // Claiming to act for someone else.
     let impersonation = forged(&vm, &|content| {
-        content.actor = crate::identity::Actor::Human(fixture.member.key())
+        content.actor = crate::identity::Actor::Principal(fixture.member.key())
     });
     assert_eq!(
         receive(&mut state, impersonation),

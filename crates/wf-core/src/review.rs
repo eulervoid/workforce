@@ -84,7 +84,7 @@ impl State {
                 Verdict::RequestChanges => return Some(ReviewStatus::ChangesRequested),
                 Verdict::Escalate => {
                     index += 1;
-                    steps.insert(index, ReviewStep::Human);
+                    steps.insert(index, ReviewStep::Principal);
                 }
             }
         }

@@ -435,7 +435,7 @@ impl State {
             .key
             .verify_proof(workforce.id, bound.invite, content.author, &bound.proof)
             .map_err(|_| Invalid::BadInviteProof)?;
-        if content.actor != Actor::Human(invite.principal) {
+        if content.actor != Actor::Principal(invite.principal) {
             return Err(Invalid::ActorMismatch);
         }
         Ok(())
@@ -584,7 +584,7 @@ impl State {
         if !genesis.founder.devices.contains(&content.author) {
             return Err(GenesisError::AuthorNotFounderDevice.into());
         }
-        if content.actor != Actor::Human(genesis.founder.principal) {
+        if content.actor != Actor::Principal(genesis.founder.principal) {
             return Err(GenesisError::ActorNotFounder.into());
         }
         let mut principals = std::collections::BTreeSet::new();

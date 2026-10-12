@@ -825,7 +825,7 @@ impl Daemon {
     }
 
     /// Merges reviewed work into the target branch and finishes the item. What cannot be merged
-    /// now leaves the item where a person or a later session will see it.
+    /// now leaves the item where the principal or a later session will see it.
     pub(crate) async fn merge_item(
         &self,
         workforce: WorkforceId,

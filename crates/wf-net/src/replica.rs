@@ -154,7 +154,7 @@ pub fn bind_device<S: EventStore>(
         .invite(&invite)
         .map(|known| known.principal)
         .ok_or(BindError::UnknownInvite)?;
-    let actor = Actor::Human(principal);
+    let actor = Actor::Principal(principal);
     match joined(replica, signer.key(), invite) {
         Joined::Otherwise => return Err(BindError::AlreadyJoined),
         Joined::WithInvite => {}

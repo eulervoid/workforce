@@ -108,7 +108,7 @@ impl Brief {
 /// Who wrote something, as an agent is told: the agent's name, or `someone` for a person.
 pub fn speaker(actor: &Actor) -> String {
     match actor {
-        Actor::Human(_) => "someone".to_string(),
+        Actor::Principal(_) => "someone".to_string(),
         Actor::Daemon(_) => "the daemon".to_string(),
         Actor::Agent { agent, .. } => agent.name.to_string(),
     }
@@ -196,7 +196,7 @@ fn review_step(state: &State, item: ItemId) -> String {
         ),
         Some(
             ReviewStatus::Awaiting {
-                step: ReviewStep::Human,
+                step: ReviewStep::Principal,
             }
             | ReviewStatus::ChangesRequested
             | ReviewStatus::Approved { .. }

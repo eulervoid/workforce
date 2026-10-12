@@ -207,7 +207,7 @@ impl DaemonClient {
         }
     }
 
-    /// The permission requests that wait for a person.
+    /// The permission requests that wait for the principal.
     pub fn permissions(
         &mut self,
         workforce: WorkforceId,

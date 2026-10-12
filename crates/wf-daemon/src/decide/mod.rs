@@ -1,4 +1,4 @@
-//! The chain of deciders a permission request passes through before a person is asked.
+//! The chain of deciders a permission request passes through before the principal is asked.
 
 mod hook;
 mod model;
@@ -192,7 +192,7 @@ pub(crate) fn read_answer(text: &str) -> Outcome {
 }
 
 /// Answers the requests of a session whose agent asks: the deciders of the machine config in
-/// their order, then a person, through `wf inbox` and `wf session allow|deny`.
+/// their order, then the principal, through `wf inbox` and `wf session allow|deny`.
 pub(crate) struct Deciding {
     pub(crate) held: Arc<Held>,
     pub(crate) workforce: WorkforceId,
@@ -246,7 +246,7 @@ impl Permissions for Deciding {
             let answer = self.held.hold(self.workforce, self.session, &title, passed);
             Decision {
                 permission: answer.await.unwrap_or(PermissionMode::Deny),
-                by: "a person".to_string(),
+                by: "the principal".to_string(),
                 reason: None,
             }
         })

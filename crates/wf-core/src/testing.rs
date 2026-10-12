@@ -57,13 +57,14 @@ impl Fixture {
                 devices: vec![member_device.key()],
                 previous: vec![],
             }],
-            policy: DEFAULT_POLICY_TOML.replace("review = \"principal\"\n", ""),
+            policy: DEFAULT_POLICY_TOML.replace("review = \"manual\"\n", ""),
             forked_from: None,
         };
         let body = EventBody::Genesis(Signed::sign(&founder, None, genesis).unwrap());
-        let genesis = EventBuilder::genesis(devices[0].key(), Actor::Human(founder.key()), 1_000)
-            .sign(&devices[0], body)
-            .unwrap();
+        let genesis =
+            EventBuilder::genesis(devices[0].key(), Actor::Principal(founder.key()), 1_000)
+                .sign(&devices[0], body)
+                .unwrap();
         Self {
             founder,
             member,
@@ -87,7 +88,7 @@ impl Fixture {
     }
 
     pub fn founder_actor(&self) -> Actor {
-        Actor::Human(self.founder.key())
+        Actor::Principal(self.founder.key())
     }
 
     /// The founder's agent `name` acting in `session`.
@@ -162,7 +163,11 @@ impl Fixture {
         };
         let body = EventBody::Genesis(Signed::sign(founder, None, genesis).unwrap());
         parent
-            .fork_genesis_builder(self.devices[0].key(), Actor::Human(founder.key()), now_ms)
+            .fork_genesis_builder(
+                self.devices[0].key(),
+                Actor::Principal(founder.key()),
+                now_ms,
+            )
             .unwrap()
             .sign(&self.devices[0], body)
             .unwrap()

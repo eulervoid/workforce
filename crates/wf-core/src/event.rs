@@ -232,7 +232,7 @@ pub struct SessionEnded {
     pub reason: EndReason,
 }
 
-/// The verdict of a review session or of a human on the work submitted for an item.
+/// The verdict of a review session or of a principal on the work submitted for an item.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Review {
     pub item: ItemId,
@@ -541,7 +541,7 @@ mod tests {
             forked_from: None,
         };
         let body = EventBody::Genesis(Signed::sign(&principal, None, genesis).unwrap());
-        EventBuilder::genesis(device.key(), Actor::Human(principal.key()), 1_000)
+        EventBuilder::genesis(device.key(), Actor::Principal(principal.key()), 1_000)
             .sign(&device, body)
             .unwrap()
     }
@@ -616,8 +616,8 @@ mod tests {
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
     ];
 
-    const GOLDEN_LEN: usize = 1985;
-    const GOLDEN_ID: &str = "j3flm66joavnlcqky2vri5tcbhmiyeppkwsfpwshjk5f2x6x4atq";
+    const GOLDEN_LEN: usize = 1987;
+    const GOLDEN_ID: &str = "yvx5sucz7euc2hqmcfb4i6qexpc75kfpmjkfanjbscsryoewyjga";
 
     #[test]
     fn round_trips_and_verifies() {
@@ -641,7 +641,7 @@ mod tests {
         let other = DeviceSigner::from_bytes(&[3; 32]).unwrap();
         let builder = EventBuilder::genesis(
             DeviceSigner::from_bytes(&[2; 32]).unwrap().key(),
-            Actor::Human(principal.key()),
+            Actor::Principal(principal.key()),
             1,
         );
         let body = EventBody::Unknown {
@@ -661,7 +661,7 @@ mod tests {
             tag: 4242,
             payload: vec![9, 8, 7, 6],
         };
-        let event = EventBuilder::genesis(device.key(), Actor::Human(principal.key()), 1)
+        let event = EventBuilder::genesis(device.key(), Actor::Principal(principal.key()), 1)
             .sign(&device, body.clone())
             .unwrap();
         let bytes = event.encode().unwrap();

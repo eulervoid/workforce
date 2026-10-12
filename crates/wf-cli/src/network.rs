@@ -411,7 +411,7 @@ fn finish_join(
             workforce: code.workforce.to_string(),
             device: device.to_string(),
             name,
-            principal: crate::view::actor_label(state, &Actor::Human(principal)),
+            principal: crate::view::actor_label(state, &Actor::Principal(principal)),
             events: state.event_count(),
         },
         |view| {

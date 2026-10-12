@@ -172,7 +172,7 @@ impl Workspace {
         })?;
         let actor = match std::env::var(SESSION_VARIABLE) {
             Ok(session) => agent_actor(state, &session)?,
-            Err(_) => Actor::Human(principal),
+            Err(_) => Actor::Principal(principal),
         };
         Ok(Self {
             source,
@@ -196,7 +196,7 @@ impl Workspace {
     pub fn session(&self) -> Option<SessionId> {
         match &self.actor {
             Actor::Agent { session, .. } => Some(*session),
-            Actor::Human(_) | Actor::Daemon(_) => None,
+            Actor::Principal(_) | Actor::Daemon(_) => None,
         }
     }
 
@@ -301,7 +301,7 @@ impl Workspace {
         Ok(session)
     }
 
-    /// The permission requests that wait for a person. Only a running daemon holds any.
+    /// The permission requests that wait for the principal. Only a running daemon holds any.
     pub fn held_permissions(&self) -> Vec<HeldPermission> {
         match &self.source {
             Source::Local(_) => Vec::new(),

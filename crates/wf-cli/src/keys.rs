@@ -119,7 +119,7 @@ impl DataDir {
         )
     }
 
-    /// The principal key of one workforce, which lives next to its store. A person has a key per
+    /// The principal key of one workforce, which lives next to its store. A principal has a key per
     /// workforce, so losing or replacing one touches nothing else.
     pub fn principal(&self, workforce: &WorkforceId) -> anyhow::Result<Option<PrincipalSigner>> {
         Ok(read_secret(&self.principal_path(workforce))?

@@ -153,7 +153,7 @@ macro_rules! key_pair {
 }
 
 key_pair!(
-    /// Identifies a human. Signs authority statements: genesis, policy, owners, invites.
+    /// Identifies the accountable person. Signs authority statements: genesis, policy, owners, invites.
     PrincipalKey, PrincipalSigner, AUTHORITY_DOMAIN
 );
 key_pair!(
@@ -240,7 +240,7 @@ pub struct AgentId {
 /// Who an event is attributed to. The signing device states this truthfully (members are trusted).
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Actor {
-    Human(PrincipalKey),
+    Principal(PrincipalKey),
     Agent {
         agent: AgentId,
         session: SessionId,
@@ -254,7 +254,7 @@ impl Actor {
     /// The accountable principal, whoever acts.
     pub fn principal(&self) -> PrincipalKey {
         match self {
-            Actor::Human(principal) | Actor::Daemon(principal) => *principal,
+            Actor::Principal(principal) | Actor::Daemon(principal) => *principal,
             Actor::Agent { agent, .. } => agent.principal,
         }
     }
@@ -367,7 +367,7 @@ mod tests {
             session: SessionId::from(EventId::of(b"session")),
         };
         assert_eq!(agent.principal(), principal);
-        assert_eq!(Actor::Human(principal).principal(), principal);
+        assert_eq!(Actor::Principal(principal).principal(), principal);
         assert_eq!(Actor::Daemon(principal).principal(), principal);
     }
 }

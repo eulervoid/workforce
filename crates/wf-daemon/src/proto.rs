@@ -106,26 +106,26 @@ pub enum Call {
     },
 }
 
-/// What a person says to a permission request.
+/// What the principal says to a permission request.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Answer {
     Allow,
     Deny,
 }
 
-/// A request of an agent for permission to do something, held until a person answers.
+/// A request of an agent for permission to do something, held until the principal answers.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HeldPermission {
     pub session: SessionId,
     /// The tool call that wants permission.
     pub what: String,
-    /// Why each decider of the machine passed it on to a person, as `decider: why`.
+    /// Why each decider of the machine passed it on to the principal, as `decider: why`.
     pub passed: Vec<String>,
     /// Milliseconds since the Unix epoch.
     pub since_ms: u64,
 }
 
-/// How a session ends, and so who writes the end: the agent submits or releases, a person stops
+/// How a session ends, and so who writes the end: the agent submits or releases, the principal stops
 /// it, and the daemon ends it when its limits are reached or the harness fails.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Finish {
@@ -137,7 +137,7 @@ pub enum Finish {
     Reviewed,
     /// A supervise session has resolved or escalated what it was started for. By the agent.
     Supervised,
-    /// A person stops it.
+    /// The principal stops it.
     Stop,
     /// Someone moved the item to a state where it waits, such as review, while the agent worked.
     MovedOn,

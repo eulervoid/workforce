@@ -32,14 +32,14 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }]
 
 [[review]]
 name = "critical"
-steps = [{ agent = { requires = ["review", "strong-model"] } }, "human"]
+steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
 
 [[review]]
-name = "principal"
-steps = ["human"]
+name = "manual"
+steps = ["principal"]
 
 [types.task]
-review = "principal"
+review = "manual"
 lane = "default"
 fields = ["priority", "labels", "requires"]
 depends_on = ["task", "decision"]

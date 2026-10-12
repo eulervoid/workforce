@@ -86,7 +86,7 @@ pub struct FenceConfig {
 pub struct PermissionsConfig {
     /// What may and may not be done, in words, for deciders that read: models and agents.
     pub guidance: Option<String>,
-    /// Asked in this order; what all of them pass on goes to a person.
+    /// Asked in this order; what all of them pass on goes to the principal.
     #[serde(rename = "decider", default = "default_deciders")]
     pub deciders: Vec<DeciderConfig>,
 }
@@ -260,7 +260,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn no_config_asks_the_rules_and_then_a_person() {
+    fn no_config_asks_the_rules_and_then_the_principal() {
         assert_eq!(
             MachineConfig::parse("").ok().unwrap().permissions.deciders,
             [DeciderConfig::Rules {}]
