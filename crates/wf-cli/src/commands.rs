@@ -683,9 +683,8 @@ fn item(
                         .is_none_or(|wanted| summary.lane.as_deref() == Some(wanted.as_str()))
                 })
                 .filter(|(_, summary)| {
-                    args.priority.is_none_or(|wanted| {
-                        summary.priority.as_deref() == Some(wanted.to_string().as_str())
-                    })
+                    args.priority
+                        .is_none_or(|wanted| summary.priority == Some(wanted))
                 })
                 .filter(|(_, summary)| {
                     dispatchable

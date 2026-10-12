@@ -15,7 +15,7 @@ use wf_core::hlc::Hlc;
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
-use wf_core::item::{Item, ItemView, Origin, Standing};
+use wf_core::item::{Item, ItemView, Origin, Priority, Standing};
 use wf_core::policy::{Field, ReviewStep, StateCategory};
 use wf_core::resolve::MentionTarget;
 use wf_core::review::ReviewStatus;
@@ -26,7 +26,7 @@ use wf_daemon::proto::HeldPermission;
 use crate::cli::ItemGrouping;
 
 /// Bump when a view changes shape incompatibly. Snapshot tests pin the current shapes.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[derive(Serialize)]
 pub struct Envelope<T> {
@@ -111,8 +111,8 @@ pub struct ItemRefView {
     pub title: String,
     pub state: Option<String>,
     #[serde(skip)]
-    pub state_category: Option<String>,
-    pub priority: Option<String>,
+    pub state_category: Option<StateCategory>,
+    pub priority: Option<Priority>,
 }
 
 #[derive(Clone, Serialize)]
@@ -125,8 +125,8 @@ pub struct ItemSummary {
     pub state: Option<String>,
     /// `None` when the state is unknown under the current policy.
     #[serde(skip)]
-    pub state_category: Option<String>,
-    pub priority: Option<String>,
+    pub state_category: Option<StateCategory>,
+    pub priority: Option<Priority>,
     /// `None` unless the item is open.
     pub readiness: Option<Readiness>,
     pub blocked_by: Vec<ItemRefView>,
@@ -153,12 +153,12 @@ fn steps_view(body: &Body) -> Option<StepsView> {
     (total > 0).then_some(StepsView { done, total })
 }
 
-fn standing_parts(standing: Standing<'_>) -> (Option<String>, Option<String>) {
+fn standing_parts(standing: Standing<'_>) -> (Option<String>, Option<StateCategory>) {
     match standing {
         Standing::Known {
             state,
             state_category,
-        } => (Some(state.to_string()), Some(state_category.to_string())),
+        } => (Some(state.to_string()), Some(state_category)),
         Standing::Unknown { state } => (state.map(ToString::to_string), None),
     }
 }
@@ -167,7 +167,7 @@ fn item_ref_view(state: &State, view: ItemView<'_>) -> ItemRefView {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let (state_name, state_category) = standing_parts(view.standing(policy));
     let priority = match view {
-        ItemView::Live(item) => item.priority().map(|priority| priority.to_string()),
+        ItemView::Live(item) => item.priority(),
         ItemView::Archived(_) => None,
     };
     ItemRefView {
@@ -185,7 +185,7 @@ fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<It
         .dependents(item.id())
         .filter_map(|id| match state.item(id) {
             Some(ItemView::Live(waiting)) => Some(waiting),
-            _ => None,
+            Some(ItemView::Archived(_)) | None => None,
         })
         .collect();
     waiting.sort_by_key(|waiting| {
@@ -211,7 +211,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
     };
     let (priority, readiness, blocked_by, blocking, labels, lane, archived) = match view {
         ItemView::Live(item) => (
-            item.priority().map(|priority| priority.to_string()),
+            item.priority(),
             state.readiness(graph, item),
             state
                 .blockers(graph, item.id())
@@ -357,7 +357,7 @@ pub fn group_items(
         ),
         ItemGrouping::Priority => collect_groups(
             entries,
-            |_, summary| Assigned::from(summary.priority.clone()),
+            |_, summary| Assigned::from(summary.priority.map(|priority| priority.to_string())),
             |priority| assigned_name(priority, "no_priority"),
         ),
         ItemGrouping::State => collect_groups(
@@ -409,7 +409,7 @@ pub struct LinkView {
     pub title: String,
     pub state: Option<String>,
     #[serde(skip)]
-    pub state_category: Option<String>,
+    pub state_category: Option<StateCategory>,
     /// A concurrent link formed a cycle and this edge was dropped.
     pub ignored: bool,
 }
@@ -450,8 +450,8 @@ pub struct BacklinkView {
 pub struct SourceView {
     pub item: String,
     pub title: String,
-    /// `body`, or the id of the comment or move note.
-    pub origin: String,
+    /// The comment or move note the reference is in, by id; `None` for the body.
+    pub in_comment: Option<String>,
 }
 
 pub fn source_view(state: &State, source: &wf_core::resolve::Source) -> SourceView {
@@ -461,9 +461,9 @@ pub fn source_view(state: &State, source: &wf_core::resolve::Source) -> SourceVi
             .item(source.item)
             .map(|view| view.title().to_string())
             .unwrap_or_default(),
-        origin: match source.origin {
-            Origin::Body => "body".to_string(),
-            Origin::Comment(id) => id.to_string(),
+        in_comment: match source.origin {
+            Origin::Body => None,
+            Origin::Comment(id) => Some(id.to_string()),
         },
     }
 }
@@ -473,8 +473,7 @@ pub struct CommentView {
     pub id: String,
     /// The short id the comment is resolved and referenced by within its item.
     pub short: String,
-    /// `comment`, `blocker` or `change_request`.
-    pub kind: String,
+    pub kind: CommentKindView,
     pub by: String,
     pub at: String,
     pub text: Option<String>,
@@ -488,16 +487,60 @@ pub struct CommentView {
     pub resolved_by: Option<String>,
 }
 
+/// What a comment is.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommentKindView {
+    Comment,
+    Blocker,
+    ChangeRequest,
+}
+
+impl From<CommentKind> for CommentKindView {
+    fn from(kind: CommentKind) -> Self {
+        match kind {
+            CommentKind::Plain => CommentKindView::Comment,
+            CommentKind::Blocker => CommentKindView::Blocker,
+            CommentKind::ChangeRequest => CommentKindView::ChangeRequest,
+        }
+    }
+}
+
+/// What kind of thing happened to an item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActivityKind {
+    Created,
+    Comment,
+    Moved,
+    Edited,
+    /// A body edit lost to a concurrent one.
+    BodyOverwritten,
+    DependsOn,
+    Supersedes,
+    Archived,
+    Unarchived,
+    SessionStarted,
+    SessionEnded,
+    Reviewed,
+    Merged,
+    /// A dependency of the item was done or cancelled.
+    DependencyFinished,
+    /// Another item now depends, or no longer depends, on this one.
+    Dependent,
+    SupersededBy,
+    ReferencedIn,
+    /// An event about the workforce rather than an item, such as a new agent or device; the
+    /// summary says what.
+    Workforce,
+}
+
 /// One thing that happened to an item.
 #[derive(Serialize)]
 pub struct ActivityView {
     pub at: String,
     pub by: String,
-    /// `created`, `comment`, `moved`, `edited`, `body_overwritten`, `depends_on`, `supersedes`,
-    /// `archived`,
-    /// `unarchived`, `session_started`, `session_ended`, `reviewed`, `merged`,
-    /// `dependency_finished`, `dependent`, `superseded_by` or `referenced_in`.
-    pub kind: String,
+    pub kind: ActivityKind,
     /// What happened, in a few words: `moved to done`, `#k3f9ab now depends on this`.
     pub summary: String,
     /// The comment, for a comment, or the comment that says why for a move or a verdict.
@@ -548,7 +591,7 @@ pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchL
                 activity: ActivityView {
                     at: timestamp(event.content.hlc),
                     by: actor_label(state, &event.content.actor),
-                    kind: event.content.body.name().to_string(),
+                    kind: ActivityKind::Workforce,
                     summary: describe(state, &event.content.body),
                     comment: None,
                     text: None,
@@ -563,8 +606,7 @@ pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchL
 #[derive(Serialize)]
 pub struct OpenCommentView {
     pub id: String,
-    /// `blocker` or `change_request`.
-    pub kind: String,
+    pub kind: CommentKindView,
     pub by: String,
 }
 
@@ -637,19 +679,26 @@ pub struct ItemDetail {
 }
 
 #[derive(Serialize)]
-pub struct ReviewStatusView {
-    /// `awaiting`, `changes_requested`, `approved` or `merged`.
-    pub status: String,
-    /// What the awaited step is: `principal`, or `agent: review, strong-model`.
-    pub step: Option<String>,
-    pub commit: Option<String>,
+#[serde(tag = "status", rename_all = "snake_case")]
+pub enum ReviewStatusView {
+    Awaiting {
+        /// What the awaited step is: `principal`, or `agent: review, strong-model`.
+        step: String,
+    },
+    ChangesRequested,
+    Approved {
+        /// `None` for work submitted without commits.
+        commit: Option<String>,
+    },
+    Merged {
+        commit: String,
+    },
 }
 
 fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
     match status {
-        ReviewStatus::Awaiting { step } => ReviewStatusView {
-            status: "awaiting".into(),
-            step: Some(match step {
+        ReviewStatus::Awaiting { step } => ReviewStatusView::Awaiting {
+            step: match step {
                 ReviewStep::Principal => "principal".to_string(),
                 ReviewStep::Agent { requires } => format!(
                     "agent: {}",
@@ -659,23 +708,14 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
                         .collect::<Vec<_>>()
                         .join(", ")
                 ),
-            }),
-            commit: None,
+            },
         },
-        ReviewStatus::ChangesRequested => ReviewStatusView {
-            status: "changes_requested".into(),
-            step: None,
-            commit: None,
-        },
-        ReviewStatus::Approved { commit } => ReviewStatusView {
-            status: "approved".into(),
-            step: None,
+        ReviewStatus::ChangesRequested => ReviewStatusView::ChangesRequested,
+        ReviewStatus::Approved { commit } => ReviewStatusView::Approved {
             commit: commit.map(|commit| commit.to_string()),
         },
-        ReviewStatus::Merged { commit } => ReviewStatusView {
-            status: "merged".into(),
-            step: None,
-            commit: Some(commit.to_string()),
+        ReviewStatus::Merged { commit } => ReviewStatusView::Merged {
+            commit: commit.to_string(),
         },
     }
 }
@@ -707,7 +747,10 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
         let by = actor_label(state, &entry.by);
         let at = timestamp(entry.at);
         let (kind, summary) = match &entry.activity {
-            Activity::Created => ("created", format!("created the {}", item.item_type())),
+            Activity::Created => (
+                ActivityKind::Created,
+                format!("created the {}", item.item_type()),
+            ),
             Activity::Commented {
                 comment,
                 kind,
@@ -718,7 +761,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                 let view = CommentView {
                     id: comment.to_string(),
                     short: comment.short(),
-                    kind: kind.name().to_string(),
+                    kind: CommentKindView::from(*kind),
                     by: by.clone(),
                     at: at.clone(),
                     text: Some(text.clone()),
@@ -739,7 +782,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                 views.push(ActivityView {
                     at,
                     by,
-                    kind: "comment".into(),
+                    kind: ActivityKind::Comment,
                     summary: kind.name().replace('_', " "),
                     comment: Some(view),
                     text: None,
@@ -750,7 +793,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                 let mut view = ActivityView {
                     at,
                     by,
-                    kind: "moved".into(),
+                    kind: ActivityKind::Moved,
                     summary: format!("moved to {to}"),
                     comment: None,
                     text: None,
@@ -775,7 +818,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                 let mut view = ActivityView {
                     at,
                     by,
-                    kind: "reviewed".into(),
+                    kind: ActivityKind::Reviewed,
                     summary,
                     comment: None,
                     text: None,
@@ -784,30 +827,34 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                 views.push(view);
                 continue;
             }
-            Activity::Edited(change) => ("edited", edit_summary(&body, change)),
+            Activity::Edited(change) => (ActivityKind::Edited, edit_summary(&body, change)),
             Activity::BodyOverwritten { body: lost } => {
                 views.push(ActivityView {
                     at,
                     by,
-                    kind: "body_overwritten".into(),
+                    kind: ActivityKind::BodyOverwritten,
                     summary: "edited the body, overwritten by a concurrent edit".into(),
                     comment: None,
                     text: Some(lost.clone()),
                 });
                 continue;
             }
-            Activity::DependsOn(SetChange::Add(target)) => {
-                ("depends_on", format!("now depends on {}", label(target)))
-            }
+            Activity::DependsOn(SetChange::Add(target)) => (
+                ActivityKind::DependsOn,
+                format!("now depends on {}", label(target)),
+            ),
             Activity::DependsOn(SetChange::Remove { value, .. }) => (
-                "depends_on",
+                ActivityKind::DependsOn,
                 format!("no longer depends on {}", label(value)),
             ),
-            Activity::Supersedes(target) => ("supersedes", format!("supersedes {}", label(target))),
-            Activity::Archived => ("archived", "archived".to_string()),
-            Activity::Unarchived => ("unarchived", "unarchived".to_string()),
+            Activity::Supersedes(target) => (
+                ActivityKind::Supersedes,
+                format!("supersedes {}", label(target)),
+            ),
+            Activity::Archived => (ActivityKind::Archived, "archived".to_string()),
+            Activity::Unarchived => (ActivityKind::Unarchived, "unarchived".to_string()),
             Activity::SessionStarted { role, .. } => (
-                "session_started",
+                ActivityKind::SessionStarted,
                 match role {
                     SessionRole::Work => "started work".to_string(),
                     SessionRole::Review {
@@ -843,13 +890,14 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                     Some(to) => format!("{ended} → {to}"),
                     None => ended,
                 };
-                ("session_ended", summary)
+                (ActivityKind::SessionEnded, summary)
             }
-            Activity::Merged { commit } => {
-                ("merged", format!("merged as {}", short_commit(commit)))
-            }
+            Activity::Merged { commit } => (
+                ActivityKind::Merged,
+                format!("merged as {}", short_commit(commit)),
+            ),
             Activity::DependencyFinished { item, to, category } => (
-                "dependency_finished",
+                ActivityKind::DependencyFinished,
                 match category {
                     StateCategory::Cancelled => {
                         format!("{} {to} · this item is stranded", label(item))
@@ -862,21 +910,22 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
                 },
             ),
             Activity::Dependent(SetChange::Add(dependent)) => (
-                "dependent",
+                ActivityKind::Dependent,
                 format!("{} now depends on this", label(dependent)),
             ),
             Activity::Dependent(SetChange::Remove { value, .. }) => (
-                "dependent",
+                ActivityKind::Dependent,
                 format!("{} no longer depends on this", label(value)),
             ),
-            Activity::SupersededBy(other) => {
-                ("superseded_by", format!("superseded by {}", label(other)))
-            }
+            Activity::SupersededBy(other) => (
+                ActivityKind::SupersededBy,
+                format!("superseded by {}", label(other)),
+            ),
             Activity::ReferencedIn {
                 item: other,
                 comment,
             } => (
-                "referenced_in",
+                ActivityKind::ReferencedIn,
                 match comment {
                     Some(comment) => format!("{} referenced in {}", comment.short(), label(other)),
                     None => format!("referenced in {}", label(other)),
@@ -886,7 +935,7 @@ fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<Activity
         views.push(ActivityView {
             at,
             by,
-            kind: kind.to_string(),
+            kind,
             summary,
             comment: None,
             text: None,
@@ -909,7 +958,7 @@ fn attach_reason(
         .last()
         .and_then(|last| last.comment.as_ref())
         .is_some_and(|comment| {
-            comment.short == because.short() && comment.kind == CommentKind::Plain.name()
+            comment.short == because.short() && comment.kind == CommentKindView::Comment
         });
     if names_it {
         view.comment = views.pop().and_then(|last| last.comment);
@@ -1012,7 +1061,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         .into_iter()
         .map(|(id, comment)| OpenCommentView {
             id: id.short(),
-            kind: comment.kind.name().to_string(),
+            kind: CommentKindView::from(comment.kind),
             by: actor_label(state, &comment.by),
         })
         .collect();

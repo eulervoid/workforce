@@ -1250,7 +1250,7 @@ wf inbox
 wf review <item> --approve|--request-changes|--escalate
 wf search <query>
 ```
-All commands support `--json`. Output is `{"schema": 2, "data": ...}`; the schema number is bumped on
+All commands support `--json`. Output is `{"schema": 3, "data": ...}`; the schema number is bumped on
 incompatible changes and the shapes are snapshot-tested. Item ids print as the first 6 characters of their
 base32 hash and any unique prefix of at least 4 characters is accepted, with or without `#`.
 Without `--json`, lists (`item list`, `agent list`, `log`, `mentions`) print as borderless tables

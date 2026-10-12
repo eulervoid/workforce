@@ -8,10 +8,12 @@ use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
 use crate::view::{
-    AgentView, BodyPartView, InboxEntryView, ItemDetail, ItemGroup, ItemSummary, LogView,
-    MentionsView, SessionView, StatusView, StepRefView, StepsView,
+    ActivityKind, AgentView, BodyPartView, CommentKindView, InboxEntryView, ItemDetail, ItemGroup,
+    ItemSummary, LogView, MentionsView, ReviewStatusView, SessionView, SourceView, StatusView,
+    StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
+use wf_core::item::Priority;
 use wf_core::policy::StateCategory;
 
 fn short(id: &str) -> &str {
@@ -32,8 +34,12 @@ fn table(header: &[&str]) -> Table {
     table
 }
 
-fn origin(origin: &str) -> &str {
-    if origin == "body" { "body" } else { "comment" }
+/// Where in an item a reference is.
+fn origin(source: &SourceView) -> &'static str {
+    match source.in_comment {
+        None => "body",
+        Some(_) => "comment",
+    }
 }
 
 /// Colors are always written as ANSI escapes; `anstream` strips them when output is not a terminal.
@@ -64,42 +70,42 @@ mod style {
     }
 }
 
-fn state_style(state_category: Option<&str>) -> anstyle::Style {
+fn state_style(state_category: Option<StateCategory>) -> anstyle::Style {
     use anstyle::AnsiColor;
     match state_category {
-        Some("open") => style::color(AnsiColor::Green),
-        Some("active") => style::color(AnsiColor::Blue),
-        Some("review") => style::color(AnsiColor::Yellow),
-        Some("done") => style::color(AnsiColor::Magenta),
-        Some("cancelled") => style::color(AnsiColor::BrightBlack),
-        _ => style::DIM,
+        Some(StateCategory::Open) => style::color(AnsiColor::Green),
+        Some(StateCategory::Active) => style::color(AnsiColor::Blue),
+        Some(StateCategory::Review) => style::color(AnsiColor::Yellow),
+        Some(StateCategory::Done) => style::color(AnsiColor::Magenta),
+        Some(StateCategory::Cancelled) => style::color(AnsiColor::BrightBlack),
+        Some(StateCategory::Inactive) | None => style::DIM,
     }
 }
 
 /// The icon of a state category; `?` when the state is unknown under the current policy.
-fn state_icon(state_category: Option<&str>) -> &'static str {
+fn state_icon(state_category: Option<StateCategory>) -> &'static str {
     match state_category {
-        Some("inactive") => "◌",
-        Some("open") => "○",
-        Some("active") => "◐",
-        Some("review") => "◎",
-        Some("done") => "✓",
-        Some("cancelled") => "✗",
-        _ => "?",
+        Some(StateCategory::Inactive) => "◌",
+        Some(StateCategory::Open) => "○",
+        Some(StateCategory::Active) => "◐",
+        Some(StateCategory::Review) => "◎",
+        Some(StateCategory::Done) => "✓",
+        Some(StateCategory::Cancelled) => "✗",
+        None => "?",
     }
 }
 
 /// `◐ in_progress`. Pickers take plain text, so the icon is not colored.
 pub fn state_choice(name: &str, state_category: StateCategory) -> String {
-    format!("{} {name}", state_icon(Some(&state_category.to_string())))
+    format!("{} {name}", state_icon(Some(state_category)))
 }
 
-fn priority_style(priority: &str) -> anstyle::Style {
+fn priority_style(priority: Priority) -> anstyle::Style {
     match priority {
-        "P0" => style::WARNING,
-        "P1" => style::color(anstyle::AnsiColor::Yellow),
-        "P2" => anstyle::Style::new(),
-        _ => style::DIM,
+        Priority::P0 => style::WARNING,
+        Priority::P1 => style::color(anstyle::AnsiColor::Yellow),
+        Priority::P2 => anstyle::Style::new(),
+        Priority::P3 => style::DIM,
     }
 }
 
@@ -121,7 +127,10 @@ fn local_time(timestamp: &str, format: &str) -> String {
 }
 
 /// The icon of an item: its state's icon, or a warning icon when the item is stranded.
-pub fn item_icon(state_category: Option<&str>, readiness: Option<Readiness>) -> &'static str {
+pub fn item_icon(
+    state_category: Option<StateCategory>,
+    readiness: Option<Readiness>,
+) -> &'static str {
     match readiness {
         Some(Readiness::Stranded) => "⚠",
         Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => {
@@ -139,7 +148,7 @@ pub fn item_choice(summary: &ItemSummary) -> String {
     };
     format!(
         "{} #{} ({}:{state})  {}",
-        item_icon(summary.state_category.as_deref(), summary.readiness),
+        item_icon(summary.state_category, summary.readiness),
         short(&summary.id),
         summary.item_type,
         summary.title,
@@ -152,7 +161,7 @@ fn item_label(
     id: &str,
     item_type: &str,
     state: Option<&str>,
-    state_category: Option<&str>,
+    state_category: Option<StateCategory>,
     readiness: Option<Readiness>,
     suffix: &str,
 ) -> String {
@@ -186,7 +195,7 @@ const ITEM_COLUMNS: [&str; 5] = [
 
 fn item_row(item: &ItemSummary) -> [String; 5] {
     let suffix = if item.archived { " · archived" } else { "" };
-    let priority = item.priority.as_deref().map_or_else(
+    let priority = item.priority.map_or_else(
         || style::paint(style::DIM, "-"),
         |priority| style::paint(priority_style(priority), priority),
     );
@@ -204,7 +213,7 @@ fn item_row(item: &ItemSummary) -> [String; 5] {
             &item.id,
             &item.item_type,
             item.state.as_deref(),
-            item.state_category.as_deref(),
+            item.state_category,
             item.readiness,
             suffix,
         ),
@@ -240,12 +249,12 @@ fn group_heading(grouping: ItemGrouping, group: &ItemGroup) -> String {
     };
     let (icon, heading_style) = match grouping {
         ItemGrouping::State => (
-            state_icon(first.state_category.as_deref()),
-            state_style(first.state_category.as_deref()),
+            state_icon(first.state_category),
+            state_style(first.state_category),
         ),
         ItemGrouping::Readiness => match first.readiness {
-            Some(Readiness::Ready) => ("○", state_style(Some("open"))),
-            Some(Readiness::Claimed) => ("◐", state_style(Some("active"))),
+            Some(Readiness::Ready) => ("○", state_style(Some(StateCategory::Open))),
+            Some(Readiness::Claimed) => ("◐", state_style(Some(StateCategory::Active))),
             Some(Readiness::Blocked) => ("⊘", style::color(anstyle::AnsiColor::Red)),
             Some(Readiness::Stranded) => ("⚠", style::WARNING),
             None => ("·", style::DIM),
@@ -305,7 +314,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             &summary.id,
             &summary.item_type,
             summary.state.as_deref(),
-            summary.state_category.as_deref(),
+            summary.state_category,
             summary.readiness,
             archived
         ),
@@ -313,7 +322,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     );
 
     let mut status = Vec::new();
-    if let Some(priority) = &summary.priority {
+    if let Some(priority) = summary.priority {
         status.push(paint(priority_style(priority), priority));
     }
     if let Some(lane) = &detail.summary.lane {
@@ -344,13 +353,17 @@ pub fn item_detail(detail: &ItemDetail) -> String {
         status.push(paint(style::WARNING, format!("waits for you: {waits}")));
     }
     if let Some(review) = &detail.review_status {
-        let text = match (review.status.as_str(), &review.step, &review.commit) {
-            ("awaiting", Some(step), _) => format!("review: awaiting {step}"),
-            ("changes_requested", _, _) => "review: changes requested".to_string(),
-            (status, _, Some(commit)) => {
-                format!("review: {status} {}", &commit[..commit.len().min(8)])
+        let short_commit = |commit: &str| commit[..commit.len().min(8)].to_string();
+        let text = match review {
+            ReviewStatusView::Awaiting { step } => format!("review: awaiting {step}"),
+            ReviewStatusView::ChangesRequested => "review: changes requested".to_string(),
+            ReviewStatusView::Approved {
+                commit: Some(commit),
+            } => format!("review: approved {}", short_commit(commit)),
+            ReviewStatusView::Approved { commit: None } => "review: approved".to_string(),
+            ReviewStatusView::Merged { commit } => {
+                format!("review: merged {}", short_commit(commit))
             }
-            (status, _, None) => format!("review: {status}"),
         };
         status.push(text);
     }
@@ -386,9 +399,9 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             .map(|comment| {
                 format!(
                     "{} {} {} by {}",
-                    comment_marker(&comment.kind),
+                    comment_marker(comment.kind),
                     comment.id,
-                    comment.kind.replace('_', " "),
+                    comment_kind_label(comment.kind),
                     paint(style::actor(&comment.by), &comment.by)
                 )
             })
@@ -410,7 +423,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
                     &link.id,
                     &link.item_type,
                     link.state.as_deref(),
-                    link.state_category.as_deref(),
+                    link.state_category,
                     None,
                     ""
                 ),
@@ -439,7 +452,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
                 &link.id,
                 &link.item_type,
                 link.state.as_deref(),
-                link.state_category.as_deref(),
+                link.state_category,
                 None,
                 ""
             ),
@@ -457,7 +470,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             "  ↳ {what}referenced by {} \"{}\" ({})",
             id_label(&source.item),
             source.title,
-            origin(&source.origin)
+            origin(source)
         );
     }
     if !detail.mentions.is_empty() {
@@ -520,18 +533,20 @@ fn activity_entry(entry: &crate::view::ActivityView, width: usize) -> (String, O
     use style::{DIM, WARNING, paint};
     let mut parts = vec![paint(style::actor(&entry.by), &entry.by)];
     match &entry.comment {
-        Some(comment) if entry.kind == "comment" => {
-            match comment.kind.as_str() {
-                "blocker" | "change_request" => parts.push(paint(
+        Some(comment) if entry.kind == ActivityKind::Comment => {
+            match comment.kind {
+                CommentKindView::Blocker | CommentKindView::ChangeRequest => parts.push(paint(
                     WARNING,
                     format!(
                         "{} {}",
-                        comment_marker(&comment.kind),
-                        comment.kind.replace('_', " ")
+                        comment_marker(comment.kind),
+                        comment_kind_label(comment.kind)
                     ),
                 )),
-                _ if comment.resolves.is_empty() => parts.push(paint(DIM, "commented")),
-                _ => {}
+                CommentKindView::Comment if comment.resolves.is_empty() => {
+                    parts.push(paint(DIM, "commented"))
+                }
+                CommentKindView::Comment => {}
             }
             if !comment.resolves.is_empty() {
                 parts.push(format!("resolved {}", comment.resolves.join(", ")));
@@ -600,11 +615,19 @@ fn local_date_and_time(timestamp: &str) -> (String, String) {
 }
 
 /// Marks a blocker or change request: `⧗` waits on someone else, `△` waits on the work.
-fn comment_marker(kind: &str) -> &'static str {
+fn comment_marker(kind: CommentKindView) -> &'static str {
     match kind {
-        "blocker" => "⧗",
-        "change_request" => "△",
-        _ => "",
+        CommentKindView::Blocker => "⧗",
+        CommentKindView::ChangeRequest => "△",
+        CommentKindView::Comment => "",
+    }
+}
+
+fn comment_kind_label(kind: CommentKindView) -> &'static str {
+    match kind {
+        CommentKindView::Comment => "comment",
+        CommentKindView::Blocker => "blocker",
+        CommentKindView::ChangeRequest => "change request",
     }
 }
 
@@ -643,7 +666,7 @@ pub fn mentions(view: &MentionsView) -> String {
         table.add_row([
             format!("#{}", short(&source.item)),
             source.title.clone(),
-            origin(&source.origin).to_string(),
+            origin(source).to_string(),
         ]);
     }
     format!("{table}\n")

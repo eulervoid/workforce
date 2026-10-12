@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&detail)"
 ---
 {
-  "schema": 2,
+  "schema": 3,
   "data": {
     "id": "2idxhqxiscvhbvcdpviq72mxhegkt4vu2mgh6zuw2tgr2mfmvlta",
     "type": "task",
@@ -50,13 +50,13 @@ expression: "Envelope::new(&detail)"
       {
         "item": "n7ftyxzwhjp5rhhj4s5sbrlmpgja3did4jo2qhe5f7ub7cinwesq",
         "title": "Implement feed sync",
-        "origin": "body",
+        "in_comment": null,
         "comment": null
       },
       {
         "item": "n7ftyxzwhjp5rhhj4s5sbrlmpgja3did4jo2qhe5f7ub7cinwesq",
         "title": "Implement feed sync",
-        "origin": "u2q4sduwekbv6r7md3k2fhirld7bg5f3k5f3naxd3umwa2dvqy5a",
+        "in_comment": "u2q4sduwekbv6r7md3k2fhirld7bg5f3k5f3naxd3umwa2dvqy5a",
         "comment": null
       }
     ],
