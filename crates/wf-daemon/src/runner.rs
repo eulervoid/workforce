@@ -1174,10 +1174,7 @@ async fn drive(
     };
     let mut path =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>();
-    if let Some(directory) = std::env::current_exe()
-        .ok()
-        .and_then(|exe| exe.parent().map(Path::to_path_buf))
-    {
+    if let Some(directory) = daemon.bin_dir() {
         path.insert(0, directory);
     }
     let path = std::env::join_paths(path).unwrap_or_default();

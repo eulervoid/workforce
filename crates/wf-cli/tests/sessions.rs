@@ -190,6 +190,9 @@ impl WorldSetup {
                 network: Network::Direct,
                 harnesses,
                 machine_config: Some(self.wf.root.path().join("config.toml")),
+                // A fresh copy of a binary is slow to start the first time on macOS, and the
+                // fake agent runs `$WF_BIN`.
+                wf_binary: None,
             },
             device,
         )

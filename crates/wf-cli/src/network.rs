@@ -457,6 +457,7 @@ pub fn daemon(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()>
         },
         harnesses: Default::default(),
         machine_config: wf_daemon::machine_config::MachineConfig::path_from_env(),
+        wf_binary: Some(std::env::current_exe().context("finding the wf binary")?),
     };
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()

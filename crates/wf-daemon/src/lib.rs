@@ -16,7 +16,7 @@ mod storage;
 
 use std::collections::BTreeMap;
 use std::future::Future;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tokio::net::UnixListener;
@@ -101,10 +101,32 @@ pub struct Config {
     pub harnesses: BTreeMap<wf_core::name::HarnessName, wf_harness::AcpAgentConfig>,
     /// The machine config, read for each permission request. `None` uses the defaults.
     pub machine_config: Option<PathBuf>,
+    /// The `wf` binary agents run. The daemon copies it to `<data>/bin/wf` when it starts and
+    /// puts that directory first on the agents' `PATH`, so rebuilding or upgrading `wf` does not
+    /// change what running agents call. `None` leaves `PATH` as it is.
+    pub wf_binary: Option<PathBuf>,
 }
 
 pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
+}
+
+/// Where in the data directory the daemon keeps the `wf` its agents run.
+const BIN_DIR: &str = "bin";
+
+/// Copies `binary` to `<directory>/wf`. Through a rename, so an agent that runs the old copy at
+/// that moment keeps it. Not a hard link: in the tests, macOS killed runs of the binary while
+/// daemons linked it.
+fn install_wf(binary: &Path, directory: &Path) -> Result<(), DaemonError> {
+    let io = |path: &Path| {
+        let path = path.to_path_buf();
+        move |source| DaemonError::Io { path, source }
+    };
+    std::fs::create_dir_all(directory).map_err(io(directory))?;
+    let staged = directory.join(".wf.new");
+    std::fs::copy(binary, &staged).map_err(io(binary))?;
+    let installed = directory.join("wf");
+    std::fs::rename(&staged, &installed).map_err(io(&installed))
 }
 
 /// Workforces created or joined while the daemon runs are picked up this often.
@@ -164,6 +186,9 @@ pub struct Daemon {
 
 impl Daemon {
     pub async fn start(config: Config, device: DeviceSigner) -> Result<Arc<Self>, DaemonError> {
+        if let Some(binary) = &config.wf_binary {
+            install_wf(binary, &config.data_dir.join(BIN_DIR))?;
+        }
         let node = Arc::new(Node::start(&device, config.network.clone()).await?);
         let daemon = Arc::new(Self {
             config,
@@ -186,6 +211,14 @@ impl Daemon {
 
     pub fn device(&self) -> wf_core::identity::DeviceKey {
         self.device.key()
+    }
+
+    /// The directory with the daemon's copy of `wf`, if it made one.
+    pub(crate) fn bin_dir(&self) -> Option<PathBuf> {
+        self.config
+            .wf_binary
+            .as_ref()
+            .map(|_| self.config.data_dir.join(BIN_DIR))
     }
 
     pub fn node(&self) -> &Arc<Node<StorageHandle>> {
@@ -425,5 +458,30 @@ impl Daemon {
 
     pub(crate) fn signer(&self) -> &DeviceSigner {
         &self.device
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_installed_wf_stays_when_the_original_changes() {
+        let root = tempfile::tempdir().unwrap();
+        let original = root.path().join("wf");
+        let bin = root.path().join("data").join(BIN_DIR);
+        std::fs::write(&original, "first build").unwrap();
+        install_wf(&original, &bin).unwrap();
+        std::fs::write(&original, "second build").unwrap();
+        assert_eq!(
+            std::fs::read_to_string(bin.join("wf")).unwrap(),
+            "first build"
+        );
+
+        install_wf(&original, &bin).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(bin.join("wf")).unwrap(),
+            "second build"
+        );
     }
 }
