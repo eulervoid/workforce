@@ -1240,8 +1240,9 @@ async fn turns(
     stopped: &mut mpsc::UnboundedReceiver<Stop>,
     conversation: &mut Conversation,
 ) -> End {
-    let Ok(mut prompt) = brief(loaded, run).await else {
-        return failed("the workforce could not be read".to_string());
+    let mut prompt = match brief(loaded, run).await {
+        Ok(prompt) => prompt,
+        Err(because) => return failed(because),
     };
     let cancel = conversation.cancel();
     let deadline = run.max_duration.map(|duration| Instant::now() + duration);
@@ -1423,8 +1424,9 @@ impl Sources for Logged<'_> {
     }
 }
 
-/// The first prompt of a session: its brief.
-async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, StorageClosed> {
+/// The first prompt of a session: its brief. `Err` says why there is none; a review that cannot
+/// show the change it reviews has none, so that nothing is approved unseen.
+async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, String> {
     let diff = match run.role {
         SessionRole::Review {
             commit: Some(commit),
@@ -1432,9 +1434,13 @@ async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, StorageClosed>
             let (repository, target) = (run.repository.clone(), run.target.clone());
             blocking(move || GitCli::open(&repository)?.diff(&target, commit, &[]))
                 .await
-                .ok()
-                .and_then(Result::ok)
-                .unwrap_or_default()
+                .map_err(|error| wf_core::report::report(&error))?
+                .map_err(|error| {
+                    format!(
+                        "the change to review could not be read: {}",
+                        wf_core::report::report(&error)
+                    )
+                })?
         }
         SessionRole::Review { commit: None }
         | SessionRole::Work
@@ -1454,6 +1460,7 @@ async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, StorageClosed>
                 .unwrap_or_default()
         })
         .await
+        .map_err(|_| "the workforce could not be read".to_string())
 }
 
 /// What to say when a parked session can go on: what others wrote on the item since the session's
