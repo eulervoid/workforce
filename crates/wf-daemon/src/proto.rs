@@ -19,7 +19,7 @@ use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::peers::PeerSync;
 
-pub const PROTOCOL_VERSION: u32 = 7;
+pub const PROTOCOL_VERSION: u32 = 8;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;

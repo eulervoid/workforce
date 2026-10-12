@@ -50,6 +50,26 @@ fn items_are_listed_by_label_lane_and_priority() {
 }
 
 #[test]
+fn an_agent_is_removed_and_added_again() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo"]);
+    wf.run(&["agent", "add", "coder", "--harness", "claude-code"]);
+    wf.run(&["agent", "add", "reviewer", "--harness", "claude-code"]);
+    assert!(
+        wf.run(&["agent", "remove", "coder"])
+            .contains("removed agent coder")
+    );
+    let agents = wf.json(&["agent", "list"]);
+    assert_eq!(agents.as_array().unwrap().len(), 1, "{agents}");
+    let error = wf.fail(&["agent", "remove", "coder"]);
+    assert!(error.contains("valid: `reviewer`"), "{error}");
+    assert!(wf.run(&["log"]).contains("coder removed"));
+
+    wf.run(&["agent", "add", "coder", "--harness", "opencode"]);
+    assert_eq!(wf.json(&["agent", "list"]).as_array().unwrap().len(), 2);
+}
+
+#[test]
 fn the_demo_script_works_end_to_end() {
     let wf = Sandbox::new();
 

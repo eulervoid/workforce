@@ -463,6 +463,11 @@ pub enum AgentCommand {
     List,
     /// Change an agent of yours. Fields that are given replace the current value.
     Edit(AgentEditArgs),
+    /// Remove an agent of yours. Its sessions stay in the log; `wf agent add` brings it back.
+    Remove {
+        /// The agent to remove.
+        name: AgentName,
+    },
 }
 
 #[derive(Args)]

@@ -1137,6 +1137,7 @@ pub fn describe(state: &State, body: &EventBody) -> String {
         EventBody::Genesis(signed) => format!("workforce \"{}\"", signed.statement.name),
         EventBody::PolicySet(_) => "policy replaced".to_string(),
         EventBody::AgentDefined(defined) => format!("{} on {}", defined.name, defined.harness),
+        EventBody::AgentRemoved(removed) => format!("{} removed", removed.name),
         EventBody::InviteCreated(_) => "device invite".to_string(),
         EventBody::DeviceBound(_) => "device bound".to_string(),
         EventBody::DeviceProfile(profile) => format!("device \"{}\"", profile.name),

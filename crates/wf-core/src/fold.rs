@@ -259,7 +259,7 @@ impl State {
                     workforce.policy.set(policy, stamp);
                 }
             }
-            EventBody::AgentDefined(_)
+            EventBody::AgentDefined(_) | EventBody::AgentRemoved(_)
                 if origin == Origin::History
                     && !workforce
                         .members
@@ -279,10 +279,26 @@ impl State {
                 };
                 match workforce.agents.get_mut(&agent) {
                     Some(existing) => {
-                        existing.set(definition, stamp);
+                        existing.set(Some(definition), stamp);
                     }
                     None => {
-                        workforce.agents.insert(agent, Lww::new(definition, stamp));
+                        workforce
+                            .agents
+                            .insert(agent, Lww::new(Some(definition), stamp));
+                    }
+                }
+            }
+            EventBody::AgentRemoved(removed) => {
+                let agent = AgentId {
+                    principal: workforce.canonical(&content.actor.principal()),
+                    name: removed.name.clone(),
+                };
+                match workforce.agents.get_mut(&agent) {
+                    Some(existing) => {
+                        existing.set(None, stamp);
+                    }
+                    None => {
+                        workforce.agents.insert(agent, Lww::new(None, stamp));
                     }
                 }
             }

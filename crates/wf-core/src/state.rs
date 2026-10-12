@@ -269,7 +269,8 @@ pub(crate) struct Workforce {
     pub(crate) policy_source: Lww<String>,
     /// The latest policy this version can read, which the workforce runs on.
     pub(crate) policy: Lww<PolicyDoc>,
-    pub(crate) agents: BTreeMap<AgentId, Lww<AgentDefinition>>,
+    /// `None` once removed, so events of its sessions stay valid in any order.
+    pub(crate) agents: BTreeMap<AgentId, Lww<Option<AgentDefinition>>>,
     pub(crate) items: BTreeMap<ItemId, Item>,
     pub(crate) sessions: BTreeMap<SessionId, Session>,
 }
@@ -474,7 +475,7 @@ impl State {
         self.workforce
             .iter()
             .flat_map(|workforce| workforce.agents.iter())
-            .map(|(id, definition)| (id, definition.value()))
+            .filter_map(|(id, definition)| Some((id, definition.value().as_ref()?)))
     }
 
     pub fn agent(&self, name: &AgentName, principal: PrincipalKey) -> Option<&AgentDefinition> {
@@ -482,7 +483,7 @@ impl State {
             principal,
             name: name.clone(),
         };
-        self.workforce.as_ref()?.agents.get(&id).map(Lww::value)
+        self.workforce.as_ref()?.agents.get(&id)?.value().as_ref()
     }
 
     pub fn session(&self, id: SessionId) -> Option<&Session> {

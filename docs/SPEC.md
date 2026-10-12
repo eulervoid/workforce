@@ -391,6 +391,7 @@ event invalid.
 | 5 | `DeviceBound` | `invite: EventId`, `proof: Signature` by the invite key (M1) |
 | 6 | `DeviceProfile` | `name`, `hardware`, `agents: {agent -> max_sessions}`, `max_sessions` (M1) |
 | 7 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` (M1) |
+| 8 | `AgentRemoved` | `name`: the acting principal's agent is gone until it is defined again; its sessions and their events stay valid (M2.2) |
 | 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires`, `review: Option<ReviewName>` |
 | 11 | `ItemEdited` | `item`, `changes: Vec<Change>` (`Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires`, `Review`, `StepDone`, `Recovery`) |
 | 12 | `ItemMoved` | `item`, `to`, `by_session: Option<SessionId>` (the session whose start or end the move carries out), `because: Option<EventId>` (the comment that says why) |

@@ -70,6 +70,13 @@ pub struct AgentDefined {
     pub instructions: Option<String>,
 }
 
+/// Removes an agent of the acting principal. Its sessions and what they wrote stay; defining it
+/// again brings it back.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AgentRemoved {
+    pub name: AgentName,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum InviteKind {
     Device,
@@ -259,6 +266,7 @@ pub enum EventBody {
     Genesis(Signed<Genesis>),
     PolicySet(Signed<PolicySet>),
     AgentDefined(AgentDefined),
+    AgentRemoved(AgentRemoved),
     InviteCreated(Signed<InviteCreated>),
     DeviceBound(DeviceBound),
     DeviceProfile(DeviceProfile),
@@ -289,6 +297,7 @@ mod tag {
     pub const DEVICE_BOUND: u16 = 5;
     pub const DEVICE_PROFILE: u16 = 6;
     pub const FORK_ANNOUNCED: u16 = 7;
+    pub const AGENT_REMOVED: u16 = 8;
     pub const ITEM_CREATED: u16 = 10;
     pub const ITEM_EDITED: u16 = 11;
     pub const ITEM_MOVED: u16 = 12;
@@ -317,6 +326,7 @@ impl EventBody {
             EventBody::Genesis(_) => "Genesis",
             EventBody::PolicySet(_) => "PolicySet",
             EventBody::AgentDefined(_) => "AgentDefined",
+            EventBody::AgentRemoved(_) => "AgentRemoved",
             EventBody::InviteCreated(_) => "InviteCreated",
             EventBody::DeviceBound(_) => "DeviceBound",
             EventBody::DeviceProfile(_) => "DeviceProfile",
@@ -346,6 +356,7 @@ impl EventBody {
             EventBody::Genesis(body) => body.serialize(serializer),
             EventBody::PolicySet(body) => body.serialize(serializer),
             EventBody::AgentDefined(body) => body.serialize(serializer),
+            EventBody::AgentRemoved(body) => body.serialize(serializer),
             EventBody::InviteCreated(body) => body.serialize(serializer),
             EventBody::DeviceBound(body) => body.serialize(serializer),
             EventBody::DeviceProfile(body) => body.serialize(serializer),
@@ -370,6 +381,7 @@ impl EventBody {
             EventBody::Genesis(body) => (tag::GENESIS, encoding::encode(body)?),
             EventBody::PolicySet(body) => (tag::POLICY_SET, encoding::encode(body)?),
             EventBody::AgentDefined(body) => (tag::AGENT_DEFINED, encoding::encode(body)?),
+            EventBody::AgentRemoved(body) => (tag::AGENT_REMOVED, encoding::encode(body)?),
             EventBody::InviteCreated(body) => (tag::INVITE_CREATED, encoding::encode(body)?),
             EventBody::DeviceBound(body) => (tag::DEVICE_BOUND, encoding::encode(body)?),
             EventBody::DeviceProfile(body) => (tag::DEVICE_PROFILE, encoding::encode(body)?),
@@ -396,6 +408,7 @@ impl EventBody {
             tag::GENESIS => EventBody::Genesis(encoding::decode(payload)?),
             tag::POLICY_SET => EventBody::PolicySet(encoding::decode(payload)?),
             tag::AGENT_DEFINED => EventBody::AgentDefined(encoding::decode(payload)?),
+            tag::AGENT_REMOVED => EventBody::AgentRemoved(encoding::decode(payload)?),
             tag::INVITE_CREATED => EventBody::InviteCreated(encoding::decode(payload)?),
             tag::DEVICE_BOUND => EventBody::DeviceBound(encoding::decode(payload)?),
             tag::DEVICE_PROFILE => EventBody::DeviceProfile(encoding::decode(payload)?),

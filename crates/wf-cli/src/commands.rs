@@ -7,8 +7,8 @@ use wf_core::autonomy::Autonomy;
 use wf_core::brief::{Brief, Sources};
 use wf_core::crdt::SetChange;
 use wf_core::event::{
-    AgentDefined, Change, Comment, CommentKind, Event, EventBody, Genesis, ItemCreated, ItemLinked,
-    ItemMoved, ItemRef, Link, PolicySet,
+    AgentDefined, AgentRemoved, Change, Comment, CommentKind, Event, EventBody, Genesis,
+    ItemCreated, ItemLinked, ItemMoved, ItemRef, Link, PolicySet,
 };
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
@@ -345,6 +345,30 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
             let message = format!("defined agent {}", args.name);
             let message = hosting_note(workspace, &args.name, start, message)?;
             done(json, message, &event, None)
+        }
+        AgentCommand::Remove { name } => {
+            let state = workspace.state();
+            if state.agent(&name, principal).is_none() {
+                let yours = state
+                    .agents()
+                    .filter(|(id, _)| id.principal == principal)
+                    .map(|(id, _)| id.name.clone());
+                bail!("there is no agent `{name}`; {}", OneOf::new(yours));
+            }
+            let live = state
+                .sessions()
+                .filter(|session| {
+                    session.is_live()
+                        && session.agent().principal == principal
+                        && session.agent().name == name
+                })
+                .count();
+            if live > 0 {
+                bail!("{name} has {live} live session(s); stop them first with `wf session stop`");
+            }
+            let event =
+                workspace.author(EventBody::AgentRemoved(AgentRemoved { name: name.clone() }))?;
+            done(json, format!("removed agent {name}"), &event, None)
         }
         AgentCommand::Edit(args) => {
             let current = workspace

@@ -278,6 +278,25 @@ mod actors {
     }
 
     #[test]
+    fn a_removed_agent_is_gone_but_what_its_session_writes_stays_valid() {
+        let (fixture, mut state, task, session) = working();
+        let actor = fixture.agent_actor("coder", session);
+        // Written before the removal, received after it.
+        let late = fixture.author_as(&state, 0, actor, 3_001, comment(task, "still here"));
+        let coder = crate::name::AgentName::new("coder").unwrap();
+        let removed = crate::event::EventBody::AgentRemoved(crate::event::AgentRemoved {
+            name: coder.clone(),
+        });
+        fixture.apply(&mut state, 0, 3_002, removed);
+        assert!(state.agent(&coder, fixture.founder.key()).is_none());
+        assert!(state.agents().next().is_none());
+        state.receive(late, Trust::Untrusted).unwrap();
+
+        fixture.apply(&mut state, 0, 3_003, define_agent("coder"));
+        assert!(state.agent(&coder, fixture.founder.key()).is_some());
+    }
+
+    #[test]
     fn events_of_a_session_are_admitted_only_from_its_device() {
         let (fixture, mut state, task, session) = working();
         let actor = fixture.agent_actor("coder", session);

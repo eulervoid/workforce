@@ -521,6 +521,7 @@ impl State {
                 Ok(())
             }
             EventBody::AgentDefined(AgentDefined { .. })
+            | EventBody::AgentRemoved(_)
             | EventBody::DeviceBound(_)
             | EventBody::DeviceProfile(_)
             | EventBody::Unknown { .. } => Ok(()),
@@ -663,6 +664,7 @@ impl State {
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)
             | EventBody::AgentDefined(_)
+            | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)
             | EventBody::DeviceBound(_)
             | EventBody::ForkAnnounced(_)
@@ -757,7 +759,8 @@ impl State {
         let supervises = workforce
             .agents
             .get(agent)
-            .is_some_and(|definition| definition.value().lanes.contains(&supervision));
+            .and_then(|definition| definition.value().as_ref())
+            .is_some_and(|definition| definition.lanes.contains(&supervision));
         let worked_on = workforce
             .sessions
             .values()
@@ -920,6 +923,7 @@ impl State {
                 }
             }
             EventBody::AgentDefined(defined) => defined.lanes.iter().try_for_each(known_lane),
+            EventBody::AgentRemoved(_) => Ok(()),
             EventBody::ItemCreated(created) => {
                 let type_name = &created.item_type;
                 type_of(type_name)?;
