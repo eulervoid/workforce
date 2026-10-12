@@ -401,9 +401,6 @@ pub struct InitArgs {
     /// A name for this machine, shown by `wf device list`. Defaults to its host name.
     #[arg(long)]
     pub device_name: Option<String>,
-    /// Do not define a default agent for each harness found on PATH.
-    #[arg(long)]
-    pub no_agents: bool,
 }
 
 #[derive(Subcommand)]

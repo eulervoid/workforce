@@ -13,7 +13,7 @@ use wf_core::event::{
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
 use wf_core::item::{ItemView, Priority};
-use wf_core::name::{AgentName, Handle, HarnessName, LaneName, StateName};
+use wf_core::name::{AgentName, Handle, StateName};
 use wf_core::policy::Field;
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
@@ -177,7 +177,8 @@ struct InitView {
     name: String,
     id: String,
     handle: String,
-    agents: Vec<String>,
+    /// The harnesses found on PATH, which agents can be added for.
+    harnesses: Vec<String>,
 }
 
 fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
@@ -229,32 +230,11 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
         }),
     )?;
 
-    let mut agents = Vec::new();
-    if !args.no_agents {
-        let path = std::env::var_os("PATH").unwrap_or_default();
-        for (index, harness) in harness::detect(&path).into_iter().enumerate() {
-            let name = if index == 0 {
-                "coder".to_string()
-            } else {
-                format!("coder-{harness}")
-            };
-            replica.author(
-                &device,
-                actor.clone(),
-                workspace::now_ms(),
-                EventBody::AgentDefined(AgentDefined {
-                    name: AgentName::new(&name)?,
-                    harness: HarnessName::new(harness)?,
-                    model: None,
-                    instructions: None,
-                    capabilities: Vec::new(),
-                    lanes: vec![LaneName::new("default")?],
-                    autonomy: Autonomy::default(),
-                }),
-            )?;
-            agents.push(format!("@{handle}/{name} ({harness})"));
-        }
-    }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let harnesses = harness::detect(&path)
+        .into_iter()
+        .map(String::from)
+        .collect();
 
     let file = toml::to_string(&WorkforceFile { id })?;
     std::fs::write(cwd.join(WORKFORCE_FILE), file)?;
@@ -264,18 +244,20 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
             name: args.name,
             id: id.to_string(),
             handle: handle.to_string(),
-            agents,
+            harnesses,
         },
         |init| {
             let mut out = format!(
                 "created workforce \"{}\" ({})\nyou are @{}\n",
                 init.name, init.id, init.handle
             );
-            if init.agents.is_empty() {
-                out.push_str("no agents defined; add one with `wf agent add`\n");
+            if init.harnesses.is_empty() {
+                out.push_str("no agent harness found on PATH; add an agent with `wf agent add`\n");
+                return out;
             }
-            for agent in &init.agents {
-                out.push_str(&format!("defined agent {agent}\n"));
+            out.push_str("found harnesses; add an agent for the one wf should use:\n");
+            for harness in &init.harnesses {
+                out.push_str(&format!("  wf agent add coder --harness {harness}\n"));
             }
             out
         },

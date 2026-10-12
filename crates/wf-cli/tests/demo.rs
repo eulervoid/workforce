@@ -23,15 +23,15 @@ fn the_demo_script_works_end_to_end() {
 
     let init = wf.json(&["init", "--name", "demo"]);
     assert_eq!(init["handle"], "joshua");
-    assert_eq!(init["agents"].as_array().unwrap().len(), 2);
+    assert_eq!(init["harnesses"], serde_json::json!(["claude-code", "opencode"]));
     assert!(wf.repository.join(".workforce.toml").is_file());
     assert!(
         wf.fail(&["init", "--name", "again"])
             .contains("already belongs")
     );
 
-    let agents = wf.run(&["agent", "list"]);
-    assert!(agents.contains("@joshua/coder") && agents.contains("@joshua/coder-opencode"));
+    assert!(wf.json(&["agent", "list"]).as_array().unwrap().is_empty());
+    wf.run(&["agent", "add", "coder", "--harness", "claude-code"]);
 
     let task = wf.add(&["--title", "Implement feed sync", "--priority", "P1"]);
     let first = wf.add(&["--title", "Pick a hash for event ids"]);
@@ -121,8 +121,8 @@ fn the_demo_script_works_end_to_end() {
     let log = wf.run(&["log"]);
     assert!(log.contains("events verified"), "{log}");
     let events = wf.json(&["log"])["events"].as_array().unwrap().len();
-    // genesis, device profile, two agents, then the items
-    assert_eq!(events, 1 + 1 + 2 + 2 + 1 + 1 + 1 + 1 + 1 + 2);
+    // genesis, device profile, one agent, then the items
+    assert_eq!(events, 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2);
     assert!(
         wf.json(&["log"])["events"]
             .as_array()
@@ -141,7 +141,7 @@ fn the_demo_script_works_end_to_end() {
 #[test]
 fn invalid_requests_fail_with_the_specific_reason() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     let task = wf.add(&["--title", "a task"]);
     let decision = wf.add(&["--title", "a decision", "--type", "decision"]);
 
@@ -198,7 +198,7 @@ fn invalid_requests_fail_with_the_specific_reason() {
 #[test]
 fn item_edit_by_flags_and_by_editor() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     let task = wf.add(&["--title", "Old title", "--label", "keep", "--label", "drop"]);
 
     wf.run(&[
@@ -273,7 +273,7 @@ fn item_edit_by_flags_and_by_editor() {
 #[test]
 fn agents_and_policy() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     wf.run(&[
         "agent",
         "add",
@@ -344,7 +344,7 @@ fn commands_outside_a_workforce_explain_what_to_do() {
 #[test]
 fn item_add_opens_the_editor_on_request_and_asks_for_a_title_otherwise() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     assert!(
         wf.fail(&["item", "add"])
             .contains("missing --title; run at a terminal")
@@ -376,7 +376,7 @@ fn item_add_opens_the_editor_on_request_and_asks_for_a_title_otherwise() {
 #[test]
 fn comments_need_text_or_the_editor() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     let task = wf.add(&["--title", "a task"]);
     assert!(
         wf.fail(&["comment", short(&task)])
@@ -408,7 +408,7 @@ fn comments_need_text_or_the_editor() {
 #[test]
 fn blockers_and_change_requests_stay_open_until_a_comment_resolves_them() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     let task = wf.add(&["--title", "a task"]);
     let comment = |args: &[&str]| {
         let mut all = vec!["comment", short(&task)];
@@ -466,7 +466,7 @@ fn blockers_and_change_requests_stay_open_until_a_comment_resolves_them() {
 #[test]
 fn missing_items_and_states_are_errors_without_a_terminal() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     let task = wf.add(&["--title", "a task"]);
     for args in [
         &["item", "show"][..],
@@ -495,7 +495,7 @@ fn missing_items_and_states_are_errors_without_a_terminal() {
 #[test]
 fn invite_device_prints_a_code_that_names_this_machine() {
     let sandbox = Sandbox::new();
-    sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+    sandbox.run(&["init", "--name", "demo"]);
     let invite = sandbox.json(&["invite", "device", "--expires", "1h"]);
     let code = invite["code"].as_str().unwrap();
     assert!(code.starts_with("wfi1"), "{code}");
@@ -513,7 +513,7 @@ fn join_refuses_bad_codes_and_missing_names() {
     let sandbox = Sandbox::new();
     let error = sandbox.fail(&["join", "not-a-code", "--name", "vm"]);
     assert!(error.contains("invite code"), "{error}");
-    sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+    sandbox.run(&["init", "--name", "demo"]);
     let code = sandbox.json(&["invite", "device"])["code"]
         .as_str()
         .unwrap()
@@ -529,7 +529,6 @@ fn devices_and_members_are_listed_and_editable() {
         "init",
         "--name",
         "demo",
-        "--no-agents",
         "--device-name",
         "laptop",
     ]);
@@ -611,7 +610,6 @@ fn the_cli_gives_the_same_output_through_the_daemon_as_through_the_store() {
         "init",
         "--name",
         "demo",
-        "--no-agents",
         "--device-name",
         "laptop",
     ]);
@@ -641,7 +639,7 @@ fn the_cli_gives_the_same_output_through_the_daemon_as_through_the_store() {
 #[test]
 fn a_second_daemon_is_refused() {
     let sandbox = Sandbox::new();
-    sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+    sandbox.run(&["init", "--name", "demo"]);
     let daemon = sandbox.start_daemon();
     let error = sandbox.fail(&["daemon", "--no-network"]);
     assert!(error.contains("already listening"), "{error}");
@@ -744,7 +742,6 @@ mod forking {
             "init",
             "--name",
             "demo",
-            "--no-agents",
             "--device-name",
             "laptop",
         ]);
@@ -789,7 +786,7 @@ mod forking {
     #[test]
     fn the_daemon_founds_the_fork_and_the_history_keeps_its_edits() {
         let sandbox = Sandbox::new();
-        sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+        sandbox.run(&["init", "--name", "demo"]);
         let item = sandbox.add(&["--title", "Original", "--priority", "P1"]);
         sandbox.run(&["item", "edit", short(&item), "--title", "Renamed"]);
         sandbox.run(&["comment", short(&item), "A note"]);
@@ -826,7 +823,6 @@ mod forking {
             "init",
             "--name",
             "demo",
-            "--no-agents",
             "--device-name",
             "laptop",
         ]);
@@ -857,7 +853,6 @@ mod forking {
             "init",
             "--name",
             "demo",
-            "--no-agents",
             "--device-name",
             "laptop",
         ]);
@@ -905,7 +900,7 @@ mod forking {
     #[test]
     fn a_fork_without_a_new_principal_keeps_the_key_of_its_parent() {
         let sandbox = Sandbox::new();
-        sandbox.run(&["init", "--name", "demo", "--no-agents"]);
+        sandbox.run(&["init", "--name", "demo"]);
         let parent = sandbox.json(&["status"])["id"]
             .as_str()
             .unwrap()
@@ -931,7 +926,7 @@ mod forking {
 #[test]
 fn steps_are_checked_and_unchecked_by_number() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     let task = wf.add(&[
         "--title",
         "Build it",
@@ -1022,7 +1017,7 @@ mod work {
     #[test]
     fn an_agent_comments_on_its_item_and_on_its_steps() {
         let wf = Sandbox::new();
-        wf.run(&["init", "--name", "demo", "--no-agents"]);
+        wf.run(&["init", "--name", "demo"]);
         wf.run(&["agent", "add", "coder", "--harness", "opencode"]);
         let task = wf.add(&[
             "--title",
@@ -1100,7 +1095,7 @@ mod work {
     #[test]
     fn a_comment_names_a_step_that_exists() {
         let wf = Sandbox::new();
-        wf.run(&["init", "--name", "demo", "--no-agents"]);
+        wf.run(&["init", "--name", "demo"]);
         wf.run(&["agent", "add", "coder", "--harness", "opencode"]);
         let task = wf.add(&["--title", "Build it", "--body", "- [ ] only step"]);
         let session = start_session(&wf, short(&task));
@@ -1121,7 +1116,7 @@ mod work {
 #[test]
 fn items_name_a_review_level_from_the_policy() {
     let wf = Sandbox::new();
-    wf.run(&["init", "--name", "demo", "--no-agents"]);
+    wf.run(&["init", "--name", "demo"]);
     let task = wf.add(&["--title", "Careful", "--review", "standard"]);
     let review = |wf: &Sandbox| wf.json(&["item", "show", short(&task)])["review"].clone();
     assert_eq!(review(&wf), "standard");
@@ -1186,7 +1181,7 @@ command = ["/bin/sh", "-c", "echo '{\"permission\": \"deny\", \"reason\": \"neve
 #[test]
 fn an_agent_that_starts_automatically_is_hosted_here_and_status_flags_one_that_is_not() {
     let wf = Sandbox::new();
-    wf.json(&["init", "--name", "demo", "--no-agents"]);
+    wf.json(&["init", "--name", "demo"]);
     let added = wf.run(&[
         "agent",
         "add",

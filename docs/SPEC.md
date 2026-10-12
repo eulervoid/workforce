@@ -1063,7 +1063,8 @@ go into the transcript of the session that asked.
 
 ### Creating
 `wf init --name <name>` inside a git clone: writes genesis, `.workforce.toml` (only the id), reads the
-origin from the clone, detects harnesses and offers one default agent per harness, named by role (`coder`).
+origin from the clone, and lists the harnesses found on PATH with the `wf agent add` command for each; it
+defines no agent. `wf init -i` asks which harnesses to define agents for, with their permissions and model.
 
 ### Joining
 Two invite kinds, one command:

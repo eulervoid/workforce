@@ -62,7 +62,7 @@ impl World {
 
     fn without_daemon(agents: &[(&str, &str)]) -> WorldSetup {
         let wf = Sandbox::new();
-        wf.run(&["init", "--name", "demo", "--no-agents"]);
+        wf.run(&["init", "--name", "demo"]);
         let policy = wf.run(&["policy", "show"]);
         let path = wf.root.path().join("unreviewed-policy.toml");
         std::fs::write(&path, policy.replace("review = \"principal\"\n", "")).unwrap();
