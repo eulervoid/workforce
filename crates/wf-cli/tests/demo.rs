@@ -21,7 +21,14 @@ fn titles(items: &Value) -> Vec<String> {
 fn items_are_listed_by_label_lane_and_priority() {
     let wf = Sandbox::new();
     wf.run(&["init", "--name", "demo"]);
-    wf.add(&["--title", "Urgent fix", "--priority", "P0", "--label", "bug"]);
+    wf.add(&[
+        "--title",
+        "Urgent fix",
+        "--priority",
+        "P0",
+        "--label",
+        "bug",
+    ]);
     wf.add(&["--title", "Later", "--priority", "P3"]);
     wf.add(&["--title", "Summary", "--type", "distill"]);
     assert_eq!(
