@@ -105,11 +105,16 @@ fn priority_style(priority: &str) -> anstyle::Style {
 
 /// `2026-10-09 21:42` in the local time zone; text that is not a timestamp is kept as it is.
 fn short_time(timestamp: &str) -> String {
+    local_time(timestamp, "%Y-%m-%d %H:%M")
+}
+
+/// A timestamp of a view, in the time zone of this machine and the given format.
+fn local_time(timestamp: &str, format: &str) -> String {
     timestamp.parse::<jiff::Timestamp>().map_or_else(
         |_| timestamp.to_string(),
         |time| {
             time.to_zoned(jiff::tz::TimeZone::system())
-                .strftime("%Y-%m-%d %H:%M")
+                .strftime(format)
                 .to_string()
         },
     )
@@ -698,7 +703,10 @@ pub fn devices(devices: &[DeviceView]) -> String {
             if device.this_device {
                 "now".to_string()
             } else {
-                device.last_seen.clone().unwrap_or_else(|| "-".to_string())
+                device
+                    .last_seen
+                    .as_deref()
+                    .map_or_else(|| "-".to_string(), short_time)
             },
             device.flags.join(", "),
         ]);
@@ -725,7 +733,7 @@ pub fn log(view: &LogView) -> String {
             short(&event.id).to_string(),
             event.device.to_string(),
             event.seq.to_string(),
-            event.at.to_string(),
+            local_time(&event.at, "%Y-%m-%d %H:%M:%S"),
             event.kind.to_string(),
             event.actor.to_string(),
             event.summary.to_string(),
@@ -755,7 +763,7 @@ pub fn status(view: &StatusView) -> String {
         .iter()
         .map(|device| match (&device.last_seen, device.this_device) {
             (_, true) => format!("{} (this)", device.name),
-            (Some(seen), false) => format!("{} (seen {seen})", device.name),
+            (Some(seen), false) => format!("{} (seen {})", device.name, short_time(seen)),
             (None, false) => device.name.clone(),
         })
         .collect();
