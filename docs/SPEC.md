@@ -411,7 +411,9 @@ event invalid.
 * `SetChange<T>` = `Add(T)` or `Remove{value: T, observed: Vec<EventId>}`. A removal lists the add events
   its author had seen, so a concurrent add survives it (add wins) without any ancestry index.
 * An item id is the id of its `ItemCreated` event. Policy and `Genesis` carry TOML text, not a parsed
-  structure, so the stored policy is exactly what the owner wrote.
+  structure, so the stored policy is exactly what the owner wrote. Peers do not parse it to admit
+  the event: a policy a version cannot read (written by a newer one) is flagged in `wf status`, and
+  that version keeps running on the last policy it could read, or the default.
 * `CommitId` = `Git(GitOid)`, the single `vcs` variant (section 9).
 * Bodies for later milestones (`Assigned`, `Claim`, `Heartbeat`, ...) take new tags. Tag 24 (`Report`,
   now a comment) is retired.

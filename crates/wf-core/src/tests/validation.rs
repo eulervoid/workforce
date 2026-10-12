@@ -137,11 +137,6 @@ fn genesis_rules() {
         }),
         Err(GenesisError::DuplicateDevice(fixture.devices[0].key()).into())
     );
-    assert!(matches!(
-        forged_genesis(&fixture, &fixture.devices[0], |genesis| genesis.policy =
-            "nope".into()),
-        Err(Invalid::Policy(PolicyError::Parse(_)))
-    ));
 }
 
 #[test]
@@ -406,24 +401,79 @@ fn policy_changes_need_a_valid_principal_signature_for_this_workforce() {
         Err(Invalid::BadPrincipalSignature)
     );
 
-    let invalid = fixture.author(
+    let valid = fixture.author(
         &state,
         0,
         5_001,
-        fixture.policy_set(&fixture.founder, "types = 1"),
+        fixture.policy_set(&fixture.founder, crate::policy::DEFAULT_POLICY_TOML),
     );
-    assert!(matches!(
-        receive(&mut state, invalid),
-        Err(Invalid::Policy(PolicyError::Parse(_)))
-    ));
+    assert_eq!(receive(&mut state, valid), Ok(Disposition::Applied));
+}
 
-    let valid = fixture.author(
+/// A policy written by a newer version, with a recovery step this version does not know.
+fn newer_policy() -> String {
+    crate::policy::DEFAULT_POLICY_TOML.replace(
+        r#"steps = ["retry", "retry", "principal"]"#,
+        r#"steps = ["retry", { command = "make reset" }, "principal"]"#,
+    )
+}
+
+#[test]
+fn a_policy_this_version_cannot_read_is_flagged_and_the_last_readable_one_kept() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let readable = format!("{}\n# the first edit\n", crate::policy::DEFAULT_POLICY_TOML);
+    let first = fixture.author(
+        &state,
+        0,
+        5_000,
+        fixture.policy_set(&fixture.founder, &readable),
+    );
+    assert_eq!(receive(&mut state, first), Ok(Disposition::Applied));
+
+    let newer = fixture.author(
+        &state,
+        0,
+        5_001,
+        fixture.policy_set(&fixture.founder, &newer_policy()),
+    );
+    assert_eq!(receive(&mut state, newer), Ok(Disposition::Applied));
+    assert!(matches!(
+        state.unreadable_policy(),
+        Some(PolicyError::Parse(_))
+    ));
+    assert_eq!(state.policy().unwrap().source, readable);
+
+    let fixed = fixture.author(
         &state,
         0,
         5_002,
         fixture.policy_set(&fixture.founder, crate::policy::DEFAULT_POLICY_TOML),
     );
-    assert_eq!(receive(&mut state, valid), Ok(Disposition::Applied));
+    assert_eq!(receive(&mut state, fixed), Ok(Disposition::Applied));
+    assert_eq!(state.unreadable_policy(), None);
+}
+
+#[test]
+fn a_workforce_whose_first_policy_is_unreadable_runs_on_the_default() {
+    let fixture = Fixture::new(1);
+    let EventBody::Genesis(signed) = &fixture.genesis.content.body else {
+        unreachable!()
+    };
+    let mut genesis = signed.statement.clone();
+    genesis.policy = newer_policy();
+    let author = &fixture.devices[0];
+    let body = EventBody::Genesis(Signed::sign(&fixture.founder, None, genesis).unwrap());
+    let event = EventBuilder::genesis(author.key(), fixture.founder_actor(), 1_000)
+        .sign(author, body)
+        .unwrap();
+    let mut state = State::new();
+    state.receive(event, Trust::Untrusted).unwrap();
+    assert!(state.unreadable_policy().is_some());
+    assert_eq!(
+        state.policy().unwrap().source,
+        crate::policy::DEFAULT_POLICY_TOML
+    );
 }
 
 #[test]

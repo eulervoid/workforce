@@ -12,7 +12,7 @@ use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, InviteKey, PrincipalKey, Role};
 use crate::item::{Item, ItemView};
 use crate::name::{AgentName, Handle, HarnessName, LaneName, Requirement};
-use crate::policy::Policy;
+use crate::policy::{DEFAULT_POLICY_TOML, Policy, PolicyError};
 use crate::session::{Session, SessionRole};
 use crate::sync::{FeedVersion, Versions};
 use crate::validate::Invalid;
@@ -32,6 +32,21 @@ pub enum Trust {
 pub struct PolicyDoc {
     pub source: String,
     pub policy: Policy,
+}
+
+impl PolicyDoc {
+    pub fn parse(source: &str) -> Result<Self, PolicyError> {
+        Ok(Self {
+            source: source.to_string(),
+            policy: Policy::parse(source)?,
+        })
+    }
+}
+
+impl Default for PolicyDoc {
+    fn default() -> Self {
+        Self::parse(DEFAULT_POLICY_TOML).expect("the default policy is valid")
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -250,6 +265,9 @@ pub(crate) struct Workforce {
     pub(crate) aliases: BTreeMap<PrincipalKey, PrincipalKey>,
     pub(crate) announcements: BTreeMap<EventId, Announcement>,
     pub(crate) profiles: BTreeMap<DeviceKey, Lww<DeviceProfile>>,
+    /// The policy as the latest genesis or policy event set it.
+    pub(crate) policy_source: Lww<String>,
+    /// The latest policy this version can read, which the workforce runs on.
     pub(crate) policy: Lww<PolicyDoc>,
     pub(crate) agents: BTreeMap<AgentId, Lww<AgentDefinition>>,
     pub(crate) items: BTreeMap<ItemId, Item>,
@@ -366,6 +384,17 @@ impl State {
         self.workforce
             .as_ref()
             .map(|workforce| workforce.policy.value())
+    }
+
+    /// Why this version cannot read the policy the workforce set last, if it cannot. The
+    /// workforce then runs on [`State::policy`], the last one it could read, or the default.
+    pub fn unreadable_policy(&self) -> Option<PolicyError> {
+        let workforce = self.workforce.as_ref()?;
+        let latest = workforce.policy_source.value();
+        if *latest == workforce.policy.value().source {
+            return None;
+        }
+        Policy::parse(latest).err()
     }
 
     pub fn members(&self) -> impl Iterator<Item = (&PrincipalKey, &Member)> {

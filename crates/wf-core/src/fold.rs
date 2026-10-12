@@ -9,7 +9,6 @@ use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::{AgentId, Role};
 use crate::item::{Comment, Item, Merge, Resolved, Verdicted};
 use crate::name::StateName;
-use crate::policy::Policy;
 use crate::refs;
 use crate::session::{Ended, Session};
 use crate::state::{
@@ -79,8 +78,7 @@ impl State {
                     },
                 );
             }
-            let policy =
-                Policy::parse(&genesis.policy).expect("admitted genesis has a valid policy");
+            let policy = PolicyDoc::parse(&genesis.policy).unwrap_or_else(|_| PolicyDoc::default());
             self.expected = None;
             self.workforce = Some(Workforce {
                 id: id.into(),
@@ -88,13 +86,8 @@ impl State {
                 founder: genesis.founder.principal,
                 members,
                 devices,
-                policy: Lww::new(
-                    PolicyDoc {
-                        source: genesis.policy.clone(),
-                        policy,
-                    },
-                    stamp,
-                ),
+                policy_source: Lww::new(genesis.policy.clone(), stamp),
+                policy: Lww::new(policy, stamp),
                 agents: BTreeMap::new(),
                 items: BTreeMap::new(),
                 sessions: BTreeMap::new(),
@@ -260,14 +253,10 @@ impl State {
             }
             EventBody::PolicySet(signed) => {
                 let source = &signed.statement.policy;
-                let policy = Policy::parse(source).expect("admitted policy is valid");
-                workforce.policy.set(
-                    PolicyDoc {
-                        source: source.clone(),
-                        policy,
-                    },
-                    stamp,
-                );
+                workforce.policy_source.set(source.clone(), stamp);
+                if let Ok(policy) = PolicyDoc::parse(source) {
+                    workforce.policy.set(policy, stamp);
+                }
             }
             EventBody::AgentDefined(_)
                 if origin == Origin::History

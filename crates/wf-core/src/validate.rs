@@ -16,7 +16,7 @@ use crate::event::{
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, RecoveryName, ReviewName, StateName, TypeName};
-use crate::policy::{Field, Policy, PolicyError, StateCategory};
+use crate::policy::{Field, StateCategory};
 use crate::session::{SessionRole, Verdict};
 use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
 
@@ -88,8 +88,6 @@ pub enum Invalid {
     NotOwner(PrincipalKey),
     #[error("principal signature is invalid")]
     BadPrincipalSignature,
-    #[error(transparent)]
-    Policy(#[from] PolicyError),
     #[error("unknown item {0}")]
     UnknownItem(ItemId),
     #[error("unknown session {0}")]
@@ -469,7 +467,8 @@ impl State {
                 if trust == Trust::Untrusted && signed.verify(Some(workforce.id)).is_err() {
                     return Err(Invalid::BadPrincipalSignature);
                 }
-                Policy::parse(&signed.statement.policy)?;
+                // A policy this version cannot read is still admitted: a newer version may have
+                // written it. The workforce keeps running on the last policy it could read.
                 Ok(())
             }
             EventBody::InviteCreated(signed) => {
@@ -609,7 +608,6 @@ impl State {
                 }
             }
         }
-        Policy::parse(&genesis.policy)?;
         Ok(())
     }
 

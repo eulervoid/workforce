@@ -1517,6 +1517,12 @@ fn policy(json: bool, command: PolicyCommand, workspace: &mut Workspace) -> anyh
         .expect("a workforce has a policy")
         .source
         .clone();
+    if let Some(error) = workspace.state().unreadable_policy() {
+        eprintln!(
+            "this version of wf cannot read the policy set last ({}); this is the last one it could read",
+            wf_core::report::report(&error)
+        );
+    }
     match command {
         PolicyCommand::Show => emit(json, &current, |source| source.clone()),
         PolicyCommand::Apply { file } => {

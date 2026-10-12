@@ -1315,6 +1315,12 @@ pub fn status(
             ));
         }
     }
+    if let Some(error) = state.unreadable_policy() {
+        flagged.insert(format!(
+            "this version of wf cannot read the policy set last ({}), so it runs on the last one it could read; update wf, or replace the policy with `wf policy edit`",
+            wf_core::report::report(&error)
+        ));
+    }
     for edge in graph.ignored() {
         flagged.insert(format!(
             "dependency #{} -> #{} ignored: concurrent links formed a cycle",
