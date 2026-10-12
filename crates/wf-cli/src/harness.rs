@@ -48,6 +48,15 @@ pub struct ModelView {
     pub is_default: bool,
 }
 
+/// The name of a model without the provider that its value already names, as opencode repeats
+/// it: `anthropic/Claude Haiku 4.5` for `anthropic/claude-haiku-4-5`.
+fn without_provider<'a>(value: &str, name: &'a str) -> &'a str {
+    value
+        .split_once('/')
+        .and_then(|(provider, _)| name.strip_prefix(provider)?.strip_prefix('/'))
+        .unwrap_or(name)
+}
+
 /// `wf harness models`: starts the harness, opens a session in an empty directory to read the
 /// models it offers, and stops it.
 pub fn models(json: bool, harness: &HarnessName) -> anyhow::Result<()> {
@@ -70,8 +79,8 @@ pub fn models(json: bool, harness: &HarnessName) -> anyhow::Result<()> {
     let views: Vec<ModelView> = models
         .into_iter()
         .map(|model| ModelView {
+            name: without_provider(&model.value, &model.name).to_string(),
             value: model.value,
-            name: model.name,
             is_default: model.is_default,
         })
         .collect();
@@ -117,6 +126,19 @@ pub fn models_of(harness: &str) -> anyhow::Result<Vec<ModelView>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_name_drops_the_provider_its_value_names() {
+        assert_eq!(
+            without_provider("anthropic/claude-haiku-4-5", "anthropic/Claude Haiku 4.5"),
+            "Claude Haiku 4.5"
+        );
+        assert_eq!(without_provider("haiku", "Haiku 5.5"), "Haiku 5.5");
+        assert_eq!(
+            without_provider("openrouter/qwen/qwen3", "Qwen: Qwen3"),
+            "Qwen: Qwen3"
+        );
+    }
     use std::os::unix::fs::PermissionsExt;
 
     #[test]
