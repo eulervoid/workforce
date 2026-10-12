@@ -1029,7 +1029,9 @@ Both sides ignore fields they do not know.
 A request of an agent whose permissions are `ask` passes through a chain of deciders, in the order the
 machine config lists them, until one answers. Each one allows, denies or passes the request on:
 
-* **`rules`**: built-in. Running `wf` alone is allowed, because it is how a session reports back.
+* **`rules`**: built-in. Running `wf` alone is allowed, because it is how a session reports back:
+  its session commands, help for any command (`wf … --help`), and lists of these joined by `;` or
+  `&&`, each optionally piped into filters such as `grep`.
 * **`hook`**: a program that gets the request on stdin and prints
   `{"permission": "allow" | "deny" | "ask", "reason": ...}`. `ask`, a crash or a timeout passes on.
 * **`model`**: a decision model such as Jev, called over the System One API at a configured
