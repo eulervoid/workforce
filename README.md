@@ -9,6 +9,7 @@ and merge) are implemented; sessions across machines come next.
 - [docs/M0.md](docs/M0.md): plan for the first milestone
 - [docs/M1.md](docs/M1.md): sync, device invites, daemon and fork, with what was built
 - [docs/M2.md](docs/M2.md): agents at work on one machine, with what was built
+- [docs/M2.2.md](docs/M2.2.md): daily use on one machine (in progress)
 
 ## Try it
 ```sh
