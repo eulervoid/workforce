@@ -391,7 +391,7 @@ event invalid.
 | 6 | `DeviceProfile` | `name`, `hardware`, `agents: {agent -> max_sessions}`, `max_sessions` (M1) |
 | 7 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` (M1) |
 | 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires`, `review: Option<ReviewName>` |
-| 11 | `ItemEdited` | `item`, `changes: Vec<Change>` (`Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires`, `Review`) |
+| 11 | `ItemEdited` | `item`, `changes: Vec<Change>` (`Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires`, `Review`, `StepDone`, `Recovery`) |
 | 12 | `ItemMoved` | `item`, `to`, `by_session: Option<SessionId>` (the session whose start or end the move carries out), `because: Option<EventId>` (the comment that says why) |
 | 13 | `ItemLinked` | `item`, `link`: `DependsOn(SetChange<ItemId>)` or `Supersedes(ItemId)` |
 | 14 | `ItemArchived` | `item` |
@@ -1172,6 +1172,13 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
 [[review]]
 name = "manual"          # the strictest: a principal decides alone
 steps = ["principal"]
+
+[[recovery]]             # what happens when a session ends without finishing (M2.2)
+name = "none"
+steps = ["principal"]
+[[recovery]]
+name = "standard"        # tasks: try twice more, then the principal decides
+steps = ["retry", "retry", "principal"]
 
 [lanes.default]
 claim = ["member"]

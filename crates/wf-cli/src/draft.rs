@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use wf_core::crdt::SetChange;
 use wf_core::event::Change;
 use wf_core::item::{Item, Priority};
-use wf_core::name::{Label, LaneName, Requirement, ReviewName, TypeName};
+use wf_core::name::{Label, LaneName, RecoveryName, Requirement, ReviewName, TypeName};
 
 const FENCE: &str = "+++";
 
@@ -24,6 +24,8 @@ pub struct Draft {
     pub requires: BTreeSet<Requirement>,
     /// The item's own review level, not the one it gets from its type.
     pub review: Option<ReviewName>,
+    /// The item's own recovery level, not the one it gets from its type.
+    pub recovery: Option<RecoveryName>,
 }
 
 /// Everything in a draft except the body, which is the markdown after the front matter.
@@ -43,6 +45,8 @@ struct FrontMatter {
     requires: BTreeSet<Requirement>,
     #[serde(default)]
     review: Option<ReviewName>,
+    #[serde(default)]
+    recovery: Option<RecoveryName>,
 }
 
 impl Draft {
@@ -55,6 +59,7 @@ impl Draft {
             labels: item.labels().values().cloned().collect(),
             requires: item.requires().values().cloned().collect(),
             review: item.review().cloned(),
+            recovery: item.recovery().cloned(),
         }
     }
 
@@ -80,6 +85,7 @@ impl Draft {
             labels: self.labels.clone(),
             requires: self.requires.clone(),
             review: self.review.clone(),
+            recovery: self.recovery.clone(),
         })?;
         if self.priority.is_none() {
             front_matter.push_str("# priority = \"P2\"  # P0, P1, P2 or P3\n");
@@ -89,6 +95,9 @@ impl Draft {
         }
         if self.review.is_none() {
             front_matter.push_str("# review = \"standard\"\n");
+        }
+        if self.recovery.is_none() {
+            front_matter.push_str("# recovery = \"standard\"\n");
         }
         Ok(format!(
             "{FENCE}\n{front_matter}{FENCE}\n\n{}\n",
@@ -126,6 +135,7 @@ impl Draft {
             labels: front_matter.labels,
             requires: front_matter.requires,
             review: front_matter.review,
+            recovery: front_matter.recovery,
         };
         Ok((front_matter.item_type, draft))
     }
@@ -148,6 +158,9 @@ impl Draft {
         }
         if self.review != current.review {
             changes.push(Change::Review(self.review.clone()));
+        }
+        if self.recovery != current.recovery {
+            changes.push(Change::Recovery(self.recovery.clone()));
         }
         for label in self.labels.difference(&current.labels) {
             changes.push(Change::Labels(SetChange::Add(label.clone())));
@@ -266,6 +279,7 @@ mod tests {
                 labels: BTreeSet::new(),
                 requires: BTreeSet::new(),
                 review: None,
+                recovery: None,
             },
         };
         let text = new.to_markdown().unwrap();

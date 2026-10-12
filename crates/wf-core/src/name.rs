@@ -146,6 +146,10 @@ name_type!(
     ReviewName, "review level", SLUG, is_slug_char
 );
 name_type!(
+    /// A recovery level of the policy, such as `default`.
+    RecoveryName, "recovery level", SLUG, is_slug_char
+);
+name_type!(
     /// A capability or hardware requirement of an item, such as `gpu` or `os:linux`.
     Requirement, "requirement", TAG, is_tag_char
 );

@@ -620,6 +620,8 @@ pub struct ItemDetail {
     pub review: Option<String>,
     /// Where the review of the submitted work stands.
     pub review_status: Option<ReviewStatusView>,
+    /// What happens when a session ends without finishing: its own level, or its type's.
+    pub recovery: Option<String>,
     pub labels: Vec<String>,
     pub requires: Vec<String>,
     pub depends_on: Vec<LinkView>,
@@ -923,6 +925,8 @@ fn edit_summary(body: &Body, change: &Change) -> String {
         Change::Requires(change) => format!("requires {}", set_change(change)),
         Change::Review(Some(level)) => format!("review → {level}"),
         Change::Review(None) => "review → its type's level".to_string(),
+        Change::Recovery(Some(level)) => format!("recovery → {level}"),
+        Change::Recovery(None) => "recovery → its type's level".to_string(),
         Change::StepDone { step, done } => {
             let verb = if *done { "checked" } else { "unchecked" };
             match step_ref(body, *step) {
@@ -1019,6 +1023,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         lane: item.effective_lane(policy).map(ToString::to_string),
         review: item.effective_review(policy).map(ToString::to_string),
         review_status: state.review_status(item.id()).map(review_status_view),
+        recovery: item.effective_recovery(policy).map(ToString::to_string),
         labels: item.labels().values().map(ToString::to_string).collect(),
         requires: item.requires().values().map(ToString::to_string).collect(),
         depends_on,
@@ -1133,6 +1138,7 @@ pub fn describe(state: &State, body: &EventBody) -> String {
                     Change::Labels(_) => "labels",
                     Change::Requires(_) => "requires",
                     Change::Review(_) => "review",
+                    Change::Recovery(_) => "recovery",
                     Change::StepDone { .. } => "step",
                 })
                 .collect();

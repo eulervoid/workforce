@@ -5,7 +5,7 @@ expression: "Envelope::new(&detail)"
 {
   "schema": 2,
   "data": {
-    "id": "qmpsblvtzdcva6gukek4piok3gzoki77pyjehpywrgam3yu5zbha",
+    "id": "i546xzi4gy56gpd2tlzxobzw6xzbuhu5epnwu7fgaykdm7cg5v6a",
     "type": "task",
     "title": "Implement feed sync",
     "state": "open",
@@ -13,7 +13,7 @@ expression: "Envelope::new(&detail)"
     "readiness": "blocked",
     "blocked_by": [
       {
-        "id": "a6o2462npoaunrmpnu4ihelr6scdi7f3xazpivz3h47cyzf5mjsa",
+        "id": "tzum6wrnloq6nbozjwlifh74vzn3n2yho5hcsoidetaaygfvuveq",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -28,7 +28,7 @@ expression: "Envelope::new(&detail)"
     "body": [
       {
         "kind": "markdown",
-        "text": "blocked on #a6o246, ask @coder"
+        "text": "blocked on #tzum6w, ask @coder"
       }
     ],
     "author": "@joshua",
@@ -37,11 +37,12 @@ expression: "Envelope::new(&detail)"
     "lane": "default",
     "review": null,
     "review_status": null,
+    "recovery": "standard",
     "labels": [],
     "requires": [],
     "depends_on": [
       {
-        "id": "a6o2462npoaunrmpnu4ihelr6scdi7f3xazpivz3h47cyzf5mjsa",
+        "id": "tzum6wrnloq6nbozjwlifh74vzn3n2yho5hcsoidetaaygfvuveq",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -52,7 +53,7 @@ expression: "Envelope::new(&detail)"
     "supersedes": null,
     "references": [
       {
-        "id": "a6o2462npoaunrmpnu4ihelr6scdi7f3xazpivz3h47cyzf5mjsa",
+        "id": "tzum6wrnloq6nbozjwlifh74vzn3n2yho5hcsoidetaaygfvuveq",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -86,7 +87,7 @@ expression: "Envelope::new(&detail)"
         "at": "1970-01-01T00:00:08Z",
         "by": "@joshua",
         "kind": "depends_on",
-        "summary": "now depends on #a6o246",
+        "summary": "now depends on #tzum6w",
         "comment": null,
         "text": null
       },
@@ -96,12 +97,12 @@ expression: "Envelope::new(&detail)"
         "kind": "comment",
         "summary": "comment",
         "comment": {
-          "id": "fqwmtyrcohwg7k7mx7lnghzvyf5ceybw77bbamrfkiul4fybm4wa",
-          "short": "fqwm",
+          "id": "fq2rlcki7hiioocdzg2tpkibssvfjw2uf7godi2c274wmsz7ddaa",
+          "short": "fq2r",
           "kind": "comment",
           "by": "@joshua",
           "at": "1970-01-01T00:00:09Z",
-          "text": "see #a6o246, @joshua please check",
+          "text": "see #tzum6w, @joshua please check",
           "session": null,
           "step": null,
           "resolves": [],

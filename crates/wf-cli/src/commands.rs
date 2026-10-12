@@ -530,6 +530,7 @@ fn item(
                     labels: args.labels.into_iter().collect(),
                     requires: args.requires.into_iter().collect(),
                     review: args.review,
+                    recovery: args.recovery,
                 },
             };
             let has_priorities = workspace
@@ -548,6 +549,15 @@ fn item(
             if draft.title.trim().is_empty() {
                 bail!("the title is empty; nothing was created");
             }
+            if let Some(recovery) = &draft.recovery {
+                let known = workspace
+                    .state()
+                    .policy()
+                    .is_some_and(|document| document.policy.recovery_level(recovery).is_some());
+                if !known {
+                    bail!("there is no recovery level `{recovery}`; nothing was created");
+                }
+            }
             let event = workspace.author(EventBody::ItemCreated(ItemCreated {
                 item_type: new_item.item_type,
                 title: draft.title,
@@ -559,6 +569,13 @@ fn item(
                 review: draft.review,
             }))?;
             let id = ItemId::from(event.id());
+            // The recovery level is no field of a new item, so that events keep their layout.
+            if let Some(recovery) = draft.recovery {
+                workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {
+                    item: id,
+                    changes: vec![Change::Recovery(Some(recovery))],
+                }))?;
+            }
             let state = workspace.state();
             let graph = state.dependency_graph();
             let created = view::summary(state, &graph, state.item(id).expect("just created"));
@@ -760,10 +777,11 @@ fn edit(
         if let Some(lane) = args.lane {
             draft.lane = Some(lane);
         }
-        match args.review {
-            Some(ReviewChoice::Default) => draft.review = None,
-            Some(ReviewChoice::Level(review)) => draft.review = Some(review),
-            None => {}
+        if let Some(review) = args.review {
+            draft.review = review.into_level();
+        }
+        if let Some(recovery) = args.recovery {
+            draft.recovery = recovery.into_level();
         }
         draft.labels.extend(args.add_labels);
         for label in &args.remove_labels {

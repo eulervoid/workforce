@@ -6,29 +6,7 @@ expression: "Envelope::new(&all)"
   "schema": 2,
   "data": [
     {
-      "id": "a6o2462npoaunrmpnu4ihelr6scdi7f3xazpivz3h47cyzf5mjsa",
-      "type": "task",
-      "title": "Pick a hash for event ids",
-      "state": "open",
-      "priority": "P2",
-      "readiness": "ready",
-      "blocked_by": [],
-      "blocking": [
-        {
-          "id": "qmpsblvtzdcva6gukek4piok3gzoki77pyjehpywrgam3yu5zbha",
-          "type": "task",
-          "title": "Implement feed sync",
-          "state": "open",
-          "priority": "P1"
-        }
-      ],
-      "labels": [],
-      "lane": "default",
-      "steps": null,
-      "archived": false
-    },
-    {
-      "id": "qmpsblvtzdcva6gukek4piok3gzoki77pyjehpywrgam3yu5zbha",
+      "id": "i546xzi4gy56gpd2tlzxobzw6xzbuhu5epnwu7fgaykdm7cg5v6a",
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",
@@ -36,7 +14,7 @@ expression: "Envelope::new(&all)"
       "readiness": "blocked",
       "blocked_by": [
         {
-          "id": "a6o2462npoaunrmpnu4ihelr6scdi7f3xazpivz3h47cyzf5mjsa",
+          "id": "tzum6wrnloq6nbozjwlifh74vzn3n2yho5hcsoidetaaygfvuveq",
           "type": "task",
           "title": "Pick a hash for event ids",
           "state": "open",
@@ -50,7 +28,29 @@ expression: "Envelope::new(&all)"
       "archived": false
     },
     {
-      "id": "tdwbmzniw2zhlddjcwy3s2zk7ivxtr4l4hfqc2a5oo76c2f443yq",
+      "id": "tzum6wrnloq6nbozjwlifh74vzn3n2yho5hcsoidetaaygfvuveq",
+      "type": "task",
+      "title": "Pick a hash for event ids",
+      "state": "open",
+      "priority": "P2",
+      "readiness": "ready",
+      "blocked_by": [],
+      "blocking": [
+        {
+          "id": "i546xzi4gy56gpd2tlzxobzw6xzbuhu5epnwu7fgaykdm7cg5v6a",
+          "type": "task",
+          "title": "Implement feed sync",
+          "state": "open",
+          "priority": "P1"
+        }
+      ],
+      "labels": [],
+      "lane": "default",
+      "steps": null,
+      "archived": false
+    },
+    {
+      "id": "xofaq375xpit7suguv2duuj53xm7gi4ty4sfq33yv3herut7ilsq",
       "type": "task",
       "title": "Write spec",
       "state": "done",

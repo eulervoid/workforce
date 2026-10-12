@@ -16,7 +16,8 @@ use crate::identity::{
 };
 use crate::item::Priority;
 use crate::name::{
-    AgentName, HarnessName, Label, LaneName, Requirement, ReviewName, StateName, TypeName,
+    AgentName, HarnessName, Label, LaneName, RecoveryName, Requirement, ReviewName, StateName,
+    TypeName,
 };
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 
@@ -137,6 +138,8 @@ pub enum Change {
         step: StepId,
         done: bool,
     },
+    /// The recovery level of the item; `None` goes back to its type's.
+    Recovery(Option<RecoveryName>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -616,8 +619,8 @@ mod tests {
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
     ];
 
-    const GOLDEN_LEN: usize = 1987;
-    const GOLDEN_ID: &str = "yvx5sucz7euc2hqmcfb4i6qexpc75kfpmjkfanjbscsryoewyjga";
+    const GOLDEN_LEN: usize = 2242;
+    const GOLDEN_ID: &str = "xeoko2kk5yieo7zfh4w6xkkwwydeo5ptps4hazdawfy2ehkinc7q";
 
     #[test]
     fn round_trips_and_verifies() {

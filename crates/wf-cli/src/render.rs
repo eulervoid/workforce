@@ -317,6 +317,9 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     if let Some(review) = &detail.review {
         status.push(paint(DIM, format!("review={review}")));
     }
+    if let Some(recovery) = &detail.recovery {
+        status.push(paint(DIM, format!("recovery={recovery}")));
+    }
     if !detail.labels.is_empty() {
         status.push(paint(DIM, format!("labels={}", detail.labels.join(","))));
     }

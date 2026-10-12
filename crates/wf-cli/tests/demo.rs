@@ -1118,6 +1118,26 @@ fn items_name_a_review_level_from_the_policy() {
 }
 
 #[test]
+fn items_name_a_recovery_level_from_the_policy() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo"]);
+    let task = wf.add(&["--title", "Fragile", "--recovery", "none"]);
+    let recovery = |wf: &Sandbox| wf.json(&["item", "show", short(&task)])["recovery"].clone();
+    assert_eq!(recovery(&wf), "none");
+    assert!(
+        wf.run(&["item", "show", short(&task)])
+            .contains("recovery=none")
+    );
+    wf.run(&["item", "edit", short(&task), "--recovery", "default"]);
+    assert_eq!(recovery(&wf), "standard", "the task type's default applies");
+
+    let message = wf.fail(&["item", "add", "--title", "x", "--recovery", "ghost"]);
+    assert!(message.contains("no recovery level `ghost`"), "{message}");
+    let message = wf.fail(&["item", "edit", short(&task), "--recovery", "ghost"]);
+    assert!(message.contains("no recovery level `ghost`"), "{message}");
+}
+
+#[test]
 fn permissions_test_runs_the_deciders_of_the_machine_config() {
     let wf = Sandbox::new();
     let allowed = wf.json(&["permissions", "test", "--command", "wf item list | head"]);

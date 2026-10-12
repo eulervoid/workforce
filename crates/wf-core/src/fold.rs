@@ -468,6 +468,9 @@ fn apply_change(item: &mut Item, change: &Change, stamp: Stamp) {
         Change::Review(review) => {
             item.review.set(review.clone(), stamp);
         }
+        Change::Recovery(recovery) => {
+            item.recovery.set(recovery.clone(), stamp);
+        }
         Change::Labels(change) => item.labels.apply(change, stamp),
         Change::Requires(change) => item.requires.apply(change, stamp),
     }

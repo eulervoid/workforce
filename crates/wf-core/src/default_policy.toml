@@ -38,8 +38,18 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
 name = "manual"
 steps = ["principal"]
 
+# What happens when a session ends without finishing: one step per unsuccessful attempt.
+[[recovery]]
+name = "none"
+steps = ["principal"]
+
+[[recovery]]
+name = "standard"
+steps = ["retry", "retry", "principal"]
+
 [types.task]
 review = "manual"
+recovery = "standard"
 lane = "default"
 fields = ["priority", "labels", "requires"]
 depends_on = ["task", "decision"]
@@ -69,6 +79,7 @@ states = [
 
 [types.distill]
 lane = "meta"
+recovery = "standard"
 fields = ["labels"]
 depends_on = []
 initial = "open"

@@ -519,6 +519,31 @@ mod review_levels {
     }
 
     #[test]
+    fn only_the_principal_sets_the_recovery_level_of_an_item() {
+        let (fixture, mut state, task) = setup();
+        let recovery = |level: Option<&str>| {
+            edit(
+                task,
+                crate::event::Change::Recovery(level.map(|name| name.parse().unwrap())),
+            )
+        };
+        assert_eq!(state.check_policy(&recovery(Some("none"))), Ok(()));
+        assert_eq!(state.check_policy(&recovery(None)), Ok(()));
+        assert_eq!(
+            state.check_policy(&recovery(Some("ghost"))),
+            Err(PolicyViolation::UnknownRecoveryLevel(
+                "ghost".parse().unwrap()
+            ))
+        );
+        let session =
+            session_id(&fixture.apply(&mut state, 0, 3_000, start_session("coder", task)));
+        assert_eq!(
+            check_as(&fixture, &state, "coder", session, &recovery(Some("none"))),
+            Err(PolicyViolation::AgentChangesRecovery(task))
+        );
+    }
+
+    #[test]
     fn an_agent_that_worked_on_an_item_cannot_lower_its_review() {
         let (fixture, mut state, task) = setup();
         let session =

@@ -6,7 +6,8 @@ use wf_core::autonomy::{Autonomy, PermissionMode, StartMode};
 use wf_core::graph::Readiness;
 use wf_core::item::Priority;
 use wf_core::name::{
-    AgentName, HarnessName, Label, LaneName, Requirement, ReviewName, StateName, TypeName,
+    AgentName, HarnessName, Label, LaneName, RecoveryName, Requirement, ReviewName, StateName,
+    TypeName,
 };
 
 #[derive(Parser)]
@@ -557,6 +558,10 @@ pub struct ItemAddArgs {
     /// The review level the work needs, a name from the policy's `[[review]]` list.
     #[arg(long)]
     pub review: Option<ReviewName>,
+    /// What happens when a session on it ends without finishing, a name from the policy's
+    /// `[[recovery]]` list.
+    #[arg(long)]
+    pub recovery: Option<RecoveryName>,
     /// Open the item in the editor before creating it, filled in with the flags given.
     #[arg(long)]
     pub edit: bool,
@@ -650,24 +655,38 @@ pub struct ItemEditArgs {
     /// The review level the work needs, a name from the policy's `[[review]]` list, or `default`
     /// for the level of the item's type.
     #[arg(long)]
-    pub review: Option<ReviewChoice>,
+    pub review: Option<LevelChoice<ReviewName>>,
+    /// What happens when a session on it ends without finishing, a name from the policy's
+    /// `[[recovery]]` list, or `default` for the level of the item's type.
+    #[arg(long)]
+    pub recovery: Option<LevelChoice<RecoveryName>>,
 }
 
-/// What `wf item edit --review` sets.
+/// What `wf item edit --review` and `--recovery` set.
 #[derive(Clone, Debug)]
-pub enum ReviewChoice {
-    /// The item follows the review level of its type.
+pub enum LevelChoice<Name> {
+    /// The item follows the level of its type.
     Default,
-    Level(ReviewName),
+    Level(Name),
 }
 
-impl std::str::FromStr for ReviewChoice {
-    type Err = <ReviewName as std::str::FromStr>::Err;
+impl<Name: std::str::FromStr> std::str::FromStr for LevelChoice<Name> {
+    type Err = Name::Err;
 
     fn from_str(text: &str) -> Result<Self, Self::Err> {
         match text {
-            "default" => Ok(ReviewChoice::Default),
-            level => level.parse().map(ReviewChoice::Level),
+            "default" => Ok(LevelChoice::Default),
+            level => level.parse().map(LevelChoice::Level),
+        }
+    }
+}
+
+impl<Name> LevelChoice<Name> {
+    /// The level the item names itself: none when it follows its type.
+    pub fn into_level(self) -> Option<Name> {
+        match self {
+            LevelChoice::Default => None,
+            LevelChoice::Level(name) => Some(name),
         }
     }
 }
@@ -679,6 +698,7 @@ impl ItemEditArgs {
             || self.priority.is_some()
             || self.lane.is_some()
             || self.review.is_some()
+            || self.recovery.is_some()
             || !self.add_labels.is_empty()
             || !self.remove_labels.is_empty()
             || !self.add_requires.is_empty()

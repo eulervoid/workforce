@@ -55,7 +55,7 @@ use crate::event::CommentKind;
 use crate::hlc::Hlc;
 use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::name::{Label, LaneName, Requirement, ReviewName, StateName, TypeName};
+use crate::name::{Label, LaneName, RecoveryName, Requirement, ReviewName, StateName, TypeName};
 use crate::policy::{Policy, StateCategory};
 use crate::refs::Token;
 use crate::session::{CommitId, Verdict};
@@ -163,6 +163,7 @@ pub struct Item {
     pub(crate) priority: Lww<Option<Priority>>,
     pub(crate) lane: Lww<Option<LaneName>>,
     pub(crate) review: Lww<Option<ReviewName>>,
+    pub(crate) recovery: Lww<Option<RecoveryName>>,
     pub(crate) labels: AddWinsSet<Label>,
     pub(crate) requires: AddWinsSet<Requirement>,
     pub(crate) depends_on: AddWinsSet<ItemId>,
@@ -224,6 +225,11 @@ impl Item {
     /// The review level the item needs, if any.
     pub fn review(&self) -> Option<&ReviewName> {
         self.review.value().as_ref()
+    }
+
+    /// The recovery level the item names, if any.
+    pub fn recovery(&self) -> Option<&RecoveryName> {
+        self.recovery.value().as_ref()
     }
 
     pub fn labels(&self) -> &AddWinsSet<Label> {
@@ -295,6 +301,16 @@ impl Item {
         })
     }
 
+    /// The recovery level of the item: its own, else its type's. `None` means the principal
+    /// decides after the first unsuccessful attempt.
+    pub fn effective_recovery<'a>(&'a self, policy: &'a Policy) -> Option<&'a RecoveryName> {
+        self.recovery().or_else(|| {
+            policy
+                .type_config(&self.item_type)
+                .and_then(|config| config.recovery.as_ref())
+        })
+    }
+
     /// When the item last changed state.
     pub fn moved(&self) -> Stamp {
         self.state.stamp()
@@ -353,6 +369,7 @@ impl Item {
             priority: Lww::new(created.priority, stamp),
             lane: Lww::new(created.lane.clone(), stamp),
             review: Lww::new(created.review.clone(), stamp),
+            recovery: Lww::new(None, stamp),
             labels,
             requires,
             depends_on: AddWinsSet::default(),

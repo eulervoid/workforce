@@ -15,7 +15,7 @@ use crate::event::{
 };
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
-use crate::name::{LaneName, ReviewName, StateName, TypeName};
+use crate::name::{LaneName, RecoveryName, ReviewName, StateName, TypeName};
 use crate::policy::{Field, Policy, PolicyError, StateCategory};
 use crate::session::{SessionRole, Verdict};
 use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
@@ -169,6 +169,12 @@ pub enum PolicyViolation {
     ReviewWithoutReviewState { type_name: TypeName },
     #[error("an agent that worked on {0} cannot lower its review level")]
     AgentLowersReview(ItemId),
+    #[error("there is no recovery level `{0}`")]
+    UnknownRecoveryLevel(RecoveryName),
+    #[error(
+        "an agent cannot change the recovery level of {0}; the principal decides how much is retried"
+    )]
+    AgentChangesRecovery(ItemId),
     #[error("a review session comments on the item, not on its steps")]
     StepInReviewComment,
     #[error(
@@ -660,6 +666,14 @@ impl State {
                     Err(PolicyViolation::NotTheReviewer)
                 }
             }
+            EventBody::ItemEdited(edited)
+                if edited
+                    .changes
+                    .iter()
+                    .any(|change| matches!(change, Change::Recovery(_))) =>
+            {
+                Err(PolicyViolation::AgentChangesRecovery(edited.item))
+            }
             EventBody::ItemEdited(edited) => {
                 let lowers = edited
                     .changes
@@ -926,6 +940,10 @@ impl State {
                         Change::Labels(_) => require_field(type_name, Field::Labels)?,
                         Change::Requires(_) => require_field(type_name, Field::Requires)?,
                         Change::Review(review) => known_review(type_name, review)?,
+                        Change::Recovery(Some(level)) if policy.recovery_level(level).is_none() => {
+                            return Err(PolicyViolation::UnknownRecoveryLevel(level.clone()));
+                        }
+                        Change::Recovery(_) => {}
                     }
                 }
                 Ok(())

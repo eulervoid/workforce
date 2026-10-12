@@ -7,7 +7,9 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::identity::Role;
-use crate::name::{AgentName, LaneName, Requirement, ReviewName, StateName, TypeName};
+use crate::name::{
+    AgentName, LaneName, RecoveryName, Requirement, ReviewName, StateName, TypeName,
+};
 
 pub const DEFAULT_POLICY_TOML: &str = include_str!("default_policy.toml");
 
@@ -49,6 +51,15 @@ pub enum PolicyError {
     },
     #[error("type `{0}` has a review level but no review state to wait in")]
     ReviewWithoutBlocked(TypeName),
+    #[error("recovery level `{0}` is defined twice")]
+    DuplicateRecoveryLevel(RecoveryName),
+    #[error("`default` is not a recovery level name: it resets an item to the level of its type")]
+    ReservedRecoveryLevel,
+    #[error("type `{type_name}` has the unknown recovery level `{level}`")]
+    UnknownRecoveryLevel {
+        type_name: TypeName,
+        level: RecoveryName,
+    },
 }
 
 /// Fixed set of behavioural state categories. Built-in behaviour keys on these, never on state names.
@@ -127,6 +138,10 @@ pub struct TypeConfig {
     /// The review level of items of this type that do not name one.
     #[serde(default)]
     pub review: Option<ReviewName>,
+    /// The recovery level of items of this type that do not name one. Without one, the principal
+    /// decides after the first unsuccessful attempt.
+    #[serde(default)]
+    pub recovery: Option<RecoveryName>,
 }
 
 impl TypeConfig {
@@ -273,6 +288,25 @@ pub struct ReviewLevelConfig {
     pub steps: Vec<ReviewStep>,
 }
 
+/// One step of a recovery level, taken when a session ends without finishing.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RecoveryStep {
+    /// The item may be started again, by any agent that can take it.
+    Retry,
+    /// The item waits for the principal.
+    Principal,
+}
+
+/// A named sequence of recovery steps: the first is taken after the first unsuccessful attempt,
+/// the second after the next, and so on. After the last step the principal decides.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RecoveryLevelConfig {
+    pub name: RecoveryName,
+    pub steps: Vec<RecoveryStep>,
+}
+
 /// Unknown top-level tables (`[transcripts]`, ...) are kept in the stored text but ignored here
 /// until a later milestone gives them meaning.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,6 +324,8 @@ pub struct Policy {
     /// Ordered from least to most strict: the position is what lowering and raising mean.
     #[serde(default)]
     pub review: Vec<ReviewLevelConfig>,
+    #[serde(default)]
+    pub recovery: Vec<RecoveryLevelConfig>,
 }
 
 static DEFAULT_POLICY: LazyLock<Policy> = LazyLock::new(|| {
@@ -321,6 +357,10 @@ impl Policy {
         self.review.iter().find(|level| &level.name == name)
     }
 
+    pub fn recovery_level(&self, name: &RecoveryName) -> Option<&RecoveryLevelConfig> {
+        self.recovery.iter().find(|level| &level.name == name)
+    }
+
     /// How strict a level is: its position in the list.
     pub fn review_rank(&self, name: &ReviewName) -> Option<usize> {
         self.review.iter().position(|level| &level.name == name)
@@ -334,6 +374,15 @@ impl Policy {
             }
             if level.name.as_str() == "default" {
                 return Err(PolicyError::ReservedReviewLevel);
+            }
+        }
+        let mut recovery_levels = BTreeSet::new();
+        for level in &self.recovery {
+            if !recovery_levels.insert(&level.name) {
+                return Err(PolicyError::DuplicateRecoveryLevel(level.name.clone()));
+            }
+            if level.name.as_str() == "default" {
+                return Err(PolicyError::ReservedRecoveryLevel);
             }
         }
         for (name, builtin) in &DEFAULT_POLICY.types {
@@ -386,6 +435,14 @@ impl Policy {
                 if reviews && !has(StateCategory::Review) {
                     return Err(PolicyError::ReviewWithoutBlocked(name.clone()));
                 }
+            }
+            if let Some(level) = &config.recovery
+                && self.recovery_level(level).is_none()
+            {
+                return Err(PolicyError::UnknownRecoveryLevel {
+                    type_name: name.clone(),
+                    level: level.clone(),
+                });
             }
             if let Some(target) = config
                 .depends_on
@@ -564,12 +621,57 @@ mod tests {
     #[test]
     fn a_type_names_its_default_review_level() {
         let source = DEFAULT_POLICY_TOML.replace(
-            "[types.task]\nreview = \"manual\"\nlane",
-            "[types.task]\nreview = \"standard\"\nlane",
+            "[types.task]\nreview = \"manual\"\n",
+            "[types.task]\nreview = \"standard\"\n",
         );
         let policy = Policy::parse(&source).unwrap();
         let task = policy.type_config(&type_name("task")).unwrap();
         assert_eq!(task.review, Some(ReviewName::new("standard").unwrap()));
+    }
+
+    #[test]
+    fn default_policy_retries_tasks_twice_before_the_principal_decides() {
+        let policy = Policy::default_policy();
+        let standard = policy
+            .recovery_level(&RecoveryName::new("standard").unwrap())
+            .unwrap();
+        assert_eq!(
+            standard.steps,
+            [
+                RecoveryStep::Retry,
+                RecoveryStep::Retry,
+                RecoveryStep::Principal
+            ]
+        );
+        let task = policy.type_config(&type_name("task")).unwrap();
+        assert_eq!(task.recovery, Some(RecoveryName::new("standard").unwrap()));
+    }
+
+    #[test]
+    fn rejects_recovery_levels_that_do_not_hold_together() {
+        let duplicate = with_custom("[[recovery]]\nname = \"none\"\nsteps = [\"retry\"]\n");
+        assert_eq!(
+            Policy::parse(&duplicate),
+            Err(PolicyError::DuplicateRecoveryLevel(
+                RecoveryName::new("none").unwrap()
+            ))
+        );
+        let reserved = with_custom("[[recovery]]\nname = \"default\"\nsteps = []\n");
+        assert_eq!(
+            Policy::parse(&reserved),
+            Err(PolicyError::ReservedRecoveryLevel)
+        );
+        let unknown = DEFAULT_POLICY_TOML.replace(
+            "review = \"manual\"\nrecovery = \"standard\"",
+            "review = \"manual\"\nrecovery = \"ghost\"",
+        );
+        assert_eq!(
+            Policy::parse(&unknown),
+            Err(PolicyError::UnknownRecoveryLevel {
+                type_name: type_name("task"),
+                level: RecoveryName::new("ghost").unwrap()
+            })
+        );
     }
 
     #[test]
@@ -586,8 +688,7 @@ mod tests {
             Policy::parse(&reserved),
             Err(PolicyError::ReservedReviewLevel)
         );
-        let unknown =
-            DEFAULT_POLICY_TOML.replace("review = \"manual\"\nlane", "review = \"ghost\"\nlane");
+        let unknown = DEFAULT_POLICY_TOML.replace("review = \"manual\"\n", "review = \"ghost\"\n");
         assert_eq!(
             Policy::parse(&unknown),
             Err(PolicyError::UnknownReviewLevel {
