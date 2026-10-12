@@ -21,9 +21,14 @@ fn titles(items: &Value) -> Vec<String> {
 fn the_demo_script_works_end_to_end() {
     let wf = Sandbox::new();
 
+    assert!(wf.fail(&["init"]).contains("--name"));
+    assert!(wf.fail(&["init", "-i"]).contains("needs a terminal"));
     let init = wf.json(&["init", "--name", "demo"]);
     assert_eq!(init["handle"], "joshua");
-    assert_eq!(init["harnesses"], serde_json::json!(["claude-code", "opencode"]));
+    assert_eq!(
+        init["harnesses"],
+        serde_json::json!(["claude-code", "opencode"])
+    );
     assert!(wf.repository.join(".workforce.toml").is_file());
     assert!(
         wf.fail(&["init", "--name", "again"])
@@ -525,13 +530,7 @@ fn join_refuses_bad_codes_and_missing_names() {
 #[test]
 fn devices_and_members_are_listed_and_editable() {
     let sandbox = Sandbox::new();
-    sandbox.run(&[
-        "init",
-        "--name",
-        "demo",
-        "--device-name",
-        "laptop",
-    ]);
+    sandbox.run(&["init", "--name", "demo", "--device-name", "laptop"]);
 
     let devices = sandbox.json(&["device", "list"]);
     let devices = devices.as_array().unwrap();
@@ -606,13 +605,7 @@ impl Drop for RunningDaemon {
 #[test]
 fn the_cli_gives_the_same_output_through_the_daemon_as_through_the_store() {
     let sandbox = Sandbox::new();
-    sandbox.run(&[
-        "init",
-        "--name",
-        "demo",
-        "--device-name",
-        "laptop",
-    ]);
+    sandbox.run(&["init", "--name", "demo", "--device-name", "laptop"]);
     sandbox.add(&["--title", "Written before the daemon", "--priority", "P1"]);
 
     let daemon = sandbox.start_daemon();
@@ -738,13 +731,7 @@ mod forking {
     #[test]
     fn a_fork_without_a_lost_device_keeps_every_item_and_is_announced() {
         let sandbox = Sandbox::new();
-        sandbox.run(&[
-            "init",
-            "--name",
-            "demo",
-            "--device-name",
-            "laptop",
-        ]);
+        sandbox.run(&["init", "--name", "demo", "--device-name", "laptop"]);
         sandbox.add(&["--title", "Try sync", "--priority", "P1"]);
         let parent_file = workforce_file(&sandbox);
         let parent = sandbox.json(&["status"])["id"]
@@ -819,13 +806,7 @@ mod forking {
     #[test]
     fn excluding_a_device_leaves_it_out_but_keeps_its_items() {
         let sandbox = Sandbox::new();
-        sandbox.run(&[
-            "init",
-            "--name",
-            "demo",
-            "--device-name",
-            "laptop",
-        ]);
+        sandbox.run(&["init", "--name", "demo", "--device-name", "laptop"]);
         sandbox.add(&["--title", "From the laptop", "--priority", "P2"]);
         bind_second_device(&sandbox, "vm");
         assert_eq!(
@@ -849,13 +830,7 @@ mod forking {
     #[test]
     fn a_new_principal_gives_the_fork_its_own_key_and_leaves_the_parent_alone() {
         let sandbox = Sandbox::new();
-        sandbox.run(&[
-            "init",
-            "--name",
-            "demo",
-            "--device-name",
-            "laptop",
-        ]);
+        sandbox.run(&["init", "--name", "demo", "--device-name", "laptop"]);
         sandbox.add(&["--title", "Written with the old key", "--priority", "P2"]);
         let parent = sandbox.json(&["status"])["id"]
             .as_str()

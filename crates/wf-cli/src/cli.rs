@@ -393,8 +393,12 @@ pub struct CommentArgs {
 
 #[derive(Args)]
 pub struct InitArgs {
-    #[arg(long)]
-    pub name: String,
+    #[arg(long, required_unless_present = "interactive")]
+    pub name: Option<String>,
+    /// Ask for the name, and which of the harnesses found to define agents for, with their
+    /// permissions and model.
+    #[arg(long, short)]
+    pub interactive: bool,
     /// Your handle, the `joshua` in `@joshua`. Defaults to `$USER`.
     #[arg(long)]
     pub handle: Option<String>,

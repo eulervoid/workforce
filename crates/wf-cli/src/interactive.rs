@@ -84,3 +84,95 @@ pub fn page(text: &str) -> anyhow::Result<()> {
     child.wait()?;
     Ok(())
 }
+
+/// An agent that `wf init -i` defines.
+pub struct AgentSetup {
+    pub name: wf_core::name::AgentName,
+    pub harness: wf_core::name::HarnessName,
+    pub permissions: wf_core::autonomy::PermissionMode,
+    /// `None` keeps the harness's own default.
+    pub model: Option<String>,
+}
+
+/// What `wf init -i` asks for before it writes anything.
+pub struct InitAnswers {
+    pub name: String,
+    pub agents: Vec<AgentSetup>,
+}
+
+/// Ask for the name of the workforce, which of the found harnesses to define agents for, and the
+/// name, permissions and model of each.
+pub fn init_dialog(name: Option<String>, harnesses: &[&str]) -> anyhow::Result<InitAnswers> {
+    use wf_core::autonomy::PermissionMode;
+    use wf_core::name::{AgentName, HarnessName};
+
+    cliclack::intro("wf init")?;
+    let name: String = match name {
+        Some(name) => name,
+        None => cliclack::input("Name of the workforce")
+            .validate(|input: &String| {
+                if input.trim().is_empty() {
+                    Err("give it a name")
+                } else {
+                    Ok(())
+                }
+            })
+            .interact()?,
+    };
+
+    let picked: Vec<&str> = if harnesses.is_empty() {
+        cliclack::log::warning(
+            "no agent harness found on PATH; add agents later with `wf agent add`",
+        )?;
+        Vec::new()
+    } else {
+        let items: Vec<(&str, &str, &str)> = harnesses
+            .iter()
+            .map(|harness| (*harness, *harness, ""))
+            .collect();
+        cliclack::multiselect("Which harnesses should wf use? (space to pick)")
+            .items(&items)
+            .required(false)
+            .interact()?
+    };
+
+    let mut agents: Vec<AgentSetup> = Vec::new();
+    for harness in picked {
+        let suggested = if agents.is_empty() {
+            "coder".to_string()
+        } else {
+            format!("coder-{harness}")
+        };
+        let taken: Vec<String> = agents.iter().map(|agent| agent.name.to_string()).collect();
+        let agent_name: AgentName = cliclack::input(format!("Name of the {harness} agent"))
+            .default_input(&suggested)
+            .validate(move |input: &String| match AgentName::new(input) {
+                Err(error) => Err(error.to_string()),
+                Ok(_) if taken.contains(input) => Err(format!("`{input}` is already taken")),
+                Ok(_) => Ok(()),
+            })
+            .interact()?;
+        let permissions = cliclack::select(format!("What may {agent_name} do?"))
+            .item(
+                PermissionMode::Allow,
+                "allow",
+                "everything it asks, inside the sandbox; asks on a machine without one",
+            )
+            .item(PermissionMode::Ask, "ask", "hold each request for you")
+            .item(PermissionMode::Deny, "deny", "refuse every request")
+            .interact()?;
+        let model: String = cliclack::input(format!("Model for {agent_name}"))
+            .placeholder("the harness's default")
+            .required(false)
+            .interact()?;
+        let model = model.trim();
+        agents.push(AgentSetup {
+            name: agent_name,
+            harness: HarnessName::new(harness)?,
+            permissions,
+            model: (!model.is_empty()).then(|| model.to_string()),
+        });
+    }
+    cliclack::outro("creating the workforce")?;
+    Ok(InitAnswers { name, agents })
+}

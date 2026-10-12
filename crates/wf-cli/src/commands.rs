@@ -13,7 +13,7 @@ use wf_core::event::{
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
 use wf_core::item::{ItemView, Priority};
-use wf_core::name::{AgentName, Handle, StateName};
+use wf_core::name::{AgentName, Handle, LaneName, StateName};
 use wf_core::policy::Field;
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
@@ -96,7 +96,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     let json = cli.json;
     let mode = Mode::detect(json);
     match cli.command {
-        Command::Init(args) => init(json, args, data, cwd),
+        Command::Init(args) => init(json, mode, args, data, cwd),
         Command::Join(args) => crate::network::join(json, mode, args, data, cwd),
         Command::Fork {
             command: Some(ForkCommand::Accept { id, relay }),
@@ -179,12 +179,27 @@ struct InitView {
     handle: String,
     /// The harnesses found on PATH, which agents can be added for.
     harnesses: Vec<String>,
+    /// The agents defined, which only `wf init -i` does.
+    agents: Vec<String>,
 }
 
-fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
+fn init(json: bool, mode: Mode, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     if workspace::find_workforce(cwd).is_ok() {
         bail!("this directory already belongs to a workforce ({WORKFORCE_FILE})");
     }
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    let harnesses = harness::detect(&path);
+    let (name, setups) = match (args.interactive, mode) {
+        (true, Mode::Interactive) => {
+            let answers = interactive::init_dialog(args.name, &harnesses)?;
+            (answers.name, answers.agents)
+        }
+        (true, Mode::Scripted) => bail!("`wf init -i` needs a terminal"),
+        (false, _) => (
+            args.name.context("pass --name to name the workforce")?,
+            Vec::new(),
+        ),
+    };
     let handle = match args.handle {
         Some(handle) => Handle::new(handle)?,
         None => handle_from_environment(),
@@ -193,7 +208,7 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
     let device = data.device(true)?.expect("created on demand");
 
     let genesis = Genesis {
-        name: args.name.clone(),
+        name: name.clone(),
         founder: MemberSeed {
             principal: principal.key(),
             handle: handle.clone(),
@@ -230,27 +245,55 @@ fn init(json: bool, args: InitArgs, data: DataDir, cwd: &Path) -> anyhow::Result
         }),
     )?;
 
-    let path = std::env::var_os("PATH").unwrap_or_default();
-    let harnesses = harness::detect(&path)
-        .into_iter()
-        .map(String::from)
-        .collect();
+    let mut agents = Vec::new();
+    for setup in setups {
+        let autonomy = Autonomy {
+            permissions: setup.permissions,
+            ..Autonomy::default()
+        };
+        replica.author(
+            &device,
+            actor.clone(),
+            workspace::now_ms(),
+            EventBody::AgentDefined(AgentDefined {
+                name: setup.name.clone(),
+                harness: setup.harness.clone(),
+                model: setup.model.clone(),
+                instructions: None,
+                capabilities: Vec::new(),
+                lanes: vec![LaneName::new("default")?],
+                autonomy,
+            }),
+        )?;
+        let model = setup.model.as_deref().unwrap_or("its default model");
+        agents.push(format!(
+            "@{handle}/{} ({}, {model}, permissions {})",
+            setup.name, setup.harness, setup.permissions
+        ));
+    }
 
     let file = toml::to_string(&WorkforceFile { id })?;
     std::fs::write(cwd.join(WORKFORCE_FILE), file)?;
     emit(
         json,
         &InitView {
-            name: args.name,
+            name,
             id: id.to_string(),
             handle: handle.to_string(),
-            harnesses,
+            harnesses: harnesses.into_iter().map(String::from).collect(),
+            agents,
         },
         |init| {
             let mut out = format!(
                 "created workforce \"{}\" ({})\nyou are @{}\n",
                 init.name, init.id, init.handle
             );
+            if !init.agents.is_empty() {
+                for agent in &init.agents {
+                    out.push_str(&format!("defined agent {agent}\n"));
+                }
+                return out;
+            }
             if init.harnesses.is_empty() {
                 out.push_str("no agent harness found on PATH; add an agent with `wf agent add`\n");
                 return out;

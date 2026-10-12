@@ -15,7 +15,7 @@ and merge) are implemented; sessions across machines come next.
 cargo build
 export PATH="$PWD/target/debug:$PATH"
 cd ~/src/some-repo
-wf init --name demo
+wf init --name demo              # or `wf init -i` to pick the harnesses, permissions and models
 wf item add --title "Implement feed sync" --priority P1
 wf item list --ready
 wf log

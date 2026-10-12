@@ -37,6 +37,7 @@ anstream = "1.0.0"
 pulldown-cmark = "0.13"
 similar = "3.2"
 textwrap = "0.16"
+cliclack = "0.5"
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }
