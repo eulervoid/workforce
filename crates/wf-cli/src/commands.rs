@@ -19,6 +19,7 @@ use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
 use wf_core::refs::{self, Mention, Token};
 use wf_core::session::{CommitId, SessionRole, Verdict};
 use wf_core::state::{State, Trust};
+use wf_core::validate::OneOf;
 use wf_daemon::proto::Finish;
 use wf_store::{RedbStore, Replica};
 
@@ -349,7 +350,14 @@ fn agent(json: bool, command: AgentCommand, workspace: &mut Workspace) -> anyhow
             let current = workspace
                 .state()
                 .agent(&args.name, principal)
-                .ok_or_else(|| anyhow!("there is no agent `{}`", args.name))?
+                .ok_or_else(|| {
+                    let yours = workspace
+                        .state()
+                        .agents()
+                        .filter(|(id, _)| id.principal == principal)
+                        .map(|(id, _)| id.name.clone());
+                    anyhow!("there is no agent `{}`; {}", args.name, OneOf::new(yours))
+                })?
                 .clone();
             let autonomy = args.autonomy.applied_to(current.autonomy);
             let start = autonomy.start;
@@ -557,12 +565,16 @@ fn item(
                 bail!("the title is empty; nothing was created");
             }
             if let Some(recovery) = &draft.recovery {
-                let known = workspace
+                let policy = &workspace
                     .state()
                     .policy()
-                    .is_some_and(|document| document.policy.recovery_level(recovery).is_some());
-                if !known {
-                    bail!("there is no recovery level `{recovery}`; nothing was created");
+                    .expect("a workforce has a policy")
+                    .policy;
+                if policy.recovery_level(recovery).is_none() {
+                    let valid = OneOf::new(policy.recovery.iter().map(|level| &level.name));
+                    bail!(
+                        "there is no recovery level `{recovery}`, so nothing was created; {valid}"
+                    );
                 }
             }
             let event = workspace.author(EventBody::ItemCreated(ItemCreated {
@@ -596,6 +608,7 @@ fn item(
         }
         ItemCommand::List(args) => {
             let state = workspace.state();
+            check_list_filters(state, &args)?;
             let graph = state.dependency_graph();
             let views = sorted_views(state, args.archived);
             let dispatchable: Option<BTreeSet<String>> = match &args.for_agent {
@@ -969,6 +982,31 @@ impl Sources for Here<'_> {
             .and_then(|git| wf_vcs::VcsAdapter::diff(git, target, commit, &[]).ok())
             .unwrap_or_default()
     }
+}
+
+/// Refuses a `--type` or `--state` that no item can have, instead of listing nothing.
+fn check_list_filters(state: &State, args: &ItemListArgs) -> anyhow::Result<()> {
+    let policy = &state.policy().expect("a workforce has a policy").policy;
+    let types: Vec<_> = match &args.item_type {
+        Some(name) => match policy.type_config(name) {
+            Some(config) => vec![config],
+            None => bail!(
+                "there is no item type `{name}`; {}",
+                OneOf::new(policy.types.keys())
+            ),
+        },
+        None => policy.types.values().collect(),
+    };
+    if let Some(wanted) = &args.state {
+        let states: BTreeSet<&StateName> = types
+            .iter()
+            .flat_map(|config| config.states.iter().map(|state| &state.name))
+            .collect();
+        if !states.contains(wanted) {
+            bail!("no item can be in state `{wanted}`; {}", OneOf::new(states));
+        }
+    }
+    Ok(())
 }
 
 pub(crate) fn review(

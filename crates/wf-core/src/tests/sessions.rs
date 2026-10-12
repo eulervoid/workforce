@@ -492,16 +492,21 @@ mod review_levels {
         if let crate::event::EventBody::ItemCreated(created) = &mut created {
             created.review = Some(ghost.clone());
         }
+        let unknown = || PolicyViolation::UnknownReviewLevel {
+            name: ghost.clone(),
+            valid: crate::validate::OneOf::new(["none", "light", "standard", "critical", "manual"]),
+        };
+        assert_eq!(state.check_policy(&created), Err(unknown()));
         assert_eq!(
-            state.check_policy(&created),
-            Err(PolicyViolation::UnknownReviewLevel(ghost.clone()))
+            unknown().to_string(),
+            "there is no review level `ghost`; valid: `none`, `light`, `standard`, `critical`, `manual`"
         );
         assert_eq!(
             state.check_policy(&edit(
                 task,
                 crate::event::Change::Review(Some(ghost.clone()))
             )),
-            Err(PolicyViolation::UnknownReviewLevel(ghost))
+            Err(unknown())
         );
         assert_eq!(
             state.check_policy(&review_of(task, Some("critical"))),
@@ -531,9 +536,10 @@ mod review_levels {
         assert_eq!(state.check_policy(&recovery(None)), Ok(()));
         assert_eq!(
             state.check_policy(&recovery(Some("ghost"))),
-            Err(PolicyViolation::UnknownRecoveryLevel(
-                "ghost".parse().unwrap()
-            ))
+            Err(PolicyViolation::UnknownRecoveryLevel {
+                name: "ghost".parse().unwrap(),
+                valid: crate::validate::OneOf::new(["none", "standard", "diagnose"]),
+            })
         );
         let session =
             session_id(&fixture.apply(&mut state, 0, 3_000, start_session("coder", task)));

@@ -251,7 +251,7 @@ fn author_checks_follow_the_policy() {
 
     assert!(matches!(
         state.check_policy(&create("nonsense", "x")),
-        Err(PolicyViolation::UnknownType(_))
+        Err(PolicyViolation::UnknownType { .. })
     ));
     assert!(matches!(
         state.check_policy(&moved(task, "answered")),

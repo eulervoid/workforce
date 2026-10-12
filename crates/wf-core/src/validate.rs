@@ -100,17 +100,38 @@ pub enum Invalid {
     PendingFull,
 }
 
+/// The names that would have been accepted, for an error that names one that is not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OneOf(Vec<String>);
+
+impl OneOf {
+    pub fn new<Name: std::fmt::Display>(names: impl IntoIterator<Item = Name>) -> Self {
+        Self(names.into_iter().map(|name| name.to_string()).collect())
+    }
+}
+
+impl std::fmt::Display for OneOf {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        if self.0.is_empty() {
+            return formatter.write_str("there are none");
+        }
+        let names: Vec<String> = self.0.iter().map(|name| format!("`{name}`")).collect();
+        write!(formatter, "valid: {}", names.join(", "))
+    }
+}
+
 /// A rule the author must satisfy before signing, checked against the author's current view.
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum PolicyViolation {
     #[error("unknown item {0}")]
     UnknownItem(ItemId),
-    #[error("there is no item type `{0}`")]
-    UnknownType(TypeName),
-    #[error("type `{type_name}` has no state `{state}`")]
+    #[error("there is no item type `{name}`; {valid}")]
+    UnknownType { name: TypeName, valid: OneOf },
+    #[error("type `{type_name}` has no state `{state}`; {valid}")]
     UnknownState {
         type_name: TypeName,
         state: StateName,
+        valid: OneOf,
     },
     #[error("type `{type_name}` does not have the `{field:?}` field")]
     FieldNotAllowed { type_name: TypeName, field: Field },
@@ -137,8 +158,8 @@ pub enum PolicyViolation {
     SupersedesRequiresDecisions,
     #[error("supersedes cannot be removed")]
     CannotRemoveSupersedes,
-    #[error("there is no lane `{0}`")]
-    UnknownLane(LaneName),
+    #[error("there is no lane `{name}`; {valid}")]
+    UnknownLane { name: LaneName, valid: OneOf },
     #[error(transparent)]
     Body(#[from] BodyError),
     #[error("the item has no step {0}")]
@@ -161,14 +182,14 @@ pub enum PolicyViolation {
     PersonCannotEscalate,
     #[error("{0} was not submitted at that commit, so a verdict on it counts for nothing")]
     StaleReview(ItemId),
-    #[error("there is no review level `{0}`")]
-    UnknownReviewLevel(ReviewName),
+    #[error("there is no review level `{name}`; {valid}")]
+    UnknownReviewLevel { name: ReviewName, valid: OneOf },
     #[error("a `{type_name}` has no review state to wait in during review")]
     ReviewWithoutReviewState { type_name: TypeName },
     #[error("an agent that worked on {0} cannot lower its review level")]
     AgentLowersReview(ItemId),
-    #[error("there is no recovery level `{0}`")]
-    UnknownRecoveryLevel(RecoveryName),
+    #[error("there is no recovery level `{name}`; {valid}")]
+    UnknownRecoveryLevel { name: RecoveryName, valid: OneOf },
     #[error(
         "an agent cannot change the recovery level of {0}; the principal decides how much is retried"
     )]
@@ -779,7 +800,10 @@ impl State {
             if policy.lanes.contains_key(lane) {
                 Ok(())
             } else {
-                Err(PolicyViolation::UnknownLane(lane.clone()))
+                Err(PolicyViolation::UnknownLane {
+                    name: lane.clone(),
+                    valid: OneOf::new(policy.lanes.keys()),
+                })
             }
         };
         let item_of = |id: &ItemId| {
@@ -791,14 +815,20 @@ impl State {
         let type_of = |type_name: &TypeName| {
             policy
                 .type_config(type_name)
-                .ok_or_else(|| PolicyViolation::UnknownType(type_name.clone()))
+                .ok_or_else(|| PolicyViolation::UnknownType {
+                    name: type_name.clone(),
+                    valid: OneOf::new(policy.types.keys()),
+                })
         };
         let known_review = |type_name: &TypeName, review: &Option<ReviewName>| {
             let Some(level) = review else {
                 return Ok(());
             };
             if policy.review_level(level).is_none() {
-                return Err(PolicyViolation::UnknownReviewLevel(level.clone()));
+                return Err(PolicyViolation::UnknownReviewLevel {
+                    name: level.clone(),
+                    valid: OneOf::new(policy.review.iter().map(|level| &level.name)),
+                });
             }
             let reviewable = type_of(type_name)?
                 .first_state(StateCategory::Review)
@@ -939,7 +969,10 @@ impl State {
                         Change::Requires(_) => require_field(type_name, Field::Requires)?,
                         Change::Review(review) => known_review(type_name, review)?,
                         Change::Recovery(Some(level)) if policy.recovery_level(level).is_none() => {
-                            return Err(PolicyViolation::UnknownRecoveryLevel(level.clone()));
+                            return Err(PolicyViolation::UnknownRecoveryLevel {
+                                name: level.clone(),
+                                valid: OneOf::new(policy.recovery.iter().map(|level| &level.name)),
+                            });
                         }
                         Change::Recovery(_) => {}
                     }
@@ -955,6 +988,7 @@ impl State {
                     None => Err(PolicyViolation::UnknownState {
                         type_name: item.item_type().clone(),
                         state: moved.to.clone(),
+                        valid: OneOf::new(config.states.iter().map(|state| &state.name)),
                     }),
                 }
             }
