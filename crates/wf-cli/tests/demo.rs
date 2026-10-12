@@ -295,7 +295,7 @@ fn agents_and_policy() {
     assert_eq!(agents[0]["model"], "big");
     assert_eq!(agents[0]["capabilities"], serde_json::json!(["rust"]));
     assert_eq!(agents[0]["start"], "manual");
-    assert_eq!(agents[0]["permissions"], "ask");
+    assert_eq!(agents[0]["permissions"], "allow");
     wf.run(&[
         "agent",
         "edit",
@@ -310,7 +310,7 @@ fn agents_and_policy() {
     let agents = wf.json(&["agent", "list"]);
     assert_eq!(agents[0]["model"], "big");
     assert_eq!(agents[0]["start"], "auto");
-    assert_eq!(agents[0]["permissions"], "ask");
+    assert_eq!(agents[0]["permissions"], "allow");
     assert_eq!(agents[0]["park_timeout"], "30m");
     assert_eq!(agents[0]["max_duration"], "1h");
     assert!(

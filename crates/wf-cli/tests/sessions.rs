@@ -47,6 +47,9 @@ struct World {
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
+/// The fake agents run without Fence, so what they are allowed to do is asked.
+const SANDBOX_OFF: &str = "[sandbox]\nkind = \"off\"\n\n";
+
 impl World {
     /// One agent `coder` that follows `script`.
     async fn new(script: &str) -> Self {
@@ -84,7 +87,17 @@ impl World {
             wf.run(&["agent", "add", name, "--harness", &harness]);
             scripts.insert(harness, path);
         }
+        std::fs::write(wf.root.path().join("config.toml"), SANDBOX_OFF).unwrap();
         WorldSetup { wf, scripts }
+    }
+
+    /// Writes the machine config of the daemon: `text`, with the fake agents unsandboxed.
+    fn machine_config(&self, text: &str) {
+        std::fs::write(
+            self.wf.root.path().join("config.toml"),
+            format!("{SANDBOX_OFF}{text}"),
+        )
+        .unwrap();
     }
 
     fn wf(&self, args: &[&str]) -> Value {
@@ -1203,8 +1216,7 @@ say done
 wf work release --note done
 ";
     let world = World::new(script).await;
-    std::fs::write(
-        world.wf.root.path().join("config.toml"),
+    world.machine_config(
         r#"
 [[permissions.decider]]
 kind = "rules"
@@ -1213,8 +1225,7 @@ kind = "rules"
 kind = "hook"
 command = ["sh", "-c", "grep -q '\"title\":\"Edit file\"' && echo '{\"permission\":\"deny\",\"reason\":\"no edits today\"}'"]
 "#,
-    )
-    .unwrap();
+    );
     let item = world.wf.add(&["--title", "Wants to edit"]);
     start_session(&world, &item);
     world.ended_session().await;
@@ -1242,11 +1253,7 @@ async fn an_agent_of_the_workforce_can_decide() {
         ),
     ])
     .await;
-    std::fs::write(
-        world.wf.root.path().join("config.toml"),
-        "[[permissions.decider]]\nkind = \"agent\"\nagent = \"judge\"\n",
-    )
-    .unwrap();
+    world.machine_config("[[permissions.decider]]\nkind = \"agent\"\nagent = \"judge\"\n");
     let item = world.wf.add(&["--title", "Wants to edit"]);
     start_session(&world, &item);
     world.ended_session().await;
@@ -1265,11 +1272,9 @@ async fn an_agent_of_the_workforce_can_decide() {
 #[tokio::test(flavor = "multi_thread")]
 async fn a_request_every_decider_passes_on_says_why_in_the_inbox() {
     let world = World::new("permission\nsay done\nhang\n").await;
-    std::fs::write(
-        world.wf.root.path().join("config.toml"),
+    world.machine_config(
         "[[permissions.decider]]\nkind = \"hook\"\ncommand = [\"sh\", \"-c\", \"echo '{\\\"permission\\\":\\\"ask\\\",\\\"reason\\\":\\\"not sure\\\"}'\"]\n",
-    )
-    .unwrap();
+    );
     let item = world.wf.add(&["--title", "Unsure"]);
     start_session(&world, &item);
     world

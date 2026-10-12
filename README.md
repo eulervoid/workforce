@@ -59,8 +59,22 @@ block; use `--full` for everything. Use `--raw` for unrendered markdown with pla
 layout. Both options also work with `session start --watch`. Markdown is buffered until a
 paragraph or event boundary; raw mode streams text chunks immediately.
 
+## Sandbox
+The daemon runs every agent in [Fence](https://github.com/fencesandbox/fence), which has to be
+installed: an agent may write only in its worktree and where it needs to commit and talk to the
+daemon, and reach model APIs and package registries. Inside it, agents are allowed what they ask by
+default. The machine config can add to what Fence allows, or turn the sandbox off; then agents run
+with your privileges, and those set to `allow` are asked instead.
+```toml
+[sandbox]
+kind = "fence"                   # or "off"
+allow_write = ["/opt/cache"]
+allow_domains = ["*.example.com"]
+```
+
 ## Permission requests
-An agent with `--permissions ask` asks before its harness runs a tool. The request goes through the
+An agent with `--permissions ask`, or any agent on a machine without a sandbox, asks before its
+harness runs a tool. The request goes through the
 deciders of this machine's config, `~/.config/workforce/config.toml` (or `$XDG_CONFIG_HOME`), in
 their order; what all of them pass on waits for you in `wf watch` and `wf inbox`. Without a config,
 the built-in rules decide alone: a session may run its own `wf` commands.

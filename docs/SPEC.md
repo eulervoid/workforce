@@ -140,7 +140,8 @@ start = "manual"          # auto: the dispatcher starts sessions; manual: only `
 nudges = 3                # "continue" prompts in a row without a new commit before giving up
 park_timeout = "2h"       # how long a session waits on a blocker or dependency before it ends
 max_duration = "4h"       # optional limit per session
-permissions = "ask"       # allow | ask | deny: answers to the harness's permission requests
+permissions = "allow"     # allow | ask | deny: answers to the harness's permission requests; a machine
+                          # that runs agents without a sandbox asks instead of allowing
 instructions = "..."      # optional: told in every brief, before the item (how strictly to review, ...)
 ```
 

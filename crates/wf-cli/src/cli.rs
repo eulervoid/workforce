@@ -440,7 +440,8 @@ pub struct AutonomyArgs {
     /// `auto` lets the dispatcher start the agent on ready items.
     #[arg(long)]
     pub start: Option<StartMode>,
-    /// `allow`, `ask` or `deny` the permission requests of its sessions.
+    /// `allow` (the default), `ask` or `deny` the permission requests of its sessions. A machine
+    /// that runs agents without a sandbox asks instead of allowing.
     #[arg(long)]
     pub permissions: Option<PermissionMode>,
     /// Turns in a row without a commit before a session is released.

@@ -5,7 +5,7 @@ use std::path::Path;
 use serde_json::json;
 use wf_harness::AcpAgentConfig;
 
-use crate::machine_config::SandboxConfig;
+use crate::machine_config::FenceConfig;
 
 /// What the agent is let to touch besides its worktree.
 pub(crate) struct Access<'a> {
@@ -18,7 +18,7 @@ pub(crate) struct Access<'a> {
 
 /// `agent`, started by Fence in the worktree. The settings Fence reads are written to `settings`.
 pub(crate) fn wrap(
-    config: &SandboxConfig,
+    config: &FenceConfig,
     access: &Access<'_>,
     agent: &AcpAgentConfig,
     settings: &Path,
@@ -68,7 +68,7 @@ mod tests {
             .arg("--flag")
             .env("WF_SESSION", "s1");
         let wrapped = wrap(
-            &SandboxConfig {
+            &FenceConfig {
                 allow_write: vec!["/opt/cache".into()],
                 allow_domains: vec!["example.com".to_string()],
             },

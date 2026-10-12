@@ -24,7 +24,7 @@ use wf_store::{AuthorError, RedbStore};
 use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name};
 
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
-use crate::machine_config::MachineConfig;
+use crate::machine_config::{MachineConfig, MachineConfigError, SandboxConfig};
 use crate::proto::Finish;
 use crate::{Daemon, Loaded, StorageClosed};
 
@@ -57,6 +57,13 @@ pub enum SessionError {
     Authoring(#[from] AuthorError),
     #[error(transparent)]
     Storage(#[from] StorageClosed),
+    #[error(transparent)]
+    MachineConfig(#[from] MachineConfigError),
+    #[error(
+        "agents run in Fence on this machine, but `fence` is not on PATH; install it, or set \
+         `kind = \"off\"` under `[sandbox]` in the machine config to run them without a sandbox"
+    )]
+    NoFence,
     #[error("{path}: {source}")]
     Io {
         path: PathBuf,
@@ -190,6 +197,7 @@ struct Run {
     park_timeout: Duration,
     max_duration: Option<Duration>,
     permissions: Arc<dyn Permissions>,
+    sandbox: SandboxConfig,
 }
 
 /// How the task of a session ends.
@@ -202,6 +210,14 @@ enum End {
 impl Daemon {
     pub(crate) async fn snapshot(&self, loaded: &Loaded) -> Result<State, StorageClosed> {
         loaded.storage.with(|replica| replica.state().clone()).await
+    }
+
+    /// The config of this machine, read anew so that edits apply to the next session.
+    fn machine_config(&self) -> Result<MachineConfig, MachineConfigError> {
+        match &self.config.machine_config {
+            Some(path) => MachineConfig::load(path),
+            None => Ok(MachineConfig::default()),
+        }
     }
 
     /// Writes an event as the device. `actor` says on whose behalf.
@@ -366,6 +382,11 @@ impl Daemon {
         let harness = self
             .harness_command(&definition.harness)
             .ok_or_else(|| SessionError::UnknownHarness(definition.harness.clone()))?;
+        let sandbox = self.machine_config()?.sandbox;
+        match &sandbox {
+            SandboxConfig::Fence(_) if !on_path("fence") => return Err(SessionError::NoFence),
+            SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
+        }
         let item_context = match state.item(item).ok_or(SessionError::UnknownItem(item))? {
             ItemView::Live(live) => {
                 let policy = &state.policy().expect("a workforce has a policy").policy;
@@ -466,7 +487,7 @@ impl Daemon {
             source,
         })?;
         let autonomy = definition.autonomy;
-        let permissions: Arc<dyn Permissions> = match autonomy.permissions {
+        let permissions: Arc<dyn Permissions> = match sandbox.permissions(autonomy.permissions) {
             wf_core::autonomy::PermissionMode::Allow => Arc::new(PermissionMode::Allow),
             wf_core::autonomy::PermissionMode::Deny => Arc::new(PermissionMode::Deny),
             wf_core::autonomy::PermissionMode::Ask => Arc::new(Deciding {
@@ -519,9 +540,20 @@ impl Daemon {
             park_timeout: autonomy.park_timeout,
             max_duration: autonomy.max_duration,
             permissions,
+            sandbox,
+        };
+        let isolation = match (&run.sandbox, autonomy.permissions) {
+            (SandboxConfig::Fence(_), _) => "",
+            (SandboxConfig::Off {}, wf_core::autonomy::PermissionMode::Allow) => {
+                " without a sandbox, so what it may do is asked"
+            }
+            (
+                SandboxConfig::Off {},
+                wf_core::autonomy::PermissionMode::Ask | wf_core::autonomy::PermissionMode::Deny,
+            ) => " without a sandbox",
         };
         eprintln!(
-            "session {}: {} started on item {}",
+            "session {}: {} started on item {}{isolation}",
             session.short(),
             run.agent,
             item.short()
@@ -995,14 +1027,9 @@ async fn run_session(
 /// The agent as the machine config says to run it: in a sandbox, or as it is. A config that is
 /// broken stops the session, so that an agent never runs unconfined by mistake.
 fn sandboxed(daemon: &Daemon, run: &Run, agent: AcpAgentConfig) -> Result<AcpAgentConfig, String> {
-    let Some(path) = &daemon.config.machine_config else {
-        return Ok(agent);
-    };
-    let Some(config) = MachineConfig::load(path)
-        .map_err(|error| error.to_string())?
-        .sandbox
-    else {
-        return Ok(agent);
+    let config = match &run.sandbox {
+        SandboxConfig::Fence(config) => config,
+        SandboxConfig::Off {} => return Ok(agent),
     };
     let access = crate::sandbox::Access {
         worktree: &run.worktree,
@@ -1013,7 +1040,13 @@ fn sandboxed(daemon: &Daemon, run: &Run, agent: AcpAgentConfig) -> Result<AcpAge
         .workforce_directory(run.workforce)
         .join("sandbox")
         .join(format!("{}.json", run.session));
-    crate::sandbox::wrap(&config, &access, &agent, &settings).map_err(|error| error.to_string())
+    crate::sandbox::wrap(config, &access, &agent, &settings).map_err(|error| error.to_string())
+}
+
+/// Whether `program` is a file in one of the directories of `PATH`.
+fn on_path(program: &str) -> bool {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .any(|directory| directory.join(program).is_file())
 }
 
 async fn drive(

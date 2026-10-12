@@ -12,7 +12,7 @@ expression: "Envelope::new(view::agent_views(&scenario.state))"
       "capabilities": [],
       "lanes": [],
       "start": "manual",
-      "permissions": "ask",
+      "permissions": "allow",
       "nudges": 3,
       "park_timeout": "2h",
       "max_duration": null,

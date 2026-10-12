@@ -93,14 +93,15 @@ pub struct Autonomy {
 }
 
 impl Default for Autonomy {
-    /// The cautious choice: nothing starts or is allowed without a person.
+    /// Nothing starts without a person. Inside its sandbox an agent may do anything; a machine that
+    /// runs agents without one asks instead.
     fn default() -> Self {
         Self {
             start: StartMode::Manual,
             nudges: 3,
             park_timeout: Duration::from_secs(2 * 60 * 60),
             max_duration: None,
-            permissions: PermissionMode::Ask,
+            permissions: PermissionMode::Allow,
         }
     }
 }

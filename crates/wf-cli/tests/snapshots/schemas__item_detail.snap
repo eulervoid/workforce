@@ -5,7 +5,7 @@ expression: "Envelope::new(&detail)"
 {
   "schema": 2,
   "data": {
-    "id": "e6cvup4k6z2ntcyiyvim5qkc76kb3s5ff756eabrp3byorf4n62a",
+    "id": "rymr6r24j7pk44t3m4m2mlnoido5s3d2oknqgfdacgviyndo6q6a",
     "type": "task",
     "title": "Implement feed sync",
     "state": "open",
@@ -13,7 +13,7 @@ expression: "Envelope::new(&detail)"
     "readiness": "blocked",
     "blocked_by": [
       {
-        "id": "socku2pyduljzcmqkhanbqmtk4buoncht2paahygwtnifoutha7q",
+        "id": "asanvnp3fbyft3yjqf3gdqjf5jst5h2iu5ht3ntbnwc4c6wuzy5q",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -28,7 +28,7 @@ expression: "Envelope::new(&detail)"
     "body": [
       {
         "kind": "markdown",
-        "text": "blocked on #socku2, ask @coder"
+        "text": "blocked on #asanvn, ask @coder"
       }
     ],
     "author": "@joshua",
@@ -41,7 +41,7 @@ expression: "Envelope::new(&detail)"
     "requires": [],
     "depends_on": [
       {
-        "id": "socku2pyduljzcmqkhanbqmtk4buoncht2paahygwtnifoutha7q",
+        "id": "asanvnp3fbyft3yjqf3gdqjf5jst5h2iu5ht3ntbnwc4c6wuzy5q",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -52,7 +52,7 @@ expression: "Envelope::new(&detail)"
     "supersedes": null,
     "references": [
       {
-        "id": "socku2pyduljzcmqkhanbqmtk4buoncht2paahygwtnifoutha7q",
+        "id": "asanvnp3fbyft3yjqf3gdqjf5jst5h2iu5ht3ntbnwc4c6wuzy5q",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -86,7 +86,7 @@ expression: "Envelope::new(&detail)"
         "at": "1970-01-01T00:00:08Z",
         "by": "@joshua",
         "kind": "depends_on",
-        "summary": "now depends on #socku2",
+        "summary": "now depends on #asanvn",
         "comment": null,
         "text": null
       },
@@ -96,12 +96,12 @@ expression: "Envelope::new(&detail)"
         "kind": "comment",
         "summary": "comment",
         "comment": {
-          "id": "g6bqb6iqcxwb7z473d2ddknrsbwjgchsf3h6hraq6fqih72nanrq",
-          "short": "g6bq",
+          "id": "jjmbtsznrxgfy4hivqetwvq5gtutrjm4kcsw7jmvqpm7lboetnja",
+          "short": "jjmb",
           "kind": "comment",
           "by": "@joshua",
           "at": "1970-01-01T00:00:09Z",
-          "text": "see #socku2, @joshua please check",
+          "text": "see #asanvn, @joshua please check",
           "session": null,
           "step": null,
           "resolves": [],

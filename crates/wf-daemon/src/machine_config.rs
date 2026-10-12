@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Deserializer};
 use url::Url;
+use wf_core::autonomy::PermissionMode;
 use wf_core::name::AgentName;
 
 #[derive(Debug, thiserror::Error)]
@@ -32,9 +33,36 @@ pub enum MachineConfigError {
 pub struct MachineConfig {
     #[serde(default)]
     pub permissions: PermissionsConfig,
-    /// Without it, agents run with the privileges of the daemon.
     #[serde(default)]
-    pub sandbox: Option<SandboxConfig>,
+    pub sandbox: SandboxConfig,
+}
+
+/// How agents are isolated on this machine.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum SandboxConfig {
+    Fence(FenceConfig),
+    /// Agents run with the privileges of the daemon, so an agent that is allowed everything is
+    /// asked instead. A struct variant, so that unknown fields are refused.
+    Off {},
+}
+
+impl Default for SandboxConfig {
+    fn default() -> Self {
+        SandboxConfig::Fence(FenceConfig::default())
+    }
+}
+
+impl SandboxConfig {
+    /// What the permission mode of an agent amounts to here: allowing everything is only safe
+    /// inside a sandbox.
+    pub fn permissions(&self, mode: PermissionMode) -> PermissionMode {
+        match (self, mode) {
+            (SandboxConfig::Off {}, PermissionMode::Allow) => PermissionMode::Ask,
+            (SandboxConfig::Off {}, PermissionMode::Ask | PermissionMode::Deny)
+            | (SandboxConfig::Fence(_), _) => mode,
+        }
+    }
 }
 
 /// Runs agents in [Fence](https://github.com/fencesandbox/fence), which has to be installed. An
@@ -43,7 +71,7 @@ pub struct MachineConfig {
 /// denied. What this adds is on top of that.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct SandboxConfig {
+pub struct FenceConfig {
     /// More paths the agent may write to.
     #[serde(default)]
     pub allow_write: Vec<PathBuf>,
@@ -237,6 +265,31 @@ mod tests {
             MachineConfig::parse("").ok().unwrap().permissions.deciders,
             [DeciderConfig::Rules {}]
         );
+    }
+
+    #[test]
+    fn agents_run_in_fence_unless_the_sandbox_is_off() {
+        let default = MachineConfig::parse("").ok().unwrap().sandbox;
+        assert_eq!(default, SandboxConfig::Fence(FenceConfig::default()));
+        assert_eq!(
+            default.permissions(PermissionMode::Allow),
+            PermissionMode::Allow
+        );
+
+        let text = "[sandbox]\nkind = \"fence\"\nallow_domains = [\"example.com\"]\n";
+        let SandboxConfig::Fence(fence) = MachineConfig::parse(text).ok().unwrap().sandbox else {
+            panic!("a fence sandbox");
+        };
+        assert_eq!(fence.allow_domains, ["example.com"]);
+
+        let off = MachineConfig::parse("[sandbox]\nkind = \"off\"\n")
+            .ok()
+            .unwrap()
+            .sandbox;
+        assert_eq!(off, SandboxConfig::Off {});
+        assert_eq!(off.permissions(PermissionMode::Allow), PermissionMode::Ask);
+        assert_eq!(off.permissions(PermissionMode::Deny), PermissionMode::Deny);
+        assert!(MachineConfig::parse("[sandbox]\nkind = \"off\"\nallow_domains = []\n").is_err());
     }
 
     #[test]

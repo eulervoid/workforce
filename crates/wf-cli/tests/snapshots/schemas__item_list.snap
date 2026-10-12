@@ -6,29 +6,29 @@ expression: "Envelope::new(&all)"
   "schema": 2,
   "data": [
     {
-      "id": "e6cvup4k6z2ntcyiyvim5qkc76kb3s5ff756eabrp3byorf4n62a",
+      "id": "asanvnp3fbyft3yjqf3gdqjf5jst5h2iu5ht3ntbnwc4c6wuzy5q",
       "type": "task",
-      "title": "Implement feed sync",
+      "title": "Pick a hash for event ids",
       "state": "open",
-      "priority": "P1",
-      "readiness": "blocked",
-      "blocked_by": [
+      "priority": "P2",
+      "readiness": "ready",
+      "blocked_by": [],
+      "blocking": [
         {
-          "id": "socku2pyduljzcmqkhanbqmtk4buoncht2paahygwtnifoutha7q",
+          "id": "rymr6r24j7pk44t3m4m2mlnoido5s3d2oknqgfdacgviyndo6q6a",
           "type": "task",
-          "title": "Pick a hash for event ids",
+          "title": "Implement feed sync",
           "state": "open",
-          "priority": "P2"
+          "priority": "P1"
         }
       ],
-      "blocking": [],
       "labels": [],
       "lane": "default",
       "steps": null,
       "archived": false
     },
     {
-      "id": "is3b7cqogb6fkcl3zf4ex3dcuswm3gr4fsq7hweh3jf4n4edrsta",
+      "id": "asn4vspftsiu6dbcodudwqqhjqivyke2dbiwjb6eahn5iodqjeta",
       "type": "task",
       "title": "Write spec",
       "state": "done",
@@ -42,22 +42,22 @@ expression: "Envelope::new(&all)"
       "archived": true
     },
     {
-      "id": "socku2pyduljzcmqkhanbqmtk4buoncht2paahygwtnifoutha7q",
+      "id": "rymr6r24j7pk44t3m4m2mlnoido5s3d2oknqgfdacgviyndo6q6a",
       "type": "task",
-      "title": "Pick a hash for event ids",
+      "title": "Implement feed sync",
       "state": "open",
-      "priority": "P2",
-      "readiness": "ready",
-      "blocked_by": [],
-      "blocking": [
+      "priority": "P1",
+      "readiness": "blocked",
+      "blocked_by": [
         {
-          "id": "e6cvup4k6z2ntcyiyvim5qkc76kb3s5ff756eabrp3byorf4n62a",
+          "id": "asanvnp3fbyft3yjqf3gdqjf5jst5h2iu5ht3ntbnwc4c6wuzy5q",
           "type": "task",
-          "title": "Implement feed sync",
+          "title": "Pick a hash for event ids",
           "state": "open",
-          "priority": "P1"
+          "priority": "P2"
         }
       ],
+      "blocking": [],
       "labels": [],
       "lane": "default",
       "steps": null,
