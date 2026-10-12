@@ -540,6 +540,44 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_merge_that_git_refuses_waits_in_review_and_is_tried_again() {
+    let script = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Add hello"]);
+    // With main not checked out the merge only moves the ref, which the lock refuses.
+    git(&world.wf.repository, &["checkout", "--quiet", "--detach"]);
+    let lock = world.wf.repository.join(".git/refs/heads/main.lock");
+    std::fs::write(&lock, "").unwrap();
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted");
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "in_review", "not left active: {shown}");
+    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
+        note["text"]
+            .as_str()
+            .is_some_and(|text| text.starts_with("Could not merge into main"))
+    }));
+
+    std::fs::remove_file(&lock).unwrap();
+    world.wf.run(&["comment", short(&item), "the lock is gone"]);
+    world
+        .wait("the merge tried again", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    let merged = std::process::Command::new("git")
+        .args(["show", "main:hello.txt"])
+        .current_dir(&world.wf.repository)
+        .output()
+        .unwrap();
+    assert!(merged.status.success(), "hello.txt is on main");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_session_left_live_by_an_earlier_daemon_is_interrupted_when_the_next_one_starts() {
     let setup = World::without_daemon(&[("coder", "")]);
     let item = setup.wf.add(&["--title", "Orphaned"]);

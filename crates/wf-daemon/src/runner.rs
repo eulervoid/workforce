@@ -503,17 +503,41 @@ impl Daemon {
             )
             .await?;
         let session = SessionId::from(started.id());
-        let state = self.snapshot(loaded).await?;
-        if let Some((item, to)) = state.start_move(session) {
-            self.move_item(loaded, principal, item, to, None, Some(session))
-                .await?;
+        // Once the session is in the log, a failure to set it up ends it: otherwise it would hold
+        // the item and a slot until the next daemon starts.
+        let prepared = async {
+            let state = self.snapshot(loaded).await?;
+            if let Some((item, to)) = state.start_move(session) {
+                self.move_item(loaded, principal, item, to, None, Some(session))
+                    .await?;
+            }
+            let transcripts = self.workforce_directory(workforce).join("transcripts");
+            std::fs::create_dir_all(&transcripts).map_err(|source| SessionError::Io {
+                path: transcripts.clone(),
+                source,
+            })?;
+            Ok::<_, SessionError>(transcripts)
         }
-
-        let transcripts = self.workforce_directory(workforce).join("transcripts");
-        std::fs::create_dir_all(&transcripts).map_err(|source| SessionError::Io {
-            path: transcripts.clone(),
-            source,
-        })?;
+        .await;
+        let transcripts = match prepared {
+            Ok(transcripts) => transcripts,
+            Err(error) => {
+                let because = format!(
+                    "the daemon could not set it up: {}",
+                    wf_core::report::report(&error)
+                );
+                if let Err(ending) = self
+                    .finish_session(workforce, loaded, session, Finish::Failed { because })
+                    .await
+                {
+                    eprintln!(
+                        "could not end session {session} after it failed to start: {}",
+                        wf_core::report::report(&ending)
+                    );
+                }
+                return Err(error);
+            }
+        };
         let autonomy = definition.autonomy;
         let permissions: Arc<dyn Permissions> = match sandbox.permissions(autonomy.permissions) {
             wf_core::autonomy::PermissionMode::Allow => Arc::new(PermissionMode::Allow),
@@ -894,9 +918,6 @@ impl Daemon {
             return Ok(());
         }
         let principal = self.principal_of_device(&state)?;
-        let Some(repository) = self.repository_of(workforce) else {
-            return Ok(());
-        };
         let ItemView::Live(live) = state.item(item).ok_or(SessionError::UnknownItem(item))? else {
             return Err(SessionError::Archived(item));
         };
@@ -919,12 +940,44 @@ impl Daemon {
             )
         };
 
+        // A merge that cannot be made leaves the item in its review state, where the dispatcher
+        // tries again, never in its active state without a session.
+        let cannot_merge = |why: String| {
+            let note = format!("Could not merge into {target}: {why}. The daemon tries again.");
+            let (comment, review) = (&comment, review.clone());
+            async move {
+                if attempt != Attempt::Retry {
+                    comment(note).await?;
+                    if let Some(review) = review {
+                        self.move_item(loaded, principal, item, review, None, attempt.by_session())
+                            .await?;
+                    }
+                }
+                Ok::<_, SessionError>(())
+            }
+        };
+        let Some(repository) = self.repository_of(workforce) else {
+            return cannot_merge(
+                "the daemon does not know the repository; run any `wf` command in its main checkout"
+                    .to_string(),
+            )
+            .await;
+        };
         let mut outcome = MergeOutcome::TargetMoved;
         for _ in 0..MERGE_ATTEMPTS {
             let (repository, target, message) =
                 (repository.clone(), target.clone(), message.clone());
-            outcome = blocking(move || GitCli::open(&repository)?.merge(&target, commit, &message))
-                .await??;
+            let merged =
+                blocking(move || GitCli::open(&repository)?.merge(&target, commit, &message))
+                    .await
+                    .and_then(|merged| merged.map_err(SessionError::from));
+            outcome = match merged {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    cannot_merge(wf_core::report::report(&error)).await?;
+                    return Err(error);
+                }
+            };
             if outcome != MergeOutcome::TargetMoved {
                 break;
             }
