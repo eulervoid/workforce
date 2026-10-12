@@ -649,6 +649,46 @@ fn a_second_daemon_is_refused() {
     daemon.stop();
 }
 
+#[test]
+fn an_export_restores_a_store_that_was_lost() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&["init", "--name", "demo"]);
+    let item = sandbox.add(&["--title", "Keep me", "--priority", "P1"]);
+    sandbox.run(&["comment", short(&item), "worth keeping"]);
+    let list = sandbox.json(&["item", "list"]);
+    let log = sandbox.json(&["log"]);
+
+    let export = sandbox.run(&["export"]);
+    let lines: Vec<serde_json::Value> = export
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    assert_eq!(lines.len(), log["events"].as_array().unwrap().len());
+    assert_eq!(lines[0]["kind"], "Genesis");
+    assert!(
+        lines
+            .iter()
+            .any(|line| line["content"]["body"]["title"] == "Keep me"),
+        "{export}"
+    );
+    let file = sandbox.root.path().join("export.jsonl");
+    std::fs::write(&file, &export).unwrap();
+
+    let id = sandbox.json(&["status"])["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let store = sandbox.data.join("workforce").join(&id).join("store.redb");
+    std::fs::rename(&store, store.with_extension("lost")).unwrap();
+    let imported = sandbox.json(&["import", file.to_str().unwrap()]);
+    assert_eq!(imported["applied"], lines.len(), "{imported}");
+    assert_eq!(sandbox.json(&["item", "list"]), list);
+    assert_eq!(sandbox.json(&["log"]), log);
+
+    let again = sandbox.json(&["import", file.to_str().unwrap()]);
+    assert_eq!(again["applied"], 0, "{again}");
+}
+
 /// Stops a daemon started with `wf daemon start`, also when the test fails.
 struct BackgroundDaemon<'a>(&'a Sandbox);
 

@@ -28,7 +28,9 @@ pub struct Cli {
 /// How the commands are grouped in `wf --help`, a blank line between groups. Clap lists
 /// subcommands in one flat block.
 const COMMAND_GROUPS: &[&[&str]] = &[
-    &["init", "status", "policy", "log", "members", "fork"],
+    &[
+        "init", "status", "policy", "log", "export", "import", "members", "fork",
+    ],
     &["item", "comment", "mentions", "review", "inbox", "watch"],
     &["agent", "harness", "session", "work", "permissions"],
     &["daemon", "sync", "invite", "join", "device"],
@@ -142,6 +144,14 @@ pub enum Command {
         /// Ignore the snapshot and fold the whole log again.
         #[arg(long)]
         refold: bool,
+    },
+    /// Print every event of the log as JSON lines, for backups and for reading with `jq`.
+    Export,
+    /// Add the events of a file `wf export` wrote to the store of their workforce on this
+    /// machine, creating it if there is none. The daemon must not run.
+    Import {
+        /// The file `wf export` wrote.
+        file: PathBuf,
     },
 }
 

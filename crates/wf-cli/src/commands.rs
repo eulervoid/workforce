@@ -103,6 +103,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             ..
         } => crate::fork::accept(json, data, cwd, &id, relay.as_deref()),
         Command::Daemon(command) => crate::daemon::daemon(json, command, data),
+        Command::Import { file } => crate::export::import(json, &file, &data),
         Command::Permissions(command) => crate::permissions::permissions(json, command, cwd),
         Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
         Command::Status { refold } => {
@@ -128,6 +129,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Init(_)
                 | Command::Join(_)
                 | Command::Daemon(_)
+                | Command::Import { .. }
                 | Command::Permissions(_)
                 | Command::Harness(_)
                 | Command::Status { .. } => unreachable!("handled above"),
@@ -147,6 +149,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Mentions { target } => mentions(json, &workspace, &target),
                 Command::Policy(command) => policy(json, command, &mut workspace),
                 Command::Log => log(json, mode, &workspace),
+                Command::Export => crate::export::export(&workspace),
                 Command::Device(command) => crate::devices::device(json, command, &mut workspace),
                 Command::Members => crate::devices::members(json, &workspace),
                 Command::Fork {

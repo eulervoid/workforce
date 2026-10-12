@@ -133,6 +133,11 @@ agent run `wf daemon run`, which stays in the foreground and stops on SIGTERM. A
 `wf` the daemon made when it started, so rebuilding `wf` does not change what running agents call;
 restart the daemon to give them the new one.
 
+`wf export > backup.jsonl` writes the log as JSON lines, one event per line, readable with `jq`
+(`content` is the event, `event` its signed encoding). `wf import backup.jsonl` adds those events to
+the store of their workforce on this machine, or creates it: for a `store.redb` that no longer
+decodes, move it away and import. The keys next to the store are not part of an export.
+
 `just check` runs formatting, clippy and all tests. Property tests default to 128 cases; for the
 10k-case run use `PROPTEST_CASES=10000 cargo test --release -p wf-core`. The 100k-event startup check
 is `cargo test --release -p wf-store -- --ignored --nocapture`, and the 100k-event join over loopback

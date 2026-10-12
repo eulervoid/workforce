@@ -336,6 +336,35 @@ impl EventBody {
         }
     }
 
+    /// Serializes what the body carries, without the tag of the wire form: for reading, such as
+    /// in `wf export`, not for hashing or signing.
+    pub fn serialize_payload<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        match self {
+            EventBody::Genesis(body) => body.serialize(serializer),
+            EventBody::PolicySet(body) => body.serialize(serializer),
+            EventBody::AgentDefined(body) => body.serialize(serializer),
+            EventBody::InviteCreated(body) => body.serialize(serializer),
+            EventBody::DeviceBound(body) => body.serialize(serializer),
+            EventBody::DeviceProfile(body) => body.serialize(serializer),
+            EventBody::ForkAnnounced(body) => body.serialize(serializer),
+            EventBody::ItemCreated(body) => body.serialize(serializer),
+            EventBody::ItemEdited(body) => body.serialize(serializer),
+            EventBody::ItemMoved(body) => body.serialize(serializer),
+            EventBody::ItemLinked(body) => body.serialize(serializer),
+            EventBody::ItemArchived(body) => body.serialize(serializer),
+            EventBody::ItemUnarchived(body) => body.serialize(serializer),
+            EventBody::Comment(body) => body.serialize(serializer),
+            EventBody::SessionStarted(body) => body.serialize(serializer),
+            EventBody::SessionEnded(body) => body.serialize(serializer),
+            EventBody::Review(body) => body.serialize(serializer),
+            EventBody::Merged(body) => body.serialize(serializer),
+            EventBody::Unknown { tag, payload } => (tag, payload).serialize(serializer),
+        }
+    }
+
     fn to_raw(&self) -> Result<RawBody, EncodingError> {
         let (tag, payload) = match self {
             EventBody::Genesis(body) => (tag::GENESIS, encoding::encode(body)?),
