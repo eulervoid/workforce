@@ -49,7 +49,8 @@ mod style {
     pub const BOLD: Style = Style::new().bold();
     pub const DIM: Style = Style::new().dimmed();
     pub const ID: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
-    pub const PERSON: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Magenta)));
+    pub const PRINCIPAL: Style =
+        Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Magenta)));
     pub const AGENT: Style =
         Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::BrightBlue)));
     pub const WARNING: Style = Style::new()
@@ -62,7 +63,11 @@ mod style {
 
     /// Principals are `@name`; agents are `@name/agent`, with a session after that.
     pub fn actor(handle: &str) -> Style {
-        if handle.contains('/') { AGENT } else { PERSON }
+        if handle.contains('/') {
+            AGENT
+        } else {
+            PRINCIPAL
+        }
     }
 
     pub fn paint(style: Style, text: impl std::fmt::Display) -> String {

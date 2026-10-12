@@ -16,8 +16,8 @@ pub enum WaitsOn {
     Supervisor,
     /// The blocker mentions this agent first.
     Agent(AgentId),
-    /// The blocker mentions this person first, or no one is named and there is no supervisor.
-    Person(PrincipalKey),
+    /// The blocker mentions this principal first, or no one is named and there is no supervisor.
+    Principal(PrincipalKey),
 }
 
 /// An open blocker of an item and who it waits on.
@@ -33,7 +33,7 @@ fn supervision() -> LaneName {
 }
 
 impl State {
-    /// Who the open blocker `comment` on `item` waits on: the first person or agent it mentions,
+    /// Who the open blocker `comment` on `item` waits on: the first principal or agent it mentions,
     /// otherwise a supervisor, otherwise the principal of whoever wrote it.
     pub fn waits_on(&self, comment: &Comment) -> WaitsOn {
         let resolver = self.resolver();
@@ -43,9 +43,9 @@ impl State {
         });
         match mentioned {
             Some(MentionTarget::Agent(agent)) => WaitsOn::Agent(agent),
-            Some(MentionTarget::Principal(principal)) => WaitsOn::Person(principal),
+            Some(MentionTarget::Principal(principal)) => WaitsOn::Principal(principal),
             None if self.has_supervisor() => WaitsOn::Supervisor,
-            None => WaitsOn::Person(comment.by.principal()),
+            None => WaitsOn::Principal(comment.by.principal()),
         }
     }
 
@@ -76,7 +76,7 @@ impl State {
                 .agent(&agent.name, agent.principal)
                 .is_some_and(|definition| definition.lanes.contains(&supervision())),
             WaitsOn::Agent(waited_on) => waited_on == agent,
-            WaitsOn::Person(_) => false,
+            WaitsOn::Principal(_) => false,
         }
     }
 

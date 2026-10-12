@@ -16,7 +16,7 @@ pub enum Waiting {
     /// Moving it on decides.
     Proposal,
     /// The review of the work has reached a step for a person: `wf review`.
-    HumanReview { commit: Option<CommitId> },
+    PrincipalReview { commit: Option<CommitId> },
     /// The work is ready to merge, but the target branch is checked out with changes.
     Merge { commit: CommitId },
     /// Sessions of `role` on the item ended without finishing, and its recovery level leaves the
@@ -51,7 +51,7 @@ impl State {
                         step: ReviewStep::Principal,
                     }) => {
                         let (commit, _) = self.submission(item.id())?;
-                        Waiting::HumanReview { commit }
+                        Waiting::PrincipalReview { commit }
                     }
                     Some(ReviewStatus::Awaiting {
                         step: ReviewStep::Agent { .. },
@@ -104,7 +104,7 @@ impl State {
             }
         }
         for blocker in self.open_blockers() {
-            if let WaitsOn::Person(_) = blocker.waits_on {
+            if let WaitsOn::Principal(_) = blocker.waits_on {
                 let Some(crate::item::ItemView::Live(item)) = self.item(blocker.item) else {
                     continue;
                 };

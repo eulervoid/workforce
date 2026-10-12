@@ -229,7 +229,7 @@ mod supervision {
         fixture.apply(&mut state, 0, 2_002, blocker(task, "which crate?"));
         assert_eq!(
             waits_on(&state, task),
-            [WaitsOn::Person(fixture.founder.key())],
+            [WaitsOn::Principal(fixture.founder.key())],
             "without a supervisor it goes back to a person"
         );
 
@@ -240,7 +240,7 @@ mod supervision {
             waits_on(&state, task),
             [
                 WaitsOn::Supervisor,
-                WaitsOn::Person(fixture.founder.key()),
+                WaitsOn::Principal(fixture.founder.key()),
                 WaitsOn::Agent(agent(&fixture, "coder")),
             ]
         );

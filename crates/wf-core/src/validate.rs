@@ -179,7 +179,7 @@ pub enum PolicyViolation {
     )]
     NotTheReviewer,
     #[error("only an agent can escalate a review")]
-    PersonCannotEscalate,
+    PrincipalCannotEscalate,
     #[error("{0} was not submitted at that commit, so a verdict on it counts for nothing")]
     StaleReview(ItemId),
     #[error("there is no review level `{name}`; {valid}")]
@@ -648,7 +648,7 @@ impl State {
         let Actor::Agent { session, .. } = actor else {
             return match body {
                 EventBody::Review(review) if review.verdict == Verdict::Escalate => {
-                    Err(PolicyViolation::PersonCannotEscalate)
+                    Err(PolicyViolation::PrincipalCannotEscalate)
                 }
                 _ => Ok(()),
             };

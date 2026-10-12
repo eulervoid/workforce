@@ -376,7 +376,7 @@ mod guards {
                 &scene.fixture.founder_actor(),
                 &verdict(item, commit(1), Verdict::Escalate)
             ),
-            Err(PolicyViolation::PersonCannotEscalate)
+            Err(PolicyViolation::PrincipalCannotEscalate)
         );
         assert_eq!(
             scene.state.check_actor(
@@ -449,7 +449,7 @@ mod inbox {
                 },
                 InboxEntry {
                     item: careful,
-                    waiting: Waiting::HumanReview {
+                    waiting: Waiting::PrincipalReview {
                         commit: Some(commit(1))
                     }
                 },

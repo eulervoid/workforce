@@ -78,7 +78,7 @@ impl Brief {
                         text: sources.text(blocker.comment).unwrap_or_default(),
                     })
                     .collect();
-                let person = state
+                let principal = state
                     .members()
                     .find(|(principal, _)| **principal == agent.principal)
                     .map(|(_, member)| format!("@{}", member.handle))
@@ -91,7 +91,7 @@ impl Brief {
                     body: item.body().render_numbered(),
                     earlier: earlier(item, sources),
                     blockers,
-                    person,
+                    principal,
                 })
             }
             SessionRole::Diagnose => {
@@ -140,7 +140,7 @@ impl Brief {
     }
 }
 
-/// Who wrote something, as an agent is told: the agent's name, or `someone` for a person.
+/// Who wrote something, as an agent is told: the agent's name, or `someone` for a principal.
 pub fn speaker(actor: &Actor) -> String {
     match actor {
         Actor::Principal(_) => "someone".to_string(),
@@ -424,7 +424,7 @@ impl ReviewBrief {
              `wf comment {item} \"<what to change>\" --request-change`, then run \
              `wf review --request-changes`. The next session has to resolve every change request \
              before it submits again.\n  \
-             - A person has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
+             - Your principal has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
              {AGAIN}"
         );
         text
@@ -444,8 +444,8 @@ pub struct SuperviseBrief {
     pub earlier: Vec<Earlier>,
     /// The blockers the supervisor is asked to answer or escalate.
     pub blockers: Vec<OpenComment>,
-    /// The handle of the person to escalate to, as in `@joshua`.
-    pub person: String,
+    /// The handle of the principal to escalate to, as in `@joshua`.
+    pub principal: String,
 }
 
 impl SuperviseBrief {
@@ -473,11 +473,11 @@ impl SuperviseBrief {
              - Do not change any files.\n\
              - Answer everything above in one comment; your session ends with it.\n\
              - You can answer: `wf comment {item} \"<answer>\" {resolve}`\n\
-             - A person has to decide: `wf comment {item} \"{person} <what they have to decide>\" \
+             - Your principal has to decide: `wf comment {item} \"{principal} <what they have to decide>\" \
              --block {resolve}`. This hands the question to them.\n\
              {AGAIN}",
             resolve = resolve.join(" "),
-            person = self.person,
+            principal = self.principal,
         );
         text
     }
@@ -524,7 +524,7 @@ impl DiagnoseBrief {
              - Say in one comment what went wrong and what the next attempt should do \
              differently; your session ends with it: \
              `wf comment {item} \"<what went wrong, and what to do differently>\"`\n\
-             - Nothing can go on without a person's decision: \
+             - Nothing can go on without your principal's decision: \
              `wf comment {item} \"<what they have to decide>\" --block`\n\
              {AGAIN}"
         );
@@ -549,7 +549,7 @@ pub fn nudge(item: ItemId, role: SessionRole) -> String {
              - Good as it is: `wf review --approve --note \"<what you checked>\"`\n\
              - Needs changes: `wf comment {item} \"<what to change>\" --request-change` for each, \
              then `wf review --request-changes`\n\
-             - A person has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
+             - Your principal has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
              {AGAIN}"
         ),
         SessionRole::Diagnose => format!(
@@ -560,7 +560,7 @@ pub fn nudge(item: ItemId, role: SessionRole) -> String {
         SessionRole::Supervise => format!(
             "Continue, and answer in one comment.\n\
              - You can answer: `wf comment {item} \"<answer>\" --resolve-blockers`\n\
-             - A person has to decide: `wf comment {item} \"<what they have to decide>\" --block --resolve-blockers`\n\
+             - Your principal has to decide: `wf comment {item} \"<what they have to decide>\" --block --resolve-blockers`\n\
              {AGAIN}"
         ),
     }

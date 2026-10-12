@@ -154,7 +154,7 @@ fn prompt(request: &DeciderRequest) -> String {
          read the request below and answer.\n\n\
          The agent works on the item in the request, in its own directory. Follow the guidance \
          in the request when there is one. Allow what is safe and serves the item; deny what is \
-         clearly harmful or against the guidance; say ask when a person should decide.\n\n\
+         clearly harmful or against the guidance; say ask when the principal should decide.\n\n\
          ```json\n{request}\n```\n\n\
          Answer with exactly one line of JSON and nothing else:\n\
          {{\"permission\": \"allow\" | \"deny\" | \"ask\", \"reason\": \"<one sentence>\"}}\n"

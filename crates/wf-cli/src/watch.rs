@@ -83,7 +83,7 @@ enum Prompt {
         item: ItemId,
         comment: wf_core::id::CommentId,
     },
-    HumanReview {
+    PrincipalReview {
         item: ItemId,
     },
     /// Shown once; it is answered elsewhere.
@@ -99,7 +99,7 @@ impl Prompt {
         match self {
             Prompt::Permission(held) => format!("permission {} {}", held.session, held.since_ms),
             Prompt::Blocker { comment, .. } => format!("blocker {comment}"),
-            Prompt::HumanReview { item } => format!("review {item}"),
+            Prompt::PrincipalReview { item } => format!("review {item}"),
             Prompt::Notice { item, what } => format!("notice {item} {what}"),
         }
     }
@@ -124,7 +124,7 @@ fn prompts(workspace: &Workspace, only: Option<ItemId>) -> Vec<Prompt> {
                 item: entry.item,
                 comment,
             },
-            Waiting::HumanReview { .. } => Prompt::HumanReview { item: entry.item },
+            Waiting::PrincipalReview { .. } => Prompt::PrincipalReview { item: entry.item },
             Waiting::Proposal => Prompt::Notice {
                 item: entry.item,
                 what: "waits for a decision: `wf item move` it on".to_string(),
@@ -162,7 +162,7 @@ fn ask_what_waits(
         let outcome = match prompt {
             Prompt::Permission(held) => ask_permission(workspace, &held),
             Prompt::Blocker { item, comment } => ask_blocker(workspace, item, comment),
-            Prompt::HumanReview { item } => ask_review(workspace, item),
+            Prompt::PrincipalReview { item } => ask_review(workspace, item),
             Prompt::Notice { item, what } => {
                 println!("{} {}", title(workspace, item), what);
                 Ok(true)

@@ -90,7 +90,7 @@ fn question(question: QuestionConfig) -> Value {
             "criteria": {
                 "allow": "It is safe, serves the item and fits the guidance.",
                 "deny": "It is clearly against the guidance or harmful.",
-                "ask": "A person should decide: it is unclear, or its consequences are hard to undo.",
+                "ask": "The principal should decide: it is unclear, or its consequences are hard to undo.",
             },
         }),
     }

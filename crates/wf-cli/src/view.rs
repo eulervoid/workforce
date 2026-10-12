@@ -1087,7 +1087,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
                 } => Some(recovery_waits(state, item.id(), role, failures, last)),
                 Waiting::Blocker { .. }
                 | Waiting::Proposal
-                | Waiting::HumanReview { .. }
+                | Waiting::PrincipalReview { .. }
                 | Waiting::Merge { .. } => None,
             }),
         requires: item.requires().values().map(ToString::to_string).collect(),
@@ -1458,7 +1458,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
             }
             Waiting::Blocker { .. }
             | Waiting::Proposal
-            | Waiting::HumanReview { .. }
+            | Waiting::PrincipalReview { .. }
             | Waiting::Merge { .. } => None,
         })
         .collect();
@@ -1597,7 +1597,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
 
 #[derive(Serialize)]
 pub struct InboxEntryView {
-    /// `blocker`, `proposal`, `human_review`, `merge`, `recovery` or `permission`.
+    /// `blocker`, `proposal`, `principal_review`, `merge`, `recovery` or `permission`.
     pub kind: String,
     pub item: Option<String>,
     pub session: Option<String>,
@@ -1679,8 +1679,8 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
                     };
                     ("proposal", format!("{state_name}; `wf item move` it on"))
                 }
-                Waiting::HumanReview { commit } => (
-                    "human_review",
+                Waiting::PrincipalReview { commit } => (
+                    "principal_review",
                     match commit {
                         Some(commit) => format!(
                             "review of {}: `wf item diff`, then `wf review`",
