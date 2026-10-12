@@ -210,6 +210,25 @@ impl GitCli {
         }
     }
 
+    /// The commit that brought `commit` into `head`, when it is there already: the merge with
+    /// `commit` as a parent, or `commit` itself when it came in without a merge.
+    fn landed(&self, commit: CommitId, head: CommitId) -> Result<Option<CommitId>, VcsError> {
+        let (commit, head) = (commit.to_string(), head.to_string());
+        let ancestor = self.attempt(["merge-base", "--is-ancestor", &commit, &head])?;
+        if !ancestor.success {
+            return Ok(None);
+        }
+        let range = format!("{commit}..{head}");
+        let listed = self.succeed(["rev-list", "--parents", "--ancestry-path", &range])?;
+        // Newest first, so the last merge listed is the one that brought it in.
+        let merge = listed.lines().rev().find_map(|line| {
+            let mut ids = line.split_whitespace();
+            let merge = ids.next()?;
+            ids.any(|parent| parent == commit).then_some(merge)
+        });
+        self.oid("rev-list", merge.unwrap_or(&commit)).map(Some)
+    }
+
     fn rev_parse(&self, reference: &str) -> Result<CommitId, VcsError> {
         let revision = format!("{reference}^{{commit}}");
         let output = self.succeed(["rev-parse", "--verify", &revision])?;
@@ -410,6 +429,11 @@ impl VcsAdapter for GitCli {
         message: &str,
     ) -> Result<MergeOutcome, VcsError> {
         let old = self.branch_head(target)?;
+        // Merged already, by a merge whose event was never written: merging again would only add
+        // an empty merge commit.
+        if let Some(landed) = self.landed(commit, old)? {
+            return Ok(MergeOutcome::Merged { commit: landed });
+        }
         let merged = self.attempt([
             "merge-tree",
             "--write-tree",
@@ -697,6 +721,23 @@ mod tests {
         );
         assert!(repo.directory().join("a.txt").is_file());
         assert_eq!(git_in(&repo.directory(), &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn merging_what_is_merged_already_names_the_earlier_merge() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "a.txt", "a\n");
+        let MergeOutcome::Merged { commit: first } =
+            repo.git.merge("main", work, "Merge #k3f9").unwrap()
+        else {
+            panic!("expected a merge");
+        };
+        let main = repo.directory();
+        repo.write(&main, "b.txt", "b\n");
+        let later = repo.commit(&main, "later work on main");
+        let again = repo.git.merge("main", work, "Merge #k3f9").unwrap();
+        assert_eq!(again, MergeOutcome::Merged { commit: first });
+        assert_eq!(repo.main(), later, "nothing new on main");
     }
 
     #[test]
