@@ -175,8 +175,14 @@ fn a_turn_closes_when_the_session_ended_or_the_item_is_blocked() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.apply(moved(task, "in_review"));
-    assert_eq!(scene.state.turn_outcome(session, 0, 3), TurnOutcome::Close);
+    for moved_on in ["in_review", "dropped", "backlog"] {
+        scene.apply(moved(task, moved_on));
+        assert_eq!(
+            scene.state.turn_outcome(session, 0, 3),
+            TurnOutcome::Close,
+            "{moved_on}"
+        );
+    }
 
     scene.apply(moved(task, "in_progress"));
     assert_eq!(

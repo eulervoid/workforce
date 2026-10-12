@@ -23,7 +23,8 @@ pub enum AfterEnd {
 /// What to do when a turn of a session has ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnOutcome {
-    /// The session already ended, or someone moved its item on, such as to review.
+    /// The session already ended, or its item was moved on: to review, done, cancelled or the
+    /// backlog, or archived.
     Close,
     /// The item waits on a dependency or an open blocker, such as the session's own question.
     Park,
@@ -102,7 +103,17 @@ impl State {
             SessionRole::Work => true,
             SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => false,
         };
-        if working && self.category_of(item) == Some(StateCategory::Review) {
+        let moved_on = match self.category_of(item) {
+            Some(StateCategory::Open | StateCategory::Active) => false,
+            Some(
+                StateCategory::Review
+                | StateCategory::Done
+                | StateCategory::Cancelled
+                | StateCategory::Inactive,
+            )
+            | None => true,
+        };
+        if working && moved_on {
             return TurnOutcome::Close;
         }
         let blocked_by_comment = match self.item(item) {
