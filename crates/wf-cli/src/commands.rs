@@ -1012,27 +1012,6 @@ pub(crate) fn review(
         verdict,
         because,
     }))?;
-    if verdict == Verdict::RequestChanges {
-        let open = {
-            let state = workspace.state();
-            let policy = &state.policy().expect("a workforce has a policy").policy;
-            let ItemView::Live(live) = state.item(item).expect("resolved ids exist") else {
-                bail!("#{} is archived", item.short());
-            };
-            policy
-                .type_config(live.item_type())
-                .and_then(|config| config.first_state(wf_core::policy::StateCategory::Open))
-                .cloned()
-        };
-        if let Some(open) = open {
-            workspace.author(EventBody::ItemMoved(ItemMoved {
-                item,
-                to: open,
-                by_session: None,
-                because: None,
-            }))?;
-        }
-    }
     if let Some((session, _, SessionRole::Review { .. })) = own_session {
         workspace.end_session(session, Finish::Reviewed)?;
     }

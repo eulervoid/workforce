@@ -9,8 +9,9 @@ use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::{AgentId, Role};
 use crate::item::{Comment, Item, Merge, Resolved, Verdicted};
 use crate::name::StateName;
+use crate::policy::StateCategory;
 use crate::refs;
-use crate::session::{Ended, Session};
+use crate::session::{Ended, Session, Verdict};
 use crate::state::{
     AgentDefinition, Announcement, Binding, Feed, FeedHead, ForkState, Invite, Known, Member,
     Neighbours, Origin, PolicyDoc, State, Workforce,
@@ -316,6 +317,18 @@ impl State {
             EventBody::Review(review) => {
                 if let Some(item) = workforce.items.get_mut(&review.item) {
                     item.touch(stamp, &content.actor);
+                    // Requesting changes sends the work back: the item is open for the next
+                    // session, in the same event.
+                    if review.verdict == Verdict::RequestChanges
+                        && let Some(open) = workforce
+                            .policy
+                            .value()
+                            .policy
+                            .type_config(item.item_type())
+                            .and_then(|config| config.first_state(StateCategory::Open))
+                    {
+                        item.state.set(Some(open.clone()), stamp);
+                    }
                     item.verdicts.insert(
                         id,
                         Verdicted {

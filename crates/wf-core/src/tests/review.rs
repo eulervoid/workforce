@@ -185,6 +185,22 @@ fn requested_changes_end_the_review_and_a_new_commit_starts_it_again() {
 }
 
 #[test]
+fn requesting_changes_reopens_the_item_in_the_same_event() {
+    let mut scene = Scene::new();
+    let item = scene.submitted("standard");
+    scene.apply(moved(item, "in_review"));
+    scene.apply(verdict(item, commit(1), Verdict::RequestChanges));
+    let policy = &scene.state.policy().unwrap().policy;
+    let Some(crate::item::ItemView::Live(live)) = scene.state.item(item) else {
+        panic!("the item is live")
+    };
+    assert_eq!(
+        live.standing(policy).state_category(),
+        Some(crate::policy::StateCategory::Open)
+    );
+}
+
+#[test]
 fn submitting_the_same_commit_again_starts_the_level_over() {
     let mut scene = Scene::new();
     let item = scene.submitted("standard");

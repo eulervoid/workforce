@@ -843,7 +843,8 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
   written in a diff tool such as lumen into change requests.
 * Verdicts: `Approve` moves on to the next step, and is refused while a change request is open;
   `RequestChanges` needs at least one open change request, written by the reviewer (section 10), and
-  moves the item back to its open state; the next session continues the branch and resolves them;
+  moves the item back to the first open state of its type in the same event, as the fold applies it;
+  the next session continues the branch and resolves them;
   `Escalate` (agents only) inserts a principal step right after the current one. Principal steps wait in
   `wf inbox`. A verdict may carry a plain comment as its `because`.
 * On the next review, the reviewer sees how each change request was resolved. A resolution it does not
