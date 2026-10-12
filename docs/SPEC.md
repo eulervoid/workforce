@@ -1194,6 +1194,7 @@ Missing and built by us: authorization, authenticated gossip membership, orderin
 wf init | invite device|member | join <code> | members | owner add|transfer
 wf device list|edit                       # name, hardware, hosted agents, max_sessions
 wf agent add|list|edit                    # profiles: harness, model, capabilities, lanes, autonomy
+wf harness models <harness>               # the models a harness offers, read from a session opened for it
 wf session start|list|show|stop|watch     # live and recent sessions, transcripts
 wf session allow|deny <session>           # answer a held permission request
 wf permissions test                       # run the permission chain on a request from stdin (M2.1)

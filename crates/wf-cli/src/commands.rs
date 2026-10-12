@@ -104,6 +104,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         } => crate::fork::accept(json, data, cwd, &id, relay.as_deref()),
         Command::Daemon(args) => crate::network::daemon(json, args, data),
         Command::Permissions(command) => crate::permissions::permissions(json, command, cwd),
+        Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
             emit(
@@ -124,6 +125,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 | Command::Join(_)
                 | Command::Daemon(_)
                 | Command::Permissions(_)
+                | Command::Harness(_)
                 | Command::Status { .. } => unreachable!("handled above"),
                 Command::Session(command) => {
                     crate::session::session(json, mode, command, &mut workspace, cwd)

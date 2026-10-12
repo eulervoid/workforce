@@ -29,7 +29,7 @@ pub struct Cli {
 const COMMAND_GROUPS: &[&[&str]] = &[
     &["init", "status", "policy", "log", "members", "fork"],
     &["item", "comment", "mentions", "review", "inbox", "watch"],
-    &["agent", "session", "work", "permissions"],
+    &["agent", "harness", "session", "work", "permissions"],
     &["daemon", "sync", "invite", "join", "device"],
 ];
 
@@ -110,6 +110,9 @@ pub enum Command {
     /// Try out how this machine decides the permission requests of agents.
     #[command(subcommand)]
     Permissions(PermissionsCommand),
+    /// The agent harnesses this machine can start.
+    #[command(subcommand)]
+    Harness(HarnessCommand),
     /// Exchange events with the other devices of the workforce.
     Sync(SyncArgs),
     /// Run the background process of this machine
@@ -156,6 +159,12 @@ pub enum PermissionsCommand {
         #[arg(long)]
         command: Option<String>,
     },
+}
+
+#[derive(Subcommand)]
+pub enum HarnessCommand {
+    /// Start the harness and list the models it offers, which `wf agent add --model` takes.
+    Models { harness: HarnessName },
 }
 
 #[derive(Args)]

@@ -161,18 +161,63 @@ pub fn init_dialog(name: Option<String>, harnesses: &[&str]) -> anyhow::Result<I
             .item(PermissionMode::Ask, "ask", "hold each request for you")
             .item(PermissionMode::Deny, "deny", "refuse every request")
             .interact()?;
-        let model: String = cliclack::input(format!("Model for {agent_name}"))
-            .placeholder("the harness's default")
-            .required(false)
-            .interact()?;
-        let model = model.trim();
+        let model = ask_model(harness, &agent_name)?;
         agents.push(AgentSetup {
             name: agent_name,
             harness: HarnessName::new(harness)?,
             permissions,
-            model: (!model.is_empty()).then(|| model.to_string()),
+            model,
         });
     }
     cliclack::outro("creating the workforce")?;
     Ok(InitAnswers { name, agents })
+}
+
+/// Pick one of the models the harness offers, or type one when it offers none or cannot be
+/// asked. `None` keeps the harness's default.
+fn ask_model(harness: &str, agent: &wf_core::name::AgentName) -> anyhow::Result<Option<String>> {
+    let spinner = cliclack::spinner();
+    spinner.start(format!("asking {harness} for its models"));
+    let models = match crate::harness::models_of(harness) {
+        Ok(models) if models.is_empty() => {
+            spinner.error(format!("{harness} offers no models to choose from"));
+            Vec::new()
+        }
+        Ok(models) => {
+            spinner.stop(format!("{harness} offers {} models", models.len()));
+            models
+        }
+        Err(error) => {
+            spinner.error(format!("could not ask {harness} for its models: {error:#}"));
+            Vec::new()
+        }
+    };
+
+    if models.is_empty() {
+        let model: String = cliclack::input(format!("Model for {agent}"))
+            .placeholder("the harness's default")
+            .required(false)
+            .interact()?;
+        let model = model.trim();
+        return Ok((!model.is_empty()).then(|| model.to_string()));
+    }
+    let default = models
+        .iter()
+        .find(|model| model.is_default)
+        .map_or_else(String::new, |model| format!(", now {}", model.name));
+    let mut select = cliclack::select(format!("Model for {agent}"))
+        .item(
+            None,
+            "the harness's default",
+            format!("follows the harness{default}"),
+        )
+        .max_rows(12);
+    if models.len() > 8 {
+        select = select.filter_mode();
+    }
+    for model in models {
+        let label = format!("{} ({})", model.value, model.name);
+        select = select.item(Some(model.value), label, "");
+    }
+    Ok(select.interact()?)
 }
