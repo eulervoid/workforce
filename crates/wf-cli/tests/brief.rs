@@ -63,7 +63,9 @@ fn briefs() -> Vec<String> {
         .parse()
         .unwrap();
     vec![
-        wf_core::brief::nudge(item),
+        wf_core::brief::nudge(item, wf_core::session::SessionRole::Work),
+        wf_core::brief::nudge(item, wf_core::session::SessionRole::Review { commit: None }),
+        wf_core::brief::nudge(item, wf_core::session::SessionRole::Supervise),
         work.render(),
         review(Some("abc123")).render(),
         review(None).render(),

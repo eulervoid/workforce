@@ -644,18 +644,26 @@ impl Daemon {
             Finish::GaveUp {
                 turns,
                 last_message,
-            } => (
-                EndReason::Released,
-                by_device.clone(),
-                Some(if last_message.trim().is_empty() {
-                    format!("Gave up: {turns} turns in a row without a new commit.")
-                } else {
-                    format!(
-                        "Gave up: {turns} turns in a row without a new commit. The agent last said:\n\n{}",
-                        truncated(last_message.trim(), LAST_MESSAGE_LIMIT)
-                    )
-                }),
-            ),
+            } => {
+                let without = match role {
+                    SessionRole::Work => "a new commit",
+                    SessionRole::Review { .. } => "a verdict",
+                    SessionRole::Supervise => "an answer",
+                };
+                let gave_up = format!("Gave up: {turns} turns in a row without {without}.");
+                (
+                    EndReason::Released,
+                    by_device.clone(),
+                    Some(if last_message.trim().is_empty() {
+                        gave_up
+                    } else {
+                        format!(
+                            "{gave_up} The agent last said:\n\n{}",
+                            truncated(last_message.trim(), LAST_MESSAGE_LIMIT)
+                        )
+                    }),
+                )
+            }
         };
         // A submission with open change requests is refused before anything is written.
         state
@@ -1176,7 +1184,7 @@ async fn turns(
                     End::Over
                 };
             }
-            TurnOutcome::Continue => prompt = wf_core::brief::nudge(run.item),
+            TurnOutcome::Continue => prompt = wf_core::brief::nudge(run.item, run.role),
             TurnOutcome::GiveUp => {
                 return End::Finish(Finish::GaveUp {
                     turns: turns_without_commit,

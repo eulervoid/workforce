@@ -448,16 +448,33 @@ impl SuperviseBrief {
     }
 }
 
-/// The prompt that goes out when a turn ended and the session on `item` is still going.
-pub fn nudge(item: ItemId) -> String {
+/// The prompt that goes out when a turn ended and the session on `item` is still going: how a
+/// session of `role` ends.
+pub fn nudge(item: ItemId, role: SessionRole) -> String {
     let item = HashId::short(&item);
-    format!(
-        "Continue.\n\
-         - Finished: `wf work submit --note \"<what the reviewer should know>\"`\n\
-         - Need an answer from someone: `wf comment {item} \"<question>\" --block`, then end your turn.\n\
-         - Stuck: `wf work release --note \"<why>\"`\n\
-         {AGAIN}"
-    )
+    match role {
+        SessionRole::Work => format!(
+            "Continue.\n\
+             - Finished: `wf work submit --note \"<what the reviewer should know>\"`\n\
+             - Need an answer from someone: `wf comment {item} \"<question>\" --block`, then end your turn.\n\
+             - Stuck: `wf work release --note \"<why>\"`\n\
+             {AGAIN}"
+        ),
+        SessionRole::Review { .. } => format!(
+            "Continue, and give exactly one verdict.\n\
+             - Good as it is: `wf review --approve --note \"<what you checked>\"`\n\
+             - Needs changes: `wf comment {item} \"<what to change>\" --request-change` for each, \
+             then `wf review --request-changes`\n\
+             - A person has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
+             {AGAIN}"
+        ),
+        SessionRole::Supervise => format!(
+            "Continue, and answer in one comment.\n\
+             - You can answer: `wf comment {item} \"<answer>\" --resolve-blockers`\n\
+             - A person has to decide: `wf comment {item} \"<what they have to decide>\" --block --resolve-blockers`\n\
+             {AGAIN}"
+        ),
+    }
 }
 
 /// The last rule of every brief.
