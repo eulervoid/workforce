@@ -134,7 +134,14 @@ async fn call(
                 })
                 .await
                 .map_err(closed)?;
-            let results = sync_all(daemon.node(), workforce, peers, Some(daemon.presence())).await;
+            if peers.is_empty() {
+                return Ok(Response::Synced(Vec::new()));
+            }
+            let node = daemon
+                .node()
+                .await
+                .map_err(|error| wf_core::report::report(&error))?;
+            let results = sync_all(&node, workforce, peers, Some(daemon.presence())).await;
             Ok(Response::Synced(results))
         }
         Call::Fork(genesis) => {
@@ -162,7 +169,11 @@ async fn call(
                 .into_iter()
                 .map(|device| (device, device.fmt_short()))
                 .collect();
-            let results = sync_all(daemon.node(), workforce, peers, Some(daemon.presence())).await;
+            let node = daemon
+                .node()
+                .await
+                .map_err(|error| wf_core::report::report(&error))?;
+            let results = sync_all(&node, workforce, peers, Some(daemon.presence())).await;
             Ok(Response::Synced(results))
         }
         Call::LastSeen => Ok(Response::LastSeen(daemon.presence().snapshot())),

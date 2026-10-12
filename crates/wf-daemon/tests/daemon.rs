@@ -229,8 +229,15 @@ async fn daemons_of_two_devices_converge_on_their_own() {
     let fixture = Fixture::new(2);
     let (_first_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
     let (_second_dir, vm, vm_socket) = start_peer(&fixture, 1).await;
-    laptop.node().remember(vm.node().local_addr());
-    vm.node().remember(laptop.node().local_addr());
+    laptop
+        .node()
+        .await
+        .unwrap()
+        .remember(vm.node().await.unwrap().local_addr());
+    vm.node()
+        .await
+        .unwrap()
+        .remember(laptop.node().await.unwrap().local_addr());
     let workforce = fixture.workforce();
     let actor = fixture.founder_actor();
 
@@ -324,8 +331,15 @@ async fn a_daemon_follows_a_fork_with_the_history_it_already_has() {
     let fixture = Fixture::new(1);
     let (_laptop_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
     let (_vm_dir, vm, vm_socket) = start_peer_as(&fixture, fixture.member_device.clone()).await;
-    laptop.node().remember(vm.node().local_addr());
-    vm.node().remember(laptop.node().local_addr());
+    laptop
+        .node()
+        .await
+        .unwrap()
+        .remember(vm.node().await.unwrap().local_addr());
+    vm.node()
+        .await
+        .unwrap()
+        .remember(laptop.node().await.unwrap().local_addr());
     let parent = fixture.workforce();
     let actor = fixture.founder_actor();
 
@@ -428,7 +442,10 @@ async fn a_running_daemon_joins_a_workforce_with_its_own_key() {
     let (_laptop_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
     let vm_signer = wf_core::identity::DeviceSigner::from_bytes(&[90; 32]).unwrap();
     let (_vm_dir, vm, vm_socket) = start_empty(vm_signer.clone()).await;
-    vm.node().remember(laptop.node().local_addr());
+    vm.node()
+        .await
+        .unwrap()
+        .remember(laptop.node().await.unwrap().local_addr());
     let workforce = fixture.workforce();
 
     let secret = InviteSigner::generate();

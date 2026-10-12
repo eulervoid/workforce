@@ -111,6 +111,49 @@ pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
 }
 
+/// Serves the workforce to its other devices and keeps in sync with them, from when it first has
+/// another device or an open invite.
+async fn go_online_when_needed(
+    daemon: std::sync::Weak<Daemon>,
+    id: WorkforceId,
+    storage: StorageHandle,
+) {
+    let Some(own) = daemon.upgrade().map(|daemon| daemon.device()) else {
+        return;
+    };
+    let mut heads = storage.watch_heads();
+    loop {
+        let needed = storage
+            .with(move |replica| peers::needs_network(replica.state(), own, now_ms()))
+            .await;
+        match needed {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(StorageClosed) => return,
+        }
+        if heads.changed().await.is_err() {
+            return;
+        }
+    }
+    let Some(daemon) = daemon.upgrade() else {
+        return;
+    };
+    let node = match daemon.node().await {
+        Ok(node) => node,
+        Err(error) => {
+            tracing::warn!(
+                "workforce {id} stays offline: {}",
+                wf_core::report::report(&error)
+            );
+            return;
+        }
+    };
+    node.serve(id, storage.clone());
+    let presence = daemon.presence.clone();
+    drop(daemon);
+    peers::run_peer_loop(node, id, storage, presence).await;
+}
+
 /// Where in the data directory the daemon keeps the `wf` its agents run.
 const BIN_DIR: &str = "bin";
 
@@ -169,7 +212,9 @@ impl HistorySource for ParentHistory {
 pub struct Daemon {
     config: Config,
     device: DeviceSigner,
-    node: Arc<Node<StorageHandle>>,
+    /// Started when a workforce first needs the network, so that a workforce on one device never
+    /// goes online.
+    node: tokio::sync::OnceCell<Arc<Node<StorageHandle>>>,
     presence: Presence,
     runners: runner::Runners,
     merging: runner::ItemLocks,
@@ -189,11 +234,10 @@ impl Daemon {
         if let Some(binary) = &config.wf_binary {
             install_wf(binary, &config.data_dir.join(BIN_DIR))?;
         }
-        let node = Arc::new(Node::start(&device, config.network.clone()).await?);
         let daemon = Arc::new(Self {
             config,
             device,
-            node,
+            node: tokio::sync::OnceCell::new(),
             presence: Presence::default(),
             runners: runner::Runners::default(),
             merging: runner::ItemLocks::default(),
@@ -221,8 +265,16 @@ impl Daemon {
             .map(|_| self.config.data_dir.join(BIN_DIR))
     }
 
-    pub fn node(&self) -> &Arc<Node<StorageHandle>> {
-        &self.node
+    /// The network node of this machine, started on first use.
+    pub async fn node(&self) -> Result<Arc<Node<StorageHandle>>, NetError> {
+        self.node
+            .get_or_try_init(|| async {
+                let node = Node::start(&self.device, self.config.network.clone()).await?;
+                tracing::info!("the network is on");
+                Ok(Arc::new(node))
+            })
+            .await
+            .cloned()
     }
 
     fn load_stored_workforces(self: &Arc<Self>) {
@@ -294,12 +346,14 @@ impl Daemon {
             }
         };
         let storage = StorageHandle::spawn(open()?, open);
-        self.node.serve(id, storage.clone());
-        tokio::spawn(peers::run_peer_loop(
-            Arc::clone(&self.node),
+        // With the network on, serve at once: a device may sync a fork right after it was made.
+        if let Some(node) = self.node.get() {
+            node.serve(id, storage.clone());
+        }
+        tokio::spawn(go_online_when_needed(
+            Arc::downgrade(self),
             id,
             storage.clone(),
-            self.presence.clone(),
         ));
         let entry = Arc::new(Loaded { storage });
         loaded.insert(id, Arc::clone(&entry));
@@ -397,7 +451,8 @@ impl Daemon {
                 }
             };
             match self
-                .node
+                .node()
+                .await?
                 .join(code, wf_net::endpoint_id(*bootstrap), &storage, author)
                 .await
             {

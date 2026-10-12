@@ -71,6 +71,12 @@ pub fn peers_of(state: &State, own: DeviceKey) -> Vec<DeviceKey> {
         .collect()
 }
 
+/// Whether the workforce needs the network: another device is bound, or one may join with an
+/// open invite.
+pub fn needs_network(state: &State, own: DeviceKey, now_ms: u64) -> bool {
+    !peers_of(state, own).is_empty() || state.has_open_invite(now_ms)
+}
+
 /// When each device was last heard from, in milliseconds since the epoch. Local to this
 /// machine, and not part of the workforce state.
 #[derive(Clone, Default)]

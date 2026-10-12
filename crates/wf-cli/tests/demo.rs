@@ -727,6 +727,28 @@ fn the_daemon_starts_in_the_background_and_stops() {
     assert_eq!(sandbox.json(&["item", "list"]).as_array().unwrap().len(), 1);
 }
 
+#[test]
+fn the_network_stays_off_until_another_device_may_join() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&["init", "--name", "demo"]);
+    let started = sandbox.json(&["daemon", "start", "--no-network"]);
+    let _guard = BackgroundDaemon(&sandbox);
+    let log_path = std::path::PathBuf::from(started["log"].as_str().unwrap());
+    let log = || std::fs::read_to_string(&log_path).unwrap();
+    sandbox.add(&["--title", "Only on this machine"]);
+    std::thread::sleep(std::time::Duration::from_millis(500));
+    assert!(!log().contains("the network is on"), "{}", log());
+
+    sandbox.run(&["invite", "device"]);
+    for _ in 0..100 {
+        if log().contains("the network is on") {
+            return;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    panic!("the network did not start for the invite: {}", log());
+}
+
 mod forking {
     use super::*;
     use wf_core::event::{DeviceBound, DeviceProfile, EventBody, InviteCreated, InviteKind};

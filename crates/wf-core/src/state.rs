@@ -442,6 +442,16 @@ impl State {
         self.workforce.as_ref()?.invites.get(id)
     }
 
+    /// Whether an invite that no device used yet is still valid at `now_ms`.
+    pub fn has_open_invite(&self, now_ms: u64) -> bool {
+        self.workforce.as_ref().is_some_and(|workforce| {
+            workforce
+                .invites
+                .values()
+                .any(|invite| invite.redeemed_by.is_empty() && invite.expires_ms > now_ms)
+        })
+    }
+
     /// Every bound device with what it says about itself and what is wrong with it.
     pub fn devices(&self) -> impl Iterator<Item = DeviceInfo<'_>> {
         self.workforce.iter().flat_map(|workforce| {
