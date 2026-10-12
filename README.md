@@ -44,7 +44,8 @@ daemon over ACP (`opencode acp`, `claude-agent-acp`, `codex-acp`, `gemini --expe
 session the agent comments with `wf comment <item>` (`--block` when it needs an answer, which a
 supervisor or you give with `--resolve`), and ends with `wf work submit` or `wf work release`.
 Submitted work is reviewed at the level the item names, then merged into the target branch of the
-`[merge]` policy. Agents start with `--start manual` and `--permissions ask`; `wf session start <item>
+`[merge]` policy. Agents start with `--start manual` and `--permissions allow`, which lets them do
+what they ask inside the sandbox and asks you on a machine without one; `wf session start <item>
 --agent <name>` runs one by hand. The harnesses named above have not all been run against this build
 yet: see *As built* in [docs/M2.md](docs/M2.md).
 
