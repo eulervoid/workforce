@@ -1,7 +1,9 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use wf_harness::{Conversation, Direction, Launch, PermissionMode, StopReason, TranscriptEntry};
+use wf_harness::{
+    Conversation, Direction, Launch, Model, PermissionMode, StopReason, TranscriptEntry,
+};
 
 #[derive(Clone, Default)]
 struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
@@ -149,4 +151,24 @@ async fn an_agent_that_cannot_start_is_an_error() {
     })
     .await;
     assert!(result.is_err());
+}
+
+#[tokio::test]
+async fn the_models_an_agent_offers_are_read_from_a_new_session() {
+    let directory = tempfile::tempdir().unwrap();
+    let models = wf_harness::models(
+        agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        directory.path().to_path_buf(),
+    )
+    .await
+    .unwrap();
+    let model = |value: &str, name: &str, is_default| Model {
+        value: value.into(),
+        name: name.into(),
+        is_default,
+    };
+    assert_eq!(
+        models,
+        [model("fast", "Fast", true), model("deep", "Deep", false)]
+    );
 }

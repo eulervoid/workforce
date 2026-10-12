@@ -1,5 +1,6 @@
 //! A scripted ACP agent for tests: answers one prompt with a message, a tool call and a
-//! permission request, and reports the permission outcome in its last message.
+//! permission request, and reports the permission outcome in its last message. Its sessions
+//! offer two models.
 
 use std::io::{BufRead, Write};
 
@@ -37,7 +38,18 @@ fn main() {
                 "result": {"protocolVersion": 1, "agentCapabilities": {}},
             })),
             Some("session/new") => send(json!({
-                "jsonrpc": "2.0", "id": id, "result": {"sessionId": "fake"},
+                "jsonrpc": "2.0", "id": id,
+                "result": {
+                    "sessionId": "fake",
+                    "configOptions": [{
+                        "id": "model", "name": "Model", "category": "model",
+                        "type": "select", "currentValue": "fast",
+                        "options": [
+                            {"value": "fast", "name": "Fast"},
+                            {"value": "deep", "name": "Deep"},
+                        ],
+                    }],
+                },
             })),
             Some("session/prompt") => {
                 eprintln!("fake agent got a prompt");

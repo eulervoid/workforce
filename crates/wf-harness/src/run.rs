@@ -6,9 +6,9 @@ use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
     RequestPermissionRequest, RequestPermissionResponse, SessionConfigId, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOptions,
-    SessionConfigValueId, SessionNotification, SessionUpdate, SetSessionConfigOptionRequest,
-    TextContent,
+    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+    SessionConfigSelectOptions, SessionConfigValueId, SessionNotification, SessionUpdate,
+    SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
 use jiff::Timestamp;
@@ -35,12 +35,22 @@ pub enum Error {
     },
 }
 
-/// The model option of the agent and the value of it that `wanted` names, by value or by name.
-fn choose_model(
+/// A model an agent offers, as its model option lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Model {
+    /// What `--model` takes.
+    pub value: String,
+    pub name: String,
+    /// The agent uses it when no model is chosen.
+    pub is_default: bool,
+}
+
+/// The choices of the agent's model options, each with the option it belongs to and whether it
+/// is the option's current value.
+fn model_choices(
     options: &[SessionConfigOption],
-    wanted: &str,
-) -> Result<(SessionConfigId, SessionConfigValueId), Error> {
-    let mut available = Vec::new();
+) -> Vec<(&SessionConfigId, bool, &SessionConfigSelectOption)> {
+    let mut found = Vec::new();
     for option in options {
         if option.category != Some(SessionConfigOptionCategory::Model) {
             continue;
@@ -56,16 +66,60 @@ fn choose_model(
             _ => Vec::new(),
         };
         for choice in choices {
-            if &*choice.value.0 == wanted || choice.name.eq_ignore_ascii_case(wanted) {
-                return Ok((option.id.clone(), choice.value.clone()));
-            }
-            available.push(format!("{} ({})", choice.value.0, choice.name));
+            found.push((&option.id, choice.value == select.current_value, choice));
         }
+    }
+    found
+}
+
+/// The model option of the agent and the value of it that `wanted` names, by value or by name.
+fn choose_model(
+    options: &[SessionConfigOption],
+    wanted: &str,
+) -> Result<(SessionConfigId, SessionConfigValueId), Error> {
+    let choices = model_choices(options);
+    if let Some((option, _, choice)) = choices.iter().find(|(_, _, choice)| {
+        &*choice.value.0 == wanted || choice.name.eq_ignore_ascii_case(wanted)
+    }) {
+        return Ok(((*option).clone(), choice.value.clone()));
     }
     Err(Error::UnknownModel {
         model: wanted.to_string(),
-        available,
+        available: choices
+            .iter()
+            .map(|(_, _, choice)| format!("{} ({})", choice.value.0, choice.name))
+            .collect(),
     })
+}
+
+/// Starts the agent, opens a session in `directory` to read the models it offers, and stops it
+/// again without prompting it.
+pub async fn models(agent: AcpAgentConfig, directory: PathBuf) -> Result<Vec<Model>, Error> {
+    let models = Client
+        .connect_with(
+            AcpAgent::new(agent),
+            async move |connection: ConnectionTo<Agent>| {
+                connection
+                    .send_request(InitializeRequest::new(ProtocolVersion::V1))
+                    .block_task()
+                    .await?;
+                let session = connection
+                    .send_request(NewSessionRequest::new(directory))
+                    .block_task()
+                    .await?;
+                let options = session.config_options.as_deref().unwrap_or_default();
+                Ok(model_choices(options)
+                    .into_iter()
+                    .map(|(_, is_default, choice)| Model {
+                        value: choice.value.0.to_string(),
+                        name: choice.name.clone(),
+                        is_default,
+                    })
+                    .collect())
+            },
+        )
+        .await?;
+    Ok(models)
 }
 
 /// The command that starts a known harness in ACP mode.
@@ -299,7 +353,7 @@ mod tests {
 
 #[cfg(test)]
 mod model_tests {
-    use agent_client_protocol::schema::v1::{SessionConfigSelect, SessionConfigSelectOption};
+    use agent_client_protocol::schema::v1::SessionConfigSelect;
 
     use super::*;
 
