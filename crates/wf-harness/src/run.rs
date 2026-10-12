@@ -5,14 +5,16 @@ use std::sync::{Arc, Mutex};
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
     CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
-    RequestPermissionRequest, RequestPermissionResponse, SessionConfigId, SessionConfigKind,
-    SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
+    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionConfigId,
+    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
     SessionConfigSelectOptions, SessionConfigValueId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
 use jiff::Timestamp;
-use tokio::sync::{Notify, mpsc, oneshot};
+use std::time::Duration;
+
+use tokio::sync::{mpsc, oneshot, watch};
 use tokio::task::JoinHandle;
 
 pub use agent_client_protocol::schema::v1::StopReason;
@@ -150,12 +152,30 @@ struct Turn {
     reply: oneshot::Sender<Result<(StopReason, String), Error>>,
 }
 
+/// How long [`Conversation::close`] waits for the agent to exit before it kills it.
+const CLOSE_GRACE: Duration = Duration::from_secs(10);
+
+/// The task that talks to the agent. Aborting it drops the agent's process, which kills its
+/// process group, so a conversation that is dropped, or a start that is given up, leaves nothing
+/// running.
+struct AgentTask(Option<JoinHandle<Result<(), Error>>>);
+
+impl Drop for AgentTask {
+    fn drop(&mut self) {
+        if let Some(task) = &self.0 {
+            task.abort();
+        }
+    }
+}
+
 /// A running agent with one ACP session, which is prompted turn after turn and keeps its context
 /// between them. Dropping it stops the agent.
 pub struct Conversation {
     turns: mpsc::Sender<Turn>,
-    cancel: Arc<Notify>,
-    task: JoinHandle<Result<(), Error>>,
+    /// Counts the cancels asked for. A watch keeps the latest value, so no cancel is lost, and
+    /// both the turn and a permission request it waits on see it.
+    cancel: Arc<watch::Sender<u64>>,
+    task: AgentTask,
 }
 
 impl Conversation {
@@ -178,8 +198,9 @@ impl Conversation {
         let (refused, mut refusal) = oneshot::channel();
         let (turns, mut incoming) = mpsc::channel::<Turn>(1);
         let (ready, opened) = oneshot::channel();
-        let cancel = Arc::new(Notify::new());
-        let cancelled = Arc::clone(&cancel);
+        let (cancel, cancelled) = watch::channel(0u64);
+        let cancel = Arc::new(cancel);
+        let mut cancelled_turn = cancelled.clone();
         // What the agent says in the turn that runs, as `reply` returns it.
         let said = Arc::new(Mutex::new(String::new()));
         let heard = Arc::clone(&said);
@@ -203,13 +224,22 @@ impl Conversation {
                 )
                 .on_receive_request(
                     async move |request: RequestPermissionRequest, responder, _connection| {
-                        let decision = permissions
-                            .decide(PermissionRequest::of(&request.tool_call.fields))
-                            .await;
-                        decided.record(&TranscriptEntry::decision(Timestamp::now(), &decision));
-                        responder.respond(RequestPermissionResponse::new(
-                            decision.permission.answer(&request.options),
-                        ))
+                        // A request that is still undecided when its turn is cancelled is
+                        // answered `cancelled`, as ACP asks of a client.
+                        let mut cancelled = cancelled.clone();
+                        cancelled.mark_unchanged();
+                        let outcome = tokio::select! {
+                            decision = permissions
+                                .decide(PermissionRequest::of(&request.tool_call.fields)) => {
+                                decided.record(&TranscriptEntry::decision(
+                                    Timestamp::now(),
+                                    &decision,
+                                ));
+                                decision.permission.answer(&request.options)
+                            }
+                            _ = cancelled.changed() => RequestPermissionOutcome::Cancelled,
+                        };
+                        responder.respond(RequestPermissionResponse::new(outcome))
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -258,7 +288,7 @@ impl Conversation {
                         let response = loop {
                             tokio::select! {
                                 response = &mut request => break response,
-                                () = cancelled.notified() => {
+                                Ok(()) = cancelled_turn.changed() => {
                                     connection.send_notification(
                                         CancelNotification::new(session.session_id.clone()),
                                     )?;
@@ -281,16 +311,21 @@ impl Conversation {
             Ok(outcome?)
         });
 
+        // Given up before it opened, the start drops the task and with it the agent.
+        let mut task = AgentTask(Some(task));
         match opened.await {
             Ok(()) => Ok(Self {
                 turns,
                 cancel,
                 task,
             }),
-            Err(_) => Err(match task.await {
-                Ok(Err(error)) => refusal.try_recv().unwrap_or(error),
-                Ok(Ok(())) | Err(_) => Error::Closed,
-            }),
+            Err(_) => {
+                let finished = task.0.take().expect("the task is there until here").await;
+                Err(match finished {
+                    Ok(Err(error)) => refusal.try_recv().unwrap_or(error),
+                    Ok(Ok(())) | Err(_) => Error::Closed,
+                })
+            }
         }
     }
 
@@ -313,29 +348,37 @@ impl Conversation {
         answer.await.map_err(|_| Error::Closed)?
     }
 
-    /// Asks the agent to stop the turn that is running. The turn then ends with
-    /// [`StopReason::Cancelled`]. Does nothing between turns.
+    /// Asks the agent to stop the turn that is running, and answers a permission request it
+    /// waits on with `cancelled`. The turn then ends with [`StopReason::Cancelled`]. A cancel
+    /// that comes before the turn has reached the agent still cancels it.
     pub fn cancel(&self) -> CancelHandle {
         CancelHandle(Arc::clone(&self.cancel))
     }
 
-    /// Stops the agent and waits until it is gone.
-    pub async fn close(self) -> Result<(), Error> {
+    /// Stops the agent and waits until it is gone, at most [`CLOSE_GRACE`]; an agent that takes
+    /// longer is killed.
+    pub async fn close(mut self) -> Result<(), Error> {
         drop(self.turns);
-        match self.task.await {
-            Ok(result) => result,
-            Err(_) => Err(Error::Closed),
+        let task = self.task.0.take().expect("the task is there until closed");
+        let abort = task.abort_handle();
+        match tokio::time::timeout(CLOSE_GRACE, task).await {
+            Ok(Ok(result)) => result,
+            Ok(Err(_)) => Err(Error::Closed),
+            Err(_) => {
+                abort.abort();
+                Err(Error::Closed)
+            }
         }
     }
 }
 
 /// Cancels the turn of a conversation that is being prompted, from another task.
 #[derive(Clone)]
-pub struct CancelHandle(Arc<Notify>);
+pub struct CancelHandle(Arc<watch::Sender<u64>>);
 
 impl CancelHandle {
     pub fn cancel(&self) {
-        self.0.notify_waiters();
+        self.0.send_modify(|cancels| *cancels += 1);
     }
 }
 

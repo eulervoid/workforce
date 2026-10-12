@@ -9,7 +9,8 @@
 //! - `wf <args>`: runs `$WF_BIN` with the arguments; double quotes group words.
 //!
 //! In `sh` and `wf` lines, `{item}` is the item named in the prompt, as in `item #k3f9ab`.
-//! - `permission`: asks for a permission and says what the answer was.
+//! - `permission`: asks for a permission and says what the answer was. A cancel while it waits
+//!   ends the turn once the request is answered, and so does a request answered `cancelled`.
 //! - `permission <command>`: asks to run the command, with `{item}` replaced.
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
@@ -150,12 +151,27 @@ fn main() {
                                     ],
                                 },
                             }));
-                            let reply: Value =
-                                serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
-                            let chosen = reply["result"]["outcome"]["optionId"]
-                                .as_str()
-                                .unwrap_or("cancelled");
+                            // As ACP asks, a cancel does not end the wait: the client answers
+                            // the request, `cancelled`, and the turn then ends cancelled.
+                            let mut cancelled = false;
+                            let reply = loop {
+                                let message: Value =
+                                    serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+                                if message["method"] == "session/cancel" {
+                                    cancelled = true;
+                                } else if message["id"] == 100 {
+                                    break message;
+                                }
+                            };
+                            let chosen = match &reply["result"]["outcome"] {
+                                outcome if outcome["outcome"] == "cancelled" => "cancelled",
+                                outcome => outcome["optionId"].as_str().unwrap_or("cancelled"),
+                            };
                             say(&format!("permission: {chosen}"));
+                            if cancelled || chosen == "cancelled" {
+                                stop = "cancelled";
+                                break;
+                            }
                         }
                         "hang" => {
                             while let Some(Ok(line)) = lines.next() {

@@ -85,6 +85,13 @@ enum Stop {
 /// How long an agent that ended its own session gets to finish its turn.
 const GRACE: Duration = Duration::from_secs(20);
 
+/// How long a harness may take to start and open its session. Wrappers such as `npx` may first
+/// download the agent.
+const START_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// How long a cancelled turn may take to end before the harness is closed anyway.
+const CANCEL_GRACE: Duration = Duration::from_secs(20);
+
 /// The sessions this daemon is running. Lost with the process, which is why a daemon that starts
 /// ends every live session of its machine.
 #[derive(Default)]
@@ -1180,15 +1187,27 @@ async fn drive(
             return failed(format!("the sandbox could not be set up: {problem}"));
         }
     };
-    let mut conversation = match Conversation::start(Launch {
+    let start = Conversation::start(Launch {
         agent,
         model: run.model.clone(),
         directory: run.worktree.clone(),
         permissions: Arc::clone(&run.permissions),
         transcript,
-    })
-    .await
-    {
+    });
+    // A harness that waits on a login or hangs at start can still be stopped; giving up the
+    // start stops it.
+    let started = tokio::select! {
+        started = start => started,
+        Some(_) = stopped.recv() => return End::Over,
+        () = tokio::time::sleep(START_TIMEOUT) => {
+            return failed(format!(
+                "{} did not start within {}",
+                run.agent,
+                humantime::format_duration(START_TIMEOUT)
+            ));
+        }
+    };
+    let mut conversation = match started {
         Ok(conversation) => conversation,
         Err(error) => {
             let report = wf_core::report::report(&error);
@@ -1230,12 +1249,12 @@ async fn turns(
                     return End::Over;
                 }
                 cancel.cancel();
-                let _ = (&mut turn).await;
+                let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
                 return End::Over;
             }
             () = sleep_until(deadline) => {
                 cancel.cancel();
-                let _ = (&mut turn).await;
+                let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
                 return End::Finish(Finish::TimedOut);
             }
         };

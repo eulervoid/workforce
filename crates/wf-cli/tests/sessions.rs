@@ -1408,6 +1408,35 @@ async fn a_denied_permission_is_told_no_and_stopping_a_session_drops_its_request
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn stopping_a_session_that_waits_on_a_permission_answers_it_cancelled() {
+    let world = World::new("permission\nsay never\n").await;
+    let item = world.wf.add(&["--title", "Needs permission"]);
+    start_session(&world, &item);
+    world
+        .wait("the request", |world| {
+            inbox(world)
+                .iter()
+                .any(|entry| entry["kind"] == "permission")
+        })
+        .await;
+    let id = world.sessions()[0]["id"].as_str().unwrap().to_string();
+    world.wf.run(&["session", "stop", short(&id)]);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "cancelled");
+    assert!(
+        !inbox(&world)
+            .iter()
+            .any(|entry| entry["kind"] == "permission"),
+        "the request is gone"
+    );
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(transcript.contains("permission: cancelled"), "{transcript}");
+    assert!(!transcript.contains("never"), "{transcript}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_inbox_lists_what_waits_on_a_person() {
     let world = World::new("").await;
     assert!(inbox(&world).is_empty());
