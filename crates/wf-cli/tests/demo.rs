@@ -18,6 +18,31 @@ fn titles(items: &Value) -> Vec<String> {
 }
 
 #[test]
+fn items_are_listed_by_label_lane_and_priority() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo"]);
+    wf.add(&["--title", "Urgent fix", "--priority", "P0", "--label", "bug"]);
+    wf.add(&["--title", "Later", "--priority", "P3"]);
+    wf.add(&["--title", "Summary", "--type", "distill"]);
+    assert_eq!(
+        titles(&wf.json(&["item", "list", "--label", "bug"])),
+        ["Urgent fix"]
+    );
+    assert_eq!(
+        titles(&wf.json(&["item", "list", "--priority", "P3"])),
+        ["Later"]
+    );
+    assert_eq!(
+        titles(&wf.json(&["item", "list", "--lane", "meta"])),
+        ["Summary"]
+    );
+    let error = wf.fail(&["item", "list", "--lane", "nowhere"]);
+    assert!(error.contains("valid: `default`, `meta`"), "{error}");
+    let error = wf.fail(&["item", "list", "--state", "nowhere"]);
+    assert!(error.contains("`in_progress`"), "{error}");
+}
+
+#[test]
 fn the_demo_script_works_end_to_end() {
     let wf = Sandbox::new();
 

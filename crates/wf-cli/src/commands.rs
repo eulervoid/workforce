@@ -649,6 +649,21 @@ fn item(
                 })
                 .filter(|(_, summary)| args.accepts(summary.readiness))
                 .filter(|(_, summary)| {
+                    args.label
+                        .as_ref()
+                        .is_none_or(|wanted| summary.labels.contains(&wanted.to_string()))
+                })
+                .filter(|(_, summary)| {
+                    args.lane
+                        .as_ref()
+                        .is_none_or(|wanted| summary.lane.as_deref() == Some(wanted.as_str()))
+                })
+                .filter(|(_, summary)| {
+                    args.priority.is_none_or(|wanted| {
+                        summary.priority.as_deref() == Some(wanted.to_string().as_str())
+                    })
+                })
+                .filter(|(_, summary)| {
                     dispatchable
                         .as_ref()
                         .is_none_or(|offered| offered.contains(&summary.id))
@@ -984,7 +999,7 @@ impl Sources for Here<'_> {
     }
 }
 
-/// Refuses a `--type` or `--state` that no item can have, instead of listing nothing.
+/// Refuses a `--type`, `--state` or `--lane` that no item can have, instead of listing nothing.
 fn check_list_filters(state: &State, args: &ItemListArgs) -> anyhow::Result<()> {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let types: Vec<_> = match &args.item_type {
@@ -1005,6 +1020,14 @@ fn check_list_filters(state: &State, args: &ItemListArgs) -> anyhow::Result<()> 
         if !states.contains(wanted) {
             bail!("no item can be in state `{wanted}`; {}", OneOf::new(states));
         }
+    }
+    if let Some(lane) = &args.lane
+        && !policy.lanes.contains_key(lane)
+    {
+        bail!(
+            "there is no lane `{lane}`; {}",
+            OneOf::new(policy.lanes.keys())
+        );
     }
     Ok(())
 }

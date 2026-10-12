@@ -28,8 +28,11 @@ pub fn session(
 ) -> anyhow::Result<()> {
     match command {
         SessionCommand::Start(args) => start(json, mode, workspace, args, cwd),
-        SessionCommand::List => {
-            let views = view::session_views(workspace.state());
+        SessionCommand::List { live } => {
+            let views: Vec<_> = view::session_views(workspace.state())
+                .into_iter()
+                .filter(|view| !live || view.ended.is_none())
+                .collect();
             emit(json, &views, |views| render::sessions(views))
         }
         SessionCommand::Show { session } => {

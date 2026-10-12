@@ -654,6 +654,8 @@ wf work submit
     assert_eq!(world.item(&item)["state"], "in_progress");
     tokio::time::sleep(Duration::from_millis(1_000)).await;
     assert_eq!(world.sessions()[0]["status"], "parked");
+    let live = world.wf.json(&["session", "list", "--live"]);
+    assert_eq!(live.as_array().unwrap().len(), 1, "parked sessions are live");
     let inbox = inbox(&world);
     assert_eq!(inbox.len(), 1, "no supervisor, so it waits on a person");
     assert_eq!(inbox[0]["kind"], "blocker");
@@ -672,6 +674,8 @@ wf work submit
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(transcript.contains("Use humantime"), "{transcript}");
+    let live = world.wf.json(&["session", "list", "--live"]);
+    assert!(live.as_array().unwrap().is_empty(), "{live}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

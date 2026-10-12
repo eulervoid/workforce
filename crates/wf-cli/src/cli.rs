@@ -224,7 +224,11 @@ pub enum SessionCommand {
     /// Start an agent on an item, in its own worktree. Needs the daemon.
     Start(SessionStartArgs),
     /// List the sessions, live ones first.
-    List,
+    List {
+        /// Only the sessions that have not ended, parked ones included.
+        #[arg(long)]
+        live: bool,
+    },
     /// Show one session.
     Show {
         /// The start of a session id. Without one, pick at a terminal.
@@ -646,6 +650,15 @@ pub struct ItemListArgs {
     /// Only items in this state.
     #[arg(long)]
     pub state: Option<StateName>,
+    /// Only items with this label.
+    #[arg(long)]
+    pub label: Option<Label>,
+    /// Only items in this lane, their own or their type's.
+    #[arg(long)]
+    pub lane: Option<LaneName>,
+    /// Only items of this priority.
+    #[arg(long)]
+    pub priority: Option<Priority>,
     /// Include archived items.
     #[arg(long)]
     pub archived: bool,
