@@ -176,7 +176,10 @@ pub enum PermissionsCommand {
 #[derive(Subcommand)]
 pub enum HarnessCommand {
     /// Start the harness and list the models it offers, which `wf agent add --model` takes.
-    Models { harness: HarnessName },
+    Models {
+        /// `claude-code`, `opencode`, `codex` or `gemini-cli`.
+        harness: HarnessName,
+    },
 }
 
 #[derive(Args)]
@@ -355,6 +358,7 @@ pub struct InviteDeviceArgs {
 
 #[derive(Subcommand)]
 pub enum DeviceCommand {
+    /// List the machines bound to the workforce, with what they say about themselves.
     List,
     /// Change what this machine says about itself.
     Edit(DeviceEditArgs),
@@ -363,10 +367,13 @@ pub enum DeviceCommand {
 /// Fields that are given replace the current value.
 #[derive(Args)]
 pub struct DeviceEditArgs {
+    /// The name of this machine, shown by `wf device list`.
     #[arg(long)]
     pub name: Option<String>,
+    /// What the machine has, such as `macos aarch64, gpu`; items that require it go here.
     #[arg(long)]
     pub hardware: Option<String>,
+    /// How many agent sessions this machine may run at once.
     #[arg(long)]
     pub max_sessions: Option<u32>,
     /// Replaces the agents of this machine: `coder=2`. Repeat for several.
@@ -397,7 +404,9 @@ pub struct JoinArgs {
 
 #[derive(Args)]
 pub struct CommentArgs {
+    /// The item to comment on. Without one, pick at a terminal.
     pub item: Option<String>,
+    /// What to say; `#item` refers to an item and `@handle` mentions someone.
     pub text: Vec<String>,
     /// Write the comment in `$VISUAL` or `$EDITOR`, starting from the text given.
     #[arg(long)]
@@ -427,6 +436,7 @@ pub struct CommentArgs {
 
 #[derive(Args)]
 pub struct InitArgs {
+    /// The name of the workforce.
     #[arg(long, required_unless_present = "interactive")]
     pub name: Option<String>,
     /// Ask for the name, and which of the harnesses found to define agents for, with their
@@ -443,22 +453,31 @@ pub struct InitArgs {
 
 #[derive(Subcommand)]
 pub enum AgentCommand {
+    /// Define an agent: a harness, a model, and what it may work on.
     Add(AgentAddArgs),
+    /// List your agents and those of the other members.
     List,
+    /// Change an agent of yours. Fields that are given replace the current value.
     Edit(AgentEditArgs),
 }
 
 #[derive(Args)]
 pub struct AgentAddArgs {
+    /// The agent's name, the `coder` in `@joshua/coder`.
     pub name: AgentName,
+    /// The program that runs the agent: `claude-code`, `opencode`, `codex` or `gemini-cli`.
     #[arg(long)]
     pub harness: HarnessName,
+    /// The model the harness runs, as `wf harness models` lists them. Defaults to the
+    /// harness's own choice.
     #[arg(long)]
     pub model: Option<String>,
+    /// What the agent can do, matched against what items require, such as `rust` or
+    /// `review`; repeat for several.
     #[arg(long = "capability")]
     pub capabilities: Vec<Requirement>,
     /// The lanes the agent takes items from. Defaults to `default`; `supervision` alone makes an
-    /// agent that only answers questions and holds no items
+    /// agent that only answers questions and holds no items.
     #[arg(long = "lane", default_value = "default")]
     pub lanes: Vec<LaneName>,
     /// What the agent is told in every brief, such as how strictly to review.
@@ -468,9 +487,10 @@ pub struct AgentAddArgs {
     pub autonomy: AutonomyArgs,
 }
 
-/// How much the agent does without the principal. Fields that are not given keep their default, or
-/// with `wf agent edit` their current value.
+// How much the agent does without the principal. Fields that are not given keep their default, or
+// with `wf agent edit` their current value.
 #[derive(Args)]
+#[command(next_help_heading = "Autonomy")]
 pub struct AutonomyArgs {
     /// `auto` lets the dispatcher start the agent on ready items.
     #[arg(long)]
@@ -501,16 +521,20 @@ impl AutonomyArgs {
     }
 }
 
-/// Fields that are given replace the current value.
 #[derive(Args)]
 pub struct AgentEditArgs {
+    /// The agent to change.
     pub name: AgentName,
+    /// The program that runs the agent.
     #[arg(long)]
     pub harness: Option<HarnessName>,
+    /// The model the harness runs, as `wf harness models` lists them.
     #[arg(long)]
     pub model: Option<String>,
+    /// Replaces the capabilities; repeat for several.
     #[arg(long = "capability")]
     pub capabilities: Vec<Requirement>,
+    /// Replaces the lanes the agent takes items from; repeat for several.
     #[arg(long = "lane")]
     pub lanes: Vec<LaneName>,
     /// What the agent is told in every brief; an empty text removes them.
@@ -522,23 +546,34 @@ pub struct AgentEditArgs {
 
 #[derive(Subcommand)]
 pub enum ItemCommand {
+    /// Create an item. Without `--title`, write it in `$VISUAL` or `$EDITOR` at a terminal.
     Add(ItemAddArgs),
+    /// List the live items, filtered and grouped.
     List(ItemListArgs),
+    /// Show an item with its comments, links, review and what happened to it.
     Show {
+        /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
+    /// Change an item. Without flags, edit it in `$VISUAL` or `$EDITOR` at a terminal.
     Edit(ItemEditArgs),
+    /// Tick steps of an item, numbered as `wf item show` prints them: `wf item check k3f 1 3`.
     Check(ItemCheckArgs),
+    /// Move an item to another state of its type.
     Move {
+        /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
+        /// A state of the item's type. Without one, pick at a terminal.
         state: Option<StateName>,
+        /// Why, kept with the move.
         #[arg(long)]
         note: Option<String>,
     },
+    /// Add or remove a dependency, or say a decision supersedes another.
     Link(ItemLinkArgs),
-    /// Show what the work of an item changes in the repository, as a review sees it.
     /// Show the work of an item, through git: its pager, colors and diff settings apply.
     Diff {
+        /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
         /// Passed on to `git diff`, such as `--stat` or `-- src/`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
@@ -551,12 +586,17 @@ pub enum ItemCommand {
     },
     /// Print the worktree of an item, as in `cd $(wf item path k3f7)`.
     Path {
+        /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
+    /// Hide an item from lists; its history stays.
     Archive {
+        /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
+    /// Bring an archived item back.
     Unarchive {
+        /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
 }
@@ -565,18 +605,25 @@ pub enum ItemCommand {
 /// `$EDITOR` when run at a terminal.
 #[derive(Args)]
 pub struct ItemAddArgs {
+    /// What the item is about, in one line.
     #[arg(short, long)]
     pub title: Option<String>,
+    /// A type of the policy, such as `task`, `decision` or `distill`.
     #[arg(long = "type", default_value = "task")]
     pub item_type: TypeName,
+    /// The description, in markdown; `- [ ]` lines are steps.
     #[arg(long, allow_hyphen_values = true)]
     pub body: Option<String>,
+    /// `P0` (most urgent) to `P3`.
     #[arg(long)]
     pub priority: Option<Priority>,
+    /// The lane whose agents take it. Defaults to its type's lane.
     #[arg(long)]
     pub lane: Option<LaneName>,
+    /// A label; repeat for several.
     #[arg(long = "label")]
     pub labels: Vec<Label>,
+    /// What an agent or machine needs to take it, such as `rust` or `gpu`; repeat for several.
     #[arg(long = "requires")]
     pub requires: Vec<Requirement>,
     /// The review level the work needs, a name from the policy's `[[review]]` list.
@@ -593,8 +640,10 @@ pub struct ItemAddArgs {
 
 #[derive(Args)]
 pub struct ItemListArgs {
+    /// Only items of this type.
     #[arg(long = "type")]
     pub item_type: Option<TypeName>,
+    /// Only items in this state.
     #[arg(long)]
     pub state: Option<StateName>,
     /// Include archived items.
@@ -656,24 +705,33 @@ impl ItemListArgs {
 /// when run at a terminal.
 #[derive(Args)]
 pub struct ItemEditArgs {
+    /// The start of an item id. Without one, pick at a terminal.
     pub item: Option<String>,
     /// Open the item in the editor after applying the flags given.
     #[arg(long)]
     pub edit: bool,
+    /// Replaces the title.
     #[arg(short, long)]
     pub title: Option<String>,
+    /// Replaces the description.
     #[arg(long, allow_hyphen_values = true)]
     pub body: Option<String>,
+    /// `P0` (most urgent) to `P3`.
     #[arg(long)]
     pub priority: Option<Priority>,
+    /// The lane whose agents take it.
     #[arg(long)]
     pub lane: Option<LaneName>,
+    /// Add a label; repeat for several.
     #[arg(long = "add-label")]
     pub add_labels: Vec<Label>,
+    /// Remove a label; repeat for several.
     #[arg(long = "remove-label")]
     pub remove_labels: Vec<Label>,
+    /// Add a requirement; repeat for several.
     #[arg(long = "add-requires")]
     pub add_requires: Vec<Requirement>,
+    /// Remove a requirement; repeat for several.
     #[arg(long = "remove-requires")]
     pub remove_requires: Vec<Requirement>,
     /// The review level the work needs, a name from the policy's `[[review]]` list, or `default`
@@ -730,10 +788,11 @@ impl ItemEditArgs {
     }
 }
 
-/// Ticks steps of an item, numbered as `wf item show` prints them: `wf item check #abc 1 3`.
 #[derive(Args)]
 pub struct ItemCheckArgs {
+    /// The start of an item id.
     pub item: String,
+    /// The numbers of the steps.
     #[arg(required = true)]
     pub numbers: Vec<NonZeroUsize>,
     /// Unticks the steps instead.
@@ -744,9 +803,12 @@ pub struct ItemCheckArgs {
 #[derive(Args)]
 #[command(group(ArgGroup::new("link").args(["depends_on", "remove_depends_on", "supersedes"])))]
 pub struct ItemLinkArgs {
+    /// The start of an item id. Without one, pick at a terminal.
     pub item: Option<String>,
+    /// The item cannot start before this one is done.
     #[arg(long)]
     pub depends_on: Option<String>,
+    /// Remove a dependency.
     #[arg(long)]
     pub remove_depends_on: Option<String>,
     /// For decisions: the target moves to `superseded`.
@@ -761,7 +823,10 @@ pub enum PolicyCommand {
     /// Edit the policy in `$VISUAL` or `$EDITOR`, then apply it.
     Edit,
     /// Replace the policy with a file. Needs the principal key of an owner.
-    Apply { file: PathBuf },
+    Apply {
+        /// A TOML file with the whole policy.
+        file: PathBuf,
+    },
 }
 
 #[cfg(test)]
@@ -793,5 +858,31 @@ mod tests {
                 "`{name}` twice"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod help_tests {
+    /// Every command, argument and flag says what it is for.
+    #[test]
+    fn everything_has_help() {
+        fn walk(command: &clap::Command, path: &str, missing: &mut Vec<String>) {
+            for argument in command.get_arguments() {
+                let builtin = matches!(argument.get_id().as_str(), "help" | "version");
+                if !builtin && argument.get_help().is_none() && !argument.is_hide_set() {
+                    missing.push(format!("{path} {}", argument.get_id()));
+                }
+            }
+            for sub in command.get_subcommands() {
+                let sub_path = format!("{path} {}", sub.get_name());
+                if sub.get_about().is_none() && sub.get_name() != "help" {
+                    missing.push(sub_path.clone());
+                }
+                walk(sub, &sub_path, missing);
+            }
+        }
+        let mut missing = Vec::new();
+        walk(&super::command(), "wf", &mut missing);
+        assert!(missing.is_empty(), "no help for:\n{}", missing.join("\n"));
     }
 }
