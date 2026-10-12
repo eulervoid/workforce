@@ -1231,34 +1231,36 @@ Missing and built by us: authorization, authenticated gossip membership, orderin
 ## 17. CLI (v1 surface)
 
 ```
-wf init | invite device|member | join <code> | members | owner add|transfer
-wf device list|edit                       # name, hardware, hosted agents, max_sessions
-wf agent add|list|edit                    # profiles: harness, model, capabilities, lanes, autonomy
-wf harness models <harness>               # the models a harness offers, read from a session opened for it
-wf session start|list|show|stop|watch     # live and recent sessions, transcripts
-wf session allow|deny <session>           # answer a held permission request
-wf permissions test                       # run the permission chain on a request from stdin (M2.1)
-wf watch [--item <item>]                  # events as they arrive; prompts for what waits on you (M2.1)
-wf work brief | submit | release          # agents, inside a session
-wf daemon | sync | status | log | export
-wf fork | fork accept | fork list
-wf policy edit|diff|apply|export
-wf item add|list|show|edit|move|link|archive|diff   # all types: task, decision, ...
-wf item checkout|path <item>              # the main checkout on the item's head; its worktree (M2.1)
+wf init [-i] | status | log | export | import <file> | members
+wf policy show|edit|apply <file>          # apply and edit need an owner's principal key
+wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
+wf item add|list|show|edit|move|cancel|link|check|archive|unarchive   # all types: task, decision, ...
+wf item list [--type] [--state] [--label] [--lane] [--priority] [--ready [--for <agent>]] [--blocked] [--stranded] [--group-by]
+wf item diff|checkout|path <item>         # the work through git; the main checkout on it; its worktree
 wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | --resolve-blockers | --resolve-change-requests] [--step <number> [--done]]
-wf inbox
-wf review <item> --approve|--request-changes|--escalate
-wf search <query>
+wf mentions <@handle | @handle/agent>
+wf review <item> --approve|--request-changes|--escalate [--note]
+wf inbox                                  # blockers, reviews, merges, recovery, permission requests
+wf watch [--item <item>]                  # events as they arrive; answer what waits on you
+wf agent add|list|edit|remove             # harness, model, capabilities, lanes, instructions, autonomy
+wf harness models <harness>               # the models a harness offers
+wf session start|list [--live]|show|stop|watch|allow|deny
+wf work brief | submit | release          # agents, inside a session
+wf permissions test                       # run the permission chain on a request
+wf daemon start|stop|status|run
+wf sync [--serve] | invite device | join <code> | device list|edit
 ```
+*Later:* `wf invite member`, `wf owner add|transfer`, `wf policy diff|export`, `wf search <query>`.
+
 All commands support `--json`. Output is `{"schema": 3, "data": ...}`; the schema number is bumped on
 incompatible changes and the shapes are snapshot-tested. Item ids print as the first 6 characters of their
 base32 hash and any unique prefix of at least 4 characters is accepted, with or without `#`.
-Without `--json`, lists (`item list`, `agent list`, `log`, `mentions`) print as borderless tables
-with bold headers. Every table is built by one function in `wf-cli`, so the look is defined in one place.
+Without `--json`, lists (`item list`, `agent list`, `session list`, `device list`, `log`, `mentions`)
+print as borderless tables with bold headers, and say so when they are empty; times are local. Every table is built by one function in `wf-cli`, so the look is defined in one place.
 Styling is emitted only when stdout is a terminal; piped output is plain.
 
 `wf item edit <item>` without flags opens a markdown draft in `$VISUAL` or `$EDITOR`: TOML front matter
-between `+++` fences (`title`, `priority`, `lane`, `labels`, `requires`, `review`), then the body as plain markdown,
+between `+++` fences (`title`, `priority`, `lane`, `labels`, `requires`, `review`, `recovery`), then the body as plain markdown,
 taken verbatim. TOML has no null, so unset fields appear as commented-out hints. Unknown keys, an
 invalid priority or label, and a missing or unclosed fence are rejected. Flags (`--title`, `--body`,
 `--add-label`, ...) edit single fields instead. The item type and state are not editable here.
