@@ -607,8 +607,8 @@ fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> Stri
             }
             day = Some(date);
         }
-        let (line, text) = activity_entry(entry, width);
-        let _ = writeln!(out, "  {}  {line}", paint(DIM, time));
+        let (line, text) = activity_entry(entry, &format!("  {}  ", paint(DIM, time)), width);
+        let _ = writeln!(out, "{line}");
         if let Some(text) = text {
             let _ = writeln!(out, "{text}");
         }
@@ -616,10 +616,14 @@ fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> Stri
     out
 }
 
-/// One entry of an item's activity after its time: who did what, and the text of a comment
-/// wrapped to `width` and indented, if it has one.
+/// Where the text of an activity entry starts: under what happened, past the time.
+const ACTIVITY_INDENT: &str = "         ";
+
+/// One entry of an item's activity: `lead` (its time), who did what, and the text of a comment,
+/// if it has one. Both are wrapped to `width`, continuing under [`ACTIVITY_INDENT`].
 fn activity_entry(
     entry: &crate::view::ActivityView,
+    lead: &str,
     width: Option<usize>,
 ) -> (String, Option<String>) {
     use style::{DIM, WARNING, paint};
@@ -658,7 +662,18 @@ fn activity_entry(
         }
         Some(_) | None => parts.push(entry.summary.clone()),
     }
-    let line = parts.join(&format!(" {} ", paint(DIM, "·")));
+    let line = format!("{lead}{}", parts.join(&format!(" {} ", paint(DIM, "·"))));
+    let line = match width {
+        Some(width) => {
+            let options = textwrap::Options::new(width)
+                .break_words(false)
+                .word_separator(textwrap::WordSeparator::AsciiSpace)
+                .word_splitter(textwrap::WordSplitter::NoHyphenation)
+                .subsequent_indent(ACTIVITY_INDENT);
+            textwrap::fill(&line, options)
+        }
+        None => line,
+    };
     let text = entry
         .comment
         .as_ref()
@@ -666,7 +681,7 @@ fn activity_entry(
         .or(entry.text.as_deref())
         .filter(|text| !text.trim().is_empty())
         .map(|text| {
-            let text = wrap_markdown(text, width, "         ");
+            let text = wrap_markdown(text, width, ACTIVITY_INDENT);
             text.trim_end_matches('\n').to_string()
         });
     (line, text)
@@ -678,7 +693,7 @@ pub fn watch_line(line: &crate::view::WatchLineView) -> String {
     watch_line_for(line, text_width())
 }
 
-/// [`watch_line`] with the text of a comment wrapped to `width`, or not at all.
+/// [`watch_line`] wrapped to `width`, or not at all.
 pub fn watch_line_for(line: &crate::view::WatchLineView, width: Option<usize>) -> String {
     use style::{DIM, paint};
     let (_, time) = local_date_and_time(&line.activity.at);
@@ -686,8 +701,9 @@ pub fn watch_line_for(line: &crate::view::WatchLineView, width: Option<usize>) -
         Some(item) => format!("{}  ", id_label(item)),
         None => String::new(),
     };
-    let (what, text) = activity_entry(&line.activity, width);
-    let mut out = format!("{}  {item}{what}\n", paint(DIM, time));
+    let lead = format!("{}  {item}", paint(DIM, time));
+    let (entry, text) = activity_entry(&line.activity, &lead, width);
+    let mut out = format!("{entry}\n");
     if let Some(text) = text {
         out.push_str(&text);
         out.push('\n');
@@ -1042,6 +1058,35 @@ mod tests {
         assert_eq!(
             wrap_markdown(code, Some(12), "  "),
             "  ```\n  let value = one + two + three;\n  ```\n"
+        );
+    }
+
+    fn checked_step(text: &str) -> crate::view::ActivityView {
+        crate::view::ActivityView {
+            at: "not a timestamp".to_string(),
+            by: crate::view::ActorView {
+                kind: crate::view::ActorKind::Agent,
+                label: "@ada/coder/bh2m".to_string(),
+            },
+            kind: ActivityKind::Edited,
+            summary: format!("checked step 1: {text}"),
+            comment: None,
+            text: None,
+        }
+    }
+
+    #[test]
+    fn long_activity_lines_continue_under_the_comment_text() {
+        let entry = checked_step("wrap long activity lines under their indent");
+        let (line, _) = activity_entry(&entry, "  00:27  ", Some(40));
+        assert_eq!(
+            anstream::adapter::strip_str(&line).to_string(),
+            "  00:27  @ada/coder/bh2m · checked step\n         1: wrap long activity lines\n         under their indent"
+        );
+        let (line, _) = activity_entry(&entry, "  00:27  ", None);
+        assert_eq!(
+            anstream::adapter::strip_str(&line).to_string(),
+            "  00:27  @ada/coder/bh2m · checked step 1: wrap long activity lines under their indent"
         );
     }
 
