@@ -6,7 +6,7 @@ license.workspace = true
 
 [dependencies]
 wf-core.workspace = true
-serde.workspace = true
+ssh-key.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]

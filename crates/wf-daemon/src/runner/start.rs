@@ -129,7 +129,7 @@ impl Daemon {
             definition,
             harness,
             sandbox,
-            agent_signing: machine_config.commits.agent_signing,
+            agent_signing: machine_config.commits.agent_signing.signing(),
             item_context,
             target: policy.merge.target.clone(),
             transcripts,
@@ -300,6 +300,7 @@ impl Daemon {
             target,
             transcripts,
         } = setup;
+        let git_environment = agent_signing.environment();
         let autonomy = definition.autonomy;
         let permissions: Arc<dyn Permissions> = match sandbox.permissions(autonomy.permissions) {
             wf_core::autonomy::PermissionMode::Allow => Arc::new(Permission::Allow),
@@ -357,7 +358,7 @@ impl Daemon {
             max_duration: autonomy.max_duration,
             permissions,
             sandbox,
-            agent_signing,
+            git_environment,
             autonomy_permissions: autonomy.permissions,
         }
     }

@@ -59,6 +59,8 @@ pub enum SessionError {
     Storage(#[from] StorageClosed),
     #[error(transparent)]
     MachineConfig(#[from] MachineConfigError),
+    #[error(transparent)]
+    SigningKey(#[from] wf_vcs::signing::SigningKeyError),
     #[error(
         "agents run in Fence on this machine, but `fence` is not on PATH; install it, or set \
          `kind = \"off\"` under `[sandbox]` in the machine config to run them without a sandbox"
@@ -213,7 +215,8 @@ struct Run {
     max_duration: Option<Duration>,
     permissions: Arc<dyn Permissions>,
     sandbox: SandboxConfig,
-    agent_signing: wf_vcs::CommitSigning,
+    /// What git in the agent's processes signs with and commits as.
+    git_environment: Vec<(String, String)>,
     autonomy_permissions: wf_core::autonomy::PermissionMode,
 }
 

@@ -433,7 +433,7 @@ impl VcsAdapter for GitCli {
         target: &str,
         commit: CommitId,
         message: &str,
-        signing: CommitSigning,
+        signing: &CommitSigning,
     ) -> Result<MergeOutcome, VcsError> {
         let old = self.branch_head(target)?;
         // Merged already, by a merge whose event was never written: merging again would only add
@@ -467,19 +467,35 @@ impl VcsAdapter for GitCli {
         // Unlike `git commit`, `commit-tree` signs only when told to.
         let sign = match signing {
             CommitSigning::AsConfigured if self.signs_commits()? => "-S",
+            CommitSigning::Key(_) => "-S",
             CommitSigning::AsConfigured | CommitSigning::Unsigned => "--no-gpg-sign",
         };
-        let new = self.succeed([
-            "commit-tree",
-            sign,
-            &tree,
-            "-p",
-            &old.to_string(),
-            "-p",
-            &commit.to_string(),
-            "-m",
-            message,
-        ])?;
+        let mut args: Vec<String> = Vec::new();
+        for (key, value) in signing.config() {
+            args.extend(["-c".to_string(), format!("{key}={value}")]);
+        }
+        args.extend(
+            [
+                "commit-tree",
+                sign,
+                &tree,
+                "-p",
+                &old.to_string(),
+                "-p",
+                &commit.to_string(),
+                "-m",
+                message,
+            ]
+            .map(str::to_string),
+        );
+        let made = Self::run_in(&self.repository, &args)?;
+        if !made.success {
+            return Err(VcsError::Git {
+                command: "commit-tree".into(),
+                stderr: made.stderr.trim().to_string(),
+            });
+        }
+        let new = made.stdout;
         let new = self.oid("commit-tree", &new)?;
         Ok(match self.advance(target, &old, &new)? {
             Advance::Done => MergeOutcome::Merged { commit: new },
@@ -728,7 +744,7 @@ mod tests {
                 "main",
                 work,
                 "Merge #k3f9: add a",
-                CommitSigning::AsConfigured,
+                &CommitSigning::AsConfigured,
             )
             .unwrap();
         let MergeOutcome::Merged { commit } = outcome else {
@@ -774,12 +790,49 @@ mod tests {
         ] {
             let work = repo.work(branch, &format!("{}.txt", &branch[3..]), "x\n");
             let MergeOutcome::Merged { commit } =
-                repo.git.merge("main", work, "Merge", signing).unwrap()
+                repo.git.merge("main", work, "Merge", &signing).unwrap()
             else {
                 panic!("expected a merge");
             };
             assert_eq!(signed(commit), expected, "{signing:?}");
         }
+
+        // With the device's key, the merge verifies against the devices of the workforce.
+        let device = wf_core::identity::DeviceSigner::generate([7; 32]);
+        let key = repo.root.path().join("device-key");
+        std::fs::write(&key, crate::signing::device_private_key(&device).unwrap()).unwrap();
+        std::fs::set_permissions(&key, std::os::unix::fs::PermissionsExt::from_mode(0o600))
+            .unwrap();
+        let allowed = repo.root.path().join("allowed_signers");
+        std::fs::write(
+            &allowed,
+            crate::signing::allowed_signer("joshua@laptop", device.key()).unwrap(),
+        )
+        .unwrap();
+        let work = repo.work("wf/c", "c.txt", "c\n");
+        let MergeOutcome::Merged { commit } = repo
+            .git
+            .merge("main", work, "Merge", &CommitSigning::Key(key))
+            .unwrap()
+        else {
+            panic!("expected a merge");
+        };
+        let verified = Command::new("git")
+            .args([
+                "-c",
+                &format!("gpg.ssh.allowedSignersFile={}", allowed.display()),
+            ])
+            .args(["-c", "gpg.ssh.program=ssh-keygen"])
+            .args(["verify-commit", &commit.to_string()])
+            .current_dir(&main)
+            .output()
+            .unwrap();
+        assert!(
+            verified.status.success(),
+            "{}",
+            String::from_utf8_lossy(&verified.stderr)
+        );
+        assert!(String::from_utf8_lossy(&verified.stderr).contains("joshua@laptop"));
     }
 
     #[test]
@@ -788,7 +841,7 @@ mod tests {
         let work = repo.work("wf/k3f9", "a.txt", "a\n");
         let MergeOutcome::Merged { commit: first } = repo
             .git
-            .merge("main", work, "Merge #k3f9", CommitSigning::AsConfigured)
+            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
             .unwrap()
         else {
             panic!("expected a merge");
@@ -798,7 +851,7 @@ mod tests {
         let later = repo.commit(&main, "later work on main");
         let again = repo
             .git
-            .merge("main", work, "Merge #k3f9", CommitSigning::AsConfigured)
+            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
             .unwrap();
         assert_eq!(again, MergeOutcome::Merged { commit: first });
         assert_eq!(repo.main(), later, "nothing new on main");
@@ -815,7 +868,7 @@ mod tests {
                 "main",
                 work,
                 "Merge #k3f9: add a",
-                CommitSigning::AsConfigured,
+                &CommitSigning::AsConfigured,
             )
             .unwrap();
         let MergeOutcome::Merged { commit } = outcome else {
@@ -833,7 +886,7 @@ mod tests {
         let before = repo.commit(&main, "conflicting change");
         let outcome = repo
             .git
-            .merge("main", work, "Merge #k3f9", CommitSigning::AsConfigured)
+            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
             .unwrap();
         assert_eq!(
             outcome,
@@ -853,7 +906,7 @@ mod tests {
         let before = repo.main();
         let outcome = repo
             .git
-            .merge("main", work, "Merge #k3f9", CommitSigning::AsConfigured)
+            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
             .unwrap();
         assert_eq!(
             outcome,
@@ -876,7 +929,7 @@ mod tests {
         repo.write(&main, ".workforce.toml", "id = \"x\"\n");
         let outcome = repo
             .git
-            .merge("main", work, "Merge #k3f9", CommitSigning::AsConfigured)
+            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
             .unwrap();
         assert!(
             matches!(outcome, MergeOutcome::Merged { .. }),

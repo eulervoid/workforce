@@ -1,5 +1,7 @@
 //! Merging reviewed work into the target branch.
 
+use std::path::PathBuf;
+
 use wf_core::event::{Comment, EventBody, Merged};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
@@ -7,9 +9,10 @@ use wf_core::item::ItemView;
 use wf_core::lifecycle::MergeFailure;
 use wf_core::name::StateName;
 use wf_core::session::CommitId;
-use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, item_branch, item_worktree};
+use wf_vcs::{CommitSigning, GitCli, MergeOutcome, VcsAdapter, item_branch, item_worktree};
 
 use super::{SessionError, blocking};
+use crate::machine_config::MergeSigningConfig;
 use crate::{Daemon, Loaded};
 
 /// How often a merge that found the target moved is tried again before giving up for now.
@@ -111,16 +114,20 @@ impl Daemon {
             )
             .await;
         };
-        let signing = match self.machine_config() {
-            Ok(config) => config.commits.merge_signing,
+        let signing = match self.merge_signing() {
+            Ok(signing) => signing,
             Err(error) => return cannot_merge(wf_core::error_chain(&error)).await,
         };
         let mut outcome = MergeOutcome::TargetMoved;
         for _ in 0..MERGE_ATTEMPTS {
-            let (repository, target, message) =
-                (repository.clone(), target.clone(), message.clone());
+            let (repository, target, message, signing) = (
+                repository.clone(),
+                target.clone(),
+                message.clone(),
+                signing.clone(),
+            );
             let merged = blocking(move || {
-                GitCli::open(&repository)?.merge(&target, commit, &message, signing)
+                GitCli::open(&repository)?.merge(&target, commit, &message, &signing)
             })
             .await
             .and_then(|merged| merged.map_err(SessionError::from));
@@ -200,5 +207,45 @@ impl Daemon {
             }
         }
         Ok(())
+    }
+}
+
+impl Daemon {
+    /// How the merge commit is signed, as the machine config says now.
+    fn merge_signing(&self) -> Result<CommitSigning, SessionError> {
+        Ok(match self.machine_config()?.commits.merge_signing {
+            MergeSigningConfig::AsConfigured => CommitSigning::AsConfigured,
+            MergeSigningConfig::Unsigned => CommitSigning::Unsigned,
+            MergeSigningConfig::Device => CommitSigning::Key(self.device_signing_key()?),
+        })
+    }
+
+    /// The device's key as an SSH key file that `ssh-keygen` signs merges with, written beside the
+    /// device key, readable only by its owner.
+    fn device_signing_key(&self) -> Result<PathBuf, SessionError> {
+        use std::io::Write;
+        use std::os::unix::fs::OpenOptionsExt;
+
+        let path = self.config.data_dir.join("keys").join("device-ssh");
+        let text = wf_vcs::signing::device_private_key(&self.device)?;
+        if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
+            return Ok(path);
+        }
+        let io = |source| SessionError::Io {
+            path: path.clone(),
+            source,
+        };
+        if let Some(directory) = path.parent() {
+            std::fs::create_dir_all(directory).map_err(io)?;
+        }
+        std::fs::OpenOptions::new()
+            .write(true)
+            .create(true)
+            .truncate(true)
+            .mode(0o600)
+            .open(&path)
+            .and_then(|mut file| file.write_all(text.as_bytes()))
+            .map_err(io)?;
+        Ok(path)
     }
 }

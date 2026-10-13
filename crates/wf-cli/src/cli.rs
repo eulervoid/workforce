@@ -365,6 +365,10 @@ pub enum DeviceCommand {
     List,
     /// Change what this machine says about itself.
     Edit(DeviceEditArgs),
+    /// Print a git allowed-signers file of the workforce's devices, to check the merges they
+    /// sign: `wf device allowed-signers > .git/allowed_signers`, then
+    /// `git config gpg.ssh.allowedSignersFile .git/allowed_signers`.
+    AllowedSigners,
 }
 
 /// Fields that are given replace the current value.

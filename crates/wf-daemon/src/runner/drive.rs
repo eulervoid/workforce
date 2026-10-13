@@ -74,7 +74,7 @@ async fn drive(
         .env("WF_SESSION", run.session.to_string())
         .env("WF_WORKFORCE", run.workforce.to_string())
         .env("PATH", path.to_string_lossy());
-    for (name, value) in run.agent_signing.environment() {
+    for (name, value) in &run.git_environment {
         agent = agent.env(name, value);
     }
     let agent = match sandboxed(daemon, run, agent) {

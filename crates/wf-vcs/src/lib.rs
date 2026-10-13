@@ -2,36 +2,54 @@
 //! reviewed work into the target branch. Git is the only system, called as the `git` CLI.
 
 mod git;
+pub mod signing;
 
 use std::path::{Path, PathBuf};
 
-use serde::Deserialize;
 use wf_core::id::{HashId, ItemId};
 use wf_core::session::CommitId;
 
 pub use git::GitCli;
 
-/// Whether commits are signed.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
+/// Whether and how commits are signed.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CommitSigning {
     /// As the git config says (`commit.gpgsign`), as for the principal's own commits.
     AsConfigured,
     /// Never, whatever the git config says.
     Unsigned,
+    /// With the SSH private key in this file, which must not need a passphrase, through
+    /// `ssh-keygen`: never through an agent that might ask the principal first.
+    Key(PathBuf),
 }
 
 impl CommitSigning {
-    /// The environment that makes git in another process, such as an agent's, sign this way.
-    pub fn environment(self) -> Vec<(&'static str, &'static str)> {
+    /// The git config that signs this way, on top of what the repository's says.
+    fn config(&self) -> Vec<(&'static str, String)> {
         match self {
             CommitSigning::AsConfigured => Vec::new(),
-            CommitSigning::Unsigned => vec![
-                ("GIT_CONFIG_COUNT", "1"),
-                ("GIT_CONFIG_KEY_0", "commit.gpgsign"),
-                ("GIT_CONFIG_VALUE_0", "false"),
+            CommitSigning::Unsigned => vec![("commit.gpgsign", "false".into())],
+            CommitSigning::Key(key) => vec![
+                ("commit.gpgsign", "true".into()),
+                ("gpg.format", "ssh".into()),
+                ("user.signingkey", key.to_string_lossy().into_owned()),
+                ("gpg.ssh.program", "ssh-keygen".into()),
             ],
         }
+    }
+
+    /// The environment that makes git in another process, such as an agent's, sign this way.
+    pub fn environment(&self) -> Vec<(String, String)> {
+        let config = self.config();
+        if config.is_empty() {
+            return Vec::new();
+        }
+        let mut environment = vec![("GIT_CONFIG_COUNT".to_string(), config.len().to_string())];
+        for (index, (key, value)) in config.into_iter().enumerate() {
+            environment.push((format!("GIT_CONFIG_KEY_{index}"), key.to_string()));
+            environment.push((format!("GIT_CONFIG_VALUE_{index}"), value));
+        }
+        environment
     }
 }
 
@@ -132,6 +150,6 @@ pub trait VcsAdapter {
         target: &str,
         commit: CommitId,
         message: &str,
-        signing: CommitSigning,
+        signing: &CommitSigning,
     ) -> Result<MergeOutcome, VcsError>;
 }

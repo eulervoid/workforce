@@ -121,7 +121,41 @@ pub fn device(json: bool, command: DeviceCommand, workspace: &mut Workspace) -> 
             emit(json, &views, |views| render::devices(views))
         }
         DeviceCommand::Edit(args) => edit(json, workspace, args),
+        DeviceCommand::AllowedSigners => {
+            let lines = allowed_signers(workspace.state())?;
+            emit(json, &lines, |lines| {
+                lines.iter().map(|line| format!("{line}\n")).collect()
+            })
+        }
     }
+}
+
+/// One allowed-signers line per bound device, for `<handle>@<device name>`.
+fn allowed_signers(state: &State) -> anyhow::Result<Vec<String>> {
+    state
+        .devices()
+        .map(|info| {
+            let handle = state
+                .member(&info.principal)
+                .map_or_else(|| "unknown".to_string(), |member| member.handle.to_string());
+            let name: String = info
+                .profile
+                .map_or_else(|| info.device.fmt_short(), |profile| profile.name.clone())
+                .chars()
+                .map(|character| {
+                    if character.is_alphanumeric() || matches!(character, '-' | '_' | '.') {
+                        character
+                    } else {
+                        '-'
+                    }
+                })
+                .collect();
+            Ok(wf_vcs::signing::allowed_signer(
+                &format!("{handle}@{name}"),
+                info.device,
+            )?)
+        })
+        .collect()
 }
 
 /// Lets this device run the agent (one session at a time) unless it already says how many. Returns

@@ -495,6 +495,36 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_merge_signed_by_the_device_verifies_against_the_workforce() {
+    let script = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"
+wf work submit
+";
+    let world = World::new(script).await;
+    world.machine_config("[commits]\nmerge_signing = \"device\"\n");
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    assert_eq!(world.ended_session().await["status"], "submitted");
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
+    let allowed = world.wf.root.path().join("allowed_signers");
+    std::fs::write(&allowed, world.wf.run(&["device", "allowed-signers"])).unwrap();
+    let verified = Command::new("git")
+        .args([
+            "-c",
+            &format!("gpg.ssh.allowedSignersFile={}", allowed.display()),
+        ])
+        .args(["verify-commit", "main"])
+        .current_dir(&world.wf.repository)
+        .output()
+        .unwrap();
+    let said = String::from_utf8_lossy(&verified.stderr);
+    assert!(verified.status.success(), "{said}");
+    assert!(said.contains("joshua@"), "{said}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn releasing_reopens_the_item_and_keeps_the_branch() {
     let script = "\
 sh echo wip > wip.txt && git add wip.txt && git commit -q -m wip
