@@ -104,8 +104,8 @@ the same store, log and item model.
   B+trees, one writer with concurrent MVCC readers, stable file format.
 * **State is folded into in-memory Rust structs** by `wf-core`. Queries are typed Rust, not SQL. Changing
   the state shape needs no migration, only a refold.
-* **Snapshots:** the folded state is serialized to redb, keyed by the heads it covers. Startup loads the
-  latest snapshot and applies newer events. Large bodies (comments) stay in the log
+* **Snapshots:** the folded state is serialized to redb, with the number of events it has applied. Startup
+  loads the latest snapshot and applies newer events. Large bodies (comments) stay in the log
   and are loaded on demand by `EventId`.
 * **Derived indexes** (search, M4) are rebuildable and never a second source of truth.
 * redb is single-process. The daemon owns the store; the CLI talks to the daemon and opens the store
@@ -427,13 +427,12 @@ encodings above; redb itself stores bytes.
 |---|---|---|
 | `events` | event id (32 bytes) | encoded `Event` |
 | `feeds` | `(author, seq)` | event ids (multimap: more than one only after equivocation). An append's `prev` must be stored |
-| `heads` | author | tips `(seq, event id)` of the author's feed (more than one only after equivocation) |
+| `log` | position | event id, in the order events were applied |
 | `pending` | event id | encoded `Event` still waiting for parents |
-| `snapshots` | BLAKE3 of the covered heads | encoded `(covered heads, blob)` |
-| `meta` | `latest_snapshot` | key of the current snapshot |
+| `meta` | `snapshot` | the snapshot blob |
 
 A snapshot blob is `(format: u32, ref parser version: u16, State)`. It is a cache: any mismatch of
-format or parser version, or a snapshot that is ahead of the log, discards it and the state is refolded
+format or parser version, or a snapshot that is ahead of the log or disagrees with it, discards it and the state is refolded
 from `events`. Appends and the snapshot that covers them commit in one transaction.
 
 Principal-signed statements are wrapped in an ordinary device-feed event, so every feed stays gapless
