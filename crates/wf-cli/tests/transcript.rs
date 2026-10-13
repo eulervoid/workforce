@@ -8,13 +8,13 @@ use wf_harness::TranscriptEntry;
 const TRANSCRIPT: &str = include_str!("fixtures/transcript-ivnj5b.jsonl");
 
 fn render(width: usize, format: Format, detail: Detail) -> String {
-    let mut renderer = Printer::new("coder", width, format, detail, TimeZone::UTC);
+    let mut printer = Printer::new("coder", width, format, detail, TimeZone::UTC);
     let mut out = String::new();
     for line in TRANSCRIPT.lines() {
         let entry: TranscriptEntry = serde_json::from_str(line).unwrap();
-        out.push_str(&renderer.render(&entry));
+        out.push_str(&printer.render(&entry));
     }
-    out.push_str(&renderer.finish(Session::Ended));
+    out.push_str(&printer.finish(Session::Ended));
     out
 }
 

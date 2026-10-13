@@ -1,13 +1,11 @@
-use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
 use crate::transcript::{self, Detail, Format, Printer};
-use anyhow::{Context, anyhow, bail};
+use anyhow::{anyhow, bail};
 use wf_core::id::{HashId, SessionId};
 use wf_harness::Permission;
-use wf_harness::TranscriptEntry;
 
 use crate::cli::{SessionCommand, SessionStartArgs};
 use crate::commands::{Scope, choose_item, emit};
@@ -239,14 +237,14 @@ fn wait_for_transcript(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn transcripts(workspace: &Workspace) -> std::path::PathBuf {
+pub(crate) fn transcripts(workspace: &Workspace) -> std::path::PathBuf {
     workspace
         .data
         .workforce(&workspace.workforce())
         .join("transcripts")
 }
 
-fn transcript_path(workspace: &Workspace, session: SessionId) -> std::path::PathBuf {
+pub(crate) fn transcript_path(workspace: &Workspace, session: SessionId) -> std::path::PathBuf {
     transcripts(workspace).join(format!("{session}.jsonl"))
 }
 
@@ -263,34 +261,25 @@ fn watch(
     raw: bool,
     full: bool,
 ) -> anyhow::Result<()> {
-    let path = transcript_path(workspace, session);
-    let mut file = File::open(&path).with_context(|| {
-        format!(
-            "opening {}; is this the machine the session ran on?",
-            path.display()
-        )
-    })?;
+    let mut reader = transcript::Reader::open(&transcript_path(workspace, session))?;
     let agent = workspace.state().session(session).map_or_else(
         || "agent".to_owned(),
         |session| session.agent().name.to_string(),
     );
     let format = if raw { Format::Raw } else { Format::Styled };
     let detail = if full { Detail::Full } else { Detail::Abridged };
-    let mut renderer = Printer::new(
+    let mut printer = Printer::new(
         &agent,
         transcript::terminal_width(),
         format,
         detail,
         jiff::tz::TimeZone::system(),
     );
-    let mut pending = String::new();
-    let mut buffer = [0u8; 8192];
-    let mut unfinished_bytes = Vec::new();
     let mut ended = false;
     let mut last_refresh = std::time::Instant::now();
     loop {
-        let read = file.read(&mut buffer)?;
-        if read == 0 {
+        let entries = reader.read()?;
+        if entries.is_empty() {
             if no_follow || ended {
                 let ended = ended
                     || workspace
@@ -302,11 +291,11 @@ fn watch(
                 } else {
                     transcript::Session::Live
                 };
-                anstream::print!("{}", renderer.finish(session));
+                anstream::print!("{}", printer.finish(session));
                 std::io::stdout().flush()?;
                 return Ok(());
             }
-            anstream::print!("{}", renderer.caught_up(jiff::Timestamp::now()));
+            anstream::print!("{}", printer.caught_up(jiff::Timestamp::now()));
             std::io::stdout().flush()?;
             if last_refresh.elapsed() >= Duration::from_secs(1) {
                 workspace.refresh()?;
@@ -323,19 +312,9 @@ fn watch(
             std::thread::sleep(FOLLOW_INTERVAL);
             continue;
         }
-        unfinished_bytes.extend_from_slice(&buffer[..read]);
-        let valid = match std::str::from_utf8(&unfinished_bytes) {
-            Ok(text) => text.len(),
-            Err(error) => error.valid_up_to(),
-        };
-        pending.push_str(std::str::from_utf8(&unfinished_bytes[..valid])?);
-        unfinished_bytes.drain(..valid);
-        while let Some(newline) = pending.find('\n') {
-            let line: String = pending.drain(..=newline).collect();
-            let entry: TranscriptEntry = serde_json::from_str(line.trim_end())
-                .with_context(|| format!("reading {}", path.display()))?;
-            anstream::print!("{}", renderer.render(&entry));
-            std::io::stdout().flush()?;
+        for entry in &entries {
+            anstream::print!("{}", printer.render(entry));
         }
+        std::io::stdout().flush()?;
     }
 }

@@ -6,6 +6,7 @@
 //! finished. [`Layout`] draws a block or the tail for a width; the append-only [`Printer`] of `wf
 //! session watch` and the dashboard both draw with it.
 
+mod file;
 mod layout;
 mod printer;
 
@@ -15,6 +16,7 @@ use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
 use wf_harness::{Decision, Direction, Permission, TranscriptEntry};
 
+pub use file::Reader;
 pub use layout::{Detail, Format, Layout, terminal_width};
 pub use printer::{Printer, Session};
 
