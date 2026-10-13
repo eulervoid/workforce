@@ -17,7 +17,7 @@ use wf_store::{RedbStore, Replica};
 
 use crate::cli::ForkArgs;
 use crate::commands::emit;
-use crate::keys::DataDir;
+use crate::data_dir::DataDir;
 use crate::network::{network_for, sync_devices};
 use crate::view::{actor_label, device_label};
 use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};

@@ -165,7 +165,7 @@ struct WorldSetup {
 
 impl WorldSetup {
     async fn start_daemon(self) -> World {
-        let data = wf_cli::keys::DataDir::new(self.wf.data.join("workforce"));
+        let data = wf_cli::data_dir::DataDir::new(self.wf.data.join("workforce"));
         let device = data.device(false).unwrap().unwrap();
         let mut harnesses = BTreeMap::new();
         for (harness, script) in &self.scripts {
@@ -585,7 +585,7 @@ async fn a_session_left_live_by_an_earlier_daemon_is_interrupted_when_the_next_o
     let setup = World::without_daemon(&[("coder", "")]);
     let item = setup.wf.add(&["--title", "Orphaned"]);
     {
-        let data = wf_cli::keys::DataDir::new(setup.wf.data.join("workforce"));
+        let data = wf_cli::data_dir::DataDir::new(setup.wf.data.join("workforce"));
         let mut workspace =
             wf_cli::workspace::Workspace::open(data, &setup.wf.repository, false).unwrap();
         let id = workspace.resolve_item(short(&item)).unwrap();

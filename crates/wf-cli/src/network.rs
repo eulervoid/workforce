@@ -20,8 +20,8 @@ use wf_store::{RedbStore, Replica};
 
 use crate::cli::{InviteDeviceArgs, JoinArgs, SyncArgs};
 use crate::commands::emit;
+use crate::data_dir::DataDir;
 use crate::interactive::Mode;
-use crate::keys::DataDir;
 use crate::view::{device_label, timestamp_now};
 use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
 

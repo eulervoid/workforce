@@ -23,9 +23,9 @@ use wf_core::id::{HashId, ItemId};
 use wf_core::name::Handle;
 
 use crate::cli::*;
+use crate::data_dir::DataDir;
 use crate::harness;
 use crate::interactive::{self, Mode};
-use crate::keys::DataDir;
 use crate::render;
 use crate::view::{self, Envelope};
 use crate::workspace::Workspace;

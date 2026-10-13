@@ -1,13 +1,13 @@
 pub mod cli;
 pub mod commands;
 pub mod daemon;
+pub mod data_dir;
 pub mod devices;
 pub mod draft;
 pub mod export;
 pub mod fork;
 pub mod harness;
 pub mod interactive;
-pub mod keys;
 pub mod network;
 pub mod permissions;
 pub mod render;

@@ -13,7 +13,7 @@ use wf_net::Network;
 
 use crate::cli::{DaemonArgs, DaemonCommand};
 use crate::commands::emit;
-use crate::keys::DataDir;
+use crate::data_dir::DataDir;
 use crate::network::network_for;
 
 /// How long `wf daemon start` waits for the daemon to answer.

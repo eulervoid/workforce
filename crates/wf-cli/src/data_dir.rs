@@ -1,5 +1,5 @@
-//! Key files, mode 0600, under `$XDG_DATA_HOME/workforce/`: `keys/device.key` for the machine and
-//! `<workforce>/principal.key` for each workforce.
+//! The data directory, `$XDG_DATA_HOME/workforce/`, and the key files in it, mode 0600:
+//! `keys/device.key` for the machine and `<workforce>/principal.key` for each workforce.
 //! A key-provider hook (1Password, ssh-agent) replaces this later.
 
 use std::io::Write;

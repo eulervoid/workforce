@@ -1,4 +1,4 @@
-use wf_cli::keys::DataDir;
+use wf_cli::data_dir::DataDir;
 
 fn main() {
     let cli = wf_cli::cli::parse();

@@ -15,7 +15,7 @@ use wf_daemon::proto::HeldPermission;
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
-use crate::keys::DataDir;
+use crate::data_dir::DataDir;
 
 pub const WORKFORCE_FILE: &str = ".workforce.toml";
 

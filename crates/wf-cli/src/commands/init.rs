@@ -13,9 +13,9 @@ use wf_store::{RedbStore, Replica};
 
 use super::{emit, handle_from_environment};
 use crate::cli::*;
+use crate::data_dir::DataDir;
 use crate::harness;
 use crate::interactive::{self, Mode};
-use crate::keys::DataDir;
 use crate::workspace::{self, WORKFORCE_FILE, WorkforceFile};
 
 #[derive(Serialize)]
