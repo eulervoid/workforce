@@ -183,7 +183,13 @@ impl State {
                                 category: finished,
                             }
                         }
-                        _ => continue,
+                        Some(
+                            StateCategory::Inactive
+                            | StateCategory::Open
+                            | StateCategory::Active
+                            | StateCategory::Review,
+                        )
+                        | None => continue,
                     }
                 }
                 EventBody::ItemEdited(edited) if edited.item == item => {
@@ -209,7 +215,14 @@ impl State {
                         .iter()
                         .flat_map(|change| match change {
                             Change::Body(body) => referenced_here(body),
-                            _ => BTreeSet::new(),
+                            Change::Title(_)
+                            | Change::Priority(_)
+                            | Change::Lane(_)
+                            | Change::Labels(_)
+                            | Change::Requires(_)
+                            | Change::ReviewLevel(_)
+                            | Change::StepDone { .. }
+                            | Change::RecoveryLevel(_) => BTreeSet::new(),
                         })
                         .collect();
                     referenced_in(edited.item, referenced);

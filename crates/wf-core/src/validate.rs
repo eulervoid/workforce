@@ -377,7 +377,25 @@ impl State {
         self.check_hlc(event)?;
         match &content.body {
             EventBody::DeviceBound(_) => self.check_binding(event)?,
-            _ => self.check_author(event)?,
+            EventBody::Genesis(_)
+            | EventBody::PolicySet(_)
+            | EventBody::AgentDefined(_)
+            | EventBody::AgentRemoved(_)
+            | EventBody::InviteCreated(_)
+            | EventBody::DeviceProfile(_)
+            | EventBody::ForkAnnounced(_)
+            | EventBody::ItemCreated(_)
+            | EventBody::ItemEdited(_)
+            | EventBody::ItemMoved(_)
+            | EventBody::ItemLinked(_)
+            | EventBody::ItemArchived(_)
+            | EventBody::ItemUnarchived(_)
+            | EventBody::Commented(_)
+            | EventBody::SessionStarted(_)
+            | EventBody::SessionEnded(_)
+            | EventBody::Reviewed(_)
+            | EventBody::Merged(_)
+            | EventBody::Unknown { .. } => self.check_author(event)?,
         }
         self.check_body(event, trust)?;
         Ok(Admission::Apply(Origin::Own))
@@ -655,7 +673,26 @@ impl State {
                 EventBody::Reviewed(review) if review.verdict == Verdict::Escalate => {
                     Err(PolicyViolation::PrincipalCannotEscalate)
                 }
-                _ => Ok(()),
+                EventBody::Genesis(_)
+                | EventBody::PolicySet(_)
+                | EventBody::AgentDefined(_)
+                | EventBody::AgentRemoved(_)
+                | EventBody::InviteCreated(_)
+                | EventBody::DeviceBound(_)
+                | EventBody::DeviceProfile(_)
+                | EventBody::ForkAnnounced(_)
+                | EventBody::ItemCreated(_)
+                | EventBody::ItemEdited(_)
+                | EventBody::ItemMoved(_)
+                | EventBody::ItemLinked(_)
+                | EventBody::ItemArchived(_)
+                | EventBody::ItemUnarchived(_)
+                | EventBody::Commented(_)
+                | EventBody::SessionStarted(_)
+                | EventBody::SessionEnded(_)
+                | EventBody::Reviewed(_)
+                | EventBody::Merged(_)
+                | EventBody::Unknown { .. } => Ok(()),
             };
         };
         let folded = workforce

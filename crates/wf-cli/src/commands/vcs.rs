@@ -3,6 +3,7 @@
 use anyhow::{anyhow, bail};
 use serde::Serialize;
 use wf_core::id::{HashId, ItemId};
+use wf_core::review::ReviewStatus;
 
 use super::emit;
 use super::item::{Scope, choose_item};
@@ -147,10 +148,15 @@ pub(super) fn path(
     let path = wf_vcs::item_worktree(&workspace.data.workforce(&workspace.workforce()), id);
     if !path.is_dir() {
         let merged = match workspace.state().review_status(id) {
-            Some(wf_core::review::ReviewStatus::Merged { commit }) => {
+            Some(ReviewStatus::Merged { commit }) => {
                 format!("; its work was merged as {}", &commit.to_string()[..8])
             }
-            _ => String::new(),
+            Some(
+                ReviewStatus::Awaiting { .. }
+                | ReviewStatus::ChangesRequested
+                | ReviewStatus::Approved { .. },
+            )
+            | None => String::new(),
         };
         bail!("#{} has no worktree on this machine{merged}", id.short());
     }
