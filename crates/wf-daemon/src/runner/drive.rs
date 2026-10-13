@@ -142,6 +142,14 @@ async fn drive(
             Begin::New => None,
             Begin::Resume(record) => record.prompted_ms,
         },
+        // An agent that does not report its options again on a resume runs the model it ran.
+        model: conversation
+            .model()
+            .map(str::to_string)
+            .or_else(|| match &run.begin {
+                Begin::New => None,
+                Begin::Resume(record) => record.model.clone(),
+            }),
     };
     if let Err(error) = record.write(&run.agent_session) {
         // Without the record the session still runs; it only cannot be resumed after a restart.

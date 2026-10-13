@@ -78,6 +78,14 @@ fn model_choices(
     found
 }
 
+/// The current value of the agent's model option; `None` when it has none.
+fn current_model(options: &[SessionConfigOption]) -> Option<String> {
+    model_choices(options)
+        .into_iter()
+        .find(|(_, is_current, _)| *is_current)
+        .map(|(_, _, choice)| choice.value.0.to_string())
+}
+
 /// The model option of the agent and the value of it that `wanted` names, by value or by name.
 fn choose_model(
     options: &[SessionConfigOption],
@@ -190,6 +198,9 @@ impl Drop for AgentTask {
 /// between them. Dropping it stops the agent.
 pub struct Conversation {
     session: AgentSessionId,
+    /// The current value of the agent's model option once the session opened and the model
+    /// was set; `None` when the agent has no model option.
+    model: Option<String>,
     turns: mpsc::Sender<Turn>,
     /// Counts the cancels asked for. A watch keeps the latest value, so no cancel is lost, and
     /// both the turn and a permission request it waits on see it.
@@ -221,7 +232,7 @@ impl Conversation {
         let model = launch.model;
         let (refused, mut refusal) = oneshot::channel();
         let (turns, mut incoming) = mpsc::channel::<Turn>(1);
-        let (ready, opened) = oneshot::channel::<SessionId>();
+        let (ready, opened) = oneshot::channel::<(SessionId, Option<String>)>();
         let (cancel, cancelled) = watch::channel(0u64);
         let cancel = Arc::new(cancel);
         let mut cancelled_turn = cancelled.clone();
@@ -315,11 +326,12 @@ impl Conversation {
                             ));
                         }
                     };
+                    let options = options.unwrap_or_default();
+                    let mut current = current_model(&options);
                     if let Some(wanted) = &model {
-                        let options = options.as_deref().unwrap_or_default();
-                        match choose_model(options, wanted) {
+                        match choose_model(&options, wanted) {
                             Ok((option, value)) => {
-                                connection
+                                let set = connection
                                     .send_request(SetSessionConfigOptionRequest::new(
                                         session_id.clone(),
                                         option,
@@ -327,6 +339,10 @@ impl Conversation {
                                     ))
                                     .block_task()
                                     .await?;
+                                // An agent that leaves its options out of the answer runs the
+                                // model it was set to.
+                                current = current_model(&set.config_options)
+                                    .or_else(|| Some(value.0.to_string()));
                             }
                             Err(error) => {
                                 let _ = refused.send(error);
@@ -336,7 +352,7 @@ impl Conversation {
                             }
                         }
                     }
-                    let _ = ready.send(session_id.clone());
+                    let _ = ready.send((session_id.clone(), current));
                     while let Some(turn) = incoming.recv().await {
                         said.lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
@@ -377,8 +393,9 @@ impl Conversation {
         // Given up before it opened, the start drops the task and with it the agent.
         let mut task = AgentTask(Some(task));
         match opened.await {
-            Ok(session) => Ok(Self {
+            Ok((session, model)) => Ok(Self {
                 session: AgentSessionId(session.0.to_string()),
+                model,
                 turns,
                 cancel,
                 task,
@@ -396,6 +413,11 @@ impl Conversation {
     /// The id the agent gave the session, to resume it by in a later conversation.
     pub fn session(&self) -> &AgentSessionId {
         &self.session
+    }
+
+    /// The model the session runs with, as the value of the agent's model option.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
 
     /// Sends a prompt and waits for the turn to end.
