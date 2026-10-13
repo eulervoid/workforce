@@ -6,6 +6,7 @@ mod dispatch;
 mod drive;
 mod end;
 mod merge;
+mod resume;
 mod start;
 
 pub(crate) use dispatch::run_dispatcher;
@@ -92,15 +93,51 @@ const START_TIMEOUT: Duration = Duration::from_secs(180);
 const CANCEL_GRACE: Duration = Duration::from_secs(20);
 
 /// The sessions this daemon is running. Lost with the process, which is why a daemon that starts
-/// ends every live session of its machine.
+/// resumes every live session of its machine, or ends it.
 #[derive(Default)]
 pub(crate) struct Runners {
     running: Mutex<BTreeMap<SessionId, mpsc::UnboundedSender<Stop>>>,
+    /// The tasks of the sessions, to wait for when the daemon halts.
+    tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
 }
+
+/// How long a halting daemon waits for its sessions' harnesses to close.
+const HALT_GRACE: Duration = Duration::from_secs(40);
 
 impl Runners {
     fn add(&self, session: SessionId, stop: mpsc::UnboundedSender<Stop>) {
         self.lock().insert(session, stop);
+    }
+
+    fn track(&self, task: tokio::task::JoinHandle<()>) {
+        let mut tasks = self
+            .tasks
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        tasks.retain(|task| !task.is_finished());
+        tasks.push(task);
+    }
+
+    /// Stops every session's harness and waits until they are closed, at most [`HALT_GRACE`].
+    pub(crate) async fn halt(&self) {
+        for (_, stop) in std::mem::take(&mut *self.lock()) {
+            let _ = stop.send(Stop::Now);
+        }
+        let waited = tokio::time::Instant::now();
+        while waited.elapsed() < HALT_GRACE {
+            let running = {
+                let mut tasks = self
+                    .tasks
+                    .lock()
+                    .unwrap_or_else(|poisoned| poisoned.into_inner());
+                tasks.retain(|task| !task.is_finished());
+                !tasks.is_empty()
+            };
+            if !running {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
     }
 
     /// Stops the task of `session`, if it runs here.
@@ -165,6 +202,9 @@ struct Run {
     model: Option<String>,
     worktree: PathBuf,
     transcript: PathBuf,
+    /// Where the agent's own id of the session is kept, to resume it after a restart.
+    agent_session: PathBuf,
+    begin: Begin,
     branch: String,
     target: String,
     repository: PathBuf,
@@ -173,6 +213,31 @@ struct Run {
     max_duration: Option<Duration>,
     permissions: Arc<dyn Permissions>,
     sandbox: SandboxConfig,
+    autonomy_permissions: wf_core::autonomy::PermissionMode,
+}
+
+impl Run {
+    /// How the agent is confined, for the log line that says it started.
+    fn isolation(&self) -> &'static str {
+        match (&self.sandbox, self.autonomy_permissions) {
+            (SandboxConfig::Fence(_), _) => "",
+            (SandboxConfig::Off {}, wf_core::autonomy::PermissionMode::Allow) => {
+                " without a sandbox, so what it may do is asked"
+            }
+            (
+                SandboxConfig::Off {},
+                wf_core::autonomy::PermissionMode::Ask | wf_core::autonomy::PermissionMode::Deny,
+            ) => " without a sandbox",
+        }
+    }
+}
+
+/// How the task of a session begins.
+enum Begin {
+    /// A new conversation, which is told the brief.
+    New,
+    /// The conversation the agent had in the session before this daemon started.
+    Resume(resume::AgentSessionRecord),
 }
 
 /// How the task of a session ends.

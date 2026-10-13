@@ -45,6 +45,10 @@ struct World {
     wf: Sandbox,
     daemon: Arc<Daemon>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
+    /// The script of each harness.
+    scripts: BTreeMap<String, PathBuf>,
+    /// How the fake agents offer to reopen a session: `resume`, `load` or not at all.
+    reopens: &'static str,
 }
 
 /// The fake agents run without Fence, so what they are allowed to do is asked.
@@ -88,7 +92,27 @@ impl World {
             scripts.insert(harness, path);
         }
         std::fs::write(wf.root.path().join("config.toml"), SANDBOX_OFF).unwrap();
-        WorldSetup { wf, scripts }
+        WorldSetup {
+            wf,
+            scripts,
+            reopens: "resume",
+        }
+    }
+
+    /// Stops the daemon as `wf daemon stop` does and starts another on the same data.
+    async fn restart(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        self.daemon.halt().await;
+        let (daemon, shutdown) = start_daemon(&self.wf, &self.scripts, self.reopens).await;
+        self.daemon = daemon;
+        self.shutdown = Some(shutdown);
+    }
+
+    fn transcript(&self, item: &str) -> String {
+        self.wf
+            .run(&["session", "watch", short(item), "--no-follow"])
     }
 
     /// Writes the machine config of the daemon: `text`, with the fake agents unsandboxed.
@@ -161,59 +185,73 @@ struct WorldSetup {
     wf: Sandbox,
     /// The script of each harness.
     scripts: BTreeMap<String, PathBuf>,
+    reopens: &'static str,
 }
 
 impl WorldSetup {
     async fn start_daemon(self) -> World {
-        let data = wf_cli::data_dir::DataDir::new(self.wf.data.join("workforce"));
-        let device = data.device(false).unwrap().unwrap();
-        let mut harnesses = BTreeMap::new();
-        for (harness, script) in &self.scripts {
-            harnesses.insert(
-                HarnessName::new(harness).unwrap(),
-                AcpAgentConfig::new(fake_agent())
-                    .env("FAKE_AGENT_SCRIPT", script.to_string_lossy())
-                    .env("WF_BIN", env!("CARGO_BIN_EXE_wf"))
-                    .env("XDG_DATA_HOME", self.wf.data.to_string_lossy())
-                    .env(
-                        "XDG_RUNTIME_DIR",
-                        self.wf.root.path().join("run").to_string_lossy(),
-                    )
-                    .env("USER", "joshua"),
-            );
+        let (daemon, shutdown) = start_daemon(&self.wf, &self.scripts, self.reopens).await;
+        World {
+            wf: self.wf,
+            daemon,
+            shutdown: Some(shutdown),
+            scripts: self.scripts,
+            reopens: self.reopens,
         }
-        let socket = self.wf.root.path().join("run/workforce/daemon.sock");
-        let daemon = Daemon::start(
-            Config {
-                data_dir: data.root().to_path_buf(),
-                socket: socket.clone(),
-                network: Network::Direct,
-                harnesses,
-                machine_config: Some(self.wf.root.path().join("config.toml")),
-                // A fresh copy of a binary is slow to start the first time on macOS, and the
-                // fake agent runs `$WF_BIN`.
-                wf_binary: None,
-            },
-            device,
-        )
-        .await
-        .unwrap();
-        let (shutdown, signal) = tokio::sync::oneshot::channel::<()>();
-        tokio::spawn(Arc::clone(&daemon).serve(async {
-            let _ = signal.await;
-        }));
-        for _ in 0..200 {
-            if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
-                return World {
-                    wf: self.wf,
-                    daemon,
-                    shutdown: Some(shutdown),
-                };
-            }
-            tokio::time::sleep(Duration::from_millis(25)).await;
-        }
-        panic!("the daemon did not start");
     }
+}
+
+/// Starts a daemon whose harnesses are the fake agent following `scripts`, and serves it.
+async fn start_daemon(
+    wf: &Sandbox,
+    scripts: &BTreeMap<String, PathBuf>,
+    reopens: &str,
+) -> (Arc<Daemon>, tokio::sync::oneshot::Sender<()>) {
+    let data = wf_cli::data_dir::DataDir::new(wf.data.join("workforce"));
+    let device = data.device(false).unwrap().unwrap();
+    let mut harnesses = BTreeMap::new();
+    for (harness, script) in scripts {
+        harnesses.insert(
+            HarnessName::new(harness).unwrap(),
+            AcpAgentConfig::new(fake_agent())
+                .env("FAKE_AGENT_SCRIPT", script.to_string_lossy())
+                .env("WF_BIN", env!("CARGO_BIN_EXE_wf"))
+                .env("XDG_DATA_HOME", wf.data.to_string_lossy())
+                .env(
+                    "XDG_RUNTIME_DIR",
+                    wf.root.path().join("run").to_string_lossy(),
+                )
+                .env("USER", "joshua")
+                .env("FAKE_AGENT_REOPENS", reopens),
+        );
+    }
+    let socket = wf.root.path().join("run/workforce/daemon.sock");
+    let daemon = Daemon::start(
+        Config {
+            data_dir: data.root().to_path_buf(),
+            socket: socket.clone(),
+            network: Network::Direct,
+            harnesses,
+            machine_config: Some(wf.root.path().join("config.toml")),
+            // A fresh copy of a binary is slow to start the first time on macOS, and the
+            // fake agent runs `$WF_BIN`.
+            wf_binary: None,
+        },
+        device,
+    )
+    .await
+    .unwrap();
+    let (shutdown, signal) = tokio::sync::oneshot::channel::<()>();
+    tokio::spawn(Arc::clone(&daemon).serve(async {
+        let _ = signal.await;
+    }));
+    for _ in 0..200 {
+        if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
+            return (daemon, shutdown);
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the daemon did not start");
 }
 
 impl Drop for World {
@@ -612,6 +650,87 @@ async fn a_session_left_live_by_an_earlier_daemon_is_interrupted_when_the_next_o
     let world = setup.start_daemon().await;
     let session = world.ended_session().await;
     assert_eq!(session["status"], "interrupted");
+    assert_eq!(world.item(&item)["state"], "open");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_goes_on_in_its_conversation_after_the_daemon_restarts() {
+    let script = "\
+say started
+hang
+sh echo done > a.txt && git add a.txt && git commit -q -m a
+wf work submit
+";
+    let mut world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Survives a restart"]);
+    start_session(&world, &item);
+    world
+        .wait("the first turn", |world| {
+            world.transcript(&item).contains("started")
+        })
+        .await;
+    world.restart().await;
+    let session = world.ended_session().await;
+    assert_eq!(world.sessions().len(), 1, "the same session went on");
+    assert_eq!(session["status"], "submitted", "{session}");
+    let transcript = world.transcript(&item);
+    assert!(
+        transcript.contains("wf restarted while you were working"),
+        "{transcript}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_parked_session_stays_parked_across_a_restart() {
+    let script = "\
+wf comment {item} \"which crate?\" --block
+turn
+say got {item}
+wf work submit
+";
+    let mut world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Waits over a restart"]);
+    start_session(&world, &item);
+    world
+        .wait("the session to park", |world| {
+            world.sessions()[0]["status"] == "parked"
+        })
+        .await;
+    world.restart().await;
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    assert_eq!(world.sessions()[0]["status"], "parked");
+    world.wf.run(&[
+        "comment",
+        short(&item),
+        "Use humantime",
+        "--resolve-blockers",
+    ]);
+    let session = world.ended_session().await;
+    assert_eq!(world.sessions().len(), 1);
+    assert_eq!(session["status"], "submitted", "{session}");
+    let transcript = world.transcript(&item);
+    assert!(transcript.contains("Use humantime"), "{transcript}");
+    assert!(
+        !transcript.contains("wf restarted while you were working"),
+        "a parked session is told what it waited for, nothing else: {transcript}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_whose_agent_cannot_reopen_it_is_interrupted_after_a_restart() {
+    let mut setup = World::without_daemon(&[("coder", "say started\nhang\n")]);
+    setup.reopens = "";
+    let mut world = setup.start_daemon().await;
+    let item = world.wf.add(&["--title", "Lost on restart"]);
+    start_session(&world, &item);
+    world
+        .wait("the first turn", |world| {
+            world.transcript(&item).contains("started")
+        })
+        .await;
+    world.restart().await;
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "interrupted", "{session}");
     assert_eq!(world.item(&item)["state"], "open");
 }
 

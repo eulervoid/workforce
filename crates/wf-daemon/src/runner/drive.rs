@@ -5,14 +5,17 @@ use std::sync::Arc;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use wf_core::event::CommentKind;
+use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
 use wf_core::session::CommitId;
-use wf_harness::{Conversation, Launch, Opening};
+use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
 use wf_vcs::{GitCli, VcsAdapter};
 
-use super::brief::{brief, resumed};
+use super::brief::{brief, restarted, resumed};
+use super::resume::AgentSessionRecord;
 use super::start::sandboxed;
-use super::{CANCEL_GRACE, End, GRACE, Run, START_TIMEOUT, Stop, blocking};
+use super::{Begin, CANCEL_GRACE, End, GRACE, Run, START_TIMEOUT, Stop, blocking};
 use crate::{Daemon, Loaded};
 
 /// The task of one session: runs the harness, and ends the session if nobody else does.
@@ -82,9 +85,13 @@ async fn drive(
             return failed(format!("the sandbox could not be set up: {problem}"));
         }
     };
+    let opening = match &run.begin {
+        Begin::New => Opening::New,
+        Begin::Resume(record) => Opening::Resume(AgentSessionId(record.id.clone())),
+    };
     let start = Conversation::start(Launch {
         agent,
-        opening: Opening::New,
+        opening,
         model: run.model.clone(),
         directory: run.worktree.clone(),
         permissions: Arc::clone(&run.permissions),
@@ -105,6 +112,17 @@ async fn drive(
     };
     let mut conversation = match started {
         Ok(conversation) => conversation,
+        // The agent could not take the conversation up again: the session ends as any session an
+        // earlier daemon left behind.
+        Err(error) if matches!(run.begin, Begin::Resume(_)) => {
+            tracing::info!(
+                "session {}: {} could not resume it: {}",
+                run.session,
+                run.agent,
+                wf_core::error_chain(&error)
+            );
+            return End::Interrupt(Interruption::Interrupted);
+        }
         Err(error) => {
             let report = wf_core::error_chain(&error);
             tracing::warn!(
@@ -115,7 +133,22 @@ async fn drive(
             return failed(format!("{} did not start: {report}", run.agent));
         }
     };
-    let end = turns(daemon, loaded, run, stopped, &mut conversation).await;
+    let mut record = AgentSessionRecord {
+        id: conversation.session().0.clone(),
+        prompted_ms: match &run.begin {
+            Begin::New => None,
+            Begin::Resume(record) => record.prompted_ms,
+        },
+    };
+    if let Err(error) = record.write(&run.agent_session) {
+        // Without the record the session still runs; it only cannot be resumed after a restart.
+        tracing::warn!(
+            "session {}: could not keep the agent's id of it in {}: {error}",
+            run.session,
+            run.agent_session.display()
+        );
+    }
+    let end = turns(daemon, loaded, run, stopped, &mut conversation, &mut record).await;
     let _ = conversation.close().await;
     end
 }
@@ -126,16 +159,25 @@ async fn turns(
     run: &Run,
     stopped: &mut mpsc::UnboundedReceiver<Stop>,
     conversation: &mut Conversation,
+    record: &mut AgentSessionRecord,
 ) -> End {
-    let mut prompt = match brief(loaded, run).await {
+    // A resumed session's time counts from the resume: how long the daemon was down is unknown.
+    let deadline = run.max_duration.map(|duration| Instant::now() + duration);
+    let mut prompt = match first_prompt(daemon, loaded, run, stopped, &deadline, record).await {
         Ok(prompt) => prompt,
-        Err(because) => return failed(because),
+        Err(end) => return end,
     };
     let cancel = conversation.cancel();
-    let deadline = run.max_duration.map(|duration| Instant::now() + duration);
     let mut last_head = branch_head(run).await;
     let mut turns_without_commit = 0;
     loop {
+        record.prompted_ms = Some(crate::now_ms());
+        if let Err(error) = record.write(&run.agent_session) {
+            tracing::warn!(
+                "session {}: could not keep when it was prompted: {error}",
+                run.session
+            );
+        }
         let turn = conversation.reply(prompt);
         tokio::pin!(turn);
         let result = tokio::select! {
@@ -205,6 +247,56 @@ async fn turns(
                 Parked::MovedOn => return End::Interrupt(Interruption::MovedOn),
             },
         }
+    }
+}
+
+/// What the session is told first: its brief, or after a restart that it was resumed. A session
+/// that was parked when the daemon stopped waits until its item is ready again.
+async fn first_prompt(
+    daemon: &Arc<Daemon>,
+    loaded: &Arc<Loaded>,
+    run: &Run,
+    stopped: &mut mpsc::UnboundedReceiver<Stop>,
+    deadline: &Option<Instant>,
+    record: &AgentSessionRecord,
+) -> Result<String, End> {
+    let Some(prompted_ms) = record.prompted_ms else {
+        return brief(loaded, run).await.map_err(failed);
+    };
+    let Ok(state) = daemon.snapshot(loaded).await else {
+        return Err(failed("the workforce could not be read".to_string()));
+    };
+    // A session whose last turn asked a blocker was parked when the daemon stopped, even if the
+    // blocker is answered by now.
+    let asked = match state.item(run.item) {
+        Some(ItemView::Live(item)) => item.comments().values().any(|comment| {
+            comment.session() == Some(run.session)
+                && comment.kind == CommentKind::Blocker
+                && comment.at.wall_ms() >= prompted_ms
+        }),
+        Some(ItemView::Archived(_)) | None => false,
+    };
+    match state.turn_outcome(run.session, 0, run.nudges) {
+        TurnOutcome::Continue | TurnOutcome::GiveUp if asked => Ok(resumed(loaded, run).await),
+        TurnOutcome::Continue | TurnOutcome::GiveUp => {
+            Ok(restarted(loaded, run, prompted_ms).await)
+        }
+        TurnOutcome::Close => {
+            let live = state
+                .session(run.session)
+                .is_some_and(|session| session.is_live());
+            Err(if live {
+                End::Interrupt(Interruption::MovedOn)
+            } else {
+                End::Over
+            })
+        }
+        TurnOutcome::Park => match park(daemon, loaded, run, stopped, deadline).await {
+            Parked::Ready => Ok(resumed(loaded, run).await),
+            Parked::Over => Err(End::Over),
+            Parked::TimedOut => Err(End::Interrupt(Interruption::TimedOut)),
+            Parked::MovedOn => Err(End::Interrupt(Interruption::MovedOn)),
+        },
     }
 }
 

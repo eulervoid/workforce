@@ -117,7 +117,10 @@ async fn go_online_when_needed(
     id: WorkforceId,
     storage: StorageHandle,
 ) {
-    let Some(own) = daemon.upgrade().map(|daemon| daemon.device()) else {
+    let Some((own, mut halted)) = daemon
+        .upgrade()
+        .map(|daemon| (daemon.device(), daemon.halted.subscribe()))
+    else {
         return;
     };
     let mut heads = storage.watch_heads();
@@ -130,8 +133,13 @@ async fn go_online_when_needed(
             Ok(false) => {}
             Err(StorageClosed) => return,
         }
-        if heads.changed().await.is_err() {
-            return;
+        tokio::select! {
+            changed = heads.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+            }
+            _ = halted.wait_for(|halted| *halted) => return,
         }
     }
     let Some(daemon) = daemon.upgrade() else {
@@ -180,6 +188,9 @@ async fn rescan(daemon: std::sync::Weak<Daemon>) {
         let Some(daemon) = daemon.upgrade() else {
             return;
         };
+        if *daemon.halted.borrow() {
+            return;
+        }
         daemon.load_stored_workforces();
     }
 }
@@ -226,6 +237,8 @@ pub struct Daemon {
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
     /// Stores that failed to open, so each is reported once.
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
+    /// Turns true when the daemon halts; its background tasks then return.
+    halted: tokio::sync::watch::Sender<bool>,
 }
 
 impl Daemon {
@@ -246,6 +259,7 @@ impl Daemon {
             judges: judges::Judges::default(),
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
+            halted: tokio::sync::watch::Sender::new(false),
         });
         daemon.load_stored_workforces();
         tokio::spawn(rescan(Arc::downgrade(&daemon)));
@@ -254,6 +268,20 @@ impl Daemon {
 
     pub fn device(&self) -> wf_core::identity::DeviceKey {
         self.device.key()
+    }
+
+    /// Stops the harness of every session without ending the sessions, and the daemon's
+    /// background tasks, so that the next daemon resumes the sessions. Waits until the harnesses
+    /// are closed.
+    pub async fn halt(&self) {
+        self.halted.send_replace(true);
+        self.runners.halt().await;
+    }
+
+    /// Completes once the daemon halts.
+    pub(crate) async fn until_halted(&self) {
+        let mut halted = self.halted.subscribe();
+        let _ = halted.wait_for(|halted| *halted).await;
     }
 
     /// The directory with the daemon's copy of `wf`, if it made one.
@@ -359,7 +387,7 @@ impl Daemon {
         let daemon = Arc::clone(self);
         let started = Arc::clone(&entry);
         tokio::spawn(async move {
-            daemon.end_stale_sessions(id, &started).await;
+            daemon.resume_sessions(id, &started).await;
             let weak = Arc::downgrade(&daemon);
             drop(daemon);
             runner::run_dispatcher(weak, id, started).await;

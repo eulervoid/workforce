@@ -19,7 +19,7 @@ use crate::network::network_for;
 /// How long `wf daemon start` waits for the daemon to answer.
 const START_WAIT: Duration = Duration::from_secs(30);
 /// How long `wf daemon stop` waits for the daemon to exit.
-const STOP_WAIT: Duration = Duration::from_secs(30);
+const STOP_WAIT: Duration = Duration::from_secs(45);
 /// What the daemon logs unless `WF_LOG` says otherwise.
 const DEFAULT_LOG_FILTER: &str = "warn,wf_daemon=info,wf_net=info,wf_cli=info";
 
@@ -194,7 +194,7 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
                 )
             },
         )?;
-        let served = daemon
+        let served = std::sync::Arc::clone(&daemon)
             .serve(async {
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
@@ -202,7 +202,8 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
                 }
             })
             .await;
-        tracing::info!("the daemon stops");
+        tracing::info!("the daemon stops; its sessions resume when it starts again");
+        daemon.halt().await;
         if read_pid(&pid_file) == Some(std::process::id()) {
             let _ = std::fs::remove_file(&pid_file);
         }

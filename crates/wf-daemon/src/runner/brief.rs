@@ -1,4 +1,5 @@
-//! What a session is told: its brief, and what happened while it was parked.
+//! What a session is told: its brief, what happened while it was parked, and what happened while
+//! the daemon was down.
 
 use std::sync::Arc;
 
@@ -97,6 +98,56 @@ pub(super) async fn resumed(loaded: &Arc<Loaded>, run: &Run) -> String {
         })
         .await
         .unwrap_or_default()
+}
+
+/// What to say to a session the daemon resumed after a restart: that it was, and what others
+/// wrote on the item since the session was last prompted.
+pub(super) async fn restarted(loaded: &Arc<Loaded>, run: &Run, prompted_ms: u64) -> String {
+    let (session, item) = (run.session, run.item);
+    loaded
+        .storage
+        .with(move |replica| {
+            let sources = Logged {
+                store: replica.store(),
+                diff: String::new(),
+            };
+            restarted_from(replica.state(), session, item, prompted_ms, &sources)
+        })
+        .await
+        .unwrap_or_default()
+}
+
+fn restarted_from(
+    state: &State,
+    session: SessionId,
+    item: ItemId,
+    prompted_ms: u64,
+    sources: &Logged,
+) -> String {
+    let mut text = String::from(
+        "wf restarted while you were working, and resumed this conversation. A command you ran \
+         may not have finished; check before you go on.",
+    );
+    if let Some(ItemView::Live(item)) = state.item(item) {
+        let mut since: Vec<_> = item
+            .comments()
+            .iter()
+            .filter(|(_, comment)| {
+                comment.at.wall_ms() > prompted_ms && comment.session() != Some(session)
+            })
+            .collect();
+        since.sort_by_key(|(id, comment)| (comment.at, **id));
+        if !since.is_empty() {
+            text.push_str("\nWritten on the item since:");
+        }
+        for (id, comment) in since {
+            if let Some(written) = sources.text(*id) {
+                text.push_str(&format!("\n- {}: {}", speaker(&comment.by), written.trim()));
+            }
+        }
+    }
+    text.push_str("\n`wf work brief` shows the item as it is now. Continue.");
+    text
 }
 
 fn resumed_from(state: &State, session: SessionId, item: ItemId, sources: &Logged) -> String {

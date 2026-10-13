@@ -27,14 +27,18 @@ pub(crate) async fn run_dispatcher(
         let Some(strong) = daemon.upgrade() else {
             return;
         };
+        if *strong.halted.borrow() {
+            return;
+        }
         dispatch_once(&strong, workforce, &loaded, &mut failed).await;
-        drop(strong);
+        let halted = async { strong.until_halted().await };
         tokio::select! {
             changed = heads.changed() => {
                 if changed.is_err() {
                     return;
                 }
             }
+            () = halted => return,
             () = tokio::time::sleep(DISPATCH_TICK) => {}
         }
     }

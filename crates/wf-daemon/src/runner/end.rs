@@ -5,7 +5,7 @@ use std::sync::Arc;
 use wf_core::event::{Comment, EventBody, ItemMoved, SessionEnded};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
-use wf_core::lifecycle::{AfterEnd, Closing, Finish, Interruption, SessionEnd};
+use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
 use wf_core::name::StateName;
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
@@ -238,38 +238,5 @@ impl Daemon {
         })
         .await??;
         Ok(commit)
-    }
-
-    /// Ends the sessions of this machine that the previous daemon left live: nothing runs them.
-    pub(crate) async fn end_stale_sessions(
-        self: &Arc<Self>,
-        workforce: WorkforceId,
-        loaded: &Arc<Loaded>,
-    ) {
-        let Ok(state) = self.snapshot(loaded).await else {
-            return;
-        };
-        let stale: Vec<SessionId> = state
-            .live_sessions()
-            .filter(|session| session.device() == self.device())
-            .filter(|session| !self.runners.is_running(session.id()))
-            .map(|session| session.id())
-            .collect();
-        for session in stale {
-            if let Err(error) = self
-                .finish_session(
-                    workforce,
-                    loaded,
-                    session,
-                    SessionEnd::Interruption(Interruption::Interrupted),
-                )
-                .await
-            {
-                tracing::warn!(
-                    "could not end stale session {session}: {}",
-                    wf_core::error_chain(&error)
-                );
-            }
-        }
     }
 }

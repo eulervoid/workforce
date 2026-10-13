@@ -15,6 +15,10 @@
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
 //! - `turn`: ends the turn.
+//!
+//! Each session gets an id of its own and keeps how far it got in the script in
+//! `<script>.<session>`. `FAKE_AGENT_REOPENS` set to `resume` or `load` offers that way back into a
+//! session, which goes on in the script from there.
 
 use std::io::{BufRead, Write};
 use std::process::Command;
@@ -68,16 +72,19 @@ fn words(line: &str) -> Vec<String> {
     words
 }
 
+/// Where a session keeps how many operations of the script it has run.
+fn progress_file(script: &str, session: &str) -> String {
+    format!("{script}.{session}")
+}
+
 fn main() {
-    let script = std::env::var("FAKE_AGENT_SCRIPT")
-        .ok()
-        .and_then(|path| std::fs::read_to_string(path).ok())
-        .unwrap_or_default();
-    let mut operations = script
-        .lines()
-        .map(str::to_string)
-        .collect::<Vec<_>>()
-        .into_iter();
+    let script_path = std::env::var("FAKE_AGENT_SCRIPT").unwrap_or_default();
+    let script = std::fs::read_to_string(&script_path).unwrap_or_default();
+    let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
+    let all: Vec<String> = script.lines().map(str::to_string).collect();
+    let mut operations = all.clone().into_iter();
+    let mut session = String::new();
+    let mut done = 0;
     let mut lines = std::io::stdin().lock().lines();
     let mut directory = std::env::current_dir().unwrap();
     let mut item = String::new();
@@ -87,13 +94,43 @@ fn main() {
         match request["method"].as_str() {
             Some("initialize") => send(json!({
                 "jsonrpc": "2.0", "id": id,
-                "result": {"protocolVersion": 1, "agentCapabilities": {}},
+                "result": {"protocolVersion": 1, "agentCapabilities": {
+                    "loadSession": reopens == "load",
+                    "sessionCapabilities":
+                        if reopens == "resume" { json!({"resume": {}}) } else { json!({}) },
+                }},
             })),
             Some("session/new") => {
                 if let Some(cwd) = request["params"]["cwd"].as_str() {
                     directory = cwd.into();
                 }
-                send(json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": "fake"}}));
+                let nanos = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos();
+                session = format!("fake-{}-{nanos}", std::process::id());
+                send(json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": session}}));
+            }
+            Some(method @ ("session/resume" | "session/load")) => {
+                if let Some(cwd) = request["params"]["cwd"].as_str() {
+                    directory = cwd.into();
+                }
+                session = request["params"]["sessionId"].as_str().unwrap().to_string();
+                let Ok(progress) = std::fs::read_to_string(progress_file(&script_path, &session))
+                else {
+                    send(json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32002, "message": "no such session"},
+                    }));
+                    continue;
+                };
+                done = progress.trim().parse().unwrap();
+                operations = all.clone().into_iter();
+                operations.by_ref().take(done).for_each(drop);
+                if method == "session/load" {
+                    say("what was said before");
+                }
+                send(json!({"jsonrpc": "2.0", "id": id, "result": {}}));
             }
             Some("session/prompt") => {
                 let prompt = request["params"]["prompt"].to_string();
@@ -105,6 +142,9 @@ fn main() {
                 }
                 let mut stop = "end_turn";
                 for operation in operations.by_ref() {
+                    done += 1;
+                    std::fs::write(progress_file(&script_path, &session), done.to_string())
+                        .unwrap();
                     let (name, rest) = operation.split_once(' ').unwrap_or((&operation, ""));
                     match name {
                         "say" => say(rest),

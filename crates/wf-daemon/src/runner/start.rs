@@ -6,16 +6,17 @@ use std::sync::Arc;
 use tokio::sync::mpsc;
 use wf_core::event::{EventBody, SessionStarted};
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::Actor;
+use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::name::AgentName;
 use wf_core::session::{CommitId, SessionRole};
+use wf_core::state::{AgentDefinition, State};
 use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
 use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree, worktrees};
 
 use super::drive::run_session;
-use super::{Run, SessionError, blocking};
+use super::{Begin, Run, SessionError, blocking};
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
 use crate::machine_config::SandboxConfig;
 use crate::{Daemon, Loaded};
@@ -76,6 +77,78 @@ impl Daemon {
             .join(format!("{}-{suffix}", item_name(item)))
     }
 
+    /// What it takes to run `agent` on `item` in `role`, as the state and the machine config say:
+    /// checked before a session is written, so that a session that cannot run is not started.
+    pub(super) fn setup(
+        &self,
+        state: &State,
+        workforce: WorkforceId,
+        agent: AgentName,
+        item: ItemId,
+        role: SessionRole,
+    ) -> Result<Setup, SessionError> {
+        let principal = self.principal_of_device(state)?;
+        let definition = state
+            .agent(&agent, principal)
+            .ok_or_else(|| SessionError::UnknownAgent(agent.clone()))?
+            .clone();
+        let harness = self
+            .harness_command(&definition.harness)
+            .ok_or_else(|| SessionError::UnknownHarness(definition.harness.clone()))?;
+        let sandbox = self.machine_config()?.sandbox;
+        match &sandbox {
+            SandboxConfig::Fence(_) if !on_path("fence") => return Err(SessionError::NoFence),
+            SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
+        }
+        let policy = &state.policy().expect("a workforce has a policy").policy;
+        let item_context = match state.item(item).ok_or(SessionError::UnknownItem(item))? {
+            ItemView::Live(live) => {
+                let state_name = match live.standing(policy) {
+                    wf_core::item::Standing::Known { state, .. } => state.to_string(),
+                    wf_core::item::Standing::Unknown { state } => {
+                        state.map(ToString::to_string).unwrap_or_default()
+                    }
+                };
+                ItemContext {
+                    id: item.to_base32(),
+                    title: live.title().to_string(),
+                    item_type: live.item_type().to_string(),
+                    state: state_name,
+                }
+            }
+            ItemView::Archived(_) => return Err(SessionError::Archived(item)),
+        };
+        let transcripts = self.workforce_directory(workforce).join("transcripts");
+        Ok(Setup {
+            workforce,
+            principal,
+            agent,
+            item,
+            role,
+            definition,
+            harness,
+            sandbox,
+            item_context,
+            target: policy.merge.target.clone(),
+            transcripts,
+        })
+    }
+
+    /// The worktree or directory a session of `role` on `item` runs in.
+    pub(super) fn session_directory(
+        &self,
+        workforce: WorkforceId,
+        item: ItemId,
+        role: SessionRole,
+    ) -> PathBuf {
+        match role {
+            SessionRole::Work => item_worktree(&self.workforce_directory(workforce), item),
+            SessionRole::Review { commit } => self.review_worktree(workforce, item, commit),
+            SessionRole::Supervise => self.empty_directory(workforce, item, "supervise"),
+            SessionRole::Diagnose => self.empty_directory(workforce, item, "diagnose"),
+        }
+    }
+
     /// Starts a session of `agent` on `item`, and a task that runs the harness. A work session
     /// runs in the item's worktree on its branch, and moves the item to its active state; a
     /// review session in a detached checkout of the commit under review, or an empty directory
@@ -101,64 +174,24 @@ impl Daemon {
             SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
         };
         let state = self.snapshot(loaded).await?;
-        let principal = self.principal_of_device(&state)?;
-        let definition = state
-            .agent(&agent, principal)
-            .ok_or_else(|| SessionError::UnknownAgent(agent.clone()))?
-            .clone();
-        let harness = self
-            .harness_command(&definition.harness)
-            .ok_or_else(|| SessionError::UnknownHarness(definition.harness.clone()))?;
-        let sandbox = self.machine_config()?.sandbox;
-        match &sandbox {
-            SandboxConfig::Fence(_) if !on_path("fence") => return Err(SessionError::NoFence),
-            SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
-        }
-        let item_context = match state.item(item).ok_or(SessionError::UnknownItem(item))? {
-            ItemView::Live(live) => {
-                let policy = &state.policy().expect("a workforce has a policy").policy;
-                let state_name = match live.standing(policy) {
-                    wf_core::item::Standing::Known { state, .. } => state.to_string(),
-                    wf_core::item::Standing::Unknown { state } => {
-                        state.map(ToString::to_string).unwrap_or_default()
-                    }
-                };
-                ItemContext {
-                    id: item.to_base32(),
-                    title: live.title().to_string(),
-                    item_type: live.item_type().to_string(),
-                    state: state_name,
-                }
-            }
-            ItemView::Archived(_) => return Err(SessionError::Archived(item)),
-        };
+        let setup = self.setup(&state, workforce, agent, item, role)?;
         if role == SessionRole::Work && state.claim(item).is_some() {
             return Err(SessionError::Claimed(item));
         }
-        let target = state
-            .policy()
-            .expect("a workforce has a policy")
-            .policy
-            .merge
-            .target
-            .clone();
-        let branch = item_branch(item);
-        let (worktree, repository) = match role {
+        let worktree = self.session_directory(workforce, item, role);
+        let path = worktree.clone();
+        let repository = match role {
             SessionRole::Work => {
-                let worktree = item_worktree(&self.workforce_directory(workforce), item);
-                let (branch, path, target) = (branch.clone(), worktree.clone(), target.clone());
-                let repository = blocking(move || {
+                let (branch, target) = (item_branch(item), setup.target.clone());
+                blocking(move || {
                     let git = GitCli::open(&repository)?;
                     git.prepare_worktree(&branch, &path, &target)?;
                     Ok::<_, VcsError>(git.repository().to_path_buf())
                 })
-                .await??;
-                (worktree, repository)
+                .await??
             }
             SessionRole::Review { commit } => {
-                let worktree = self.review_worktree(workforce, item, commit);
-                let path = worktree.clone();
-                let repository = blocking(move || {
+                blocking(move || {
                     let git = GitCli::open(&repository)?;
                     // A look at the same commit by an earlier review may have left its checkout.
                     let _ = git.remove_worktree(&path);
@@ -169,26 +202,16 @@ impl Daemon {
                     }
                     Ok::<_, VcsError>(git.repository().to_path_buf())
                 })
-                .await??;
-                (worktree, repository)
+                .await??
             }
             SessionRole::Supervise | SessionRole::Diagnose => {
-                let purpose = match role {
-                    SessionRole::Diagnose => "diagnose",
-                    SessionRole::Work | SessionRole::Review { .. } | SessionRole::Supervise => {
-                        "supervise"
-                    }
-                };
-                let worktree = self.empty_directory(workforce, item, purpose);
-                let path = worktree.clone();
-                let repository = blocking(move || {
+                blocking(move || {
                     let git = GitCli::open(&repository)?;
                     let _ = std::fs::remove_dir_all(&path);
                     std::fs::create_dir_all(&path)?;
                     Ok::<_, VcsError>(git.repository().to_path_buf())
                 })
-                .await??;
-                (worktree, repository)
+                .await??
             }
         };
         self.remember_repository(workforce, &repository)?;
@@ -196,9 +219,9 @@ impl Daemon {
         let started = self
             .author(
                 loaded,
-                Actor::Daemon(principal),
+                Actor::Daemon(setup.principal),
                 EventBody::SessionStarted(SessionStarted {
-                    agent: agent.clone(),
+                    agent: setup.agent.clone(),
                     item,
                     role,
                 }),
@@ -210,41 +233,70 @@ impl Daemon {
         let prepared = async {
             let state = self.snapshot(loaded).await?;
             if let Some((item, to)) = state.start_move(session) {
-                self.move_item(loaded, principal, item, to, None, Some(session))
+                self.move_item(loaded, setup.principal, item, to, None, Some(session))
                     .await?;
             }
-            let transcripts = self.workforce_directory(workforce).join("transcripts");
-            std::fs::create_dir_all(&transcripts).map_err(|source| SessionError::Io {
-                path: transcripts.clone(),
+            std::fs::create_dir_all(&setup.transcripts).map_err(|source| SessionError::Io {
+                path: setup.transcripts.clone(),
                 source,
-            })?;
-            Ok::<_, SessionError>(transcripts)
+            })
         }
         .await;
-        let transcripts = match prepared {
-            Ok(transcripts) => transcripts,
-            Err(error) => {
-                let because = format!(
-                    "the daemon could not set it up: {}",
-                    wf_core::error_chain(&error)
+        if let Err(error) = prepared {
+            let because = format!(
+                "the daemon could not set it up: {}",
+                wf_core::error_chain(&error)
+            );
+            if let Err(ending) = self
+                .finish_session(
+                    workforce,
+                    loaded,
+                    session,
+                    SessionEnd::Interruption(Interruption::Failed { because }),
+                )
+                .await
+            {
+                tracing::warn!(
+                    "could not end session {session} after it failed to start: {}",
+                    wf_core::error_chain(&ending)
                 );
-                if let Err(ending) = self
-                    .finish_session(
-                        workforce,
-                        loaded,
-                        session,
-                        SessionEnd::Interruption(Interruption::Failed { because }),
-                    )
-                    .await
-                {
-                    tracing::warn!(
-                        "could not end session {session} after it failed to start: {}",
-                        wf_core::error_chain(&ending)
-                    );
-                }
-                return Err(error);
             }
-        };
+            return Err(error);
+        }
+        let run = self.run(setup, session, worktree, repository, Begin::New);
+        tracing::info!(
+            "session {}: {} started on item {}{}",
+            session.short(),
+            run.agent,
+            item.short(),
+            run.isolation()
+        );
+        self.spawn_run(loaded, run);
+        Ok(session)
+    }
+
+    /// The session as its task runs it.
+    pub(super) fn run(
+        self: &Arc<Self>,
+        setup: Setup,
+        session: SessionId,
+        worktree: PathBuf,
+        repository: PathBuf,
+        begin: Begin,
+    ) -> Run {
+        let Setup {
+            workforce,
+            principal: _,
+            agent,
+            item,
+            role,
+            definition,
+            harness,
+            sandbox,
+            item_context,
+            target,
+            transcripts,
+        } = setup;
         let autonomy = definition.autonomy;
         let permissions: Arc<dyn Permissions> = match sandbox.permissions(autonomy.permissions) {
             wf_core::autonomy::PermissionMode::Allow => Arc::new(Permission::Allow),
@@ -282,7 +334,7 @@ impl Daemon {
                 },
             }),
         };
-        let run = Run {
+        Run {
             workforce,
             session,
             item,
@@ -292,7 +344,9 @@ impl Daemon {
             model: definition.model.clone(),
             worktree,
             transcript: transcripts.join(format!("{session}.jsonl")),
-            branch,
+            agent_session: super::resume::record_path(&transcripts, session),
+            begin,
+            branch: item_branch(item),
             target,
             repository,
             nudges: autonomy.nudges,
@@ -300,31 +354,35 @@ impl Daemon {
             max_duration: autonomy.max_duration,
             permissions,
             sandbox,
-        };
-        let isolation = match (&run.sandbox, autonomy.permissions) {
-            (SandboxConfig::Fence(_), _) => "",
-            (SandboxConfig::Off {}, wf_core::autonomy::PermissionMode::Allow) => {
-                " without a sandbox, so what it may do is asked"
-            }
-            (
-                SandboxConfig::Off {},
-                wf_core::autonomy::PermissionMode::Ask | wf_core::autonomy::PermissionMode::Deny,
-            ) => " without a sandbox",
-        };
-        tracing::info!(
-            "session {}: {} started on item {}{isolation}",
-            session.short(),
-            run.agent,
-            item.short()
-        );
+            autonomy_permissions: autonomy.permissions,
+        }
+    }
+
+    /// Starts the task that runs the harness of a session.
+    pub(super) fn spawn_run(self: &Arc<Self>, loaded: &Arc<Loaded>, run: Run) {
         let (stop, stopped) = mpsc::unbounded_channel();
-        self.runners.add(session, stop);
-        tokio::spawn(run_session(
+        self.runners.add(run.session, stop);
+        let task = tokio::spawn(run_session(
             Arc::clone(self),
             Arc::clone(loaded),
             run,
             stopped,
         ));
-        Ok(session)
+        self.runners.track(task);
     }
+}
+
+/// What it takes to run an agent on an item, before there is a session.
+pub(super) struct Setup {
+    pub(super) workforce: WorkforceId,
+    pub(super) principal: PrincipalKey,
+    pub(super) agent: AgentName,
+    pub(super) item: ItemId,
+    pub(super) role: SessionRole,
+    pub(super) definition: AgentDefinition,
+    pub(super) harness: AcpAgentConfig,
+    pub(super) sandbox: SandboxConfig,
+    pub(super) item_context: ItemContext,
+    pub(super) target: String,
+    pub(super) transcripts: PathBuf,
 }
