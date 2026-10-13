@@ -2,13 +2,13 @@
 //! failed inside a chained command and whose retry found its worktree gone.
 
 use jiff::tz::TimeZone;
-use wf_cli::transcript::{Detail, Format, Renderer, Session};
+use wf_cli::transcript::{Detail, Format, Printer, Session};
 use wf_harness::TranscriptEntry;
 
 const TRANSCRIPT: &str = include_str!("fixtures/transcript-ivnj5b.jsonl");
 
 fn render(width: usize, format: Format, detail: Detail) -> String {
-    let mut renderer = Renderer::new("coder", width, format, detail, TimeZone::UTC);
+    let mut renderer = Printer::new("coder", width, format, detail, TimeZone::UTC);
     let mut out = String::new();
     for line in TRANSCRIPT.lines() {
         let entry: TranscriptEntry = serde_json::from_str(line).unwrap();

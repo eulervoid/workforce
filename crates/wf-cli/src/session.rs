@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::transcript::{self, Detail, Format, Renderer};
+use crate::transcript::{self, Detail, Format, Printer};
 use anyhow::{Context, anyhow, bail};
 use wf_core::id::{HashId, SessionId};
 use wf_harness::Permission;
@@ -276,7 +276,7 @@ fn watch(
     );
     let format = if raw { Format::Raw } else { Format::Styled };
     let detail = if full { Detail::Full } else { Detail::Abridged };
-    let mut renderer = Renderer::new(
+    let mut renderer = Printer::new(
         &agent,
         transcript::terminal_width(),
         format,
