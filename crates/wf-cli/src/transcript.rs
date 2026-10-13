@@ -6,7 +6,7 @@
 //! answer to its permission request and its result. A call still open when the reader catches
 //! up shows as a running line first.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use anstyle::{AnsiColor, Style};
 use jiff::tz::TimeZone;
@@ -22,6 +22,10 @@ const TAIL: usize = 5;
 const DEFAULT_WIDTH: usize = 100;
 const MAX_WIDTH: usize = 120;
 const MIN_WIDTH: usize = 40;
+/// Prompts up to this many lines are shown whole; longer ones are cut to their first line.
+const PROMPT_LINES: usize = 10;
+/// How long agent text may wait for the rest of its paragraph before it is printed anyway.
+const STALL: SignedDuration = SignedDuration::from_secs(1);
 /// Where everything inside a turn starts.
 const MARGIN: usize = 2;
 /// Where what belongs to a tool call starts, under its name.
@@ -67,7 +71,11 @@ enum Thinking {
 /// Agent text not printed yet: only whole paragraphs are rendered, as markdown can span chunks.
 struct Prose {
     kind: Thinking,
+    /// The agent's id for the message the text is from, when it gives one.
+    message: Option<String>,
     text: String,
+    /// When the last chunk came.
+    at: Timestamp,
 }
 
 /// What came last, to decide where blank lines go: tool calls follow each other closely, and
@@ -100,10 +108,15 @@ enum Asked {
     Answered(Decision),
 }
 
-/// How a call ended, by the time of its last update.
+/// How a call ended.
 enum Outcome {
+    /// By the time of its last update.
     Completed(Timestamp),
     Failed(Timestamp),
+    /// Its permission request was denied, so it never ran.
+    Denied,
+    /// The turn ended while it was still open.
+    Unfinished,
 }
 
 struct ToolCall {
@@ -132,6 +145,8 @@ pub struct Renderer {
     prompts: usize,
     /// Open calls, in the order they started.
     calls: Vec<ToolCall>,
+    /// Calls of this turn that were denied: what the agent says of them later is left out.
+    denied: HashSet<String>,
     /// The call each open permission request is about, by the request's JSON-RPC id.
     requests: HashMap<String, String>,
     /// wf records its decision right before it answers the request.
@@ -157,6 +172,7 @@ impl Renderer {
             turn: Turn::Closed,
             prompts: 0,
             calls: Vec::new(),
+            denied: HashSet::new(),
             requests: HashMap::new(),
             decision: None,
         }
@@ -361,17 +377,32 @@ impl Renderer {
         out
     }
 
-    fn chunk(&mut self, at: Timestamp, kind: Thinking, text: &str) -> String {
+    /// A chunk of the agent's text. A chunk of another message, or of thoughts after a message,
+    /// starts a paragraph of its own.
+    fn chunk(
+        &mut self,
+        at: Timestamp,
+        kind: Thinking,
+        message: Option<&str>,
+        text: &str,
+    ) -> String {
         let mut out = String::new();
-        if self.prose.as_ref().is_some_and(|prose| prose.kind != kind) {
+        if self
+            .prose
+            .as_ref()
+            .is_some_and(|prose| prose.kind != kind || prose.message.as_deref() != message)
+        {
             out.push_str(&self.flush_prose());
         }
         out.push_str(&self.answering(at));
         let prose = self.prose.get_or_insert_with(|| Prose {
             kind,
+            message: message.map(str::to_owned),
             text: String::new(),
+            at,
         });
         prose.text.push_str(text);
+        prose.at = at;
         while let Some(boundary) = self
             .prose
             .as_ref()
@@ -379,15 +410,36 @@ impl Renderer {
         {
             let prose = self.prose.as_mut().expect("a boundary was found in it");
             let tail = prose.text.split_off(boundary);
+            let message = prose.message.clone();
             out.push_str(&self.flush_prose());
-            self.prose = Some(Prose { kind, text: tail });
+            self.prose = Some(Prose {
+                kind,
+                message,
+                text: tail,
+                at,
+            });
         }
         out
     }
 
-    /// What there is to say once everything written so far is rendered: the calls that are
-    /// still open. Call it whenever the transcript has no more lines for now.
-    pub fn caught_up(&mut self) -> String {
+    /// What there is to say once everything written so far is rendered, at `now`: agent text
+    /// that waited too long for the rest of its paragraph, and the calls that are still open.
+    /// Call it whenever the transcript has no more lines for now.
+    pub fn caught_up(&mut self, now: Timestamp) -> String {
+        let mut out = String::new();
+        if self
+            .prose
+            .as_ref()
+            .is_some_and(|prose| now.duration_since(prose.at) >= STALL)
+        {
+            out.push_str(&self.flush_prose());
+        }
+        out.push_str(&self.open_calls());
+        out
+    }
+
+    /// A running line for each open call whose state has not been shown yet.
+    fn open_calls(&mut self) -> String {
         let mut out = String::new();
         for index in 0..self.calls.len() {
             let waiting = matches!(self.calls[index].asked, Asked::Waiting);
@@ -411,7 +463,7 @@ impl Renderer {
     /// Everything still held back, at the end of the transcript.
     pub fn finish(&mut self) -> String {
         let mut out = self.flush_prose();
-        out.push_str(&self.caught_up());
+        out.push_str(&self.open_calls());
         out
     }
 
@@ -427,7 +479,7 @@ impl Renderer {
             };
             if let Some(kind) = thinking {
                 let text = update["content"]["text"].as_str().unwrap_or("");
-                return self.chunk(entry.at, kind, text);
+                return self.chunk(entry.at, kind, update["messageId"].as_str(), text);
             }
         }
         match entry.direction {
@@ -452,20 +504,7 @@ impl Renderer {
             Direction::ToAgent => match method {
                 Some("session/prompt") => self.prompt(entry.at, message),
                 Some(_) => String::new(),
-                None => {
-                    // The answer to a permission request.
-                    let id = message["id"].to_string();
-                    if let Some(call_id) = self.requests.remove(&id)
-                        && let Some(call) = self.calls.iter_mut().find(|call| call.id == call_id)
-                    {
-                        call.since = entry.at;
-                        call.asked = match self.decision.take() {
-                            Some(decision) => Asked::Answered(decision),
-                            None => Asked::Not,
-                        };
-                    }
-                    String::new()
-                }
+                None => self.answered(entry.at, &message["id"]),
             },
             Direction::Wf => {
                 self.decision = serde_json::from_value(message["decision"].clone()).ok();
@@ -478,6 +517,7 @@ impl Renderer {
                     let call = self.call(entry.at, tool_call);
                     call.asked = Asked::Waiting;
                     let call_id = call.id.clone();
+                    self.denied.remove(&call_id);
                     self.requests.insert(message["id"].to_string(), call_id);
                     String::new()
                 }
@@ -505,7 +545,38 @@ impl Renderer {
         }
     }
 
-    /// The first prompt is the brief; wf sends the later ones to keep the session going.
+    /// wf answered the permission request `id`. A call that was denied is done with.
+    fn answered(&mut self, at: Timestamp, id: &Value) -> String {
+        let Some(call_id) = self.requests.remove(&id.to_string()) else {
+            return String::new();
+        };
+        let Some(index) = self.calls.iter().position(|call| call.id == call_id) else {
+            return String::new();
+        };
+        let call = &mut self.calls[index];
+        call.since = at;
+        call.asked = match self.decision.take() {
+            Some(decision) => Asked::Answered(decision),
+            None => Asked::Not,
+        };
+        let Asked::Answered(Decision {
+            permission: Permission::Deny,
+            ..
+        }) = call.asked
+        else {
+            return String::new();
+        };
+        let call = self.calls.remove(index);
+        self.denied.insert(call.id.clone());
+        let mut out = self.flush_prose();
+        out.push_str(&self.answering(at));
+        out.push_str(&self.begin(Block::Tool));
+        out.push_str(&self.finished_call(&call, &Outcome::Denied));
+        out
+    }
+
+    /// The first prompt is the brief; wf sends the later ones to keep the session going. Each
+    /// opens a turn, cut to its first line when it is long, unless `--full`.
     fn prompt(&mut self, at: Timestamp, message: &Value) -> String {
         let text = message["params"]["prompt"]
             .as_array()
@@ -523,11 +594,8 @@ impl Renderer {
         self.turn = Turn::Prompted { at };
         let lines = text.trim_end().lines().count();
         match self.detail {
-            Detail::Abridged => {
-                let count = match lines {
-                    0 | 1 => String::new(),
-                    lines => format!("{lines} lines"),
-                };
+            Detail::Abridged if lines > PROMPT_LINES => {
+                let count = format!("{lines} lines");
                 out.push_str(&self.turn_header(speaker, color(AnsiColor::Cyan).bold(), at, &count));
                 let summary = text
                     .lines()
@@ -540,7 +608,7 @@ impl Renderer {
                     cut(summary, self.width - MARGIN)
                 ));
             }
-            Detail::Full => {
+            Detail::Abridged | Detail::Full => {
                 out.push_str(&self.turn_header(speaker, color(AnsiColor::Cyan).bold(), at, ""));
                 out.push_str(&self.prose_paragraphs(Thinking::Message, &text));
             }
@@ -549,9 +617,16 @@ impl Renderer {
         out
     }
 
-    /// `finished` and how long the turn took.
+    /// The calls the turn left open, then `finished` and how long the turn took.
     fn footer(&mut self, at: Timestamp, reason: &str) -> String {
         let mut out = self.flush_prose();
+        self.denied.clear();
+        self.requests.clear();
+        for call in std::mem::take(&mut self.calls) {
+            out.push_str(&self.answering(at));
+            out.push_str(&self.begin(Block::Tool));
+            out.push_str(&self.finished_call(&call, &Outcome::Unfinished));
+        }
         let since = match self.turn {
             Turn::Prompted { at } | Turn::Answering { since: at } => Some(at),
             Turn::Closed => None,
@@ -639,6 +714,12 @@ impl Renderer {
     }
 
     fn tool(&mut self, at: Timestamp, update: &Value) -> String {
+        if update["toolCallId"]
+            .as_str()
+            .is_some_and(|id| self.denied.contains(id))
+        {
+            return String::new();
+        }
         let mut out = self.flush_prose();
         out.push_str(&self.answering(at));
         let outcome = match update["status"].as_str() {
@@ -679,7 +760,10 @@ impl Renderer {
         if let Some(changes) = diff_counts(&call.content) {
             suffix.push(changes);
         }
-        let verdict = self.verdict(&call.asked);
+        // A verdict with a reason goes on a line of its own, under the call.
+        let verdict = self
+            .verdict(&call.asked)
+            .filter(|_| !has_reason(&call.asked));
         if let Some((verdict, _)) = &verdict {
             suffix.push(verdict.clone());
         }
@@ -772,7 +856,8 @@ impl Renderer {
         Some((format!("{verb} by {by}"), decision.permission))
     }
 
-    /// Why the permission request of `call` was decided as it was.
+    /// `denied by hook sh: no edits today`: who decided the permission request of `call`, and
+    /// why, when the decider said why.
     fn reason(&self, call: &ToolCall) -> String {
         let Asked::Answered(Decision {
             reason: Some(reason),
@@ -781,9 +866,16 @@ impl Renderer {
         else {
             return String::new();
         };
-        self.fit(reason, NESTED, true)
+        let Some((verdict, permission)) = self.verdict(&call.asked) else {
+            return String::new();
+        };
+        let style = match permission {
+            Permission::Allow => DIM,
+            Permission::Deny => color(AnsiColor::Red),
+        };
+        self.fit(&format!("{verdict}: {reason}"), NESTED, true)
             .iter()
-            .map(|line| format!("{}{}\n", " ".repeat(NESTED), self.styled(line, DIM)))
+            .map(|line| format!("{}{}\n", " ".repeat(NESTED), self.styled(line, style)))
             .collect()
     }
 
@@ -799,6 +891,8 @@ impl Renderer {
                 format!("failed  {}", duration(at.duration_since(call.since))),
                 color(AnsiColor::Red),
             ),
+            Outcome::Denied => (("✗", color(AnsiColor::Red)), String::new(), DIM),
+            Outcome::Unfinished => (("·", DIM), "unfinished".to_owned(), DIM),
         };
         let mut out = self.call_header(call, glyph, &state, style);
         out.push_str(&self.reason(call));
@@ -899,6 +993,16 @@ fn cut(text: &str, room: usize) -> String {
         kept.push(character);
     }
     format!("{}…", kept.trim_end())
+}
+
+fn has_reason(asked: &Asked) -> bool {
+    matches!(
+        asked,
+        Asked::Answered(Decision {
+            reason: Some(_),
+            ..
+        })
+    )
 }
 
 fn first_line(text: &str) -> &str {
@@ -1235,7 +1339,7 @@ mod tests {
             "```\n\n",
         ]
         .into_iter()
-        .map(|text| renderer.chunk(at(0), Thinking::Message, text))
+        .map(|text| renderer.chunk(at(0), Thinking::Message, None, text))
         .collect();
         assert!(output.contains("Hello"));
         assert!(!output.contains("**"));
@@ -1319,8 +1423,8 @@ mod tests {
             serde_json::json!({"sessionUpdate": "tool_call", "toolCallId": "1", "name": "Bash", "title": "sleep 9"}),
         );
         assert_eq!(renderer.render(&start), "\ncoder  00:00\n".trim_start());
-        assert!(renderer.caught_up().starts_with("  … Bash  sleep 9"));
-        assert_eq!(renderer.caught_up(), "");
+        assert!(renderer.caught_up(at(0)).starts_with("  … Bash  sleep 9"));
+        assert_eq!(renderer.caught_up(at(0)), "");
         let ask = entry(
             1,
             Direction::FromAgent,
@@ -1329,7 +1433,7 @@ mod tests {
         renderer.render(&ask);
         assert!(
             renderer
-                .caught_up()
+                .caught_up(at(1))
                 .trim_end()
                 .ends_with("waiting for permission")
         );
@@ -1421,7 +1525,7 @@ mod tests {
     #[test]
     fn raw_keeps_markdown_and_has_no_escape_codes() {
         let mut renderer = renderer(Format::Raw, Detail::Abridged, 80);
-        let output = renderer.chunk(at(0), Thinking::Message, "**kept**");
+        let output = renderer.chunk(at(0), Thinking::Message, None, "**kept**");
         let output = output + &renderer.finish();
         assert!(output.contains("  **kept**") && !output.contains('\x1b'));
     }
@@ -1450,7 +1554,7 @@ mod tests {
             entry(
                 0,
                 Direction::ToAgent,
-                serde_json::json!({"id": "p", "method": "session/prompt", "params": {"prompt": [{"type": "text", "text": "# Do it\n\nmore\nlines"}]}}),
+                serde_json::json!({"id": "p", "method": "session/prompt", "params": {"prompt": [{"type": "text", "text": format!("# Do it\n\n{}", "more\n".repeat(11))}]}}),
             ),
             update(
                 5,
@@ -1465,7 +1569,120 @@ mod tests {
         let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 40), &entries);
         assert_eq!(
             output,
-            "brief  00:00                     4 lines\n  Do it\n\ncoder  00:00\n  Done.\n\nfinished                           1m05s\n"
+            "brief  00:00                    13 lines\n  Do it\n\ncoder  00:00\n  Done.\n\nfinished                           1m05s\n"
         );
+    }
+
+    fn prompt(seconds: i64, text: &str) -> TranscriptEntry {
+        entry(
+            seconds,
+            Direction::ToAgent,
+            serde_json::json!({"id": seconds, "method": "session/prompt", "params": {"prompt": [{"type": "text", "text": text}]}}),
+        )
+    }
+
+    fn end_turn(seconds: i64) -> TranscriptEntry {
+        entry(
+            seconds,
+            Direction::FromAgent,
+            serde_json::json!({"id": seconds, "result": {"stopReason": "end_turn"}}),
+        )
+    }
+
+    fn said(seconds: i64, message: &str, text: &str) -> TranscriptEntry {
+        update(
+            seconds,
+            serde_json::json!({"sessionUpdate": "agent_message_chunk", "messageId": message, "content": {"type": "text", "text": text}}),
+        )
+    }
+
+    #[test]
+    fn every_prompt_opens_a_turn_and_short_ones_show_whole() {
+        let entries = [
+            prompt(0, &format!("# Brief\n\n{}", "line\n".repeat(20))),
+            said(1, "a", "Blocked."),
+            end_turn(2),
+            prompt(60, "What you were waiting for is resolved.\n- someone: Use humantime\nContinue."),
+            said(61, "b", "Done."),
+            end_turn(62),
+        ];
+        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        assert!(output.contains("  Brief\n") && !output.contains("line\n"), "{output}");
+        assert!(
+            output.contains("wf  00:01\n  What you were waiting for is resolved.\n  - someone: Use humantime\n  Continue.\n"),
+            "{output}"
+        );
+        assert_eq!(output.matches("finished").count(), 2, "{output}");
+    }
+
+    #[test]
+    fn separate_messages_do_not_run_together() {
+        let entries = [said(0, "a", "permission: no"), said(0, "b", "done")];
+        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        assert!(output.contains("  permission: no\n\n  done\n"), "{output}");
+    }
+
+    #[test]
+    fn text_that_waits_for_the_rest_of_its_paragraph_shows_after_a_while() {
+        let mut renderer = renderer(Format::Raw, Detail::Abridged, 60);
+        renderer.render(&said(0, "a", "watching"));
+        assert!(!renderer.caught_up(at(0)).contains("watching"));
+        assert!(renderer.caught_up(at(1)).contains("  watching\n"));
+        assert_eq!(renderer.finish(), "");
+    }
+
+    #[test]
+    fn a_decision_says_by_whom_and_why_and_a_denied_call_is_done() {
+        let entries = [
+            entry(
+                0,
+                Direction::FromAgent,
+                serde_json::json!({"id": 100, "method": "session/request_permission", "params": {"toolCall": {"toolCallId": "call-1", "title": "Edit file"}}}),
+            ),
+            entry(
+                0,
+                Direction::Wf,
+                serde_json::json!({"decision": {"permission": "deny", "by": "hook sh", "reason": "no edits today"}}),
+            ),
+            entry(0, Direction::ToAgent, serde_json::json!({"id": 100, "result": {}})),
+            update(
+                1,
+                serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "failed"}),
+            ),
+            said(1, "a", "permission: no"),
+            end_turn(2),
+        ];
+        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        assert!(
+            output.contains("  ✗ Tool  Edit file\n    denied by hook sh: no edits today\n"),
+            "{output}"
+        );
+        assert_eq!(output.matches("Edit file").count(), 1, "{output}");
+    }
+
+    #[test]
+    fn calls_a_turn_leaves_open_end_with_it() {
+        let entries = [
+            entry(
+                0,
+                Direction::FromAgent,
+                serde_json::json!({"id": 100, "method": "session/request_permission", "params": {"toolCall": {"toolCallId": "call-1", "title": "Edit file"}}}),
+            ),
+            entry(
+                0,
+                Direction::Wf,
+                serde_json::json!({"decision": {"permission": "allow", "by": "agent judge", "reason": "edits serve the item"}}),
+            ),
+            entry(0, Direction::ToAgent, serde_json::json!({"id": 100, "result": {}})),
+            end_turn(2),
+        ];
+        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        assert!(output.contains("· Tool  Edit file"), "{output}");
+        assert!(output.contains("unfinished"), "{output}");
+        assert!(
+            output.contains("    allowed by agent judge: edits serve the item\n"),
+            "{output}"
+        );
+        assert!(!output.contains("running"), "{output}");
     }
 }

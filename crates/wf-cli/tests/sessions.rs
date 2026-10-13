@@ -1283,6 +1283,7 @@ sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" comme
         "watch",
         short(second_work["id"].as_str().unwrap()),
         "--no-follow",
+        "--full",
     ]);
     assert!(
         transcript.contains("add a test"),

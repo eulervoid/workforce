@@ -280,17 +280,17 @@ expression: visible(&styled)
   The comment failed because ␛[36m--done␛[0m needs ␛[36m--step␛[0m, but the submit went through.
   I'll post the comment again without ␛[36m--done␛[0m.
 
-  ␛[31m✗␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7  ␛[2mallowed by rules␛[0m      ␛[31mfailed  0.0s␛[0m
-          crates under crates/ (resolver 3, edition 2024): wf-core (pure domain:
-          events, item model, lifecycle/briefs; no IO), wf-store (event log
-          store), wf-net (sync protocols over iroh, generic streams + SyncLog),
-          wf-daemon (owns the store, runs sessions, merges), wf-harness (runs
-          agents over ACP), wf-vcs (the only crate that runs git), wf-cli (the
-          wf binary, goes through Workspace). README covers M0-M2: signed event
-          log, multi-machine sync, agents in worktree sessions with review/
-          merge, and a permission-request decider chain. No code changes made."
-          2>&1 | tail -3
-    ␛[2m`wf comment` reports to wf␛[0m
+  ␛[31m✗␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7 crates under crates/   ␛[31mfailed  0.0s␛[0m
+          (resolver 3, edition 2024): wf-core (pure domain: events, item model,
+          lifecycle/briefs; no IO), wf-store (event log store), wf-net (sync
+          protocols over iroh, generic streams + SyncLog), wf-daemon (owns the
+          store, runs sessions, merges), wf-harness (runs agents over ACP),
+          wf-vcs (the only crate that runs git), wf-cli (the wf binary, goes
+          through Workspace). README covers M0-M2: signed event log, multi-
+          machine sync, agents in worktree sessions with review/merge, and a
+          permission-request decider chain. No code changes made." 2>&1 | tail
+          -3
+    ␛[2mallowed by rules: `wf comment` reports to wf␛[0m
     ␛[31m│ ␛[0mWorking directory "/home/principal/.local/share/workforce/kjfllqz4/
     ␛[31m│ ␛[0mworktrees/qp7jzsdzp2cy" was deleted; shell cwd recovered to "/home/
     ␛[31m│ ␛[0mprincipal". Re-issue your command (it will run from the recovered

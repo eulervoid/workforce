@@ -27,8 +27,8 @@ coder  00:49
   The comment failed because `--done` needs `--step`, but the submit went
   through. I'll post the comment again without `--done`.
 
-  ✗ Bash  wf comment qp7jzs "Workspace has 7 cr…  allowed by rules  failed  0.0s
-    `wf comment` reports to wf
+  ✗ Bash  wf comment qp7jzs "Workspace has 7 crates under crates/…  failed  0.0s
+    allowed by rules: `wf comment` reports to wf
     | Working directory "/home/principal/.local/share/workforce/kjfllqz4/worktr…
 
   I read the README and listed the workspace crates, but the comment with the

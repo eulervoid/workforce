@@ -287,7 +287,7 @@ fn watch(
                 std::io::stdout().flush()?;
                 return Ok(());
             }
-            anstream::print!("{}", renderer.caught_up());
+            anstream::print!("{}", renderer.caught_up(jiff::Timestamp::now()));
             std::io::stdout().flush()?;
             if last_refresh.elapsed() >= Duration::from_secs(1) {
                 workspace.refresh()?;
