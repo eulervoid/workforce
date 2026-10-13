@@ -26,7 +26,10 @@ expression: "Envelope::new(&detail)"
     "steps": null,
     "archived": false,
     "body": [],
-    "author": "@ada",
+    "author": {
+      "kind": "principal",
+      "label": "@ada"
+    },
     "created": "1970-01-01T00:00:04Z",
     "updated": "1970-01-01T00:00:04Z",
     "review": null,
@@ -64,7 +67,10 @@ expression: "Envelope::new(&detail)"
     "activity": [
       {
         "at": "1970-01-01T00:00:04Z",
-        "by": "@ada",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
         "kind": "created",
         "summary": "created the task",
         "comment": null,
@@ -72,7 +78,10 @@ expression: "Envelope::new(&detail)"
       },
       {
         "at": "1970-01-01T00:00:05Z",
-        "by": "@ada",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
         "kind": "referenced_in",
         "summary": "referenced in #rgrqrr",
         "comment": null,
@@ -80,7 +89,10 @@ expression: "Envelope::new(&detail)"
       },
       {
         "at": "1970-01-01T00:00:08Z",
-        "by": "@ada",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
         "kind": "dependent",
         "summary": "#rgrqrr now depends on this",
         "comment": null,
@@ -88,7 +100,10 @@ expression: "Envelope::new(&detail)"
       },
       {
         "at": "1970-01-01T00:00:09Z",
-        "by": "@ada",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
         "kind": "referenced_in",
         "summary": "referenced in #rgrqrr",
         "comment": null,

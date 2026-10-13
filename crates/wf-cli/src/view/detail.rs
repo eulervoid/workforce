@@ -16,7 +16,7 @@ use wf_core::state::State;
 
 use super::item::{ItemSummary, standing_parts, summary};
 use super::session::session_label;
-use super::{actor_label, mention_label, set_change, timestamp};
+use super::{ActorView, actor_view, mention_view, set_change, timestamp};
 
 #[derive(Serialize)]
 pub struct LinkView {
@@ -91,7 +91,7 @@ pub struct CommentView {
     /// The short id the comment is resolved and referenced by within its item.
     pub short: String,
     pub kind: CommentKindView,
-    pub by: String,
+    pub by: ActorView,
     pub at: String,
     pub text: Option<String>,
     /// The session that wrote it, such as `coder work 7c2k`, when an agent did.
@@ -156,7 +156,7 @@ pub enum ActivityKind {
 #[derive(Serialize)]
 pub struct ActivityView {
     pub at: String,
-    pub by: String,
+    pub by: ActorView,
     pub kind: ActivityKind,
     /// What happened, in a few words: `moved to done`, `#k3f9ab now depends on this`.
     pub summary: String,
@@ -171,7 +171,7 @@ pub struct ActivityView {
 pub struct OpenCommentView {
     pub id: String,
     pub kind: CommentKindView,
-    pub by: String,
+    pub by: ActorView,
 }
 
 #[derive(Serialize)]
@@ -218,7 +218,7 @@ pub struct ItemDetail {
     #[serde(flatten)]
     pub summary: ItemSummary,
     pub body: Vec<BodyPartView>,
-    pub author: String,
+    pub author: ActorView,
     pub created: String,
     pub updated: String,
     /// The review level the item needs: its own, or its type's default.
@@ -235,7 +235,7 @@ pub struct ItemDetail {
     pub supersedes: Option<LinkView>,
     pub references: Vec<ReferenceView>,
     pub referenced_by: Vec<BacklinkView>,
-    pub mentions: Vec<String>,
+    pub mentions: Vec<ActorView>,
     /// Everything that happened to the item, oldest first.
     pub activity: Vec<ActivityView>,
     pub open: Vec<OpenCommentView>,
@@ -290,7 +290,7 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
     let body = item.body();
     let mut views: Vec<ActivityView> = Vec::new();
     for entry in entries {
-        let by = actor_label(state, &entry.by);
+        let by = actor_view(state, &entry.by);
         let at = timestamp(entry.at);
         let (kind, summary) = match &entry.activity {
             Activity::Created => (
@@ -608,14 +608,14 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         .map(|(id, comment)| OpenCommentView {
             id: id.short(),
             kind: CommentKindView::from(comment.kind),
-            by: actor_label(state, &comment.by),
+            by: actor_view(state, &comment.by),
         })
         .collect();
 
     ItemDetail {
         summary: summary(state, &graph, ItemView::Live(item)),
         body: body_parts(&item.body()),
-        author: actor_label(state, item.author()),
+        author: actor_view(state, item.author()),
         created: timestamp(item.created()),
         updated: timestamp(item.updated()),
         review: item.effective_review_level(policy).map(ToString::to_string),
@@ -661,7 +661,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         mentions: state
             .mentions_in(item)
             .iter()
-            .map(|target| mention_label(state, target))
+            .map(|target| mention_view(state, target))
             .collect(),
         activity,
         open,

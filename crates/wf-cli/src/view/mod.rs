@@ -52,6 +52,33 @@ pub fn timestamp_ms(millis: u64) -> String {
         .map_or_else(|| "unknown".to_string(), |time| time.to_string())
 }
 
+/// Who did something: what to call them, and which kind of actor they are, for the color.
+#[derive(Clone, Serialize)]
+pub struct ActorView {
+    pub kind: ActorKind,
+    pub label: String,
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActorKind {
+    Principal,
+    Agent,
+    Daemon,
+}
+
+pub fn actor_view(state: &State, actor: &Actor) -> ActorView {
+    let kind = match actor {
+        Actor::Principal(_) => ActorKind::Principal,
+        Actor::Agent { .. } => ActorKind::Agent,
+        Actor::Daemon(_) => ActorKind::Daemon,
+    };
+    ActorView {
+        kind,
+        label: actor_label(state, actor),
+    }
+}
+
 pub fn actor_label(state: &State, actor: &Actor) -> String {
     let principal = |key: &wf_core::identity::PrincipalKey| {
         state
@@ -86,6 +113,17 @@ pub fn device_label(state: &State, device: wf_core::identity::DeviceKey) -> Stri
 
 pub fn timestamp_now() -> String {
     Timestamp::now().to_string()
+}
+
+pub fn mention_view(state: &State, target: &MentionTarget) -> ActorView {
+    let kind = match target {
+        MentionTarget::Principal(_) => ActorKind::Principal,
+        MentionTarget::Agent(_) => ActorKind::Agent,
+    };
+    ActorView {
+        kind,
+        label: mention_label(state, target),
+    }
 }
 
 pub fn mention_label(state: &State, target: &MentionTarget) -> String {

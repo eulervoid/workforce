@@ -51,7 +51,7 @@ pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchL
                 title: None,
                 activity: ActivityView {
                     at: timestamp(event.content.hlc),
-                    by: actor_label(state, &event.content.actor),
+                    by: super::actor_view(state, &event.content.actor),
                     kind: ActivityKind::Workforce,
                     summary: describe(state, &event.content.body),
                     comment: None,

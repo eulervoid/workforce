@@ -152,7 +152,7 @@ fn the_demo_script_works_end_to_end() {
     ]);
     let shown = wf.json(&["item", "show", short(&task)]);
     assert_eq!(shown["references"][0]["id"], first);
-    assert_eq!(shown["mentions"][0], "@ada/coder");
+    assert_eq!(shown["mentions"][0]["label"], "@ada/coder");
     assert_eq!(
         comments(&shown)[0]["text"],
         format!("see #{}, @coder please keep it small", short(&first))
