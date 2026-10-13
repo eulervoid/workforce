@@ -20,6 +20,9 @@ use crate::render;
 use crate::transcript::{self, Format, Now, Transcript};
 use wf_core::stats::ProjectStats;
 
+/// The background of the selected row while the list has the keys.
+const SELECTION: Color = Color::DarkGray;
+
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 pub fn draw(frame: &mut Frame, app: &App) {
@@ -281,10 +284,20 @@ fn section(title: &str) -> Line<'static> {
 /// flush against the right edge; then the lines under it.
 struct RowLines {
     selected: bool,
+    /// Whether the keys go to the list, rather than to a detail opened from it.
+    focused: bool,
     width: u16,
 }
 
 impl RowLines {
+    fn new(app: &App, selected: bool, width: u16) -> Self {
+        Self {
+            selected,
+            focused: app.list_has_keys(),
+            width,
+        }
+    }
+
     /// The keys of a row, shown only while it is selected.
     fn keys(&self, keys: &'static str) -> Option<Span<'static>> {
         self.selected.then(|| Span::raw(keys).fg(Color::Yellow))
@@ -305,15 +318,25 @@ impl RowLines {
         let right_width = right.as_ref().map_or(0, |right| right.width() + 2);
         let mut spans = vec![marker];
         spans.extend(cut_spans(first, width.saturating_sub(1 + right_width + 1)));
-        if let Some(right) = right {
-            let used: usize = spans.iter().map(Span::width).sum();
-            let padding = width.saturating_sub(used + right.width() + 1).max(2);
-            spans.push(Span::raw(" ".repeat(padding)));
-            spans.push(right);
+        let used: usize = spans.iter().map(Span::width).sum();
+        match right {
+            Some(right) => {
+                let padding = width.saturating_sub(used + right.width() + 1).max(2);
+                spans.push(Span::raw(" ".repeat(padding)));
+                spans.push(right);
+                spans.push(Span::raw(" "));
+            }
+            // Across the whole width, for the background of the selection.
+            None => spans.push(Span::raw(" ".repeat(width.saturating_sub(used)))),
         }
         let mut first = Line::from(spans);
         if self.selected {
             first = first.bold();
+            // While the list has the keys, the selection stands out; behind an open detail it
+            // only keeps its marker.
+            if self.focused {
+                first = first.bg(SELECTION);
+            }
         }
         let mut lines = vec![first];
         lines.extend(more);
@@ -474,13 +497,7 @@ fn now_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
         lines.push(section("WAITING ON YOU"));
         for entry in &snapshot.waiting {
             let row = Row::Waiting(entry.key());
-            let rows = waiting_lines(
-                entry,
-                RowLines {
-                    selected: selected == Some(&row),
-                    width,
-                },
-            );
+            let rows = waiting_lines(entry, RowLines::new(app, selected == Some(&row), width));
             add(&mut lines, row, rows);
         }
         lines.push(Line::default());
@@ -492,10 +509,7 @@ fn now_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
             let rows = session_lines(
                 app,
                 session,
-                RowLines {
-                    selected: selected == Some(&row),
-                    width,
-                },
+                RowLines::new(app, selected == Some(&row), width),
             );
             add(&mut lines, row, rows);
         }
@@ -506,11 +520,8 @@ fn now_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
         for flag in &snapshot.flagged {
             let row = Row::Flag(flag.clone());
             let first = vec![Span::raw("! ").fg(Color::Red), Span::raw(flag.clone())];
-            let rows = RowLines {
-                selected: selected == Some(&row),
-                width,
-            }
-            .lines(first, None, Vec::new());
+            let rows =
+                RowLines::new(app, selected == Some(&row), width).lines(first, None, Vec::new());
             add(&mut lines, row, rows);
         }
     }
@@ -681,10 +692,7 @@ fn draw_agents_list(frame: &mut Frame, app: &App, area: Rect) {
         }
         lines.extend(agent_lines(
             agent,
-            RowLines {
-                selected: selected == Some(&row),
-                width: area.width,
-            },
+            RowLines::new(app, selected == Some(&row), area.width),
         ));
         for session in &agent.sessions {
             let row = AgentRow::Session(session.id);
@@ -694,10 +702,7 @@ fn draw_agents_list(frame: &mut Frame, app: &App, area: Rect) {
             lines.extend(agent_session_lines(
                 app,
                 session,
-                RowLines {
-                    selected: selected == Some(&row),
-                    width: area.width,
-                },
+                RowLines::new(app, selected == Some(&row), area.width),
             ));
         }
     }
@@ -721,10 +726,7 @@ fn draw_items_list(frame: &mut Frame, app: &App, area: Rect) {
             if selected == Some(&item.id) {
                 selected_line = Some(lines.len());
             }
-            let row = RowLines {
-                selected: selected == Some(&item.id),
-                width: area.width,
-            };
+            let row = RowLines::new(app, selected == Some(&item.id), area.width);
             lines.extend(item_row_lines(item, row));
         }
     }
@@ -745,6 +747,7 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
         width: body.width.saturating_sub(1),
         ..body
     };
+    frame.render_widget(Paragraph::new(breadcrumb(app, title.width)), title);
     let in_view = app.snapshot.in_view.as_ref();
     // Until the snapshot has caught up with what was opened, the detail stays empty.
     match &opened.detail {
@@ -754,16 +757,7 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
             else {
                 return;
             };
-            // The header line of `wf item show` stays on top.
-            let mut text: Text = text.into_text().unwrap_or_default();
-            let header = if text.lines.is_empty() {
-                Line::default()
-            } else {
-                text.lines.remove(0)
-            };
-            let mut spans = vec![Span::raw(" ← ").dim()];
-            spans.extend(header.spans);
-            frame.render_widget(Paragraph::new(Line::from(spans)), title);
+            let text: Text = text.into_text().unwrap_or_default();
             draw_scrolled(frame, text, opened.scroll, body, true);
         }
         Detail::Agent(id) => {
@@ -772,11 +766,6 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
             else {
                 return;
             };
-            let line = Line::from(vec![
-                Span::raw(" ← ").dim(),
-                Span::raw(id.name.to_string()).bold(),
-            ]);
-            frame.render_widget(Paragraph::new(line), title);
             draw_scrolled(frame, Text::from(text.clone()), opened.scroll, body, true);
         }
         Detail::Session(id) => {
@@ -785,20 +774,12 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
             else {
                 return;
             };
-            draw_session(frame, app, session, opened.scroll, title, body);
+            draw_session(frame, app, session, opened.scroll, body);
         }
     }
 }
 
-fn draw_session(
-    frame: &mut Frame,
-    app: &App,
-    session: &SessionInfo,
-    scroll: Scroll,
-    title: Rect,
-    body: Rect,
-) {
-    frame.render_widget(Paragraph::new(session_title(app, session)), title);
+fn draw_session(frame: &mut Frame, app: &App, session: &SessionInfo, scroll: Scroll, body: Rect) {
     let text = match (&session.place, app.transcripts.get(&session.id)) {
         (Place::Elsewhere(device), _) => {
             Text::from(Line::from(format!(" transcript on {device}")).dim())
@@ -837,35 +818,81 @@ fn draw_session(
             Span::raw(format!("wants: {what}")),
         ]);
         let keys = Span::raw("a allow · d deny").fg(Color::Yellow);
-        let row = RowLines {
-            selected: false,
-            width: bar.width,
-        };
+        let row = RowLines::new(app, false, bar.width);
         let mut lines = row.lines(line.spans, Some(keys), Vec::new());
         frame.render_widget(Paragraph::new(lines.remove(0)), bar);
     }
 }
 
-/// `← #k3j1 Parse config lazily · coder · work · 12m  ◆`
-fn session_title(app: &App, session: &SessionInfo) -> Line<'static> {
-    let mut spans = vec![Span::raw(" ← ").dim()];
-    spans.extend(item_spans(&session.item));
-    spans.push(
+/// Where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part stands
+/// out while the detail has the keys, and is dim while it only shows what the list selects.
+fn breadcrumb(app: &App, width: u16) -> Line<'static> {
+    let separator = || Span::raw(" › ").dim();
+    let mut crumbs: Vec<Vec<Span<'static>>> = vec![vec![Span::raw(app.tab.name())]];
+    let path = app.path();
+    for detail in &path {
+        match detail {
+            Detail::Item(item) => crumbs.push(vec![Span::raw(format!("#{}", item.short()))]),
+            Detail::Agent(agent) => crumbs.push(vec![Span::raw(agent.name.to_string())]),
+            Detail::Session(id) => {
+                let Some(session) = app.session_info(*id) else {
+                    crumbs.push(vec![Span::raw(id.short())]);
+                    continue;
+                };
+                // A session is about an item: named, unless the way here went through it.
+                let item = session.item.id;
+                if crumbs
+                    .last()
+                    .and_then(|crumb| crumb.first())
+                    .map(|span| span.content.as_ref())
+                    != Some(format!("#{}", item.short()).as_str())
+                {
+                    let mut crumb = vec![Span::raw(format!("#{}", item.short()))];
+                    // In a narrow window the list with its title is not on screen.
+                    if !app.is_wide()
+                        && let Some(title) = app.item_title(item)
+                    {
+                        crumb.push(Span::raw(format!(" {title}")));
+                    }
+                    crumbs.push(crumb);
+                }
+                crumbs.push(session_crumb(app, session));
+            }
+        }
+    }
+    let focused = !app.list_has_keys();
+    let last = crumbs.len() - 1;
+    let mut spans = vec![Span::raw(" ")];
+    for (index, crumb) in crumbs.into_iter().enumerate() {
+        if index > 0 {
+            spans.push(separator());
+        }
+        for span in crumb {
+            spans.push(match (index == last, focused) {
+                (true, true) => span.bold(),
+                (true, false) | (false, _) => span.dim(),
+            });
+        }
+    }
+    Line::from(cut_spans(spans, usize::from(width)))
+}
+
+/// `coder · work · 12m ◆`
+fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
+    let status = match session.status {
+        SessionStatus::Live => Span::raw(" ◆").fg(Color::Blue),
+        SessionStatus::Parked => Span::raw(" ◇ parked").fg(Color::Blue),
+        SessionStatus::Ended { reason, .. } => Span::raw(format!(" · {}", reason.name())),
+    };
+    vec![
         Span::raw(format!(
-            " · {} · {} · {}",
+            "{} · {} · {}",
             session.agent,
             session.role,
             age(session.started_ms, app.snapshot.now_ms)
-        ))
-        .dim(),
-    );
-    let glyph = match session.status {
-        SessionStatus::Live => Span::raw("  ◆").fg(Color::Blue),
-        SessionStatus::Parked => Span::raw("  ◇ parked").fg(Color::Blue),
-        SessionStatus::Ended { reason, .. } => Span::raw(format!("  {}", reason.name())).dim(),
-    };
-    spans.push(glyph);
-    Line::from(spans)
+        )),
+        status,
+    ]
 }
 
 /// The whole transcript laid out for `width`: its blocks, then what is still open.

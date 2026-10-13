@@ -658,3 +658,51 @@ fn the_agents_tab_lists_each_agent_with_its_sessions() {
     assert_eq!(press(&mut app, KeyCode::Char('x')), None);
     assert!(app.prompt.is_none());
 }
+
+/// The style of the cell at `x`, `y` once `app` is drawn.
+fn style_at(app: &App, width: u16, height: u16, x: u16, y: u16) -> ratatui::style::Style {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| draw::draw(frame, app)).unwrap();
+    terminal.backend().buffer()[(x, y)].style()
+}
+
+#[test]
+fn the_part_with_the_keys_stands_out() {
+    use ratatui::style::{Color, Modifier};
+    let mut app = app();
+    app.resize(130);
+    let blocked = SessionId::from_bytes([12; 32]);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    app.refresh(snapshot.clone());
+    // The parked coder is selected on line 9; the breadcrumb is on line 3, right of the list.
+    let (row, crumb_y) = (9, 3);
+    let crumb_x = app.list_width() + 3;
+    assert_eq!(app.wanted().detail, Some(Detail::Session(blocked)));
+    assert_eq!(style_at(&app, 130, 14, 30, row).bg, Some(Color::DarkGray));
+    assert!(
+        style_at(&app, 130, 14, crumb_x, crumb_y)
+            .add_modifier
+            .contains(Modifier::DIM)
+    );
+    // In the detail, the list lets go of the selection's background, and the breadcrumb lights up.
+    press(&mut app, KeyCode::Char('l'));
+    app.refresh(snapshot);
+    assert_ne!(style_at(&app, 130, 14, 30, row).bg, Some(Color::DarkGray));
+    // Where `coder · work` starts: the backend quotes each line, which the column leaves out.
+    let line = screen(&app, 130, 14)
+        .lines()
+        .nth(usize::from(crumb_y))
+        .unwrap()
+        .to_owned();
+    let before = &line[1..line.find("coder ·").unwrap()];
+    let column = u16::try_from(before.chars().count()).unwrap();
+    assert!(
+        style_at(&app, 130, 14, column, crumb_y)
+            .add_modifier
+            .contains(Modifier::BOLD)
+    );
+}

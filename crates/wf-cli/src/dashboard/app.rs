@@ -678,6 +678,60 @@ impl App {
         }
     }
 
+    /// Whether the keys go to the list of the tab on screen, rather than to a detail opened from
+    /// it.
+    pub fn list_has_keys(&self) -> bool {
+        self.stack().is_none_or(|stack| stack.is_empty())
+    }
+
+    /// The details on the way from the list to what is on screen: those opened, or in a wide
+    /// window the selection's.
+    pub fn path(&self) -> Vec<Detail> {
+        match self.stack() {
+            Some(stack) if !stack.is_empty() => {
+                stack.iter().map(|opened| opened.detail.clone()).collect()
+            }
+            Some(_) | None => self
+                .in_view()
+                .map(|opened| opened.detail)
+                .into_iter()
+                .collect(),
+        }
+    }
+
+    /// The title of an item, as far as the snapshot knows it.
+    pub fn item_title(&self, item: ItemId) -> Option<&str> {
+        let snapshot = &self.snapshot;
+        let sessions = snapshot
+            .working
+            .iter()
+            .chain(
+                snapshot
+                    .agents
+                    .iter()
+                    .flat_map(|agent| agent.sessions.iter()),
+            )
+            .map(|session| &session.item);
+        let waiting = snapshot.waiting.iter().filter_map(|entry| match entry {
+            Waiting::Permission { item, .. } => item.as_ref(),
+            Waiting::Blocker { item, .. }
+            | Waiting::Review { item, .. }
+            | Waiting::Notice { item, .. } => Some(item),
+        });
+        let listed = snapshot
+            .items
+            .iter()
+            .flat_map(|group| group.items.iter())
+            .find(|row| row.id == item)
+            .map(|row| row.title.as_str());
+        listed.or_else(|| {
+            sessions
+                .chain(waiting)
+                .find(|known| known.id == item)
+                .map(|known| known.title.as_str())
+        })
+    }
+
     /// The detail of what is selected on the tab on screen.
     fn selected_detail(&self) -> Option<Detail> {
         match self.tab {
@@ -774,7 +828,7 @@ impl App {
     }
 
     /// What the snapshot knows of a session: as one that works, one in view, or one of an agent.
-    fn session_info(&self, session: SessionId) -> Option<&SessionInfo> {
+    pub fn session_info(&self, session: SessionId) -> Option<&SessionInfo> {
         let in_view = match &self.snapshot.in_view {
             Some(InView::Session(info)) => Some(info),
             Some(InView::Item { .. } | InView::Agent { .. }) | None => None,
