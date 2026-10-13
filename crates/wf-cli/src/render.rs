@@ -326,15 +326,9 @@ fn wrap_markdown(text: &str, width: Option<usize>, indent: &str) -> String {
         }
         match width {
             _ if line.trim().is_empty() => {}
-            Some(width) if !(in_fence || is_fence || trimmed.starts_with('|')) => {
-                let first = format!("{indent}{line}");
+            Some(_) if !(in_fence || is_fence || trimmed.starts_with('|')) => {
                 let rest = format!("{indent}{}", hanging_indent(&plain));
-                let options = textwrap::Options::new(width)
-                    .break_words(false)
-                    .word_separator(textwrap::WordSeparator::AsciiSpace)
-                    .word_splitter(textwrap::WordSplitter::NoHyphenation)
-                    .subsequent_indent(&rest);
-                out.push_str(&textwrap::fill(&first, options));
+                out.push_str(&fill(&format!("{indent}{line}"), width, &rest));
             }
             Some(_) | None => {
                 out.push_str(indent);
@@ -344,6 +338,22 @@ fn wrap_markdown(text: &str, width: Option<usize>, indent: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// `line` wrapped to `width` at spaces, continuing under `indent`; unchanged without a width.
+/// Words longer than the width are left whole rather than broken.
+fn fill(line: &str, width: Option<usize>, indent: &str) -> String {
+    match width {
+        Some(width) => {
+            let options = textwrap::Options::new(width)
+                .break_words(false)
+                .word_separator(textwrap::WordSeparator::AsciiSpace)
+                .word_splitter(textwrap::WordSplitter::NoHyphenation)
+                .subsequent_indent(indent);
+            textwrap::fill(line, options)
+        }
+        None => line.to_string(),
+    }
 }
 
 /// What a wrapped markdown line continues under: spaces as wide as its leading whitespace, list
@@ -402,19 +412,23 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
 
     let summary = &detail.summary;
     let mut out = String::new();
+    // A header line continues under its text: past the label for the title, past `↳ ` for a link.
+    let mut line = |text: String, indent: &str| {
+        let _ = writeln!(out, "{}", fill(&text, width, indent));
+    };
     let archived = if summary.archived { "[archived]" } else { "" };
-    let _ = writeln!(
-        out,
-        "{} {}",
-        item_label(
-            &summary.id,
-            &summary.item_type,
-            summary.state.as_deref(),
-            summary.state_category,
-            summary.readiness,
-            archived
-        ),
-        paint(BOLD, &summary.title)
+    let label = item_label(
+        &summary.id,
+        &summary.item_type,
+        summary.state.as_deref(),
+        summary.state_category,
+        summary.readiness,
+        archived,
+    );
+    let title_indent = " ".repeat(textwrap::core::display_width(&label) + 1);
+    line(
+        format!("{label} {}", paint(BOLD, &summary.title)),
+        &title_indent,
     );
 
     let mut status = Vec::new();
@@ -472,21 +486,23 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
         status.push(format!("blocked by {}", ids.join(", ")));
     }
     if !status.is_empty() {
-        let _ = writeln!(out, "  {}", status.join("  "));
+        line(format!("  {}", status.join("  ")), "  ");
     }
 
-    let _ = writeln!(
-        out,
-        "  {}",
-        [
-            style::paint_actor(&detail.author),
-            paint(DIM, format!("created {}", short_time(&detail.created))),
-            paint(DIM, format!("updated {}", short_time(&detail.updated))),
-        ]
-        .join(&format!(" {} ", paint(DIM, "·")))
+    line(
+        format!(
+            "  {}",
+            [
+                style::paint_actor(&detail.author),
+                paint(DIM, format!("created {}", short_time(&detail.created))),
+                paint(DIM, format!("updated {}", short_time(&detail.updated))),
+            ]
+            .join(&format!(" {} ", paint(DIM, "·")))
+        ),
+        "  ",
     );
     for flag in &detail.flags {
-        let _ = writeln!(out, "  {}", paint(WARNING, format!("! {flag}")));
+        line(format!("  {}", paint(WARNING, format!("! {flag}"))), "    ");
     }
     if !detail.open.is_empty() {
         let open: Vec<String> = detail
@@ -502,19 +518,53 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
                 )
             })
             .collect();
-        let _ = writeln!(
-            out,
-            "  {} {}",
-            paint(WARNING, format!("{} open:", detail.open.len())),
-            open.join(&format!(" {} ", paint(DIM, "·")))
+        line(
+            format!(
+                "  {} {}",
+                paint(WARNING, format!("{} open:", detail.open.len())),
+                open.join(&format!(" {} ", paint(DIM, "·")))
+            ),
+            "  ",
         );
     }
 
-    let links = |label: &str, links: &[crate::view::LinkView], out: &mut String| {
+    for (label, links) in [
+        ("depends on", detail.depends_on.as_slice()),
+        ("required by", &detail.required_by),
+        ("supersedes", detail.supersedes.as_slice()),
+    ] {
         for link in links {
-            let _ = writeln!(
-                out,
-                "  ↳ {label} {} \"{}\"{}",
+            line(
+                format!(
+                    "  ↳ {label} {} \"{}\"{}",
+                    item_label(
+                        &link.id,
+                        &link.item_type,
+                        link.state.as_deref(),
+                        link.state_category,
+                        None,
+                        ""
+                    ),
+                    link.title,
+                    if link.ignored {
+                        " [ignored: cycle]"
+                    } else {
+                        ""
+                    }
+                ),
+                LINK_INDENT,
+            );
+        }
+    }
+    for reference in &detail.references {
+        let link = &reference.item;
+        let what = match &reference.comment {
+            Some(comment) => format!("{} on ", paint(DIM, comment)),
+            None => String::new(),
+        };
+        line(
+            format!(
+                "  ↳ references {what}{} \"{}\"",
                 item_label(
                     &link.id,
                     &link.item_type,
@@ -524,35 +574,8 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
                     ""
                 ),
                 link.title,
-                if link.ignored {
-                    " [ignored: cycle]"
-                } else {
-                    ""
-                }
-            );
-        }
-    };
-    links("depends on", &detail.depends_on, &mut out);
-    links("required by", &detail.required_by, &mut out);
-    links("supersedes", detail.supersedes.as_slice(), &mut out);
-    for reference in &detail.references {
-        let link = &reference.item;
-        let what = match &reference.comment {
-            Some(comment) => format!("{} on ", paint(DIM, comment)),
-            None => String::new(),
-        };
-        let _ = writeln!(
-            out,
-            "  ↳ references {what}{} \"{}\"",
-            item_label(
-                &link.id,
-                &link.item_type,
-                link.state.as_deref(),
-                link.state_category,
-                None,
-                ""
             ),
-            link.title,
+            LINK_INDENT,
         );
     }
     for backlink in &detail.referenced_by {
@@ -561,17 +584,19 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
             Some(comment) => format!("{} ", paint(DIM, comment)),
             None => String::new(),
         };
-        let _ = writeln!(
-            out,
-            "  ↳ {what}referenced by {} \"{}\" ({})",
-            id_label(&source.item),
-            source.title,
-            written_in(source)
+        line(
+            format!(
+                "  ↳ {what}referenced by {} \"{}\" ({})",
+                id_label(&source.item),
+                source.title,
+                written_in(source)
+            ),
+            LINK_INDENT,
         );
     }
     if !detail.mentions.is_empty() {
         let mentions: Vec<String> = detail.mentions.iter().map(style::paint_actor).collect();
-        let _ = writeln!(out, "  ↳ mentions {}", mentions.join(" "));
+        line(format!("  ↳ mentions {}", mentions.join(" ")), LINK_INDENT);
     }
     if !detail.body.is_empty() {
         out.push('\n');
@@ -582,6 +607,9 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
     }
     out
 }
+
+/// Where a wrapped `↳` line of an item's header continues: under the text after `↳ `.
+const LINK_INDENT: &str = "    ";
 
 /// The activity of an item: one line per thing that happened, and the text of comments below
 /// their line. The date heads the section and is repeated when the day changes.
@@ -663,17 +691,7 @@ fn activity_entry(
         Some(_) | None => parts.push(entry.summary.clone()),
     }
     let line = format!("{lead}{}", parts.join(&format!(" {} ", paint(DIM, "·"))));
-    let line = match width {
-        Some(width) => {
-            let options = textwrap::Options::new(width)
-                .break_words(false)
-                .word_separator(textwrap::WordSeparator::AsciiSpace)
-                .word_splitter(textwrap::WordSplitter::NoHyphenation)
-                .subsequent_indent(ACTIVITY_INDENT);
-            textwrap::fill(&line, options)
-        }
-        None => line,
-    };
+    let line = fill(&line, width, ACTIVITY_INDENT);
     let text = entry
         .comment
         .as_ref()
@@ -1087,6 +1105,86 @@ mod tests {
         assert_eq!(
             anstream::adapter::strip_str(&line).to_string(),
             "  00:27  @ada/coder/bh2m · checked step 1: wrap long activity lines under their indent"
+        );
+    }
+
+    fn detail_with_a_reference(title: &str, referenced: &str) -> ItemDetail {
+        let author = crate::view::ActorView {
+            kind: crate::view::ActorKind::Agent,
+            label: "@ada/coder/bh2m".to_string(),
+        };
+        ItemDetail {
+            summary: crate::view::ItemSummary {
+                id: "dm3q4jpcwtdq".to_string(),
+                item_type: "task".to_string(),
+                title: title.to_string(),
+                state: None,
+                state_category: None,
+                priority: None,
+                readiness: None,
+                blocked_by: Vec::new(),
+                blocking: Vec::new(),
+                labels: Vec::new(),
+                lane: None,
+                steps: None,
+                archived: false,
+            },
+            body: Vec::new(),
+            author,
+            created: "not a timestamp".to_string(),
+            updated: "not a timestamp".to_string(),
+            review: None,
+            review_status: None,
+            recovery: None,
+            waits_after_failures: None,
+            requires: Vec::new(),
+            depends_on: Vec::new(),
+            required_by: Vec::new(),
+            supersedes: None,
+            references: vec![crate::view::ReferenceView {
+                item: crate::view::LinkView {
+                    id: "kvb7vjaaaaaa".to_string(),
+                    item_type: "task".to_string(),
+                    title: referenced.to_string(),
+                    state: None,
+                    state_category: None,
+                    ignored: false,
+                },
+                comment: None,
+            }],
+            referenced_by: Vec::new(),
+            mentions: Vec::new(),
+            activity: Vec::new(),
+            open: Vec::new(),
+            flags: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn header_lines_continue_under_their_text() {
+        let detail = detail_with_a_reference(
+            "Wrap the header of wf item show under its indent",
+            "Wrap long activity lines under their indent",
+        );
+        let shown = anstream::adapter::strip_str(&item_detail_for(&detail, Some(40))).to_string();
+        assert_eq!(
+            shown,
+            "? #dm3q4j (task:unknown) Wrap the header\n\
+             \x20                        of wf item\n\
+             \x20                        show under its\n\
+             \x20                        indent\n\
+             \x20 @ada/coder/bh2m · created not a\n\
+             \x20 timestamp · updated not a timestamp\n\
+             \x20 ↳ references ? #kvb7vj (task:unknown)\n\
+             \x20   \"Wrap long activity lines under\n\
+             \x20   their indent\"\n"
+        );
+        let shown = anstream::adapter::strip_str(&item_detail_for(&detail, None)).to_string();
+        assert_eq!(
+            shown,
+            "? #dm3q4j (task:unknown) Wrap the header of wf item show under its indent\n\
+             \x20 @ada/coder/bh2m · created not a timestamp · updated not a timestamp\n\
+             \x20 ↳ references ? #kvb7vj (task:unknown) \"Wrap long activity lines under their indent\"\n"
         );
     }
 
