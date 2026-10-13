@@ -126,25 +126,12 @@ fn prompts(workspace: &Workspace, only: Option<ItemId>) -> Vec<Prompt> {
                 comment,
             },
             Waiting::PrincipalReview { .. } => Prompt::PrincipalReview { item: entry.item },
-            Waiting::Proposal => Prompt::Notice {
-                item: entry.item,
-                what: "waits for a decision: `wf item move` it on".to_string(),
-            },
-            Waiting::Merge { commit } => Prompt::Notice {
-                item: entry.item,
-                what: format!(
-                    "{} is ready to merge, but the target is checked out with changes",
-                    &commit.to_string()[..8]
-                ),
-            },
-            Waiting::Recovery {
-                role,
-                failures,
-                last,
-            } => Prompt::Notice {
-                item: entry.item,
-                what: view::recovery_waits(state, entry.item, role, failures, last),
-            },
+            Waiting::Proposal | Waiting::Merge { .. } | Waiting::Recovery { .. } => {
+                Prompt::Notice {
+                    item: entry.item,
+                    what: view::what_waits(state, &entry).1,
+                }
+            }
         });
     }
     prompts

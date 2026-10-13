@@ -2,7 +2,7 @@
 
 use serde::Serialize;
 use wf_core::id::{HashId, ItemId, SessionId};
-use wf_core::inbox::Waiting;
+use wf_core::inbox::{InboxEntry, Waiting};
 use wf_core::item::{ItemView, Standing};
 use wf_core::session::SessionRole;
 use wf_core::state::State;
@@ -58,9 +58,62 @@ pub fn recovery_waits(
     format!("{sessions} did not finish (last: {ended}); {next}")
 }
 
+/// The kind of what waits, as `wf inbox --json` names it, and what it says to the principal.
+pub fn what_waits(state: &State, entry: &InboxEntry) -> (&'static str, String) {
+    let policy = &state.policy().expect("a workforce has a policy").policy;
+    match entry.waiting {
+        Waiting::Blocker { comment } => (
+            "blocker",
+            format!(
+                "blocker {}: answer with `wf comment {} \"...\" --resolve {}`",
+                comment.short(),
+                entry.item.short(),
+                comment.short()
+            ),
+        ),
+        Waiting::Proposal => {
+            let state_name = match state.item(entry.item) {
+                Some(ItemView::Live(live)) => match live.standing(policy) {
+                    Standing::Known { state, .. } => state.to_string(),
+                    Standing::Unknown { state } => {
+                        state.map_or_else(|| "an unknown state".to_string(), ToString::to_string)
+                    }
+                },
+                Some(ItemView::Archived(_)) | None => "an unknown state".to_string(),
+            };
+            ("proposal", format!("{state_name}; `wf item move` it on"))
+        }
+        Waiting::PrincipalReview { commit } => (
+            "principal_review",
+            match commit {
+                Some(commit) => format!(
+                    "review of {}: `wf item diff`, then `wf review`",
+                    &commit.to_string()[..8]
+                ),
+                None => "review of work without commits: read it, then `wf review`".to_string(),
+            },
+        ),
+        Waiting::Merge { commit } => (
+            "merge",
+            format!(
+                "{} is ready to merge, but {} is checked out with changes",
+                &commit.to_string()[..8],
+                policy.merge.target
+            ),
+        ),
+        Waiting::Recovery {
+            role,
+            failures,
+            last,
+        } => (
+            "recovery",
+            recovery_waits(state, entry.item, role, failures, last),
+        ),
+    }
+}
+
 /// What waits on the principal: what the state says, and the permission requests the daemon holds.
 pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView> {
-    let policy = &state.policy().expect("a workforce has a policy").policy;
     let title_of = |item: ItemId| match state.item(item) {
         Some(ItemView::Live(live)) => live.title().to_string(),
         Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
@@ -69,58 +122,7 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
         .inbox()
         .into_iter()
         .map(|entry| {
-            let (kind, what) = match entry.waiting {
-                Waiting::Blocker { comment } => (
-                    "blocker",
-                    format!(
-                        "blocker {}: answer with `wf comment {} \"...\" --resolve {}`",
-                        comment.short(),
-                        entry.item.short(),
-                        comment.short()
-                    ),
-                ),
-                Waiting::Proposal => {
-                    let state_name = match state.item(entry.item) {
-                        Some(ItemView::Live(live)) => match live.standing(policy) {
-                            Standing::Known { state, .. } => state.to_string(),
-                            Standing::Unknown { state } => state.map_or_else(
-                                || "an unknown state".to_string(),
-                                ToString::to_string,
-                            ),
-                        },
-                        Some(ItemView::Archived(_)) | None => "an unknown state".to_string(),
-                    };
-                    ("proposal", format!("{state_name}; `wf item move` it on"))
-                }
-                Waiting::PrincipalReview { commit } => (
-                    "principal_review",
-                    match commit {
-                        Some(commit) => format!(
-                            "review of {}: `wf item diff`, then `wf review`",
-                            &commit.to_string()[..8]
-                        ),
-                        None => {
-                            "review of work without commits: read it, then `wf review`".to_string()
-                        }
-                    },
-                ),
-                Waiting::Merge { commit } => (
-                    "merge",
-                    format!(
-                        "{} is ready to merge, but {} is checked out with changes",
-                        &commit.to_string()[..8],
-                        policy.merge.target
-                    ),
-                ),
-                Waiting::Recovery {
-                    role,
-                    failures,
-                    last,
-                } => (
-                    "recovery",
-                    recovery_waits(state, entry.item, role, failures, last),
-                ),
-            };
+            let (kind, what) = what_waits(state, &entry);
             InboxEntryView {
                 kind: kind.to_string(),
                 item: Some(entry.item.to_base32()),
