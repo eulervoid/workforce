@@ -35,7 +35,7 @@ fn table(header: &[&str]) -> Table {
 }
 
 /// Where in an item a reference is.
-fn origin(source: &SourceView) -> &'static str {
+fn written_in(source: &SourceView) -> &'static str {
     match source.in_comment {
         None => "body",
         Some(_) => "comment",
@@ -475,7 +475,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
             "  ↳ {what}referenced by {} \"{}\" ({})",
             id_label(&source.item),
             source.title,
-            origin(source)
+            written_in(source)
         );
     }
     if !detail.mentions.is_empty() {
@@ -671,7 +671,7 @@ pub fn mentions(view: &MentionsView) -> String {
         table.add_row([
             format!("#{}", short(&source.item)),
             source.title.clone(),
-            origin(source).to_string(),
+            written_in(source).to_string(),
         ]);
     }
     format!("{table}\n")

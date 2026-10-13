@@ -123,7 +123,7 @@ pub struct Merge {
 
 /// Where a reference or mention was written.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum Origin {
+pub enum WrittenIn {
     Body,
     Comment(CommentId),
 }

@@ -9,7 +9,7 @@ use crate::id::{
     CommentId, HashId, ItemId, MIN_PREFIX_LEN, PrefixError, SessionId, resolve_prefix,
 };
 use crate::identity::{AgentId, PrincipalKey};
-use crate::item::{Item, Origin};
+use crate::item::{Item, WrittenIn};
 use crate::refs::{Mention, Token};
 use crate::state::State;
 
@@ -55,7 +55,7 @@ pub struct Backlink {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Source {
     pub item: ItemId,
-    pub origin: Origin,
+    pub written_in: WrittenIn,
 }
 
 pub struct Resolver<'a> {
@@ -190,11 +190,11 @@ impl Resolver<'_> {
     }
 }
 
-fn tokens_of(item: &Item) -> impl Iterator<Item = (Origin, &BTreeSet<Token>)> {
-    std::iter::once((Origin::Body, item.body_tokens())).chain(
+fn tokens_of(item: &Item) -> impl Iterator<Item = (WrittenIn, &BTreeSet<Token>)> {
+    std::iter::once((WrittenIn::Body, item.body_tokens())).chain(
         item.comments()
             .iter()
-            .map(|(id, comment)| (Origin::Comment(*id), &comment.tokens)),
+            .map(|(id, comment)| (WrittenIn::Comment(*id), &comment.tokens)),
     )
 }
 
@@ -214,13 +214,13 @@ impl State {
         let resolver = self.resolver();
         let mut backlinks = BTreeSet::new();
         for item in self.live_items().filter(|item| item.id() != target) {
-            for (origin, tokens) in tokens_of(item) {
+            for (written_in, tokens) in tokens_of(item) {
                 for reference in tokens.iter().filter_map(|token| resolver.reference(token)) {
                     if reference.item() == target {
                         backlinks.insert(Backlink {
                             from: Source {
                                 item: item.id(),
-                                origin,
+                                written_in,
                             },
                             comment: reference.comment(),
                         });
@@ -248,7 +248,7 @@ impl State {
         let resolver = self.resolver();
         let mut sources = Vec::new();
         for item in self.live_items() {
-            for (origin, tokens) in tokens_of(item) {
+            for (written_in, tokens) in tokens_of(item) {
                 let mentioned = tokens.iter().any(|token| match token {
                     Token::Mention(mention) => resolver.mention(mention).as_ref() == Some(target),
                     Token::ItemRef(_) | Token::CommentRef { .. } => false,
@@ -256,7 +256,7 @@ impl State {
                 if mentioned {
                     sources.push(Source {
                         item: item.id(),
-                        origin,
+                        written_in,
                     });
                 }
             }

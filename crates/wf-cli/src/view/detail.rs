@@ -8,7 +8,7 @@ use wf_core::event::{Change, CommentKind, Event};
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::inbox::Waiting;
-use wf_core::item::{Item, ItemView, Origin, Standing};
+use wf_core::item::{Item, ItemView, Standing, WrittenIn};
 use wf_core::policy::{Field, ReviewStep, StateCategory};
 use wf_core::review::ReviewStatus;
 use wf_core::session::{CommitId, EndReason, SessionRole, Verdict};
@@ -79,9 +79,9 @@ pub fn source_view(state: &State, source: &wf_core::resolve::Source) -> SourceVi
             .item(source.item)
             .map(|view| view.title().to_string())
             .unwrap_or_default(),
-        in_comment: match source.origin {
-            Origin::Body => None,
-            Origin::Comment(id) => Some(id.to_string()),
+        in_comment: match source.written_in {
+            WrittenIn::Body => None,
+            WrittenIn::Comment(id) => Some(id.to_string()),
         },
     }
 }

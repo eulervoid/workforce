@@ -281,8 +281,9 @@ impl Workforce {
     }
 }
 
+/// What a pending event waits for before it can be admitted.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum Waiting {
+pub(crate) enum PendingOn {
     Genesis,
     /// The history of a fork, which has to be folded first.
     History,
@@ -292,16 +293,16 @@ pub(crate) enum Waiting {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Pending {
     pub(crate) events: BTreeMap<EventId, Event>,
-    pub(crate) waiting: BTreeMap<Waiting, BTreeSet<EventId>>,
+    pub(crate) waiting: BTreeMap<PendingOn, BTreeSet<EventId>>,
 }
 
 impl Pending {
-    pub(crate) fn insert(&mut self, waiting: Waiting, id: EventId, event: Event) {
+    pub(crate) fn insert(&mut self, waiting: PendingOn, id: EventId, event: Event) {
         self.events.insert(id, event);
         self.waiting.entry(waiting).or_default().insert(id);
     }
 
-    pub(crate) fn release(&mut self, waiting: Waiting) -> Vec<Event> {
+    pub(crate) fn release(&mut self, waiting: PendingOn) -> Vec<Event> {
         let Some(ids) = self.waiting.remove(&waiting) else {
             return Vec::new();
         };
@@ -321,7 +322,7 @@ pub enum BuildError {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Disposition {
     Applied,
-    /// Waiting for missing parents.
+    /// PendingOn for missing parents.
     Pending,
     /// Already known.
     Duplicate,

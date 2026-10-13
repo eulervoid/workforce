@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::event::Event;
 use crate::id::EventId;
 use crate::identity::DeviceKey;
-use crate::state::{FeedHead, State, Waiting};
+use crate::state::{FeedHead, PendingOn, State};
 
 /// What a replica knows of one author's feed: enough for a peer to tell what it lacks.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -74,8 +74,8 @@ impl State {
             .waiting
             .keys()
             .filter_map(|waiting| match waiting {
-                Waiting::Event(id) if !self.pending.events.contains_key(id) => Some(*id),
-                Waiting::Event(_) | Waiting::Genesis | Waiting::History => None,
+                PendingOn::Event(id) if !self.pending.events.contains_key(id) => Some(*id),
+                PendingOn::Event(_) | PendingOn::Genesis | PendingOn::History => None,
             })
             .chain(self.wanted_history())
             .collect()

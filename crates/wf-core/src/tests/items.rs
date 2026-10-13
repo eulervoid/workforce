@@ -2,7 +2,7 @@ use crate::crdt::SetChange;
 use crate::event::Change;
 use crate::graph::Readiness;
 use crate::id::{HashId, ItemId};
-use crate::item::{ItemView, Origin, Standing};
+use crate::item::{ItemView, Standing, WrittenIn};
 use crate::name::{Label, StateName};
 use crate::policy::{DEFAULT_POLICY_TOML, StateCategory};
 use crate::refs::Mention;
@@ -461,14 +461,14 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
             Backlink {
                 from: Source {
                     item: task,
-                    origin: Origin::Body
+                    written_in: WrittenIn::Body
                 },
                 comment: None
             },
             Backlink {
                 from: Source {
                     item: task,
-                    origin: Origin::Comment(note.id().into())
+                    written_in: WrittenIn::Comment(note.id().into())
                 },
                 comment: None
             },
@@ -488,7 +488,7 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
         sources,
         vec![Source {
             item: task,
-            origin: Origin::Comment(note.id().into())
+            written_in: WrittenIn::Comment(note.id().into())
         }]
     );
 
@@ -577,7 +577,7 @@ fn comment_references_resolve_among_the_comments_of_their_item() {
         vec![Backlink {
             from: Source {
                 item: other,
-                origin: Origin::Body
+                written_in: WrittenIn::Body
             },
             comment: Some(said)
         }]

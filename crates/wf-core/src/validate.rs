@@ -18,7 +18,9 @@ use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
 use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, StateName, TypeName};
 use crate::policy::{Field, StateCategory};
 use crate::session::{SessionRole, Verdict};
-use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
+use crate::state::{
+    Disposition, ForkState, MAX_PENDING, Origin, PendingOn, Received, State, Trust,
+};
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum GenesisError {
@@ -228,7 +230,7 @@ fn has_open(item: &crate::item::Item, kind: CommentKind) -> bool {
 
 enum Admission {
     Apply(Origin),
-    Wait(Waiting),
+    Wait(PendingOn),
     Duplicate,
 }
 
@@ -263,14 +265,14 @@ impl State {
                     // Pending events were verified when they first arrived.
                     queue.extend(
                         self.pending
-                            .release(Waiting::Event(id))
+                            .release(PendingOn::Event(id))
                             .into_iter()
                             .map(|released| (released, Trust::Stored)),
                     );
                     if is_genesis {
                         queue.extend(
                             self.pending
-                                .release(Waiting::Genesis)
+                                .release(PendingOn::Genesis)
                                 .into_iter()
                                 .map(|released| (released, Trust::Stored)),
                         );
@@ -278,7 +280,7 @@ impl State {
                     if origin == Origin::History && !self.history_incomplete() {
                         queue.extend(
                             self.pending
-                                .release(Waiting::History)
+                                .release(PendingOn::History)
                                 .into_iter()
                                 .map(|released| (released, Trust::Stored)),
                         );
@@ -287,7 +289,7 @@ impl State {
                 Ok(Admission::Wait(waiting)) => {
                     // Events that wait for the history of a fork are signed by bound devices and
                     // end when the history is complete, so they are not capped.
-                    if waiting != Waiting::History && self.pending.events.len() >= MAX_PENDING {
+                    if waiting != PendingOn::History && self.pending.events.len() >= MAX_PENDING {
                         if is_submitted {
                             return Err(Invalid::PendingFull);
                         }
@@ -328,7 +330,7 @@ impl State {
                 (_, None) => Err(Invalid::MissingWorkforce),
                 (_, Some(id)) => match self.expected {
                     Some(expected) if expected != id => Err(Invalid::WrongWorkforce(id)),
-                    Some(_) | None => Ok(Admission::Wait(Waiting::Genesis)),
+                    Some(_) | None => Ok(Admission::Wait(PendingOn::Genesis)),
                 },
             };
         };
@@ -361,14 +363,14 @@ impl State {
         // What the devices of a fork write waits until the history it continues has been folded:
         // their feeds and the items they touch are in it.
         if self.history_incomplete() {
-            return Ok(Admission::Wait(Waiting::History));
+            return Ok(Admission::Wait(PendingOn::History));
         }
 
         if let Some(missing) = event
             .causal_parents()
             .find(|parent| !self.known.contains_key(parent))
         {
-            return Ok(Admission::Wait(Waiting::Event(missing)));
+            return Ok(Admission::Wait(PendingOn::Event(missing)));
         }
 
         self.check_feed(event)?;
