@@ -322,6 +322,7 @@ impl Daemon {
             wf_core::autonomy::PermissionMode::Ask => Arc::new(Deciding {
                 held: Arc::clone(&self.held),
                 workforce,
+                item,
                 session,
                 machine_config: self.config.machine_config.clone(),
                 agents: crate::judges::WorkforceJudges {

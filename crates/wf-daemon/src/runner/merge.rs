@@ -48,6 +48,15 @@ pub(super) struct MergeRequest {
     pub(super) attempt: Attempt,
 }
 
+/// What became of a merge request, as far as the principal is concerned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum MergeEnd {
+    /// Merged, refused, made by another request already, or left for the daemon to try again.
+    Handled,
+    /// The target branch is checked out with changes: the merge waits on the principal.
+    WaitsForCleanCheckout,
+}
+
 impl Daemon {
     /// Merges reviewed work into the target branch and finishes the item. What cannot be merged
     /// now leaves the item where the principal or a later session will see it.
@@ -56,7 +65,7 @@ impl Daemon {
         workforce: WorkforceId,
         loaded: &Loaded,
         request: MergeRequest,
-    ) -> Result<(), SessionError> {
+    ) -> Result<MergeEnd, SessionError> {
         let MergeRequest {
             item,
             commit,
@@ -65,14 +74,14 @@ impl Daemon {
             attempt,
         } = request;
         let Some(_merging) = self.merging.take(item) else {
-            return Ok(());
+            return Ok(MergeEnd::Handled);
         };
         let state = self.snapshot(loaded).await?;
         if matches!(
             state.review_status(item),
             Some(wf_core::review::ReviewStatus::Merged { .. })
         ) {
-            return Ok(());
+            return Ok(MergeEnd::Handled);
         }
         let principal = self.principal_of_device(&state)?;
         let ItemView::Live(live) = state.item(item).ok_or(SessionError::UnknownItem(item))? else {
@@ -104,7 +113,7 @@ impl Daemon {
                             .await?;
                     }
                 }
-                Ok::<_, SessionError>(())
+                Ok::<_, SessionError>(MergeEnd::Handled)
             }
         };
         let Some(repository) = self.repository_of(workforce) else {
@@ -142,6 +151,12 @@ impl Daemon {
                 break;
             }
         }
+        let end = match outcome {
+            MergeOutcome::DirtyCheckout { .. } => MergeEnd::WaitsForCleanCheckout,
+            MergeOutcome::Merged { .. }
+            | MergeOutcome::Conflict { .. }
+            | MergeOutcome::TargetMoved => MergeEnd::Handled,
+        };
         match outcome {
             MergeOutcome::Merged { commit: merged } => {
                 self.author(
@@ -207,7 +222,7 @@ impl Daemon {
                 }
             }
         }
-        Ok(())
+        Ok(end)
     }
 }
 

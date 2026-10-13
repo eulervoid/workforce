@@ -9,6 +9,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer};
 use url::Url;
 use wf_core::autonomy::PermissionMode;
+use wf_core::inbox::InboxKind;
 use wf_core::name::AgentName;
 use wf_harness::Decider;
 use wf_vcs::CommitSigning;
@@ -45,6 +46,8 @@ pub struct MachineConfig {
     /// What one agent gets on this machine, on top of what every agent gets.
     #[serde(rename = "agent", default)]
     pub agents: BTreeMap<AgentName, AgentConfig>,
+    #[serde(default)]
+    pub notify: NotifyConfig,
 }
 
 /// The variables an agent gets besides the ones wf sets: a few that every program expects, such
@@ -71,6 +74,70 @@ pub struct AgentConfig {
     /// More that Fence allows the agent.
     #[serde(default)]
     pub sandbox: FenceConfig,
+}
+
+/// How the principal is told that something new waits on them.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NotifyConfig {
+    /// The program and its arguments, run without a shell once for each new entry of the inbox.
+    /// `{kind}`, `{item}`, `{title}` and `{what}` in an argument are replaced as `wf inbox` says
+    /// them. No command, no notifications.
+    pub command: Option<Vec<String>>,
+}
+
+/// One entry of the inbox, as a notification tells of it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Notice {
+    pub kind: InboxKind,
+    /// The short id of the item.
+    pub item: String,
+    pub title: String,
+    pub what: String,
+}
+
+impl NotifyConfig {
+    /// The command for `notice`, with its placeholders replaced; `None` without a command.
+    pub fn command_for(&self, notice: &Notice) -> Option<Vec<String>> {
+        let command = self.command.as_ref()?;
+        Some(
+            command
+                .iter()
+                .map(|argument| fill_placeholders(argument, notice))
+                .collect(),
+        )
+    }
+}
+
+/// Replaces the placeholders of `argument` in one pass, so that a title that says `{what}` stays
+/// as it is.
+fn fill_placeholders(argument: &str, notice: &Notice) -> String {
+    let mut filled = String::with_capacity(argument.len());
+    let mut rest = argument;
+    while let Some(start) = rest.find('{') {
+        filled.push_str(&rest[..start]);
+        rest = &rest[start..];
+        let value = [
+            ("{kind}", notice.kind.as_str()),
+            ("{item}", notice.item.as_str()),
+            ("{title}", notice.title.as_str()),
+            ("{what}", notice.what.as_str()),
+        ]
+        .into_iter()
+        .find(|(placeholder, _)| rest.starts_with(placeholder));
+        match value {
+            Some((placeholder, value)) => {
+                filled.push_str(value);
+                rest = &rest[placeholder.len()..];
+            }
+            None => {
+                filled.push('{');
+                rest = &rest[1..];
+            }
+        }
+    }
+    filled.push_str(rest);
+    filled
 }
 
 /// How commits are signed on this machine.
@@ -303,6 +370,11 @@ impl MachineConfig {
         for decider in &config.permissions.deciders {
             decider.check().map_err(ParseError::Invalid)?;
         }
+        if config.notify.command.as_ref().is_some_and(Vec::is_empty) {
+            return Err(ParseError::Invalid(
+                "`command` under `[notify]` needs a program".to_string(),
+            ));
+        }
         config
             .environment
             .check()
@@ -504,6 +576,37 @@ mod tests {
         assert_eq!(configured.merge_signing, MergeSigningConfig::Device);
         assert!(MachineConfig::parse("[commits]\nagent_signing = \"device\"\n").is_err());
         assert!(MachineConfig::parse("[commits]\nagent_signing = \"always\"\n").is_err());
+    }
+
+    #[test]
+    fn a_notify_command_gets_the_entry_in_its_placeholders() {
+        assert_eq!(MachineConfig::parse("").ok().unwrap().notify.command, None);
+        let notice = Notice {
+            kind: InboxKind::Blocker,
+            item: "k3f7ab".to_string(),
+            title: "Says {what}".to_string(),
+            what: "answer it".to_string(),
+        };
+        assert_eq!(
+            NotifyConfig::default().command_for(&notice),
+            None,
+            "no command, no notifications"
+        );
+        let text = r#"
+            [notify]
+            command = ["notify-send", "wf: {title}", "{kind} on #{item}: {what} {other}"]
+        "#;
+        let config = MachineConfig::parse(text).ok().unwrap().notify;
+        assert_eq!(
+            config.command_for(&notice).unwrap(),
+            [
+                "notify-send",
+                "wf: Says {what}",
+                "blocker on #k3f7ab: answer it {other}"
+            ]
+        );
+        assert!(MachineConfig::parse("[notify]\ncommand = []\n").is_err());
+        assert!(MachineConfig::parse("[notify]\nshell = \"x\"\n").is_err());
     }
 
     #[test]

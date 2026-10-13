@@ -14,7 +14,6 @@ use wf_core::review::ReviewStatus;
 use wf_core::session::{CommitId, EndReason, SessionRole, Verdict};
 use wf_core::state::State;
 
-use super::inbox::recovery_waits;
 use super::item::{ItemSummary, standing_parts, summary};
 use super::session::session_label;
 use super::{actor_label, mention_label, set_change, timestamp};
@@ -633,7 +632,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
                     role,
                     failures,
                     last,
-                } => Some(recovery_waits(state, item.id(), role, failures, last)),
+                } => Some(state.recovery_waits(item.id(), role, failures, last)),
                 Waiting::Blocker { .. }
                 | Waiting::Proposal
                 | Waiting::PrincipalReview { .. }

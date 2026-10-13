@@ -7,6 +7,7 @@ pub mod decide;
 mod environment;
 mod judges;
 pub mod machine_config;
+mod notify;
 mod peers;
 mod permissions;
 pub mod proto;

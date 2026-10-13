@@ -8,11 +8,12 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use wf_core::id::{SessionId, WorkforceId};
+use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
+use wf_core::inbox::{InboxKind, permission_waits};
 use wf_core::name::AgentName;
 use wf_harness::{Decider, Decision, Permission, PermissionRequest, Permissions};
 
-use crate::machine_config::{DeciderConfig, MachineConfig};
+use crate::machine_config::{DeciderConfig, MachineConfig, Notice};
 use crate::permissions::Held;
 
 /// What every decider is given: the call and what it is part of. Hooks get it as JSON on stdin.
@@ -196,6 +197,7 @@ pub(crate) fn read_answer(text: &str) -> Outcome {
 pub(crate) struct Deciding {
     pub(crate) held: Arc<Held>,
     pub(crate) workforce: WorkforceId,
+    pub(crate) item: ItemId,
     pub(crate) session: SessionId,
     /// The config is read for each request, so changes apply without restarting the daemon.
     pub(crate) machine_config: Option<PathBuf>,
@@ -212,6 +214,10 @@ impl Permissions for Deciding {
                 None => Ok(MachineConfig::default()),
             };
             let title = tool.title.clone();
+            let notify = config
+                .as_ref()
+                .map(|config| config.notify.clone())
+                .unwrap_or_default();
             let (result, broken) = match config {
                 Ok(config) => {
                     let request = DeciderRequest {
@@ -244,6 +250,15 @@ impl Permissions for Deciding {
                 passed.push(format!("the machine config is broken: {broken}"));
             }
             let answer = self.held.hold(self.workforce, self.session, &title, passed);
+            crate::notify::run_command(
+                &notify,
+                &Notice {
+                    kind: InboxKind::Permission,
+                    item: self.item.short(),
+                    title: self.context.item.title.clone(),
+                    what: permission_waits(Some(&self.context.agent.name), &title, self.session),
+                },
+            );
             Decision {
                 permission: answer.await.unwrap_or(Permission::Deny),
                 by: Decider::Principal,

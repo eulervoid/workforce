@@ -7,7 +7,7 @@ use std::time::Duration;
 use anyhow::bail;
 use wf_core::event::{Comment, CommentKind, Event, EventBody};
 use wf_core::id::{HashId, ItemId};
-use wf_core::inbox::Waiting;
+use wf_core::inbox::{InboxKind, Waiting};
 use wf_core::item::ItemView;
 use wf_daemon::proto::HeldPermission;
 use wf_harness::Permission;
@@ -90,7 +90,7 @@ enum Prompt {
     /// Shown once for each item and kind, even when its text changes; it is answered elsewhere.
     Notice {
         item: ItemId,
-        kind: &'static str,
+        kind: InboxKind,
         what: String,
     },
 }
@@ -128,11 +128,10 @@ fn prompts(workspace: &Workspace, only: Option<ItemId>) -> Vec<Prompt> {
             },
             Waiting::PrincipalReview { .. } => Prompt::PrincipalReview { item: entry.item },
             Waiting::Proposal | Waiting::Merge { .. } | Waiting::Recovery { .. } => {
-                let (kind, what) = view::what_waits(state, &entry);
                 Prompt::Notice {
                     item: entry.item,
-                    kind,
-                    what,
+                    kind: entry.waiting.kind(),
+                    what: state.what_waits(&entry),
                 }
             }
         });
