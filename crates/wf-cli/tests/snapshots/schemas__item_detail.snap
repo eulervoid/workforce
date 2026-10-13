@@ -31,7 +31,10 @@ expression: "Envelope::new(&detail)"
         "text": "blocked on #c4idpb, ask @coder"
       }
     ],
-    "author": "@ada",
+    "author": {
+      "kind": "principal",
+      "label": "@ada"
+    },
     "created": "1970-01-01T00:00:05Z",
     "updated": "1970-01-01T00:00:09Z",
     "review": null,
@@ -62,13 +65,22 @@ expression: "Envelope::new(&detail)"
     ],
     "referenced_by": [],
     "mentions": [
-      "@ada",
-      "@ada/coder"
+      {
+        "kind": "principal",
+        "label": "@ada"
+      },
+      {
+        "kind": "agent",
+        "label": "@ada/coder"
+      }
     ],
     "activity": [
       {
         "at": "1970-01-01T00:00:05Z",
-        "by": "@ada",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
         "kind": "created",
         "summary": "created the task",
         "comment": null,
@@ -76,7 +88,10 @@ expression: "Envelope::new(&detail)"
       },
       {
         "at": "1970-01-01T00:00:07Z",
-        "by": "@ada",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
         "kind": "edited",
         "summary": "set priority P1",
         "comment": null,
@@ -84,7 +99,10 @@ expression: "Envelope::new(&detail)"
       },
       {
         "at": "1970-01-01T00:00:08Z",
-        "by": "@ada",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
         "kind": "depends_on",
         "summary": "now depends on #c4idpb",
         "comment": null,
@@ -92,14 +110,20 @@ expression: "Envelope::new(&detail)"
       },
       {
         "at": "1970-01-01T00:00:09Z",
-        "by": "@ada",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
         "kind": "comment",
         "summary": "comment",
         "comment": {
           "id": "dwf44pbuftft5dx4r4mh3yxvhtdpi5my6hemh7idnr6m56uyzjlq",
           "short": "dwf4",
           "kind": "comment",
-          "by": "@ada",
+          "by": {
+            "kind": "principal",
+            "label": "@ada"
+          },
           "at": "1970-01-01T00:00:09Z",
           "text": "see #c4idpb, @ada please check",
           "session": null,

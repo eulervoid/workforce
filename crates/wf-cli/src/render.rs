@@ -46,6 +46,8 @@ fn written_in(source: &SourceView) -> &'static str {
 mod style {
     use anstyle::{AnsiColor, Style};
 
+    use crate::view::{ActorKind, ActorView};
+
     pub const BOLD: Style = Style::new().bold();
     pub const DIM: Style = Style::new().dimmed();
     pub const ID: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
@@ -53,6 +55,7 @@ mod style {
         Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Magenta)));
     pub const AGENT: Style =
         Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::BrightBlue)));
+    pub const DAEMON: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Green)));
     pub const WARNING: Style = Style::new()
         .bold()
         .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Red)));
@@ -61,17 +64,20 @@ mod style {
         Style::new().fg_color(Some(anstyle::Color::Ansi(color)))
     }
 
-    /// Principals are `@name`; agents are `@name/agent`, with a session after that.
-    pub fn actor(handle: &str) -> Style {
-        if handle.contains('/') {
-            AGENT
-        } else {
-            PRINCIPAL
+    fn actor(kind: ActorKind) -> Style {
+        match kind {
+            ActorKind::Principal => PRINCIPAL,
+            ActorKind::Agent => AGENT,
+            ActorKind::Daemon => DAEMON,
         }
     }
 
     pub fn paint(style: Style, text: impl std::fmt::Display) -> String {
         format!("{style}{text}{style:#}")
+    }
+
+    pub fn paint_actor(actor: &ActorView) -> String {
+        paint(self::actor(actor.kind), &actor.label)
     }
 }
 
@@ -473,7 +479,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
         out,
         "  {}",
         [
-            paint(style::actor(&detail.author), &detail.author),
+            style::paint_actor(&detail.author),
             paint(DIM, format!("created {}", short_time(&detail.created))),
             paint(DIM, format!("updated {}", short_time(&detail.updated))),
         ]
@@ -492,7 +498,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
                     comment_marker(comment.kind),
                     comment.id,
                     comment_kind_label(comment.kind),
-                    paint(style::actor(&comment.by), &comment.by)
+                    style::paint_actor(&comment.by)
                 )
             })
             .collect();
@@ -564,11 +570,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
         );
     }
     if !detail.mentions.is_empty() {
-        let mentions: Vec<String> = detail
-            .mentions
-            .iter()
-            .map(|mention| paint(style::actor(mention), mention))
-            .collect();
+        let mentions: Vec<String> = detail.mentions.iter().map(style::paint_actor).collect();
         let _ = writeln!(out, "  ↳ mentions {}", mentions.join(" "));
     }
     if !detail.body.is_empty() {
@@ -621,7 +623,7 @@ fn activity_entry(
     width: Option<usize>,
 ) -> (String, Option<String>) {
     use style::{DIM, WARNING, paint};
-    let mut parts = vec![paint(style::actor(&entry.by), &entry.by)];
+    let mut parts = vec![style::paint_actor(&entry.by)];
     match &entry.comment {
         Some(comment) if entry.kind == ActivityKind::Comment => {
             match comment.kind {
