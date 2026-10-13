@@ -492,6 +492,14 @@ wf work submit
     };
     assert!(signed("main"), "the merge commit is signed");
     assert!(!signed("main^2"), "the agent's commit is not");
+    assert_eq!(
+        git(
+            &world.wf.repository,
+            &["log", "-1", "--format=%an|%cn", "main^2"]
+        ),
+        "@joshua/coder|@joshua/coder",
+        "the agent commits as itself"
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
