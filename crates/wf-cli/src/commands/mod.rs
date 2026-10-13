@@ -187,7 +187,7 @@ fn handle_from_environment() -> Handle {
         .unwrap_or_else(|| Handle::new("me").expect("a valid handle"))
 }
 
-fn edit_in_editor(initial: &str, suffix: &str) -> anyhow::Result<String> {
+pub(crate) fn edit_in_editor(initial: &str, suffix: &str) -> anyhow::Result<String> {
     let editor = std::env::var("VISUAL")
         .or_else(|_| std::env::var("EDITOR"))
         .unwrap_or_else(|_| "vi".to_string());

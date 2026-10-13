@@ -7,10 +7,10 @@ use jiff::tz::TimeZone;
 use ratatui::crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
-use wf_core::id::{ItemId, SessionId};
-use wf_harness::TranscriptEntry;
+use wf_core::id::{CommentId, ItemId, SessionId};
+use wf_harness::{Permission, TranscriptEntry};
 
-use super::snapshot::{Snapshot, Waiting, WaitingKey, Wanted};
+use super::snapshot::{InView, Snapshot, Waiting, WaitingKey, Wanted};
 use crate::transcript::Transcript;
 
 /// From this width the detail sits right of the list, instead of in its place.
@@ -67,6 +67,33 @@ impl Tab {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Quit,
+    /// Answers the oldest permission request of a session.
+    Permit {
+        session: SessionId,
+        answer: Permission,
+    },
+    /// A comment that resolves a blocker.
+    Resolve {
+        item: ItemId,
+        blocker: CommentId,
+        text: String,
+    },
+    /// Writes the comment that resolves a blocker in `$EDITOR`.
+    ResolveInEditor {
+        item: ItemId,
+        blocker: CommentId,
+    },
+    Approve {
+        item: ItemId,
+    },
+    /// Writes the change requests in `$EDITOR`, one per line, then requests the changes.
+    RequestChanges {
+        item: ItemId,
+    },
+    /// The work of an item through git, in its pager.
+    ShowDiff {
+        item: ItemId,
+    },
 }
 
 /// What a detail shows.
@@ -219,11 +246,19 @@ pub struct LogTab {
     pub filter: String,
 }
 
-/// A line the footer asks for.
+/// What the footer asks for.
 #[derive(Clone, Debug)]
 pub enum Prompt {
     /// Text the lines of the Log tab must have; it applies while it is typed.
     Filter(Input),
+    /// The answer to a blocker.
+    Answer {
+        item: ItemId,
+        blocker: CommentId,
+        input: Input,
+    },
+    /// A verdict on the work of an item: approve, request changes or look at the diff first.
+    Verdict { item: ItemId },
 }
 
 pub struct App {
@@ -234,10 +269,22 @@ pub struct App {
     pub now: ListTab<Row>,
     pub log: LogTab,
     pub prompt: Option<Prompt>,
+    /// Whether transcripts show everything, as `wf session watch --full` does.
+    pub full_transcripts: bool,
     pub width: u16,
     pub time_zone: TimeZone,
-    /// Why the last refresh or action failed, until the next one works.
-    pub error: Option<String>,
+    pub status: Option<Status>,
+}
+
+/// What the footer says instead of the latest event.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Status {
+    /// What an action did, until the next key.
+    Done(String),
+    /// Why an action failed, until the next key.
+    ActionFailed(String),
+    /// Why the workforce could not be read, until it can again.
+    RefreshFailed(String),
 }
 
 impl App {
@@ -253,9 +300,10 @@ impl App {
                 filter: String::new(),
             },
             prompt: None,
+            full_transcripts: false,
             width: 80,
             time_zone,
-            error: None,
+            status: None,
         };
         app.refresh(snapshot);
         app
@@ -268,13 +316,24 @@ impl App {
 
     pub fn refresh(&mut self, snapshot: Snapshot) {
         self.snapshot = snapshot;
-        self.error = None;
+        if matches!(self.status, Some(Status::RefreshFailed(_))) {
+            self.status = None;
+        }
         let rows = self.now_rows();
         self.now.selection.update(&rows);
     }
 
-    pub fn failed(&mut self, error: &anyhow::Error) {
-        self.error = Some(format!("{error:#}"));
+    pub fn refresh_failed(&mut self, error: &anyhow::Error) {
+        self.status = Some(Status::RefreshFailed(format!("{error:#}")));
+    }
+
+    pub fn action_failed(&mut self, error: &anyhow::Error) {
+        self.status = Some(Status::ActionFailed(format!("{error:#}")));
+    }
+
+    /// Says what an action did.
+    pub fn did(&mut self, what: String) {
+        self.status = (!what.is_empty()).then_some(Status::Done(what));
     }
 
     pub fn resize(&mut self, width: u16) {
@@ -381,6 +440,98 @@ impl App {
         }
     }
 
+    /// What waits that the keys on screen act on: the selected entry, the permission request of
+    /// a selected or open session, or what waits about the open item.
+    pub fn subjects(&self) -> Vec<&Waiting> {
+        let waiting = self.snapshot.waiting.iter();
+        match self.tab {
+            Tab::Now => match self.now.stack.last() {
+                Some(opened) => match opened.detail {
+                    Detail::Session(id) => waiting
+                        .filter(|entry| matches!(entry, Waiting::Permission { session, .. } if *session == id))
+                        .collect(),
+                    Detail::Item(id) => waiting
+                        .filter(|entry| match entry {
+                            Waiting::Blocker { item, .. } | Waiting::Review { item, .. } => {
+                                item.id == id
+                            }
+                            Waiting::Permission { .. } | Waiting::Notice { .. } => false,
+                        })
+                        .collect(),
+                },
+                None => match self.now.selection.get() {
+                    Some(Row::Waiting(key)) => waiting.filter(|entry| &entry.key() == key).collect(),
+                    Some(Row::Session(id)) => waiting
+                        .filter(|entry| matches!(entry, Waiting::Permission { session, .. } if session == id))
+                        .collect(),
+                    Some(Row::Flag(_)) | None => Vec::new(),
+                },
+            },
+            Tab::Items | Tab::Agents | Tab::Log => Vec::new(),
+        }
+    }
+
+    /// The item whose work `D` shows: of a review waiting, or of the detail on screen.
+    fn item_with_work(&self) -> Option<ItemId> {
+        let review = self.subjects().into_iter().find_map(|entry| match entry {
+            Waiting::Review { item, .. } => Some(item.id),
+            Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => None,
+        });
+        review.or_else(|| match self.in_view()?.detail {
+            Detail::Item(item) => Some(item),
+            Detail::Session(_) => match &self.snapshot.in_view {
+                Some(InView::Session(session)) => Some(session.item.id),
+                Some(InView::Item { .. }) | None => None,
+            },
+        })
+    }
+
+    /// The keys that act on what waits, for whatever is on screen.
+    fn act(&mut self, key: KeyEvent) -> Option<Effect> {
+        let subjects = self.subjects();
+        let permission = subjects.iter().find_map(|entry| match entry {
+            Waiting::Permission { session, .. } => Some(*session),
+            Waiting::Blocker { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
+        });
+        let blocker = subjects.iter().find_map(|entry| match entry {
+            Waiting::Blocker { item, comment, .. } => Some((item.id, *comment)),
+            Waiting::Permission { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
+        });
+        let review = subjects.iter().find_map(|entry| match entry {
+            Waiting::Review { item, .. } => Some(item.id),
+            Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => None,
+        });
+        match key.code {
+            KeyCode::Char('a') => permission.map(|session| Effect::Permit {
+                session,
+                answer: Permission::Allow,
+            }),
+            KeyCode::Char('d') => permission.map(|session| Effect::Permit {
+                session,
+                answer: Permission::Deny,
+            }),
+            KeyCode::Char('r') => {
+                let (item, blocker) = blocker?;
+                self.prompt = Some(Prompt::Answer {
+                    item,
+                    blocker,
+                    input: Input::default(),
+                });
+                None
+            }
+            KeyCode::Char('R') => {
+                let (item, blocker) = blocker?;
+                Some(Effect::ResolveInEditor { item, blocker })
+            }
+            KeyCode::Char('v') => {
+                self.prompt = Some(Prompt::Verdict { item: review? });
+                None
+            }
+            KeyCode::Char('D') => self.item_with_work().map(|item| Effect::ShowDiff { item }),
+            _ => None,
+        }
+    }
+
     /// What the workspace is asked about for the detail on screen.
     pub fn wanted(&self) -> Option<Wanted> {
         self.in_view().map(|opened| opened.detail.wanted())
@@ -398,8 +549,18 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Some(Effect::Quit);
         }
+        if matches!(self.status, Some(Status::Done(_) | Status::ActionFailed(_))) {
+            self.status = None;
+        }
         if let Some(prompt) = self.prompt.take() {
-            self.prompt = self.prompt_key(prompt, key);
+            let (prompt, effect) = self.prompt_key(prompt, key);
+            self.prompt = prompt;
+            return effect;
+        }
+        if let Some(effect) = self.act(key) {
+            return Some(effect);
+        }
+        if self.prompt.is_some() {
             return None;
         }
         match key.code {
@@ -419,20 +580,62 @@ impl App {
         None
     }
 
-    /// A key while the footer asks for a line; the prompt stays open unless the key closes it.
-    fn prompt_key(&mut self, prompt: Prompt, key: KeyEvent) -> Option<Prompt> {
+    /// A key while the footer asks for something: the prompt it leaves open, and what it asks of
+    /// the workforce.
+    fn prompt_key(&mut self, prompt: Prompt, key: KeyEvent) -> (Option<Prompt>, Option<Effect>) {
         match prompt {
             Prompt::Filter(mut input) => match key.code {
-                KeyCode::Enter => None,
+                KeyCode::Enter => (None, None),
                 KeyCode::Esc => {
                     self.log.filter.clear();
-                    None
+                    (None, None)
                 }
                 _ => {
                     input.handle_event(&TerminalEvent::Key(key));
                     self.log.filter = input.value().to_owned();
-                    Some(Prompt::Filter(input))
+                    (Some(Prompt::Filter(input)), None)
                 }
+            },
+            Prompt::Answer {
+                item,
+                blocker,
+                mut input,
+            } => match key.code {
+                KeyCode::Esc => (None, None),
+                KeyCode::Enter if input.value().trim().is_empty() => (None, None),
+                KeyCode::Enter => {
+                    let text = input.value().trim().to_owned();
+                    (
+                        None,
+                        Some(Effect::Resolve {
+                            item,
+                            blocker,
+                            text,
+                        }),
+                    )
+                }
+                _ => {
+                    input.handle_event(&TerminalEvent::Key(key));
+                    (
+                        Some(Prompt::Answer {
+                            item,
+                            blocker,
+                            input,
+                        }),
+                        None,
+                    )
+                }
+            },
+            Prompt::Verdict { item } => match key.code {
+                KeyCode::Char('a') => (None, Some(Effect::Approve { item })),
+                KeyCode::Char('r') => (None, Some(Effect::RequestChanges { item })),
+                // The diff is looked at before deciding, so the question stays.
+                KeyCode::Char('D') => (
+                    Some(Prompt::Verdict { item }),
+                    Some(Effect::ShowDiff { item }),
+                ),
+                KeyCode::Esc => (None, None),
+                _ => (Some(Prompt::Verdict { item }), None),
             },
         }
     }
@@ -467,6 +670,15 @@ impl App {
                 KeyCode::PageUp => opened.scroll = opened.scroll.up(20),
                 KeyCode::Char('g') => opened.scroll = Scroll::FromTop(0),
                 KeyCode::Char('G') => opened.scroll = Scroll::FromEnd(0),
+                KeyCode::Char('f') => self.full_transcripts = !self.full_transcripts,
+                KeyCode::Char('i') => {
+                    if let Detail::Session(_) = opened.detail
+                        && let Some(InView::Session(session)) = &self.snapshot.in_view
+                    {
+                        let item = session.item.id;
+                        self.open(Detail::Item(item));
+                    }
+                }
                 _ => {}
             }
             return;

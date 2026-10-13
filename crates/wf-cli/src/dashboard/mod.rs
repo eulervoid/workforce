@@ -1,6 +1,7 @@
 //! The dashboard: `wf watch` at a terminal. It shows what waits on the principal, what runs and
 //! what is stuck, and answers what waits.
 
+mod act;
 mod app;
 mod draw;
 mod snapshot;
@@ -53,6 +54,16 @@ fn event_loop(
             match event::read()? {
                 TerminalEvent::Key(key) if key.kind == KeyEventKind::Press => match app.key(key) {
                     Some(Effect::Quit) => return Ok(()),
+                    Some(effect) => {
+                        match act::carry_out(effect, workspace, terminal) {
+                            Ok(what) => app.did(what),
+                            Err(error) => app.action_failed(&error),
+                        }
+                        // Show what the action changed right away.
+                        if let Err(error) = feed.refresh(workspace, &mut app) {
+                            app.refresh_failed(&error);
+                        }
+                    }
                     None => {}
                 },
                 TerminalEvent::Resize(width, _) => app.resize(width),
@@ -71,7 +82,7 @@ fn event_loop(
                 let snapshot = feed.snapshot(workspace, &app);
                 app.refresh(snapshot);
             }
-            Err(error) => app.failed(&error),
+            Err(error) => app.refresh_failed(&error),
         }
     }
 }
@@ -138,7 +149,7 @@ impl Feed {
             };
             match reader.read() {
                 Ok(entries) => app.transcribed(session, &entries),
-                Err(error) => app.failed(&error),
+                Err(error) => app.refresh_failed(&error),
             }
         }
     }

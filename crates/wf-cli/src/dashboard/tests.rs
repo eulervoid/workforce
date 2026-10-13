@@ -6,7 +6,7 @@ use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use serde_json::json;
 use wf_core::id::{CommentId, ItemId, SessionId};
-use wf_harness::{Direction, TranscriptEntry};
+use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{App, Effect, Row, Tab};
 use super::draw;
@@ -259,4 +259,107 @@ fn the_log_tab_follows_the_stream_and_filters_it() {
     assert_eq!(app.log_lines().count(), 1);
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.log_lines().count(), 2);
+}
+
+#[test]
+fn a_permission_request_is_answered_where_it_is_listed() {
+    let mut app = app();
+    let coder = SessionId::from_bytes([11; 32]);
+    assert_eq!(
+        press(&mut app, KeyCode::Char('a')),
+        Some(Effect::Permit {
+            session: coder,
+            answer: Permission::Allow
+        })
+    );
+    // On the coder's working session as well.
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::Char('k'));
+    assert_eq!(app.now.selection.get(), Some(&Row::Session(coder)));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('d')),
+        Some(Effect::Permit {
+            session: coder,
+            answer: Permission::Deny
+        })
+    );
+    // Nothing else waits on the parked coder.
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(press(&mut app, KeyCode::Char('a')), None);
+}
+
+#[test]
+fn a_session_with_a_request_shows_it_under_its_transcript() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    app.transcribed(coder.id, &coder_transcript());
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(coder));
+    app.refresh(snapshot);
+    insta::assert_snapshot!(screen(&app, 60, 12));
+}
+
+#[test]
+fn a_blocker_is_answered_in_the_footer() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(press(&mut app, KeyCode::Char('r')), None);
+    for character in "Keep it on ParseError".chars() {
+        // Letters that are keys elsewhere are text here.
+        assert_eq!(press(&mut app, KeyCode::Char(character)), None);
+    }
+    insta::assert_snapshot!(screen(&app, 60, 8));
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        Some(Effect::Resolve {
+            item: ItemId::from_bytes([2; 32]),
+            blocker: CommentId::from_bytes([21; 32]),
+            text: "Keep it on ParseError".to_owned(),
+        })
+    );
+    assert!(app.prompt.is_none());
+    // An empty answer resolves nothing.
+    press(&mut app, KeyCode::Char('r'));
+    assert_eq!(press(&mut app, KeyCode::Enter), None);
+}
+
+#[test]
+fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
+    let mut app = app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(press(&mut app, KeyCode::Char('v')), None);
+    insta::assert_snapshot!(screen(&app, 60, 8));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('D')),
+        Some(Effect::ShowDiff { item: archive })
+    );
+    assert!(app.prompt.is_some(), "the verdict is still asked for");
+    assert_eq!(
+        press(&mut app, KeyCode::Char('a')),
+        Some(Effect::Approve { item: archive })
+    );
+    press(&mut app, KeyCode::Char('v'));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('r')),
+        Some(Effect::RequestChanges { item: archive })
+    );
+}
+
+#[test]
+fn what_an_action_did_shows_until_the_next_key() {
+    let mut app = app();
+    app.did("allowed: rm -rf target".to_owned());
+    assert!(screen(&app, 60, 8).contains("✓ allowed: rm -rf target"));
+    app.refresh(snapshot());
+    assert!(
+        screen(&app, 60, 8).contains("✓ allowed"),
+        "a refresh keeps it"
+    );
+    press(&mut app, KeyCode::Char('j'));
+    assert!(!screen(&app, 60, 8).contains("✓ allowed"));
 }

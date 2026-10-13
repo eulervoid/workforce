@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 use wf_core::id::HashId;
 
-use super::app::{App, Detail, Opened, Prompt, Row, Scroll, Tab};
+use super::app::{App, Detail, Opened, Prompt, Row, Scroll, Status, Tab};
 use super::snapshot::{InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting};
 use crate::transcript::{self, Format, Now, Transcript};
 
@@ -40,9 +40,21 @@ pub fn draw(frame: &mut Frame, app: &App) {
 /// The line the footer asks for, with the cursor in it.
 fn draw_prompt(frame: &mut Frame, prompt: &Prompt, area: Rect) {
     let (label, input) = match prompt {
-        Prompt::Filter(input) => (" / ", input),
+        Prompt::Filter(input) => (" / ".to_owned(), input),
+        Prompt::Answer { blocker, input, .. } => {
+            (format!(" ⧗ {} answer: ", blocker.short()), input)
+        }
+        Prompt::Verdict { item } => {
+            let line = Line::from(vec![
+                Span::raw(format!(" ◎ #{}: ", item.short())).bold(),
+                Span::raw("a approve · r changes · D diff · esc"),
+            ]);
+            frame.render_widget(Paragraph::new(line), area);
+            return;
+        }
     };
-    let width = usize::from(area.width).saturating_sub(label.len() + 1);
+    let label_width = textwrap::core::display_width(&label);
+    let width = usize::from(area.width).saturating_sub(label_width + 1);
     let scroll = input.visual_scroll(width);
     let line = Line::from(vec![
         Span::raw(label).bold(),
@@ -50,7 +62,7 @@ fn draw_prompt(frame: &mut Frame, prompt: &Prompt, area: Rect) {
     ]);
     frame.render_widget(Paragraph::new(line), area);
     let cursor = (input.visual_cursor().max(scroll) - scroll) as u16;
-    frame.set_cursor_position((area.x + label.len() as u16 + cursor, area.y));
+    frame.set_cursor_position((area.x + label_width as u16 + cursor, area.y));
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -153,6 +165,11 @@ struct RowLines {
 }
 
 impl RowLines {
+    /// The keys of a row, shown only while it is selected.
+    fn keys(&self, keys: &'static str) -> Option<Span<'static>> {
+        self.selected.then(|| Span::raw(keys).fg(Color::Yellow))
+    }
+
     fn lines(
         &self,
         first: Vec<Span<'static>>,
@@ -233,7 +250,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             }
             first.push(Span::raw(" wants: "));
             first.push(Span::raw(what.clone()));
-            row.lines(first, None, Vec::new())
+            row.lines(first, row.keys("a / d"), Vec::new())
         }
         Waiting::Blocker { item, by, text, .. } => {
             let mut first = vec![Span::raw("⧗ ").fg(Color::Yellow)];
@@ -249,7 +266,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             );
             let mut more = vec![Span::raw("   ")];
             more.extend(quote);
-            row.lines(first, None, vec![Line::from(more).dim()])
+            row.lines(first, row.keys("r"), vec![Line::from(more).dim()])
         }
         Waiting::Review { item, commit } => {
             let mut first = vec![Span::raw("◎ ").fg(Color::Yellow)];
@@ -259,7 +276,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
                 first.push(Span::raw(format!(" {}", &commit.to_string()[..8])).dim());
             }
             first.push(Span::raw(format!("  {}", item.title)));
-            row.lines(first, None, Vec::new())
+            row.lines(first, row.keys("v"), Vec::new())
         }
         Waiting::Notice { item, kind, what } => {
             let mut first = vec![Span::raw("• ").fg(Color::Yellow)];
@@ -431,7 +448,36 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
                     transcript_text(app, &session.agent, transcript, width)
                 }
             };
+            let asks: Vec<&str> = app
+                .snapshot
+                .waiting
+                .iter()
+                .filter_map(|entry| match entry {
+                    Waiting::Permission { session, what, .. } if *session == id => {
+                        Some(what.as_str())
+                    }
+                    _ => None,
+                })
+                .collect();
+            let [body, bar] = Layout::vertical([
+                Constraint::Fill(1),
+                Constraint::Length(u16::from(!asks.is_empty())),
+            ])
+            .areas(body);
             draw_scrolled(frame, text, opened.scroll, body, false);
+            if let Some(what) = asks.first() {
+                let line = Line::from(vec![
+                    Span::raw("? ").fg(Color::Yellow).bold(),
+                    Span::raw(format!("wants: {what}")),
+                ]);
+                let keys = Span::raw("a allow · d deny").fg(Color::Yellow);
+                let row = RowLines {
+                    selected: false,
+                    width: bar.width,
+                };
+                let mut lines = row.lines(line.spans, Some(keys), Vec::new());
+                frame.render_widget(Paragraph::new(lines.remove(0)), bar);
+            }
         }
         // The snapshot has not caught up with what was opened yet.
         _ => {}
@@ -462,13 +508,13 @@ fn session_title(app: &App, session: &SessionInfo) -> Line<'static> {
 
 /// The whole transcript laid out for `width`: its blocks, then what is still open.
 fn transcript_text(app: &App, agent: &str, transcript: &Transcript, width: usize) -> Text<'static> {
-    let layout = transcript::Layout::new(
-        agent,
-        width,
-        Format::Styled,
-        transcript::Detail::Abridged,
-        app.time_zone.clone(),
-    );
+    let detail = if app.full_transcripts {
+        transcript::Detail::Full
+    } else {
+        transcript::Detail::Abridged
+    };
+    let layout =
+        transcript::Layout::new(agent, width, Format::Styled, detail, app.time_zone.clone());
     let mut out = String::new();
     let mut last = transcript::Spacing::Nothing;
     let mut add = |out: &mut String, opens: transcript::Spacing, leaves, text: String| {
@@ -535,9 +581,13 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
 
 /// The latest event, or why the last refresh failed.
 fn latest_line(app: &App) -> Line<'static> {
-    if let Some(error) = &app.error {
-        let first = error.lines().next().unwrap_or_default();
-        return Line::from(format!(" error: {first}")).fg(Color::Red);
+    match &app.status {
+        Some(Status::Done(what)) => return Line::from(format!(" ✓ {what}")).fg(Color::Green),
+        Some(Status::ActionFailed(error) | Status::RefreshFailed(error)) => {
+            let first = error.lines().next().unwrap_or_default();
+            return Line::from(format!(" error: {first}")).fg(Color::Red);
+        }
+        None => {}
     }
     match app.log.lines.last() {
         Some(line) => {
@@ -559,12 +609,41 @@ fn latest_line(app: &App) -> Line<'static> {
 
 /// The keys that work on what is on screen.
 fn keys_line(app: &App) -> Line<'static> {
-    let keys = match app.tab {
-        Tab::Now if !app.now.stack.is_empty() => "esc back · j/k scroll · g/G top/end · q quit",
-        Tab::Now => match app.now.selection.get().and_then(|row| app.detail_of(row)) {
-            Some(_) => "enter open · j/k move · tab next · q quit",
-            None => "j/k move · tab next · q quit",
+    let mut acts: Vec<&str> = Vec::new();
+    for entry in app.subjects() {
+        let keys: &[&str] = match entry {
+            Waiting::Permission { .. } => &["a allow", "d deny"],
+            Waiting::Blocker { .. } => &["r answer", "R in editor"],
+            Waiting::Review { .. } => &["v review", "D diff"],
+            Waiting::Notice { .. } => &[],
+        };
+        for key in keys {
+            if !acts.contains(key) {
+                acts.push(key);
+            }
+        }
+    }
+    let navigation = match app.tab {
+        Tab::Now => match app.now.stack.last().map(|opened| opened.detail) {
+            Some(Detail::Session(_)) if app.full_transcripts => {
+                "esc back · j/k scroll · G end · i item · f abridged"
+            }
+            Some(Detail::Session(_)) => "esc back · j/k scroll · G end · i item · f full",
+            Some(Detail::Item(_)) => "esc back · j/k scroll · G end",
+            None => match app.now.selection.get().and_then(|row| app.detail_of(row)) {
+                Some(_) => "enter open · j/k move",
+                None => "j/k move",
+            },
         },
+        Tab::Items | Tab::Agents | Tab::Log => "",
+    };
+    let keys = match app.tab {
+        Tab::Now => {
+            let mut parts: Vec<&str> = vec![navigation];
+            parts.extend(acts);
+            parts.push("q quit");
+            return Line::from(format!(" {}", parts.join(" · "))).dim();
+        }
         Tab::Log if !app.log.filter.is_empty() => {
             return Line::from(format!(
                 " filter: {} · / change · esc clear · q quit",
