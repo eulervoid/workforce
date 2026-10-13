@@ -186,7 +186,7 @@ pub(super) fn mentions(json: bool, workspace: &Workspace, target: &str) -> anyho
     let state = workspace.state();
     let mention = match refs::parse(target).into_iter().next() {
         Some(Token::Mention(mention)) => mention,
-        _ => bail!("`{target}` is not a mention; write it like @joshua or @joshua/coder"),
+        _ => bail!("`{target}` is not a mention; write it like @ada or @ada/coder"),
     };
     let resolved: Option<_> = state.resolver().mention(&mention);
     let resolved = resolved.ok_or_else(|| {

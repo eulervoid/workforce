@@ -72,7 +72,7 @@ pub fn actor_label(state: &State, actor: &Actor) -> String {
     }
 }
 
-/// `@joshua (3f9a2c)`: whose device it is and which one.
+/// `@ada (3f9a2c)`: whose device it is and which one.
 pub fn device_label(state: &State, device: wf_core::identity::DeviceKey) -> String {
     match state.principal_of(&device) {
         Some(principal) => format!(

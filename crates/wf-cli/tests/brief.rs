@@ -57,7 +57,7 @@ fn briefs() -> Vec<String> {
         body: String::new(),
         earlier: earlier(),
         blockers: open("b7e3f0"),
-        principal: "@joshua".into(),
+        principal: "@ada".into(),
     };
     let item: wf_core::id::ItemId = "socku2pyduljzcmqkhanbqmtk4buoncht2paahygwtnifoutha7q"
         .parse()

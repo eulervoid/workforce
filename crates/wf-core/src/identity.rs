@@ -231,7 +231,7 @@ pub enum Role {
     Member,
 }
 
-/// An agent is named by its principal and role name: `@joshua/coder`.
+/// An agent is named by its principal and role name: `@ada/coder`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AgentId {
     pub principal: PrincipalKey,

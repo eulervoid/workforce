@@ -76,7 +76,7 @@ fn the_demo_script_works_end_to_end() {
     assert!(wf.fail(&["init"]).contains("--name"));
     assert!(wf.fail(&["init", "-i"]).contains("needs a terminal"));
     let init = wf.json(&["init", "--name", "demo"]);
-    assert_eq!(init["handle"], "joshua");
+    assert_eq!(init["handle"], "ada");
     assert_eq!(
         init["harnesses"],
         serde_json::json!(["claude-code", "opencode"])
@@ -152,7 +152,7 @@ fn the_demo_script_works_end_to_end() {
     ]);
     let shown = wf.json(&["item", "show", short(&task)]);
     assert_eq!(shown["references"][0]["id"], first);
-    assert_eq!(shown["mentions"][0], "@joshua/coder");
+    assert_eq!(shown["mentions"][0], "@ada/coder");
     assert_eq!(
         comments(&shown)[0]["text"],
         format!("see #{}, @coder please keep it small", short(&first))
@@ -348,7 +348,7 @@ fn agents_and_policy() {
     );
     wf.run(&["agent", "edit", "reviewer", "--model", "big"]);
     let agents = wf.json(&["agent", "list"]);
-    assert_eq!(agents[0]["id"], "@joshua/reviewer");
+    assert_eq!(agents[0]["id"], "@ada/reviewer");
     assert_eq!(agents[0]["model"], "big");
     assert_eq!(agents[0]["capabilities"], serde_json::json!(["rust"]));
     assert_eq!(agents[0]["start"], "manual");
@@ -589,7 +589,7 @@ fn devices_and_members_are_listed_and_editable() {
     assert_eq!(devices.len(), 1);
     assert_eq!(devices[0]["name"], "laptop");
     assert_eq!(devices[0]["this_device"], true);
-    assert_eq!(devices[0]["principal"], "@joshua");
+    assert_eq!(devices[0]["principal"], "@ada");
 
     sandbox.run(&[
         "device",
@@ -609,7 +609,7 @@ fn devices_and_members_are_listed_and_editable() {
     assert!(text.contains("work-laptop (this)"), "{text}");
 
     let members = sandbox.json(&["members"]);
-    assert_eq!(members[0]["handle"], "@joshua");
+    assert_eq!(members[0]["handle"], "@ada");
     assert_eq!(members[0]["role"], "owner");
     assert_eq!(members[0]["devices"][0], "work-laptop");
 
@@ -1020,9 +1020,9 @@ mod forking {
         let item = sandbox.json(&["item", "list"]);
         let id = item[0]["id"].as_str().unwrap().to_string();
         let shown = sandbox.run(&["item", "show", short(&id)]);
-        assert!(shown.contains("@joshua"), "{shown}");
+        assert!(shown.contains("@ada"), "{shown}");
         let members = sandbox.json(&["members"]);
-        assert_eq!(members[0]["handle"], "@joshua");
+        assert_eq!(members[0]["handle"], "@ada");
         // The new key works for what needs a principal.
         sandbox.run(&["invite", "device"]);
 

@@ -221,7 +221,7 @@ async fn start_daemon(
                     "XDG_RUNTIME_DIR",
                     wf.root.path().join("run").to_string_lossy(),
                 )
-                .env("USER", "joshua")
+                .env("USER", "ada")
                 .env("FAKE_AGENT_REOPENS", reopens),
         );
     }
@@ -525,7 +525,7 @@ wf work submit
             &world.wf.repository,
             &["log", "-1", "--format=%an|%cn", "main^2"]
         ),
-        "@joshua/coder|@joshua/coder",
+        "@ada/coder|@ada/coder",
         "the agent commits as itself"
     );
 }
@@ -557,7 +557,7 @@ wf work submit
         .unwrap();
     let said = String::from_utf8_lossy(&verified.stderr);
     assert!(verified.status.success(), "{said}");
-    assert!(said.contains("joshua@"), "{said}");
+    assert!(said.contains("ada@"), "{said}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -813,7 +813,7 @@ wf work submit
     assert_eq!(session["status"], "submitted", "{session}");
     let transcript = world.transcript(&item);
     assert!(
-        transcript.contains("- @joshua: Use humantime"),
+        transcript.contains("- @ada: Use humantime"),
         "the answer is named by its principal: {transcript}"
     );
     assert!(
@@ -1140,8 +1140,7 @@ turn
 sh echo done > a.txt && git add a.txt && git commit -q -m a
 wf work submit
 ";
-    let supervisor =
-        "wf comment {item} \"@joshua this is about intent\" --block --resolve-blockers\n";
+    let supervisor = "wf comment {item} \"@ada this is about intent\" --block --resolve-blockers\n";
     let world = World::agents(&[("coder", coder), ("supervisor", supervisor)]).await;
     world.automate("coder", "default");
     world.automate("supervisor", "supervision");

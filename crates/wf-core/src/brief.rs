@@ -137,7 +137,7 @@ impl Brief {
     }
 }
 
-/// Who wrote something, as an agent is told: `@joshua` for a principal, `@joshua/coder` for an
+/// Who wrote something, as an agent is told: `@ada` for a principal, `@ada/coder` for an
 /// agent, and `the daemon`. A principal who is not a member is named by its short key.
 pub fn speaker(state: &State, actor: &Actor) -> String {
     match actor {
@@ -147,7 +147,7 @@ pub fn speaker(state: &State, actor: &Actor) -> String {
     }
 }
 
-/// `@joshua`, or the short key of a principal who is not a member.
+/// `@ada`, or the short key of a principal who is not a member.
 fn handle(state: &State, principal: &PrincipalKey) -> String {
     state.member(principal).map_or_else(
         || principal.fmt_short(),
@@ -450,7 +450,7 @@ pub struct SuperviseBrief {
     pub earlier: Vec<Earlier>,
     /// The blockers the supervisor is asked to answer or escalate.
     pub blockers: Vec<OpenComment>,
-    /// The handle of the principal to escalate to, as in `@joshua`.
+    /// The handle of the principal to escalate to, as in `@ada`.
     pub principal: String,
 }
 
@@ -500,7 +500,7 @@ pub struct DiagnoseBrief {
     pub title: String,
     pub body: String,
     pub earlier: Vec<Earlier>,
-    /// The work sessions that did not finish, oldest first, as `@joshua/coder released`.
+    /// The work sessions that did not finish, oldest first, as `@ada/coder released`.
     pub attempts: Vec<String>,
 }
 
@@ -624,7 +624,7 @@ mod tests {
 
     fn earlier() -> Vec<Earlier> {
         vec![Earlier {
-            by: "@joshua/coder".into(),
+            by: "@ada/coder".into(),
             kind: "comment".into(),
             text: "tried serde first".into(),
         }]
@@ -645,10 +645,10 @@ mod tests {
             .apply(&mut state, 0, 3_000, start_session("coder", task))
             .id()
             .into();
-        assert_eq!(speaker(&state, &fixture.founder_actor()), "@joshua");
+        assert_eq!(speaker(&state, &fixture.founder_actor()), "@ada");
         assert_eq!(
             speaker(&state, &fixture.agent_actor("coder", session)),
-            "@joshua/coder"
+            "@ada/coder"
         );
         assert_eq!(
             speaker(&state, &Actor::Daemon(fixture.founder.key())),
@@ -683,7 +683,7 @@ mod tests {
         );
         assert!(text.contains("## Task\n\n- [ ] 1. write parser\n"));
         assert!(text.contains("- #q7x2cd Which crate? (answered): Use humantime"));
-        assert!(text.contains("- @joshua/coder (comment): tried serde first"));
+        assert!(text.contains("- @ada/coder (comment): tried serde first"));
         assert!(text.contains("`wf/k3f9ab`") && text.contains("`main`"));
         assert!(!text.contains("change request"), "{text}");
         for command in [
@@ -711,7 +711,7 @@ mod tests {
             dependencies: vec![],
             change_requests: vec![OpenComment {
                 comment: "c4d2e1".into(),
-                by: "@joshua/reviewer".into(),
+                by: "@ada/reviewer".into(),
                 text: "Exit with 2 on a missing file".into(),
             }],
             earlier: vec![],
@@ -719,7 +719,7 @@ mod tests {
         let text = brief.render();
         assert!(text.contains("## Open change requests\n"), "{text}");
         assert!(!text.contains("## Instructions"), "{text}");
-        assert!(text.contains("- c4d2e1 by @joshua/reviewer: Exit with 2 on a missing file"));
+        assert!(text.contains("- c4d2e1 by @ada/reviewer: Exit with 2 on a missing file"));
         assert!(text.contains("--resolve <id>"));
     }
 

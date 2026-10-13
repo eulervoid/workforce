@@ -114,11 +114,11 @@ const SLUG: &str = "a-z, 0-9, `-` and `_`";
 const TAG: &str = "a-z, 0-9, `-`, `_`, `:` and `.`";
 
 name_type!(
-    /// A principal's handle, the `joshua` in `@joshua`.
+    /// A principal's handle, the `ada` in `@ada`.
     Handle, "handle", SLUG, is_slug_char
 );
 name_type!(
-    /// An agent's role name, the `coder` in `@joshua/coder`. Unique per principal.
+    /// An agent's role name, the `coder` in `@ada/coder`. Unique per principal.
     AgentName, "agent name", SLUG, is_slug_char
 );
 name_type!(
@@ -160,7 +160,7 @@ mod tests {
 
     #[test]
     fn accepts_slugs() {
-        assert!(Handle::new("joshua").is_ok());
+        assert!(Handle::new("ada").is_ok());
         assert!(AgentName::new("coder-2").is_ok());
         assert!(Requirement::new("os:linux").is_ok());
     }

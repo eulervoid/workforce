@@ -154,7 +154,7 @@ impl Resolver<'_> {
         }
     }
 
-    /// `@joshua` is a principal. Without a matching handle, a short `@coder` names an agent if
+    /// `@ada` is a principal. Without a matching handle, a short `@coder` names an agent if
     /// exactly one agent has that name. Sessions arrive in M2 and never resolve yet.
     pub fn mention(&self, mention: &Mention) -> Option<MentionTarget> {
         match mention {

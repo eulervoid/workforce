@@ -13,7 +13,7 @@ use crate::id::MIN_PREFIX_LEN;
 
 pub const PARSER_VERSION: u16 = 5;
 
-/// `@joshua` or `@joshua/coder`, as written.
+/// `@ada` or `@ada/coder`, as written.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Mention {
     /// One segment. A principal handle, or the short form of an agent name.
@@ -181,14 +181,14 @@ mod tests {
 
     #[test]
     fn finds_refs_and_mentions_in_prose() {
-        let tokens = parse("see #q7x2, @coder please keep it small. cc @joshua/reviewer");
+        let tokens = parse("see #q7x2, @coder please keep it small. cc @ada/reviewer");
         assert_eq!(
             tokens,
             BTreeSet::from([
                 item("q7x2"),
                 short("coder"),
                 Token::Mention(Mention::Agent {
-                    principal: "joshua".into(),
+                    principal: "ada".into(),
                     agent: "reviewer".into()
                 })
             ])
@@ -211,7 +211,7 @@ mod tests {
 
     #[test]
     fn three_segments_are_not_a_mention() {
-        assert_eq!(parse("@joshua/coder/s4k2 is stuck"), BTreeSet::new());
+        assert_eq!(parse("@ada/coder/s4k2 is stuck"), BTreeSet::new());
     }
 
     #[test]
@@ -245,8 +245,8 @@ mod tests {
     #[test]
     fn trims_trailing_separators() {
         assert_eq!(
-            parse("(@joshua/) and @coder-"),
-            BTreeSet::from([short("joshua"), short("coder")])
+            parse("(@ada/) and @coder-"),
+            BTreeSet::from([short("ada"), short("coder")])
         );
     }
 

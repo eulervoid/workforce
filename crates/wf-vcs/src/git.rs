@@ -806,7 +806,7 @@ mod tests {
         let allowed = repo.root.path().join("allowed_signers");
         std::fs::write(
             &allowed,
-            crate::signing::allowed_signer("joshua@laptop", device.key()).unwrap(),
+            crate::signing::allowed_signer("ada@laptop", device.key()).unwrap(),
         )
         .unwrap();
         let work = repo.work("wf/c", "c.txt", "c\n");
@@ -832,7 +832,7 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&verified.stderr)
         );
-        assert!(String::from_utf8_lossy(&verified.stderr).contains("joshua@laptop"));
+        assert!(String::from_utf8_lossy(&verified.stderr).contains("ada@laptop"));
     }
 
     #[test]

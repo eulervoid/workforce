@@ -440,7 +440,7 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
         comment(
             task,
             &format!(
-                "see #{}, @coder please keep it small, cc @joshua @nobody",
+                "see #{}, @coder please keep it small, cc @ada @nobody",
                 question.short()
             ),
         ),
@@ -476,14 +476,14 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
     );
 
     let mentioned = state.mentions_in(task_item);
-    let joshua = fixture.founder.key();
-    assert!(mentioned.contains(&MentionTarget::Principal(joshua)));
+    let ada = fixture.founder.key();
+    assert!(mentioned.contains(&MentionTarget::Principal(ada)));
     assert!(mentioned.iter().any(
         |target| matches!(target, MentionTarget::Agent(agent) if agent.name.as_str() == "coder")
     ));
     assert_eq!(mentioned.len(), 2, "@nobody does not resolve");
 
-    let sources = state.mentions_of(&MentionTarget::Principal(joshua));
+    let sources = state.mentions_of(&MentionTarget::Principal(ada));
     assert_eq!(
         sources,
         vec![Source {
@@ -495,7 +495,7 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
     let resolver = state.resolver();
     assert_eq!(
         resolver.mention(&Mention::Agent {
-            principal: "joshua".into(),
+            principal: "ada".into(),
             agent: "coder".into()
         }),
         resolver.mention(&Mention::Short("coder".into()))

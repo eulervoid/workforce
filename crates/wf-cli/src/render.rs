@@ -666,7 +666,7 @@ fn activity_entry(
     (line, text)
 }
 
-/// One line of `wf watch`: `14:02  #k3f7ab  @joshua/coder · moved to done`, and the text of a
+/// One line of `wf watch`: `14:02  #k3f7ab  @ada/coder · moved to done`, and the text of a
 /// comment below it.
 pub fn watch_line(line: &crate::view::WatchLineView) -> String {
     use style::{DIM, paint};

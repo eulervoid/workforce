@@ -51,7 +51,7 @@ fn scenario() -> Scenario {
         &mut state,
         comment(
             task,
-            &format!("see #{}, @joshua please check", dependency.short()),
+            &format!("see #{}, @ada please check", dependency.short()),
         ),
     );
     apply(&mut state, moved(done, "done"));
