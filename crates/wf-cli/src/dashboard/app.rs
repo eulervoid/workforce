@@ -9,11 +9,14 @@ use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, ItemId, SessionId};
+use wf_core::identity::AgentId;
 use wf_core::name::{AgentName, StateName};
 use wf_core::policy::StateCategory;
 use wf_harness::{Permission, TranscriptEntry};
 
-use super::snapshot::{Detail, InView, ItemRow, Snapshot, Waiting, WaitingKey, Wanted};
+use super::snapshot::{
+    Detail, InView, ItemRow, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey, Wanted,
+};
 use crate::cli::ItemGrouping;
 use crate::transcript::Transcript;
 
@@ -129,9 +132,9 @@ pub enum Effect {
 
 impl Detail {
     /// Where a detail starts: a transcript at its end, which is what happens now.
-    fn start(self) -> Scroll {
+    fn start(&self) -> Scroll {
         match self {
-            Detail::Item(_) => Scroll::FromTop(0),
+            Detail::Item(_) | Detail::Agent(_) => Scroll::FromTop(0),
             Detail::Session(_) => Scroll::FromEnd(0),
         }
     }
@@ -175,10 +178,17 @@ impl Scroll {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Opened {
     pub detail: Detail,
     pub scroll: Scroll,
+}
+
+/// A line of the Agents tab that can be selected.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum AgentRow {
+    Agent(AgentId),
+    Session(SessionId),
 }
 
 /// A line of the Now tab that can be selected.
@@ -435,6 +445,7 @@ pub struct App {
     pub tab: Tab,
     pub now: ListTab<Row>,
     pub items: ItemsTab,
+    pub agents: ListTab<AgentRow>,
     pub log: LogTab,
     pub prompt: Option<Prompt>,
     /// Whether transcripts show everything, as `wf session watch --full` does.
@@ -457,6 +468,7 @@ impl App {
                 filter: String::new(),
                 readiness: ReadinessFilter::All,
             },
+            agents: ListTab::default(),
             log: LogTab {
                 lines: Vec::new(),
                 scroll: Scroll::FromEnd(0),
@@ -485,10 +497,17 @@ impl App {
         }
         let rows = self.now_rows();
         self.now.selection.update(&rows);
-        // The item rows are only known while the Items tab is on screen.
-        if self.tab == Tab::Items {
-            let rows = self.item_rows();
-            self.items.list.selection.update(&rows);
+        // The rows of these tabs are only known while they are on screen.
+        match self.tab {
+            Tab::Items => {
+                let rows = self.item_rows();
+                self.items.list.selection.update(&rows);
+            }
+            Tab::Agents => {
+                let rows = self.agent_rows();
+                self.agents.selection.update(&rows);
+            }
+            Tab::Now | Tab::Log => {}
         }
     }
 
@@ -603,6 +622,22 @@ impl App {
             .collect()
     }
 
+    /// The rows of the Agents tab: each agent, then its sessions.
+    pub fn agent_rows(&self) -> Vec<AgentRow> {
+        self.snapshot
+            .agents
+            .iter()
+            .flat_map(|agent| {
+                std::iter::once(AgentRow::Agent(agent.id.clone())).chain(
+                    agent
+                        .sessions
+                        .iter()
+                        .map(|session| AgentRow::Session(session.id)),
+                )
+            })
+            .collect()
+    }
+
     /// The detail of a row of the Now tab, if it has one.
     pub fn detail_of(&self, row: &Row) -> Option<Detail> {
         match row {
@@ -629,7 +664,8 @@ impl App {
         match self.tab {
             Tab::Now => Some(&self.now.stack),
             Tab::Items => Some(&self.items.list.stack),
-            Tab::Agents | Tab::Log => None,
+            Tab::Agents => Some(&self.agents.stack),
+            Tab::Log => None,
         }
     }
 
@@ -637,7 +673,8 @@ impl App {
         match self.tab {
             Tab::Now => Some(&mut self.now.stack),
             Tab::Items => Some(&mut self.items.list.stack),
-            Tab::Agents | Tab::Log => None,
+            Tab::Agents => Some(&mut self.agents.stack),
+            Tab::Log => None,
         }
     }
 
@@ -646,22 +683,34 @@ impl App {
         match self.tab {
             Tab::Now => self.detail_of(self.now.selection.get()?),
             Tab::Items => self.items.list.selection.get().copied().map(Detail::Item),
-            Tab::Agents | Tab::Log => None,
+            Tab::Agents => Some(match self.agents.selection.get()? {
+                AgentRow::Agent(agent) => Detail::Agent(agent.clone()),
+                AgentRow::Session(session) => Detail::Session(*session),
+            }),
+            Tab::Log => None,
+        }
+    }
+
+    /// The detail the keys act on: the one opened last, else the selection's.
+    fn focus(&self) -> Option<Detail> {
+        match self.stack().and_then(|stack| stack.last()) {
+            Some(opened) => Some(opened.detail.clone()),
+            None => self.selected_detail(),
         }
     }
 
     /// The detail on screen: the one opened last, or in a wide window the selection's.
     pub fn in_view(&self) -> Option<Opened> {
         if let Some(opened) = self.stack().and_then(|stack| stack.last()) {
-            return Some(*opened);
+            return Some(opened.clone());
         }
         if !self.is_wide() {
             return None;
         }
         let detail = self.selected_detail()?;
         Some(Opened {
-            detail,
             scroll: detail.start(),
+            detail,
         })
     }
 
@@ -670,86 +719,77 @@ impl App {
         Wanted {
             detail: self.in_view().map(|opened| opened.detail),
             items: (self.tab == Tab::Items).then_some(self.items.grouping),
+            agents: self.tab == Tab::Agents,
         }
     }
 
     /// What waits that the keys on screen act on: the selected entry, the permission request of
     /// a selected or open session, or what waits about the selected or open item.
     pub fn subjects(&self) -> Vec<&Waiting> {
-        let waiting = self.snapshot.waiting.iter();
         let opened = self.stack().and_then(|stack| stack.last());
-        let about_item = |id: ItemId| -> Vec<&Waiting> {
-            waiting
-                .clone()
+        if opened.is_none()
+            && self.tab == Tab::Now
+            && let Some(Row::Waiting(key)) = self.now.selection.get()
+        {
+            return self.waiting(key).into_iter().collect();
+        }
+        let waiting = self.snapshot.waiting.iter();
+        match self.focus() {
+            Some(Detail::Session(id)) => waiting
+                .filter(
+                    |entry| matches!(entry, Waiting::Permission { session, .. } if *session == id),
+                )
+                .collect(),
+            Some(Detail::Item(id)) => waiting
                 .filter(|entry| match entry {
                     Waiting::Blocker { item, .. } | Waiting::Review { item, .. } => item.id == id,
                     Waiting::Permission { .. } | Waiting::Notice { .. } => false,
                 })
-                .collect()
-        };
-        let of_session = |id: SessionId| -> Vec<&Waiting> {
-            waiting
-                .clone()
-                .filter(
-                    |entry| matches!(entry, Waiting::Permission { session, .. } if *session == id),
-                )
-                .collect()
-        };
-        match (opened.map(|opened| opened.detail), self.tab) {
-            (Some(Detail::Session(id)), _) => of_session(id),
-            (Some(Detail::Item(id)), _) => about_item(id),
-            (None, Tab::Now) => match self.now.selection.get() {
-                Some(Row::Waiting(key)) => self.waiting(key).into_iter().collect(),
-                Some(Row::Session(id)) => of_session(*id),
-                Some(Row::Flag(_)) | None => Vec::new(),
-            },
-            (None, Tab::Items) => self
-                .items
-                .list
-                .selection
-                .get()
-                .map(|id| about_item(*id))
-                .unwrap_or_default(),
-            (None, Tab::Agents | Tab::Log) => Vec::new(),
+                .collect(),
+            Some(Detail::Agent(_)) | None => Vec::new(),
         }
     }
 
     /// The item the item keys act on: of the open or selected detail.
     pub fn item_subject(&self) -> Option<ItemId> {
-        let detail = match self.stack().and_then(|stack| stack.last()) {
-            Some(opened) => opened.detail,
-            None => self.selected_detail()?,
-        };
-        match detail {
+        match self.focus()? {
             Detail::Item(item) => Some(item),
-            Detail::Session(session) => self.item_of_session(session),
+            Detail::Session(session) => self.session_info(session).map(|info| info.item.id),
+            Detail::Agent(_) => None,
         }
     }
 
     /// The session `x` stops: the one open, or selected, while it is live.
     pub fn session_subject(&self) -> Option<SessionId> {
-        let detail = match self.stack().and_then(|stack| stack.last()) {
-            Some(opened) => opened.detail,
-            None => self.selected_detail()?,
-        };
-        match detail {
+        match self.focus()? {
             Detail::Session(session) => self
-                .snapshot
-                .working
-                .iter()
-                .any(|working| working.id == session)
-                .then_some(session),
-            Detail::Item(_) => None,
+                .session_info(session)
+                .filter(|info| match info.status {
+                    SessionStatus::Live | SessionStatus::Parked => true,
+                    SessionStatus::Ended { .. } => false,
+                })
+                .map(|info| info.id),
+            Detail::Item(_) | Detail::Agent(_) => None,
         }
     }
 
-    fn item_of_session(&self, session: SessionId) -> Option<ItemId> {
-        let working = self.snapshot.working.iter().find(|info| info.id == session);
+    /// What the snapshot knows of a session: as one that works, one in view, or one of an agent.
+    fn session_info(&self, session: SessionId) -> Option<&SessionInfo> {
         let in_view = match &self.snapshot.in_view {
-            Some(InView::Session(info)) if info.id == session => Some(info),
-            Some(InView::Session(_) | InView::Item { .. }) | None => None,
+            Some(InView::Session(info)) => Some(info),
+            Some(InView::Item { .. } | InView::Agent { .. }) | None => None,
         };
-        working.or(in_view).map(|info| info.item.id)
+        self.snapshot
+            .working
+            .iter()
+            .chain(in_view)
+            .chain(
+                self.snapshot
+                    .agents
+                    .iter()
+                    .flat_map(|agent| agent.sessions.iter()),
+            )
+            .find(|info| info.id == session)
     }
 
     /// The item whose work `D` shows: of a review waiting, or of the item keys.
@@ -766,8 +806,8 @@ impl App {
             return;
         };
         stack.push(Opened {
-            detail,
             scroll: detail.start(),
+            detail,
         });
     }
 
@@ -804,7 +844,7 @@ impl App {
                         Tab::Now => self.now_key(key),
                         Tab::Items => self.items_key(key),
                         Tab::Log => self.log_key(key),
-                        Tab::Agents => {}
+                        Tab::Agents => self.agents_key(key),
                     }
                 }
             }
@@ -974,15 +1014,9 @@ impl App {
     fn detail_key(&mut self, key: KeyEvent) -> bool {
         let item_session = match &self.snapshot.in_view {
             Some(InView::Item { session, .. }) => *session,
-            Some(InView::Session(_)) | None => None,
+            Some(InView::Session(_) | InView::Agent { .. }) | None => None,
         };
-        let item_of_session = self
-            .stack()
-            .and_then(|stack| stack.last())
-            .and_then(|opened| match opened.detail {
-                Detail::Session(session) => self.item_of_session(session),
-                Detail::Item(_) => None,
-            });
+        let item_of_session = self.item_subject();
         let Some(stack) = self.stack_mut() else {
             return false;
         };
@@ -993,7 +1027,7 @@ impl App {
             opened.scroll = scroll;
             return true;
         }
-        match (key.code, opened.detail) {
+        match (key.code, &opened.detail) {
             (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) => {
                 stack.pop();
             }
@@ -1020,6 +1054,20 @@ impl App {
     fn now_key(&mut self, key: KeyEvent) {
         let rows = self.now_rows();
         if self.now.selection.key(&rows, key) {
+            return;
+        }
+        if matches!(
+            key.code,
+            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
+        ) && let Some(detail) = self.selected_detail()
+        {
+            self.open(detail);
+        }
+    }
+
+    fn agents_key(&mut self, key: KeyEvent) {
+        let rows = self.agent_rows();
+        if self.agents.selection.key(&rows, key) {
             return;
         }
         if matches!(

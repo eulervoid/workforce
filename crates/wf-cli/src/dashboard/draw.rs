@@ -10,12 +10,15 @@ use wf_core::graph::Readiness;
 use wf_core::id::HashId;
 use wf_core::policy::StateCategory;
 
-use super::app::{App, Choice, Opened, Prompt, Row, Scroll, Status, Tab};
+use super::app::{AgentRow, App, Choice, Opened, Prompt, Row, Scroll, Status, Tab};
+use super::snapshot::{
+    AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
+};
 use super::snapshot::{Detail, ItemRow};
-use super::snapshot::{InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting};
 use crate::cli::ItemGrouping;
 use crate::render;
 use crate::transcript::{self, Format, Now, Transcript};
+use wf_core::stats::ProjectStats;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -242,9 +245,7 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
         Tab::Now => draw_split(frame, app, area, draw_now_list),
         Tab::Items => draw_split(frame, app, area, draw_items_list),
         Tab::Log => draw_log(frame, app, area),
-        Tab::Agents => {
-            frame.render_widget(Paragraph::new(" Nothing here yet.").dim(), area);
-        }
+        Tab::Agents => draw_split(frame, app, area, draw_agents_list),
     }
 }
 
@@ -409,14 +410,9 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
     }
 }
 
-/// `12m`, `3h05m` or `2d`.
+/// How long ago `since_ms` was: `12m`, `3h05m` or `2d`.
 fn age(since_ms: u64, now_ms: u64) -> String {
-    let minutes = now_ms.saturating_sub(since_ms) / 60_000;
-    match minutes {
-        0..60 => format!("{minutes}m"),
-        60..1440 => format!("{}h{:02}m", minutes / 60, minutes % 60),
-        _ => format!("{}d", minutes / 1440),
-    }
+    duration(now_ms.saturating_sub(since_ms))
 }
 
 /// What a session does now, from its transcript.
@@ -445,7 +441,7 @@ fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'s
     let glyph = match session.status {
         SessionStatus::Live => Span::raw("◆ ").fg(Color::Blue),
         SessionStatus::Parked => Span::raw("◇ ").fg(Color::Blue),
-        SessionStatus::Ended => Span::raw("· ").dim(),
+        SessionStatus::Ended { .. } => Span::raw("· ").dim(),
     };
     let mut first = vec![glyph, Span::raw(format!("{:<9} ", session.agent))];
     first.extend(item_spans(&session.item));
@@ -594,6 +590,126 @@ fn state_color(item: &ItemRow) -> Color {
     }
 }
 
+/// `this week: 5 done · 3h05m start to done · 2 of 9 attempts failed · 0.5 change requests a
+/// merge`, leaving out what there is nothing to say about, wrapped between its parts to `width`.
+fn stats_lines(stats: &ProjectStats, width: u16) -> Vec<Line<'static>> {
+    let mut parts = vec![format!("this week: {} done", stats.done_lately)];
+    if let Some(lead) = stats.median_lead_ms {
+        parts.push(format!("{} start to done", duration(lead)));
+    }
+    if stats.attempts > 0 {
+        parts.push(format!(
+            "{} of {} attempts failed",
+            stats.failed_attempts, stats.attempts
+        ));
+    }
+    if stats.merged > 0 {
+        let per_merge = stats.change_requests as f64 / stats.merged as f64;
+        parts.push(format!("{per_merge:.1} change requests a merge"));
+    }
+    let room = usize::from(width).saturating_sub(2);
+    let mut lines: Vec<String> = Vec::new();
+    for part in parts {
+        match lines.last_mut() {
+            Some(line) if line.chars().count() + 3 + part.chars().count() <= room => {
+                line.push_str(" · ");
+                line.push_str(&part);
+            }
+            Some(_) | None => lines.push(part),
+        }
+    }
+    lines
+        .into_iter()
+        .map(|line| Line::from(format!(" {line}")).dim())
+        .collect()
+}
+
+/// `coder  claude-code · opus  2/2 busy`
+fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
+    let first = vec![
+        Span::raw(agent.id.name.to_string()).bold(),
+        Span::raw(format!("  {}", agent.runs_on)).dim(),
+    ];
+    let live = agent.stats.live;
+    let load = match agent.capacity {
+        Some(capacity) if live as u32 >= capacity => {
+            Span::raw(format!("{live}/{capacity} busy")).fg(Color::Blue)
+        }
+        Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).dim(),
+        None => Span::raw(format!("{live} live · not here")).dim(),
+    };
+    row.lines(first, Some(load), Vec::new())
+}
+
+/// A session under its agent: `◆ #k3j1 Parse config lazily  work 12m`.
+fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'static>> {
+    let glyph = match session.status {
+        SessionStatus::Live => Span::raw("  ◆ ").fg(Color::Blue),
+        SessionStatus::Parked => Span::raw("  ◇ ").fg(Color::Blue),
+        SessionStatus::Ended { .. } => Span::raw("  · ").dim(),
+    };
+    let mut first = vec![glyph];
+    first.extend(item_spans(&session.item));
+    let now_ms = app.snapshot.now_ms;
+    let right = match session.status {
+        SessionStatus::Live => format!("{} {}", session.role, age(session.started_ms, now_ms)),
+        SessionStatus::Parked => format!(
+            "{} parked {}",
+            session.role,
+            age(session.started_ms, now_ms)
+        ),
+        SessionStatus::Ended { reason, at_ms } => {
+            format!(
+                "{} {} ago",
+                reason.name().replace('_', " "),
+                age(at_ms, now_ms)
+            )
+        }
+    };
+    row.lines(first, Some(Span::raw(right).dim()), Vec::new())
+}
+
+fn draw_agents_list(frame: &mut Frame, app: &App, area: Rect) {
+    let selected = app.agents.selection.get();
+    let mut lines = stats_lines(&app.snapshot.stats, area.width);
+    let mut selected_line = None;
+    for agent in &app.snapshot.agents {
+        lines.push(Line::default());
+        let row = AgentRow::Agent(agent.id.clone());
+        if selected == Some(&row) {
+            selected_line = Some(lines.len());
+        }
+        lines.extend(agent_lines(
+            agent,
+            RowLines {
+                selected: selected == Some(&row),
+                width: area.width,
+            },
+        ));
+        for session in &agent.sessions {
+            let row = AgentRow::Session(session.id);
+            if selected == Some(&row) {
+                selected_line = Some(lines.len());
+            }
+            lines.extend(agent_session_lines(
+                app,
+                session,
+                RowLines {
+                    selected: selected == Some(&row),
+                    width: area.width,
+                },
+            ));
+        }
+    }
+    if app.snapshot.agents.is_empty() {
+        lines.push(Line::from(" no agents yet; `wf agent add` defines one").dim());
+    }
+    let offset = selected_line
+        .map(|line| (line + 2).saturating_sub(usize::from(area.height)))
+        .unwrap_or_default();
+    frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
+}
+
 fn draw_items_list(frame: &mut Frame, app: &App, area: Rect) {
     let selected = app.items.list.selection.get();
     let mut lines = vec![items_heading(app)];
@@ -629,13 +745,15 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
         width: body.width.saturating_sub(1),
         ..body
     };
-    match (opened.detail, &app.snapshot.in_view) {
-        (
-            Detail::Item(id),
-            Some(InView::Item {
-                id: shown, text, ..
-            }),
-        ) if id == *shown => {
+    let in_view = app.snapshot.in_view.as_ref();
+    // Until the snapshot has caught up with what was opened, the detail stays empty.
+    match &opened.detail {
+        Detail::Item(id) => {
+            let Some(InView::Item { text, .. }) = in_view
+                .filter(|shown| matches!(shown, InView::Item { id: shown, .. } if shown == id))
+            else {
+                return;
+            };
             // The header line of `wf item show` stays on top.
             let mut text: Text = text.into_text().unwrap_or_default();
             let header = if text.lines.is_empty() {
@@ -648,51 +766,83 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
             frame.render_widget(Paragraph::new(Line::from(spans)), title);
             draw_scrolled(frame, text, opened.scroll, body, true);
         }
-        (Detail::Session(id), Some(InView::Session(session))) if id == session.id => {
-            frame.render_widget(Paragraph::new(session_title(app, session)), title);
-            let text = match (&session.place, app.transcripts.get(&id)) {
-                (Place::Elsewhere(device), _) => {
-                    Text::from(Line::from(format!(" transcript on {device}")).dim())
-                }
-                (Place::Here, None) => Text::from(Line::from(" no transcript yet").dim()),
-                (Place::Here, Some(transcript)) => {
-                    let width = usize::from(body.width).max(20);
-                    transcript_text(app, &session.agent, transcript, width)
-                }
+        Detail::Agent(id) => {
+            let Some(InView::Agent { text, .. }) = in_view
+                .filter(|shown| matches!(shown, InView::Agent { id: shown, .. } if shown == id))
+            else {
+                return;
             };
-            let asks: Vec<&str> = app
-                .snapshot
-                .waiting
-                .iter()
-                .filter_map(|entry| match entry {
-                    Waiting::Permission { session, what, .. } if *session == id => {
-                        Some(what.as_str())
-                    }
-                    _ => None,
-                })
-                .collect();
-            let [body, bar] = Layout::vertical([
-                Constraint::Fill(1),
-                Constraint::Length(u16::from(!asks.is_empty())),
-            ])
-            .areas(body);
-            draw_scrolled(frame, text, opened.scroll, body, false);
-            if let Some(what) = asks.first() {
-                let line = Line::from(vec![
-                    Span::raw("? ").fg(Color::Yellow).bold(),
-                    Span::raw(format!("wants: {what}")),
-                ]);
-                let keys = Span::raw("a allow · d deny").fg(Color::Yellow);
-                let row = RowLines {
-                    selected: false,
-                    width: bar.width,
-                };
-                let mut lines = row.lines(line.spans, Some(keys), Vec::new());
-                frame.render_widget(Paragraph::new(lines.remove(0)), bar);
-            }
+            let line = Line::from(vec![
+                Span::raw(" ← ").dim(),
+                Span::raw(id.name.to_string()).bold(),
+            ]);
+            frame.render_widget(Paragraph::new(line), title);
+            draw_scrolled(frame, Text::from(text.clone()), opened.scroll, body, true);
         }
-        // The snapshot has not caught up with what was opened yet.
-        _ => {}
+        Detail::Session(id) => {
+            let Some(InView::Session(session)) =
+                in_view.filter(|shown| matches!(shown, InView::Session(shown) if shown.id == *id))
+            else {
+                return;
+            };
+            draw_session(frame, app, session, opened.scroll, title, body);
+        }
+    }
+}
+
+fn draw_session(
+    frame: &mut Frame,
+    app: &App,
+    session: &SessionInfo,
+    scroll: Scroll,
+    title: Rect,
+    body: Rect,
+) {
+    frame.render_widget(Paragraph::new(session_title(app, session)), title);
+    let text = match (&session.place, app.transcripts.get(&session.id)) {
+        (Place::Elsewhere(device), _) => {
+            Text::from(Line::from(format!(" transcript on {device}")).dim())
+        }
+        (Place::Here, None) => Text::from(Line::from(" no transcript yet").dim()),
+        (Place::Here, Some(transcript)) => {
+            let width = usize::from(body.width).max(20);
+            transcript_text(app, &session.agent, transcript, width)
+        }
+    };
+    let asks: Vec<&str> = app
+        .snapshot
+        .waiting
+        .iter()
+        .filter_map(|entry| match entry {
+            Waiting::Permission {
+                session: asking,
+                what,
+                ..
+            } if *asking == session.id => Some(what.as_str()),
+            Waiting::Permission { .. }
+            | Waiting::Blocker { .. }
+            | Waiting::Review { .. }
+            | Waiting::Notice { .. } => None,
+        })
+        .collect();
+    let [body, bar] = Layout::vertical([
+        Constraint::Fill(1),
+        Constraint::Length(u16::from(!asks.is_empty())),
+    ])
+    .areas(body);
+    draw_scrolled(frame, text, scroll, body, false);
+    if let Some(what) = asks.first() {
+        let line = Line::from(vec![
+            Span::raw("? ").fg(Color::Yellow).bold(),
+            Span::raw(format!("wants: {what}")),
+        ]);
+        let keys = Span::raw("a allow · d deny").fg(Color::Yellow);
+        let row = RowLines {
+            selected: false,
+            width: bar.width,
+        };
+        let mut lines = row.lines(line.spans, Some(keys), Vec::new());
+        frame.render_widget(Paragraph::new(lines.remove(0)), bar);
     }
 }
 
@@ -712,7 +862,7 @@ fn session_title(app: &App, session: &SessionInfo) -> Line<'static> {
     let glyph = match session.status {
         SessionStatus::Live => Span::raw("  ◆").fg(Color::Blue),
         SessionStatus::Parked => Span::raw("  ◇ parked").fg(Color::Blue),
-        SessionStatus::Ended => Span::raw("  ended").dim(),
+        SessionStatus::Ended { reason, .. } => Span::raw(format!("  {}", reason.name())).dim(),
     };
     spans.push(glyph);
     Line::from(spans)
@@ -845,16 +995,16 @@ fn keys_line(app: &App) -> Line<'static> {
     let opened = app
         .stack()
         .and_then(|stack| stack.last())
-        .map(|opened| opened.detail);
+        .map(|opened| &opened.detail);
     let navigation = match (app.tab, opened) {
         (_, Some(Detail::Session(_))) => "esc back · j/k scroll · i item · f full",
         (_, Some(Detail::Item(_))) if item_session => "esc back · j/k scroll · enter session",
-        (_, Some(Detail::Item(_))) => "esc back · j/k scroll",
+        (_, Some(Detail::Item(_) | Detail::Agent(_))) => "esc back · j/k scroll",
         (Tab::Now, None) => "enter open · j/k move",
         (Tab::Items, None) => "enter open · o group · / filter · F ready",
         (Tab::Log, None) if !app.log.filter.is_empty() => "/ change filter · esc clear",
         (Tab::Log, None) => "/ filter · j/k scroll · G end",
-        (Tab::Agents, None) => "tab next",
+        (Tab::Agents, None) => "enter open · j/k move",
     };
     let mut parts: Vec<&str> = vec![navigation];
     parts.extend(acts);

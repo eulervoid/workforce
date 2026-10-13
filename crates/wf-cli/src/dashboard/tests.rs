@@ -12,12 +12,15 @@ use wf_core::name::{AgentName, StateName};
 use wf_core::policy::StateCategory;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
-use super::app::{App, Choice, Effect, Prompt, Row, Tab};
+use super::app::{AgentRow, App, Choice, Effect, Prompt, Row, Tab};
 use super::draw;
 use super::snapshot::{
-    Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Place, SessionInfo, SessionStatus,
-    Snapshot, Waiting,
+    AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Place, SessionInfo,
+    SessionStatus, Snapshot, Waiting,
 };
+use wf_core::identity::AgentId;
+use wf_core::session::EndReason;
+use wf_core::stats::{AgentStats, ProjectStats};
 
 /// 2026-10-14 07:00 UTC.
 const NOW_MS: u64 = 1_792_047_600_000;
@@ -92,6 +95,8 @@ fn snapshot() -> Snapshot {
         flagged: vec!["#q9r1aa \"Watch\" is stranded: a dependency was cancelled".to_owned()],
         in_view: None,
         items: Vec::new(),
+        agents: Vec::new(),
+        stats: ProjectStats::default(),
     }
 }
 
@@ -560,5 +565,96 @@ fn the_keys_show_on_a_question_mark() {
     insta::assert_snapshot!("keys", screen(&app, 60, 18));
     // Any key closes it, and does nothing else.
     assert_eq!(press(&mut app, KeyCode::Char('q')), None);
+    assert!(app.prompt.is_none());
+}
+
+/// The snapshot while the Agents tab is on screen.
+fn with_agents() -> Snapshot {
+    let mut snapshot = snapshot();
+    let principal = wf_core::testing::Fixture::new(1).founder.key();
+    let ended = SessionInfo {
+        status: SessionStatus::Ended {
+            reason: EndReason::Submitted { commit: None },
+            at_ms: NOW_MS - 2 * 60 * 60_000,
+        },
+        ..session(14, "coder", item(4, "Dashboard"), 300)
+    };
+    snapshot.agents = vec![
+        AgentInfo {
+            id: AgentId {
+                principal,
+                name: AgentName::new("coder").unwrap(),
+            },
+            runs_on: "claude-code · opus".to_owned(),
+            capacity: Some(2),
+            stats: AgentStats {
+                sessions: 3,
+                live: 2,
+                finished: 1,
+                failed: 0,
+                median_duration_ms: Some(5 * 60 * 60_000),
+            },
+            sessions: vec![
+                snapshot.working[0].clone(),
+                snapshot.working[1].clone(),
+                ended,
+            ],
+        },
+        AgentInfo {
+            id: AgentId {
+                principal,
+                name: AgentName::new("reviewer").unwrap(),
+            },
+            runs_on: "claude-code".to_owned(),
+            capacity: None,
+            stats: AgentStats {
+                live: 1,
+                sessions: 1,
+                ..AgentStats::default()
+            },
+            sessions: vec![snapshot.working[2].clone()],
+        },
+    ];
+    snapshot.stats = ProjectStats {
+        done_lately: 5,
+        median_lead_ms: Some(3 * 60 * 60_000),
+        attempts: 9,
+        failed_attempts: 2,
+        merged: 4,
+        change_requests: 2,
+    };
+    snapshot
+}
+
+#[test]
+fn the_agents_tab_lists_each_agent_with_its_sessions() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('3'));
+    assert!(app.wanted().agents);
+    app.refresh(with_agents());
+    insta::assert_snapshot!("agents", screen(&app, 60, 16));
+    // An agent opens on its definition, a session on its transcript.
+    press(&mut app, KeyCode::Enter);
+    assert!(
+        matches!(app.wanted().detail, Some(Detail::Agent(agent)) if agent.name.as_str() == "coder")
+    );
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        app.agents.selection.get(),
+        Some(&AgentRow::Session(SessionId::from_bytes([11; 32])))
+    );
+    // The keys of a session work here too.
+    assert_eq!(
+        press(&mut app, KeyCode::Char('a')),
+        Some(Effect::Permit {
+            session: SessionId::from_bytes([11; 32]),
+            answer: Permission::Allow
+        })
+    );
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Char('k'));
+    // A session that ended cannot be stopped.
+    assert_eq!(press(&mut app, KeyCode::Char('x')), None);
     assert!(app.prompt.is_none());
 }
