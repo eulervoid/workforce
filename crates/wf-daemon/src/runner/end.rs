@@ -123,6 +123,9 @@ impl Daemon {
                     },
                 )
                 .await
+                // A merge that waits on the principal is told of by the dispatcher, which tries
+                // it again.
+                .map(|_| ())
             }
         };
         self.author(
