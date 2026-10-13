@@ -125,7 +125,12 @@ impl Cluster {
         if from == to {
             return;
         }
-        let mut events: Vec<Event> = self.peers[from].replica.lock().store().events().unwrap();
+        let mut events: Vec<Event> = self.peers[from]
+            .replica
+            .lock()
+            .store()
+            .log_since(0)
+            .unwrap();
         events.retain(|event| !(usize::from(seed) + event.content.seq as usize).is_multiple_of(3));
         events.reverse();
         let duplicates: Vec<Event> = events.iter().step_by(2).cloned().collect();
@@ -156,7 +161,7 @@ impl Cluster {
             Op::Leak { from, to, seed } => self.leak(from % count, to % count, seed),
             Op::Checkpoint { peer } => {
                 let peer = &mut self.peers[peer % count];
-                peer.checkpoint = peer.replica.lock().store().events().unwrap();
+                peer.checkpoint = peer.replica.lock().store().log_since(0).unwrap();
             }
             Op::Restore { peer } => self.restore(peer % count),
         }

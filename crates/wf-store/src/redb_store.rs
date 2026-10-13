@@ -1,4 +1,3 @@
-use std::collections::BTreeSet;
 use std::path::Path;
 use std::thread::sleep;
 use std::time::Duration;
@@ -11,7 +10,7 @@ use wf_core::event::Event;
 use wf_core::id::{EventId, HashId};
 use wf_core::identity::DeviceKey;
 
-use crate::store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError, StoredSnapshot};
+use crate::store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError};
 
 const EVENTS: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("events");
 /// `(author, seq)` to the ids of the events there: more than one when a feed has equivocated.
@@ -20,10 +19,12 @@ const FEEDS: MultimapTableDefinition<([u8; 32], u64), [u8; 32]> =
 /// Position to event id, in the order events were applied.
 const LOG: TableDefinition<u64, [u8; 32]> = TableDefinition::new("log");
 const PENDING: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("pending");
-/// Snapshots keyed by the hash of the heads they cover.
-const SNAPSHOTS: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("snapshots");
 const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
-const LATEST_SNAPSHOT: &str = "latest_snapshot";
+/// The row of [`META`] that holds the snapshot.
+const SNAPSHOT: &str = "snapshot";
+/// Where stores written before the snapshot moved into [`META`] kept it; removed on open.
+const OLD_SNAPSHOTS: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("snapshots");
+const OLD_LATEST_SNAPSHOT: &str = "latest_snapshot";
 
 /// Another `wf` process holds the single-writer lock: retry briefly before giving up.
 const LOCK_ATTEMPTS: u32 = 12;
@@ -69,8 +70,8 @@ impl RedbStore {
         transaction.open_multimap_table(FEEDS)?;
         transaction.open_table(LOG)?;
         transaction.open_table(PENDING)?;
-        transaction.open_table(SNAPSHOTS)?;
-        transaction.open_table(META)?;
+        transaction.open_table(META)?.remove(OLD_LATEST_SNAPSHOT)?;
+        transaction.delete_table(OLD_SNAPSHOTS)?;
         transaction.commit()?;
         Ok(())
     }
@@ -79,14 +80,6 @@ impl RedbStore {
         let transaction = self.database.begin_read()?;
         Ok(transaction.open_table(EVENTS)?.len()?)
     }
-}
-
-fn snapshot_key(covers: &BTreeSet<EventId>) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
-    for head in covers {
-        hasher.update(head.as_bytes());
-    }
-    *hasher.finalize().as_bytes()
 }
 
 fn decode_all<'a>(
@@ -135,13 +128,6 @@ impl EventStore for RedbStore {
         Ok(result)
     }
 
-    fn events(&self) -> Result<Vec<Event>, StoreError> {
-        let transaction = self.database.begin_read()?;
-        let mut events = decode_all(transaction.open_table(EVENTS)?.iter()?)?;
-        events.sort_by_key(|event| (event.content.hlc, event.id()));
-        Ok(events)
-    }
-
     fn log_len(&self) -> Result<u64, StoreError> {
         let transaction = self.database.begin_read()?;
         Ok(transaction.open_table(LOG)?.len()?)
@@ -175,23 +161,10 @@ impl EventStore for RedbStore {
         decode_all(transaction.open_table(PENDING)?.iter()?)
     }
 
-    fn snapshot(&self) -> Result<Option<StoredSnapshot>, StoreError> {
+    fn snapshot(&self) -> Result<Option<Vec<u8>>, StoreError> {
         let transaction = self.database.begin_read()?;
-        let Some(key) = transaction.open_table(META)?.get(LATEST_SNAPSHOT)? else {
-            return Ok(None);
-        };
-        let key: [u8; 32] = key
-            .value()
-            .try_into()
-            .map_err(|_| StoreError::Inconsistent("bad snapshot key".into()))?;
-        let Some(blob) = transaction.open_table(SNAPSHOTS)?.get(key)? else {
-            return Ok(None);
-        };
-        let (covers, bytes): (Vec<EventId>, Vec<u8>) = wf_core::encoding::decode(blob.value())?;
-        Ok(Some(StoredSnapshot {
-            covers: covers.into_iter().collect(),
-            bytes,
-        }))
+        let meta = transaction.open_table(META)?;
+        Ok(meta.get(SNAPSHOT)?.map(|bytes| bytes.value().to_vec()))
     }
 
     fn commit(&self, commit: Commit<'_>) -> Result<(), StoreError> {
@@ -221,30 +194,8 @@ impl EventStore for RedbStore {
         }
         match commit.snapshot {
             SnapshotChange::Keep => {}
-            SnapshotChange::Replace(snapshot) => {
-                let mut snapshots = transaction.open_table(SNAPSHOTS)?;
-                let mut meta = transaction.open_table(META)?;
-                let previous = meta
-                    .get(LATEST_SNAPSHOT)?
-                    .and_then(|key| <[u8; 32]>::try_from(key.value()).ok());
-                if let Some(previous) = previous {
-                    snapshots.remove(previous)?;
-                }
-                let key = snapshot_key(&snapshot.covers);
-                let covers: Vec<EventId> = snapshot.covers.iter().copied().collect();
-                let blob = wf_core::encoding::encode(&(covers, &snapshot.bytes))?;
-                snapshots.insert(key, blob.as_slice())?;
-                meta.insert(LATEST_SNAPSHOT, key.as_slice())?;
-            }
-            SnapshotChange::Discard => {
-                let mut snapshots = transaction.open_table(SNAPSHOTS)?;
-                let mut meta = transaction.open_table(META)?;
-                let previous = meta
-                    .remove(LATEST_SNAPSHOT)?
-                    .and_then(|key| <[u8; 32]>::try_from(key.value()).ok());
-                if let Some(previous) = previous {
-                    snapshots.remove(previous)?;
-                }
+            SnapshotChange::Replace(bytes) => {
+                transaction.open_table(META)?.insert(SNAPSHOT, bytes)?;
             }
         }
         transaction.commit()?;

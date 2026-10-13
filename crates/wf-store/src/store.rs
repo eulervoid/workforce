@@ -1,5 +1,3 @@
-use std::collections::BTreeSet;
-
 use wf_core::encoding::EncodingError;
 use wf_core::event::Event;
 use wf_core::id::{EventId, WorkforceId};
@@ -30,14 +28,6 @@ pub enum StoreError {
     Locked,
 }
 
-/// A folded state serialized by the replica. The store treats the bytes as opaque.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StoredSnapshot {
-    /// The heads of the state the snapshot covers.
-    pub covers: BTreeSet<EventId>,
-    pub bytes: Vec<u8>,
-}
-
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum PendingChange<'a> {
     #[default]
@@ -49,12 +39,12 @@ pub enum PendingChange<'a> {
     },
 }
 
+/// The snapshot is a folded state serialized by the replica; the store treats its bytes as opaque.
 #[derive(Clone, Copy, Debug, Default)]
 pub enum SnapshotChange<'a> {
     #[default]
     Keep,
-    Replace(&'a StoredSnapshot),
-    Discard,
+    Replace(&'a [u8]),
 }
 
 /// Everything that changes in one transaction: appended events, pending set and snapshot.
@@ -73,9 +63,6 @@ pub trait EventStore {
     /// equivocated feed yields every branch.
     fn feed_since(&self, author: &DeviceKey, after_seq: u64) -> Result<Vec<Event>, StoreError>;
 
-    /// Every event, ordered by `(hlc, id)`, which is a causal order within one workforce.
-    fn events(&self) -> Result<Vec<Event>, StoreError>;
-
     /// How many events have been appended. Events are numbered in the order they were applied,
     /// which is not always a causal one: a fork takes in its history newest event first.
     fn log_len(&self) -> Result<u64, StoreError>;
@@ -92,7 +79,8 @@ pub trait EventStore {
 
     fn pending(&self) -> Result<Vec<Event>, StoreError>;
 
-    fn snapshot(&self) -> Result<Option<StoredSnapshot>, StoreError>;
+    /// The bytes of the latest snapshot.
+    fn snapshot(&self) -> Result<Option<Vec<u8>>, StoreError>;
 
     /// Atomic. Events are appended in the order they were applied, which is not always causal: a
     /// fork takes in the history it was made from starting with the newest event.

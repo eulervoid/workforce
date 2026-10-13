@@ -8,7 +8,7 @@ use wf_core::state::{BuildError, Disposition, Received, State, Trust};
 use wf_core::validate::{Invalid, PolicyViolation};
 
 use crate::history::HistorySource;
-use crate::store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError, StoredSnapshot};
+use crate::store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError};
 
 /// A snapshot is written once this many events have been applied since the last one.
 pub const SNAPSHOT_INTERVAL: usize = 256;
@@ -212,7 +212,7 @@ impl<S: EventStore> Replica<S> {
                 remove: &released,
             },
             snapshot: snapshot
-                .as_ref()
+                .as_deref()
                 .map_or(SnapshotChange::Keep, SnapshotChange::Replace),
         })?;
         if snapshot.is_some() {
@@ -332,7 +332,7 @@ impl<S: EventStore> Replica<S> {
                 remove: &released,
             },
             snapshot: snapshot
-                .as_ref()
+                .as_deref()
                 .map_or(SnapshotChange::Keep, SnapshotChange::Replace),
         })?;
         if snapshot.is_some() {
@@ -348,12 +348,12 @@ impl<S: EventStore> Replica<S> {
         self.state.event_count() >= self.snapshot_event_count + interval
     }
 
-    fn snapshot(&self) -> Result<StoredSnapshot, StoreError> {
-        let bytes = wf_core::encoding::encode(&(SNAPSHOT_FORMAT, PARSER_VERSION, &self.state))?;
-        Ok(StoredSnapshot {
-            covers: self.state.heads().clone(),
-            bytes,
-        })
+    fn snapshot(&self) -> Result<Vec<u8>, StoreError> {
+        Ok(wf_core::encoding::encode(&(
+            SNAPSHOT_FORMAT,
+            PARSER_VERSION,
+            &self.state,
+        ))?)
     }
 
     fn write_snapshot(&mut self) -> Result<(), StoreError> {
@@ -372,8 +372,7 @@ fn load_snapshot<S: EventStore>(store: &S) -> Result<Option<State>, StoreError> 
     let Some(stored) = store.snapshot()? else {
         return Ok(None);
     };
-    let Ok(((format, parser), rest)) = postcard::take_from_bytes::<(u32, u16)>(&stored.bytes)
-    else {
+    let Ok(((format, parser), rest)) = postcard::take_from_bytes::<(u32, u16)>(&stored) else {
         return Ok(None);
     };
     if format != SNAPSHOT_FORMAT || parser != PARSER_VERSION {

@@ -4826,7 +4826,6 @@ dependencies = [
 name = "wf-store"
 version = "0.0.0"
 dependencies = [
- "blake3",
  "postcard",
  "redb",
  "serde",

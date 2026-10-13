@@ -5,7 +5,6 @@ use wf_core::state::{Disposition, State, Trust};
 use wf_core::testing::*;
 use wf_store::{
     Commit, EventStore, PendingChange, RedbStore, Replica, SNAPSHOT_INTERVAL, SnapshotChange,
-    StoredSnapshot,
 };
 
 fn open(directory: &TempDir) -> RedbStore {
@@ -54,7 +53,7 @@ fn events_survive_reopening() {
     };
     let reopened = Replica::open(open(&directory), fixture.workforce()).unwrap();
     assert_eq!(reopened.state(), &expected);
-    assert_eq!(reopened.store().events().unwrap().len(), 6);
+    assert_eq!(reopened.store().log_since(0).unwrap().len(), 6);
 }
 
 #[test]
@@ -100,10 +99,7 @@ fn one_commit_stores_events_pending_events_and_the_snapshot_together() {
     let second = fixture.apply(&mut author, 0, 2_001, create("task", "b"));
     let third = fixture.apply(&mut author, 0, 2_002, create("task", "c"));
 
-    let snapshot = StoredSnapshot {
-        covers: Default::default(),
-        bytes: vec![1],
-    };
+    let snapshot = vec![1];
     {
         let store = open(&directory);
         store
@@ -118,7 +114,7 @@ fn one_commit_stores_events_pending_events_and_the_snapshot_together() {
             .unwrap();
     }
     let store = open(&directory);
-    assert_eq!(store.events().unwrap().len(), 3);
+    assert_eq!(store.log_since(0).unwrap().len(), 3);
     assert_eq!(store.log_len().unwrap(), 3);
     assert_eq!(store.pending().unwrap().len(), 1);
     assert_eq!(store.snapshot().unwrap(), Some(snapshot));
@@ -153,13 +149,17 @@ fn deleting_the_snapshot_changes_nothing() {
         add(&mut replica, &fixture, SNAPSHOT_INTERVAL + 5);
         replica.state().clone()
     };
+    {
+        let database = redb::Database::open(directory.path().join("store.redb")).unwrap();
+        let transaction = database.begin_write().unwrap();
+        transaction
+            .open_table(redb::TableDefinition::<&str, &[u8]>::new("meta"))
+            .unwrap()
+            .remove("snapshot")
+            .unwrap();
+        transaction.commit().unwrap();
+    }
     let store = open(&directory);
-    store
-        .commit(Commit {
-            snapshot: SnapshotChange::Discard,
-            ..Commit::default()
-        })
-        .unwrap();
     assert!(store.snapshot().unwrap().is_none());
     let replica = Replica::open(store, fixture.workforce()).unwrap();
     assert_eq!(replica.state(), &expected);
@@ -182,10 +182,7 @@ fn unusable_snapshots_are_discarded_and_refolded() {
         let store = open(&directory);
         store
             .commit(Commit {
-                snapshot: SnapshotChange::Replace(&StoredSnapshot {
-                    covers: Default::default(),
-                    bytes: garbage,
-                }),
+                snapshot: SnapshotChange::Replace(&garbage),
                 ..Commit::default()
             })
             .unwrap();
@@ -207,7 +204,7 @@ fn out_of_order_events_are_parked_and_survive_restarts() {
         let received = replica.receive(second.clone()).unwrap();
         assert_eq!(received.disposition, Disposition::Pending);
         assert_eq!(replica.store().pending().unwrap().len(), 1);
-        assert_eq!(replica.store().events().unwrap().len(), 1);
+        assert_eq!(replica.store().log_since(0).unwrap().len(), 1);
     }
     {
         let mut replica = Replica::open(open(&directory), fixture.workforce()).unwrap();
@@ -219,7 +216,7 @@ fn out_of_order_events_are_parked_and_survive_restarts() {
         let received = replica.receive(first).unwrap();
         assert_eq!(received.applied.len(), 2);
         assert!(replica.store().pending().unwrap().is_empty());
-        assert_eq!(replica.store().events().unwrap().len(), 3);
+        assert_eq!(replica.store().log_since(0).unwrap().len(), 3);
         assert_eq!(replica.state(), &author);
     }
 }
@@ -241,7 +238,7 @@ fn duplicates_are_idempotent() {
     let received = replica.receive(event).unwrap();
     assert_eq!(received.disposition, Disposition::Duplicate);
     assert_eq!(replica.state(), &before);
-    assert_eq!(replica.store().events().unwrap().len(), 2);
+    assert_eq!(replica.store().log_since(0).unwrap().len(), 2);
 }
 
 #[test]
@@ -252,7 +249,7 @@ fn invalid_events_are_refused_and_not_stored() {
     let mut forged = fixture.author(replica.state(), 0, 2_000, create("task", "a"));
     forged.content.hlc = wf_core::hlc::Hlc::next_after(forged.content.hlc, 99_999);
     assert!(replica.receive(forged).is_err());
-    assert_eq!(replica.store().events().unwrap().len(), 1);
+    assert_eq!(replica.store().log_since(0).unwrap().len(), 1);
 
     let violation = replica.author(
         &fixture.devices[0],
@@ -261,7 +258,7 @@ fn invalid_events_are_refused_and_not_stored() {
         create("nonsense", "a"),
     );
     assert!(matches!(violation, Err(wf_store::AuthorError::Policy(_))));
-    assert_eq!(replica.store().events().unwrap().len(), 1);
+    assert_eq!(replica.store().log_since(0).unwrap().len(), 1);
 }
 
 #[test]
@@ -298,7 +295,7 @@ fn stored_events_decode_to_what_was_written() {
     assert_eq!(stored, event);
     stored.verify_signature().unwrap();
     let mut state = State::new();
-    for stored in replica.store().events().unwrap() {
+    for stored in replica.store().log_since(0).unwrap() {
         state.receive(stored, Trust::Untrusted).unwrap();
     }
     assert_eq!(&state, replica.state());
@@ -536,9 +533,6 @@ impl EventStore for Flaky {
     ) -> Result<Vec<Event>, wf_store::StoreError> {
         self.inner.feed_since(author, after_seq)
     }
-    fn events(&self) -> Result<Vec<Event>, wf_store::StoreError> {
-        self.inner.events()
-    }
     fn log_len(&self) -> Result<u64, wf_store::StoreError> {
         self.inner.log_len()
     }
@@ -551,7 +545,7 @@ impl EventStore for Flaky {
     fn pending(&self) -> Result<Vec<Event>, wf_store::StoreError> {
         self.inner.pending()
     }
-    fn snapshot(&self) -> Result<Option<StoredSnapshot>, wf_store::StoreError> {
+    fn snapshot(&self) -> Result<Option<Vec<u8>>, wf_store::StoreError> {
         self.inner.snapshot()
     }
     fn commit(&self, commit: Commit<'_>) -> Result<(), wf_store::StoreError> {

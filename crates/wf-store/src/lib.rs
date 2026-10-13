@@ -10,4 +10,4 @@ pub use redb_store::RedbStore;
 pub use replica::{
     AuthorError, BatchReceived, ForkError, ReceiveError, Replica, SNAPSHOT_INTERVAL,
 };
-pub use store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError, StoredSnapshot};
+pub use store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError};

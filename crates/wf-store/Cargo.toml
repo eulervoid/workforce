@@ -6,7 +6,6 @@ license.workspace = true
 
 [dependencies]
 wf-core.workspace = true
-blake3.workspace = true
 postcard.workspace = true
 redb.workspace = true
 serde.workspace = true
