@@ -1,0 +1,206 @@
+//! The commands of `wf`: `run` hands each to its module; the output helpers they share live here.
+
+mod agent;
+mod comment;
+mod init;
+mod item;
+mod log;
+mod policy;
+mod review;
+mod vcs;
+mod work;
+
+pub(crate) use item::{Scope, choose_item};
+pub(crate) use review::review;
+pub(crate) use vcs::{repository, target, work_commit};
+
+use std::path::Path;
+
+use anyhow::{Context, bail};
+use serde::Serialize;
+use wf_core::event::Event;
+use wf_core::id::{HashId, ItemId};
+use wf_core::name::Handle;
+
+use crate::cli::*;
+use crate::harness;
+use crate::interactive::{self, Mode};
+use crate::keys::DataDir;
+use crate::render;
+use crate::view::{self, Envelope};
+use crate::workspace::Workspace;
+use agent::agent;
+use comment::{comment, mentions};
+use init::init;
+use item::item;
+use log::log;
+use policy::policy;
+use work::work;
+
+pub(crate) fn emit<T: Serialize>(
+    json: bool,
+    data: &T,
+    text: impl FnOnce(&T) -> String,
+) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string_pretty(&Envelope::new(data))?);
+    } else {
+        anstream::print!("{}", text(data));
+    }
+    Ok(())
+}
+
+/// Like [`emit`], but long text goes through the pager when a person is at the terminal.
+/// One JSON object per line with `--json`, so a reader can follow; otherwise `text`.
+pub(crate) fn emit_line<T: Serialize>(
+    json: bool,
+    data: &T,
+    text: impl FnOnce(&T) -> String,
+) -> anyhow::Result<()> {
+    if json {
+        println!("{}", serde_json::to_string(&Envelope::new(data))?);
+    } else {
+        anstream::print!("{}", text(data));
+    }
+    std::io::Write::flush(&mut std::io::stdout())?;
+    Ok(())
+}
+
+fn emit_paged<T: Serialize>(
+    json: bool,
+    mode: Mode,
+    data: &T,
+    text: impl FnOnce(&T) -> String,
+) -> anyhow::Result<()> {
+    match mode {
+        Mode::Interactive => interactive::page(&text(data)),
+        Mode::Scripted => emit(json, data, text),
+    }
+}
+
+#[derive(Serialize)]
+pub struct Done {
+    pub message: String,
+    pub event: String,
+    pub item: Option<String>,
+}
+
+fn done(json: bool, message: String, event: &Event, item: Option<ItemId>) -> anyhow::Result<()> {
+    emit(
+        json,
+        &Done {
+            message,
+            event: event.id().to_string(),
+            item: item.map(|id| id.to_base32()),
+        },
+        |done| format!("{}\n", done.message),
+    )
+}
+
+pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
+    let json = cli.json;
+    let mode = Mode::detect(json);
+    match cli.command {
+        Command::Init(args) => init(json, mode, args, data, cwd),
+        Command::Join(args) => crate::network::join(json, mode, args, data, cwd),
+        Command::Fork {
+            command: Some(ForkCommand::Accept { id, relay }),
+            ..
+        } => crate::fork::accept(json, data, cwd, &id, relay.as_deref()),
+        Command::Daemon(command) => crate::daemon::daemon(json, command, data),
+        Command::Import { file } => crate::export::import(json, &file, &data),
+        Command::Permissions(command) => crate::permissions::permissions(json, command, cwd),
+        Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
+        Command::Status { refold } => {
+            let workspace = Workspace::open(data, cwd, refold)?;
+            let waiting_on_you =
+                view::inbox_views(workspace.state(), &workspace.held_permissions()).len();
+            let context = view::StatusContext {
+                own: Some(workspace.device_key()),
+                last_seen: &workspace.last_seen(),
+                daemon: workspace.follows_daemon(),
+                waiting_on_you,
+                refolded: refold,
+            };
+            emit(
+                json,
+                &view::status(workspace.state(), context),
+                render::status,
+            )
+        }
+        command => {
+            let mut workspace = Workspace::open(data, cwd, false)?;
+            match command {
+                Command::Init(_)
+                | Command::Join(_)
+                | Command::Daemon(_)
+                | Command::Import { .. }
+                | Command::Permissions(_)
+                | Command::Harness(_)
+                | Command::Status { .. } => unreachable!("handled above"),
+                Command::Session(command) => {
+                    crate::session::session(json, mode, command, &mut workspace, cwd)
+                }
+                Command::Work(command) => work(json, command, &mut workspace),
+                Command::Review(args) => review(json, mode, &mut workspace, args),
+                Command::Watch(args) => crate::watch::watch(json, mode, &mut workspace, args),
+                Command::Inbox => {
+                    let views = view::inbox_views(workspace.state(), &workspace.held_permissions());
+                    emit(json, &views, |views| render::inbox(views))
+                }
+                Command::Agent(command) => agent(json, command, &mut workspace),
+                Command::Item(command) => item(json, mode, command, &mut workspace),
+                Command::Comment(args) => comment(json, mode, &mut workspace, args),
+                Command::Mentions { target } => mentions(json, &workspace, &target),
+                Command::Policy(command) => policy(json, command, &mut workspace),
+                Command::Log => log(json, mode, &workspace),
+                Command::Export => crate::export::export(&workspace),
+                Command::Device(command) => crate::devices::device(json, command, &mut workspace),
+                Command::Members => crate::devices::members(json, &workspace),
+                Command::Fork {
+                    command: Some(ForkCommand::List),
+                    ..
+                } => crate::fork::list(json, &workspace),
+                Command::Fork {
+                    args,
+                    command: None,
+                } => crate::fork::fork(json, &mut workspace, args, cwd),
+                Command::Fork {
+                    command: Some(ForkCommand::Accept { .. }),
+                    ..
+                } => unreachable!("handled above"),
+                Command::Sync(args) => crate::network::sync(json, workspace, args),
+                Command::Invite(InviteCommand::Device(args)) => {
+                    crate::network::invite_device(json, &mut workspace, args)
+                }
+            }
+        }
+    }
+}
+
+fn handle_from_environment() -> Handle {
+    std::env::var("USER")
+        .ok()
+        .map(|user| user.to_lowercase().replace([' ', '.'], "-"))
+        .and_then(|user| Handle::new(user).ok())
+        .unwrap_or_else(|| Handle::new("me").expect("a valid handle"))
+}
+
+fn edit_in_editor(initial: &str, suffix: &str) -> anyhow::Result<String> {
+    let editor = std::env::var("VISUAL")
+        .or_else(|_| std::env::var("EDITOR"))
+        .unwrap_or_else(|_| "vi".to_string());
+    let file = tempfile::Builder::new().suffix(suffix).tempfile()?;
+    std::fs::write(file.path(), initial)?;
+    let mut words = editor.split_whitespace();
+    let program = words.next().context("$EDITOR is empty")?;
+    let status = std::process::Command::new(program)
+        .args(words)
+        .arg(file.path())
+        .status()
+        .with_context(|| format!("starting editor `{editor}`"))?;
+    if !status.success() {
+        bail!("editor `{editor}` failed; nothing was changed");
+    }
+    Ok(std::fs::read_to_string(file.path())?)
+}
