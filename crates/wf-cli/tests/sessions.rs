@@ -646,9 +646,9 @@ wf work submit
     let shown = world.item(&item);
     assert_eq!(shown["state"], "in_review", "{shown}");
     assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
-        note["text"]
-            .as_str()
-            .is_some_and(|text| text.starts_with("Waiting to merge"))
+        note["text"].as_str().is_some_and(|text| {
+            text.starts_with("Waiting to merge") && text.contains("changes to .workforce.toml.")
+        })
     }));
     assert!(
         std::fs::read_to_string(&file)

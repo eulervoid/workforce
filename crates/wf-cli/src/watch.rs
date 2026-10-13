@@ -87,9 +87,10 @@ enum Prompt {
     PrincipalReview {
         item: ItemId,
     },
-    /// Shown once; it is answered elsewhere.
+    /// Shown once for each item and kind, even when its text changes; it is answered elsewhere.
     Notice {
         item: ItemId,
+        kind: &'static str,
         what: String,
     },
 }
@@ -101,7 +102,7 @@ impl Prompt {
             Prompt::Permission(held) => format!("permission {} {}", held.session, held.since_ms),
             Prompt::Blocker { comment, .. } => format!("blocker {comment}"),
             Prompt::PrincipalReview { item } => format!("review {item}"),
-            Prompt::Notice { item, what } => format!("notice {item} {what}"),
+            Prompt::Notice { item, kind, .. } => format!("notice {item} {kind}"),
         }
     }
 }
@@ -127,9 +128,11 @@ fn prompts(workspace: &Workspace, only: Option<ItemId>) -> Vec<Prompt> {
             },
             Waiting::PrincipalReview { .. } => Prompt::PrincipalReview { item: entry.item },
             Waiting::Proposal | Waiting::Merge { .. } | Waiting::Recovery { .. } => {
+                let (kind, what) = view::what_waits(state, &entry);
                 Prompt::Notice {
                     item: entry.item,
-                    what: view::what_waits(state, &entry).1,
+                    kind,
+                    what,
                 }
             }
         });
@@ -151,7 +154,7 @@ fn ask_what_waits(
             Prompt::Permission(held) => ask_permission(workspace, &held),
             Prompt::Blocker { item, comment } => ask_blocker(workspace, item, comment),
             Prompt::PrincipalReview { item } => ask_review(workspace, item),
-            Prompt::Notice { item, what } => {
+            Prompt::Notice { item, what, .. } => {
                 println!("{} {}", title(workspace, item), what);
                 continue;
             }

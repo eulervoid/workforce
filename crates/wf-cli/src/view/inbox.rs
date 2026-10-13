@@ -96,7 +96,7 @@ pub fn what_waits(state: &State, entry: &InboxEntry) -> (&'static str, String) {
         Waiting::Merge { commit } => (
             "merge",
             format!(
-                "{} is ready to merge, but {} is checked out with changes",
+                "{} is ready to merge, but {} is checked out with changes; the daemon's comment on the item names them",
                 &commit.to_string()[..8],
                 policy.merge.target
             ),
