@@ -80,6 +80,13 @@ pub struct Decision {
     pub reason: Option<String>,
 }
 
+impl Decision {
+    /// `by` when the principal answered the request themselves.
+    pub const BY_PRINCIPAL: &str = "the principal";
+    /// `by` when the agent's fixed permissions answered it, so nobody weighed the request.
+    pub const BY_FIXED_PERMISSIONS: &str = "the agent's permissions";
+}
+
 /// Decides what a request of the agent for permission is answered with. The principal may be asked,
 /// so it may take a long time; the agent waits meanwhile.
 pub trait Permissions: Send + Sync + 'static {
@@ -93,7 +100,7 @@ impl Permissions for Permission {
     ) -> agent_client_protocol::BoxFuture<'_, Decision> {
         let decision = Decision {
             permission: *self,
-            by: "the agent's permissions".to_string(),
+            by: Decision::BY_FIXED_PERMISSIONS.to_string(),
             reason: None,
         };
         Box::pin(async move { decision })

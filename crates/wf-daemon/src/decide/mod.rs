@@ -246,7 +246,7 @@ impl Permissions for Deciding {
             let answer = self.held.hold(self.workforce, self.session, &title, passed);
             Decision {
                 permission: answer.await.unwrap_or(Permission::Deny),
-                by: "the principal".to_string(),
+                by: Decision::BY_PRINCIPAL.to_string(),
                 reason: None,
             }
         })
