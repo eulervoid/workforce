@@ -1,6 +1,6 @@
 //! The signed event envelope and the M0 event bodies.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use iroh_base::Signature;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -16,8 +16,8 @@ use crate::identity::{
 };
 use crate::item::Priority;
 use crate::name::{
-    AgentName, HarnessName, Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName,
-    StateName, TypeName,
+    AgentName, HarnessName, Label, LaneName, NameError, RecoveryLevelName, Requirement,
+    ReviewLevelName, StateName, TypeName,
 };
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 
@@ -103,9 +103,31 @@ pub struct DeviceBound {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeviceProfile {
     pub name: String,
+    /// What the device has, as requirements separated by commas or spaces, such as `gpu, os:linux`.
+    /// Read it with [`DeviceProfile::hardware_requirements`].
     pub hardware: String,
     pub agents: BTreeMap<AgentName, u32>,
     pub max_sessions: u32,
+}
+
+impl DeviceProfile {
+    /// Parses hardware as it is written for a profile.
+    pub fn parse_hardware(text: &str) -> Result<BTreeSet<Requirement>, NameError> {
+        hardware_words(text).map(Requirement::new).collect()
+    }
+
+    /// The requirements the hardware of the device meets. Words that are not requirements, as
+    /// older versions wrote, are left out.
+    pub fn hardware_requirements(&self) -> BTreeSet<Requirement> {
+        hardware_words(&self.hardware)
+            .filter_map(|word| Requirement::new(word).ok())
+            .collect()
+    }
+}
+
+fn hardware_words(text: &str) -> impl Iterator<Item = &str> {
+    text.split(|character: char| character == ',' || character.is_whitespace())
+        .filter(|word| !word.is_empty())
 }
 
 /// Written in a parent workforce by an owner who forked it.

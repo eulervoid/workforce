@@ -106,7 +106,7 @@ async fn dispatch_once(
     for agent in agents {
         while state.has_free_slot(device, &agent) {
             let review = state
-                .reviewable(&agent)
+                .reviewable(device, &agent)
                 .into_iter()
                 .find(|(item, _)| !failed.contains(&(*item, agent.name.clone())));
             let supervision = state
@@ -114,7 +114,7 @@ async fn dispatch_once(
                 .into_iter()
                 .find(|item| !failed.contains(&(*item, agent.name.clone())));
             let diagnosis = state
-                .diagnosable(&agent)
+                .diagnosable(device, &agent)
                 .into_iter()
                 .find(|item| !failed.contains(&(*item, agent.name.clone())));
             let (item, role) = match (review, supervision, diagnosis) {

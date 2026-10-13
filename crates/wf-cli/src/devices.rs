@@ -173,7 +173,7 @@ fn edit(json: bool, workspace: &mut Workspace, args: DeviceEditArgs) -> anyhow::
         profile.name = name;
     }
     if let Some(hardware) = args.hardware {
-        profile.hardware = hardware;
+        profile.hardware = crate::network::hardware(&hardware)?;
     }
     if let Some(max_sessions) = args.max_sessions {
         profile.max_sessions = max_sessions;

@@ -374,7 +374,8 @@ pub struct DeviceEditArgs {
     /// The name of this machine, shown by `wf device list`.
     #[arg(long)]
     pub name: Option<String>,
-    /// What the machine has, such as `macos aarch64, gpu`; items that require it go here.
+    /// What the machine has, such as `gpu, os:linux`; items and review steps that require it
+    /// can run here.
     #[arg(long)]
     pub hardware: Option<String>,
     /// How many agent sessions this machine may run at once.
@@ -398,7 +399,7 @@ pub struct JoinArgs {
     /// An agent this machine can run and how many sessions of it, as `coder=2`.
     #[arg(long = "agent", value_name = "NAME=SESSIONS")]
     pub agents: Vec<String>,
-    /// Describe the hardware; detected when left out.
+    /// What the machine has, such as `gpu, os:linux`; its os and arch when left out.
     #[arg(long)]
     pub hardware: Option<String>,
     /// Use this relay server instead of the default ones.

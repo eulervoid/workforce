@@ -389,7 +389,7 @@ event invalid.
 | 3 | `AgentDefined` | `name`, `harness`, `model: Option<String>`, `capabilities`, `lanes`, `start`, `nudges`, `park_timeout`, `max_duration`, `permissions` (M2) |
 | 4 | `InviteCreated` | `Signed<InviteCreated>`: `kind` (`Device`), `invite: InviteKey`, `expires` (M1) |
 | 5 | `DeviceBound` | `invite: EventId`, `proof: Signature` by the invite key (M1) |
-| 6 | `DeviceProfile` | `name`, `hardware`, `agents: {agent -> max_sessions}`, `max_sessions` (M1) |
+| 6 | `DeviceProfile` | `name`, `hardware` (requirements in one string, separated by commas or spaces), `agents: {agent -> max_sessions}`, `max_sessions` (M1) |
 | 7 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` (M1) |
 | 8 | `AgentRemoved` | `name`: the acting principal's agent is gone until it is defined again; its sessions and their events stay valid (M2.2) |
 | 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires`, `review: Option<ReviewName>` |
@@ -758,7 +758,7 @@ computed per query.
 |---|---|---|
 | **scope** | who can *see* it | replication filter (*later*, v1 has one scope) |
 | **lane** | who may *claim* it | lane policy, matched by role and kind |
-| **requires** | who is *able* to | item `requires` vs. agent capabilities plus device hardware |
+| **requires** | who is *able* to | item `requires` and agent review or recovery steps vs. agent capabilities plus device hardware |
 
 * Every item is in exactly one lane. The lane may derive from the item type (`distill`, `triage` go to
   `meta`). An agent takes items from the lanes in its definition. The `supervision` lane holds no items:

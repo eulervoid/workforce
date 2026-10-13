@@ -69,6 +69,10 @@ impl Scene {
         self.state.review_status(item)
     }
 
+    fn device(&self) -> crate::identity::DeviceKey {
+        self.fixture.devices[0].key()
+    }
+
     fn agent(&self, name: &str) -> AgentId {
         AgentId {
             principal: self.fixture.founder.key(),
@@ -242,7 +246,8 @@ fn approved_work_and_work_without_review_wait_for_the_merge() {
 fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
-    let offered = |scene: &Scene, name: &str| scene.state.reviewable(&scene.agent(name));
+    let offered =
+        |scene: &Scene, name: &str| scene.state.reviewable(scene.device(), &scene.agent(name));
     assert_eq!(offered(&scene, "reviewer"), [(item, Some(commit(1)))]);
     assert!(offered(&scene, "weak").is_empty(), "missing strong-model");
     assert!(
@@ -267,10 +272,31 @@ fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
 }
 
 #[test]
+fn the_hardware_of_the_device_counts_for_a_review_step() {
+    use crate::event::DeviceProfile;
+
+    let mut scene = Scene::new();
+    let item = scene.submitted("standard");
+    let offered = |scene: &Scene| scene.state.reviewable(scene.device(), &scene.agent("weak"));
+    assert!(offered(&scene).is_empty(), "missing strong-model");
+    scene.apply(EventBody::DeviceProfile(DeviceProfile {
+        name: "laptop".into(),
+        hardware: "gpu, strong-model".into(),
+        agents: [(AgentName::new("weak").unwrap(), 1)].into(),
+        max_sessions: 1,
+    }));
+    assert_eq!(offered(&scene), [(item, Some(commit(1)))]);
+}
+
+#[test]
 fn reviewers_that_do_not_finish_are_retried_until_the_principal_decides() {
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
-    let offered = |scene: &Scene| scene.state.reviewable(&scene.agent("reviewer"));
+    let offered = |scene: &Scene| {
+        scene
+            .state
+            .reviewable(scene.device(), &scene.agent("reviewer"))
+    };
     for attempt in 1..=3 {
         assert_eq!(
             offered(&scene),
@@ -307,7 +333,12 @@ fn human_steps_are_not_offered_to_agents() {
     let mut scene = Scene::new();
     let item = scene.submitted("critical");
     scene.apply(verdict(item, commit(1), Verdict::Approve));
-    assert!(scene.state.reviewable(&scene.agent("reviewer")).is_empty());
+    assert!(
+        scene
+            .state
+            .reviewable(scene.device(), &scene.agent("reviewer"))
+            .is_empty()
+    );
 }
 
 mod guards {

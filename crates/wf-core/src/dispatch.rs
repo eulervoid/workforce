@@ -64,6 +64,15 @@ impl State {
         on_device < profile.max_sessions as usize && of_agent < *agent_limit as usize
     }
 
+    /// What `agent` brings to an item on `device`: its capabilities and the hardware of the device.
+    pub fn offered(&self, device: DeviceKey, agent: &AgentDefinition) -> BTreeSet<Requirement> {
+        let mut offered: BTreeSet<Requirement> = agent.capabilities.iter().cloned().collect();
+        if let Some(profile) = self.device_profile(device) {
+            offered.extend(profile.hardware_requirements());
+        }
+        offered
+    }
+
     /// The ready items `agent` may take on `device`, most urgent first: in a lane of the agent,
     /// with every requirement met by its capabilities or the hardware of the device, and not
     /// waiting for the principal after sessions that did not finish.
@@ -74,18 +83,7 @@ impl State {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
-        let mut offered: BTreeSet<&Requirement> = definition.capabilities.iter().collect();
-        let hardware: Vec<Requirement> = self
-            .device_profile(device)
-            .map(|profile| {
-                profile
-                    .hardware
-                    .split(|character: char| character == ',' || character.is_whitespace())
-                    .filter_map(|word| Requirement::new(word).ok())
-                    .collect()
-            })
-            .unwrap_or_default();
-        offered.extend(hardware.iter());
+        let offered = self.offered(device, definition);
 
         self.ready_items()
             .into_iter()

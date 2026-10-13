@@ -264,9 +264,12 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
         Recovery::Diagnose { failures: 1, .. }
     ));
     assert!(scene.offered().is_empty(), "no work before the diagnosis");
-    assert_eq!(scene.state.diagnosable(&doctor), [item]);
+    assert_eq!(scene.state.diagnosable(scene.device(), &doctor), [item]);
     assert!(
-        scene.state.diagnosable(&scene.coder).is_empty(),
+        scene
+            .state
+            .diagnosable(scene.device(), &scene.coder)
+            .is_empty(),
         "the coder lacks the capability"
     );
 
@@ -275,7 +278,7 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
         .id()
         .into();
     assert!(
-        scene.state.diagnosable(&doctor).is_empty(),
+        scene.state.diagnosable(scene.device(), &doctor).is_empty(),
         "one diagnosis at a time"
     );
     scene.apply(end_session(diagnosis, EndReason::Diagnosed));

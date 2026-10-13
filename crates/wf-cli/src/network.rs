@@ -260,13 +260,25 @@ pub struct JoinView {
     pub events: usize,
 }
 
+/// The operating system and architecture of this machine, as requirements items can name.
 pub(crate) fn detect_hardware() -> String {
-    let cpus = std::thread::available_parallelism().map_or(1, |count| count.get());
     format!(
-        "{} {}, {cpus} cpus",
+        "os:{}, arch:{}",
         std::env::consts::OS,
         std::env::consts::ARCH
     )
+}
+
+/// Hardware as given on the command line, checked and written the way profiles keep it.
+pub(crate) fn hardware(text: &str) -> anyhow::Result<String> {
+    let requirements = DeviceProfile::parse_hardware(text).with_context(|| {
+        format!("`{text}` is not a list of requirements such as `gpu, os:linux`")
+    })?;
+    Ok(requirements
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(", "))
 }
 
 pub(crate) fn parse_agents(agents: &[String]) -> anyhow::Result<BTreeMap<AgentName, u32>> {
@@ -313,7 +325,10 @@ pub fn join(
     }
     let profile = DeviceProfile {
         name: name.clone(),
-        hardware: args.hardware.unwrap_or_else(detect_hardware),
+        hardware: match args.hardware {
+            Some(text) => hardware(&text)?,
+            None => detect_hardware(),
+        },
         agents: parse_agents(&args.agents)?,
         max_sessions: args.max_sessions,
     };

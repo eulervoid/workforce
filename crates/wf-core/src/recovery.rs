@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::hlc::Hlc;
 use crate::id::{ItemId, SessionId};
-use crate::identity::AgentId;
+use crate::identity::{AgentId, DeviceKey};
 use crate::item::{Item, ItemView};
 use crate::name::Requirement;
 use crate::policy::RecoveryStep;
@@ -130,12 +130,14 @@ impl State {
         recovery
     }
 
-    /// The items whose work waits for a diagnosis that `agent` can give: the agent has the
-    /// capabilities of the step, and no diagnose session holds the item. Oldest first.
-    pub fn diagnosable(&self, agent: &AgentId) -> Vec<ItemId> {
+    /// The items whose work waits for a diagnosis that `agent` can give on `device`: the agent's
+    /// capabilities and the device's hardware meet what the step requires, and no diagnose
+    /// session holds the item. Oldest first.
+    pub fn diagnosable(&self, device: DeviceKey, agent: &AgentId) -> Vec<ItemId> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
         };
+        let offered = self.offered(device, definition);
         let mut found: Vec<&Item> = self
             .live_items()
             .filter(|item| {
@@ -144,9 +146,7 @@ impl State {
                 else {
                     return false;
                 };
-                let capable = requires
-                    .iter()
-                    .all(|need| definition.capabilities.contains(need));
+                let capable = requires.iter().all(|need| offered.contains(need));
                 let held = self.live_sessions().any(|session| {
                     session.item() == item.id() && session.role() == SessionRole::Diagnose
                 });

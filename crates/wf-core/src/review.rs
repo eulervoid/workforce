@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::crdt::Stamp;
 use crate::id::ItemId;
-use crate::identity::AgentId;
+use crate::identity::{AgentId, DeviceKey};
 use crate::item::{Item, ItemView};
 use crate::name::{Requirement, StateName};
 use crate::policy::{ReviewStep, StateCategory};
@@ -171,18 +171,20 @@ impl State {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
-        let staff: Vec<&crate::state::AgentDefinition> = self
+        // What each agent that starts by itself offers on each device that hosts it.
+        let staff: Vec<BTreeSet<Requirement>> = self
             .agents()
-            .filter(|(id, definition)| {
-                definition.autonomy.start == crate::autonomy::StartMode::Auto
-                    && self.devices().any(|device| {
+            .filter(|(_, definition)| definition.autonomy.start == crate::autonomy::StartMode::Auto)
+            .flat_map(|(id, definition)| {
+                self.devices()
+                    .filter(move |device| {
                         device.principal == id.principal
                             && device
                                 .profile
                                 .is_some_and(|profile| profile.agents.contains_key(&id.name))
                     })
+                    .map(move |device| self.offered(device.device, definition))
             })
-            .map(|(_, definition)| definition)
             .collect();
         self.live_items()
             .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
@@ -193,23 +195,26 @@ impl State {
                 else {
                     return false;
                 };
-                !staff.iter().any(|definition| {
-                    requires
-                        .iter()
-                        .all(|need| definition.capabilities.contains(need))
-                })
+                !staff
+                    .iter()
+                    .any(|offered| requires.iter().all(|need| offered.contains(need)))
             })
             .map(Item::id)
             .collect()
     }
 
-    /// Items waiting for a review step that `agent` could take: the step names capabilities the
-    /// agent has, the agent never did the work on the item, and no review session holds the step.
-    pub fn reviewable(&self, agent: &AgentId) -> Vec<(ItemId, Option<CommitId>)> {
+    /// Items waiting for a review step that `agent` could take on `device`: the agent's
+    /// capabilities and the device's hardware meet what the step requires, the agent never did
+    /// the work on the item, and no review session holds the step.
+    pub fn reviewable(
+        &self,
+        device: DeviceKey,
+        agent: &AgentId,
+    ) -> Vec<(ItemId, Option<CommitId>)> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
         };
-        let offered: BTreeSet<&Requirement> = definition.capabilities.iter().collect();
+        let offered = self.offered(device, definition);
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
