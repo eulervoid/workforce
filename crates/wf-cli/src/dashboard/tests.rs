@@ -5,13 +5,18 @@ use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use serde_json::json;
+use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, ItemId, SessionId};
+use wf_core::item::Priority;
+use wf_core::name::{AgentName, StateName};
+use wf_core::policy::StateCategory;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
-use super::app::{App, Effect, Row, Tab};
+use super::app::{App, Choice, Effect, Prompt, Row, Tab};
 use super::draw;
 use super::snapshot::{
-    Counts, InView, ItemRef, Place, SessionInfo, SessionStatus, Snapshot, Waiting,
+    Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Place, SessionInfo, SessionStatus,
+    Snapshot, Waiting,
 };
 
 /// 2026-10-14 07:00 UTC.
@@ -86,6 +91,7 @@ fn snapshot() -> Snapshot {
         working: vec![coder, parked, reviewer],
         flagged: vec!["#q9r1aa \"Watch\" is stranded: a dependency was cancelled".to_owned()],
         in_view: None,
+        items: Vec::new(),
     }
 }
 
@@ -196,16 +202,13 @@ fn a_session_opens_on_its_transcript_and_esc_goes_back() {
     app.transcribed(coder.id, &coder_transcript());
     // The permission request of the coder is selected first; it opens the coder's session.
     press(&mut app, KeyCode::Enter);
-    assert_eq!(
-        app.wanted(),
-        Some(super::snapshot::Wanted::Session(coder.id))
-    );
+    assert_eq!(app.wanted().detail, Some(Detail::Session(coder.id)));
     let mut snapshot = snapshot();
     snapshot.in_view = Some(InView::Session(coder));
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&app, 60, 16));
     press(&mut app, KeyCode::Esc);
-    assert_eq!(app.wanted(), None);
+    assert_eq!(app.wanted().detail, None);
 }
 
 #[test]
@@ -217,10 +220,7 @@ fn a_wide_window_shows_the_selection_beside_the_list() {
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
-    assert_eq!(
-        app.wanted(),
-        Some(super::snapshot::Wanted::Session(blocked))
-    );
+    assert_eq!(app.wanted().detail, Some(Detail::Session(blocked)));
     let mut snapshot = snapshot();
     snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
     app.refresh(snapshot);
@@ -237,6 +237,7 @@ fn an_item_detail_shows_the_item_as_wf_item_show_prints_it() {
         id: spans,
         text: "◐ #cicicicicici (task:in_progress) Fix error spans\n\nThe span is lost.\n"
             .to_owned(),
+        session: Some(SessionId::from_bytes([12; 32])),
     });
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&app, 60, 10));
@@ -362,4 +363,202 @@ fn what_an_action_did_shows_until_the_next_key() {
     );
     press(&mut app, KeyCode::Char('j'));
     assert!(!screen(&app, 60, 8).contains("✓ allowed"));
+}
+
+fn item_row(seed: u8, title: &str, category: StateCategory, state: &str) -> ItemRow {
+    ItemRow {
+        id: ItemId::from_bytes([seed; 32]),
+        title: title.to_owned(),
+        state: state.to_owned(),
+        state_category: Some(category),
+        priority: None,
+        readiness: None,
+        steps: None,
+    }
+}
+
+/// The snapshot while the Items tab is on screen.
+fn with_items() -> Snapshot {
+    let mut snapshot = snapshot();
+    snapshot.items = vec![
+        ItemGroup {
+            name: "open".to_owned(),
+            items: vec![
+                ItemRow {
+                    priority: Some(Priority::P1),
+                    readiness: Some(Readiness::Ready),
+                    ..item_row(4, "Dashboard", StateCategory::Open, "open")
+                },
+                ItemRow {
+                    readiness: Some(Readiness::Blocked),
+                    ..item_row(5, "Session subscription", StateCategory::Open, "open")
+                },
+            ],
+        },
+        ItemGroup {
+            name: "in_progress".to_owned(),
+            items: vec![ItemRow {
+                steps: Some((2, 5)),
+                ..item_row(
+                    1,
+                    "Parse config lazily",
+                    StateCategory::Active,
+                    "in_progress",
+                )
+            }],
+        },
+    ];
+    snapshot
+}
+
+#[test]
+fn the_items_tab_lists_items_by_state_and_filters_them() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::State));
+    app.refresh(with_items());
+    insta::assert_snapshot!("items", screen(&app, 60, 14));
+    press(&mut app, KeyCode::Char('F'));
+    assert_eq!(app.item_groups().len(), 1, "only the ready item");
+    press(&mut app, KeyCode::Char('F'));
+    press(&mut app, KeyCode::Char('F'));
+    press(&mut app, KeyCode::Char('F'));
+    press(&mut app, KeyCode::Char('/'));
+    for character in "parse".chars() {
+        press(&mut app, KeyCode::Char(character));
+    }
+    press(&mut app, KeyCode::Enter);
+    let titles: Vec<&str> = app
+        .item_groups()
+        .into_iter()
+        .flat_map(|(_, items)| items.into_iter().map(|item| item.title.as_str()))
+        .collect();
+    assert_eq!(titles, ["Parse config lazily"]);
+    press(&mut app, KeyCode::Char('o'));
+    assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::Lane));
+}
+
+#[test]
+fn an_item_opens_on_its_detail_and_enter_goes_on_to_its_session() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Enter);
+    let parse = ItemId::from_bytes([1; 32]);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(parse)));
+    let coder = SessionId::from_bytes([11; 32]);
+    let mut snapshot = with_items();
+    snapshot.in_view = Some(InView::Item {
+        id: parse,
+        text: "◐ #aeaqca (task:in_progress) Parse config lazily\n".to_owned(),
+        session: Some(coder),
+    });
+    app.refresh(snapshot);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.wanted().detail, Some(Detail::Session(coder)));
+    // Its tab keeps its own details: the Now tab is as it was.
+    press(&mut app, KeyCode::Char('1'));
+    assert_eq!(app.wanted().detail, None);
+    press(&mut app, KeyCode::Char('2'));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.wanted().detail, None);
+}
+
+#[test]
+fn item_keys_act_on_the_selected_item() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    let dashboard = ItemId::from_bytes([4; 32]);
+    assert_eq!(
+        press(&mut app, KeyCode::Char('s')),
+        Some(Effect::ChooseAgent { item: dashboard })
+    );
+    app.choose(Choice::Agent {
+        item: dashboard,
+        agents: vec![
+            AgentName::new("coder").unwrap(),
+            AgentName::new("reviewer").unwrap(),
+        ],
+        index: 0,
+    });
+    insta::assert_snapshot!("choose_agent", screen(&app, 60, 12));
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        Some(Effect::StartSession {
+            item: dashboard,
+            agent: AgentName::new("reviewer").unwrap()
+        })
+    );
+    assert_eq!(
+        press(&mut app, KeyCode::Char('m')),
+        Some(Effect::ChooseState { item: dashboard })
+    );
+    app.choose(Choice::State {
+        item: dashboard,
+        states: vec![
+            (StateName::new("open").unwrap(), StateCategory::Open),
+            (StateName::new("done").unwrap(), StateCategory::Done),
+        ],
+        index: 0,
+    });
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        Some(Effect::Move {
+            item: dashboard,
+            state: StateName::new("done").unwrap()
+        })
+    );
+    assert_eq!(press(&mut app, KeyCode::Char('c')), None);
+    for character in "Start with the Now tab".chars() {
+        press(&mut app, KeyCode::Char(character));
+    }
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        Some(Effect::Comment {
+            item: dashboard,
+            text: "Start with the Now tab".to_owned()
+        })
+    );
+    assert_eq!(
+        press(&mut app, KeyCode::Char('e')),
+        Some(Effect::Edit { item: dashboard })
+    );
+    // An item has no session to stop.
+    assert_eq!(press(&mut app, KeyCode::Char('x')), None);
+    assert!(app.prompt.is_none());
+}
+
+#[test]
+fn a_session_is_stopped_only_when_confirmed() {
+    let mut app = app();
+    let coder = SessionId::from_bytes([11; 32]);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.now.selection.get(), Some(&Row::Session(coder)));
+    assert_eq!(press(&mut app, KeyCode::Char('x')), None);
+    insta::assert_snapshot!("stop", screen(&app, 60, 6));
+    assert_eq!(press(&mut app, KeyCode::Char('n')), None);
+    assert!(app.prompt.is_none());
+    press(&mut app, KeyCode::Char('x'));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('y')),
+        Some(Effect::StopSession { session: coder })
+    );
+}
+
+#[test]
+fn the_keys_show_on_a_question_mark() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('?'));
+    assert!(matches!(app.prompt, Some(Prompt::Keys)));
+    insta::assert_snapshot!("keys", screen(&app, 60, 18));
+    // Any key closes it, and does nothing else.
+    assert_eq!(press(&mut app, KeyCode::Char('q')), None);
+    assert!(app.prompt.is_none());
 }

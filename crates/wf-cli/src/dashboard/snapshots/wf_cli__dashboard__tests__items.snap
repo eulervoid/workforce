@@ -1,0 +1,18 @@
+---
+source: crates/wf-cli/src/dashboard/tests.rs
+expression: "screen(&app, 60, 14)"
+---
+" workforce                1 Now·3  2 Items  3 Agents  4 Log "
+" 3 live · 14 open · 1 blocked · 2 devices                   "
+"────────────────────────────────────────────────────────────"
+" by state                                                   "
+"                                                            "
+" open (2)                                                   "
+"▸○ #aqcaib Dashboard                                     P1 "
+" ○ #aucqkb Session subscription                     blocked "
+"                                                            "
+" in_progress (1)                                            "
+" ◐ #aeaqca Parse config lazily                          2/5 "
+"────────────────────────────────────────────────────────────"
+" 07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_r"
+" enter open · o group · / filter · F ready · ? keys         "

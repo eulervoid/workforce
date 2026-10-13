@@ -1,0 +1,22 @@
+---
+source: crates/wf-cli/src/dashboard/tests.rs
+expression: "screen(&app, 60, 18)"
+---
+" workforce                1 Now·3  2 Items  3 Agents  4 Log "
+" 3 live · 14 open · 1 blocked · 2 devices                   "
+"────────────────────────────────────────────────────────────"
+" ┌ keys ────────────────────────────────────────────┐       "
+"▸│ 1-4 tab   switch tabs                            │ a / d "
+" │ j/k g/G   move, top, end                         │       "
+" │ enter esc open, go back                          │       "
+" │ a d       allow, deny a permission request       │       "
+" │ r R       answer a blocker here, in $EDITOR      │       "
+" │ v D       review, show the diff                  │       "
+" │ s x       start a session, stop one              │   12m "
+" │ m c e     move, comment on, edit an item         │ed 40m "
+" │ i f       a session's item, full transcript      │    2m "
+" │ o / F     items: grouping, filter, readiness     │       "
+" └──────────────────────────────────────────────────┘       "
+"────────────────────────────────────────────────────────────"
+" 07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_r"
+" any key closes                                             "

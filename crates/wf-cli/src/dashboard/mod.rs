@@ -15,7 +15,7 @@ use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
 
 use self::app::{App, Effect};
-use self::snapshot::{Snapshot, Sources, Wanted};
+use self::snapshot::{Detail, Snapshot, Sources};
 use crate::workspace::{self, Workspace};
 use crate::{render, transcript, view};
 
@@ -56,7 +56,8 @@ fn event_loop(
                     Some(Effect::Quit) => return Ok(()),
                     Some(effect) => {
                         match act::carry_out(effect, workspace, terminal) {
-                            Ok(what) => app.did(what),
+                            Ok(act::Outcome::Did(what)) => app.did(what),
+                            Ok(act::Outcome::Choose(choice)) => app.choose(choice),
                             Err(error) => app.action_failed(&error),
                         }
                         // Show what the action changed right away.
@@ -132,7 +133,7 @@ impl Feed {
             .filter(|session| session.device() == own)
             .map(|session| session.id())
             .collect();
-        if let Some(Wanted::Session(session)) = app.wanted() {
+        if let Some(Detail::Session(session)) = app.wanted().detail {
             sessions.push(session);
         }
         for session in sessions {

@@ -706,7 +706,7 @@ pub struct ItemListArgs {
 }
 
 /// What `wf item list --group-by` groups by.
-#[derive(Clone, Copy, ValueEnum)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum ItemGrouping {
     /// By state, ordered by state category: `open`, `in_progress`, `done`, ...
     State,

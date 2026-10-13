@@ -5,12 +5,14 @@ use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::inbox::{InboxKind, Waiting as InboxWaiting};
-use wf_core::item::ItemView;
+use wf_core::item::{ItemView, Priority};
 use wf_core::policy::StateCategory;
 use wf_core::session::{CommitId, Session, SessionRole};
 use wf_core::state::State;
 use wf_daemon::proto::HeldPermission;
 
+use crate::cli::ItemGrouping;
+use crate::commands::sorted_views;
 use crate::{render, view};
 
 /// Everything the dashboard draws besides transcripts, as plain data: the loop takes one at each
@@ -29,6 +31,28 @@ pub struct Snapshot {
     pub flagged: Vec<String>,
     /// What the detail on screen shows.
     pub in_view: Option<InView>,
+    /// The live items in groups, when the Items tab is on screen.
+    pub items: Vec<ItemGroup>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemGroup {
+    pub name: String,
+    pub items: Vec<ItemRow>,
+}
+
+/// An item in a list, as `wf item list` shows it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ItemRow {
+    pub id: ItemId,
+    pub title: String,
+    pub state: String,
+    pub state_category: Option<StateCategory>,
+    pub priority: Option<Priority>,
+    /// `None` unless the item is open.
+    pub readiness: Option<Readiness>,
+    /// Steps checked off, and all steps.
+    pub steps: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -140,13 +164,23 @@ pub enum InView {
     Item {
         id: ItemId,
         text: String,
+        /// The session `enter` opens: the live one, else the latest.
+        session: Option<SessionId>,
     },
     Session(SessionInfo),
 }
 
 /// What the dashboard asks the workspace about, besides what it always shows.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Wanted {
+    pub detail: Option<Detail>,
+    /// The items, grouped so.
+    pub items: Option<ItemGrouping>,
+}
+
+/// What a detail shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Wanted {
+pub enum Detail {
     Item(ItemId),
     Session(SessionId),
 }
@@ -164,7 +198,7 @@ pub struct Sources<'a> {
 }
 
 impl Snapshot {
-    pub fn take(sources: &Sources, wanted: Option<Wanted>) -> Self {
+    pub fn take(sources: &Sources, wanted: Wanted) -> Self {
         let Sources {
             state,
             events,
@@ -196,7 +230,12 @@ impl Snapshot {
                 .collect(),
             flagged: view::status(state, context).flagged,
             in_view: wanted
+                .detail
                 .and_then(|wanted| in_view(state, events, &graph, own, wanted, detail_width)),
+            items: wanted
+                .items
+                .map(|grouping| item_groups(state, &graph, grouping))
+                .unwrap_or_default(),
         }
     }
 }
@@ -336,11 +375,11 @@ fn in_view(
     events: &[Event],
     graph: &wf_core::graph::DependencyGraph,
     own: DeviceKey,
-    wanted: Wanted,
+    wanted: Detail,
     width: u16,
 ) -> Option<InView> {
     match wanted {
-        Wanted::Item(id) => {
+        Detail::Item(id) => {
             let item = state.item(id)?;
             let text = match item {
                 ItemView::Live(live) => render::item_detail_for(
@@ -349,11 +388,49 @@ fn in_view(
                 ),
                 ItemView::Archived(_) => format!("#{} {} (archived)\n", id.short(), item.title()),
             };
-            Some(InView::Item { id, text })
+            let mut sessions: Vec<&Session> = state
+                .sessions()
+                .filter(|session| session.item() == id)
+                .collect();
+            sessions.sort_by_key(|session| (session.is_live(), session.started()));
+            let session = sessions.last().map(|session| session.id());
+            Some(InView::Item { id, text, session })
         }
-        Wanted::Session(id) => {
+        Detail::Session(id) => {
             let session = state.session(id)?;
             Some(InView::Session(session_info(state, graph, own, session)))
         }
     }
+}
+
+fn item_groups(
+    state: &State,
+    graph: &wf_core::graph::DependencyGraph,
+    grouping: ItemGrouping,
+) -> Vec<ItemGroup> {
+    let entries: Vec<_> = sorted_views(state, false)
+        .into_iter()
+        .map(|view| (view, view::summary(state, graph, view)))
+        .collect();
+    view::group_items(state, grouping, entries)
+        .into_iter()
+        .map(|group| ItemGroup {
+            name: group.group,
+            items: group
+                .items
+                .into_iter()
+                .filter_map(|summary| {
+                    Some(ItemRow {
+                        id: summary.id.parse().ok()?,
+                        title: summary.title,
+                        state: summary.state.unwrap_or_else(|| "unknown".to_owned()),
+                        state_category: summary.state_category,
+                        priority: summary.priority,
+                        readiness: summary.readiness,
+                        steps: summary.steps.map(|steps| (steps.done, steps.total)),
+                    })
+                })
+                .collect(),
+        })
+        .collect()
 }

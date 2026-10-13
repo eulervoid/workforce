@@ -5,11 +5,16 @@ use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::{Paragraph, Wrap};
+use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+use wf_core::graph::Readiness;
 use wf_core::id::HashId;
+use wf_core::policy::StateCategory;
 
-use super::app::{App, Detail, Opened, Prompt, Row, Scroll, Status, Tab};
+use super::app::{App, Choice, Opened, Prompt, Row, Scroll, Status, Tab};
+use super::snapshot::{Detail, ItemRow};
 use super::snapshot::{InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting};
+use crate::cli::ItemGrouping;
+use crate::render;
 use crate::transcript::{self, Format, Now, Transcript};
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
@@ -32,15 +37,128 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_rule(frame, rule_below);
     frame.render_widget(Paragraph::new(latest_line(app)), latest);
     match &app.prompt {
-        Some(prompt) => draw_prompt(frame, prompt, keys),
+        Some(Prompt::Choose(choice)) => {
+            draw_choice(frame, choice, body);
+            frame.render_widget(
+                Paragraph::new(Line::from(" j/k move · enter pick · esc cancel").dim()),
+                keys,
+            );
+        }
+        Some(Prompt::Keys) => {
+            draw_keys(frame, body);
+            frame.render_widget(Paragraph::new(Line::from(" any key closes").dim()), keys);
+        }
+        Some(prompt) => draw_prompt(frame, app, prompt, keys),
         None => frame.render_widget(Paragraph::new(keys_line(app)), keys),
     }
 }
 
+/// A list to pick from, at the bottom of the body.
+fn draw_choice(frame: &mut Frame, choice: &Choice, body: Rect) {
+    let (title, options): (String, Vec<String>) = match choice {
+        Choice::Agent { item, agents, .. } => (
+            format!(" start on #{} ", item.short()),
+            agents.iter().map(ToString::to_string).collect(),
+        ),
+        Choice::State { item, states, .. } => (
+            format!(" move #{} to ", item.short()),
+            states
+                .iter()
+                .map(|(name, category)| render::state_choice(&name.to_string(), *category))
+                .collect(),
+        ),
+    };
+    let lines: Vec<Line> = options
+        .into_iter()
+        .enumerate()
+        .map(|(index, option)| {
+            if index == choice.index() {
+                Line::from(format!("▸ {option}")).bold().reversed()
+            } else {
+                Line::from(format!("  {option}"))
+            }
+        })
+        .collect();
+    let height = (lines.len() as u16 + 2).min(body.height);
+    let width = lines
+        .iter()
+        .map(Line::width)
+        .chain([title.chars().count()])
+        .max()
+        .unwrap_or_default() as u16
+        + 4;
+    let area = Rect {
+        x: body.x + 1,
+        y: body.y + body.height - height,
+        width: width.min(body.width.saturating_sub(1)),
+        height,
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::bordered().title(title)),
+        area,
+    );
+}
+
+/// Every key, by where it works.
+const KEYS: &[(&str, &str)] = &[
+    ("1-4 tab", "switch tabs"),
+    ("j/k g/G", "move, top, end"),
+    ("enter esc", "open, go back"),
+    ("a d", "allow, deny a permission request"),
+    ("r R", "answer a blocker here, in $EDITOR"),
+    ("v D", "review, show the diff"),
+    ("s x", "start a session, stop one"),
+    ("m c e", "move, comment on, edit an item"),
+    ("i f", "a session's item, full transcript"),
+    ("o / F", "items: grouping, filter, readiness"),
+    ("q", "quit"),
+];
+
+fn draw_keys(frame: &mut Frame, body: Rect) {
+    let lines: Vec<Line> = KEYS
+        .iter()
+        .map(|(keys, what)| {
+            Line::from(vec![
+                Span::raw(format!(" {keys:<10}")).fg(Color::Yellow),
+                Span::raw(*what),
+            ])
+        })
+        .collect();
+    let height = (lines.len() as u16 + 2).min(body.height);
+    let area = Rect {
+        x: body.x + 1,
+        y: body.y,
+        width: body.width.saturating_sub(2).min(52),
+        height,
+    };
+    frame.render_widget(Clear, area);
+    frame.render_widget(
+        Paragraph::new(lines).block(Block::bordered().title(" keys ")),
+        area,
+    );
+}
+
 /// The line the footer asks for, with the cursor in it.
-fn draw_prompt(frame: &mut Frame, prompt: &Prompt, area: Rect) {
+fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
+    let question = |text: String| Line::from(text).bold();
     let (label, input) = match prompt {
         Prompt::Filter(input) => (" / ".to_owned(), input),
+        Prompt::Comment { item, input } => (format!(" comment on #{}: ", item.short()), input),
+        Prompt::Stop { session } => {
+            let agent = app
+                .snapshot
+                .working
+                .iter()
+                .find(|working| working.id == *session)
+                .map_or_else(String::new, |working| {
+                    format!("{} on #{} ", working.agent, working.item.id.short())
+                });
+            let line = question(format!(" stop {agent}now? y/n"));
+            frame.render_widget(Paragraph::new(line), area);
+            return;
+        }
+        Prompt::Choose(_) | Prompt::Keys => return,
         Prompt::Answer { blocker, input, .. } => {
             (format!(" ⧗ {} answer: ", blocker.short()), input)
         }
@@ -121,21 +239,22 @@ fn draw_rule(frame: &mut Frame, area: Rect) {
 
 fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
     match app.tab {
-        Tab::Now => draw_now(frame, app, area),
+        Tab::Now => draw_split(frame, app, area, draw_now_list),
+        Tab::Items => draw_split(frame, app, area, draw_items_list),
         Tab::Log => draw_log(frame, app, area),
-        Tab::Items | Tab::Agents => {
+        Tab::Agents => {
             frame.render_widget(Paragraph::new(" Nothing here yet.").dim(), area);
         }
     }
 }
 
 /// The list, and the detail on screen: in its place, or right of it in a wide window.
-fn draw_now(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_split(frame: &mut Frame, app: &App, area: Rect, draw_list: fn(&mut Frame, &App, Rect)) {
     let in_view = app.in_view();
     if !app.is_wide() {
         match in_view {
             Some(opened) => draw_detail(frame, app, opened, area),
-            None => draw_now_list(frame, app, area),
+            None => draw_list(frame, app, area),
         }
         return;
     }
@@ -145,7 +264,7 @@ fn draw_now(frame: &mut Frame, app: &App, area: Rect) {
         Constraint::Fill(1),
     ])
     .areas(area);
-    draw_now_list(frame, app, list);
+    draw_list(frame, app, list);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).dim(), rule);
     if let Some(opened) = in_view {
@@ -414,6 +533,94 @@ fn draw_now_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
 }
 
+/// `in_progress · ready · "parse"`: how the items are grouped and filtered.
+fn items_heading(app: &App) -> Line<'static> {
+    let grouping = match app.items.grouping {
+        ItemGrouping::State => "state",
+        ItemGrouping::Lane => "lane",
+        ItemGrouping::Priority => "priority",
+        ItemGrouping::Type => "type",
+        ItemGrouping::Label => "label",
+        ItemGrouping::Readiness => "readiness",
+    };
+    let mut parts = vec![format!("by {grouping}")];
+    if let Some(readiness) = app.items.readiness.name() {
+        parts.push(format!("only {readiness}"));
+    }
+    if !app.items.filter.is_empty() {
+        parts.push(format!("\"{}\"", app.items.filter));
+    }
+    Line::from(format!(" {}", parts.join(" · "))).dim()
+}
+
+fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
+    let icon = render::item_icon(item.state_category, item.readiness);
+    let first = vec![
+        Span::raw(format!("{icon} ")).fg(state_color(item)),
+        Span::raw(format!("#{}", item.id.short())).fg(Color::Cyan),
+        Span::raw(" "),
+        Span::raw(item.title.clone()),
+    ];
+    let mut right = Vec::new();
+    if let Some(readiness @ (Readiness::Blocked | Readiness::Stranded)) = item.readiness {
+        right.push(
+            match readiness {
+                Readiness::Blocked => "blocked",
+                _ => "stranded",
+            }
+            .to_owned(),
+        );
+    }
+    if let Some((done, total)) = item.steps {
+        right.push(format!("{done}/{total}"));
+    }
+    if let Some(priority) = item.priority {
+        right.push(priority.to_string());
+    }
+    let right = (!right.is_empty()).then(|| Span::raw(right.join(" ")).dim());
+    row.lines(first, right, Vec::new())
+}
+
+fn state_color(item: &ItemRow) -> Color {
+    if item.readiness == Some(Readiness::Stranded) {
+        return Color::Red;
+    }
+    match item.state_category {
+        Some(StateCategory::Open) => Color::Green,
+        Some(StateCategory::Active) => Color::Blue,
+        Some(StateCategory::Review) => Color::Yellow,
+        Some(StateCategory::Done) => Color::Magenta,
+        Some(StateCategory::Cancelled | StateCategory::Inactive) | None => Color::DarkGray,
+    }
+}
+
+fn draw_items_list(frame: &mut Frame, app: &App, area: Rect) {
+    let selected = app.items.list.selection.get();
+    let mut lines = vec![items_heading(app)];
+    let mut selected_line = None;
+    for (name, items) in app.item_groups() {
+        lines.push(Line::default());
+        lines.push(section(&format!("{name} ({})", items.len())));
+        for item in items {
+            if selected == Some(&item.id) {
+                selected_line = Some(lines.len());
+            }
+            let row = RowLines {
+                selected: selected == Some(&item.id),
+                width: area.width,
+            };
+            lines.extend(item_row_lines(item, row));
+        }
+    }
+    if lines.len() == 1 {
+        lines.push(Line::from(" no items match").dim());
+    }
+    let offset = selected_line
+        .map(|line| (line + 2).saturating_sub(usize::from(area.height)))
+        .unwrap_or_default();
+    frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
+}
+
 fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     // The same margin as the lists.
@@ -423,7 +630,12 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
         ..body
     };
     match (opened.detail, &app.snapshot.in_view) {
-        (Detail::Item(id), Some(InView::Item { id: shown, text })) if id == *shown => {
+        (
+            Detail::Item(id),
+            Some(InView::Item {
+                id: shown, text, ..
+            }),
+        ) if id == *shown => {
             // The header line of `wf item show` stays on top.
             let mut text: Text = text.into_text().unwrap_or_default();
             let header = if text.lines.is_empty() {
@@ -623,36 +835,29 @@ fn keys_line(app: &App) -> Line<'static> {
             }
         }
     }
-    let navigation = match app.tab {
-        Tab::Now => match app.now.stack.last().map(|opened| opened.detail) {
-            Some(Detail::Session(_)) if app.full_transcripts => {
-                "esc back · j/k scroll · G end · i item · f abridged"
-            }
-            Some(Detail::Session(_)) => "esc back · j/k scroll · G end · i item · f full",
-            Some(Detail::Item(_)) => "esc back · j/k scroll · G end",
-            None => match app.now.selection.get().and_then(|row| app.detail_of(row)) {
-                Some(_) => "enter open · j/k move",
-                None => "j/k move",
-            },
-        },
-        Tab::Items | Tab::Agents | Tab::Log => "",
+    let item_session = matches!(
+        &app.snapshot.in_view,
+        Some(InView::Item {
+            session: Some(_),
+            ..
+        })
+    );
+    let opened = app
+        .stack()
+        .and_then(|stack| stack.last())
+        .map(|opened| opened.detail);
+    let navigation = match (app.tab, opened) {
+        (_, Some(Detail::Session(_))) => "esc back · j/k scroll · i item · f full",
+        (_, Some(Detail::Item(_))) if item_session => "esc back · j/k scroll · enter session",
+        (_, Some(Detail::Item(_))) => "esc back · j/k scroll",
+        (Tab::Now, None) => "enter open · j/k move",
+        (Tab::Items, None) => "enter open · o group · / filter · F ready",
+        (Tab::Log, None) if !app.log.filter.is_empty() => "/ change filter · esc clear",
+        (Tab::Log, None) => "/ filter · j/k scroll · G end",
+        (Tab::Agents, None) => "tab next",
     };
-    let keys = match app.tab {
-        Tab::Now => {
-            let mut parts: Vec<&str> = vec![navigation];
-            parts.extend(acts);
-            parts.push("q quit");
-            return Line::from(format!(" {}", parts.join(" · "))).dim();
-        }
-        Tab::Log if !app.log.filter.is_empty() => {
-            return Line::from(format!(
-                " filter: {} · / change · esc clear · q quit",
-                app.log.filter
-            ))
-            .dim();
-        }
-        Tab::Log => "/ filter · j/k scroll · g/G top/end · q quit",
-        Tab::Items | Tab::Agents => "tab next · q quit",
-    };
-    Line::from(format!(" {keys}")).dim()
+    let mut parts: Vec<&str> = vec![navigation];
+    parts.extend(acts);
+    parts.push("? keys");
+    Line::from(format!(" {}", parts.join(" · "))).dim()
 }

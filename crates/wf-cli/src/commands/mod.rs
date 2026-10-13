@@ -10,7 +10,7 @@ mod review;
 mod vcs;
 mod work;
 
-pub(crate) use item::{Scope, choose_item};
+pub(crate) use item::{Scope, choose_item, sorted_views};
 pub(crate) use review::review;
 pub(crate) use vcs::{repository, target, work_commit};
 

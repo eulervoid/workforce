@@ -3,31 +3,168 @@
 
 use std::io::Write;
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{self, Event as TerminalEvent, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
-use wf_core::event::{Comment, CommentKind, EventBody, Review};
+use wf_core::event::{Comment, CommentKind, EventBody, ItemEdited, ItemMoved, Review};
 use wf_core::id::{CommentId, HashId, ItemId};
+use wf_core::item::{ItemView, Standing};
+use wf_core::name::{AgentName, StateName};
+use wf_core::policy::StateCategory;
 use wf_core::session::Verdict;
 use wf_harness::Permission;
 
-use super::app::Effect;
+use super::app::{Choice, Effect};
 use crate::commands::{edit_in_editor, repository, target, work_commit};
-use crate::workspace::Workspace;
+use crate::draft::Draft;
+use crate::workspace::{self, Workspace};
 
 /// What is written above this line in `$EDITOR` counts; what is below is there to read.
 const SCISSORS: &str = "--- wf: everything below this line is left out ---";
 
-/// Carries out `effect`, and says what it did. Quitting is up to the loop.
+/// What carrying out an effect came to.
+pub enum Outcome {
+    /// What it did, to say so.
+    Did(String),
+    /// Something to pick before it can be done.
+    Choose(Choice),
+}
+
+/// Carries out `effect`. Quitting is up to the loop.
 pub fn carry_out(
+    effect: Effect,
+    workspace: &mut Workspace,
+    terminal: &mut DefaultTerminal,
+) -> anyhow::Result<Outcome> {
+    match effect {
+        Effect::ChooseAgent { item } => Ok(Outcome::Choose(agents(workspace, item)?)),
+        Effect::ChooseState { item } => Ok(Outcome::Choose(states(workspace, item)?)),
+        effect => done(effect, workspace, terminal).map(Outcome::Did),
+    }
+}
+
+/// The agents of the principal of this machine, the policy's default agent first.
+fn agents(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
+    let state = workspace.state();
+    let principal = state
+        .principal_of(&workspace.device_key())
+        .ok_or_else(|| anyhow!("this device is not bound to a member"))?;
+    let default = state
+        .policy()
+        .and_then(|stored| stored.policy.default_agent.clone());
+    let mut agents: Vec<AgentName> = state
+        .agents()
+        .filter(|(id, _)| id.principal == principal)
+        .map(|(id, _)| id.name.clone())
+        .collect();
+    agents.sort_by_key(|agent| Some(agent) != default.as_ref());
+    if agents.is_empty() {
+        bail!("you have no agents; add one with `wf agent add`");
+    }
+    Ok(Choice::Agent {
+        item,
+        agents,
+        index: 0,
+    })
+}
+
+/// The states of the item's type, its current state selected.
+fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
+    let state = workspace.state();
+    let policy = &state.policy().expect("a workforce has a policy").policy;
+    let ItemView::Live(live) = state
+        .item(item)
+        .ok_or_else(|| anyhow!("#{} is gone", item.short()))?
+    else {
+        bail!("#{} is archived", item.short());
+    };
+    let config = policy
+        .type_config(live.item_type())
+        .ok_or_else(|| anyhow!("no item type `{}` in the policy", live.item_type()))?;
+    let states: Vec<(StateName, StateCategory)> = config
+        .states
+        .iter()
+        .map(|state| (state.name.clone(), state.state_category))
+        .collect();
+    let current = match live.standing(policy) {
+        Standing::Known { state, .. } => Some(state),
+        Standing::Unknown { .. } => None,
+    };
+    let index = states
+        .iter()
+        .position(|(name, _)| Some(name) == current)
+        .unwrap_or_default();
+    Ok(Choice::State {
+        item,
+        states,
+        index,
+    })
+}
+
+/// Carries out an effect that needs nothing more, and says what it did.
+fn done(
     effect: Effect,
     workspace: &mut Workspace,
     terminal: &mut DefaultTerminal,
 ) -> anyhow::Result<String> {
     match effect {
-        Effect::Quit => Ok(String::new()),
+        Effect::Quit | Effect::ChooseAgent { .. } | Effect::ChooseState { .. } => Ok(String::new()),
+        Effect::StartSession { item, agent } => {
+            let (file, _) = workspace::find_workforce(&std::env::current_dir()?)?;
+            let repository = file
+                .parent()
+                .ok_or_else(|| anyhow!("the workforce file has no directory"))?
+                .to_path_buf();
+            let session = workspace.start_session(agent.clone(), item, &repository)?;
+            Ok(format!(
+                "started {agent} on #{} ({})",
+                item.short(),
+                session.short()
+            ))
+        }
+        Effect::StopSession { session } => {
+            workspace.stop_session(session)?;
+            Ok(format!("stopped {}", session.short()))
+        }
+        Effect::Move { item, state } => {
+            workspace.author(EventBody::ItemMoved(ItemMoved {
+                item,
+                to: state.clone(),
+                by_session: None,
+                because: None,
+            }))?;
+            Ok(format!("moved #{} to {state}", item.short()))
+        }
+        Effect::Comment { item, text } => {
+            workspace.author(EventBody::Commented(Comment::plain(item, text)))?;
+            Ok(format!("commented on #{}", item.short()))
+        }
+        Effect::Edit { item } => {
+            let draft = {
+                let ItemView::Live(live) = workspace
+                    .state()
+                    .item(item)
+                    .ok_or_else(|| anyhow!("#{} is gone", item.short()))?
+                else {
+                    bail!("#{} is archived; unarchive it to edit", item.short());
+                };
+                Draft::of(live)
+            };
+            let markdown = draft.to_markdown()?;
+            let edited = suspended(terminal, || edit_in_editor(&markdown, ".md"))??;
+            let draft = Draft::from_markdown(&edited)?;
+            let changes = match workspace.state().item(item) {
+                Some(ItemView::Live(live)) => draft.changes(live),
+                Some(ItemView::Archived(_)) | None => bail!("#{} is gone", item.short()),
+            };
+            if changes.is_empty() {
+                return Ok("nothing changed".to_owned());
+            }
+            workspace.author(EventBody::ItemEdited(ItemEdited { item, changes }))?;
+            Ok(format!("edited #{}", item.short()))
+        }
         Effect::Permit { session, answer } => {
             let held = workspace.answer_permission(session, answer)?;
             let verb = match answer {

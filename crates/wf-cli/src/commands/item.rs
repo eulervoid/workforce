@@ -23,7 +23,7 @@ use crate::render;
 use crate::view::{self, ItemSummary};
 use crate::workspace::Workspace;
 
-fn sorted_views(state: &State, include_archived: bool) -> Vec<ItemView<'_>> {
+pub(crate) fn sorted_views(state: &State, include_archived: bool) -> Vec<ItemView<'_>> {
     let mut views: Vec<ItemView<'_>> = state
         .items()
         .filter(|view| include_archived || matches!(view, ItemView::Live(_)))
