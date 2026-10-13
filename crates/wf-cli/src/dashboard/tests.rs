@@ -703,6 +703,43 @@ fn the_agents_tab_lists_each_agent_with_its_sessions() {
     assert!(app.prompt.is_none());
 }
 
+#[test]
+fn the_list_behind_an_open_detail_takes_no_keys() {
+    // An agent opened and `→` pressed again stays one level deep.
+    let mut app = app();
+    press(&mut app, KeyCode::Char('3'));
+    app.refresh(with_agents());
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.path().len(), 1);
+    assert!(!screen(&mut app, 60, 16).contains("coder › coder"));
+    // So is a session opened from the Now tab.
+    press(&mut app, KeyCode::Char('1'));
+    app.refresh(snapshot());
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.path().len(), 1);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.path(), Vec::new());
+    // The grouping and filters of the items stay as they are under an item, while the keys of
+    // the dashboard still work.
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('o'));
+    press(&mut app, KeyCode::Char('F'));
+    press(&mut app, KeyCode::Char('/'));
+    assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::State));
+    assert!(app.prompt.is_none());
+    assert_eq!(app.item_groups().len(), with_items().items.len());
+    press(&mut app, KeyCode::Char('?'));
+    assert!(matches!(app.prompt, Some(Prompt::Keys)));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(press(&mut app, KeyCode::Char('q')), Some(Effect::Quit));
+}
+
 /// The style of the cell at `x`, `y` once `app` is drawn.
 fn style_at(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> ratatui::style::Style {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();

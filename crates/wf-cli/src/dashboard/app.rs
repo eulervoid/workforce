@@ -913,16 +913,14 @@ impl App {
             KeyCode::Char('4') => self.tab = Tab::Log,
             KeyCode::Tab => self.tab = self.tab.next(),
             KeyCode::BackTab => self.tab = self.tab.previous(),
-            _ => {
-                if !self.detail_key(key) {
-                    match self.tab {
-                        Tab::Now => self.now_key(key),
-                        Tab::Items => self.items_key(key),
-                        Tab::Log => self.log_key(key),
-                        Tab::Agents => self.agents_key(key),
-                    }
-                }
-            }
+            // A detail covers the list behind it, so the list takes no keys while one is open.
+            _ if !self.list_has_keys() => self.detail_key(key),
+            _ => match self.tab {
+                Tab::Now => self.now_key(key),
+                Tab::Items => self.items_key(key),
+                Tab::Log => self.log_key(key),
+                Tab::Agents => self.agents_key(key),
+            },
         }
         None
     }
@@ -1085,45 +1083,42 @@ impl App {
         }
     }
 
-    /// The keys of the open detail; `false` when no detail is open or it does not take the key.
-    fn detail_key(&mut self, key: KeyEvent) -> bool {
+    /// The keys of the open detail.
+    fn detail_key(&mut self, key: KeyEvent) {
         let item_session = match &self.snapshot.in_view {
             Some(InView::Item { session, .. }) => *session,
             Some(InView::Session(_) | InView::Agent { .. }) | None => None,
         };
         let item_of_session = self.item_subject();
         let Some(stack) = self.stack_mut() else {
-            return false;
+            return;
         };
         let Some(opened) = stack.last_mut() else {
-            return false;
+            return;
         };
         if let Some(scroll) = opened.scroll.key(key) {
             opened.scroll = scroll;
-            return true;
+            return;
         }
         match (key.code, &opened.detail) {
             (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) => {
                 stack.pop();
             }
             (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'), Detail::Item(_)) => {
-                let Some(session) = item_session else {
-                    return true;
-                };
-                self.open(Detail::Session(session));
+                if let Some(session) = item_session {
+                    self.open(Detail::Session(session));
+                }
             }
             (KeyCode::Char('i'), Detail::Session(_)) => {
-                let Some(item) = item_of_session else {
-                    return true;
-                };
-                self.open(Detail::Item(item));
+                if let Some(item) = item_of_session {
+                    self.open(Detail::Item(item));
+                }
             }
             (KeyCode::Char('f'), Detail::Session(_)) => {
                 self.full_transcripts = !self.full_transcripts;
             }
-            _ => return false,
+            _ => {}
         }
-        true
     }
 
     fn now_key(&mut self, key: KeyEvent) {
