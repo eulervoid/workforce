@@ -5,10 +5,35 @@ mod git;
 
 use std::path::{Path, PathBuf};
 
+use serde::Deserialize;
 use wf_core::id::{HashId, ItemId};
 use wf_core::session::CommitId;
 
 pub use git::GitCli;
+
+/// Whether commits are signed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CommitSigning {
+    /// As the git config says (`commit.gpgsign`), as for the principal's own commits.
+    AsConfigured,
+    /// Never, whatever the git config says.
+    Unsigned,
+}
+
+impl CommitSigning {
+    /// The environment that makes git in another process, such as an agent's, sign this way.
+    pub fn environment(self) -> Vec<(&'static str, &'static str)> {
+        match self {
+            CommitSigning::AsConfigured => Vec::new(),
+            CommitSigning::Unsigned => vec![
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "commit.gpgsign"),
+                ("GIT_CONFIG_VALUE_0", "false"),
+            ],
+        }
+    }
+}
 
 /// How much of an item's id names its branch and worktree.
 const NAME_LEN: usize = 12;
@@ -100,11 +125,13 @@ pub trait VcsAdapter {
     /// Goes back to what the main checkout had before the last checkout: `git checkout -`.
     fn checkout_previous(&self) -> Result<(), VcsError>;
 
-    /// Merges `commit` into `target` with a merge commit that has both as parents.
+    /// Merges `commit` into `target` with a merge commit that has both as parents, signed as
+    /// `signing` says.
     fn merge(
         &self,
         target: &str,
         commit: CommitId,
         message: &str,
+        signing: CommitSigning,
     ) -> Result<MergeOutcome, VcsError>;
 }

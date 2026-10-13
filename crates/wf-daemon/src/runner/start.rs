@@ -18,7 +18,7 @@ use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree
 use super::drive::run_session;
 use super::{Begin, Run, SessionError, blocking};
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
-use crate::machine_config::{AgentSigning, SandboxConfig};
+use crate::machine_config::SandboxConfig;
 use crate::{Daemon, Loaded};
 
 /// The agent as the machine config says to run it: in a sandbox, or as it is. A config that is
@@ -386,7 +386,7 @@ pub(super) struct Setup {
     pub(super) definition: AgentDefinition,
     pub(super) harness: AcpAgentConfig,
     pub(super) sandbox: SandboxConfig,
-    pub(super) agent_signing: AgentSigning,
+    pub(super) agent_signing: wf_vcs::CommitSigning,
     pub(super) item_context: ItemContext,
     pub(super) target: String,
     pub(super) transcripts: PathBuf,

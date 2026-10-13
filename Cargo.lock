@@ -4838,6 +4838,7 @@ dependencies = [
 name = "wf-vcs"
 version = "0.0.0"
 dependencies = [
+ "serde",
  "tempfile",
  "thiserror 2.0.21",
  "wf-core",

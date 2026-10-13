@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer};
 use url::Url;
 use wf_core::autonomy::PermissionMode;
 use wf_core::name::AgentName;
+use wf_vcs::CommitSigning;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MachineConfigError {
@@ -39,37 +40,35 @@ pub struct MachineConfig {
     pub commits: CommitsConfig,
 }
 
-/// How the commits of agents are made on this machine.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+/// How commits are signed on this machine.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct CommitsConfig {
-    #[serde(default)]
-    pub agent_signing: AgentSigning,
+    /// The agents' commits. Unsigned by default, so that an agent never waits for a key the
+    /// principal has to unlock or approve.
+    #[serde(default = "CommitsConfig::default_agent_signing")]
+    pub agent_signing: CommitSigning,
+    /// The merge commit that brings approved work into the target. As the git config says by
+    /// default: it is the principal's acceptance of the work.
+    #[serde(default = "CommitsConfig::default_merge_signing")]
+    pub merge_signing: CommitSigning,
 }
 
-/// Whether agents sign their commits. The merge commit the daemon makes of approved work follows
-/// the git config either way, so what lands on the target is signed when signing is configured.
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AgentSigning {
-    /// Agents commit without signing, whatever the git config says, so that they never wait for
-    /// a key the principal has to unlock or approve.
-    #[default]
-    Unsigned,
-    /// The git config decides, as for the principal's own commits.
-    AsConfigured,
+impl CommitsConfig {
+    fn default_agent_signing() -> CommitSigning {
+        CommitSigning::Unsigned
+    }
+
+    fn default_merge_signing() -> CommitSigning {
+        CommitSigning::AsConfigured
+    }
 }
 
-impl AgentSigning {
-    /// The environment that makes git in the agent's processes sign as configured here.
-    pub fn git_environment(self) -> Vec<(&'static str, &'static str)> {
-        match self {
-            AgentSigning::Unsigned => vec![
-                ("GIT_CONFIG_COUNT", "1"),
-                ("GIT_CONFIG_KEY_0", "commit.gpgsign"),
-                ("GIT_CONFIG_VALUE_0", "false"),
-            ],
-            AgentSigning::AsConfigured => Vec::new(),
+impl Default for CommitsConfig {
+    fn default() -> Self {
+        CommitsConfig {
+            agent_signing: Self::default_agent_signing(),
+            merge_signing: Self::default_merge_signing(),
         }
     }
 }
@@ -330,21 +329,14 @@ mod tests {
     }
 
     #[test]
-    fn agents_commit_unsigned_unless_the_config_says_otherwise() {
-        let default = MachineConfig::parse("").ok().unwrap().commits.agent_signing;
-        assert_eq!(default, AgentSigning::Unsigned);
-        assert!(
-            default
-                .git_environment()
-                .contains(&("GIT_CONFIG_KEY_0", "commit.gpgsign"))
-        );
-        let configured = MachineConfig::parse("[commits]\nagent_signing = \"as_configured\"\n")
-            .ok()
-            .unwrap()
-            .commits
-            .agent_signing;
-        assert_eq!(configured, AgentSigning::AsConfigured);
-        assert!(configured.git_environment().is_empty());
+    fn agents_commit_unsigned_and_merges_are_signed_as_configured_by_default() {
+        let default = MachineConfig::parse("").ok().unwrap().commits;
+        assert_eq!(default.agent_signing, CommitSigning::Unsigned);
+        assert_eq!(default.merge_signing, CommitSigning::AsConfigured);
+        let text = "[commits]\nagent_signing = \"as_configured\"\nmerge_signing = \"unsigned\"\n";
+        let configured = MachineConfig::parse(text).ok().unwrap().commits;
+        assert_eq!(configured.agent_signing, CommitSigning::AsConfigured);
+        assert_eq!(configured.merge_signing, CommitSigning::Unsigned);
         assert!(MachineConfig::parse("[commits]\nagent_signing = \"always\"\n").is_err());
     }
 

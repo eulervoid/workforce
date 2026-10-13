@@ -77,11 +77,11 @@ allow_domains = ["*.example.com"]
 ## Signed commits
 Agents commit without signing, so that they never wait for a key you have to unlock or approve. When
 your git config signs commits (`commit.gpgsign`), the merge commit that brings approved work into the
-target is signed, as you: the signature says you accepted the work. To have agents sign as your git
-config says, set this in the machine config:
+target is signed, as you: the signature says you accepted the work. The machine config changes either:
 ```toml
 [commits]
-agent_signing = "as_configured"  # default "unsigned"
+agent_signing = "unsigned"       # default; "as_configured" signs as your git config says
+merge_signing = "as_configured"  # default; "unsigned" never signs the merge commit
 ```
 
 ## Permission requests

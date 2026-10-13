@@ -111,14 +111,19 @@ impl Daemon {
             )
             .await;
         };
+        let signing = match self.machine_config() {
+            Ok(config) => config.commits.merge_signing,
+            Err(error) => return cannot_merge(wf_core::error_chain(&error)).await,
+        };
         let mut outcome = MergeOutcome::TargetMoved;
         for _ in 0..MERGE_ATTEMPTS {
             let (repository, target, message) =
                 (repository.clone(), target.clone(), message.clone());
-            let merged =
-                blocking(move || GitCli::open(&repository)?.merge(&target, commit, &message))
-                    .await
-                    .and_then(|merged| merged.map_err(SessionError::from));
+            let merged = blocking(move || {
+                GitCli::open(&repository)?.merge(&target, commit, &message, signing)
+            })
+            .await
+            .and_then(|merged| merged.map_err(SessionError::from));
             outcome = match merged {
                 Ok(outcome) => outcome,
                 Err(error) => {
