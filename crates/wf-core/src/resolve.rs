@@ -185,7 +185,6 @@ impl Resolver<'_> {
                     .find(|(id, _)| id.principal == *principal && id.name.as_str() == agent)
                     .map(|(id, _)| MentionTarget::Agent(id.clone()))
             }
-            Mention::Session { .. } => None,
         }
     }
 }

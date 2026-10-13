@@ -710,13 +710,13 @@ Relations that change behaviour are explicit events. Informational ones are deri
 ### Derived references and mentions
 * `#k3f7a2` for items (any unique prefix of at least 4 characters, like git), `#k3f7a2/c7f2` for a
   comment on an item (section 10).
-* `@joshua` for principals, `@joshua/coder` for agents, `@joshua/coder/s4k2` for sessions. Short forms
-  (`@coder`, `@s4k2`) work when unique in the workforce.
+* `@joshua` for principals, `@joshua/coder` for agents, and with session inboxes (M3)
+  `@joshua/coder/s4k2` for sessions. Short forms (`@coder`) work when unique in the workforce.
 * Parsed with `pulldown-cmark`, skipping code spans and blocks. Tokens that do not resolve are plain text.
 * Derived in the fold with a versioned parser, not stored as events. A better parser means a refold.
 
 A handle match wins: `@joshua` is a principal even if an agent is also called `joshua`. A short name that
-matches no handle resolves to an agent only if exactly one agent has that name. Sessions arrive in M2.
+matches no handle resolves to an agent only if exactly one agent has that name.
 
 **Mention resolution:**
 
@@ -725,7 +725,7 @@ matches no handle resolves to an agent only if exactly one agent has that name. 
 | `@joshua` | the principal's inbox |
 | `@joshua/coder` in a comment **on an item** | the live session of that agent on this item; otherwise the agent's inbox, picked up by its next session |
 | `@joshua/coder` elsewhere | the agent's inbox |
-| `@joshua/coder/s4k2` | that session; if it has ended, the agent's inbox with a note |
+| `@joshua/coder/s4k2` (M3) | that session; if it has ended, the agent's inbox with a note |
 
 So `@coder please also handle the empty case` on an item reaches the session working on it, which checks
 its inbox after each commit.

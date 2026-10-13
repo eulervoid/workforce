@@ -11,21 +11,16 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::MIN_PREFIX_LEN;
 
-pub const PARSER_VERSION: u16 = 4;
+pub const PARSER_VERSION: u16 = 5;
 
-/// `@joshua`, `@joshua/coder` or `@joshua/coder/s4k2`, as written.
+/// `@joshua` or `@joshua/coder`, as written.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Mention {
-    /// One segment. A principal handle, or a short form of an agent or session name.
+    /// One segment. A principal handle, or the short form of an agent name.
     Short(String),
     Agent {
         principal: String,
         agent: String,
-    },
-    Session {
-        principal: String,
-        agent: String,
-        session: String,
     },
 }
 
@@ -34,11 +29,6 @@ impl std::fmt::Display for Mention {
         match self {
             Mention::Short(name) => write!(formatter, "@{name}"),
             Mention::Agent { principal, agent } => write!(formatter, "@{principal}/{agent}"),
-            Mention::Session {
-                principal,
-                agent,
-                session,
-            } => write!(formatter, "@{principal}/{agent}/{session}"),
         }
     }
 }
@@ -172,11 +162,6 @@ fn parse_mention(rest: &str) -> (Option<Token>, usize) {
             principal: owned(principal),
             agent: owned(agent),
         },
-        [principal, agent, session] => Mention::Session {
-            principal: owned(principal),
-            agent: owned(agent),
-            session: owned(session),
-        },
         _ => return (None, length),
     };
     (Some(Token::Mention(mention)), length)
@@ -225,16 +210,8 @@ mod tests {
     }
 
     #[test]
-    fn finds_session_mentions() {
-        let tokens = parse("@joshua/coder/s4k2 is stuck");
-        assert_eq!(
-            tokens,
-            BTreeSet::from([Token::Mention(Mention::Session {
-                principal: "joshua".into(),
-                agent: "coder".into(),
-                session: "s4k2".into()
-            })])
-        );
+    fn three_segments_are_not_a_mention() {
+        assert_eq!(parse("@joshua/coder/s4k2 is stuck"), BTreeSet::new());
     }
 
     #[test]
