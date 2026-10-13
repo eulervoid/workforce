@@ -22,35 +22,35 @@ expression: visible(&styled)
   ␛[2mlog␛[0m ␛[2mphase=register durationMs=1 totalMs=825␛[0m
 
 ␛[1m␛[36mbrief␛[0m  ␛[2m00:49␛[0m
-  You are the agent ␛[36mcoder␛[0m, working on item #qp7jzs: Dummy: add a hello
+  You are the agent `coder`, working on item #qp7jzs: Dummy: add a hello
   subcommand note to the README
 
-  ␛[1mTask␛[0m
+  ## Task
 
   Dummy issue to generate a transcript. Read the README, list the crates in the
   workspace, and summarize them in a comment. Make no code changes.
 
-  ␛[1mHow to work␛[0m
+  ## How to work
 
-  • You are in a git worktree on the branch ␛[36mwf/qp7jzsdzp2cy␛[0m, started from ␛[36mmain␛[0m.
-    Work only here.
-  • Commit small and often: only commits carry over to a later session.
-  • Tick each step as soon as it is done, not all at the end: ␛[36mwf item check
-    qp7jzs <number>␛[0m
-  • Report while you work: ␛[36mwf comment qp7jzs "<what you chose, what you
-    rejected, and why>" --step <number>␛[0m
-    • Add ␛[36m--done␛[0m to tick the step with the same command.
-    • Leave out ␛[36m--step␛[0m for a report on the whole item.
-    • Write each report so that it makes sense on its own.
-  • Need an answer from someone: ␛[36mwf comment qp7jzs "<question>" --block␛[0m, then
+  - You are in a git worktree on the branch `wf/qp7jzsdzp2cy`, started from
+    `main`. Work only here.
+  - Commit small and often: only commits carry over to a later session.
+  - Tick each step as soon as it is done, not all at the end: `wf item check
+    qp7jzs <number>`
+  - Report while you work: `wf comment qp7jzs "<what you chose, what you
+    rejected, and why>" --step <number>`
+    - Add `--done` to tick the step with the same command.
+    - Leave out `--step` for a report on the whole item.
+    - Write each report so that it makes sense on its own.
+  - Need an answer from someone: `wf comment qp7jzs "<question>" --block`, then
     end your turn. You are prompted again once it is answered.
-  • Finished: ␛[36mwf work submit --note "<what the reviewer should know>"␛[0m. Your
+  - Finished: `wf work submit --note "<what the reviewer should know>"`. Your
     commits are reviewed and merged from there.
-  • Stuck: ␛[36mwf work release --note "<why>"␛[0m
-  • Lost track: ␛[36mwf work brief␛[0m prints this brief again.
+  - Stuck: `wf work release --note "<why>"`
+  - Lost track: `wf work brief` prints this brief again.
 
 ␛[1m␛[35mcoder␛[0m  ␛[2m00:49␛[0m
-  ␛[32m✓␛[0m ␛[1mBash␛[0m  cat README.md; ls crates; grep -A15  ␛[2mallowed by a person␛[0m          ␛[2m0.2s␛[0m
+  ␛[32m✓␛[0m ␛[1mBash␛[0m  cat README.md; ls crates; grep -A15  ␛[2mallowed by you␛[0m               ␛[2m0.2s␛[0m
           '^\[workspace\]' Cargo.toml; for f in crates/*/Cargo.toml; do echo
           "$f: $(grep -m1 '^description' $f)"; done
     ␛[2m│ ␛[0m␛[2m# workforce (`wf`)␛[0m
@@ -261,17 +261,17 @@ expression: visible(&styled)
     ␛[2m│ ␛[0m␛[2mcrates/wf-net/Cargo.toml:␛[0m
     ␛[2m│ ␛[0m␛[2mcrates/wf-store/Cargo.toml:␛[0m
     ␛[2m│ ␛[0m␛[2mcrates/wf-vcs/Cargo.toml:␛[0m
-  ␛[32m✓␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7 crates  ␛[2mallowed by a person␛[0m    ␛[2m0.1s␛[0m
-          under crates/ (resolver 3, edition 2024): wf-core (pure domain:
-          events, item model, lifecycle/briefs; no IO), wf-store (event log
-          store), wf-net (sync protocols over iroh, generic streams + SyncLog),
-          wf-daemon (owns the store, runs sessions, merges), wf-harness (runs
-          agents over ACP), wf-vcs (the only crate that runs git), wf-cli (the
-          wf binary, goes through Workspace). README covers M0-M2: signed event
-          log, multi-machine sync, agents in worktree sessions with review/
-          merge, and a permission-request decider chain. No code changes made."
-          --done 2>&1 | tail -3; wf work submit --note "No code changes; summary
-          posted as a comment." 2>&1 | tail -3
+  ␛[32m✓␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7 crates under  ␛[2mallowed by you␛[0m   ␛[2m0.1s␛[0m
+          crates/ (resolver 3, edition 2024): wf-core (pure domain: events,
+          item model, lifecycle/briefs; no IO), wf-store (event log store), wf-
+          net (sync protocols over iroh, generic streams + SyncLog), wf-daemon
+          (owns the store, runs sessions, merges), wf-harness (runs agents over
+          ACP), wf-vcs (the only crate that runs git), wf-cli (the wf binary,
+          goes through Workspace). README covers M0-M2: signed event log, multi-
+          machine sync, agents in worktree sessions with review/merge, and a
+          permission-request decider chain. No code changes made." --done 2>&1
+          | tail -3; wf work submit --note "No code changes; summary posted as a
+          comment." 2>&1 | tail -3
     ␛[2m│ ␛[0m␛[2mUsage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...␛[0m
     ␛[2m│␛[0m
     ␛[2m│ ␛[0m␛[2mFor more information, try '--help'.␛[0m

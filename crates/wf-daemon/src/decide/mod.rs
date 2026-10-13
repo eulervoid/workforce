@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use wf_core::id::{SessionId, WorkforceId};
 use wf_core::name::AgentName;
-use wf_harness::{Decision, Permission, PermissionRequest, Permissions};
+use wf_harness::{Decider, Decision, Permission, PermissionRequest, Permissions};
 
 use crate::machine_config::{DeciderConfig, MachineConfig};
 use crate::permissions::Held;
@@ -63,7 +63,7 @@ pub enum Outcome {
 pub struct ChainResult {
     pub decision: Option<Decision>,
     /// `(decider, why)` for every decider that passed.
-    pub passed: Vec<(String, String)>,
+    pub passed: Vec<(Decider, String)>,
 }
 
 /// Asks the agents that decide, which only the daemon can run.
@@ -90,13 +90,13 @@ pub async fn run_chain(
                 return ChainResult {
                     decision: Some(Decision {
                         permission,
-                        by: decider.name(),
+                        by: decider.decider(),
                         reason,
                     }),
                     passed,
                 };
             }
-            Outcome::Passed { why } => passed.push((decider.name(), why)),
+            Outcome::Passed { why } => passed.push((decider.decider(), why)),
         }
     }
     ChainResult {
@@ -246,7 +246,7 @@ impl Permissions for Deciding {
             let answer = self.held.hold(self.workforce, self.session, &title, passed);
             Decision {
                 permission: answer.await.unwrap_or(Permission::Deny),
-                by: Decision::BY_PRINCIPAL.to_string(),
+                by: Decider::Principal,
                 reason: None,
             }
         })

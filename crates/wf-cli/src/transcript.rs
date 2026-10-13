@@ -6,7 +6,7 @@
 //! answer to its permission request and its result. A call still open when the reader catches
 //! up shows as a running line first.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use anstyle::{AnsiColor, Style};
 use jiff::tz::TimeZone;
@@ -14,7 +14,7 @@ use jiff::{SignedDuration, Timestamp};
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde_json::Value;
 use similar::TextDiff;
-use wf_harness::{Decision, Direction, Permission, TranscriptEntry};
+use wf_harness::{Decider, Decision, Direction, Permission, TranscriptEntry};
 
 /// Lines kept from the start and the end of long tool output: the tail holds the errors.
 const HEAD: usize = 5;
@@ -52,6 +52,13 @@ pub enum Format {
     Styled,
     /// The same layout as plain text: markdown as written, no color and no box characters.
     Raw,
+}
+
+/// Whether the session of the transcript still runs, when the reader reaches its end.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Session {
+    Live,
+    Ended,
 }
 
 /// How much of the transcript is shown.
@@ -92,13 +99,15 @@ enum Block {
 
 enum Turn {
     Closed,
-    /// wf prompted the agent, which has not answered yet.
+    /// wf prompted the agent with the request `request`, which has not been answered yet.
     Prompted {
         at: Timestamp,
+        request: Value,
     },
     /// The agent's header is out.
     Answering {
         since: Timestamp,
+        request: Value,
     },
 }
 
@@ -129,8 +138,16 @@ struct ToolCall {
     since: Timestamp,
     content: Vec<Value>,
     asked: Asked,
-    /// Whether a running line went out for the permission state it is in now.
-    shown: Option<bool>,
+    /// The running line that went out last, so each state is shown once.
+    shown: Shown,
+}
+
+/// The running line of an open call, printed when the output catches up with it.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Shown {
+    Nothing,
+    WaitingForPermission,
+    Running,
 }
 
 pub struct Renderer {
@@ -147,10 +164,6 @@ pub struct Renderer {
     calls: Vec<ToolCall>,
     /// Calls of this turn that were denied: what the agent says of them later is left out.
     denied: HashSet<String>,
-    /// The call each open permission request is about, by the request's JSON-RPC id.
-    requests: HashMap<String, String>,
-    /// wf records its decision right before it answers the request.
-    decision: Option<Decision>,
 }
 
 impl Renderer {
@@ -173,8 +186,6 @@ impl Renderer {
             prompts: 0,
             calls: Vec::new(),
             denied: HashSet::new(),
-            requests: HashMap::new(),
-            decision: None,
         }
     }
 
@@ -310,12 +321,15 @@ impl Renderer {
 
     /// Opens the agent's part of the turn, unless it is open already.
     fn answering(&mut self, at: Timestamp) -> String {
-        let since = match self.turn {
-            Turn::Answering { .. } => return String::new(),
-            Turn::Prompted { at } => at,
-            Turn::Closed => at,
+        let (since, request) = match std::mem::replace(&mut self.turn, Turn::Closed) {
+            turn @ Turn::Answering { .. } => {
+                self.turn = turn;
+                return String::new();
+            }
+            Turn::Prompted { at, request } => (at, request),
+            Turn::Closed => (at, Value::Null),
         };
-        self.turn = Turn::Answering { since };
+        self.turn = Turn::Answering { since, request };
         let agent = self.agent.clone();
         self.turn_header(
             &agent,
@@ -442,16 +456,18 @@ impl Renderer {
     fn open_calls(&mut self) -> String {
         let mut out = String::new();
         for index in 0..self.calls.len() {
-            let waiting = matches!(self.calls[index].asked, Asked::Waiting);
-            if self.calls[index].shown == Some(waiting) {
+            let state = match self.calls[index].asked {
+                Asked::Waiting => Shown::WaitingForPermission,
+                Asked::Not | Asked::Answered(_) => Shown::Running,
+            };
+            if self.calls[index].shown == state {
                 continue;
             }
-            self.calls[index].shown = Some(waiting);
+            self.calls[index].shown = state;
             out.push_str(&self.begin(Block::Tool));
-            let right = if waiting {
-                "waiting for permission"
-            } else {
-                "running"
+            let right = match state {
+                Shown::WaitingForPermission => "waiting for permission",
+                Shown::Running | Shown::Nothing => "running",
             };
             let call = &self.calls[index];
             out.push_str(&self.call_header(call, ("…", DIM), right, DIM));
@@ -460,11 +476,17 @@ impl Renderer {
         out
     }
 
-    /// Everything still held back, at the end of the transcript.
-    pub fn finish(&mut self) -> String {
-        let mut out = self.flush_prose();
-        out.push_str(&self.open_calls());
-        out
+    /// Everything still held back, at the end of the transcript. The calls still open are running
+    /// while the session is, and unfinished once it ended.
+    pub fn finish(&mut self, session: Session) -> String {
+        match session {
+            Session::Live => {
+                let mut out = self.flush_prose();
+                out.push_str(&self.open_calls());
+                out
+            }
+            Session::Ended => self.unfinished_calls(),
+        }
     }
 
     pub fn render(&mut self, entry: &TranscriptEntry) -> String {
@@ -503,13 +525,16 @@ impl Renderer {
             },
             Direction::ToAgent => match method {
                 Some("session/prompt") => self.prompt(entry.at, message),
-                Some(_) => String::new(),
-                None => self.answered(entry.at, &message["id"]),
+                Some(_) | None => String::new(),
             },
-            Direction::Wf => {
-                self.decision = serde_json::from_value(message["decision"].clone()).ok();
-                String::new()
-            }
+            Direction::Wf => match serde_json::from_value(message["decision"].clone()) {
+                Ok(decision) => self.decided(
+                    entry.at,
+                    message["toolCallId"].as_str().unwrap_or("?"),
+                    decision,
+                ),
+                Err(_) => String::new(),
+            },
             Direction::FromAgent => match method {
                 Some("session/update") => self.update(entry.at, &message["params"]["update"]),
                 Some("session/request_permission") => {
@@ -518,7 +543,6 @@ impl Renderer {
                     call.asked = Asked::Waiting;
                     let call_id = call.id.clone();
                     self.denied.remove(&call_id);
-                    self.requests.insert(message["id"].to_string(), call_id);
                     String::new()
                 }
                 Some(_) => String::new(),
@@ -526,17 +550,7 @@ impl Renderer {
                     if let Some(reason) = message["result"]["stopReason"].as_str() {
                         self.footer(entry.at, reason)
                     } else if let Some(error) = message["error"]["message"].as_str() {
-                        let mut out = self.flush_prose();
-                        out.push_str(&self.answering(entry.at));
-                        out.push_str(&self.begin(Block::Other));
-                        let text = cut(first_line(error), self.width - MARGIN - 2);
-                        out.push_str(&format!(
-                            "{}{} {}\n",
-                            " ".repeat(MARGIN),
-                            self.styled("✗", color(AnsiColor::Red)),
-                            self.styled(&text, color(AnsiColor::Red))
-                        ));
-                        out
+                        self.error(entry.at, &message["id"], error)
                     } else {
                         String::new()
                     }
@@ -545,27 +559,20 @@ impl Renderer {
         }
     }
 
-    /// wf answered the permission request `id`. A call that was denied is done with.
-    fn answered(&mut self, at: Timestamp, id: &Value) -> String {
-        let Some(call_id) = self.requests.remove(&id.to_string()) else {
-            return String::new();
-        };
+    /// wf decided the permission request for the call `call_id`, right before answering it. A
+    /// call that was denied is done with.
+    fn decided(&mut self, at: Timestamp, call_id: &str, decision: Decision) -> String {
         let Some(index) = self.calls.iter().position(|call| call.id == call_id) else {
             return String::new();
         };
         let call = &mut self.calls[index];
         call.since = at;
-        call.asked = match self.decision.take() {
-            Some(decision) => Asked::Answered(decision),
-            None => Asked::Not,
-        };
-        let Asked::Answered(Decision {
-            permission: Permission::Deny,
-            ..
-        }) = call.asked
-        else {
-            return String::new();
-        };
+        let permission = decision.permission;
+        call.asked = Asked::Answered(decision);
+        match permission {
+            Permission::Allow => return String::new(),
+            Permission::Deny => {}
+        }
         let call = self.calls.remove(index);
         self.denied.insert(call.id.clone());
         let mut out = self.flush_prose();
@@ -576,7 +583,7 @@ impl Renderer {
     }
 
     /// The first prompt is the brief; wf sends the later ones to keep the session going. Each
-    /// opens a turn, cut to its first line when it is long, unless `--full`.
+    /// opens a turn and keeps its lines, cut to its first line when it is long, unless `--full`.
     fn prompt(&mut self, at: Timestamp, message: &Value) -> String {
         let text = message["params"]["prompt"]
             .as_array()
@@ -591,7 +598,10 @@ impl Renderer {
         let speaker = if self.prompts == 0 { "brief" } else { "wf" };
         self.prompts += 1;
         let mut out = self.flush_prose();
-        self.turn = Turn::Prompted { at };
+        self.turn = Turn::Prompted {
+            at,
+            request: message["id"].clone(),
+        };
         let lines = text.trim_end().lines().count();
         match self.detail {
             Detail::Abridged if lines > PROMPT_LINES => {
@@ -610,28 +620,87 @@ impl Renderer {
             }
             Detail::Abridged | Detail::Full => {
                 out.push_str(&self.turn_header(speaker, color(AnsiColor::Cyan).bold(), at, ""));
-                out.push_str(&self.prose_paragraphs(Thinking::Message, &text));
+                // Line by line as written: a prompt is wf's text, and markdown would join lines.
+                let margin = " ".repeat(MARGIN);
+                let room = self.width.saturating_sub(MARGIN).max(10);
+                for line in text.trim_end().lines() {
+                    let line = line.trim_end();
+                    if line.is_empty() {
+                        out.push('\n');
+                        continue;
+                    }
+                    let hanging = " ".repeat(hanging_indent(line));
+                    let options = textwrap::Options::new(room)
+                        .subsequent_indent(&hanging)
+                        .break_words(true);
+                    for part in textwrap::wrap(line, options) {
+                        out.push_str(&format!("{margin}{part}\n"));
+                    }
+                }
             }
         }
         self.last = Block::Other;
         out
     }
 
-    /// The calls the turn left open, then `finished` and how long the turn took.
-    fn footer(&mut self, at: Timestamp, reason: &str) -> String {
+    /// The calls left open, which end with the turn or the session.
+    fn unfinished_calls(&mut self) -> String {
         let mut out = self.flush_prose();
         self.denied.clear();
-        self.requests.clear();
         for call in std::mem::take(&mut self.calls) {
-            out.push_str(&self.answering(at));
+            out.push_str(&self.answering(call.since));
             out.push_str(&self.begin(Block::Tool));
             out.push_str(&self.finished_call(&call, &Outcome::Unfinished));
         }
-        let since = match self.turn {
-            Turn::Prompted { at } | Turn::Answering { since: at } => Some(at),
-            Turn::Closed => None,
+        out
+    }
+
+    /// Closes the turn: the calls it left open, then how long it took.
+    fn close_turn(&mut self, at: Timestamp) -> (String, String) {
+        let out = self.unfinished_calls();
+        let elapsed = match std::mem::replace(&mut self.turn, Turn::Closed) {
+            Turn::Prompted { at: since, .. } | Turn::Answering { since, .. } => {
+                duration(at.duration_since(since))
+            }
+            Turn::Closed => String::new(),
         };
-        self.turn = Turn::Closed;
+        (out, elapsed)
+    }
+
+    /// An error reply: to the prompt of the turn, it ends the turn; to anything else, it is shown
+    /// where it comes.
+    fn error(&mut self, at: Timestamp, request: &Value, error: &str) -> String {
+        let text = cut(first_line(error), self.width - MARGIN - 2);
+        let ends_turn = match &self.turn {
+            Turn::Prompted {
+                request: prompt, ..
+            }
+            | Turn::Answering {
+                request: prompt, ..
+            } => prompt == request,
+            Turn::Closed => false,
+        };
+        let (mut out, elapsed) = if ends_turn {
+            self.close_turn(at)
+        } else {
+            let mut out = self.flush_prose();
+            out.push_str(&self.answering(at));
+            (out, String::new())
+        };
+        out.push_str(&self.begin(Block::Other));
+        let left = format!(
+            "{}{} {}",
+            " ".repeat(MARGIN),
+            self.styled("✗", color(AnsiColor::Red)),
+            self.styled(&text, color(AnsiColor::Red))
+        );
+        out.push_str(&self.spread(&left, MARGIN + 2 + width_of(&text), &elapsed, DIM));
+        out
+    }
+
+    /// The calls the turn left open, then `finished` and how long the turn took.
+    fn footer(&mut self, at: Timestamp, reason: &str) -> String {
+        let (mut out, elapsed) = self.close_turn(at);
         let (text, style) = match reason {
             "end_turn" => ("finished", DIM),
             "cancelled" => ("stopped", color(AnsiColor::Yellow)),
@@ -641,9 +710,6 @@ impl Renderer {
             other => (other, color(AnsiColor::Yellow)),
         };
         out.push_str(&self.begin(Block::Other));
-        let elapsed = since
-            .map(|since| duration(at.duration_since(since)))
-            .unwrap_or_default();
         out.push_str(&self.spread(&self.styled(text, style), width_of(text), &elapsed, DIM));
         out
     }
@@ -689,7 +755,7 @@ impl Renderer {
                     since: at,
                     content: Vec::new(),
                     asked: Asked::Not,
-                    shown: None,
+                    shown: Shown::Nothing,
                 });
                 self.calls.len() - 1
             }
@@ -839,15 +905,15 @@ impl Renderer {
         let Asked::Answered(decision) = asked else {
             return None;
         };
-        let unweighed = decision.by == Decision::BY_FIXED_PERMISSIONS
+        let unweighed = decision.by == Decider::FixedPermissions
             && decision.permission == Permission::Allow
             && decision.reason.is_none();
         if unweighed && self.detail == Detail::Abridged {
             return None;
         }
-        let by = match decision.by.as_str() {
-            Decision::BY_PRINCIPAL => "you",
-            by => by,
+        let by = match &decision.by {
+            Decider::Principal => "you".to_owned(),
+            by => by.to_string(),
         };
         let verb = match decision.permission {
             Permission::Allow => "allowed",
@@ -1003,6 +1069,17 @@ fn has_reason(asked: &Asked) -> bool {
             ..
         })
     )
+}
+
+/// Where the wrapped lines of `line` start: under its text, past its indent and list marker.
+fn hanging_indent(line: &str) -> usize {
+    let text = line.trim_start();
+    let indent = line.len() - text.len();
+    let marker = ["- ", "* "]
+        .iter()
+        .find(|marker| text.starts_with(**marker))
+        .map_or(0, |marker| marker.len());
+    indent + marker
 }
 
 fn first_line(text: &str) -> &str {
@@ -1325,7 +1402,7 @@ mod tests {
             .iter()
             .map(|entry| plain(&renderer.render(entry)))
             .collect();
-        out.push_str(&plain(&renderer.finish()));
+        out.push_str(&plain(&renderer.finish(Session::Live)));
         out
     }
 
@@ -1381,11 +1458,7 @@ mod tests {
                 Direction::FromAgent,
                 serde_json::json!({"id": 7, "method": "session/request_permission", "params": {"toolCall": {"toolCallId": "1"}}}),
             ),
-            entry(
-                2,
-                Direction::Wf,
-                serde_json::json!({"decision": {"permission": "allow", "by": "the principal", "reason": null}}),
-            ),
+            decision(2, "1", Permission::Allow, Decider::Principal, None),
             entry(
                 2,
                 Direction::ToAgent,
@@ -1441,7 +1514,7 @@ mod tests {
 
     #[test]
     fn unweighed_allows_and_harness_logs_show_only_with_full() {
-        let entries = |by: &str| {
+        let entries = |by: Decider| {
             [
                 entry(
                     0,
@@ -1457,11 +1530,7 @@ mod tests {
                     Direction::FromAgent,
                     serde_json::json!({"id": 1, "method": "session/request_permission", "params": {"toolCall": {"toolCallId": "1"}}}),
                 ),
-                entry(
-                    0,
-                    Direction::Wf,
-                    serde_json::json!({"decision": {"permission": "allow", "by": by, "reason": null}}),
-                ),
+                decision(0, "1", Permission::Allow, by, None),
                 entry(
                     0,
                     Direction::ToAgent,
@@ -1475,7 +1544,7 @@ mod tests {
         };
         let quiet = render_all(
             &mut renderer(Format::Raw, Detail::Abridged, 80),
-            &entries("the agent's permissions"),
+            &entries(Decider::FixedPermissions),
         );
         assert!(
             !quiet.contains("allowed") && !quiet.contains("session/create"),
@@ -1484,7 +1553,7 @@ mod tests {
         assert!(quiet.contains("✓ Read  a.rs"), "{quiet}");
         let full = render_all(
             &mut renderer(Format::Raw, Detail::Full, 80),
-            &entries("the agent's permissions"),
+            &entries(Decider::FixedPermissions),
         );
         assert!(
             full.contains("allowed by the agent's permissions")
@@ -1493,7 +1562,7 @@ mod tests {
         );
         let rules = render_all(
             &mut renderer(Format::Raw, Detail::Abridged, 80),
-            &entries("rules"),
+            &entries(Decider::Rules),
         );
         assert!(rules.contains("allowed by rules"), "{rules}");
     }
@@ -1526,7 +1595,7 @@ mod tests {
     fn raw_keeps_markdown_and_has_no_escape_codes() {
         let mut renderer = renderer(Format::Raw, Detail::Abridged, 80);
         let output = renderer.chunk(at(0), Thinking::Message, None, "**kept**");
-        let output = output + &renderer.finish();
+        let output = output + &renderer.finish(Session::Live);
         assert!(output.contains("  **kept**") && !output.contains('\x1b'));
     }
 
@@ -1589,6 +1658,29 @@ mod tests {
         )
     }
 
+    fn decision(
+        seconds: i64,
+        call: &str,
+        permission: Permission,
+        by: Decider,
+        reason: Option<&str>,
+    ) -> TranscriptEntry {
+        let decision = Decision {
+            permission,
+            by,
+            reason: reason.map(str::to_owned),
+        };
+        TranscriptEntry::decision(at(seconds), call, &decision)
+    }
+
+    fn asked(seconds: i64, request: i64, call: &str, title: &str) -> TranscriptEntry {
+        entry(
+            seconds,
+            Direction::FromAgent,
+            serde_json::json!({"id": request, "method": "session/request_permission", "params": {"toolCall": {"toolCallId": call, "title": title}}}),
+        )
+    }
+
     fn said(seconds: i64, message: &str, text: &str) -> TranscriptEntry {
         update(
             seconds,
@@ -1602,14 +1694,20 @@ mod tests {
             prompt(0, &format!("# Brief\n\n{}", "line\n".repeat(20))),
             said(1, "a", "Blocked."),
             end_turn(2),
-            prompt(60, "What you were waiting for is resolved.\n- someone: Use humantime\nContinue."),
+            prompt(
+                60,
+                "What you were waiting for is resolved.\n- @joshua: Use humantime\nContinue.",
+            ),
             said(61, "b", "Done."),
             end_turn(62),
         ];
         let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
-        assert!(output.contains("  Brief\n") && !output.contains("line\n"), "{output}");
         assert!(
-            output.contains("wf  00:01\n  What you were waiting for is resolved.\n  - someone: Use humantime\n  Continue.\n"),
+            output.contains("  Brief\n") && !output.contains("line\n"),
+            "{output}"
+        );
+        assert!(
+            output.contains("wf  00:01\n  What you were waiting for is resolved.\n  - @joshua: Use humantime\n  Continue.\n"),
             "{output}"
         );
         assert_eq!(output.matches("finished").count(), 2, "{output}");
@@ -1628,7 +1726,7 @@ mod tests {
         renderer.render(&said(0, "a", "watching"));
         assert!(!renderer.caught_up(at(0)).contains("watching"));
         assert!(renderer.caught_up(at(1)).contains("  watching\n"));
-        assert_eq!(renderer.finish(), "");
+        assert_eq!(renderer.finish(Session::Live), "");
     }
 
     #[test]
@@ -1639,12 +1737,20 @@ mod tests {
                 Direction::FromAgent,
                 serde_json::json!({"id": 100, "method": "session/request_permission", "params": {"toolCall": {"toolCallId": "call-1", "title": "Edit file"}}}),
             ),
+            decision(
+                0,
+                "call-1",
+                Permission::Deny,
+                Decider::Hook {
+                    program: "sh".to_owned(),
+                },
+                Some("no edits today"),
+            ),
             entry(
                 0,
-                Direction::Wf,
-                serde_json::json!({"decision": {"permission": "deny", "by": "hook sh", "reason": "no edits today"}}),
+                Direction::ToAgent,
+                serde_json::json!({"id": 100, "result": {}}),
             ),
-            entry(0, Direction::ToAgent, serde_json::json!({"id": 100, "result": {}})),
             update(
                 1,
                 serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "call-1", "status": "failed"}),
@@ -1668,12 +1774,20 @@ mod tests {
                 Direction::FromAgent,
                 serde_json::json!({"id": 100, "method": "session/request_permission", "params": {"toolCall": {"toolCallId": "call-1", "title": "Edit file"}}}),
             ),
+            decision(
+                0,
+                "call-1",
+                Permission::Allow,
+                Decider::Agent {
+                    agent: "judge".to_owned(),
+                },
+                Some("edits serve the item"),
+            ),
             entry(
                 0,
-                Direction::Wf,
-                serde_json::json!({"decision": {"permission": "allow", "by": "agent judge", "reason": "edits serve the item"}}),
+                Direction::ToAgent,
+                serde_json::json!({"id": 100, "result": {}}),
             ),
-            entry(0, Direction::ToAgent, serde_json::json!({"id": 100, "result": {}})),
             end_turn(2),
         ];
         let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
@@ -1684,5 +1798,83 @@ mod tests {
             "{output}"
         );
         assert!(!output.contains("running"), "{output}");
+    }
+
+    #[test]
+    fn decisions_belong_to_the_call_they_name() {
+        let entries = [
+            asked(0, 100, "call-a", "Edit a"),
+            asked(0, 101, "call-b", "Edit b"),
+            decision(1, "call-b", Permission::Allow, Decider::Principal, None),
+            decision(
+                2,
+                "call-a",
+                Permission::Deny,
+                Decider::Hook {
+                    program: "sh".to_owned(),
+                },
+                Some("no edits today"),
+            ),
+            update(
+                3,
+                serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "call-b", "status": "completed"}),
+            ),
+        ];
+        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        assert!(
+            output.contains("✗ Tool  Edit a\n    denied by hook sh: no edits today\n"),
+            "{output}"
+        );
+        assert!(
+            output.contains("✓ Tool  Edit b  allowed by you"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn an_error_reply_to_the_prompt_ends_its_turn() {
+        let entries = [
+            prompt(0, "Do it"),
+            asked(1, 100, "call-1", "Edit file"),
+            entry(
+                2,
+                Direction::FromAgent,
+                serde_json::json!({"id": 0, "error": {"code": -32603, "message": "Internal error"}}),
+            ),
+            prompt(10, "Go on"),
+            said(11, "a", "Done."),
+            end_turn(12),
+        ];
+        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        assert!(output.contains("· Tool  Edit file"), "{output}");
+        assert!(output.contains("✗ Internal error"), "{output}");
+        assert_eq!(output.matches("Edit file").count(), 1, "{output}");
+    }
+
+    #[test]
+    fn calls_open_when_the_session_ended_are_unfinished() {
+        let entries = [prompt(0, "Do it"), asked(1, 100, "call-1", "Edit file")];
+        let mut ended = renderer(Format::Raw, Detail::Abridged, 60);
+        for entry in &entries {
+            ended.render(entry);
+        }
+        let output = ended.finish(Session::Ended);
+        assert!(!output.contains("waiting for permission"), "{output}");
+        assert!(
+            output.contains("· Tool  Edit file") && output.contains("unfinished"),
+            "{output}"
+        );
+    }
+
+    #[test]
+    fn prompts_keep_their_lines_when_styled() {
+        let output = plain(&render_all(
+            &mut renderer(Format::Styled, Detail::Abridged, 60),
+            &[prompt(0, "Resolved.\n- @joshua: Use humantime\nContinue.")],
+        ));
+        assert!(
+            output.contains("  - @joshua: Use humantime\n  Continue.\n"),
+            "{output}"
+        );
     }
 }

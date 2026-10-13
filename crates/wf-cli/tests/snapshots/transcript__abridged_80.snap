@@ -6,7 +6,7 @@ expression: visible(&styled)
   You are the agent `coder`, working on item #qp7jzs: Dummy: add a hello subcom…
 
 ␛[1m␛[35mcoder␛[0m  ␛[2m00:49␛[0m
-  ␛[32m✓␛[0m ␛[1mBash␛[0m  cat README.md; ls crates; grep -A15 '^\[wo…  ␛[2mallowed by a person␛[0m  ␛[2m0.2s␛[0m
+  ␛[32m✓␛[0m ␛[1mBash␛[0m  cat README.md; ls crates; grep -A15 '^\[workspa…  ␛[2mallowed by you␛[0m  ␛[2m0.2s␛[0m
     ␛[2m│ ␛[0m␛[2m# workforce (`wf`)␛[0m
     ␛[2m│␛[0m
     ␛[2m│ ␛[0m␛[2mA peer-to-peer, CLI-first coordination layer for coding agents and the hu…␛[0m
@@ -18,7 +18,7 @@ expression: visible(&styled)
     ␛[2m│ ␛[0m␛[2mcrates/wf-net/Cargo.toml:␛[0m
     ␛[2m│ ␛[0m␛[2mcrates/wf-store/Cargo.toml:␛[0m
     ␛[2m│ ␛[0m␛[2mcrates/wf-vcs/Cargo.toml:␛[0m
-  ␛[32m✓␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7 crates…  ␛[2mallowed by a person␛[0m   ␛[2m0.1s␛[0m
+  ␛[32m✓␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7 crates under…  ␛[2mallowed by you␛[0m  ␛[2m0.1s␛[0m
     ␛[2m│ ␛[0m␛[2mUsage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...␛[0m
     ␛[2m│␛[0m
     ␛[2m│ ␛[0m␛[2mFor more information, try '--help'.␛[0m

@@ -2,7 +2,7 @@
 //! failed inside a chained command and whose retry found its worktree gone.
 
 use jiff::tz::TimeZone;
-use wf_cli::transcript::{Detail, Format, Renderer};
+use wf_cli::transcript::{Detail, Format, Renderer, Session};
 use wf_harness::TranscriptEntry;
 
 const TRANSCRIPT: &str = include_str!("fixtures/transcript-ivnj5b.jsonl");
@@ -14,7 +14,7 @@ fn render(width: usize, format: Format, detail: Detail) -> String {
         let entry: TranscriptEntry = serde_json::from_str(line).unwrap();
         out.push_str(&renderer.render(&entry));
     }
-    out.push_str(&renderer.finish());
+    out.push_str(&renderer.finish(Session::Ended));
     out
 }
 

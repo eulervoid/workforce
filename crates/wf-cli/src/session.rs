@@ -292,7 +292,17 @@ fn watch(
         let read = file.read(&mut buffer)?;
         if read == 0 {
             if no_follow || ended {
-                anstream::print!("{}", renderer.finish());
+                let ended = ended
+                    || workspace
+                        .state()
+                        .session(session)
+                        .is_some_and(|session| !session.is_live());
+                let session = if ended {
+                    transcript::Session::Ended
+                } else {
+                    transcript::Session::Live
+                };
+                anstream::print!("{}", renderer.finish(session));
                 std::io::stdout().flush()?;
                 return Ok(());
             }

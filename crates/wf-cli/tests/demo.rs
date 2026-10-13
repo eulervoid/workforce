@@ -1305,7 +1305,7 @@ fn permissions_test_runs_the_deciders_of_the_machine_config() {
     let wf = Sandbox::new();
     let allowed = wf.json(&["permissions", "test", "--command", "wf item list | head"]);
     assert_eq!(allowed["permission"], "allow");
-    assert_eq!(allowed["by"], "rules");
+    assert_eq!(allowed["by"]["kind"], "rules");
 
     let config = wf.root.path().join("config/workforce");
     std::fs::create_dir_all(&config).unwrap();

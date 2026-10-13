@@ -6,7 +6,7 @@ brief  00:49                                                                    
   You are the agent `coder`, working on item #qp7jzs: Dummy: add a hello subcommand note to the README
 
 coder  00:49
-  ✓ Bash  cat README.md; ls crates; grep -A15 '^\[workspace\]' Cargo.toml; for f in crates/*…  allowed by a person  0.2s
+  ✓ Bash  cat README.md; ls crates; grep -A15 '^\[workspace\]' Cargo.toml; for f in crates/*/Carg…  allowed by you  0.2s
     | # workforce (`wf`)
     |
     | A peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.
@@ -18,7 +18,7 @@ coder  00:49
     | crates/wf-net/Cargo.toml:
     | crates/wf-store/Cargo.toml:
     | crates/wf-vcs/Cargo.toml:
-  ✓ Bash  wf comment qp7jzs "Workspace has 7 crates under crates/ (resolver 3, edition 2024)…  allowed by a person  0.1s
+  ✓ Bash  wf comment qp7jzs "Workspace has 7 crates under crates/ (resolver 3, edition 2024): wf-…  allowed by you  0.1s
     | Usage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...
     |
     | For more information, try '--help'.

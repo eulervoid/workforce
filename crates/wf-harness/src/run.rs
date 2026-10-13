@@ -269,6 +269,7 @@ impl Conversation {
                                 .decide(PermissionRequest::of(&request.tool_call.fields)) => {
                                 decided.record(&TranscriptEntry::decision(
                                     Timestamp::now(),
+                                    &request.tool_call.tool_call_id.0,
                                     &decision,
                                 ));
                                 decision.permission.answer(&request.options)
