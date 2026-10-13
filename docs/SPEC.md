@@ -1109,11 +1109,12 @@ must not make other machines run programs or call paid APIs. Each decision, its 
 go into the transcript of the session that asked.
 
 ### Notifications
-The principal does not have to watch `wf inbox`: with a command under `[notify]` in the machine config,
-the daemon runs it, without a shell, once for each new entry of the inbox (a blocker, a proposal, a
-review step or a merge that waits on the principal, a recovery left to the principal, a held permission
-request). `{kind}`, `{item}`, `{title}` and `{what}` in its arguments are replaced with the kind, the
-short id and the title of the item, and the text of `wf inbox`. No command, no notifications.
+The principal does not have to watch `wf inbox`: with a command under `[notify]` in the machine
+config, the daemon runs it, without a shell, once for each new entry of the inbox (a blocker, a
+proposal, a review step or a merge that waits on the principal, a recovery left to the principal, a
+held permission request). `{kind}`, `{item}`, `{title}` and `{what}` in its arguments are replaced
+with the kind, the short id and the title of the item, and the text of `wf inbox`. No command, no
+notifications.
 
 ```toml
 [notify]
@@ -1125,8 +1126,9 @@ The dispatcher tells of what waits after each of its turns, so approved work it 
 finish is not told of: a merge only once the dispatcher found the target branch checked out with
 changes. The entries told of are kept in the daemon and beside the store of the workforce
 (`announced.json`), so a restart does not tell of them again, and an entry that was gone and comes
-back, such as a resubmission, is told of anew. Permission requests do not outlive the daemon and are told of when they are held. A command that
-fails or takes longer than 20 seconds is logged and stopped; nothing waits for it.
+back, such as a resubmission, is told of anew. Permission requests do not outlive the daemon and are
+told of when they are held. A command that fails or takes longer than 20 seconds is logged and
+stopped; nothing waits for it.
 
 ## 13. Secrets and transcripts
 

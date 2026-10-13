@@ -142,11 +142,11 @@ agent = "judge"
 session says who decided each request and why.
 
 ## Notifications
-With a command under `[notify]` in the machine config, the daemon runs it, without a shell, once
-for each new entry of `wf inbox`: a blocker, a proposal to decide, a review that is yours, a merge
-that waits for a clean checkout, sessions that did not finish, a permission request. `{kind}`, `{item}`, `{title}` and `{what}` in its arguments are
-replaced as `wf inbox` says them. What it already told you of is not told again after a restart; a
-command that fails is logged.
+With a command under `[notify]` in the machine config, the daemon runs it, without a shell, once for
+each new entry of `wf inbox`: a blocker, a proposal to decide, a review that is yours, a merge that
+waits for a clean checkout, sessions that did not finish, a permission request. `{kind}`, `{item}`,
+`{title}` and `{what}` in its arguments are replaced as `wf inbox` says them. What it already told
+you of is not told again after a restart; a command that fails is logged.
 ```toml
 [notify]
 command = ["terminal-notifier", "-title", "wf: {title}", "-message", "{what}"]          # macOS
