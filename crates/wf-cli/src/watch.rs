@@ -38,6 +38,9 @@ pub fn watch(
         .as_deref()
         .map(|text| workspace.resolve_item(text))
         .transpose()?;
+    if mode == Mode::Interactive {
+        return crate::dashboard::run(workspace, only);
+    }
     let mut events = workspace.events()?;
     let mut backlog: Vec<Event> = events
         .iter()

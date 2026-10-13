@@ -1,6 +1,7 @@
 pub mod cli;
 pub mod commands;
 pub mod daemon;
+mod dashboard;
 pub mod data_dir;
 pub mod devices;
 pub mod draft;
