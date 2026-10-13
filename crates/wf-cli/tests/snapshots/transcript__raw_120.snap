@@ -7,22 +7,22 @@ brief  00:49                                                                    
 
 coder  00:49
   ✓ Bash  cat README.md; ls crates; grep -A15 '^\[workspace\]' Cargo.toml; for f in crates/*/Carg…  allowed by you  0.2s
-    | # workforce (`wf`)
-    |
-    | A peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.
-    | Event-sourced, forkable, built on iroh. M0 (signed event log, item model, CLI), M1 (sync between
-    | your machines, device invites, daemon, fork) and M2 (agents at work on one machine: sessions, review
-    | … 141 lines hidden
-    | crates/wf-daemon/Cargo.toml:
-    | crates/wf-harness/Cargo.toml:
-    | crates/wf-net/Cargo.toml:
-    | crates/wf-store/Cargo.toml:
-    | crates/wf-vcs/Cargo.toml:
+      # workforce (`wf`)
+
+      A peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.
+      Event-sourced, forkable, built on iroh. M0 (signed event log, item model, CLI), M1 (sync between
+      your machines, device invites, daemon, fork) and M2 (agents at work on one machine: sessions, review
+      … 141 lines hidden
+      crates/wf-daemon/Cargo.toml:
+      crates/wf-harness/Cargo.toml:
+      crates/wf-net/Cargo.toml:
+      crates/wf-store/Cargo.toml:
+      crates/wf-vcs/Cargo.toml:
   ✓ Bash  wf comment qp7jzs "Workspace has 7 crates under crates/ (resolver 3, edition 2024): wf-…  allowed by you  0.1s
-    | Usage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...
-    |
-    | For more information, try '--help'.
-    | submitted #qp7jzs
+      Usage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...
+
+      For more information, try '--help'.
+      submitted #qp7jzs
 
   The comment failed because `--done` needs `--step`, but the submit went through. I'll post the comment again without
   `--done`.

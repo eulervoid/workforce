@@ -25,6 +25,8 @@ const PROMPT_LINES: usize = 10;
 const MARGIN: usize = 2;
 /// Where what belongs to a tool call starts, under its name.
 const NESTED: usize = 4;
+/// The columns left of output and diffs under a tool call, after `NESTED`.
+const GUTTER: usize = 2;
 
 const DIM: Style = Style::new().dimmed();
 const BOLD: Style = Style::new().bold();
@@ -180,10 +182,14 @@ impl Layout {
         }
     }
 
-    fn gutter(&self) -> &'static str {
-        match self.format {
-            Format::Styled => "│ ",
-            Format::Raw => "| ",
+    /// What goes left of a line under a tool call. A line there drew the eye away from the code
+    /// it framed, so the indent alone sets output and diffs apart from the agent's text, and a
+    /// bar only marks the output of a call that failed.
+    fn gutter(&self, gutter: Gutter) -> String {
+        match (gutter, self.format) {
+            (Gutter::Blank, _) => "  ".to_owned(),
+            (Gutter::Failed, Format::Styled) => self.styled("│", color(AnsiColor::Red)) + " ",
+            (Gutter::Failed, Format::Raw) => "| ".to_owned(),
         }
     }
 
@@ -240,27 +246,18 @@ impl Layout {
     }
 
     /// Lines in a gutter under a tool call.
-    fn guttered(
-        &self,
-        lines: Vec<Line>,
-        gutter_style: Style,
-        style: impl Fn(&str) -> Style,
-    ) -> String {
-        let indent = " ".repeat(NESTED);
-        let gutter = self.gutter();
+    fn guttered(&self, lines: Vec<Line>, gutter: Gutter, style: impl Fn(&str) -> Style) -> String {
+        let left = format!("{}{}", " ".repeat(NESTED), self.gutter(gutter));
         let mut out = String::new();
         for line in lines {
-            out.push_str(&indent);
             match line {
-                Line::Text(text) if text.is_empty() => {
-                    out.push_str(&self.styled(gutter.trim_end(), gutter_style));
-                }
+                Line::Text(text) if text.is_empty() => out.push_str(left.trim_end()),
                 Line::Text(text) => {
-                    out.push_str(&self.styled(gutter, gutter_style));
+                    out.push_str(&left);
                     out.push_str(&self.styled(&text, style(&text)));
                 }
                 Line::Hidden(count) => {
-                    out.push_str(&self.styled(gutter, gutter_style));
+                    out.push_str(&left);
                     let text = format!("… {count} lines hidden");
                     out.push_str(&self.styled(&text, DIM));
                 }
@@ -610,12 +607,15 @@ impl Layout {
 
     fn output(&self, text: &str, failed: bool) -> String {
         let text = anstream::adapter::strip_str(unfenced(text)).to_string();
-        let width = NESTED + width_of(self.gutter());
-        let lines = self.fit(text.trim_end(), width, self.detail == Detail::Full);
+        let lines = self.fit(
+            text.trim_end(),
+            NESTED + GUTTER,
+            self.detail == Detail::Full,
+        );
         let (gutter, style) = if failed {
-            (color(AnsiColor::Red), Style::new())
+            (Gutter::Failed, Style::new())
         } else {
-            (DIM, DIM)
+            (Gutter::Blank, DIM)
         };
         self.guttered(self.abridged(lines), gutter, |_| style)
     }
@@ -640,8 +640,7 @@ impl Layout {
                 }
             })
             .collect();
-        let width = NESTED + width_of(self.gutter());
-        let lines = self.fit(&body.join("\n"), width, false);
+        let lines = self.fit(&body.join("\n"), NESTED + GUTTER, false);
         let mut out = String::new();
         if titled {
             out.push_str(&format!(
@@ -650,7 +649,7 @@ impl Layout {
                 self.styled(path, BOLD)
             ));
         }
-        out.push_str(&self.guttered(self.abridged(lines), DIM, |line| {
+        out.push_str(&self.guttered(self.abridged(lines), Gutter::Blank, |line| {
             if line.starts_with('+') {
                 color(AnsiColor::Green)
             } else if line.starts_with('-') {
@@ -671,6 +670,12 @@ pub fn call_line(call: &ToolCall) -> String {
         &call.name
     };
     format!("{name}  {}", first_line(&summary(call, name)))
+}
+
+#[derive(Clone, Copy)]
+enum Gutter {
+    Blank,
+    Failed,
 }
 
 enum Line {
