@@ -25,7 +25,15 @@ const SELECTION: Color = Color::DarkGray;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-pub fn draw(frame: &mut Frame, app: &App) {
+/// Draws the dashboard, and keeps the scroll of the text with the keys to what is shown of it.
+pub fn draw(frame: &mut Frame, app: &mut App) {
+    if let Some(scroll) = draw_all(frame, app) {
+        app.shown(scroll);
+    }
+}
+
+/// Draws the dashboard; the scroll of the text with the keys as it is shown, if one is.
+fn draw_all(frame: &mut Frame, app: &App) -> Option<Scroll> {
     let [header, counts, rule, body, rule_below, latest, keys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -39,7 +47,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_header(frame, app, header);
     frame.render_widget(Paragraph::new(counts_line(app)), counts);
     draw_rule(frame, rule);
-    draw_body(frame, app, body);
+    let shown = draw_body(frame, app, body);
     draw_rule(frame, rule_below);
     frame.render_widget(Paragraph::new(latest_line(app)), latest);
     match &app.prompt {
@@ -57,6 +65,7 @@ pub fn draw(frame: &mut Frame, app: &App) {
         Some(prompt) => draw_prompt(frame, app, prompt, keys),
         None => frame.render_widget(Paragraph::new(keys_line(app)), keys),
     }
+    shown
 }
 
 /// A list to pick from, at the bottom of the body.
@@ -243,7 +252,7 @@ fn draw_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(rule).dim(), area);
 }
 
-fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
     match app.tab {
         Tab::Now => draw_split(frame, app, area, draw_now_list),
         Tab::Items => draw_split(frame, app, area, draw_items_list),
@@ -253,14 +262,21 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
 }
 
 /// The list, and the detail on screen: in its place, or right of it in a wide window.
-fn draw_split(frame: &mut Frame, app: &App, area: Rect, draw_list: fn(&mut Frame, &App, Rect)) {
+fn draw_split(
+    frame: &mut Frame,
+    app: &App,
+    area: Rect,
+    draw_list: fn(&mut Frame, &App, Rect),
+) -> Option<Scroll> {
     let in_view = app.in_view();
     if !app.is_wide() {
-        match in_view {
+        return match in_view {
             Some(opened) => draw_detail(frame, app, opened, area),
-            None => draw_list(frame, app, area),
-        }
-        return;
+            None => {
+                draw_list(frame, app, area);
+                None
+            }
+        };
     }
     let [list, rule, detail] = Layout::horizontal([
         Constraint::Length(app.list_width()),
@@ -271,9 +287,7 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, draw_list: fn(&mut Frame
     draw_list(frame, app, list);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).dim(), rule);
-    if let Some(opened) = in_view {
-        draw_detail(frame, app, opened, detail);
-    }
+    draw_detail(frame, app, in_view?, detail)
 }
 
 fn section(title: &str) -> Line<'static> {
@@ -739,7 +753,7 @@ fn draw_items_list(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
 }
 
-fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
+fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Option<Scroll> {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     // The same margin as the lists.
     let body = Rect {
@@ -755,31 +769,43 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) {
             let Some(InView::Item { text, .. }) = in_view
                 .filter(|shown| matches!(shown, InView::Item { id: shown, .. } if shown == id))
             else {
-                return;
+                return None;
             };
             let text: Text = text.into_text().unwrap_or_default();
-            draw_scrolled(frame, text, opened.scroll, body, true);
+            Some(draw_scrolled(frame, text, opened.scroll, body, true))
         }
         Detail::Agent(id) => {
             let Some(InView::Agent { text, .. }) = in_view
                 .filter(|shown| matches!(shown, InView::Agent { id: shown, .. } if shown == id))
             else {
-                return;
+                return None;
             };
-            draw_scrolled(frame, Text::from(text.clone()), opened.scroll, body, true);
+            Some(draw_scrolled(
+                frame,
+                Text::from(text.clone()),
+                opened.scroll,
+                body,
+                true,
+            ))
         }
         Detail::Session(id) => {
             let Some(InView::Session(session)) =
                 in_view.filter(|shown| matches!(shown, InView::Session(shown) if shown.id == *id))
             else {
-                return;
+                return None;
             };
-            draw_session(frame, app, session, opened.scroll, body);
+            Some(draw_session(frame, app, session, opened.scroll, body))
         }
     }
 }
 
-fn draw_session(frame: &mut Frame, app: &App, session: &SessionInfo, scroll: Scroll, body: Rect) {
+fn draw_session(
+    frame: &mut Frame,
+    app: &App,
+    session: &SessionInfo,
+    scroll: Scroll,
+    body: Rect,
+) -> Scroll {
     let text = match (&session.place, app.transcripts.get(&session.id)) {
         (Place::Elsewhere(device), _) => {
             Text::from(Line::from(format!(" transcript on {device}")).dim())
@@ -811,7 +837,7 @@ fn draw_session(frame: &mut Frame, app: &App, session: &SessionInfo, scroll: Scr
         Constraint::Length(u16::from(!asks.is_empty())),
     ])
     .areas(body);
-    draw_scrolled(frame, text, scroll, body, false);
+    let shown = draw_scrolled(frame, text, scroll, body, false);
     if let Some(what) = asks.first() {
         let line = Line::from(vec![
             Span::raw("? ").fg(Color::Yellow).bold(),
@@ -822,6 +848,7 @@ fn draw_session(frame: &mut Frame, app: &App, session: &SessionInfo, scroll: Scr
         let mut lines = row.lines(line.spans, Some(keys), Vec::new());
         frame.render_widget(Paragraph::new(lines.remove(0)), bar);
     }
+    shown
 }
 
 /// Where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part stands
@@ -933,22 +960,31 @@ fn transcript_text(app: &App, agent: &str, transcript: &Transcript, width: usize
     out.into_text().unwrap_or_default()
 }
 
-fn draw_scrolled(frame: &mut Frame, text: Text<'static>, scroll: Scroll, area: Rect, wrap: bool) {
+/// Draws `text` at `scroll`, kept to what the text allows; returns the scroll it was drawn at.
+fn draw_scrolled(
+    frame: &mut Frame,
+    text: Text<'static>,
+    scroll: Scroll,
+    area: Rect,
+    wrap: bool,
+) -> Scroll {
     let height = usize::from(area.height);
     let mut paragraph = Paragraph::new(text);
     if wrap {
         paragraph = paragraph.wrap(Wrap { trim: false });
     }
     let lines = paragraph.line_count(area.width);
-    let last_top = lines.saturating_sub(height);
+    let last_top = u16::try_from(lines.saturating_sub(height)).unwrap_or(u16::MAX);
+    let scroll = scroll.within(last_top);
     let top = match scroll {
-        Scroll::FromTop(offset) => usize::from(offset).min(last_top),
-        Scroll::FromEnd(offset) => last_top.saturating_sub(usize::from(offset)),
+        Scroll::FromTop(offset) => offset,
+        Scroll::FromEnd(offset) => last_top - offset,
     };
-    frame.render_widget(paragraph.scroll((top as u16, 0)), area);
+    frame.render_widget(paragraph.scroll((top, 0)), area);
+    scroll
 }
 
-fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
+fn draw_log(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
     let area = Rect {
         x: area.x + 1,
         width: area.width.saturating_sub(1),
@@ -962,10 +998,10 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
             "no events match the filter"
         };
         frame.render_widget(Paragraph::new(empty).dim(), area);
-        return;
+        return None;
     }
     let text: Text = text.into_text().unwrap_or_default();
-    draw_scrolled(frame, text, app.log.scroll, area, true);
+    Some(draw_scrolled(frame, text, app.log.scroll, area, true))
 }
 
 /// The latest event, or why the last refresh failed.

@@ -48,7 +48,7 @@ fn event_loop(
     app.refresh(snapshot);
     let mut refreshed = Instant::now();
     loop {
-        terminal.draw(|frame| draw::draw(frame, &app))?;
+        terminal.draw(|frame| draw::draw(frame, &mut app))?;
         let wait = REFRESH_EVERY.saturating_sub(refreshed.elapsed());
         if event::poll(wait)? {
             match event::read()? {

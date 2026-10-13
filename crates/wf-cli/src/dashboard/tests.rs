@@ -25,7 +25,7 @@ use wf_core::stats::{AgentStats, ProjectStats};
 /// 2026-10-14 07:00 UTC.
 const NOW_MS: u64 = 1_792_047_600_000;
 
-fn screen(app: &App, width: u16, height: u16) -> String {
+fn screen(app: &mut App, width: u16, height: u16) -> String {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| draw::draw(frame, app)).unwrap();
     terminal.backend().to_string()
@@ -162,7 +162,7 @@ fn the_now_tab_shows_what_waits_what_works_and_what_is_flagged() {
     let mut app = app();
     let coder = app.snapshot.working[0].id;
     app.transcribed(coder, &coder_transcript());
-    insta::assert_snapshot!(screen(&app, 60, 22));
+    insta::assert_snapshot!(screen(&mut app, 60, 22));
 }
 
 #[test]
@@ -211,7 +211,7 @@ fn a_session_opens_on_its_transcript_and_esc_goes_back() {
     let mut snapshot = snapshot();
     snapshot.in_view = Some(InView::Session(coder));
     app.refresh(snapshot);
-    insta::assert_snapshot!(screen(&app, 60, 16));
+    insta::assert_snapshot!(screen(&mut app, 60, 16));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.wanted().detail, None);
 }
@@ -229,7 +229,7 @@ fn a_wide_window_shows_the_selection_beside_the_list() {
     let mut snapshot = snapshot();
     snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
     app.refresh(snapshot);
-    insta::assert_snapshot!(screen(&app, 130, 14));
+    insta::assert_snapshot!(screen(&mut app, 130, 14));
 }
 
 #[test]
@@ -245,14 +245,58 @@ fn an_item_detail_shows_the_item_as_wf_item_show_prints_it() {
         session: Some(SessionId::from_bytes([12; 32])),
     });
     app.refresh(snapshot);
-    insta::assert_snapshot!(screen(&app, 60, 10));
+    insta::assert_snapshot!(screen(&mut app, 60, 10));
+}
+
+#[test]
+fn scrolling_stops_at_the_end_of_a_detail() {
+    let mut app = app();
+    let spans = ItemId::from_bytes([2; 32]);
+    app.open_item(spans);
+    let mut snapshot = snapshot();
+    let text: String = (1..=12).map(|line| format!("line {line}\n")).collect();
+    snapshot.in_view = Some(InView::Item {
+        id: spans,
+        text,
+        session: None,
+    });
+    app.refresh(snapshot);
+    // Drawn after each key, as the dashboard is.
+    for _ in 0..20 {
+        press(&mut app, KeyCode::Char('j'));
+        screen(&mut app, 60, 10);
+    }
+    let at_end = screen(&mut app, 60, 10);
+    assert!(at_end.contains("line 12"));
+    press(&mut app, KeyCode::Char('k'));
+    assert_ne!(screen(&mut app, 60, 10), at_end);
+    press(&mut app, KeyCode::PageDown);
+    assert_eq!(screen(&mut app, 60, 10), at_end);
+    // Above the top of the log, which starts at its end.
+    press(&mut app, KeyCode::Char('4'));
+    let at_end = screen(&mut app, 60, 8);
+    for _ in 0..10 {
+        press(&mut app, KeyCode::Char('k'));
+        screen(&mut app, 60, 8);
+    }
+    let at_top = screen(&mut app, 60, 8);
+    assert_ne!(at_top, at_end);
+    press(&mut app, KeyCode::PageUp);
+    assert_eq!(screen(&mut app, 60, 8), at_top);
+    press(&mut app, KeyCode::Char('j'));
+    assert_ne!(screen(&mut app, 60, 8), at_top);
+    // At its end, the log follows what is added.
+    press(&mut app, KeyCode::PageDown);
+    screen(&mut app, 60, 8);
+    app.logged(["07:09  #ambqga  @ada · resolved b72c\n".to_owned()]);
+    assert!(screen(&mut app, 60, 8).contains("b72c"));
 }
 
 #[test]
 fn the_log_tab_follows_the_stream_and_filters_it() {
     let mut app = app();
     press(&mut app, KeyCode::Char('4'));
-    insta::assert_snapshot!("log", screen(&app, 60, 9));
+    insta::assert_snapshot!("log", screen(&mut app, 60, 9));
     press(&mut app, KeyCode::Char('/'));
     for character in "ambq".chars() {
         press(&mut app, KeyCode::Char(character));
@@ -260,7 +304,7 @@ fn the_log_tab_follows_the_stream_and_filters_it() {
     // The filter applies while it is typed, and `q` is text, not quitting.
     assert_eq!(press(&mut app, KeyCode::Char('q')), None);
     press(&mut app, KeyCode::Backspace);
-    insta::assert_snapshot!("log_filtered", screen(&app, 60, 9));
+    insta::assert_snapshot!("log_filtered", screen(&mut app, 60, 9));
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.log_lines().count(), 1);
     press(&mut app, KeyCode::Esc);
@@ -305,7 +349,7 @@ fn a_session_with_a_request_shows_it_under_its_transcript() {
     let mut snapshot = snapshot();
     snapshot.in_view = Some(InView::Session(coder));
     app.refresh(snapshot);
-    insta::assert_snapshot!(screen(&app, 60, 12));
+    insta::assert_snapshot!(screen(&mut app, 60, 12));
 }
 
 #[test]
@@ -317,7 +361,7 @@ fn a_blocker_is_answered_in_the_footer() {
         // Letters that are keys elsewhere are text here.
         assert_eq!(press(&mut app, KeyCode::Char(character)), None);
     }
-    insta::assert_snapshot!(screen(&app, 60, 8));
+    insta::assert_snapshot!(screen(&mut app, 60, 8));
     assert_eq!(
         press(&mut app, KeyCode::Enter),
         Some(Effect::Resolve {
@@ -339,7 +383,7 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(press(&mut app, KeyCode::Char('v')), None);
-    insta::assert_snapshot!(screen(&app, 60, 8));
+    insta::assert_snapshot!(screen(&mut app, 60, 8));
     assert_eq!(
         press(&mut app, KeyCode::Char('D')),
         Some(Effect::ShowDiff { item: archive })
@@ -360,14 +404,14 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
 fn what_an_action_did_shows_until_the_next_key() {
     let mut app = app();
     app.did("allowed: rm -rf target".to_owned());
-    assert!(screen(&app, 60, 8).contains("✓ allowed: rm -rf target"));
+    assert!(screen(&mut app, 60, 8).contains("✓ allowed: rm -rf target"));
     app.refresh(snapshot());
     assert!(
-        screen(&app, 60, 8).contains("✓ allowed"),
+        screen(&mut app, 60, 8).contains("✓ allowed"),
         "a refresh keeps it"
     );
     press(&mut app, KeyCode::Char('j'));
-    assert!(!screen(&app, 60, 8).contains("✓ allowed"));
+    assert!(!screen(&mut app, 60, 8).contains("✓ allowed"));
 }
 
 fn item_row(seed: u8, title: &str, category: StateCategory, state: &str) -> ItemRow {
@@ -422,7 +466,7 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
     press(&mut app, KeyCode::Char('2'));
     assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::State));
     app.refresh(with_items());
-    insta::assert_snapshot!("items", screen(&app, 60, 14));
+    insta::assert_snapshot!("items", screen(&mut app, 60, 14));
     press(&mut app, KeyCode::Char('F'));
     assert_eq!(app.item_groups().len(), 1, "only the ready item");
     press(&mut app, KeyCode::Char('F'));
@@ -489,7 +533,7 @@ fn item_keys_act_on_the_selected_item() {
         ],
         index: 0,
     });
-    insta::assert_snapshot!("choose_agent", screen(&app, 60, 12));
+    insta::assert_snapshot!("choose_agent", screen(&mut app, 60, 12));
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(
         press(&mut app, KeyCode::Enter),
@@ -547,7 +591,7 @@ fn a_session_is_stopped_only_when_confirmed() {
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(app.now.selection.get(), Some(&Row::Session(coder)));
     assert_eq!(press(&mut app, KeyCode::Char('x')), None);
-    insta::assert_snapshot!("stop", screen(&app, 60, 6));
+    insta::assert_snapshot!("stop", screen(&mut app, 60, 6));
     assert_eq!(press(&mut app, KeyCode::Char('n')), None);
     assert!(app.prompt.is_none());
     press(&mut app, KeyCode::Char('x'));
@@ -562,7 +606,7 @@ fn the_keys_show_on_a_question_mark() {
     let mut app = app();
     press(&mut app, KeyCode::Char('?'));
     assert!(matches!(app.prompt, Some(Prompt::Keys)));
-    insta::assert_snapshot!("keys", screen(&app, 60, 18));
+    insta::assert_snapshot!("keys", screen(&mut app, 60, 18));
     // Any key closes it, and does nothing else.
     assert_eq!(press(&mut app, KeyCode::Char('q')), None);
     assert!(app.prompt.is_none());
@@ -632,7 +676,7 @@ fn the_agents_tab_lists_each_agent_with_its_sessions() {
     press(&mut app, KeyCode::Char('3'));
     assert!(app.wanted().agents);
     app.refresh(with_agents());
-    insta::assert_snapshot!("agents", screen(&app, 60, 16));
+    insta::assert_snapshot!("agents", screen(&mut app, 60, 16));
     // An agent opens on its definition, a session on its transcript.
     press(&mut app, KeyCode::Enter);
     assert!(
@@ -660,7 +704,7 @@ fn the_agents_tab_lists_each_agent_with_its_sessions() {
 }
 
 /// The style of the cell at `x`, `y` once `app` is drawn.
-fn style_at(app: &App, width: u16, height: u16, x: u16, y: u16) -> ratatui::style::Style {
+fn style_at(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> ratatui::style::Style {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
     terminal.draw(|frame| draw::draw(frame, app)).unwrap();
     terminal.backend().buffer()[(x, y)].style()
@@ -682,18 +726,24 @@ fn the_part_with_the_keys_stands_out() {
     let (row, crumb_y) = (9, 3);
     let crumb_x = app.list_width() + 3;
     assert_eq!(app.wanted().detail, Some(Detail::Session(blocked)));
-    assert_eq!(style_at(&app, 130, 14, 30, row).bg, Some(Color::DarkGray));
+    assert_eq!(
+        style_at(&mut app, 130, 14, 30, row).bg,
+        Some(Color::DarkGray)
+    );
     assert!(
-        style_at(&app, 130, 14, crumb_x, crumb_y)
+        style_at(&mut app, 130, 14, crumb_x, crumb_y)
             .add_modifier
             .contains(Modifier::DIM)
     );
     // In the detail, the list lets go of the selection's background, and the breadcrumb lights up.
     press(&mut app, KeyCode::Char('l'));
     app.refresh(snapshot);
-    assert_ne!(style_at(&app, 130, 14, 30, row).bg, Some(Color::DarkGray));
+    assert_ne!(
+        style_at(&mut app, 130, 14, 30, row).bg,
+        Some(Color::DarkGray)
+    );
     // Where `coder · work` starts: the backend quotes each line, which the column leaves out.
-    let line = screen(&app, 130, 14)
+    let line = screen(&mut app, 130, 14)
         .lines()
         .nth(usize::from(crumb_y))
         .unwrap()
@@ -701,7 +751,7 @@ fn the_part_with_the_keys_stands_out() {
     let before = &line[1..line.find("coder ·").unwrap()];
     let column = u16::try_from(before.chars().count()).unwrap();
     assert!(
-        style_at(&app, 130, 14, column, crumb_y)
+        style_at(&mut app, 130, 14, column, crumb_y)
             .add_modifier
             .contains(Modifier::BOLD)
     );
