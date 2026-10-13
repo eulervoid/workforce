@@ -25,13 +25,20 @@ where
     W: AsyncWrite + Unpin,
     T: Serialize,
 {
-    let bytes = encoding::encode(message)?;
+    write_encoded_frame(writer, &encoding::encode(message)?).await
+}
+
+/// Writes a message that is already encoded.
+pub async fn write_encoded_frame<W>(writer: &mut W, bytes: &[u8]) -> Result<(), FrameError>
+where
+    W: AsyncWrite + Unpin,
+{
     let length = u32::try_from(bytes.len())
         .ok()
         .filter(|length| *length <= MAX_FRAME_LEN)
         .ok_or(FrameError::TooLarge(bytes.len() as u64))?;
     writer.write_all(&length.to_be_bytes()).await?;
-    writer.write_all(&bytes).await?;
+    writer.write_all(bytes).await?;
     writer.flush().await?;
     Ok(())
 }

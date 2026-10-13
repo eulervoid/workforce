@@ -19,9 +19,7 @@ use wf_core::name::AgentName;
 use wf_harness::Permission;
 use wf_net::frame::MAX_FRAME_LEN;
 
-use crate::peers::PeerSync;
-
-pub const PROTOCOL_VERSION: u32 = 9;
+pub const PROTOCOL_VERSION: u32 = 10;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -56,27 +54,26 @@ pub struct Request {
 }
 
 #[derive(Serialize, Deserialize)]
+///
+/// Each call is answered with a [`Reply`] of the type its documentation names.
 pub enum Call {
-    /// The encoded [`wf_core::state::State`].
+    /// The encoded [`wf_core::state::State`], as `Vec<u8>`.
     State,
+    /// `Option<Event>`.
     Event(EventId),
     /// A page of the log: up to [`EVENTS_PER_PAGE`] events in the order the daemon applied them,
-    /// starting at position `from`. An empty page is the end.
-    Events {
-        from: u64,
-    },
-    /// Checks the policy, signs with the device key of the daemon and stores the event.
-    Author {
-        actor: Actor,
-        body: Box<EventBody>,
-    },
-    /// Syncs with every other bound device now.
+    /// starting at position `from`, as `Vec<Event>`. An empty page is the end.
+    Events { from: u64 },
+    /// Checks the policy, signs with the device key of the daemon and stores the event; answered
+    /// with the `Event`.
+    Author { actor: Actor, body: Box<EventBody> },
+    /// Syncs with every other bound device now; answered with a `Vec<PeerSync>`.
     SyncNow,
     /// Founds the workforce of this genesis as a fork of the one the request names, from what the
-    /// daemon holds of it, and starts serving it.
+    /// daemon holds of it, and starts serving it; answered with `()`.
     Fork(Box<Event>),
     /// Joins the workforce of an invite code (`wfi1...`) as this machine's device, writing a
-    /// profile for it, so the daemon's endpoint is the only one with its key.
+    /// profile for it, so the daemon's endpoint is the only one with its key; answered with `()`.
     Join {
         code: String,
         profile: DeviceProfile,
@@ -84,27 +81,28 @@ pub enum Call {
     /// Starts taking in a workforce this machine does not have yet, from these devices, which may
     /// not be bound in it as far as this machine knows: how a device follows a fork it is only
     /// about to learn the members of. The history comes from the parent when it is stored here.
+    /// Answered with a `Vec<PeerSync>`.
     Follow(Vec<DeviceKey>),
-    /// When each device was last heard from, in milliseconds since the epoch.
+    /// When each device was last heard from, in milliseconds since the epoch, as
+    /// `Vec<(DeviceKey, u64)>`.
     LastSeen,
     /// Starts a work session of `agent` on `item`, in a worktree of the repository at
-    /// `repository` on this machine.
+    /// `repository` on this machine; answered with its `SessionId`.
     StartSession {
         agent: AgentName,
         item: ItemId,
         repository: PathBuf,
     },
     /// Ends a live session of this machine after the agent's turn, as the agent says, and
-    /// applies what follows from it to its item.
-    EndSession {
-        session: SessionId,
-        finish: Finish,
-    },
-    /// Stops a live session of this machine now, for the principal.
+    /// applies what follows from it to its item; answered with `()`.
+    EndSession { session: SessionId, finish: Finish },
+    /// Stops a live session of this machine now, for the principal; answered with `()`.
     StopSession(SessionId),
-    /// The permission requests that sessions of this machine wait to have answered.
+    /// The permission requests that sessions of this machine wait to have answered, as
+    /// `Vec<HeldPermission>`.
     Permissions,
-    /// Answers the oldest permission request of a session.
+    /// Answers the oldest permission request of a session; answered with that
+    /// `HeldPermission`.
     AnswerPermission {
         session: SessionId,
         answer: Permission,
@@ -123,22 +121,9 @@ pub struct HeldPermission {
     pub since_ms: u64,
 }
 
-#[derive(Serialize, Deserialize)]
-pub enum Response {
-    State(Vec<u8>),
-    Event(Option<Event>),
-    Events(Vec<Event>),
-    Authored(Event),
-    Synced(Vec<PeerSync>),
-    Forked,
-    Joined,
-    LastSeen(Vec<(DeviceKey, u64)>),
-    SessionStarted(SessionId),
-    SessionEnded,
-    Permissions(Vec<HeldPermission>),
-    PermissionAnswered(HeldPermission),
-    Failed(String),
-}
+/// What the daemon answers a [`Call`] with: what the call asks for, or why it failed. Each call
+/// says what it is answered with, so the client decodes the reply as the type it expects.
+pub type Reply<T> = Result<T, String>;
 
 /// `$XDG_RUNTIME_DIR/workforce/daemon.sock`, falling back to the data directory.
 pub fn socket_path(data_dir: &Path, runtime_dir: Option<&Path>) -> PathBuf {

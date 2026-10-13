@@ -4,6 +4,7 @@ use std::io::ErrorKind;
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
+use serde::de::DeserializeOwned;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
@@ -15,7 +16,7 @@ use wf_harness::Permission;
 
 use crate::peers::PeerSync;
 use crate::proto::{
-    Call, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request, Response,
+    Call, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Reply, Request,
     read_message, write_message,
 };
 
@@ -25,8 +26,6 @@ pub enum ClientError {
     Proto(#[from] ProtoError),
     #[error("the daemon refused: {0}")]
     Failed(String),
-    #[error("the daemon answered with the wrong kind of message")]
-    UnexpectedResponse,
 }
 
 pub struct DaemonClient {
@@ -66,21 +65,20 @@ impl DaemonClient {
         }
     }
 
-    fn call(&mut self, workforce: WorkforceId, call: Call) -> Result<Response, ClientError> {
+    /// Makes `call` and reads its [`Reply`] as the type the call is answered with.
+    fn call<T: DeserializeOwned>(
+        &mut self,
+        workforce: WorkforceId,
+        call: Call,
+    ) -> Result<T, ClientError> {
         write_message(&mut self.stream, &Request { workforce, call })?;
-        match read_message(&mut self.stream)? {
-            Response::Failed(message) => Err(ClientError::Failed(message)),
-            response => Ok(response),
-        }
+        let reply: Reply<T> = read_message(&mut self.stream)?;
+        reply.map_err(ClientError::Failed)
     }
 
     pub fn state(&mut self, workforce: WorkforceId) -> Result<State, ClientError> {
-        match self.call(workforce, Call::State)? {
-            Response::State(bytes) => {
-                wf_core::encoding::decode(&bytes).map_err(|error| ProtoError::from(error).into())
-            }
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        let bytes: Vec<u8> = self.call(workforce, Call::State)?;
+        wf_core::encoding::decode(&bytes).map_err(|error| ProtoError::from(error).into())
     }
 
     pub fn event(
@@ -88,10 +86,7 @@ impl DaemonClient {
         workforce: WorkforceId,
         id: EventId,
     ) -> Result<Option<Event>, ClientError> {
-        match self.call(workforce, Call::Event(id))? {
-            Response::Event(event) => Ok(event),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, Call::Event(id))
     }
 
     /// Every event, in the order the daemon applied them.
@@ -108,11 +103,11 @@ impl DaemonClient {
         let mut events = Vec::new();
         loop {
             let position = from + events.len() as u64;
-            match self.call(workforce, Call::Events { from: position })? {
-                Response::Events(page) if page.is_empty() => return Ok(events),
-                Response::Events(page) => events.extend(page),
-                _ => return Err(ClientError::UnexpectedResponse),
+            let page: Vec<Event> = self.call(workforce, Call::Events { from: position })?;
+            if page.is_empty() {
+                return Ok(events);
             }
+            events.extend(page);
         }
     }
 
@@ -122,31 +117,22 @@ impl DaemonClient {
         actor: Actor,
         body: EventBody,
     ) -> Result<Event, ClientError> {
-        match self.call(
+        self.call(
             workforce,
             Call::Author {
                 actor,
                 body: Box::new(body),
             },
-        )? {
-            Response::Authored(event) => Ok(event),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        )
     }
 
     pub fn sync_now(&mut self, workforce: WorkforceId) -> Result<Vec<PeerSync>, ClientError> {
-        match self.call(workforce, Call::SyncNow)? {
-            Response::Synced(peers) => Ok(peers),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, Call::SyncNow)
     }
 
     /// Has the daemon found the fork of `parent` that `genesis` starts.
     pub fn fork(&mut self, parent: WorkforceId, genesis: Event) -> Result<(), ClientError> {
-        match self.call(parent, Call::Fork(Box::new(genesis)))? {
-            Response::Forked => Ok(()),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(parent, Call::Fork(Box::new(genesis)))
     }
 
     /// Has the daemon join the workforce of `code` as this machine's device.
@@ -160,10 +146,7 @@ impl DaemonClient {
             code: code.to_string(),
             profile,
         };
-        match self.call(workforce, call)? {
-            Response::Joined => Ok(()),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, call)
     }
 
     /// Has the daemon take in `workforce` from `devices`.
@@ -172,10 +155,7 @@ impl DaemonClient {
         workforce: WorkforceId,
         devices: Vec<DeviceKey>,
     ) -> Result<Vec<PeerSync>, ClientError> {
-        match self.call(workforce, Call::Follow(devices))? {
-            Response::Synced(peers) => Ok(peers),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, Call::Follow(devices))
     }
 
     /// Has the daemon start a work session of `agent` on `item`.
@@ -191,10 +171,7 @@ impl DaemonClient {
             item,
             repository: repository.to_path_buf(),
         };
-        match self.call(workforce, call)? {
-            Response::SessionStarted(session) => Ok(session),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, call)
     }
 
     /// Has the daemon end a session of this machine.
@@ -204,10 +181,7 @@ impl DaemonClient {
         session: SessionId,
         finish: Finish,
     ) -> Result<(), ClientError> {
-        match self.call(workforce, Call::EndSession { session, finish })? {
-            Response::SessionEnded => Ok(()),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, Call::EndSession { session, finish })
     }
 
     /// Has the daemon stop a session of this machine now.
@@ -216,10 +190,7 @@ impl DaemonClient {
         workforce: WorkforceId,
         session: SessionId,
     ) -> Result<(), ClientError> {
-        match self.call(workforce, Call::StopSession(session))? {
-            Response::SessionEnded => Ok(()),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, Call::StopSession(session))
     }
 
     /// The permission requests that wait for the principal.
@@ -227,10 +198,7 @@ impl DaemonClient {
         &mut self,
         workforce: WorkforceId,
     ) -> Result<Vec<HeldPermission>, ClientError> {
-        match self.call(workforce, Call::Permissions)? {
-            Response::Permissions(held) => Ok(held),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, Call::Permissions)
     }
 
     /// Answers the oldest request of a session, and says which it was.
@@ -240,20 +208,14 @@ impl DaemonClient {
         session: SessionId,
         answer: Permission,
     ) -> Result<HeldPermission, ClientError> {
-        match self.call(workforce, Call::AnswerPermission { session, answer })? {
-            Response::PermissionAnswered(held) => Ok(held),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, Call::AnswerPermission { session, answer })
     }
 
     pub fn last_seen(
         &mut self,
         workforce: WorkforceId,
     ) -> Result<Vec<(DeviceKey, u64)>, ClientError> {
-        match self.call(workforce, Call::LastSeen)? {
-            Response::LastSeen(seen) => Ok(seen),
-            _ => Err(ClientError::UnexpectedResponse),
-        }
+        self.call(workforce, Call::LastSeen)
     }
 }
 

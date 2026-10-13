@@ -2,15 +2,16 @@
 
 use std::sync::Arc;
 
+use serde::Serialize;
 use tokio::net::UnixStream;
 use wf_core::id::WorkforceId;
 use wf_core::invite::{InviteCode, InviteCodeError};
 use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::session::SessionRole;
-use wf_net::frame::{FrameError, read_frame, write_frame};
+use wf_net::frame::{FrameError, read_frame, write_encoded_frame, write_frame};
 
-use crate::peers::{peers_of, sync_all};
-use crate::proto::{Call, EVENTS_PER_PAGE, Hello, HelloReply, PROTOCOL_VERSION, Request, Response};
+use crate::peers::{PeerSync, peers_of, sync_all};
+use crate::proto::{Call, EVENTS_PER_PAGE, Hello, HelloReply, PROTOCOL_VERSION, Reply, Request};
 use crate::{Daemon, Loaded, now_ms};
 
 pub(crate) async fn handle(daemon: Arc<Daemon>, mut stream: UnixStream) {
@@ -41,21 +42,32 @@ async fn converse(daemon: &Arc<Daemon>, stream: &mut UnixStream) -> Result<(), F
             Err(FrameError::Closed) => return Ok(()),
             Err(error) => return Err(error),
         };
-        let response = answer(daemon, request).await;
-        match write_frame(stream, &response).await {
+        let reply = answer(daemon, request).await;
+        match write_encoded_frame(stream, &reply).await {
             Err(FrameError::TooLarge(size)) => {
                 // Nothing of the answer was written, so the connection is still in step.
                 let message = format!(
                     "the answer is {size} bytes, more than fits in one message on the socket"
                 );
-                write_frame(stream, &Response::Failed(message)).await?;
+                write_frame(stream, &failed(message)).await?;
             }
             other => other?,
         }
     }
 }
 
-async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
+/// A failed [`Reply`], which reads the same whatever the call was answered with.
+fn failed(message: String) -> Reply<()> {
+    Err(message)
+}
+
+/// Encodes what a call is answered with.
+fn reply<T: Serialize>(value: T) -> Result<Vec<u8>, String> {
+    wf_core::encoding::encode(&Reply::Ok(value)).map_err(|error| wf_core::report::report(&error))
+}
+
+/// The encoded [`Reply`] to a request.
+async fn answer(daemon: &Arc<Daemon>, request: Request) -> Vec<u8> {
     let opened = match request.call {
         Call::Follow(_) | Call::Join { .. } => daemon.follow(request.workforce),
         Call::State
@@ -73,12 +85,16 @@ async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
-        Err(error) => return Response::Failed(wf_core::report::report(&error)),
+        Err(error) => return encode_failed(wf_core::report::report(&error)),
     };
     match call(daemon, request.workforce, &loaded, request.call).await {
-        Ok(response) => response,
-        Err(message) => Response::Failed(message),
+        Ok(reply) => reply,
+        Err(message) => encode_failed(message),
     }
+}
+
+fn encode_failed(message: String) -> Vec<u8> {
+    wf_core::encoding::encode(&failed(message)).expect("a message encodes")
 }
 
 async fn call(
@@ -86,7 +102,7 @@ async fn call(
     workforce: WorkforceId,
     loaded: &Arc<Loaded>,
     call: Call,
-) -> Result<Response, String> {
+) -> Result<Vec<u8>, String> {
     let storage = &loaded.storage;
     let closed = |error: crate::StorageClosed| wf_core::report::report(&error);
     match call {
@@ -96,7 +112,7 @@ async fn call(
                 .await
                 .map_err(closed)?
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::State(bytes))
+            reply(bytes)
         }
         Call::Event(id) => {
             let event = storage
@@ -104,7 +120,7 @@ async fn call(
                 .await
                 .map_err(closed)?
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::Event(event))
+            reply(event)
         }
         Call::Events { from } => {
             let events = storage
@@ -114,7 +130,7 @@ async fn call(
                 .await
                 .map_err(closed)?
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::Events(events))
+            reply(events)
         }
         Call::Author { actor, body } => {
             let signer = daemon.signer().clone();
@@ -124,7 +140,7 @@ async fn call(
                 .await
                 .map_err(closed)?
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::Authored(event))
+            reply(event)
         }
         Call::SyncNow => {
             let own = daemon.device();
@@ -138,21 +154,21 @@ async fn call(
                 .await
                 .map_err(closed)?;
             if peers.is_empty() {
-                return Ok(Response::Synced(Vec::new()));
+                return reply(Vec::<PeerSync>::new());
             }
             let node = daemon
                 .node()
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
             let results = sync_all(&node, workforce, peers, Some(daemon.presence())).await;
-            Ok(Response::Synced(results))
+            reply(results)
         }
         Call::Fork(genesis) => {
             daemon
                 .create_fork(loaded, *genesis)
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::Forked)
+            reply(())
         }
         Call::Join { code, profile } => {
             let code: InviteCode = code
@@ -165,7 +181,7 @@ async fn call(
                 .join(loaded, &code, profile)
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::Joined)
+            reply(())
         }
         Call::Follow(devices) => {
             let peers = devices
@@ -177,9 +193,9 @@ async fn call(
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
             let results = sync_all(&node, workforce, peers, Some(daemon.presence())).await;
-            Ok(Response::Synced(results))
+            reply(results)
         }
-        Call::LastSeen => Ok(Response::LastSeen(daemon.presence().snapshot())),
+        Call::LastSeen => reply(daemon.presence().snapshot()),
         Call::StartSession {
             agent,
             item,
@@ -196,20 +212,20 @@ async fn call(
                 )
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::SessionStarted(session))
+            reply(session)
         }
-        Call::Permissions => Ok(Response::Permissions(daemon.held.list(workforce))),
+        Call::Permissions => reply(daemon.held.list(workforce)),
         Call::AnswerPermission { session, answer } => daemon
             .held
             .answer(session, answer)
-            .map(Response::PermissionAnswered)
-            .ok_or_else(|| "that session is not waiting for an answer".to_string()),
+            .ok_or_else(|| "that session is not waiting for an answer".to_string())
+            .and_then(reply),
         Call::EndSession { session, finish } => {
             daemon
                 .finish_session(workforce, loaded, session, SessionEnd::Finish(finish))
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::SessionEnded)
+            reply(())
         }
         Call::StopSession(session) => {
             daemon
@@ -221,7 +237,7 @@ async fn call(
                 )
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
-            Ok(Response::SessionEnded)
+            reply(())
         }
     }
 }
