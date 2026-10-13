@@ -217,7 +217,7 @@ fn a_new_principal_keeps_the_handle_of_events_in_the_history() {
 
     assert_eq!(state.member(&old).unwrap().handle.as_str(), "joshua");
     assert_eq!(state.member(&new).unwrap().handle.as_str(), "joshua");
-    assert_eq!(state.canonical_principal(&old), new);
+    assert_eq!(state.workforce.as_ref().unwrap().canonical(&old), new);
     assert_eq!(
         state.principal_of(&scenario.fixture.devices[0].key()),
         Some(new)

@@ -275,10 +275,6 @@ impl Policy {
         &DEFAULT_POLICY
     }
 
-    pub fn builtin_type_names() -> impl Iterator<Item = &'static TypeName> {
-        DEFAULT_POLICY.types.keys()
-    }
-
     /// Parses and validates policy text.
     pub fn parse(source: &str) -> Result<Policy, PolicyError> {
         let policy: Policy =
@@ -409,9 +405,7 @@ mod tests {
     fn default_policy_is_valid() {
         let policy = Policy::parse(DEFAULT_POLICY_TOML).unwrap();
         assert_eq!(&policy, Policy::default_policy());
-        let names: Vec<_> = Policy::builtin_type_names()
-            .map(|name| name.as_str())
-            .collect();
+        let names: Vec<_> = policy.types.keys().map(|name| name.as_str()).collect();
         assert_eq!(names, ["decision", "distill", "task"]);
     }
 

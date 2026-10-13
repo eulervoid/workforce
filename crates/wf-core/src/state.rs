@@ -411,13 +411,6 @@ impl State {
         workforce.members.get(&workforce.canonical(principal))
     }
 
-    /// The key a principal has in this workforce, whichever key an event names.
-    pub fn canonical_principal(&self, principal: &PrincipalKey) -> PrincipalKey {
-        self.workforce
-            .as_ref()
-            .map_or(*principal, |workforce| workforce.canonical(principal))
-    }
-
     /// The workforce this one was forked from and the heads it was forked at.
     pub fn fork_point(&self) -> Option<(WorkforceId, &[EventId])> {
         let fork = self.workforce.as_ref()?.fork.as_ref()?;
