@@ -115,7 +115,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
             let waiting_on_you =
-                view::inbox_views(workspace.state(), &workspace.held_permissions()).len();
+                view::inbox_views(workspace.state(), None, &workspace.held_permissions()).len();
             let context = view::StatusContext {
                 own: Some(workspace.device_key()),
                 last_seen: &workspace.last_seen(),
@@ -146,7 +146,12 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Review(args) => review(json, mode, &mut workspace, args),
                 Command::Watch(args) => crate::watch::watch(json, mode, &mut workspace, args),
                 Command::Inbox => {
-                    let views = view::inbox_views(workspace.state(), &workspace.held_permissions());
+                    let git = vcs::repository().ok();
+                    let views = view::inbox_views(
+                        workspace.state(),
+                        git.as_ref(),
+                        &workspace.held_permissions(),
+                    );
                     emit(json, &views, |views| render::inbox(views))
                 }
                 Command::Agent(command) => agent(json, command, &mut workspace),

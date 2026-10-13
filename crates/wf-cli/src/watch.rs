@@ -116,7 +116,14 @@ fn prompts(workspace: &Workspace, only: Option<ItemId>) -> Vec<Prompt> {
         })
         .map(Prompt::Permission)
         .collect();
-    for entry in state.inbox() {
+    let inbox = state.inbox();
+    // Only a waiting merge needs the repository, to name the files that block it.
+    let git = inbox
+        .iter()
+        .any(|entry| matches!(entry.waiting, Waiting::Merge { .. }))
+        .then(|| repository().ok())
+        .flatten();
+    for entry in inbox {
         if only.is_some_and(|item| item != entry.item) {
             continue;
         }
@@ -129,7 +136,7 @@ fn prompts(workspace: &Workspace, only: Option<ItemId>) -> Vec<Prompt> {
             Waiting::Proposal | Waiting::Merge { .. } | Waiting::Recovery { .. } => {
                 Prompt::Notice {
                     item: entry.item,
-                    what: view::what_waits(state, &entry).1,
+                    what: view::what_waits(state, git.as_ref(), &entry).1,
                 }
             }
         });
