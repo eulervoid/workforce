@@ -148,7 +148,8 @@ enum Actor {
 ```
 
   The device is trusted to state the actor truthfully (members are trusted in v1). Attribution chain:
-  principal → agent → session → device signature.
+  principal → agent → session → device signature. Actors are shown as `@ada`, `@ada/coder` and
+  `@daemon`.
 * **Workforce id**: BLAKE3 hash of the genesis event. Identifies, but is not a capability, so it may be
   committed to the repo.
 
