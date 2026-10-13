@@ -18,7 +18,7 @@ use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree
 use super::drive::run_session;
 use super::{Begin, Run, SessionError, blocking};
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
-use crate::machine_config::SandboxConfig;
+use crate::machine_config::{EnvironmentConfig, SandboxConfig};
 use crate::{Daemon, Loaded};
 
 /// The agent as the machine config says to run it: in a sandbox, or as it is. A config that is
@@ -101,7 +101,8 @@ impl Daemon {
             .harness_command(&definition.harness)
             .ok_or_else(|| SessionError::UnknownHarness(definition.harness.clone()))?;
         let machine_config = self.machine_config()?;
-        let sandbox = machine_config.sandbox;
+        let sandbox = machine_config.sandbox_of(&agent);
+        let environment = machine_config.environment_of(&agent);
         match &sandbox {
             SandboxConfig::Fence(_) if !on_path("fence") => return Err(SessionError::NoFence),
             SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
@@ -134,6 +135,7 @@ impl Daemon {
             definition,
             harness,
             sandbox,
+            environment,
             git_identity,
             agent_signing: machine_config.commits.agent_signing.signing(),
             item_context,
@@ -301,6 +303,7 @@ impl Daemon {
             definition,
             harness,
             sandbox,
+            environment,
             git_identity,
             agent_signing,
             item_context,
@@ -370,6 +373,7 @@ impl Daemon {
             permissions,
             sandbox,
             git_environment,
+            environment,
             autonomy_permissions: autonomy.permissions,
         }
     }
@@ -398,6 +402,7 @@ pub(super) struct Setup {
     pub(super) definition: AgentDefinition,
     pub(super) harness: AcpAgentConfig,
     pub(super) sandbox: SandboxConfig,
+    pub(super) environment: EnvironmentConfig,
     /// The name the agent commits under.
     pub(super) git_identity: String,
     pub(super) agent_signing: wf_vcs::CommitSigning,

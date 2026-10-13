@@ -1114,6 +1114,9 @@ go into the transcript of the session that asked.
   `publish = none | redacted | full` is a per-workforce policy (*later*).
 * `wf` **brokers** secrets, it does not store them. Sources: `secretspec.toml`, 1Password `op://`
   references, the system keyring. Values are injected into the harness environment.
+* An agent's environment is only what wf sets, a few variables every program expects (`HOME`, `PATH`,
+  ...), and what the machine config inherits or sets for every agent or for one (M2.2). Nothing else
+  of the daemon's environment reaches it; a variable set allows nothing in the sandbox by itself.
 * wf keeps the injected values in memory only and uses them to scrub: exact match plus base64, URL and hex
   encodings, then pattern scanning (gitleaks-style) as a second layer.
 * Comments written by agent sessions always pass redaction before signing.

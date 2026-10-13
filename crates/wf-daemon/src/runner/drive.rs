@@ -88,6 +88,11 @@ async fn drive(
             return failed(format!("the sandbox could not be set up: {problem}"));
         }
     };
+    let agent = crate::environment::confine(
+        agent,
+        &run.environment,
+        crate::environment::daemon_variables(),
+    );
     let opening = match &run.begin {
         Begin::New => Opening::New,
         Begin::Resume(record) => Opening::Resume(AgentSessionId(record.id.clone())),

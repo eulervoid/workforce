@@ -4,6 +4,7 @@
 
 pub mod client;
 pub mod decide;
+mod environment;
 mod judges;
 pub mod machine_config;
 mod peers;

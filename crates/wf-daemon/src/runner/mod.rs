@@ -218,6 +218,8 @@ struct Run {
     sandbox: SandboxConfig,
     /// What git in the agent's processes signs with and commits as.
     git_environment: Vec<(String, String)>,
+    /// What the machine config gives the agent in its environment.
+    environment: crate::machine_config::EnvironmentConfig,
     autonomy_permissions: wf_core::autonomy::PermissionMode,
 }
 
@@ -269,7 +271,7 @@ impl Daemon {
     }
 
     /// The config of this machine, read anew so that edits apply to the next session.
-    fn machine_config(&self) -> Result<MachineConfig, MachineConfigError> {
+    pub(crate) fn machine_config(&self) -> Result<MachineConfig, MachineConfigError> {
         match &self.config.machine_config {
             Some(path) => MachineConfig::load(path),
             None => Ok(MachineConfig::default()),

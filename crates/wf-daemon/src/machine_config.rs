@@ -2,6 +2,7 @@
 //! here, such as programs to run and model APIs to call. It is never part of the signed policy,
 //! because policy that syncs must not make other machines run programs or call paid APIs.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -38,6 +39,37 @@ pub struct MachineConfig {
     pub sandbox: SandboxConfig,
     #[serde(default)]
     pub commits: CommitsConfig,
+    #[serde(default)]
+    pub environment: EnvironmentConfig,
+    /// What one agent gets on this machine, on top of what every agent gets.
+    #[serde(rename = "agent", default)]
+    pub agents: BTreeMap<AgentName, AgentConfig>,
+}
+
+/// The variables an agent gets besides the ones wf sets: a few that every program expects, such
+/// as `HOME` and `PATH`, and those named here. Nothing else of the daemon's environment reaches it.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EnvironmentConfig {
+    /// Variables of the daemon's environment passed on, when they are set.
+    #[serde(default)]
+    pub inherit: Vec<String>,
+    /// Variables set to these values. `~` and `$NAME` are expanded from the daemon's environment
+    /// when the config is read, and `$$` is a `$`. A relative path is relative to the directory
+    /// the agent runs in.
+    #[serde(default)]
+    pub set: BTreeMap<String, String>,
+}
+
+/// What this machine gives one agent, on top of what it gives every agent.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AgentConfig {
+    #[serde(default)]
+    pub environment: EnvironmentConfig,
+    /// More that Fence allows the agent.
+    #[serde(default)]
+    pub sandbox: FenceConfig,
 }
 
 /// How commits are signed on this machine.
@@ -118,7 +150,7 @@ impl SandboxConfig {
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FenceConfig {
-    /// More paths the agent may write to.
+    /// More paths the agent may write to, expanded as the values of `[environment.set]`.
     #[serde(default)]
     pub allow_write: Vec<PathBuf>,
     /// More domains the agent may reach, such as `*.example.com`.
@@ -256,11 +288,129 @@ impl MachineConfig {
     }
 
     fn parse(text: &str) -> Result<Self, ParseError> {
-        let config: MachineConfig = toml::from_str(text).map_err(ParseError::Toml)?;
+        Self::parse_in(text, &|name| std::env::var(name).ok())
+    }
+
+    /// Parses `text`, expanding the variables of `[environment.set]` and the paths Fence allows
+    /// from `variable`.
+    fn parse_in(text: &str, variable: &dyn Fn(&str) -> Option<String>) -> Result<Self, ParseError> {
+        let mut config: MachineConfig = toml::from_str(text).map_err(ParseError::Toml)?;
         for decider in &config.permissions.deciders {
             decider.check().map_err(ParseError::Invalid)?;
         }
+        config
+            .environment
+            .check()
+            .map_err(|problem| ParseError::Invalid(format!("[environment]: {problem}")))?;
+        for (agent, agent_config) in &config.agents {
+            agent_config.environment.check().map_err(|problem| {
+                ParseError::Invalid(format!("[agent.{agent}.environment]: {problem}"))
+            })?;
+            match &config.sandbox {
+                SandboxConfig::Off {} if agent_config.sandbox != FenceConfig::default() => {
+                    return Err(ParseError::Invalid(format!(
+                        "[agent.{agent}.sandbox] adds to what Fence allows, but the sandbox is off"
+                    )));
+                }
+                SandboxConfig::Off {} | SandboxConfig::Fence(_) => {}
+            }
+        }
+        config.environment.expand(variable)?;
+        if let SandboxConfig::Fence(fence) = &mut config.sandbox {
+            fence.expand(variable)?;
+        }
+        for agent_config in config.agents.values_mut() {
+            agent_config.environment.expand(variable)?;
+            agent_config.sandbox.expand(variable)?;
+        }
         Ok(config)
+    }
+
+    /// What `agent` gets in its environment: what every agent gets, and what it gets on top,
+    /// which wins where both set a variable.
+    pub fn environment_of(&self, agent: &AgentName) -> EnvironmentConfig {
+        let mut environment = self.environment.clone();
+        if let Some(own) = self.agents.get(agent) {
+            environment
+                .inherit
+                .extend(own.environment.inherit.iter().cloned());
+            environment.set.extend(own.environment.set.clone());
+        }
+        environment
+    }
+
+    /// The sandbox `agent` runs in: what Fence allows every agent, and what it allows the agent.
+    pub fn sandbox_of(&self, agent: &AgentName) -> SandboxConfig {
+        match (&self.sandbox, self.agents.get(agent)) {
+            (SandboxConfig::Fence(fence), Some(own)) => {
+                let mut fence = fence.clone();
+                fence
+                    .allow_write
+                    .extend(own.sandbox.allow_write.iter().cloned());
+                fence
+                    .allow_domains
+                    .extend(own.sandbox.allow_domains.iter().cloned());
+                SandboxConfig::Fence(fence)
+            }
+            (sandbox, _) => sandbox.clone(),
+        }
+    }
+}
+
+/// Whether wf sets the variable `name` itself, so that the config must not.
+fn set_by_wf(name: &str) -> bool {
+    matches!(
+        name,
+        "PATH" | "GIT_AUTHOR_NAME" | "GIT_COMMITTER_NAME" | "GIT_CONFIG_COUNT"
+    ) || ["WF_", "GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"]
+        .iter()
+        .any(|prefix| name.starts_with(prefix))
+}
+
+/// `text` with `~` and `$NAME` expanded from `variable`; a variable that is not set is an error.
+fn expand(text: &str, variable: &dyn Fn(&str) -> Option<String>) -> Result<String, ParseError> {
+    shellexpand::full_with_context(
+        text,
+        || variable("HOME"),
+        |name| {
+            variable(name)
+                .map(Some)
+                .ok_or(std::env::VarError::NotPresent)
+        },
+    )
+    .map(|expanded| expanded.into_owned())
+    .map_err(|error| ParseError::Invalid(format!("`{text}`: {error}")))
+}
+
+impl EnvironmentConfig {
+    fn check(&self) -> Result<(), String> {
+        for name in self.inherit.iter().chain(self.set.keys()) {
+            if name.is_empty() || name.contains(['=', '\0']) {
+                return Err(format!("`{name}` is not a variable name"));
+            }
+            if set_by_wf(name) {
+                return Err(format!("wf sets `{name}` itself"));
+            }
+        }
+        Ok(())
+    }
+
+    fn expand(&mut self, variable: &dyn Fn(&str) -> Option<String>) -> Result<(), ParseError> {
+        for value in self.set.values_mut() {
+            *value = expand(value, variable)?;
+        }
+        Ok(())
+    }
+}
+
+impl FenceConfig {
+    fn expand(&mut self, variable: &dyn Fn(&str) -> Option<String>) -> Result<(), ParseError> {
+        for path in &mut self.allow_write {
+            if let Some(text) = path.to_str() {
+                *path = PathBuf::from(expand(text, variable)?);
+            }
+        }
+        Ok(())
     }
 }
 
@@ -349,6 +499,71 @@ mod tests {
         assert_eq!(configured.merge_signing, MergeSigningConfig::Device);
         assert!(MachineConfig::parse("[commits]\nagent_signing = \"device\"\n").is_err());
         assert!(MachineConfig::parse("[commits]\nagent_signing = \"always\"\n").is_err());
+    }
+
+    #[test]
+    fn an_agent_gets_the_environment_and_sandbox_of_every_agent_and_its_own() {
+        let text = r#"
+            [environment]
+            inherit = ["ANTHROPIC_API_KEY"]
+            set = { CARGO_TARGET_DIR = "~/.cache/target", NOTE = "$$HOME is ${HOME}" }
+
+            [sandbox]
+            kind = "fence"
+            allow_write = ["$CACHE/target"]
+
+            [agent.coder]
+            environment = { inherit = ["SSH_AUTH_SOCK"], set = { CARGO_TARGET_DIR = "target" } }
+            sandbox = { allow_domains = ["docs.rs"] }
+        "#;
+        let variable = |name: &str| match name {
+            "HOME" => Some("/home/me".to_string()),
+            "CACHE" => Some("/var/cache".to_string()),
+            _ => None,
+        };
+        let config = MachineConfig::parse_in(text, &variable).ok().unwrap();
+        let (coder, reviewer) = (
+            AgentName::new("coder").unwrap(),
+            AgentName::new("reviewer").unwrap(),
+        );
+
+        let every = config.environment_of(&reviewer);
+        assert_eq!(every.inherit, ["ANTHROPIC_API_KEY"]);
+        assert_eq!(every.set["CARGO_TARGET_DIR"], "/home/me/.cache/target");
+        assert_eq!(every.set["NOTE"], "$HOME is /home/me");
+        let own = config.environment_of(&coder);
+        assert_eq!(own.inherit, ["ANTHROPIC_API_KEY", "SSH_AUTH_SOCK"]);
+        assert_eq!(own.set["CARGO_TARGET_DIR"], "target");
+
+        let SandboxConfig::Fence(fence) = config.sandbox_of(&coder) else {
+            panic!("a fence sandbox");
+        };
+        assert_eq!(fence.allow_write, [PathBuf::from("/var/cache/target")]);
+        assert_eq!(fence.allow_domains, ["docs.rs"]);
+        assert_eq!(
+            config.sandbox_of(&reviewer),
+            SandboxConfig::Fence(FenceConfig {
+                allow_write: vec!["/var/cache/target".into()],
+                allow_domains: vec![],
+            })
+        );
+    }
+
+    #[test]
+    fn bad_environments_are_refused() {
+        for text in [
+            "[environment]\nset = { PATH = \"/bin\" }",
+            "[environment]\ninherit = [\"WF_SESSION\"]",
+            "[environment]\nset = { GIT_CONFIG_KEY_0 = \"x\" }",
+            "[environment]\nset = { \"A=B\" = \"x\" }",
+            "[environment]\nset = { CACHE = \"$NOT_SET_ANYWHERE/x\" }",
+            "[environment]\npass = []",
+            "[agent.coder.environment]\ninherit = [\"GIT_AUTHOR_NAME\"]",
+            "[sandbox]\nkind = \"off\"\n[agent.coder.sandbox]\nallow_write = [\"/x\"]",
+            "[agent.coder.sandbox]\nkind = \"off\"",
+        ] {
+            assert!(MachineConfig::parse_in(text, &|_| None).is_err(), "{text}");
+        }
     }
 
     #[test]
