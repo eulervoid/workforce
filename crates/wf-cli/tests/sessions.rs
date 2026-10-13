@@ -876,6 +876,52 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_principal_is_told_of_a_blocker_once_even_across_a_restart() {
+    let mut world = World::new("wf comment {item} \"which crate?\" --block\n").await;
+    let told = world.wf.root.path().join("told.txt");
+    world.machine_config(&format!(
+        "[notify]\ncommand = ['sh', '-c', 'printf \"%s|%s|%s\\n\" \"$1\" \"$2\" \"$3\" >> \"$0\"', '{}', '{{kind}}', '{{item}}', '{{what}}']\n",
+        told.display()
+    ));
+    let lines = |_: &World| -> Vec<String> {
+        std::fs::read_to_string(&told)
+            .unwrap_or_default()
+            .lines()
+            .map(str::to_string)
+            .collect()
+    };
+    let item = world.wf.add(&["--title", "Parse durations"]);
+    start_session(&world, &item);
+    world
+        .wait("the blocker is told of", |world| lines(world).len() == 1)
+        .await;
+    let first = &lines(&world)[0];
+    assert!(
+        first.starts_with(&format!("blocker|{}|blocker ", short(&item)))
+            && first.contains("--resolve"),
+        "{first}"
+    );
+
+    world.restart().await;
+    world
+        .wf
+        .run(&["comment", short(&item), "Which database?", "--block"]);
+    world
+        .wait("the second blocker is told of", |world| {
+            lines(world).len() >= 2
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let told = lines(&world);
+    assert_eq!(
+        told.len(),
+        2,
+        "the first blocker is not told of again: {told:?}"
+    );
+    assert_ne!(told[0], told[1]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn cancelling_an_item_stops_its_session() {
     let world = World::new("wf comment {item} \"which crate?\" --block\n").await;
     let item = world.wf.add(&["--title", "Not needed after all"]);
