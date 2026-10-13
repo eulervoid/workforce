@@ -100,7 +100,10 @@ pub(super) fn is_parked(
     };
     session.is_live()
         && session.role() == SessionRole::Work
-        && (blocked || !state.blockers(graph, session.item()).is_empty())
+        && (blocked
+            || !state
+                .unfinished_dependencies(graph, session.item())
+                .is_empty())
 }
 
 /// Live sessions first, then the others, each the newest first.

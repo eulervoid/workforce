@@ -123,10 +123,13 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
             item.priority(),
             state.readiness(graph, item),
             state
-                .blockers(graph, item.id())
+                .unfinished_dependencies(graph, item.id())
                 .iter()
-                .map(|blocker| {
-                    item_ref_view(state, state.item(blocker.item).expect("dependencies exist"))
+                .map(|dependency| {
+                    item_ref_view(
+                        state,
+                        state.item(dependency.item).expect("dependencies exist"),
+                    )
                 })
                 .collect(),
             blocking_views(state, graph, item),

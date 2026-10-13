@@ -29,7 +29,7 @@ pub struct DependencyGraph {
 
 /// Why a dependency is not satisfied yet.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Blocker {
+pub struct UnfinishedDependency {
     pub item: ItemId,
     /// `None` when the dependency's state is unknown under the current policy.
     pub state_category: Option<StateCategory>,
@@ -122,7 +122,11 @@ impl State {
     }
 
     /// Dependencies of `item` that are not done yet.
-    pub fn blockers(&self, graph: &DependencyGraph, item: ItemId) -> Vec<Blocker> {
+    pub fn unfinished_dependencies(
+        &self,
+        graph: &DependencyGraph,
+        item: ItemId,
+    ) -> Vec<UnfinishedDependency> {
         let Some(policy) = self.policy() else {
             return Vec::new();
         };
@@ -132,7 +136,7 @@ impl State {
                 let state_category = self
                     .item(dependency)
                     .and_then(|view| view.standing(&policy.policy).state_category());
-                (state_category != Some(StateCategory::Done)).then_some(Blocker {
+                (state_category != Some(StateCategory::Done)).then_some(UnfinishedDependency {
                     item: dependency,
                     state_category,
                 })
@@ -148,14 +152,14 @@ impl State {
         {
             return None;
         }
-        let blockers = self.blockers(graph, item.id());
+        let unfinished = self.unfinished_dependencies(graph, item.id());
         Some(
-            if blockers
+            if unfinished
                 .iter()
-                .any(|blocker| blocker.state_category == Some(StateCategory::Cancelled))
+                .any(|dependency| dependency.state_category == Some(StateCategory::Cancelled))
             {
                 Readiness::Stranded
-            } else if !blockers.is_empty() || item.has_open_blocker() {
+            } else if !unfinished.is_empty() || item.has_open_blocker() {
                 Readiness::Blocked
             } else if self.claim(item.id()).is_some() {
                 Readiness::Claimed

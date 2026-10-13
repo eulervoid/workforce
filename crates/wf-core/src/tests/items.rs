@@ -55,10 +55,10 @@ fn a_task_waits_for_the_task_it_depends_on() {
     fixture.apply(&mut state, 0, 2_002, depends_on(task, first));
     assert_eq!(ready_ids(&state), vec![first]);
     let graph = state.dependency_graph();
-    let blockers = state.blockers(&graph, task);
-    assert_eq!(blockers.len(), 1);
-    assert_eq!(blockers[0].item, first);
-    assert_eq!(blockers[0].state_category, Some(StateCategory::Open));
+    let unfinished = state.unfinished_dependencies(&graph, task);
+    assert_eq!(unfinished.len(), 1);
+    assert_eq!(unfinished[0].item, first);
+    assert_eq!(unfinished[0].state_category, Some(StateCategory::Open));
     assert_eq!(graph.dependents(first).collect::<Vec<_>>(), vec![task]);
 
     fixture.apply(&mut state, 0, 2_003, moved(first, "done"));
@@ -108,9 +108,9 @@ fn done_satisfies_dependents_but_cancelled_strands_them() {
 
     fixture.apply(&mut state, 0, 2_003, moved(part, "dropped"));
     let graph = state.dependency_graph();
-    let blockers = state.blockers(&graph, whole);
-    assert_eq!(blockers.len(), 1);
-    assert_eq!(blockers[0].state_category, Some(StateCategory::Cancelled));
+    let unfinished = state.unfinished_dependencies(&graph, whole);
+    assert_eq!(unfinished.len(), 1);
+    assert_eq!(unfinished[0].state_category, Some(StateCategory::Cancelled));
     assert!(!ready_ids(&state).contains(&whole));
     assert_eq!(readiness(&state, whole), Some(Readiness::Stranded));
     assert_eq!(readiness(&state, part), None);

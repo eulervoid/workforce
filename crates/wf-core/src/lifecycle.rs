@@ -266,7 +266,9 @@ impl State {
             Some(ItemView::Live(live)) => live.has_open_blocker(),
             Some(ItemView::Archived(_)) | None => false,
         };
-        let waits_on_dependency = !self.blockers(&self.dependency_graph(), item).is_empty();
+        let waits_on_dependency = !self
+            .unfinished_dependencies(&self.dependency_graph(), item)
+            .is_empty();
         if working && (blocked_by_comment || waits_on_dependency) {
             return TurnOutcome::Park;
         }
