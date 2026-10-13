@@ -129,7 +129,7 @@ fn prompts(workspace: &Workspace, only: Option<ItemId>) -> Vec<Prompt> {
             Waiting::Proposal | Waiting::Merge { .. } | Waiting::Recovery { .. } => {
                 Prompt::Notice {
                     item: entry.item,
-                    what: view::what_waits(state, &entry).1,
+                    what: state.what_waits(&entry),
                 }
             }
         });

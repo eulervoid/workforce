@@ -11,7 +11,6 @@ use wf_core::inbox::Waiting;
 use wf_core::item::ItemView;
 use wf_core::state::State;
 
-use super::inbox::recovery_waits;
 use super::session::is_parked;
 use super::{actor_label, device_label, timestamp_ms};
 
@@ -193,7 +192,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
                 Some(format!(
                     "#{} \"{title}\": {}",
                     entry.item.short(),
-                    recovery_waits(state, entry.item, role, failures, last)
+                    state.recovery_waits(entry.item, role, failures, last)
                 ))
             }
             Waiting::Blocker { .. }
