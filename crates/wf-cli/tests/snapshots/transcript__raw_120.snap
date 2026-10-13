@@ -1,0 +1,59 @@
+---
+source: crates/wf-cli/tests/transcript.rs
+expression: raw
+---
+brief  00:49                                                                                                    19 lines
+  You are the agent `coder`, working on item #qp7jzs: Dummy: add a hello subcommand note to the README
+
+coder  00:49
+  ✓ Bash  cat README.md; ls crates; grep -A15 '^\[workspace\]' Cargo.toml; for f in crates/*/Carg…  allowed by you  0.2s
+    | # workforce (`wf`)
+    |
+    | A peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.
+    | Event-sourced, forkable, built on iroh. M0 (signed event log, item model, CLI), M1 (sync between
+    | your machines, device invites, daemon, fork) and M2 (agents at work on one machine: sessions, review
+    | … 141 lines hidden
+    | crates/wf-daemon/Cargo.toml:
+    | crates/wf-harness/Cargo.toml:
+    | crates/wf-net/Cargo.toml:
+    | crates/wf-store/Cargo.toml:
+    | crates/wf-vcs/Cargo.toml:
+  ✓ Bash  wf comment qp7jzs "Workspace has 7 crates under crates/ (resolver 3, edition 2024): wf-…  allowed by you  0.1s
+    | Usage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...
+    |
+    | For more information, try '--help'.
+    | submitted #qp7jzs
+
+  The comment failed because `--done` needs `--step`, but the submit went through. I'll post the comment again without
+  `--done`.
+
+  ✗ Bash  wf comment qp7jzs "Workspace has 7 crates under crates/ (resolver 3, edition 2024): wf-core (pu…  failed  0.0s
+    allowed by rules: `wf comment` reports to wf
+    | Working directory "/home/principal/.local/share/workforce/kjfllqz4/worktrees/qp7jzsdzp2cy" was deleted; shell cwd…
+
+  I read the README and listed the workspace crates, but the comment with the summary may not have been posted. I made
+  no code changes.
+
+  The first `wf comment` call failed because `--done` requires `--step`. I then ran `wf work submit`, which succeeded
+  (`submitted #qp7jzs`). When I retried the comment, the worktree had already been deleted, so I don't know whether it
+  posted. I didn't retry from outside the worktree, since `wf` needs the repo.
+
+  The summary I tried to post:
+
+  - **`wf-core`:** pure domain logic (events, item model, lifecycle and briefs) with no IO.
+  - **`wf-store`:** the event-log store.
+  - **`wf-net`:** sync protocols over iroh, written against generic streams and a `SyncLog` trait.
+  - **`wf-daemon`:** owns the store while it runs, runs sessions and merges approved work.
+  - **`wf-harness`:** runs agents over ACP.
+  - **`wf-vcs`:** the only crate that runs `git`.
+  - **`wf-cli`:** the `wf` binary, which goes through `Workspace`.
+
+  The README covers milestones M0–M2:
+  - the signed event log
+  - sync between machines
+  - agent sessions in worktrees with review and merge
+  - the permission-request decider chain
+
+  Check item #qp7jzs for the comment. If it's missing, the text above is what it should say.
+
+finished                                                                                                           32.0s

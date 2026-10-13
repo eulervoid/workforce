@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::transcript::Renderer;
+use crate::transcript::{self, Detail, Format, Renderer};
 use anyhow::{Context, anyhow, bail};
 use wf_core::id::{HashId, SessionId};
 use wf_harness::Permission;
@@ -270,7 +270,19 @@ fn watch(
             path.display()
         )
     })?;
-    let mut renderer = Renderer::new(raw, full);
+    let agent = workspace.state().session(session).map_or_else(
+        || "agent".to_owned(),
+        |session| session.agent().name.to_string(),
+    );
+    let format = if raw { Format::Raw } else { Format::Styled };
+    let detail = if full { Detail::Full } else { Detail::Abridged };
+    let mut renderer = Renderer::new(
+        &agent,
+        transcript::terminal_width(),
+        format,
+        detail,
+        jiff::tz::TimeZone::system(),
+    );
     let mut pending = String::new();
     let mut buffer = [0u8; 8192];
     let mut unfinished_bytes = Vec::new();
@@ -280,10 +292,22 @@ fn watch(
         let read = file.read(&mut buffer)?;
         if read == 0 {
             if no_follow || ended {
-                anstream::print!("{}", renderer.finish());
+                let ended = ended
+                    || workspace
+                        .state()
+                        .session(session)
+                        .is_some_and(|session| !session.is_live());
+                let session = if ended {
+                    transcript::Session::Ended
+                } else {
+                    transcript::Session::Live
+                };
+                anstream::print!("{}", renderer.finish(session));
                 std::io::stdout().flush()?;
                 return Ok(());
             }
+            anstream::print!("{}", renderer.caught_up(jiff::Timestamp::now()));
+            std::io::stdout().flush()?;
             if last_refresh.elapsed() >= Duration::from_secs(1) {
                 workspace.refresh()?;
                 ended = workspace

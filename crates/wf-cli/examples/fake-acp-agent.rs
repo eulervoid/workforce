@@ -24,6 +24,7 @@
 
 use std::io::{BufRead, Write};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 
@@ -33,12 +34,16 @@ fn send(message: Value) {
     stdout.flush().unwrap();
 }
 
+/// An agent message of its own, in one chunk.
 fn say(text: &str) {
+    static MESSAGES: AtomicUsize = AtomicUsize::new(0);
+    let message = MESSAGES.fetch_add(1, Ordering::Relaxed);
     send(json!({
         "jsonrpc": "2.0",
         "method": "session/update",
         "params": {"sessionId": "fake", "update": {
             "sessionUpdate": "agent_message_chunk",
+            "messageId": format!("message-{message}"),
             "content": {"type": "text", "text": text},
         }},
     }));

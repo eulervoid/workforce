@@ -10,6 +10,7 @@ use serde::{Deserialize, Deserializer};
 use url::Url;
 use wf_core::autonomy::PermissionMode;
 use wf_core::name::AgentName;
+use wf_harness::Decider;
 use wf_vcs::CommitSigning;
 
 #[derive(Debug, thiserror::Error)]
@@ -214,15 +215,19 @@ pub enum DeciderConfig {
 }
 
 impl DeciderConfig {
-    /// How the decider is named in transcripts and in the inbox.
-    pub fn name(&self) -> String {
+    /// Who decides, as transcripts and the inbox name it.
+    pub fn decider(&self) -> Decider {
         match self {
-            DeciderConfig::Rules {} => "rules".to_string(),
-            DeciderConfig::Hook { command, .. } => {
-                format!("hook {}", command.first().map_or("", String::as_str))
-            }
-            DeciderConfig::Model { model, .. } => format!("model {model}"),
-            DeciderConfig::Agent { agent, .. } => format!("agent {agent}"),
+            DeciderConfig::Rules {} => Decider::Rules,
+            DeciderConfig::Hook { command, .. } => Decider::Hook {
+                program: command.first().cloned().unwrap_or_default(),
+            },
+            DeciderConfig::Model { model, .. } => Decider::Model {
+                model: model.clone(),
+            },
+            DeciderConfig::Agent { agent, .. } => Decider::Agent {
+                agent: agent.to_string(),
+            },
         }
     }
 }
@@ -593,7 +598,11 @@ mod tests {
         "#;
         let config = MachineConfig::parse(text).ok().unwrap().permissions;
         assert_eq!(config.guidance.as_deref(), Some("no network"));
-        let names: Vec<String> = config.deciders.iter().map(DeciderConfig::name).collect();
+        let names: Vec<String> = config
+            .deciders
+            .iter()
+            .map(|decider| decider.decider().to_string())
+            .collect();
         assert_eq!(
             names,
             [
