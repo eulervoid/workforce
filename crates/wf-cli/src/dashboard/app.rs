@@ -164,6 +164,14 @@ impl Scroll {
         }
     }
 
+    /// The scroll kept to a text whose top can go no further down than `last_top`.
+    pub fn within(self, last_top: u16) -> Scroll {
+        match self {
+            Scroll::FromTop(offset) => Scroll::FromTop(offset.min(last_top)),
+            Scroll::FromEnd(offset) => Scroll::FromEnd(offset.min(last_top)),
+        }
+    }
+
     /// What the keys of a scrolled text do to it; `None` for a key it does not take.
     fn key(self, key: KeyEvent) -> Option<Scroll> {
         Some(match key.code {
@@ -675,6 +683,19 @@ impl App {
             Tab::Items => Some(&mut self.items.list.stack),
             Tab::Agents => Some(&mut self.agents.stack),
             Tab::Log => None,
+        }
+    }
+
+    /// Keeps the scroll of the text with the keys to what drawing showed of it, so that the next
+    /// key moves the text from there rather than from past its end.
+    pub fn shown(&mut self, scroll: Scroll) {
+        match self.stack_mut() {
+            Some(stack) => {
+                if let Some(opened) = stack.last_mut() {
+                    opened.scroll = scroll;
+                }
+            }
+            None => self.log.scroll = scroll,
         }
     }
 
