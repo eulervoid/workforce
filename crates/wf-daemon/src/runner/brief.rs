@@ -142,7 +142,11 @@ fn restarted_from(
         }
         for (id, comment) in since {
             if let Some(written) = sources.text(*id) {
-                text.push_str(&format!("\n- {}: {}", speaker(&comment.by), written.trim()));
+                text.push_str(&format!(
+                    "\n- {}: {}",
+                    speaker(state, &comment.by),
+                    written.trim()
+                ));
             }
         }
     }
@@ -169,7 +173,11 @@ fn resumed_from(state: &State, session: SessionId, item: ItemId, sources: &Logge
             since.sort_by_key(|(id, comment)| (comment.at, **id));
             for (id, comment) in since {
                 if let Some(written) = sources.text(*id) {
-                    text.push_str(&format!("\n- {}: {}", speaker(&comment.by), written.trim()));
+                    text.push_str(&format!(
+                        "\n- {}: {}",
+                        speaker(state, &comment.by),
+                        written.trim()
+                    ));
                 }
             }
         }
