@@ -13,7 +13,7 @@ use wf_core::identity::DeviceKey;
 use wf_core::state::State;
 use wf_net::{HeadsTopic, Heard, NetError, Node, SyncLog, SyncReport, heads_digest};
 
-use crate::storage::StorageHandle;
+use wf_net::StorageHandle;
 
 /// Even without news, ask the other devices how they are doing this often.
 const PERIODIC_ROUND: Duration = Duration::from_secs(60);

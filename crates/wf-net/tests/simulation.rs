@@ -1,13 +1,17 @@
 //! Several peers of one workforce write, partition, lose and duplicate messages, get restored
 //! from old snapshots and reconnect. Once everyone can talk, every peer has the same state.
 
+mod common;
+
+use common::SharedReplica;
+
 use proptest::prelude::*;
 use wf_core::event::{Change, Event};
 use wf_core::id::ItemId;
 use wf_core::item::Priority;
 use wf_core::state::State;
 use wf_core::testing::*;
-use wf_net::{SharedReplica, initiate, read_open, respond};
+use wf_net::{initiate, read_open, respond};
 use wf_store::{AuthorError, EventStore, RedbStore, Replica};
 
 const MAX_PEERS: usize = 5;

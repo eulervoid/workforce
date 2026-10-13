@@ -15,7 +15,7 @@ use wf_core::state::State;
 use wf_daemon::client::DaemonClient;
 use wf_daemon::{PeerOutcome, PeerSync, peers_of, sync_all};
 use wf_net::replica::{self, Joined};
-use wf_net::{NetError, Network, Node, SharedReplica};
+use wf_net::{NetError, Network, Node, StorageHandle};
 use wf_store::{RedbStore, Replica};
 
 use crate::cli::{InviteDeviceArgs, JoinArgs, SyncArgs};
@@ -26,7 +26,7 @@ use crate::view::{device_label, timestamp_now};
 use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
 
 pub(crate) async fn sync_devices(
-    node: &Arc<Node<SharedReplica<RedbStore>>>,
+    node: &Arc<Node<StorageHandle>>,
     workforce: wf_core::id::WorkforceId,
     devices: Vec<DeviceKey>,
     presence: Option<&wf_daemon::Presence>,
@@ -120,6 +120,7 @@ pub fn network_for(relay: Option<&str>) -> anyhow::Result<Network> {
 
 pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<()> {
     let network = network_for(args.relay.as_deref())?;
+    let store = workspace::store_path(&workspace.data, &workspace.workforce())?;
     let (replicated, device, workforce) = workspace.into_replicated();
     let replica = match replicated {
         Replicated::Local(replica) => *replica,
@@ -136,7 +137,9 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
         .into_iter()
         .map(|peer| (peer, device_label(replica.state(), peer)))
         .collect();
-    let shared = SharedReplica::new(replica);
+    let storage = StorageHandle::spawn(replica, move || {
+        Replica::open(RedbStore::open(&store)?, workforce)
+    });
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -147,7 +150,7 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
                 .await
                 .context("starting the network endpoint")?,
         );
-        node.serve(workforce, shared.clone());
+        node.serve(workforce, storage.clone());
         if args.serve {
             eprintln!(
                 "serving as device {} since {}; interrupt to stop",
@@ -156,7 +159,9 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
             );
         }
         let results = sync_all(&node, workforce, peers, None).await;
-        let events = shared.lock().state().event_count();
+        let events = storage
+            .with(|replica| replica.state().event_count())
+            .await?;
         finish(json, &device, &results, events, args.serve)?;
         if args.serve {
             tokio::signal::ctrl_c().await?;
@@ -336,12 +341,15 @@ pub fn join(
     }
 
     let device = data.device(true)?.expect("created on demand");
-    let store = RedbStore::open(workspace::store_path(&data, &code.workforce)?)?;
-    let replica = Replica::open(store, code.workforce)?;
+    let store = workspace::store_path(&data, &code.workforce)?;
+    let replica = Replica::open(RedbStore::open(&store)?, code.workforce)?;
     if replica::joined(&replica, device.key(), code.invite) == Joined::Otherwise {
         bail!("this machine has already joined the workforce");
     }
-    let shared = SharedReplica::new(replica);
+    let workforce = code.workforce;
+    let storage = StorageHandle::spawn(replica, move || {
+        Replica::open(RedbStore::open(&store)?, workforce)
+    });
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -353,23 +361,30 @@ pub fn join(
         let mut failures = Vec::new();
         let mut joined = false;
         for bootstrap in &code.bootstrap {
-            let authoring = shared.clone();
             let signer = device.clone();
             let invite = code.invite;
             let proof = code.prove(device.key())?;
             let profile = profile.clone();
+            let author = {
+                let storage = storage.clone();
+                move || async move {
+                    storage
+                        .with(move |replica| {
+                            replica::bind_device(
+                                replica,
+                                &signer,
+                                invite,
+                                proof,
+                                profile,
+                                workspace::now_ms(),
+                            )
+                        })
+                        .await?
+                        .map_err(Into::into)
+                }
+            };
             let result = node
-                .join(&code, wf_net::endpoint_id(*bootstrap), &shared, move || {
-                    let result = replica::bind_device(
-                        &mut authoring.lock(),
-                        &signer,
-                        invite,
-                        proof,
-                        profile,
-                        workspace::now_ms(),
-                    );
-                    std::future::ready(result.map_err(Into::into))
-                })
+                .join(&code, wf_net::endpoint_id(*bootstrap), &storage, author)
                 .await;
             match result {
                 Ok(()) => {
@@ -390,7 +405,7 @@ pub fn join(
                 failures.join("\n  ")
             );
         }
-        anyhow::Ok(shared.lock().state().clone())
+        anyhow::Ok(storage.with(|replica| replica.state().clone()).await?)
     })?;
     finish_join(json, &state, device.key(), &code, name)
 }

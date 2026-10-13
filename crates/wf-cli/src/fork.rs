@@ -12,7 +12,7 @@ use wf_core::identity::{
     Actor, DeviceKey, MemberSeed, PrincipalKey, PrincipalSigner, Role, Signed,
 };
 use wf_core::state::State;
-use wf_net::{Node, SharedReplica};
+use wf_net::{Node, StorageHandle};
 use wf_store::{RedbStore, Replica};
 
 use crate::cli::ForkArgs;
@@ -337,25 +337,27 @@ pub fn accept(
             state.event_count()
         }
         Replicated::Local(parent) => {
-            let store = RedbStore::open(workspace::store_path(&data, &child)?)?;
-            let mut replica = Replica::open(store, child)?;
+            let store = workspace::store_path(&data, &child)?;
+            let mut replica = Replica::open(RedbStore::open(&store)?, child)?;
             replica.set_history_source(parent);
-            let shared = SharedReplica::new(replica);
+            let storage = StorageHandle::spawn(replica, move || {
+                Replica::open(RedbStore::open(&store)?, child)
+            });
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;
             runtime.block_on(async {
                 let node: Arc<Node<_>> = Arc::new(Node::start(&device, network).await?);
-                node.serve(child, shared.clone());
+                node.serve(child, storage.clone());
                 let results = sync_devices(&node, child, bootstrap, None).await;
                 if results.iter().all(|result| !result.reached()) {
                     bail!("could not reach a device that has the fork");
                 }
                 anyhow::Ok(())
             })?;
-            let replica = shared.lock();
-            check_member(replica.state(), own, child)?;
-            replica.state().event_count()
+            let state = storage.with_blocking(|replica| replica.state().clone())?;
+            check_member(&state, own, child)?;
+            state.event_count()
         }
     };
     let file = toml::to_string(&WorkforceFile { id: child })?;

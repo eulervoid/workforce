@@ -1,9 +1,13 @@
 //! Syncing a forked workforce: the history it was forked from is fetched by id.
 
+mod common;
+
+use common::SharedReplica;
+
 use wf_core::event::{Change, Event};
 use wf_core::identity::PrincipalSigner;
 use wf_core::testing::*;
-use wf_net::{SharedReplica, SyncLog, initiate, read_open, respond};
+use wf_net::{SyncLog, initiate, read_open, respond};
 use wf_store::{EventStore, RedbStore, Replica};
 
 fn replica(workforce: wf_core::id::WorkforceId) -> SharedReplica<RedbStore> {

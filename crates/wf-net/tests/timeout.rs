@@ -1,9 +1,13 @@
 //! A peer that stops answering does not hold a session forever.
 
+mod common;
+
+use common::SharedReplica;
+
 use std::time::Duration;
 
 use wf_core::testing::*;
-use wf_net::{SharedReplica, SyncError, initiate_within, respond_within};
+use wf_net::{SyncError, initiate_within, respond_within};
 use wf_store::{RedbStore, Replica};
 
 fn replica(fixture: &Fixture) -> SharedReplica<RedbStore> {

@@ -7,12 +7,14 @@ mod join;
 mod log;
 mod node;
 pub mod replica;
+mod storage;
 mod sync;
 
 pub use gossip::{GOSSIP_ALPN, HeadsTopic, Heard, heads_digest, topic_id};
 pub use join::JOIN_ALPN;
-pub use log::{LogError, ReceiveSummary, SharedReplica, SyncLog};
+pub use log::{LogError, ReceiveSummary, SyncLog};
 pub use node::{NetError, Network, Node, SourceError, device_key, endpoint_id};
+pub use storage::{StorageClosed, StorageHandle};
 pub use sync::{
     IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, initiate_within, read_open, respond,
     respond_within,

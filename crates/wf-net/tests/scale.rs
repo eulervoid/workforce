@@ -1,6 +1,10 @@
 //! Joining a workforce with 100k events over loopback. Slow in debug builds:
 //! `cargo test --release -p wf-net --test scale -- --ignored --nocapture`
 
+mod common;
+
+use common::SharedReplica;
+
 use std::time::Instant;
 
 use wf_core::event::{Change, DeviceBound, EventBody};
@@ -8,7 +12,7 @@ use wf_core::identity::DeviceSigner;
 use wf_core::invite::InviteCode;
 use wf_core::state::Trust;
 use wf_core::testing::*;
-use wf_net::{Network, Node, SharedReplica};
+use wf_net::{Network, Node};
 use wf_store::{Commit, EventStore, RedbStore, Replica};
 
 #[tokio::test]

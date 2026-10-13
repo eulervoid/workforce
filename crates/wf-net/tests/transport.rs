@@ -1,8 +1,12 @@
 //! Real iroh endpoints in one process over loopback, with relays and address lookup off.
 
+mod common;
+
+use common::SharedReplica;
+
 use wf_core::identity::DeviceSigner;
 use wf_core::testing::*;
-use wf_net::{Network, Node, SharedReplica};
+use wf_net::{Network, Node};
 use wf_store::{RedbStore, Replica};
 
 fn replica(fixture: &Fixture) -> SharedReplica<RedbStore> {

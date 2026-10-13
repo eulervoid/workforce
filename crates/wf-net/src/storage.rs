@@ -1,18 +1,21 @@
-//! The storage task: one thread owns each replica and everything else talks to it over a channel.
+//! The storage task: one thread owns a replica and everything else talks to it over a channel.
 //! Redb is blocking, so the thread keeps disk work off the async executor, and a single owner
 //! keeps writes ordered.
 
 use std::collections::BTreeSet;
 use std::sync::mpsc;
 
+use iroh::Signature;
 use tokio::sync::{oneshot, watch};
 use wf_core::event::Event;
 use wf_core::id::EventId;
 use wf_core::identity::DeviceKey;
 use wf_core::invite::JoinRefusal;
 use wf_core::sync::Versions;
-use wf_net::{LogError, ReceiveSummary, Signature, SyncLog, replica};
 use wf_store::{RedbStore, Replica, StoreError};
+
+use crate::log::{LogError, ReceiveSummary, SyncLog};
+use crate::replica;
 
 type Job = Box<dyn FnOnce(&mut Replica<RedbStore>) + Send>;
 

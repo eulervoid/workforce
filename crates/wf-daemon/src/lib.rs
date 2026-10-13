@@ -12,7 +12,6 @@ pub mod proto;
 mod runner;
 mod sandbox;
 mod server;
-mod storage;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -30,7 +29,7 @@ use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::SessionError;
-pub use storage::{StorageClosed, StorageHandle};
+pub use wf_net::{StorageClosed, StorageHandle};
 
 pub const STORE_FILE: &str = "store.redb";
 
