@@ -1,0 +1,249 @@
+//! `wf status`: whether the workforce is working, and what is next.
+
+use std::collections::BTreeSet;
+
+use serde::Serialize;
+use wf_core::autonomy::StartMode;
+use wf_core::graph::Readiness;
+use wf_core::id::HashId;
+use wf_core::identity::Actor;
+use wf_core::inbox::Waiting;
+use wf_core::item::ItemView;
+use wf_core::state::State;
+
+use super::inbox::recovery_waits;
+use super::session::is_parked;
+use super::{actor_label, device_label, timestamp_ms};
+
+#[derive(Serialize)]
+pub struct StatusView {
+    pub name: String,
+    pub id: String,
+    pub members: Vec<String>,
+    pub agents: usize,
+    pub events: usize,
+    pub pending: usize,
+    pub heads: usize,
+    pub archived_items: usize,
+    pub forked_from: Option<String>,
+    pub devices: Vec<DeviceStatus>,
+    /// Whether this command was answered by the daemon of this machine, which starts the agents.
+    pub daemon: bool,
+    pub ready_items: usize,
+    pub live_sessions: usize,
+    /// Live work sessions whose item waits on a dependency or an open blocker.
+    pub parked_sessions: usize,
+    /// Items whose sessions did not finish and whose recovery level leaves them to the principal.
+    pub after_failures: Vec<String>,
+    /// What waits on the principal, as `wf inbox` lists it.
+    pub waiting_on_you: usize,
+    pub flagged: Vec<String>,
+    /// What to do next, if anything stands out.
+    pub next: Option<String>,
+    pub refolded: bool,
+}
+
+/// What `wf status` knows besides the state.
+pub struct StatusContext<'a> {
+    pub own: Option<wf_core::identity::DeviceKey>,
+    pub last_seen: &'a std::collections::BTreeMap<wf_core::identity::DeviceKey, u64>,
+    pub daemon: bool,
+    pub waiting_on_you: usize,
+    pub refolded: bool,
+}
+
+#[derive(Serialize)]
+pub struct DeviceStatus {
+    pub name: String,
+    pub this_device: bool,
+    /// Only a running daemon knows.
+    pub last_seen: Option<String>,
+}
+
+pub fn status(state: &State, context: StatusContext) -> StatusView {
+    let StatusContext {
+        own,
+        last_seen,
+        daemon,
+        waiting_on_you,
+        refolded,
+    } = context;
+    let policy = &state.policy().expect("a workforce has a policy").policy;
+    let graph = state.dependency_graph();
+    let mut flagged = BTreeSet::new();
+    let mut archived_items = 0;
+    for view in state.items() {
+        match view {
+            ItemView::Archived(_) => archived_items += 1,
+            ItemView::Live(item) => match item.standing(policy).state_category() {
+                Some(_) => {
+                    if state.readiness(&graph, item) == Some(Readiness::Stranded) {
+                        flagged.insert(format!(
+                            "#{} \"{}\" is stranded: a dependency was cancelled",
+                            item.id().short(),
+                            item.title()
+                        ));
+                    }
+                }
+                None => {
+                    flagged.insert(format!(
+                        "#{} \"{}\" has an unknown state or type",
+                        item.id().short(),
+                        item.title()
+                    ));
+                }
+            },
+        }
+    }
+    for item in state.unstaffed_reviews() {
+        flagged.insert(format!(
+            "the review of #{} waits for an agent step that no agent started on this workforce can take",
+            item.short()
+        ));
+    }
+    for (id, definition) in state.agents() {
+        if definition.autonomy.start != StartMode::Auto {
+            continue;
+        }
+        if definition.lanes.is_empty() {
+            flagged.insert(format!(
+                "agent {0} starts automatically but has no lane, so it never takes an item; `wf agent edit {0} --lane default`",
+                id.name
+            ));
+        }
+        let hosted = state.devices().any(|device| {
+            device.principal == id.principal
+                && device
+                    .profile
+                    .is_some_and(|profile| profile.agents.contains_key(&id.name))
+        });
+        if !hosted {
+            flagged.insert(format!(
+                "agent {0} starts automatically but no device hosts it; `wf device edit --agent {0}=1`",
+                id.name
+            ));
+        }
+    }
+    if let Some(error) = state.unreadable_policy() {
+        flagged.insert(format!(
+            "this version of wf cannot read the policy set last ({}), so it runs on the last one it could read; update wf, or replace the policy with `wf policy edit`",
+            wf_core::report::report(&error)
+        ));
+    }
+    for edge in graph.ignored() {
+        flagged.insert(format!(
+            "dependency #{} -> #{} ignored: concurrent links formed a cycle",
+            edge.from.short(),
+            edge.to.short()
+        ));
+    }
+    for (device, seq) in state.equivocations() {
+        flagged.insert(format!(
+            "device {} wrote two different events with seq {seq}; it was cloned or restored from a snapshot",
+            device.fmt_short()
+        ));
+    }
+    for info in state.devices().filter(|info| info.invite_redeemed_twice) {
+        flagged.insert(format!(
+            "device {} was bound with an invite that two devices used; `wf fork --exclude` removes one",
+            device_label(state, info.device)
+        ));
+    }
+    let devices = state
+        .devices()
+        .map(|info| DeviceStatus {
+            name: info
+                .profile
+                .map_or_else(|| info.device.fmt_short(), |profile| profile.name.clone()),
+            this_device: Some(info.device) == own,
+            last_seen: last_seen
+                .get(&info.device)
+                .map(|millis| timestamp_ms(*millis)),
+        })
+        .collect();
+    for announcement in state.announcements() {
+        flagged.insert(format!(
+            "{} forked this workforce to {}; `wf fork accept {}` follows it",
+            actor_label(state, &Actor::Principal(announcement.by)),
+            announcement.to,
+            announcement.to
+        ));
+    }
+    let live: Vec<_> = state
+        .sessions()
+        .filter(|session| session.is_live())
+        .collect();
+    let parked_sessions = live
+        .iter()
+        .filter(|session| is_parked(state, &graph, session))
+        .count();
+    let after_failures: Vec<String> = state
+        .inbox()
+        .into_iter()
+        .filter_map(|entry| match entry.waiting {
+            Waiting::Recovery {
+                role,
+                failures,
+                last,
+            } => {
+                let title = match state.item(entry.item) {
+                    Some(ItemView::Live(item)) => item.title().to_string(),
+                    Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
+                };
+                Some(format!(
+                    "#{} \"{title}\": {}",
+                    entry.item.short(),
+                    recovery_waits(state, entry.item, role, failures, last)
+                ))
+            }
+            Waiting::Blocker { .. }
+            | Waiting::Proposal
+            | Waiting::PrincipalReview { .. }
+            | Waiting::Merge { .. } => None,
+        })
+        .collect();
+    let ready_items = state.ready_items().len();
+    let auto_agents = state
+        .agents()
+        .any(|(_, definition)| definition.autonomy.start == StartMode::Auto);
+    let next = if state.agents().next().is_none() {
+        Some("add an agent: `wf agent add`".to_string())
+    } else if !daemon && auto_agents {
+        Some("start the daemon, which starts the agents: `wf daemon start`".to_string())
+    } else if waiting_on_you > 0 {
+        Some(format!("{waiting_on_you} waiting on you: `wf inbox`"))
+    } else if !live.is_empty() {
+        Some("follow the agents: `wf watch`".to_string())
+    } else if ready_items == 0 {
+        Some("add an item: `wf item add`".to_string())
+    } else {
+        None
+    };
+    StatusView {
+        name: state.name().unwrap_or_default().to_string(),
+        id: state
+            .workforce_id()
+            .map(|id| id.to_string())
+            .unwrap_or_default(),
+        members: state
+            .members()
+            .map(|(_, member)| format!("@{} ({:?})", member.handle, member.role).to_lowercase())
+            .collect(),
+        agents: state.agents().count(),
+        events: state.event_count(),
+        pending: state.pending_events().count(),
+        heads: state.heads().len(),
+        archived_items,
+        forked_from: state.fork_point().map(|(parent, _)| parent.to_string()),
+        devices,
+        daemon,
+        ready_items,
+        live_sessions: live.len(),
+        parked_sessions,
+        after_failures,
+        waiting_on_you,
+        flagged: flagged.into_iter().collect(),
+        next,
+        refolded,
+    }
+}
