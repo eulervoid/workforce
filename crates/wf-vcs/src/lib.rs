@@ -105,9 +105,31 @@ pub enum MergeOutcome {
     /// The work does not merge cleanly. The paths are the files in conflict.
     Conflict { paths: Vec<String> },
     /// The target branch is checked out in a worktree with changes, which the merge never touches.
-    DirtyCheckout { worktree: PathBuf },
+    DirtyCheckout(DirtyCheckout),
     /// The target branch moved while the merge was being made. Nothing changed; try again.
     TargetMoved,
+}
+
+/// A worktree with uncommitted changes to tracked files.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DirtyCheckout {
+    pub worktree: PathBuf,
+    /// The changed files, relative to the worktree.
+    pub paths: Vec<String>,
+}
+
+impl DirtyCheckout {
+    /// How many changed files [`DirtyCheckout::files`] names before it only counts the rest.
+    const NAMED: usize = 10;
+
+    /// The changed files to name to the principal, such as `a.txt, b.txt and 3 more`.
+    pub fn files(&self) -> String {
+        let named = self.paths[..self.paths.len().min(Self::NAMED)].join(", ");
+        match self.paths.len().saturating_sub(Self::NAMED) {
+            0 => named,
+            more => format!("{named} and {more} more"),
+        }
+    }
 }
 
 pub trait VcsAdapter {

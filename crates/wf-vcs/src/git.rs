@@ -4,7 +4,7 @@ use std::process::{Command, Output};
 
 use wf_core::session::{CommitId, GitOid};
 
-use crate::{CommitSigning, MergeOutcome, VcsAdapter, VcsError};
+use crate::{CommitSigning, DirtyCheckout, MergeOutcome, VcsAdapter, VcsError};
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
 
@@ -155,18 +155,55 @@ impl GitCli {
         Ok(worktrees)
     }
 
-    /// Whether nothing tracked is edited. Untracked files do not count, such as the marker `wf init`
-    /// leaves: git itself refuses to overwrite one, and nothing else is at risk.
-    fn is_clean(&self, worktree: &Path) -> Result<bool, VcsError> {
+    /// The tracked files edited in `worktree`. Untracked files do not count, such as the marker
+    /// `wf init` leaves: git itself refuses to overwrite one, and nothing else is at risk.
+    fn changed_paths(&self, worktree: &Path) -> Result<Vec<String>, VcsError> {
         let status = self.succeed_in(
             worktree,
             [
                 OsStr::new("status"),
                 OsStr::new("--porcelain"),
+                OsStr::new("-z"),
                 OsStr::new("--untracked-files=no"),
             ],
         )?;
-        Ok(status.trim().is_empty())
+        // Each entry is `XY path`; a rename or copy is followed by the path it came from.
+        let mut entries = status.split('\0').filter(|entry| !entry.is_empty());
+        let mut paths = Vec::new();
+        while let Some(entry) = entries.next() {
+            let (Some(code), Some(path)) = (entry.get(..2), entry.get(3..)) else {
+                return Err(VcsError::UnexpectedOutput {
+                    command: "status --porcelain -z".into(),
+                    output: status.clone(),
+                });
+            };
+            if code.contains(['R', 'C']) {
+                entries.next();
+            }
+            paths.push(path.to_string());
+        }
+        Ok(paths)
+    }
+
+    fn is_clean(&self, worktree: &Path) -> Result<bool, VcsError> {
+        Ok(self.changed_paths(worktree)?.is_empty())
+    }
+
+    /// Where `branch` is checked out with changes, if it is.
+    pub fn dirty_checkout(&self, branch: &str) -> Result<Option<DirtyCheckout>, VcsError> {
+        let reference = format!("refs/heads/{branch}");
+        let Some(worktree) = self
+            .worktrees()?
+            .into_iter()
+            .find(|worktree| worktree.branch.as_deref() == Some(reference.as_str()))
+        else {
+            return Ok(None);
+        };
+        let paths = self.changed_paths(&worktree.path)?;
+        Ok((!paths.is_empty()).then_some(DirtyCheckout {
+            worktree: worktree.path,
+            paths,
+        }))
     }
 
     /// Moves `target` from `old` to `new`, if nothing moved it in the meantime. Where the target
@@ -181,8 +218,12 @@ impl GitCli {
             |this: &Self| -> Result<bool, VcsError> { Ok(this.rev_parse(&reference)? != *old) };
         match checkout {
             Some(worktree) => {
-                if !self.is_clean(&worktree.path)? {
-                    return Ok(Advance::Dirty(worktree.path));
+                let paths = self.changed_paths(&worktree.path)?;
+                if !paths.is_empty() {
+                    return Ok(Advance::Dirty(DirtyCheckout {
+                        worktree: worktree.path,
+                        paths,
+                    }));
                 }
                 let finished = Self::run_in(
                     &worktree.path,
@@ -249,7 +290,7 @@ struct Worktree {
 
 enum Advance {
     Done,
-    Dirty(PathBuf),
+    Dirty(DirtyCheckout),
     Moved,
 }
 
@@ -499,7 +540,7 @@ impl VcsAdapter for GitCli {
         let new = self.oid("commit-tree", &new)?;
         Ok(match self.advance(target, &old, &new)? {
             Advance::Done => MergeOutcome::Merged { commit: new },
-            Advance::Dirty(worktree) => MergeOutcome::DirtyCheckout { worktree },
+            Advance::Dirty(dirty) => MergeOutcome::DirtyCheckout(dirty),
             Advance::Moved => MergeOutcome::TargetMoved,
         })
     }
@@ -910,9 +951,10 @@ mod tests {
             .unwrap();
         assert_eq!(
             outcome,
-            MergeOutcome::DirtyCheckout {
-                worktree: main.clone()
-            }
+            MergeOutcome::DirtyCheckout(DirtyCheckout {
+                worktree: main.clone(),
+                paths: vec!["file.txt".into()],
+            })
         );
         assert_eq!(repo.main(), before);
         assert_eq!(
@@ -937,6 +979,33 @@ mod tests {
         );
         assert!(main.join("a.txt").exists());
         assert!(main.join(".workforce.toml").exists());
+    }
+
+    #[test]
+    fn a_dirty_checkout_names_its_changed_files_and_where_a_rename_went() {
+        let repo = TestRepo::new();
+        let main = repo.directory();
+        repo.write(&main, "second.txt", "2\n");
+        repo.commit(&main, "second");
+        git_in(&main, &["mv", "file.txt", "file with space.txt"]);
+        repo.write(&main, "second.txt", "two\n");
+        repo.write(&main, "untracked.txt", "new\n");
+        let dirty = repo.git.dirty_checkout("main").unwrap().unwrap();
+        assert_eq!(dirty.worktree, main);
+        assert_eq!(dirty.paths, ["file with space.txt", "second.txt"]);
+        assert_eq!(repo.git.dirty_checkout("wf/k3f9").unwrap(), None);
+    }
+
+    #[test]
+    fn a_long_list_of_changed_files_is_cut_short() {
+        let dirty = DirtyCheckout {
+            worktree: PathBuf::from("/repo"),
+            paths: (1..=13).map(|number| format!("{number}.txt")).collect(),
+        };
+        assert_eq!(
+            dirty.files(),
+            "1.txt, 2.txt, 3.txt, 4.txt, 5.txt, 6.txt, 7.txt, 8.txt, 9.txt, 10.txt and 3 more"
+        );
     }
 
     #[test]
