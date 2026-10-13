@@ -1,7 +1,10 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use wf_harness::{Conversation, Direction, Launch, Model, Permission, StopReason, TranscriptEntry};
+use wf_harness::{
+    AgentSessionId, Conversation, Direction, Error, Launch, Model, Opening, Permission, StopReason,
+    TranscriptEntry,
+};
 
 #[derive(Clone, Default)]
 struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
@@ -22,6 +25,7 @@ async fn run_fake_agent(permissions: Permission) -> Vec<TranscriptEntry> {
     let buffer = SharedBuffer::default();
     let mut conversation = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        opening: Opening::New,
         model: None,
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(permissions),
@@ -86,6 +90,7 @@ async fn one_session_takes_several_prompts() {
     let buffer = SharedBuffer::default();
     let mut conversation = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        opening: Opening::New,
         model: None,
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(Permission::Allow),
@@ -125,6 +130,7 @@ async fn a_reply_holds_what_the_agent_said_in_its_turn() {
     let directory = tempfile::tempdir().unwrap();
     let mut conversation = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        opening: Opening::New,
         model: None,
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(Permission::Deny),
@@ -142,6 +148,7 @@ async fn a_reply_holds_what_the_agent_said_in_its_turn() {
 async fn an_agent_that_cannot_start_is_an_error() {
     let result = Conversation::start(Launch {
         agent: agent_client_protocol::AcpAgentConfig::new("/nonexistent/agent"),
+        opening: Opening::New,
         model: None,
         directory: std::env::temp_dir(),
         permissions: Arc::new(Permission::Allow),
@@ -169,4 +176,69 @@ async fn the_models_an_agent_offers_are_read_from_a_new_session() {
         models,
         [model("fast", "Fast", true), model("deep", "Deep", false)]
     );
+}
+
+/// Reopens the session `fake` with an agent that offers `reopens`, prompts it once and returns
+/// the transcript, or why it could not be opened.
+async fn reopen(reopens: &str) -> Result<(String, Vec<TranscriptEntry>), Error> {
+    let directory = tempfile::tempdir().unwrap();
+    let buffer = SharedBuffer::default();
+    let mut conversation = Conversation::start(Launch {
+        agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
+            .env("FAKE_AGENT_REOPENS", reopens),
+        opening: Opening::Resume(AgentSessionId("fake".to_string())),
+        model: None,
+        directory: directory.path().to_path_buf(),
+        permissions: Arc::new(Permission::Allow),
+        transcript: buffer.clone(),
+    })
+    .await?;
+    assert_eq!(conversation.session(), &AgentSessionId("fake".to_string()));
+    let (_, said) = conversation.reply("go on").await.unwrap();
+    conversation.close().await.unwrap();
+    let bytes = buffer.0.lock().unwrap().clone();
+    let entries = String::from_utf8(bytes)
+        .unwrap()
+        .lines()
+        .map(|line| serde_json::from_str(line).unwrap())
+        .collect();
+    Ok((said, entries))
+}
+
+fn sent_methods(entries: &[TranscriptEntry]) -> Vec<&str> {
+    entries
+        .iter()
+        .filter(|entry| entry.direction == Direction::ToAgent)
+        .filter_map(|entry| entry.message["method"].as_str())
+        .collect()
+}
+
+#[tokio::test]
+async fn a_session_is_resumed_when_the_agent_can() {
+    let (_, entries) = reopen("resume").await.unwrap();
+    assert_eq!(
+        sent_methods(&entries),
+        ["initialize", "session/resume", "session/prompt"]
+    );
+}
+
+#[tokio::test]
+async fn a_loaded_session_does_not_record_or_hear_its_history_again() {
+    let (said, entries) = reopen("load").await.unwrap();
+    assert_eq!(
+        sent_methods(&entries),
+        ["initialize", "session/load", "session/prompt"]
+    );
+    assert!(!said.contains("said before"), "{said}");
+    assert!(
+        !entries
+            .iter()
+            .any(|entry| entry.message.to_string().contains("said before")),
+        "the replay is not recorded"
+    );
+}
+
+#[tokio::test]
+async fn an_agent_that_cannot_reopen_sessions_says_so() {
+    assert!(matches!(reopen("").await, Err(Error::CannotResume)));
 }

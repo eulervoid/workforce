@@ -1,13 +1,15 @@
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
 use agent_client_protocol::schema::ProtocolVersion;
 use agent_client_protocol::schema::v1::{
-    CancelNotification, ContentBlock, InitializeRequest, NewSessionRequest, PromptRequest,
-    RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse, SessionConfigId,
-    SessionConfigKind, SessionConfigOption, SessionConfigOptionCategory, SessionConfigSelectOption,
-    SessionConfigSelectOptions, SessionConfigValueId, SessionNotification, SessionUpdate,
+    CancelNotification, ContentBlock, InitializeRequest, LoadSessionRequest, NewSessionRequest,
+    PromptRequest, RequestPermissionOutcome, RequestPermissionRequest, RequestPermissionResponse,
+    ResumeSessionRequest, SessionConfigId, SessionConfigKind, SessionConfigOption,
+    SessionConfigOptionCategory, SessionConfigSelectOption, SessionConfigSelectOptions,
+    SessionConfigValueId, SessionId, SessionNotification, SessionUpdate,
     SetSessionConfigOptionRequest, TextContent,
 };
 use agent_client_protocol::{AcpAgent, AcpAgentConfig, Agent, Client, ConnectionTo};
@@ -30,6 +32,8 @@ pub enum Error {
     Transcript(#[from] io::Error),
     #[error("the agent is gone")]
     Closed,
+    #[error("the agent can neither resume nor load a session it opened before")]
+    CannotResume,
     #[error("the agent does not offer the model {model:?}; it offers: {}", .available.join(", "))]
     UnknownModel {
         model: String,
@@ -135,10 +139,24 @@ pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
     }
 }
 
+/// The id an agent gives a session it opens, which it can resume or load later by.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AgentSessionId(pub String);
+
+/// Which session of the agent a conversation opens.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Opening {
+    New,
+    /// A session an earlier conversation opened, with what was said in it. The agent resumes it
+    /// if it can, or else loads it; the history a load replays is not recorded again.
+    Resume(AgentSessionId),
+}
+
 /// What it takes to start an agent: the command, where it works and how it is answered. Every
 /// line that crosses the connection is appended to `transcript`.
 pub struct Launch<W> {
     pub agent: AcpAgentConfig,
+    pub opening: Opening,
     /// The model to prompt, as the agent names it: the value or the name of an option it offers.
     /// Without one the agent keeps its own default.
     pub model: Option<String>,
@@ -171,6 +189,7 @@ impl Drop for AgentTask {
 /// A running agent with one ACP session, which is prompted turn after turn and keeps its context
 /// between them. Dropping it stops the agent.
 pub struct Conversation {
+    session: AgentSessionId,
     turns: mpsc::Sender<Turn>,
     /// Counts the cancels asked for. A watch keeps the latest value, so no cancel is lost, and
     /// both the turn and a permission request it waits on see it.
@@ -184,20 +203,25 @@ impl Conversation {
         let writer = Arc::new(TranscriptWriter::new(launch.transcript));
         let recorder = Arc::clone(&writer);
         let decided = Arc::clone(&writer);
+        // While a loaded session replays its history, the updates are neither recorded nor heard.
+        let replaying = Arc::new(AtomicBool::new(false));
+        let muted = Arc::clone(&replaying);
         let agent = AcpAgent::new(launch.agent).with_debug(move |line, direction| {
-            let direction = Direction::from(direction);
-            recorder.record(&TranscriptEntry::from_line(
-                Timestamp::now(),
-                direction,
-                line,
-            ));
+            let entry =
+                TranscriptEntry::from_line(Timestamp::now(), Direction::from(direction), line);
+            if muted.load(Ordering::SeqCst) && entry.message["method"] == "session/update" {
+                return;
+            }
+            recorder.record(&entry);
         });
+        let opening = launch.opening;
+        let unheard = Arc::clone(&replaying);
         let permissions = launch.permissions;
         let directory = launch.directory;
         let model = launch.model;
         let (refused, mut refusal) = oneshot::channel();
         let (turns, mut incoming) = mpsc::channel::<Turn>(1);
-        let (ready, opened) = oneshot::channel();
+        let (ready, opened) = oneshot::channel::<SessionId>();
         let (cancel, cancelled) = watch::channel(0u64);
         let cancel = Arc::new(cancel);
         let mut cancelled_turn = cancelled.clone();
@@ -212,6 +236,7 @@ impl Conversation {
                     async move |notification: SessionNotification, _connection| {
                         if let SessionUpdate::AgentMessageChunk(chunk) = notification.update
                             && let ContentBlock::Text(text) = chunk.content
+                            && !unheard.load(Ordering::SeqCst)
                         {
                             heard
                                 .lock()
@@ -244,21 +269,59 @@ impl Conversation {
                     agent_client_protocol::on_receive_request!(),
                 )
                 .connect_with(agent, |connection: ConnectionTo<Agent>| async move {
-                    connection
+                    let initialized = connection
                         .send_request(InitializeRequest::new(ProtocolVersion::V1))
                         .block_task()
                         .await?;
-                    let session = connection
-                        .send_request(NewSessionRequest::new(directory))
-                        .block_task()
-                        .await?;
+                    let capabilities = initialized.agent_capabilities;
+                    let (session_id, options) = match opening {
+                        Opening::New => {
+                            let session = connection
+                                .send_request(NewSessionRequest::new(directory))
+                                .block_task()
+                                .await?;
+                            (session.session_id, session.config_options)
+                        }
+                        Opening::Resume(AgentSessionId(id))
+                            if capabilities.session_capabilities.resume.is_some() =>
+                        {
+                            let session_id = SessionId::new(id);
+                            let resumed = connection
+                                .send_request(ResumeSessionRequest::new(
+                                    session_id.clone(),
+                                    directory,
+                                ))
+                                .block_task()
+                                .await?;
+                            (session_id, resumed.config_options)
+                        }
+                        Opening::Resume(AgentSessionId(id)) if capabilities.load_session => {
+                            let session_id = SessionId::new(id);
+                            replaying.store(true, Ordering::SeqCst);
+                            let loaded = connection
+                                .send_request(LoadSessionRequest::new(
+                                    session_id.clone(),
+                                    directory,
+                                ))
+                                .block_task()
+                                .await;
+                            replaying.store(false, Ordering::SeqCst);
+                            (session_id, loaded?.config_options)
+                        }
+                        Opening::Resume(_) => {
+                            let _ = refused.send(Error::CannotResume);
+                            return Err(agent_client_protocol::util::internal_error(
+                                "cannot resume",
+                            ));
+                        }
+                    };
                     if let Some(wanted) = &model {
-                        let options = session.config_options.as_deref().unwrap_or_default();
+                        let options = options.as_deref().unwrap_or_default();
                         match choose_model(options, wanted) {
                             Ok((option, value)) => {
                                 connection
                                     .send_request(SetSessionConfigOptionRequest::new(
-                                        session.session_id.clone(),
+                                        session_id.clone(),
                                         option,
                                         &*value.0,
                                     ))
@@ -273,14 +336,14 @@ impl Conversation {
                             }
                         }
                     }
-                    let _ = ready.send(());
+                    let _ = ready.send(session_id.clone());
                     while let Some(turn) = incoming.recv().await {
                         said.lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .clear();
                         let request = connection
                             .send_request(PromptRequest::new(
-                                session.session_id.clone(),
+                                session_id.clone(),
                                 vec![ContentBlock::Text(TextContent::new(turn.prompt))],
                             ))
                             .block_task();
@@ -290,7 +353,7 @@ impl Conversation {
                                 response = &mut request => break response,
                                 Ok(()) = cancelled_turn.changed() => {
                                     connection.send_notification(
-                                        CancelNotification::new(session.session_id.clone()),
+                                        CancelNotification::new(session_id.clone()),
                                     )?;
                                 }
                             }
@@ -314,7 +377,8 @@ impl Conversation {
         // Given up before it opened, the start drops the task and with it the agent.
         let mut task = AgentTask(Some(task));
         match opened.await {
-            Ok(()) => Ok(Self {
+            Ok(session) => Ok(Self {
+                session: AgentSessionId(session.0.to_string()),
                 turns,
                 cancel,
                 task,
@@ -327,6 +391,11 @@ impl Conversation {
                 })
             }
         }
+    }
+
+    /// The id the agent gave the session, to resume it by in a later conversation.
+    pub fn session(&self) -> &AgentSessionId {
+        &self.session
     }
 
     /// Sends a prompt and waits for the turn to end.

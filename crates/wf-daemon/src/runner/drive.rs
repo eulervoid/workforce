@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use tokio::time::Instant;
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
 use wf_core::session::CommitId;
-use wf_harness::{Conversation, Launch};
+use wf_harness::{Conversation, Launch, Opening};
 use wf_vcs::{GitCli, VcsAdapter};
 
 use super::brief::{brief, resumed};
@@ -84,6 +84,7 @@ async fn drive(
     };
     let start = Conversation::start(Launch {
         agent,
+        opening: Opening::New,
         model: run.model.clone(),
         directory: run.worktree.clone(),
         permissions: Arc::clone(&run.permissions),

@@ -1,6 +1,7 @@
 //! A scripted ACP agent for tests: answers one prompt with a message, a tool call and a
 //! permission request, and reports the permission outcome in its last message. Its sessions
-//! offer two models.
+//! offer two models. `FAKE_AGENT_REOPENS` set to `resume` or `load` offers that way back into a
+//! session; a load first replays an earlier message.
 
 use std::io::{BufRead, Write};
 
@@ -28,6 +29,7 @@ fn chunk(text: &str) {
 }
 
 fn main() {
+    let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
     let mut lines = std::io::stdin().lock().lines();
     while let Some(Ok(line)) = lines.next() {
         let request: Value = serde_json::from_str(&line).unwrap();
@@ -35,8 +37,16 @@ fn main() {
         match request["method"].as_str() {
             Some("initialize") => send(json!({
                 "jsonrpc": "2.0", "id": id,
-                "result": {"protocolVersion": 1, "agentCapabilities": {}},
+                "result": {"protocolVersion": 1, "agentCapabilities": {
+                    "loadSession": reopens == "load",
+                    "sessionCapabilities": if reopens == "resume" { json!({"resume": {}}) } else { json!({}) },
+                }},
             })),
+            Some("session/resume") => send(json!({"jsonrpc": "2.0", "id": id, "result": {}})),
+            Some("session/load") => {
+                chunk("said before. ");
+                send(json!({"jsonrpc": "2.0", "id": id, "result": {}}));
+            }
             Some("session/new") => send(json!({
                 "jsonrpc": "2.0", "id": id,
                 "result": {

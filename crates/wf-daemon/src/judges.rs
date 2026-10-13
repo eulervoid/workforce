@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use wf_core::id::WorkforceId;
 use wf_core::name::AgentName;
-use wf_harness::{Conversation, Launch, Permission};
+use wf_harness::{Conversation, Launch, Opening, Permission};
 
 use crate::Daemon;
 use crate::decide::{AgentDeciders, DeciderRequest, Outcome, read_answer};
@@ -132,6 +132,7 @@ impl WorkforceJudges {
             .map_err(|error| format!("{}: {error}", transcript_path.display()))?;
         let conversation = Conversation::start(Launch {
             agent: command,
+            opening: Opening::New,
             model: definition.model.clone(),
             directory,
             // A judge only reads what it is given; whatever it asks to do is refused.
