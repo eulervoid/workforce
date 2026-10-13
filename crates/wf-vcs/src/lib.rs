@@ -2,6 +2,7 @@
 //! reviewed work into the target branch. Git is the only system, called as the `git` CLI.
 
 mod git;
+pub mod signing;
 
 use std::path::{Path, PathBuf};
 
@@ -9,6 +10,48 @@ use wf_core::id::{HashId, ItemId};
 use wf_core::session::CommitId;
 
 pub use git::GitCli;
+
+/// Whether and how commits are signed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CommitSigning {
+    /// As the git config says (`commit.gpgsign`), as for the principal's own commits.
+    AsConfigured,
+    /// Never, whatever the git config says.
+    Unsigned,
+    /// With the SSH private key in this file, which must not need a passphrase, through
+    /// `ssh-keygen`: never through an agent that might ask the principal first.
+    Key(PathBuf),
+}
+
+impl CommitSigning {
+    /// The git config that signs this way, on top of what the repository's says.
+    fn config(&self) -> Vec<(&'static str, String)> {
+        match self {
+            CommitSigning::AsConfigured => Vec::new(),
+            CommitSigning::Unsigned => vec![("commit.gpgsign", "false".into())],
+            CommitSigning::Key(key) => vec![
+                ("commit.gpgsign", "true".into()),
+                ("gpg.format", "ssh".into()),
+                ("user.signingkey", key.to_string_lossy().into_owned()),
+                ("gpg.ssh.program", "ssh-keygen".into()),
+            ],
+        }
+    }
+
+    /// The environment that makes git in another process, such as an agent's, sign this way.
+    pub fn environment(&self) -> Vec<(String, String)> {
+        let config = self.config();
+        if config.is_empty() {
+            return Vec::new();
+        }
+        let mut environment = vec![("GIT_CONFIG_COUNT".to_string(), config.len().to_string())];
+        for (index, (key, value)) in config.into_iter().enumerate() {
+            environment.push((format!("GIT_CONFIG_KEY_{index}"), key.to_string()));
+            environment.push((format!("GIT_CONFIG_VALUE_{index}"), value));
+        }
+        environment
+    }
+}
 
 /// How much of an item's id names its branch and worktree.
 const NAME_LEN: usize = 12;
@@ -100,11 +143,13 @@ pub trait VcsAdapter {
     /// Goes back to what the main checkout had before the last checkout: `git checkout -`.
     fn checkout_previous(&self) -> Result<(), VcsError>;
 
-    /// Merges `commit` into `target` with a merge commit that has both as parents.
+    /// Merges `commit` into `target` with a merge commit that has both as parents, signed as
+    /// `signing` says.
     fn merge(
         &self,
         target: &str,
         commit: CommitId,
         message: &str,
+        signing: &CommitSigning,
     ) -> Result<MergeOutcome, VcsError>;
 }

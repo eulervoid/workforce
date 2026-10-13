@@ -88,6 +88,11 @@ impl Daemon {
         role: SessionRole,
     ) -> Result<Setup, SessionError> {
         let principal = self.principal_of_device(state)?;
+        let handle = &state
+            .member(&principal)
+            .ok_or(SessionError::NotBound)?
+            .handle;
+        let git_identity = format!("@{handle}/{agent}");
         let definition = state
             .agent(&agent, principal)
             .ok_or_else(|| SessionError::UnknownAgent(agent.clone()))?
@@ -95,7 +100,8 @@ impl Daemon {
         let harness = self
             .harness_command(&definition.harness)
             .ok_or_else(|| SessionError::UnknownHarness(definition.harness.clone()))?;
-        let sandbox = self.machine_config()?.sandbox;
+        let machine_config = self.machine_config()?;
+        let sandbox = machine_config.sandbox;
         match &sandbox {
             SandboxConfig::Fence(_) if !on_path("fence") => return Err(SessionError::NoFence),
             SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
@@ -128,6 +134,8 @@ impl Daemon {
             definition,
             harness,
             sandbox,
+            git_identity,
+            agent_signing: machine_config.commits.agent_signing.signing(),
             item_context,
             target: policy.merge.target.clone(),
             transcripts,
@@ -293,10 +301,17 @@ impl Daemon {
             definition,
             harness,
             sandbox,
+            git_identity,
+            agent_signing,
             item_context,
             target,
             transcripts,
         } = setup;
+        // The agent commits as itself, `@principal/agent`, as it is named everywhere else.
+        let mut git_environment = agent_signing.environment();
+        for variable in ["GIT_AUTHOR_NAME", "GIT_COMMITTER_NAME"] {
+            git_environment.push((variable.to_string(), git_identity.clone()));
+        }
         let autonomy = definition.autonomy;
         let permissions: Arc<dyn Permissions> = match sandbox.permissions(autonomy.permissions) {
             wf_core::autonomy::PermissionMode::Allow => Arc::new(Permission::Allow),
@@ -354,6 +369,7 @@ impl Daemon {
             max_duration: autonomy.max_duration,
             permissions,
             sandbox,
+            git_environment,
             autonomy_permissions: autonomy.permissions,
         }
     }
@@ -382,6 +398,9 @@ pub(super) struct Setup {
     pub(super) definition: AgentDefinition,
     pub(super) harness: AcpAgentConfig,
     pub(super) sandbox: SandboxConfig,
+    /// The name the agent commits under.
+    pub(super) git_identity: String,
+    pub(super) agent_signing: wf_vcs::CommitSigning,
     pub(super) item_context: ItemContext,
     pub(super) target: String,
     pub(super) transcripts: PathBuf,

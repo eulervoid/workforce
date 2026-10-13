@@ -876,6 +876,29 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
   `wf/<item>` branch lands in the target.
 * **Later:** git bundles over iroh-blobs for peer-to-peer repositories; `git-remote-iroh` as prior art.
 
+### Commit identity and signatures
+* An agent commits as itself: the daemon sets `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME` of its
+  processes to `@principal/agent`, the name it has everywhere else, without the session. The email is
+  what the git config says. Which session made a commit is in the log: `SessionEnded` names it.
+* Agents commit unsigned by default (`[commits] agent_signing` in the machine config), so they never
+  wait for a key the principal has to unlock or approve; `as_configured` lets the git config decide.
+  Git config reaches the agent through `GIT_CONFIG_*` variables of its processes.
+* The merge commit (`[commits] merge_signing`) is signed as the git config says (the principal's key,
+  the default), not at all, or with the key of the daemon's **device** (`device`). A device signature
+  says "this device of the workforce merged it"; the approval it carries out is the `Reviewed` event,
+  which a device signed as well. The daemon writes the device key as an OpenSSH key file beside it
+  and signs through `ssh-keygen`. `wf device allowed-signers` prints a git allowed-signers file with
+  every bound device as `<handle>@<device name>`, so `git verify-commit` checks merges against the
+  workforce. The device key also signs events; the two never sign the same bytes, since an SSH
+  signature covers a blob that starts with `SSHSIG` and names the namespace `git`, and an event
+  signature covers bytes that start with `wf/event/1\0`.
+* **Later: a signing key per session.** One key for all agents proves only that some agent of the
+  machine committed, not which: anyone with the key can sign as any `@principal/agent`. For the
+  signature to name the session, the daemon generates a key when a session starts, lets only that
+  session's sandbox read it, records its public key in the log (in `SessionStarted`, a format change),
+  and throws it away when the session ends. `wf device allowed-signers` then also lists each
+  session's key, and a commit checks out against the session that made it.
+
 ## 10. Comments
 
 All text about an item is a comment: discussion, questions, requested changes, the reasons for a move or

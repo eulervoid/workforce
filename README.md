@@ -74,6 +74,20 @@ allow_write = ["/opt/cache"]
 allow_domains = ["*.example.com"]
 ```
 
+## Commits and signatures
+Agents commit as themselves, `@you/coder`, and without signing, so that they never wait for a key you
+have to unlock or approve. When your git config signs commits (`commit.gpgsign`), the merge commit
+that brings approved work into the target is signed, as you: the signature says you accepted the
+work. Or the daemon signs it with its device's key, which needs nobody to approve it; then
+`wf device allowed-signers > .git/allowed_signers` and
+`git config gpg.ssh.allowedSignersFile .git/allowed_signers` let git check those merges. The machine
+config says which:
+```toml
+[commits]
+agent_signing = "unsigned"       # default; "as_configured" signs as your git config says
+merge_signing = "as_configured"  # default; "unsigned" never signs, "device" signs with the device key
+```
+
 ## Permission requests
 An agent with `--permissions ask`, or any agent on a machine without a sandbox, asks before its
 harness runs a tool. The request goes through the

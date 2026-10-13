@@ -326,10 +326,9 @@ pub enum ForkCommand {
 
 #[derive(Subcommand)]
 pub enum DaemonCommand {
-    /// Start the daemon in the background; it logs to `daemon.log` in the data directory.
+    /// Start the daemon in the background.
     Start(DaemonArgs),
-    /// Stop the daemon of this machine. Its sessions stop; when it starts again, they end as
-    /// interrupted and their items are ready again.
+    /// Stop the daemon and its sessions.
     Stop,
     /// Whether the daemon of this machine runs, and where it logs.
     Status,
@@ -349,7 +348,7 @@ pub struct DaemonArgs {
 
 #[derive(Subcommand)]
 pub enum InviteCommand {
-    /// Print a code that binds one more machine to you. Needs your principal key.
+    /// Print a code to add a device. Needs your principal key.
     Device(InviteDeviceArgs),
 }
 
@@ -362,10 +361,14 @@ pub struct InviteDeviceArgs {
 
 #[derive(Subcommand)]
 pub enum DeviceCommand {
-    /// List the machines bound to the workforce, with what they say about themselves.
+    /// List the machines bound to the workforce.
     List,
     /// Change what this machine says about itself.
     Edit(DeviceEditArgs),
+    /// Print a git allowed-signers file of the workforce's devices, to check the merges they
+    /// sign: `wf device allowed-signers > .git/allowed_signers`, then
+    /// `git config gpg.ssh.allowedSignersFile .git/allowed_signers`.
+    AllowedSigners,
 }
 
 /// Fields that are given replace the current value.
@@ -378,7 +381,7 @@ pub struct DeviceEditArgs {
     /// can run here.
     #[arg(long)]
     pub hardware: Option<String>,
-    /// How many agent sessions this machine may run at once.
+    /// How many agent sessions this machine should run concurrently at most.
     #[arg(long)]
     pub max_sessions: Option<u32>,
     /// Replaces the agents of this machine: `coder=2`. Repeat for several.

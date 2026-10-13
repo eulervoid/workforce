@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer};
 use url::Url;
 use wf_core::autonomy::PermissionMode;
 use wf_core::name::AgentName;
+use wf_vcs::CommitSigning;
 
 #[derive(Debug, thiserror::Error)]
 pub enum MachineConfigError {
@@ -35,6 +36,51 @@ pub struct MachineConfig {
     pub permissions: PermissionsConfig,
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    #[serde(default)]
+    pub commits: CommitsConfig,
+}
+
+/// How commits are signed on this machine.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitsConfig {
+    #[serde(default)]
+    pub agent_signing: AgentSigningConfig,
+    #[serde(default)]
+    pub merge_signing: MergeSigningConfig,
+}
+
+/// Whether agents sign their commits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSigningConfig {
+    /// Never, so that an agent never waits for a key the principal has to unlock or approve.
+    #[default]
+    Unsigned,
+    /// As the git config says, as for the principal's own commits.
+    AsConfigured,
+}
+
+/// Who signs the merge commit that brings approved work into the target.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeSigningConfig {
+    /// As the git config says: the principal, with their own key, when it signs commits.
+    #[default]
+    AsConfigured,
+    /// Nobody.
+    Unsigned,
+    /// The device of the daemon, with its key: `wf device allowed-signers` lets git check it.
+    Device,
+}
+
+impl AgentSigningConfig {
+    pub fn signing(self) -> CommitSigning {
+        match self {
+            AgentSigningConfig::Unsigned => CommitSigning::Unsigned,
+            AgentSigningConfig::AsConfigured => CommitSigning::AsConfigured,
+        }
+    }
 }
 
 /// How agents are isolated on this machine.
@@ -290,6 +336,19 @@ mod tests {
         assert_eq!(off.permissions(PermissionMode::Allow), PermissionMode::Ask);
         assert_eq!(off.permissions(PermissionMode::Deny), PermissionMode::Deny);
         assert!(MachineConfig::parse("[sandbox]\nkind = \"off\"\nallow_domains = []\n").is_err());
+    }
+
+    #[test]
+    fn agents_commit_unsigned_and_merges_are_signed_as_configured_by_default() {
+        let default = MachineConfig::parse("").ok().unwrap().commits;
+        assert_eq!(default.agent_signing, AgentSigningConfig::Unsigned);
+        assert_eq!(default.merge_signing, MergeSigningConfig::AsConfigured);
+        let text = "[commits]\nagent_signing = \"as_configured\"\nmerge_signing = \"device\"\n";
+        let configured = MachineConfig::parse(text).ok().unwrap().commits;
+        assert_eq!(configured.agent_signing, AgentSigningConfig::AsConfigured);
+        assert_eq!(configured.merge_signing, MergeSigningConfig::Device);
+        assert!(MachineConfig::parse("[commits]\nagent_signing = \"device\"\n").is_err());
+        assert!(MachineConfig::parse("[commits]\nagent_signing = \"always\"\n").is_err());
     }
 
     #[test]
