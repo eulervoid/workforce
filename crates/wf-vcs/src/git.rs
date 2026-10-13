@@ -107,6 +107,12 @@ impl GitCli {
         self.succeed_in(&self.repository, args.map(OsStr::new))
     }
 
+    /// Whether the git config asks for commits to be signed (`commit.gpgsign`).
+    fn signs_commits(&self) -> Result<bool, VcsError> {
+        let configured = self.attempt(["config", "--type=bool", "--get", "commit.gpgsign"])?;
+        Ok(configured.success && configured.stdout.trim() == "true")
+    }
+
     fn attempt<const N: usize>(&self, args: [&str; N]) -> Result<Finished, VcsError> {
         Self::run_in(&self.repository, args)
     }
@@ -457,8 +463,15 @@ impl VcsAdapter for GitCli {
             return Ok(MergeOutcome::Conflict { paths });
         }
         let tree = lines.next().unwrap_or_default().trim().to_string();
+        // Unlike `git commit`, `commit-tree` signs only when told to.
+        let sign = if self.signs_commits()? {
+            "-S"
+        } else {
+            "--no-gpg-sign"
+        };
         let new = self.succeed([
             "commit-tree",
+            sign,
             &tree,
             "-p",
             &old.to_string(),
