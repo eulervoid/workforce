@@ -84,7 +84,7 @@ impl Daemon {
             self.author(
                 loaded,
                 Actor::Daemon(principal),
-                EventBody::Comment(Comment::plain(item, body)),
+                EventBody::Commented(Comment::plain(item, body)),
             )
         };
 

@@ -55,7 +55,9 @@ use crate::event::CommentKind;
 use crate::hlc::Hlc;
 use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::name::{Label, LaneName, RecoveryName, Requirement, ReviewName, StateName, TypeName};
+use crate::name::{
+    Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, StateName, TypeName,
+};
 use crate::policy::{Policy, StateCategory};
 use crate::refs::Token;
 use crate::session::{CommitId, Verdict};
@@ -103,7 +105,7 @@ impl Comment {
 
 /// A verdict on one commit of an item, by a review session or a person.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Verdicted {
+pub struct Review {
     pub commit: Option<CommitId>,
     pub verdict: Verdict,
     pub by: Actor,
@@ -162,15 +164,15 @@ pub struct Item {
     pub(crate) state: Lww<Option<StateName>>,
     pub(crate) priority: Lww<Option<Priority>>,
     pub(crate) lane: Lww<Option<LaneName>>,
-    pub(crate) review: Lww<Option<ReviewName>>,
-    pub(crate) recovery: Lww<Option<RecoveryName>>,
+    pub(crate) review: Lww<Option<ReviewLevelName>>,
+    pub(crate) recovery: Lww<Option<RecoveryLevelName>>,
     pub(crate) labels: AddWinsSet<Label>,
     pub(crate) requires: AddWinsSet<Requirement>,
     pub(crate) depends_on: AddWinsSet<ItemId>,
     pub(crate) supersedes: Lww<Option<ItemId>>,
     pub(crate) archived: Lww<Option<Hlc>>,
     pub(crate) comments: BTreeMap<CommentId, Comment>,
-    pub(crate) verdicts: BTreeMap<EventId, Verdicted>,
+    pub(crate) verdicts: BTreeMap<EventId, Review>,
     pub(crate) merges: BTreeMap<EventId, Merge>,
     /// When the principal last did something to the item. It starts its recovery level again.
     pub(crate) principal_touched: Option<Hlc>,
@@ -225,12 +227,12 @@ impl Item {
     }
 
     /// The review level the item needs, if any.
-    pub fn review(&self) -> Option<&ReviewName> {
+    pub fn review_level(&self) -> Option<&ReviewLevelName> {
         self.review.value().as_ref()
     }
 
     /// The recovery level the item names, if any.
-    pub fn recovery(&self) -> Option<&RecoveryName> {
+    pub fn recovery_level(&self) -> Option<&RecoveryLevelName> {
         self.recovery.value().as_ref()
     }
 
@@ -277,7 +279,7 @@ impl Item {
             .any(|comment| comment.is_open() && comment.kind == CommentKind::Blocker)
     }
 
-    pub fn verdicts(&self) -> &BTreeMap<EventId, Verdicted> {
+    pub fn verdicts(&self) -> &BTreeMap<EventId, Review> {
         &self.verdicts
     }
 
@@ -295,8 +297,8 @@ impl Item {
     }
 
     /// The review level the item needs: its own, else its type's. `None` means no review.
-    pub fn effective_review<'a>(&'a self, policy: &'a Policy) -> Option<&'a ReviewName> {
-        self.review().or_else(|| {
+    pub fn effective_review_level<'a>(&'a self, policy: &'a Policy) -> Option<&'a ReviewLevelName> {
+        self.review_level().or_else(|| {
             policy
                 .type_config(&self.item_type)
                 .and_then(|config| config.review.as_ref())
@@ -305,8 +307,11 @@ impl Item {
 
     /// The recovery level of the item: its own, else its type's. `None` means the principal
     /// decides after the first unsuccessful attempt.
-    pub fn effective_recovery<'a>(&'a self, policy: &'a Policy) -> Option<&'a RecoveryName> {
-        self.recovery().or_else(|| {
+    pub fn effective_recovery_level<'a>(
+        &'a self,
+        policy: &'a Policy,
+    ) -> Option<&'a RecoveryLevelName> {
+        self.recovery_level().or_else(|| {
             policy
                 .type_config(&self.item_type)
                 .and_then(|config| config.recovery.as_ref())
@@ -320,7 +325,7 @@ impl Item {
 
     /// Whether submitted work waits for review steps before it is done.
     pub fn needs_review(&self, policy: &Policy) -> bool {
-        self.effective_review(policy)
+        self.effective_review_level(policy)
             .and_then(|name| policy.review_level(name))
             .is_some_and(|level| !level.steps.is_empty())
     }

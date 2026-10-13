@@ -13,7 +13,7 @@ use crate::identity::{
     Actor, AgentId, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed,
 };
 use crate::item::Priority;
-use crate::name::{AgentName, Handle, HarnessName, LaneName, ReviewName, StateName, TypeName};
+use crate::name::{AgentName, Handle, HarnessName, LaneName, ReviewLevelName, StateName, TypeName};
 use crate::policy::DEFAULT_POLICY_TOML;
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::{State, Trust};
@@ -294,25 +294,25 @@ pub fn unarchive(item: ItemId) -> EventBody {
 }
 
 pub fn comment(item: ItemId, text: &str) -> EventBody {
-    EventBody::Comment(Comment::plain(item, text))
+    EventBody::Commented(Comment::plain(item, text))
 }
 
 pub fn blocker(item: ItemId, text: &str) -> EventBody {
-    EventBody::Comment(Comment {
+    EventBody::Commented(Comment {
         kind: CommentKind::Blocker,
         ..Comment::plain(item, text)
     })
 }
 
 pub fn change_request(item: ItemId, text: &str) -> EventBody {
-    EventBody::Comment(Comment {
+    EventBody::Commented(Comment {
         kind: CommentKind::ChangeRequest,
         ..Comment::plain(item, text)
     })
 }
 
 pub fn resolving(item: ItemId, text: &str, resolves: &[CommentId]) -> EventBody {
-    EventBody::Comment(Comment {
+    EventBody::Commented(Comment {
         resolves: resolves.to_vec(),
         ..Comment::plain(item, text)
     })
@@ -348,7 +348,7 @@ pub fn end_session(session: SessionId, reason: EndReason) -> EventBody {
 
 /// A comment about a step of the item's body: a report, when a session writes it.
 pub fn on_step(item: ItemId, text: &str, step: StepId) -> EventBody {
-    EventBody::Comment(Comment {
+    EventBody::Commented(Comment {
         step: Some(step),
         ..Comment::plain(item, text)
     })
@@ -359,7 +359,7 @@ pub fn create_reviewed(item_type: &str, title: &str, review: &str) -> EventBody 
     let EventBody::ItemCreated(mut created) = create(item_type, title) else {
         unreachable!("`create` makes an `ItemCreated`")
     };
-    created.review = Some(ReviewName::new(review).unwrap());
+    created.review = Some(ReviewLevelName::new(review).unwrap());
     EventBody::ItemCreated(created)
 }
 
@@ -375,7 +375,7 @@ pub fn define_supervisor(name: &str) -> EventBody {
 pub fn review_of(item: ItemId, review: Option<&str>) -> EventBody {
     edit(
         item,
-        Change::Review(review.map(|name| ReviewName::new(name).unwrap())),
+        Change::ReviewLevel(review.map(|name| ReviewLevelName::new(name).unwrap())),
     )
 }
 
@@ -403,7 +403,7 @@ pub fn start_review(agent: &str, item: ItemId, commit: impl Into<Option<CommitId
 }
 
 pub fn verdict(item: ItemId, commit: impl Into<Option<CommitId>>, verdict: Verdict) -> EventBody {
-    EventBody::Review(crate::event::Review {
+    EventBody::Reviewed(crate::event::Review {
         item,
         commit: commit.into(),
         verdict,

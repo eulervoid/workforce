@@ -76,7 +76,7 @@ impl State {
                 commit: merge.commit,
             });
         }
-        let level = policy.review_level(live.effective_review(policy)?)?;
+        let level = policy.review_level(live.effective_review_level(policy)?)?;
         let mut steps = level.steps.clone();
         let mut index = 0;
         let mut verdicts: Vec<_> = live

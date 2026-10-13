@@ -156,14 +156,14 @@ impl State {
                     referenced_in(event.id().into(), referenced_here(&created.body));
                     continue;
                 }
-                EventBody::Comment(comment) if comment.item == item => Activity::Commented {
+                EventBody::Commented(comment) if comment.item == item => Activity::Commented {
                     comment: event.id().into(),
                     kind: comment.kind,
                     text: comment.text.clone(),
                     resolves: comment.resolves.clone(),
                     step: comment.step,
                 },
-                EventBody::Comment(comment) => {
+                EventBody::Commented(comment) => {
                     referenced_in(comment.item, referenced_here(&comment.text));
                     continue;
                 }
@@ -262,7 +262,7 @@ impl State {
                         moved_to,
                     }
                 }
-                EventBody::Review(review) if review.item == item => Activity::Reviewed {
+                EventBody::Reviewed(review) if review.item == item => Activity::Reviewed {
                     commit: review.commit,
                     verdict: review.verdict,
                     because: review.because,
@@ -276,7 +276,7 @@ impl State {
                 | EventBody::ItemUnarchived(_)
                 | EventBody::SessionStarted(_)
                 | EventBody::SessionEnded(_)
-                | EventBody::Review(_)
+                | EventBody::Reviewed(_)
                 | EventBody::Merged(_)
                 | EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
@@ -304,7 +304,7 @@ impl State {
     pub fn item_of(&self, event: &Event) -> Option<ItemId> {
         match &event.content.body {
             EventBody::ItemCreated(_) => Some(event.id().into()),
-            EventBody::Comment(comment) => Some(comment.item),
+            EventBody::Commented(comment) => Some(comment.item),
             EventBody::ItemMoved(moved) => Some(moved.item),
             EventBody::ItemEdited(edited) => Some(edited.item),
             EventBody::ItemLinked(linked) => Some(linked.item),
@@ -315,7 +315,7 @@ impl State {
             EventBody::SessionEnded(ended) => {
                 self.session(ended.session).map(|session| session.item())
             }
-            EventBody::Review(review) => Some(review.item),
+            EventBody::Reviewed(review) => Some(review.item),
             EventBody::Merged(merged) => Some(merged.item),
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)

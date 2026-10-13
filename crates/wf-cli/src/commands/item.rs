@@ -197,7 +197,7 @@ pub(super) fn item(
             if let Some(recovery) = draft.recovery {
                 workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {
                     item: id,
-                    changes: vec![Change::Recovery(Some(recovery))],
+                    changes: vec![Change::RecoveryLevel(Some(recovery))],
                 }))?;
             }
             let state = workspace.state();

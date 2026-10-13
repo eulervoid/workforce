@@ -6,8 +6,8 @@ use wf_core::autonomy::{Autonomy, PermissionMode, StartMode};
 use wf_core::graph::Readiness;
 use wf_core::item::Priority;
 use wf_core::name::{
-    AgentName, HarnessName, Label, LaneName, RecoveryName, Requirement, ReviewName, StateName,
-    TypeName,
+    AgentName, HarnessName, Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName,
+    StateName, TypeName,
 };
 
 #[derive(Parser)]
@@ -646,11 +646,11 @@ pub struct ItemAddArgs {
     pub requires: Vec<Requirement>,
     /// The review level the work needs, a name from the policy's `[[review]]` list.
     #[arg(long)]
-    pub review: Option<ReviewName>,
+    pub review: Option<ReviewLevelName>,
     /// What happens when a session on it ends without finishing, a name from the policy's
     /// `[[recovery]]` list.
     #[arg(long)]
-    pub recovery: Option<RecoveryName>,
+    pub recovery: Option<RecoveryLevelName>,
     /// Open the item in the editor before creating it, filled in with the flags given.
     #[arg(long)]
     pub edit: bool,
@@ -764,11 +764,11 @@ pub struct ItemEditArgs {
     /// The review level the work needs, a name from the policy's `[[review]]` list, or `default`
     /// for the level of the item's type.
     #[arg(long)]
-    pub review: Option<LevelChoice<ReviewName>>,
+    pub review: Option<LevelChoice<ReviewLevelName>>,
     /// What happens when a session on it ends without finishing, a name from the policy's
     /// `[[recovery]]` list, or `default` for the level of the item's type.
     #[arg(long)]
-    pub recovery: Option<LevelChoice<RecoveryName>>,
+    pub recovery: Option<LevelChoice<RecoveryLevelName>>,
 }
 
 /// What `wf item edit --review` and `--recovery` set.

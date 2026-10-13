@@ -48,7 +48,7 @@ pub(crate) fn review(
         Verdict::Escalate
     };
     let because = comment_why(workspace, item, args.note)?;
-    let event = workspace.author(EventBody::Review(wf_core::event::Review {
+    let event = workspace.author(EventBody::Reviewed(wf_core::event::Review {
         item,
         commit,
         verdict,

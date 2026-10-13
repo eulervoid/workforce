@@ -15,7 +15,7 @@ use crate::event::{
 };
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
-use crate::name::{LaneName, RecoveryName, ReviewName, StateName, TypeName};
+use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, StateName, TypeName};
 use crate::policy::{Field, StateCategory};
 use crate::session::{SessionRole, Verdict};
 use crate::state::{Disposition, ForkState, MAX_PENDING, Origin, Received, State, Trust, Waiting};
@@ -183,13 +183,16 @@ pub enum PolicyViolation {
     #[error("{0} was not submitted at that commit, so a verdict on it counts for nothing")]
     StaleReview(ItemId),
     #[error("there is no review level `{name}`; {valid}")]
-    UnknownReviewLevel { name: ReviewName, valid: OneOf },
+    UnknownReviewLevel { name: ReviewLevelName, valid: OneOf },
     #[error("a `{type_name}` has no review state to wait in during review")]
     ReviewWithoutReviewState { type_name: TypeName },
     #[error("an agent that worked on {0} cannot lower its review level")]
     AgentLowersReview(ItemId),
     #[error("there is no recovery level `{name}`; {valid}")]
-    UnknownRecoveryLevel { name: RecoveryName, valid: OneOf },
+    UnknownRecoveryLevel {
+        name: RecoveryLevelName,
+        valid: OneOf,
+    },
     #[error(
         "an agent cannot change the recovery level of {0}; the principal decides how much is retried"
     )]
@@ -543,11 +546,11 @@ impl State {
                     Err(Invalid::UnknownSession(ended.session))
                 }
             }
-            EventBody::Review(crate::event::Review { item, .. })
+            EventBody::Reviewed(crate::event::Review { item, .. })
             | EventBody::Merged(crate::event::Merged { item, .. }) => known_item(item),
             EventBody::ItemEdited(ItemEdited { item, .. })
             | EventBody::ItemMoved(ItemMoved { item, .. })
-            | EventBody::Comment(crate::event::Comment { item, .. })
+            | EventBody::Commented(crate::event::Comment { item, .. })
             | EventBody::ItemArchived(crate::event::ItemRef { item })
             | EventBody::ItemUnarchived(crate::event::ItemRef { item }) => known_item(item),
             EventBody::ItemLinked(ItemLinked { item, link }) => {
@@ -647,7 +650,7 @@ impl State {
         };
         let Actor::Agent { session, .. } = actor else {
             return match body {
-                EventBody::Review(review) if review.verdict == Verdict::Escalate => {
+                EventBody::Reviewed(review) if review.verdict == Verdict::Escalate => {
                     Err(PolicyViolation::PrincipalCannotEscalate)
                 }
                 _ => Ok(()),
@@ -673,7 +676,7 @@ impl State {
             EventBody::SessionEnded(ended) if ended.session != *session => {
                 Err(PolicyViolation::SessionEndsAnother)
             }
-            EventBody::Review(review) => {
+            EventBody::Reviewed(review) => {
                 let reviewing = folded.item() == review.item
                     && matches!(folded.role(), SessionRole::Review { commit } if commit == review.commit);
                 let did_the_work = workforce.sessions.values().any(|other| {
@@ -691,7 +694,7 @@ impl State {
                 if edited
                     .changes
                     .iter()
-                    .any(|change| matches!(change, Change::Recovery(_))) =>
+                    .any(|change| matches!(change, Change::RecoveryLevel(_))) =>
             {
                 Err(PolicyViolation::AgentChangesRecovery(edited.item))
             }
@@ -699,7 +702,7 @@ impl State {
                 let lowers = edited
                     .changes
                     .iter()
-                    .any(|change| matches!(change, Change::Review(_)))
+                    .any(|change| matches!(change, Change::ReviewLevel(_)))
                     && self.lowers_review(actor, edited);
                 if lowers {
                     Err(PolicyViolation::AgentLowersReview(edited.item))
@@ -720,7 +723,7 @@ impl State {
                     Ok(())
                 }
             }
-            EventBody::Comment(comment) => {
+            EventBody::Commented(comment) => {
                 let own_blocker = workforce.items.get(&comment.item).is_some_and(|item| {
                     comment.resolves.iter().any(|resolved| {
                         item.comments().get(resolved).is_some_and(|target| {
@@ -773,10 +776,10 @@ impl State {
         }
         let policy = &workforce.policy.value().policy;
         // `None` ranks below every level, so removing the review lowers it.
-        let rank = |level: Option<&ReviewName>| {
+        let rank = |level: Option<&ReviewLevelName>| {
             level.and_then(|name| policy.review_rank(name).map(|rank| rank + 1))
         };
-        let before = rank(item.effective_review(policy));
+        let before = rank(item.effective_review_level(policy));
         let type_default = policy
             .type_config(item.item_type())
             .and_then(|config| config.review.as_ref());
@@ -784,7 +787,7 @@ impl State {
             .changes
             .iter()
             .filter_map(|change| {
-                let Change::Review(review) = change else {
+                let Change::ReviewLevel(review) = change else {
                     return None;
                 };
                 Some(review.as_ref().or(type_default))
@@ -823,7 +826,7 @@ impl State {
                     valid: OneOf::new(policy.types.keys()),
                 })
         };
-        let known_review = |type_name: &TypeName, review: &Option<ReviewName>| {
+        let known_review = |type_name: &TypeName, review: &Option<ReviewLevelName>| {
             let Some(level) = review else {
                 return Ok(());
             };
@@ -863,7 +866,7 @@ impl State {
 
         match body {
             EventBody::Genesis(_) | EventBody::PolicySet(_) | EventBody::Unknown { .. } => Ok(()),
-            EventBody::Comment(comment) => {
+            EventBody::Commented(comment) => {
                 if comment.text.trim().is_empty() && comment.resolves.is_empty() {
                     return Err(PolicyViolation::EmptyComment);
                 }
@@ -904,7 +907,7 @@ impl State {
                     Some(_) | None => Ok(()),
                 }
             }
-            EventBody::Review(review) => {
+            EventBody::Reviewed(review) => {
                 let item = item_of(&review.item)?;
                 because_on(item, review.because)?;
                 match self.submission(review.item) {
@@ -971,14 +974,16 @@ impl State {
                         Change::Lane(lane) => lane.iter().try_for_each(known_lane)?,
                         Change::Labels(_) => require_field(type_name, Field::Labels)?,
                         Change::Requires(_) => require_field(type_name, Field::Requires)?,
-                        Change::Review(review) => known_review(type_name, review)?,
-                        Change::Recovery(Some(level)) if policy.recovery_level(level).is_none() => {
+                        Change::ReviewLevel(review) => known_review(type_name, review)?,
+                        Change::RecoveryLevel(Some(level))
+                            if policy.recovery_level(level).is_none() =>
+                        {
                             return Err(PolicyViolation::UnknownRecoveryLevel {
                                 name: level.clone(),
                                 valid: OneOf::new(policy.recovery.iter().map(|level| &level.name)),
                             });
                         }
-                        Change::Recovery(_) => {}
+                        Change::RecoveryLevel(_) => {}
                     }
                 }
                 Ok(())

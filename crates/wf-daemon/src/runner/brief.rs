@@ -23,7 +23,7 @@ struct Logged<'a> {
 
 impl Sources for Logged<'_> {
     fn text(&self, comment: CommentId) -> Option<String> {
-        let EventBody::Comment(written) =
+        let EventBody::Commented(written) =
             wf_store::EventStore::event(self.store, &EventId::from(comment))
                 .ok()??
                 .content

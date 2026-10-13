@@ -73,7 +73,8 @@ struct Here<'a> {
 
 impl Sources for Here<'_> {
     fn text(&self, comment: CommentId) -> Option<String> {
-        let EventBody::Comment(written) = self.workspace.event(&comment.into()).ok()??.content.body
+        let EventBody::Commented(written) =
+            self.workspace.event(&comment.into()).ok()??.content.body
         else {
             return None;
         };

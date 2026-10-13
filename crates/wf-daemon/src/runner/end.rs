@@ -90,7 +90,7 @@ impl Daemon {
                     .author(
                         loaded,
                         actor.clone(),
-                        EventBody::Comment(Comment::plain(item, note)),
+                        EventBody::Commented(Comment::plain(item, note)),
                     )
                     .await?;
                 Some(CommentId::from(written.id()))

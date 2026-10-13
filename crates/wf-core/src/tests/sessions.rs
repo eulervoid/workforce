@@ -1,7 +1,7 @@
 use crate::event::Event;
 use crate::id::{ItemId, SessionId};
 use crate::item::ItemView;
-use crate::name::ReviewName;
+use crate::name::ReviewLevelName;
 use crate::session::EndReason;
 use crate::state::{State, Trust};
 use crate::testing::*;
@@ -506,7 +506,7 @@ mod review_levels {
     #[test]
     fn items_name_levels_that_exist() {
         let (fixture, mut state, task) = setup();
-        let ghost = ReviewName::new("ghost").unwrap();
+        let ghost = ReviewLevelName::new("ghost").unwrap();
         let mut created = create("task", "x");
         if let crate::event::EventBody::ItemCreated(created) = &mut created {
             created.review = Some(ghost.clone());
@@ -523,7 +523,7 @@ mod review_levels {
         assert_eq!(
             state.check_policy(&edit(
                 task,
-                crate::event::Change::Review(Some(ghost.clone()))
+                crate::event::Change::ReviewLevel(Some(ghost.clone()))
             )),
             Err(unknown())
         );
@@ -548,7 +548,7 @@ mod review_levels {
         let recovery = |level: Option<&str>| {
             edit(
                 task,
-                crate::event::Change::Recovery(level.map(|name| name.parse().unwrap())),
+                crate::event::Change::RecoveryLevel(level.map(|name| name.parse().unwrap())),
             )
         };
         assert_eq!(state.check_policy(&recovery(Some("none"))), Ok(()));

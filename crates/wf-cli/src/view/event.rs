@@ -98,8 +98,8 @@ pub fn describe(state: &State, body: &EventBody) -> String {
                     Change::Lane(_) => "lane",
                     Change::Labels(_) => "labels",
                     Change::Requires(_) => "requires",
-                    Change::Review(_) => "review",
-                    Change::Recovery(_) => "recovery",
+                    Change::ReviewLevel(_) => "review",
+                    Change::RecoveryLevel(_) => "recovery",
                     Change::StepDone { .. } => "step",
                 })
                 .collect();
@@ -131,7 +131,7 @@ pub fn describe(state: &State, body: &EventBody) -> String {
         },
         EventBody::ItemArchived(reference) => format!("{} archived", item(&reference.item)),
         EventBody::ItemUnarchived(reference) => format!("{} unarchived", item(&reference.item)),
-        EventBody::Comment(comment) => format!("{} commented", item(&comment.item)),
+        EventBody::Commented(comment) => format!("{} commented", item(&comment.item)),
         EventBody::SessionStarted(started) => {
             format!("{} started on {}", started.agent, item(&started.item))
         }
@@ -140,7 +140,7 @@ pub fn describe(state: &State, body: &EventBody) -> String {
             ended.session.short(),
             ended.reason
         ),
-        EventBody::Review(review) => {
+        EventBody::Reviewed(review) => {
             format!("{} reviewed: {:?}", item(&review.item), review.verdict)
         }
         EventBody::Merged(merged) => format!("{} merged as {}", item(&merged.item), merged.commit),

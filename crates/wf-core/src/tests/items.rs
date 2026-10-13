@@ -721,14 +721,14 @@ fn the_review_level_of_an_item_is_a_register() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "work")));
-    let review = |item: &crate::item::Item| item.review().map(ToString::to_string);
+    let review = |item: &crate::item::Item| item.review_level().map(ToString::to_string);
     let item_of = |state: &State| match state.item(task).unwrap() {
         ItemView::Live(item) => review(item),
         ItemView::Archived(_) => panic!("live"),
     };
     assert_eq!(item_of(&state), None);
 
-    let level = |name: Option<&str>| Change::Review(name.map(|name| name.parse().unwrap()));
+    let level = |name: Option<&str>| Change::ReviewLevel(name.map(|name| name.parse().unwrap()));
     fixture.apply(&mut state, 0, 2_001, edit(task, level(Some("standard"))));
     assert_eq!(item_of(&state), Some("standard".to_string()));
     fixture.apply(&mut state, 0, 2_002, edit(task, level(None)));
@@ -742,15 +742,15 @@ fn the_recovery_level_of_an_item_is_a_register_that_falls_back_to_its_type() {
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "work")));
     let levels = |state: &State| match state.item(task).unwrap() {
         ItemView::Live(item) => (
-            item.recovery().map(ToString::to_string),
-            item.effective_recovery(&state.policy().unwrap().policy)
+            item.recovery_level().map(ToString::to_string),
+            item.effective_recovery_level(&state.policy().unwrap().policy)
                 .map(ToString::to_string),
         ),
         ItemView::Archived(_) => panic!("live"),
     };
     assert_eq!(levels(&state), (None, Some("standard".to_string())));
 
-    let level = |name: Option<&str>| Change::Recovery(name.map(|name| name.parse().unwrap()));
+    let level = |name: Option<&str>| Change::RecoveryLevel(name.map(|name| name.parse().unwrap()));
     fixture.apply(&mut state, 0, 2_001, edit(task, level(Some("none"))));
     assert_eq!(
         levels(&state),

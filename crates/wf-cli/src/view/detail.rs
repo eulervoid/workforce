@@ -522,10 +522,10 @@ fn edit_summary(body: &Body, change: &Change) -> String {
         Change::Lane(None) => "moved it to its type's lane".to_string(),
         Change::Labels(change) => format!("labels {}", set_change(change)),
         Change::Requires(change) => format!("requires {}", set_change(change)),
-        Change::Review(Some(level)) => format!("review → {level}"),
-        Change::Review(None) => "review → its type's level".to_string(),
-        Change::Recovery(Some(level)) => format!("recovery → {level}"),
-        Change::Recovery(None) => "recovery → its type's level".to_string(),
+        Change::ReviewLevel(Some(level)) => format!("review → {level}"),
+        Change::ReviewLevel(None) => "review → its type's level".to_string(),
+        Change::RecoveryLevel(Some(level)) => format!("recovery → {level}"),
+        Change::RecoveryLevel(None) => "recovery → its type's level".to_string(),
         Change::StepDone { step, done } => {
             let verb = if *done { "checked" } else { "unchecked" };
             match step_ref(body, *step) {
@@ -619,9 +619,11 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         author: actor_label(state, item.author()),
         created: timestamp(item.created()),
         updated: timestamp(item.updated()),
-        review: item.effective_review(policy).map(ToString::to_string),
+        review: item.effective_review_level(policy).map(ToString::to_string),
         review_status: state.review_status(item.id()).map(review_status_view),
-        recovery: item.effective_recovery(policy).map(ToString::to_string),
+        recovery: item
+            .effective_recovery_level(policy)
+            .map(ToString::to_string),
         waits_after_failures: state
             .inbox()
             .into_iter()

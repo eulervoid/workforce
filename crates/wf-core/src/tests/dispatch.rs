@@ -155,7 +155,7 @@ fn sessions_that_do_not_finish_are_retried_as_the_recovery_level_says() {
     let fragile: ItemId = scene.apply(create("task", "fragile")).id().into();
     scene.apply(edit(
         fragile,
-        crate::event::Change::Recovery(Some("none".parse().unwrap())),
+        crate::event::Change::RecoveryLevel(Some("none".parse().unwrap())),
     ));
     scene.apply(create("task", "untouched"));
 
@@ -254,7 +254,7 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
     let item: ItemId = scene.apply(create("task", "flaky")).id().into();
     scene.apply(edit(
         item,
-        crate::event::Change::Recovery(Some("diagnose".parse().unwrap())),
+        crate::event::Change::RecoveryLevel(Some("diagnose".parse().unwrap())),
     ));
     let work: crate::id::SessionId = scene.apply(start_session("coder", item)).id().into();
     scene.apply(end_session(work, EndReason::Failed));

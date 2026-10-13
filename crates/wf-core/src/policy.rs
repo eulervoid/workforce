@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::identity::Role;
 use crate::name::{
-    AgentName, LaneName, RecoveryName, Requirement, ReviewName, StateName, TypeName,
+    AgentName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, StateName, TypeName,
 };
 
 pub const DEFAULT_POLICY_TOML: &str = include_str!("default_policy.toml");
@@ -41,24 +41,24 @@ pub enum PolicyError {
         target: TypeName,
     },
     #[error("review level `{0}` is defined twice")]
-    DuplicateReviewLevel(ReviewName),
+    DuplicateReviewLevel(ReviewLevelName),
     #[error("`default` is not a review level: it resets an item to the level of its type")]
     ReservedReviewLevel,
     #[error("type `{type_name}` has the unknown review level `{level}`")]
     UnknownReviewLevel {
         type_name: TypeName,
-        level: ReviewName,
+        level: ReviewLevelName,
     },
     #[error("type `{0}` has a review level but no review state to wait in")]
     ReviewWithoutBlocked(TypeName),
     #[error("recovery level `{0}` is defined twice")]
-    DuplicateRecoveryLevel(RecoveryName),
+    DuplicateRecoveryLevel(RecoveryLevelName),
     #[error("`default` is not a recovery level name: it resets an item to the level of its type")]
     ReservedRecoveryLevel,
     #[error("type `{type_name}` has the unknown recovery level `{level}`")]
     UnknownRecoveryLevel {
         type_name: TypeName,
-        level: RecoveryName,
+        level: RecoveryLevelName,
     },
 }
 
@@ -137,11 +137,11 @@ pub struct TypeConfig {
     pub states: Vec<StateConfig>,
     /// The review level of items of this type that do not name one.
     #[serde(default)]
-    pub review: Option<ReviewName>,
+    pub review: Option<ReviewLevelName>,
     /// The recovery level of items of this type that do not name one. Without one, the principal
     /// decides after the first unsuccessful attempt.
     #[serde(default)]
-    pub recovery: Option<RecoveryName>,
+    pub recovery: Option<RecoveryLevelName>,
 }
 
 impl TypeConfig {
@@ -288,7 +288,7 @@ pub enum ReviewStep {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewLevelConfig {
-    pub name: ReviewName,
+    pub name: ReviewLevelName,
     pub steps: Vec<ReviewStep>,
 }
 
@@ -310,7 +310,7 @@ pub enum RecoveryStep {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RecoveryLevelConfig {
-    pub name: RecoveryName,
+    pub name: RecoveryLevelName,
     pub steps: Vec<RecoveryStep>,
 }
 
@@ -360,16 +360,16 @@ impl Policy {
         self.types.get(type_name)
     }
 
-    pub fn review_level(&self, name: &ReviewName) -> Option<&ReviewLevelConfig> {
+    pub fn review_level(&self, name: &ReviewLevelName) -> Option<&ReviewLevelConfig> {
         self.review.iter().find(|level| &level.name == name)
     }
 
-    pub fn recovery_level(&self, name: &RecoveryName) -> Option<&RecoveryLevelConfig> {
+    pub fn recovery_level(&self, name: &RecoveryLevelName) -> Option<&RecoveryLevelConfig> {
         self.recovery.iter().find(|level| &level.name == name)
     }
 
     /// How strict a level is: its position in the list.
-    pub fn review_rank(&self, name: &ReviewName) -> Option<usize> {
+    pub fn review_rank(&self, name: &ReviewLevelName) -> Option<usize> {
         self.review.iter().position(|level| &level.name == name)
     }
 
@@ -601,7 +601,7 @@ mod tests {
             .collect();
         assert_eq!(names, ["none", "light", "standard", "critical", "manual"]);
         let critical = policy
-            .review_level(&ReviewName::new("critical").unwrap())
+            .review_level(&ReviewLevelName::new("critical").unwrap())
             .unwrap();
         let requires: BTreeSet<_> = ["review", "strong-model"]
             .into_iter()
@@ -618,9 +618,9 @@ mod tests {
                 .contains_key(&LaneName::new("supervision").unwrap())
         );
         let task = policy.type_config(&type_name("task")).unwrap();
-        assert_eq!(task.review, Some(ReviewName::new("manual").unwrap()));
+        assert_eq!(task.review, Some(ReviewLevelName::new("manual").unwrap()));
         assert_eq!(
-            policy.review_rank(&ReviewName::new("standard").unwrap()),
+            policy.review_rank(&ReviewLevelName::new("standard").unwrap()),
             Some(2)
         );
     }
@@ -633,7 +633,7 @@ mod tests {
         );
         let policy = Policy::parse(&source).unwrap();
         let task = policy.type_config(&type_name("task")).unwrap();
-        assert_eq!(task.review, Some(ReviewName::new("standard").unwrap()));
+        assert_eq!(task.review, Some(ReviewLevelName::new("standard").unwrap()));
     }
 
     #[test]
@@ -645,7 +645,7 @@ mod tests {
         assert!(old.contains("[\"human\"]"));
         let policy = Policy::parse(&old).unwrap();
         let manual = policy
-            .review_level(&ReviewName::new("manual").unwrap())
+            .review_level(&ReviewLevelName::new("manual").unwrap())
             .unwrap();
         assert_eq!(manual.steps, [ReviewStep::Principal]);
     }
@@ -654,7 +654,7 @@ mod tests {
     fn default_policy_retries_tasks_twice_before_the_principal_decides() {
         let policy = Policy::default_policy();
         let standard = policy
-            .recovery_level(&RecoveryName::new("standard").unwrap())
+            .recovery_level(&RecoveryLevelName::new("standard").unwrap())
             .unwrap();
         assert_eq!(
             standard.steps,
@@ -665,7 +665,10 @@ mod tests {
             ]
         );
         let task = policy.type_config(&type_name("task")).unwrap();
-        assert_eq!(task.recovery, Some(RecoveryName::new("standard").unwrap()));
+        assert_eq!(
+            task.recovery,
+            Some(RecoveryLevelName::new("standard").unwrap())
+        );
     }
 
     #[test]
@@ -674,7 +677,7 @@ mod tests {
         assert_eq!(
             Policy::parse(&duplicate),
             Err(PolicyError::DuplicateRecoveryLevel(
-                RecoveryName::new("none").unwrap()
+                RecoveryLevelName::new("none").unwrap()
             ))
         );
         let reserved = with_custom("[[recovery]]\nname = \"default\"\nsteps = []\n");
@@ -690,7 +693,7 @@ mod tests {
             Policy::parse(&unknown),
             Err(PolicyError::UnknownRecoveryLevel {
                 type_name: type_name("task"),
-                level: RecoveryName::new("ghost").unwrap()
+                level: RecoveryLevelName::new("ghost").unwrap()
             })
         );
     }
@@ -701,7 +704,7 @@ mod tests {
         assert_eq!(
             Policy::parse(&duplicate),
             Err(PolicyError::DuplicateReviewLevel(
-                ReviewName::new("light").unwrap()
+                ReviewLevelName::new("light").unwrap()
             ))
         );
         let reserved = with_custom("[[review]]\nname = \"default\"\nsteps = []\n");
@@ -714,7 +717,7 @@ mod tests {
             Policy::parse(&unknown),
             Err(PolicyError::UnknownReviewLevel {
                 type_name: type_name("task"),
-                level: ReviewName::new("ghost").unwrap()
+                level: ReviewLevelName::new("ghost").unwrap()
             })
         );
         let unreviewable = with_custom(

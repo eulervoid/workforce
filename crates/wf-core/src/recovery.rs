@@ -99,7 +99,7 @@ impl State {
         steps_taken.sort_by_key(|(at, _)| *at);
 
         let level = live
-            .effective_recovery(policy)
+            .effective_recovery_level(policy)
             .and_then(|name| policy.recovery_level(name))
             .map(|level| level.steps.as_slice())
             .unwrap_or_default();

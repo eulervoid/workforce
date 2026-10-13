@@ -43,7 +43,7 @@ pub(super) fn comment(
         .step
         .map(|number| step_numbered(workspace, id, number))
         .transpose()?;
-    let event = workspace.author(EventBody::Comment(Comment {
+    let event = workspace.author(EventBody::Commented(Comment {
         item: id,
         text: text.to_string(),
         kind,
@@ -128,7 +128,7 @@ pub(super) fn comment_why(
     let Some(why) = why.filter(|why| !why.trim().is_empty()) else {
         return Ok(None);
     };
-    let written = workspace.author(EventBody::Comment(Comment::plain(item, why.trim())))?;
+    let written = workspace.author(EventBody::Commented(Comment::plain(item, why.trim())))?;
     Ok(Some(CommentId::from(written.id())))
 }
 

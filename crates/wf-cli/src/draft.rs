@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use wf_core::crdt::SetChange;
 use wf_core::event::Change;
 use wf_core::item::{Item, Priority};
-use wf_core::name::{Label, LaneName, RecoveryName, Requirement, ReviewName, TypeName};
+use wf_core::name::{Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, TypeName};
 
 const FENCE: &str = "+++";
 
@@ -23,9 +23,9 @@ pub struct Draft {
     pub labels: BTreeSet<Label>,
     pub requires: BTreeSet<Requirement>,
     /// The item's own review level, not the one it gets from its type.
-    pub review: Option<ReviewName>,
+    pub review: Option<ReviewLevelName>,
     /// The item's own recovery level, not the one it gets from its type.
-    pub recovery: Option<RecoveryName>,
+    pub recovery: Option<RecoveryLevelName>,
 }
 
 /// Everything in a draft except the body, which is the markdown after the front matter.
@@ -44,9 +44,9 @@ struct FrontMatter {
     #[serde(default)]
     requires: BTreeSet<Requirement>,
     #[serde(default)]
-    review: Option<ReviewName>,
+    review: Option<ReviewLevelName>,
     #[serde(default)]
-    recovery: Option<RecoveryName>,
+    recovery: Option<RecoveryLevelName>,
 }
 
 impl Draft {
@@ -58,8 +58,8 @@ impl Draft {
             lane: item.lane().cloned(),
             labels: item.labels().values().cloned().collect(),
             requires: item.requires().values().cloned().collect(),
-            review: item.review().cloned(),
-            recovery: item.recovery().cloned(),
+            review: item.review_level().cloned(),
+            recovery: item.recovery_level().cloned(),
         }
     }
 
@@ -157,10 +157,10 @@ impl Draft {
             changes.push(Change::Lane(self.lane.clone()));
         }
         if self.review != current.review {
-            changes.push(Change::Review(self.review.clone()));
+            changes.push(Change::ReviewLevel(self.review.clone()));
         }
         if self.recovery != current.recovery {
-            changes.push(Change::Recovery(self.recovery.clone()));
+            changes.push(Change::RecoveryLevel(self.recovery.clone()));
         }
         for label in self.labels.difference(&current.labels) {
             changes.push(Change::Labels(SetChange::Add(label.clone())));

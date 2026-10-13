@@ -143,11 +143,11 @@ name_type!(
 );
 name_type!(
     /// A review level of the policy, such as `standard`.
-    ReviewName, "review level", SLUG, is_slug_char
+    ReviewLevelName, "review level", SLUG, is_slug_char
 );
 name_type!(
     /// A recovery level of the policy, such as `default`.
-    RecoveryName, "recovery level", SLUG, is_slug_char
+    RecoveryLevelName, "recovery level", SLUG, is_slug_char
 );
 name_type!(
     /// A capability or hardware requirement of an item, such as `gpu` or `os:linux`.

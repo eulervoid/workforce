@@ -16,8 +16,8 @@ use crate::identity::{
 };
 use crate::item::Priority;
 use crate::name::{
-    AgentName, HarnessName, Label, LaneName, RecoveryName, Requirement, ReviewName, StateName,
-    TypeName,
+    AgentName, HarnessName, Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName,
+    StateName, TypeName,
 };
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 
@@ -126,7 +126,7 @@ pub struct ItemCreated {
     pub labels: Vec<Label>,
     pub requires: Vec<Requirement>,
     /// The review level the item needs; `None` for none.
-    pub review: Option<ReviewName>,
+    pub review: Option<ReviewLevelName>,
 }
 
 /// One edit to an item field.
@@ -138,7 +138,7 @@ pub enum Change {
     Lane(Option<LaneName>),
     Labels(SetChange<Label>),
     Requires(SetChange<Requirement>),
-    Review(Option<ReviewName>),
+    ReviewLevel(Option<ReviewLevelName>),
     /// Ticks or unticks a step, named by the hash of its text. Ignored when the body has no
     /// such step.
     StepDone {
@@ -146,7 +146,7 @@ pub enum Change {
         done: bool,
     },
     /// The recovery level of the item; `None` goes back to its type's.
-    Recovery(Option<RecoveryName>),
+    RecoveryLevel(Option<RecoveryLevelName>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -277,10 +277,10 @@ pub enum EventBody {
     ItemLinked(ItemLinked),
     ItemArchived(ItemRef),
     ItemUnarchived(ItemRef),
-    Comment(Comment),
+    Commented(Comment),
     SessionStarted(SessionStarted),
     SessionEnded(SessionEnded),
-    Review(Review),
+    Reviewed(Review),
     Merged(Merged),
     /// A body from a newer peer. Stored and relayed, ignored by the fold.
     Unknown {
@@ -337,10 +337,10 @@ impl EventBody {
             EventBody::ItemLinked(_) => "ItemLinked",
             EventBody::ItemArchived(_) => "ItemArchived",
             EventBody::ItemUnarchived(_) => "ItemUnarchived",
-            EventBody::Comment(_) => "Comment",
+            EventBody::Commented(_) => "Commented",
             EventBody::SessionStarted(_) => "SessionStarted",
             EventBody::SessionEnded(_) => "SessionEnded",
-            EventBody::Review(_) => "Review",
+            EventBody::Reviewed(_) => "Reviewed",
             EventBody::Merged(_) => "Merged",
             EventBody::Unknown { .. } => "Unknown",
         }
@@ -367,10 +367,10 @@ impl EventBody {
             EventBody::ItemLinked(body) => body.serialize(serializer),
             EventBody::ItemArchived(body) => body.serialize(serializer),
             EventBody::ItemUnarchived(body) => body.serialize(serializer),
-            EventBody::Comment(body) => body.serialize(serializer),
+            EventBody::Commented(body) => body.serialize(serializer),
             EventBody::SessionStarted(body) => body.serialize(serializer),
             EventBody::SessionEnded(body) => body.serialize(serializer),
-            EventBody::Review(body) => body.serialize(serializer),
+            EventBody::Reviewed(body) => body.serialize(serializer),
             EventBody::Merged(body) => body.serialize(serializer),
             EventBody::Unknown { tag, payload } => (tag, payload).serialize(serializer),
         }
@@ -392,10 +392,10 @@ impl EventBody {
             EventBody::ItemLinked(body) => (tag::ITEM_LINKED, encoding::encode(body)?),
             EventBody::ItemArchived(body) => (tag::ITEM_ARCHIVED, encoding::encode(body)?),
             EventBody::ItemUnarchived(body) => (tag::ITEM_UNARCHIVED, encoding::encode(body)?),
-            EventBody::Comment(body) => (tag::COMMENT, encoding::encode(body)?),
+            EventBody::Commented(body) => (tag::COMMENT, encoding::encode(body)?),
             EventBody::SessionStarted(body) => (tag::SESSION_STARTED, encoding::encode(body)?),
             EventBody::SessionEnded(body) => (tag::SESSION_ENDED, encoding::encode(body)?),
-            EventBody::Review(body) => (tag::REVIEW, encoding::encode(body)?),
+            EventBody::Reviewed(body) => (tag::REVIEW, encoding::encode(body)?),
             EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
             EventBody::Unknown { tag, payload } => (*tag, payload.clone()),
         };
@@ -419,10 +419,10 @@ impl EventBody {
             tag::ITEM_LINKED => EventBody::ItemLinked(encoding::decode(payload)?),
             tag::ITEM_ARCHIVED => EventBody::ItemArchived(encoding::decode(payload)?),
             tag::ITEM_UNARCHIVED => EventBody::ItemUnarchived(encoding::decode(payload)?),
-            tag::COMMENT => EventBody::Comment(encoding::decode(payload)?),
+            tag::COMMENT => EventBody::Commented(encoding::decode(payload)?),
             tag::SESSION_STARTED => EventBody::SessionStarted(encoding::decode(payload)?),
             tag::SESSION_ENDED => EventBody::SessionEnded(encoding::decode(payload)?),
-            tag::REVIEW => EventBody::Review(encoding::decode(payload)?),
+            tag::REVIEW => EventBody::Reviewed(encoding::decode(payload)?),
             tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
             tag => EventBody::Unknown {
                 tag,
@@ -608,7 +608,7 @@ mod tests {
 
     #[test]
     fn golden_comment_body() {
-        let body = EventBody::Comment(Comment {
+        let body = EventBody::Commented(Comment {
             item: ItemId::from_bytes([1; 32]),
             text: "why".into(),
             kind: CommentKind::ChangeRequest,
@@ -639,7 +639,7 @@ mod tests {
                     commit: Some(commit),
                 },
             }),
-            EventBody::Review(Review {
+            EventBody::Reviewed(Review {
                 item,
                 commit: Some(commit),
                 verdict: Verdict::RequestChanges,

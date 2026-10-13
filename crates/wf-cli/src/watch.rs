@@ -233,7 +233,7 @@ fn ask_blocker(
         Some(Event {
             content:
                 wf_core::event::EventContent {
-                    body: EventBody::Comment(blocker),
+                    body: EventBody::Commented(blocker),
                     ..
                 },
             ..
@@ -254,7 +254,7 @@ fn ask_blocker(
     if answer.is_empty() {
         return Ok(true);
     }
-    workspace.author(EventBody::Comment(Comment {
+    workspace.author(EventBody::Commented(Comment {
         resolves: vec![comment],
         ..Comment::plain(item, answer)
     }))?;
@@ -301,7 +301,7 @@ fn ask_review(workspace: &mut Workspace, item: ItemId) -> anyhow::Result<bool> {
                     continue;
                 }
                 for change in changes {
-                    workspace.author(EventBody::Comment(Comment {
+                    workspace.author(EventBody::Commented(Comment {
                         kind: CommentKind::ChangeRequest,
                         ..Comment::plain(item, change)
                     }))?;

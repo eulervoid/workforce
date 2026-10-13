@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&events)"
 ---
 {
-  "schema": 3,
+  "schema": 4,
   "data": [
     {
       "id": "yy7leba7eadnhm25qkt7ai47ft3qssxagr3xmrbyybxqugzumjpq",
@@ -81,7 +81,7 @@ expression: "Envelope::new(&events)"
       "device": "43a72e7144",
       "actor": "@joshua",
       "at": "1970-01-01T00:00:09Z",
-      "kind": "Comment",
+      "kind": "Commented",
       "summary": "#n7ftyx commented",
       "verified": true
     },

@@ -7,7 +7,7 @@ use crate::crdt::{Lww, Stamp};
 use crate::event::{Change, CommentKind, Event, EventBody, ItemLinked, Link};
 use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::{AgentId, Role};
-use crate::item::{Comment, Item, Merge, Resolved, Verdicted};
+use crate::item::{Comment, Item, Merge, Resolved, Review};
 use crate::name::StateName;
 use crate::policy::StateCategory;
 use crate::refs;
@@ -179,7 +179,7 @@ impl State {
                     | EventBody::ForkAnnounced(_)
                     | EventBody::SessionStarted(_)
                     | EventBody::SessionEnded(_)
-                    | EventBody::Review(_)
+                    | EventBody::Reviewed(_)
                     | EventBody::Merged(_)
                     | EventBody::Unknown { .. }
             )
@@ -330,7 +330,7 @@ impl State {
                     });
                 }
             }
-            EventBody::Review(review) => {
+            EventBody::Reviewed(review) => {
                 if let Some(item) = workforce.items.get_mut(&review.item) {
                     item.touch(stamp, &content.actor);
                     // Requesting changes sends the work back: the item is open for the next
@@ -347,7 +347,7 @@ impl State {
                     }
                     item.verdicts.insert(
                         id,
-                        Verdicted {
+                        Review {
                             commit: review.commit,
                             verdict: review.verdict,
                             by: content.actor.clone(),
@@ -419,7 +419,7 @@ impl State {
                     item.archived.set(None, stamp);
                 }
             }
-            EventBody::Comment(comment) => {
+            EventBody::Commented(comment) => {
                 if let Some(item) = workforce.items.get_mut(&comment.item) {
                     item.touch(stamp, &content.actor);
                     let by = CommentId::from(id);
@@ -483,10 +483,10 @@ fn apply_change(item: &mut Item, change: &Change, stamp: Stamp) {
         Change::Lane(lane) => {
             item.lane.set(lane.clone(), stamp);
         }
-        Change::Review(review) => {
+        Change::ReviewLevel(review) => {
             item.review.set(review.clone(), stamp);
         }
-        Change::Recovery(recovery) => {
+        Change::RecoveryLevel(recovery) => {
             item.recovery.set(recovery.clone(), stamp);
         }
         Change::Labels(change) => item.labels.apply(change, stamp),
