@@ -124,6 +124,16 @@ impl World {
         .unwrap();
     }
 
+    /// Sets a notify command that appends `kind|item|what` to a file, and returns the file.
+    fn notify_to_file(&self) -> PathBuf {
+        let told = self.wf.root.path().join("told.txt");
+        self.machine_config(&format!(
+            "[notify]\ncommand = ['sh', '-c', 'printf \"%s|%s|%s\\n\" \"$1\" \"$2\" \"$3\" >> \"$0\"', '{}', '{{kind}}', '{{item}}', '{{what}}']\n",
+            told.display()
+        ));
+        told
+    }
+
     fn wf(&self, args: &[&str]) -> Value {
         self.wf.json(args)
     }
@@ -878,18 +888,8 @@ wf work submit
 #[tokio::test(flavor = "multi_thread")]
 async fn the_principal_is_told_of_a_blocker_once_even_across_a_restart() {
     let mut world = World::new("wf comment {item} \"which crate?\" --block\n").await;
-    let told = world.wf.root.path().join("told.txt");
-    world.machine_config(&format!(
-        "[notify]\ncommand = ['sh', '-c', 'printf \"%s|%s|%s\\n\" \"$1\" \"$2\" \"$3\" >> \"$0\"', '{}', '{{kind}}', '{{item}}', '{{what}}']\n",
-        told.display()
-    ));
-    let lines = |_: &World| -> Vec<String> {
-        std::fs::read_to_string(&told)
-            .unwrap_or_default()
-            .lines()
-            .map(str::to_string)
-            .collect()
-    };
+    let told = world.notify_to_file();
+    let lines = |_: &World| told_of(&told);
     let item = world.wf.add(&["--title", "Parse durations"]);
     start_session(&world, &item);
     world
@@ -1210,6 +1210,15 @@ async fn only_the_items_an_agent_would_be_given_are_listed_for_it() {
 }
 
 /// A coder and a reviewer, both started by the dispatcher.
+/// The lines the notify command of [`World::notify_to_file`] wrote.
+fn told_of(file: &Path) -> Vec<String> {
+    std::fs::read_to_string(file)
+        .unwrap_or_default()
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
 async fn review_world(coder: &str, reviewer: &str) -> World {
     let world = World::agents(&[("coder", coder), ("reviewer", reviewer)]).await;
     world.automate("coder", "default");
@@ -1360,6 +1369,35 @@ async fn a_critical_item_waits_for_a_person_after_the_agent_approves() {
         })
         .await;
     assert!(world.wf.repository.join("hello.txt").is_file());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn approving_with_a_clean_checkout_tells_of_the_review_and_not_of_the_merge() {
+    let world = review_world(COMMIT_AND_SUBMIT, "wf review --approve\n").await;
+    let told = world.notify_to_file();
+    let item = world
+        .wf
+        .add(&["--title", "Add hello", "--review", "critical"]);
+    world
+        .wait("the principal step is told of", |_| {
+            !told_of(&told).is_empty()
+        })
+        .await;
+    assert!(
+        told_of(&told)[0].starts_with(&format!("principal_review|{}|", short(&item))),
+        "{:?}",
+        told_of(&told)
+    );
+
+    world.wf.run(&["review", short(&item), "--approve"]);
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let told = told_of(&told);
+    assert_eq!(told.len(), 1, "nothing but the review is told of: {told:?}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
