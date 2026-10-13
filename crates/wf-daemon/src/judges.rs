@@ -9,7 +9,7 @@ use std::time::Duration;
 use tokio::sync::Mutex;
 use wf_core::id::WorkforceId;
 use wf_core::name::AgentName;
-use wf_harness::{Conversation, Launch, PermissionMode};
+use wf_harness::{Conversation, Launch, Permission};
 
 use crate::Daemon;
 use crate::decide::{AgentDeciders, DeciderRequest, Outcome, read_answer};
@@ -135,7 +135,7 @@ impl WorkforceJudges {
             model: definition.model.clone(),
             directory,
             // A judge only reads what it is given; whatever it asks to do is refused.
-            permissions: Arc::new(PermissionMode::Deny),
+            permissions: Arc::new(Permission::Deny),
             transcript,
         })
         .await
@@ -191,7 +191,7 @@ mod tests {
         assert_eq!(
             answer_in(said),
             Outcome::Decided {
-                permission: PermissionMode::Allow,
+                permission: Permission::Allow,
                 reason: Some("runs tests".into())
             }
         );

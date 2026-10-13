@@ -11,7 +11,7 @@ use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::name::AgentName;
 use wf_core::session::{CommitId, SessionRole};
-use wf_harness::{AcpAgentConfig, PermissionMode, PermissionRequest, Permissions};
+use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
 use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree, worktrees};
 
 use super::drive::run_session;
@@ -247,8 +247,8 @@ impl Daemon {
         };
         let autonomy = definition.autonomy;
         let permissions: Arc<dyn Permissions> = match sandbox.permissions(autonomy.permissions) {
-            wf_core::autonomy::PermissionMode::Allow => Arc::new(PermissionMode::Allow),
-            wf_core::autonomy::PermissionMode::Deny => Arc::new(PermissionMode::Deny),
+            wf_core::autonomy::PermissionMode::Allow => Arc::new(Permission::Allow),
+            wf_core::autonomy::PermissionMode::Deny => Arc::new(Permission::Deny),
             wf_core::autonomy::PermissionMode::Ask => Arc::new(Deciding {
                 held: Arc::clone(&self.held),
                 workforce,

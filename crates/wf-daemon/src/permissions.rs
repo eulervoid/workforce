@@ -4,14 +4,14 @@ use std::sync::Mutex;
 
 use tokio::sync::oneshot;
 use wf_core::id::{SessionId, WorkforceId};
-use wf_harness::PermissionMode;
+use wf_harness::Permission;
 
-use crate::proto::{Answer, HeldPermission};
+use crate::proto::HeldPermission;
 
 struct Request {
     workforce: WorkforceId,
     held: HeldPermission,
-    reply: oneshot::Sender<PermissionMode>,
+    reply: oneshot::Sender<Permission>,
 }
 
 /// The requests that wait for the principal. Runtime state: a request does not outlive its session,
@@ -34,7 +34,7 @@ impl Held {
         session: SessionId,
         what: &str,
         passed: Vec<String>,
-    ) -> oneshot::Receiver<PermissionMode> {
+    ) -> oneshot::Receiver<Permission> {
         let (reply, answer) = oneshot::channel();
         self.lock().push(Request {
             workforce,
@@ -58,16 +58,13 @@ impl Held {
     }
 
     /// Answers the oldest request of the session, if it has one.
-    pub(crate) fn answer(&self, session: SessionId, answer: Answer) -> Option<HeldPermission> {
+    pub(crate) fn answer(&self, session: SessionId, answer: Permission) -> Option<HeldPermission> {
         let mut requests = self.lock();
         let index = requests
             .iter()
             .position(|request| request.held.session == session)?;
         let request = requests.remove(index);
-        let _ = request.reply.send(match answer {
-            Answer::Allow => PermissionMode::Allow,
-            Answer::Deny => PermissionMode::Deny,
-        });
+        let _ = request.reply.send(answer);
         Some(request.held)
     }
 

@@ -16,6 +16,7 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
+use wf_harness::Permission;
 use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::peers::PeerSync;
@@ -106,15 +107,8 @@ pub enum Call {
     /// Answers the oldest permission request of a session.
     AnswerPermission {
         session: SessionId,
-        answer: Answer,
+        answer: Permission,
     },
-}
-
-/// What the principal says to a permission request.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Answer {
-    Allow,
-    Deny,
 }
 
 /// A request of an agent for permission to do something, held until the principal answers.

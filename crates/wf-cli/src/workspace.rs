@@ -11,7 +11,8 @@ use wf_core::identity::{Actor, DeviceSigner, PrincipalSigner};
 use wf_core::lifecycle::Finish;
 use wf_core::state::State;
 use wf_daemon::client::DaemonClient;
-use wf_daemon::proto::{Answer, HeldPermission};
+use wf_daemon::proto::HeldPermission;
+use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
 use crate::keys::DataDir;
@@ -316,7 +317,7 @@ impl Workspace {
     pub fn answer_permission(
         &mut self,
         session: SessionId,
-        answer: Answer,
+        answer: Permission,
     ) -> anyhow::Result<HeldPermission> {
         let workforce = self.workforce;
         let (client, _) = self.daemon("answer permission requests")?;

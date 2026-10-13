@@ -10,7 +10,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use wf_core::id::{SessionId, WorkforceId};
 use wf_core::name::AgentName;
-use wf_harness::{Decision, PermissionMode, PermissionRequest, Permissions};
+use wf_harness::{Decision, Permission, PermissionRequest, Permissions};
 
 use crate::machine_config::{DeciderConfig, MachineConfig};
 use crate::permissions::Held;
@@ -50,7 +50,7 @@ pub struct AgentContext {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum Outcome {
     Decided {
-        permission: PermissionMode,
+        permission: Permission,
         reason: Option<String>,
     },
     /// Left to the next decider, and why: it said `ask`, failed or is not sure.
@@ -113,7 +113,7 @@ async fn ask(
     match decider {
         DeciderConfig::Rules {} => match rules::allows(&request.tool) {
             Some(reason) => Outcome::Decided {
-                permission: PermissionMode::Allow,
+                permission: Permission::Allow,
                 reason: Some(reason),
             },
             None => Outcome::Passed {
@@ -169,14 +169,14 @@ pub(crate) fn read_answer(text: &str) -> Outcome {
             permission: Answer::Allow,
             reason,
         }) => Outcome::Decided {
-            permission: PermissionMode::Allow,
+            permission: Permission::Allow,
             reason,
         },
         Ok(AnswerLine {
             permission: Answer::Deny,
             reason,
         }) => Outcome::Decided {
-            permission: PermissionMode::Deny,
+            permission: Permission::Deny,
             reason,
         },
         Ok(AnswerLine {
@@ -245,7 +245,7 @@ impl Permissions for Deciding {
             }
             let answer = self.held.hold(self.workforce, self.session, &title, passed);
             Decision {
-                permission: answer.await.unwrap_or(PermissionMode::Deny),
+                permission: answer.await.unwrap_or(Permission::Deny),
                 by: "the principal".to_string(),
                 reason: None,
             }
@@ -288,14 +288,14 @@ pub(crate) mod tests {
         assert_eq!(
             read_answer(r#"{"permission": "allow", "reason": "reads only"}"#),
             Outcome::Decided {
-                permission: PermissionMode::Allow,
+                permission: Permission::Allow,
                 reason: Some("reads only".into())
             }
         );
         assert_eq!(
             read_answer(r#"{"permission": "deny", "later": "fields are ignored"}"#),
             Outcome::Decided {
-                permission: PermissionMode::Deny,
+                permission: Permission::Deny,
                 reason: None
             }
         );

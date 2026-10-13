@@ -59,7 +59,7 @@ pub(super) async fn ask(
 mod tests {
     use super::*;
     use crate::decide::tests::request;
-    use wf_harness::PermissionMode;
+    use wf_harness::Permission;
 
     fn sh(script: &str) -> Vec<String> {
         vec!["sh".into(), "-c".into(), script.into()]
@@ -72,7 +72,7 @@ mod tests {
         assert_eq!(
             ask(&sh(script), Duration::from_secs(5), &request()).await,
             Outcome::Decided {
-                permission: PermissionMode::Allow,
+                permission: Permission::Allow,
                 reason: Some("tests".into())
             }
         );

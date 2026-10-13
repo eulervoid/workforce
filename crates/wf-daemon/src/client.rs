@@ -11,11 +11,12 @@ use wf_core::invite::InviteCode;
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_core::state::State;
+use wf_harness::Permission;
 
 use crate::peers::PeerSync;
 use crate::proto::{
-    Answer, Call, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request,
-    Response, read_message, write_message,
+    Call, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request, Response,
+    read_message, write_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -237,7 +238,7 @@ impl DaemonClient {
         &mut self,
         workforce: WorkforceId,
         session: SessionId,
-        answer: Answer,
+        answer: Permission,
     ) -> Result<HeldPermission, ClientError> {
         match self.call(workforce, Call::AnswerPermission { session, answer })? {
             Response::PermissionAnswered(held) => Ok(held),

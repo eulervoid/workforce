@@ -7,7 +7,7 @@ use anyhow::Context;
 use serde::Serialize;
 use wf_daemon::decide::{AgentContext, DeciderRequest, ItemContext, run_chain};
 use wf_daemon::machine_config::MachineConfig;
-use wf_harness::{PermissionMode, PermissionRequest};
+use wf_harness::{Permission, PermissionRequest};
 
 use crate::cli::PermissionsCommand;
 use crate::commands::emit;
@@ -18,7 +18,7 @@ struct ChainView {
     /// `decider: why` for each decider that passed it on.
     passed: Vec<String>,
     /// `allow` or `deny`, or `None` when the principal would be asked.
-    permission: Option<PermissionMode>,
+    permission: Option<Permission>,
     by: Option<String>,
     reason: Option<String>,
 }
@@ -62,8 +62,8 @@ fn render(view: &ChainView) -> String {
         out.push_str(&format!("passed by {why}\n"));
     }
     let verdict = match (view.permission, &view.by) {
-        (Some(PermissionMode::Allow), Some(by)) => format!("allowed by {by}"),
-        (Some(PermissionMode::Deny), Some(by)) => format!("denied by {by}"),
+        (Some(Permission::Allow), Some(by)) => format!("allowed by {by}"),
+        (Some(Permission::Deny), Some(by)) => format!("denied by {by}"),
         (Some(_), None) | (None, _) => "the principal would be asked".to_string(),
     };
     match &view.reason {

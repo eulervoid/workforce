@@ -1,9 +1,7 @@
 use std::io;
 use std::sync::{Arc, Mutex};
 
-use wf_harness::{
-    Conversation, Direction, Launch, Model, PermissionMode, StopReason, TranscriptEntry,
-};
+use wf_harness::{Conversation, Direction, Launch, Model, Permission, StopReason, TranscriptEntry};
 
 #[derive(Clone, Default)]
 struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
@@ -19,7 +17,7 @@ impl io::Write for SharedBuffer {
     }
 }
 
-async fn run_fake_agent(permissions: PermissionMode) -> Vec<TranscriptEntry> {
+async fn run_fake_agent(permissions: Permission) -> Vec<TranscriptEntry> {
     let directory = tempfile::tempdir().unwrap();
     let buffer = SharedBuffer::default();
     let mut conversation = Conversation::start(Launch {
@@ -45,7 +43,7 @@ async fn run_fake_agent(permissions: PermissionMode) -> Vec<TranscriptEntry> {
 
 #[tokio::test]
 async fn records_both_directions_and_the_agent_log() {
-    let entries = run_fake_agent(PermissionMode::Allow).await;
+    let entries = run_fake_agent(Permission::Allow).await;
     let methods: Vec<_> = entries
         .iter()
         .filter(|entry| entry.direction == Direction::ToAgent)
@@ -60,7 +58,7 @@ async fn records_both_directions_and_the_agent_log() {
 
 #[tokio::test]
 async fn allowed_permissions_are_granted() {
-    let entries = run_fake_agent(PermissionMode::Allow).await;
+    let entries = run_fake_agent(Permission::Allow).await;
     let protocol_only: Vec<_> = entries
         .into_iter()
         .filter(|entry| entry.direction != Direction::AgentLog)
@@ -74,7 +72,7 @@ async fn allowed_permissions_are_granted() {
 
 #[tokio::test]
 async fn denied_permissions_are_rejected() {
-    let entries = run_fake_agent(PermissionMode::Deny).await;
+    let entries = run_fake_agent(Permission::Deny).await;
     assert!(entries.iter().any(|entry| {
         entry.message["params"]["update"]["content"]["text"]
             .as_str()
@@ -90,7 +88,7 @@ async fn one_session_takes_several_prompts() {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
         model: None,
         directory: directory.path().to_path_buf(),
-        permissions: Arc::new(PermissionMode::Allow),
+        permissions: Arc::new(Permission::Allow),
         transcript: buffer.clone(),
     })
     .await
@@ -129,7 +127,7 @@ async fn a_reply_holds_what_the_agent_said_in_its_turn() {
         agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
         model: None,
         directory: directory.path().to_path_buf(),
-        permissions: Arc::new(PermissionMode::Deny),
+        permissions: Arc::new(Permission::Deny),
         transcript: SharedBuffer::default(),
     })
     .await
@@ -146,7 +144,7 @@ async fn an_agent_that_cannot_start_is_an_error() {
         agent: agent_client_protocol::AcpAgentConfig::new("/nonexistent/agent"),
         model: None,
         directory: std::env::temp_dir(),
-        permissions: Arc::new(PermissionMode::Allow),
+        permissions: Arc::new(Permission::Allow),
         transcript: SharedBuffer::default(),
     })
     .await;

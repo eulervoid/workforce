@@ -10,19 +10,19 @@ use serde_json::Value;
 /// How a permission request is answered.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum PermissionMode {
+pub enum Permission {
     Allow,
     Deny,
 }
 
-impl PermissionMode {
+impl Permission {
     pub(crate) fn answer(self, options: &[PermissionOption]) -> RequestPermissionOutcome {
         let wanted = match self {
-            PermissionMode::Allow => [
+            Permission::Allow => [
                 PermissionOptionKind::AllowOnce,
                 PermissionOptionKind::AllowAlways,
             ],
-            PermissionMode::Deny => [
+            Permission::Deny => [
                 PermissionOptionKind::RejectOnce,
                 PermissionOptionKind::RejectAlways,
             ],
@@ -73,7 +73,7 @@ impl PermissionRequest {
 /// The answer to a permission request, who gave it and why.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Decision {
-    pub permission: PermissionMode,
+    pub permission: Permission,
     /// Which decider answered: `rules`, a hook, a model, an agent, the principal, or the agent's
     /// fixed permissions.
     pub by: String,
@@ -86,7 +86,7 @@ pub trait Permissions: Send + Sync + 'static {
     fn decide(&self, request: PermissionRequest) -> agent_client_protocol::BoxFuture<'_, Decision>;
 }
 
-impl Permissions for PermissionMode {
+impl Permissions for Permission {
     fn decide(
         &self,
         _request: PermissionRequest,
@@ -121,18 +121,18 @@ mod tests {
 
     #[test]
     fn allow_prefers_once_over_always() {
-        assert_eq!(selected(PermissionMode::Allow.answer(&options())), "once");
+        assert_eq!(selected(Permission::Allow.answer(&options())), "once");
     }
 
     #[test]
     fn deny_picks_a_reject_option() {
-        assert_eq!(selected(PermissionMode::Deny.answer(&options())), "reject");
+        assert_eq!(selected(Permission::Deny.answer(&options())), "reject");
     }
 
     #[test]
     fn missing_options_cancel() {
         assert!(matches!(
-            PermissionMode::Deny.answer(&options()[..1]),
+            Permission::Deny.answer(&options()[..1]),
             RequestPermissionOutcome::Cancelled
         ));
     }

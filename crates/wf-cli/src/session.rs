@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::transcript::Renderer;
 use anyhow::{Context, anyhow, bail};
 use wf_core::id::{HashId, SessionId};
-use wf_daemon::proto::Answer;
+use wf_harness::Permission;
 use wf_harness::TranscriptEntry;
 
 use crate::cli::{SessionCommand, SessionStartArgs};
@@ -57,8 +57,12 @@ pub fn session(
                 |done| format!("{}\n", done.message),
             )
         }
-        SessionCommand::Allow { session } => answer(json, mode, workspace, session, Answer::Allow),
-        SessionCommand::Deny { session } => answer(json, mode, workspace, session, Answer::Deny),
+        SessionCommand::Allow { session } => {
+            answer(json, mode, workspace, session, Permission::Allow)
+        }
+        SessionCommand::Deny { session } => {
+            answer(json, mode, workspace, session, Permission::Deny)
+        }
         SessionCommand::Watch(args) => {
             if json {
                 bail!("`wf session watch` has no --json output; the transcript is JSON lines");
@@ -74,13 +78,13 @@ fn answer(
     mode: Mode,
     workspace: &mut Workspace,
     session: Option<String>,
-    answer: Answer,
+    answer: Permission,
 ) -> anyhow::Result<()> {
     let id = choose_session(workspace, mode, session, Which::Permission)?;
     let held = workspace.answer_permission(id, answer)?;
     let verb = match answer {
-        Answer::Allow => "allowed",
-        Answer::Deny => "denied",
+        Permission::Allow => "allowed",
+        Permission::Deny => "denied",
     };
     emit(
         json,

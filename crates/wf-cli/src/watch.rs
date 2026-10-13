@@ -9,7 +9,8 @@ use wf_core::event::{Comment, CommentKind, Event, EventBody};
 use wf_core::id::{HashId, ItemId};
 use wf_core::inbox::Waiting;
 use wf_core::item::ItemView;
-use wf_daemon::proto::{Answer, HeldPermission};
+use wf_daemon::proto::HeldPermission;
+use wf_harness::Permission;
 
 use crate::cli::{ReviewArgs, WatchArgs};
 use crate::commands::{emit_line, repository, review, target, work_commit};
@@ -214,8 +215,8 @@ fn ask_permission(workspace: &mut Workspace, held: &HeldPermission) -> anyhow::R
             return Ok(false);
         };
         let answer = match answer.as_str() {
-            "a" | "allow" | "y" | "yes" => Answer::Allow,
-            "d" | "deny" | "n" | "no" => Answer::Deny,
+            "a" | "allow" | "y" | "yes" => Permission::Allow,
+            "d" | "deny" | "n" | "no" => Permission::Deny,
             "s" | "skip" | "" => return Ok(true),
             _ => continue,
         };

@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use serde_json::{Value, json};
 use url::Url;
-use wf_harness::PermissionMode;
+use wf_harness::Permission;
 
 use super::{DeciderRequest, Outcome};
 use crate::machine_config::QuestionConfig;
@@ -116,12 +116,12 @@ fn decide(question: QuestionConfig, response: &Value) -> Outcome {
             let reason = format!("{probability:.2} that it should be allowed");
             if probability > allow_above {
                 Outcome::Decided {
-                    permission: PermissionMode::Allow,
+                    permission: Permission::Allow,
                     reason: Some(reason),
                 }
             } else if probability < deny_below {
                 Outcome::Decided {
-                    permission: PermissionMode::Deny,
+                    permission: Permission::Deny,
                     reason: Some(reason),
                 }
             } else {
@@ -138,8 +138,8 @@ fn decide(question: QuestionConfig, response: &Value) -> Outcome {
             };
             let reason = format!("{choice}, with confidence {confidence:.2}");
             let permission = match choice {
-                "allow" => PermissionMode::Allow,
-                "deny" => PermissionMode::Deny,
+                "allow" => Permission::Allow,
+                "deny" => Permission::Deny,
                 _ => return Outcome::Passed { why: reason },
             };
             if confidence >= min_confidence {
@@ -184,14 +184,14 @@ mod tests {
         assert!(matches!(
             decide(NOUL, &noul(0.95)),
             Outcome::Decided {
-                permission: PermissionMode::Allow,
+                permission: Permission::Allow,
                 ..
             }
         ));
         assert!(matches!(
             decide(NOUL, &noul(0.05)),
             Outcome::Decided {
-                permission: PermissionMode::Deny,
+                permission: Permission::Deny,
                 ..
             }
         ));
@@ -214,7 +214,7 @@ mod tests {
         assert!(matches!(
             decide(CHOICE, &choice("deny", 0.9)),
             Outcome::Decided {
-                permission: PermissionMode::Deny,
+                permission: Permission::Deny,
                 ..
             }
         ));
@@ -234,7 +234,7 @@ mod tests {
         assert!(matches!(
             decide(NOUL, &wrapped),
             Outcome::Decided {
-                permission: PermissionMode::Allow,
+                permission: Permission::Allow,
                 ..
             }
         ));
@@ -298,7 +298,7 @@ mod tests {
             matches!(
                 outcome,
                 Outcome::Decided {
-                    permission: PermissionMode::Allow,
+                    permission: Permission::Allow,
                     ..
                 }
             ),
