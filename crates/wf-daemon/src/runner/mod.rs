@@ -268,7 +268,7 @@ impl Daemon {
     }
 
     /// The config of this machine, read anew so that edits apply to the next session.
-    fn machine_config(&self) -> Result<MachineConfig, MachineConfigError> {
+    pub(crate) fn machine_config(&self) -> Result<MachineConfig, MachineConfigError> {
         match &self.config.machine_config {
             Some(path) => MachineConfig::load(path),
             None => Ok(MachineConfig::default()),

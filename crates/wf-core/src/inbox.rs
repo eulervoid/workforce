@@ -1,5 +1,7 @@
 //! What waits on a person, worked out from the state.
 
+use serde::{Deserialize, Serialize};
+
 use crate::id::{CommentId, HashId, ItemId, SessionId};
 use crate::item::{ItemView, Standing};
 use crate::policy::{ReviewStep, StateCategory};
@@ -9,7 +11,8 @@ use crate::session::{CommitId, SessionRole};
 use crate::state::State;
 use crate::supervision::WaitsOn;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Waiting {
     /// A blocker on the item waits on this person: resolving it is the answer.
     Blocker { comment: CommentId },
@@ -42,7 +45,7 @@ impl Waiting {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct InboxEntry {
     pub item: ItemId,
     pub waiting: Waiting,

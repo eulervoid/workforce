@@ -6,6 +6,7 @@ pub mod client;
 pub mod decide;
 mod judges;
 pub mod machine_config;
+mod notify;
 mod peers;
 mod permissions;
 pub mod proto;
@@ -384,6 +385,11 @@ impl Daemon {
         ));
         let entry = Arc::new(Loaded { storage });
         loaded.insert(id, Arc::clone(&entry));
+        tokio::spawn(notify::run_notifier(
+            Arc::downgrade(self),
+            id,
+            Arc::clone(&entry),
+        ));
         let daemon = Arc::clone(self);
         let started = Arc::clone(&entry);
         tokio::spawn(async move {
