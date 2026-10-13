@@ -1696,7 +1696,7 @@ mod tests {
             end_turn(2),
             prompt(
                 60,
-                "What you were waiting for is resolved.\n- @joshua: Use humantime\nContinue.",
+                "What you were waiting for is resolved.\n- @ada: Use humantime\nContinue.",
             ),
             said(61, "b", "Done."),
             end_turn(62),
@@ -1707,7 +1707,7 @@ mod tests {
             "{output}"
         );
         assert!(
-            output.contains("wf  00:01\n  What you were waiting for is resolved.\n  - @joshua: Use humantime\n  Continue.\n"),
+            output.contains("wf  00:01\n  What you were waiting for is resolved.\n  - @ada: Use humantime\n  Continue.\n"),
             "{output}"
         );
         assert_eq!(output.matches("finished").count(), 2, "{output}");
@@ -1870,10 +1870,10 @@ mod tests {
     fn prompts_keep_their_lines_when_styled() {
         let output = plain(&render_all(
             &mut renderer(Format::Styled, Detail::Abridged, 60),
-            &[prompt(0, "Resolved.\n- @joshua: Use humantime\nContinue.")],
+            &[prompt(0, "Resolved.\n- @ada: Use humantime\nContinue.")],
         ));
         assert!(
-            output.contains("  - @joshua: Use humantime\n  Continue.\n"),
+            output.contains("  - @ada: Use humantime\n  Continue.\n"),
             "{output}"
         );
     }
