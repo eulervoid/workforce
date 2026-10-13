@@ -1322,13 +1322,12 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
 | M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, blockers, change requests and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress, reports as comments, item activity |
 | M2.1 | Convenience at the CLI: machine config, permission chain (rules, hooks, decision models, agents), `wf item diff` through git, `wf item checkout\|path`, `wf watch` |
 | M2.2 | Daily use on one machine: recovery levels, no silent stalls, daemon management, export, network off for a single device, CLI polish. **= stage 1** |
+| M2.3 | The dashboard: `wf watch` at a terminal shows what waits on the principal, the live sessions with their transcripts, items, agents and stats, and answers what waits |
 | M3 | Sessions across devices: anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, session inboxes, overlap notifications, secret brokering, redaction, merge mode `origin` with `Merged` from origin. **= stage 2** |
 | M4 | Decision ratification flow, distill items, hybrid search |
 | M5 | Multiple principals, threads, scopes, `wf attach`. **= stage 3** |
 | M6 | Git bundles over iroh-blobs, peer-to-peer repos, compaction (item checkpoints, frontier) |
 | M7 | Donors: revocation, rate limits, sandbox, transcript publishing, governance. **= stage 4** |
-
-A TUI with the live state of the workforce comes after M2.1, built on what `wf watch` shows.
 
 ## 19. Open questions
 1. Should merges to the main branch require a principal key once origin-side protection is not enough?
