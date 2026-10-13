@@ -74,7 +74,7 @@ async fn dispatch_once(
             tracing::warn!(
                 "could not merge #{}: {}",
                 item.short(),
-                wf_core::report::report(&error)
+                wf_core::error_chain(&error)
             );
         }
     }
@@ -89,7 +89,7 @@ async fn dispatch_once(
             tracing::warn!(
                 "could not finish #{}: {}",
                 item.short(),
-                wf_core::report::report(&error)
+                wf_core::error_chain(&error)
             );
         }
     }
@@ -149,7 +149,7 @@ async fn dispatch_once(
                     "could not start {} on #{}: {}",
                     agent.name,
                     item.short(),
-                    wf_core::report::report(&error)
+                    wf_core::error_chain(&error)
                 );
             }
             let Ok(fresh) = daemon.snapshot(loaded).await else {

@@ -101,7 +101,7 @@ impl<S: EventStore> Replica<S> {
                     Invalid::WrongWorkforce(found) => {
                         StoreError::WrongWorkforce { expected, found }
                     }
-                    other => StoreError::Inconsistent(wf_core::report::report(&other)),
+                    other => StoreError::Inconsistent(wf_core::error_chain(&other)),
                 })?;
         }
         if state.pending_events().next().is_some() {
@@ -121,7 +121,7 @@ impl<S: EventStore> Replica<S> {
             let received = replica
                 .state
                 .receive(event.clone(), Trust::Stored)
-                .map_err(|error| StoreError::Inconsistent(wf_core::report::report(&error)))?;
+                .map_err(|error| StoreError::Inconsistent(wf_core::error_chain(&error)))?;
             replica.persist(&event, &received)?;
         }
         let needs_snapshot = replayed >= SNAPSHOT_INTERVAL || (!from_snapshot && replayed > 0);

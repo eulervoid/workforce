@@ -127,7 +127,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
     if let Some(error) = state.unreadable_policy() {
         flagged.insert(format!(
             "this version of wf cannot read the policy set last ({}), so it runs on the last one it could read; update wf, or replace the policy with `wf policy edit`",
-            wf_core::report::report(&error)
+            wf_core::error_chain(&error)
         ));
     }
     for edge in graph.ignored() {

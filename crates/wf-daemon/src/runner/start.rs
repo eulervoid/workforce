@@ -226,7 +226,7 @@ impl Daemon {
             Err(error) => {
                 let because = format!(
                     "the daemon could not set it up: {}",
-                    wf_core::report::report(&error)
+                    wf_core::error_chain(&error)
                 );
                 if let Err(ending) = self
                     .finish_session(
@@ -239,7 +239,7 @@ impl Daemon {
                 {
                     tracing::warn!(
                         "could not end session {session} after it failed to start: {}",
-                        wf_core::report::report(&ending)
+                        wf_core::error_chain(&ending)
                     );
                 }
                 return Err(error);

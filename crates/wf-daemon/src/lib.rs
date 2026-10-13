@@ -142,7 +142,7 @@ async fn go_online_when_needed(
         Err(error) => {
             tracing::warn!(
                 "workforce {id} stays offline: {}",
-                wf_core::report::report(&error)
+                wf_core::error_chain(&error)
             );
             return;
         }
@@ -312,7 +312,7 @@ impl Daemon {
                     };
                     tracing::warn!(
                         "not serving workforce {id}: {}{hint}",
-                        wf_core::report::report(&error)
+                        wf_core::error_chain(&error)
                     );
                 }
             }
@@ -459,7 +459,7 @@ impl Daemon {
                 Err(error @ (NetError::JoinRefused { .. } | NetError::JoinAuthoring(_))) => {
                     return Err(error.into());
                 }
-                Err(error) => failures.push(wf_core::report::report(&error)),
+                Err(error) => failures.push(wf_core::error_chain(&error)),
             }
         }
         Err(DaemonError::JoinUnreachable(failures.join("; ")))

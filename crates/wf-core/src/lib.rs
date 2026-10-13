@@ -7,6 +7,7 @@ pub mod brief;
 pub mod crdt;
 pub mod dispatch;
 pub mod encoding;
+mod error_chain;
 pub mod event;
 mod fold;
 pub mod graph;
@@ -21,7 +22,6 @@ pub mod name;
 pub mod policy;
 pub mod recovery;
 pub mod refs;
-pub mod report;
 pub mod resolve;
 pub mod review;
 pub mod session;
@@ -29,6 +29,8 @@ pub mod state;
 pub mod supervision;
 pub mod sync;
 pub mod validate;
+
+pub use error_chain::error_chain;
 
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;

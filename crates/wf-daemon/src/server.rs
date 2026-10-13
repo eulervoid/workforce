@@ -63,7 +63,7 @@ fn failed(message: String) -> Reply<()> {
 
 /// Encodes what a call is answered with.
 fn reply<T: Serialize>(value: T) -> Result<Vec<u8>, String> {
-    wf_core::encoding::encode(&Reply::Ok(value)).map_err(|error| wf_core::report::report(&error))
+    wf_core::encoding::encode(&Reply::Ok(value)).map_err(|error| wf_core::error_chain(&error))
 }
 
 /// The encoded [`Reply`] to a request.
@@ -85,7 +85,7 @@ async fn answer(daemon: &Arc<Daemon>, request: Request) -> Vec<u8> {
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
-        Err(error) => return encode_failed(wf_core::report::report(&error)),
+        Err(error) => return encode_failed(wf_core::error_chain(&error)),
     };
     match call(daemon, request.workforce, &loaded, request.call).await {
         Ok(reply) => reply,
@@ -104,14 +104,14 @@ async fn call(
     call: Call,
 ) -> Result<Vec<u8>, String> {
     let storage = &loaded.storage;
-    let closed = |error: crate::StorageClosed| wf_core::report::report(&error);
+    let closed = |error: crate::StorageClosed| wf_core::error_chain(&error);
     match call {
         Call::State => {
             let bytes = storage
                 .with(|replica| wf_core::encoding::encode(replica.state()))
                 .await
                 .map_err(closed)?
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(bytes)
         }
         Call::Event(id) => {
@@ -119,7 +119,7 @@ async fn call(
                 .with(move |replica| wf_store::EventStore::event(replica.store(), &id))
                 .await
                 .map_err(closed)?
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(event)
         }
         Call::Events { from } => {
@@ -129,7 +129,7 @@ async fn call(
                 })
                 .await
                 .map_err(closed)?
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(events)
         }
         Call::Author { actor, body } => {
@@ -139,7 +139,7 @@ async fn call(
                 .with(move |replica| replica.author(&signer, actor, now_ms, *body))
                 .await
                 .map_err(closed)?
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(event)
         }
         Call::SyncNow => {
@@ -159,7 +159,7 @@ async fn call(
             let node = daemon
                 .node()
                 .await
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             let results = sync_all(&node, workforce, peers, Some(daemon.presence())).await;
             reply(results)
         }
@@ -167,20 +167,20 @@ async fn call(
             daemon
                 .create_fork(loaded, *genesis)
                 .await
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(())
         }
         Call::Join { code, profile } => {
             let code: InviteCode = code
                 .parse()
-                .map_err(|error: InviteCodeError| wf_core::report::report(&error))?;
+                .map_err(|error: InviteCodeError| wf_core::error_chain(&error))?;
             if code.workforce != workforce {
                 return Err("the invite is for another workforce".to_string());
             }
             daemon
                 .join(loaded, &code, profile)
                 .await
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(())
         }
         Call::Follow(devices) => {
@@ -191,7 +191,7 @@ async fn call(
             let node = daemon
                 .node()
                 .await
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             let results = sync_all(&node, workforce, peers, Some(daemon.presence())).await;
             reply(results)
         }
@@ -211,7 +211,7 @@ async fn call(
                     repository,
                 )
                 .await
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(session)
         }
         Call::Permissions => reply(daemon.held.list(workforce)),
@@ -224,7 +224,7 @@ async fn call(
             daemon
                 .finish_session(workforce, loaded, session, SessionEnd::Finish(finish))
                 .await
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(())
         }
         Call::StopSession(session) => {
@@ -236,7 +236,7 @@ async fn call(
                     SessionEnd::Interruption(Interruption::Stop),
                 )
                 .await
-                .map_err(|error| wf_core::report::report(&error))?;
+                .map_err(|error| wf_core::error_chain(&error))?;
             reply(())
         }
     }

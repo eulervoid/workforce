@@ -176,7 +176,7 @@ impl Daemon {
             tracing::warn!(
                 "could not remove the checkout of the review of #{}: {}",
                 item.short(),
-                wf_core::report::report(&error)
+                wf_core::error_chain(&error)
             );
         }
     }
@@ -200,14 +200,14 @@ impl Daemon {
                 tracing::warn!(
                     "could not remove the branch of #{}: {}",
                     item.short(),
-                    wf_core::report::report(&error)
+                    wf_core::error_chain(&error)
                 );
             }
             Err(error) => {
                 tracing::warn!(
                     "could not remove the branch of #{}: {}",
                     item.short(),
-                    wf_core::report::report(&error)
+                    wf_core::error_chain(&error)
                 );
             }
         }
@@ -267,7 +267,7 @@ impl Daemon {
             {
                 tracing::warn!(
                     "could not end stale session {session}: {}",
-                    wf_core::report::report(&error)
+                    wf_core::error_chain(&error)
                 );
             }
         }

@@ -53,11 +53,11 @@ pub(super) async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, Str
             let (repository, target) = (run.repository.clone(), run.target.clone());
             blocking(move || GitCli::open(&repository)?.diff(&target, commit, &[]))
                 .await
-                .map_err(|error| wf_core::report::report(&error))?
+                .map_err(|error| wf_core::error_chain(&error))?
                 .map_err(|error| {
                     format!(
                         "the change to review could not be read: {}",
-                        wf_core::report::report(&error)
+                        wf_core::error_chain(&error)
                     )
                 })?
         }

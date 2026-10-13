@@ -122,7 +122,7 @@ impl Daemon {
             outcome = match merged {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    cannot_merge(wf_core::report::report(&error)).await?;
+                    cannot_merge(wf_core::error_chain(&error)).await?;
                     return Err(error);
                 }
             };
@@ -156,7 +156,7 @@ impl Daemon {
                     tracing::warn!(
                         "could not remove the branch of #{}: {}",
                         item.short(),
-                        wf_core::report::report(&error)
+                        wf_core::error_chain(&error)
                     );
                 }
                 self.move_item(loaded, principal, item, done, because, attempt.by_session())

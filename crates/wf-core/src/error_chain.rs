@@ -6,7 +6,7 @@
 use std::error::Error;
 
 /// `outer: inner: innermost`
-pub fn report(error: &(dyn Error + 'static)) -> String {
+pub fn error_chain(error: &(dyn Error + 'static)) -> String {
     let mut text = error.to_string();
     let mut source = error.source();
     while let Some(cause) = source {
@@ -31,7 +31,7 @@ mod tests {
 
     #[test]
     fn causes_follow_the_error() {
-        assert_eq!(report(&Outer(Inner)), "outer: inner");
-        assert_eq!(report(&Inner), "inner");
+        assert_eq!(error_chain(&Outer(Inner)), "outer: inner");
+        assert_eq!(error_chain(&Inner), "inner");
     }
 }

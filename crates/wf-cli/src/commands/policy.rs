@@ -23,7 +23,7 @@ pub(super) fn policy(
     if let Some(error) = workspace.state().unreadable_policy() {
         eprintln!(
             "this version of wf cannot read the policy set last ({}); this is the last one it could read",
-            wf_core::report::report(&error)
+            wf_core::error_chain(&error)
         );
     }
     match command {

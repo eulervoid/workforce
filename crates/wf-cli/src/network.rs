@@ -410,7 +410,7 @@ pub fn join(
                     node.shutdown().await;
                     return Err(error.into());
                 }
-                Err(error) => failures.push(wf_core::report::report(&error)),
+                Err(error) => failures.push(wf_core::error_chain(&error)),
             }
         }
         node.shutdown().await;

@@ -36,7 +36,7 @@ pub(super) async fn run_session(
         tracing::warn!(
             "could not end session {}: {}",
             run.session,
-            wf_core::report::report(&error)
+            wf_core::error_chain(&error)
         );
     }
     daemon.runners.stop(run.session, Stop::Now);
@@ -105,7 +105,7 @@ async fn drive(
     let mut conversation = match started {
         Ok(conversation) => conversation,
         Err(error) => {
-            let report = wf_core::report::report(&error);
+            let report = wf_core::error_chain(&error);
             tracing::warn!(
                 "could not start {} for session {}: {report}",
                 run.agent,
@@ -161,7 +161,7 @@ async fn turns(
                 return failed(format!(
                     "{} stopped answering: {}",
                     run.agent,
-                    wf_core::report::report(&error)
+                    wf_core::error_chain(&error)
                 ));
             }
         };
