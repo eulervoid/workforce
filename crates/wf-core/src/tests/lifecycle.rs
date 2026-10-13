@@ -1,5 +1,8 @@
 use crate::id::{ItemId, SessionId};
-use crate::lifecycle::{AfterEnd, TurnOutcome};
+use crate::identity::Actor;
+use crate::lifecycle::{
+    AfterEnd, Closing, Finish, Interruption, MergeFailure, SessionEnd, TurnOutcome,
+};
 use crate::name::StateName;
 use crate::session::{CommitId, EndReason};
 use crate::state::State;
@@ -207,5 +210,93 @@ fn a_turn_parks_while_the_item_waits_on_a_dependency() {
     assert_eq!(
         scene.state.turn_outcome(session, 0, 3),
         TurnOutcome::Continue
+    );
+}
+
+#[test]
+fn an_agent_finish_is_written_by_the_agent_and_an_interruption_by_the_daemon() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    let by_agent = Actor::Agent {
+        agent: scene.state.session(session).unwrap().agent().clone(),
+        session,
+    };
+    let by_daemon = Actor::Daemon(scene.fixture.founder.key());
+    let closing = |end| scene.state.closing(session, &end, Some(commit())).unwrap();
+
+    let submitted = closing(SessionEnd::Finish(Finish::Submit {
+        note: Some("done".to_string()),
+    }));
+    assert_eq!(
+        submitted,
+        Closing {
+            reason: EndReason::Submitted {
+                commit: Some(commit())
+            },
+            actor: by_agent.clone(),
+            note: Some("done".to_string()),
+        }
+    );
+    let released = closing(SessionEnd::Finish(Finish::Release { note: None }));
+    assert_eq!(
+        (released.reason, released.actor),
+        (EndReason::Released, by_agent)
+    );
+    let stopped = closing(SessionEnd::Interruption(Interruption::Stop));
+    assert_eq!(
+        (stopped.reason, stopped.actor, stopped.note),
+        (EndReason::Cancelled, by_daemon.clone(), None)
+    );
+    let failed = closing(SessionEnd::Interruption(Interruption::Failed {
+        because: "the harness exited".to_string(),
+    }));
+    assert_eq!(
+        failed.note.as_deref(),
+        Some("The session failed: the harness exited")
+    );
+}
+
+#[test]
+fn giving_up_says_what_was_missing_and_quotes_the_agent_shortened() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    let gave_up = |last_message: String| {
+        scene
+            .state
+            .closing(
+                session,
+                &SessionEnd::Interruption(Interruption::GaveUp {
+                    turns: 3,
+                    last_message,
+                }),
+                None,
+            )
+            .unwrap()
+    };
+    let silent = gave_up("  ".to_string());
+    assert_eq!(silent.reason, EndReason::Released);
+    assert_eq!(
+        silent.note.as_deref(),
+        Some("Gave up: 3 turns in a row without a new commit.")
+    );
+    let long = gave_up("é".repeat(700)).note.unwrap();
+    assert!(long.ends_with(&format!("{}…", "é".repeat(600))), "{long}");
+}
+
+#[test]
+fn work_that_conflicts_reopens_and_work_that_may_merge_later_waits_in_review() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    assert_eq!(
+        scene.state.after_failed_merge(task, MergeFailure::Conflict),
+        Some(state_name("open"))
+    );
+    assert_eq!(
+        scene
+            .state
+            .after_failed_merge(task, MergeFailure::Transient),
+        Some(state_name("in_review"))
     );
 }

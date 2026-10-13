@@ -59,8 +59,10 @@ impl State {
                     Some(ReviewStatus::Approved { .. })
                     | Some(ReviewStatus::ChangesRequested)
                     | Some(ReviewStatus::Merged { .. })
-                    | None => match merges.iter().find(|(merging, _)| *merging == item.id()) {
-                        Some((_, commit)) => Waiting::Merge { commit: *commit },
+                    | None => match merges.iter().find(|pending| pending.item == item.id()) {
+                        Some(pending) => Waiting::Merge {
+                            commit: pending.commit,
+                        },
                         None => Waiting::Proposal,
                     },
                 };

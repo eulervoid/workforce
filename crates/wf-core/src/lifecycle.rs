@@ -1,12 +1,75 @@
 //! What follows from a session starting, ending and finishing a turn. Pure functions of the
 //! state: the daemon asks and then writes the events.
 
+use serde::{Deserialize, Serialize};
+
 use crate::id::{ItemId, SessionId};
+use crate::identity::Actor;
 use crate::item::ItemView;
 use crate::name::StateName;
 use crate::policy::StateCategory;
-use crate::session::{EndReason, SessionRole};
+use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::State;
+
+/// How an agent ends its session. The session ends after the agent's turn, and the agent writes
+/// the end.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Finish {
+    /// The work is done.
+    Submit { note: Option<String> },
+    /// The agent gives the item back.
+    Release { note: Option<String> },
+    /// A review session has given its verdict.
+    Reviewed,
+    /// A supervise session has resolved or escalated what it was started for.
+    Supervised,
+    /// A diagnose session has said what went wrong.
+    Diagnosed,
+}
+
+/// Why a session ends now, without waiting for the agent. The daemon writes the end.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Interruption {
+    /// The principal stops it.
+    Stop,
+    /// Someone moved the item to a state where it waits, such as review, while the agent worked.
+    MovedOn,
+    /// It waited too long or ran too long.
+    TimedOut,
+    /// The harness failed or exited, or the daemon could not run it.
+    Failed { because: String },
+    /// The daemon that ran it stopped; a later daemon ends the sessions it left live.
+    Interrupted,
+    /// The agent used up its nudges without progress. `last_message` is what it said last.
+    GaveUp { turns: u32, last_message: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionEnd {
+    Finish(Finish),
+    Interruption(Interruption),
+}
+
+/// What is written when a session ends: the comment `note` by `actor`, then the end.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Closing {
+    pub reason: EndReason,
+    pub actor: Actor,
+    pub note: Option<String>,
+}
+
+/// Why reviewed work could not be merged.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergeFailure {
+    /// The work conflicts with the target: a session has to merge the target into the branch.
+    Conflict,
+    /// It may merge later: the target's checkout has changes, the target kept moving, or git
+    /// failed. The dispatcher tries again.
+    Transient,
+}
+
+/// How much of the last words of an agent that gave up goes into the comment, in characters.
+const LAST_MESSAGE_LIMIT: usize = 600;
 
 /// What happens to the item of a work session that ended.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -35,6 +98,89 @@ pub enum TurnOutcome {
 }
 
 impl State {
+    /// What is written when `session` ends. `submitted` is the head of the session's branch when
+    /// the branch has commits of its own; only a submission records it. `None` for a session that
+    /// does not exist or a device that is not bound.
+    pub fn closing(
+        &self,
+        session: SessionId,
+        end: &SessionEnd,
+        submitted: Option<CommitId>,
+    ) -> Option<Closing> {
+        let session = self.session(session)?;
+        let closing = |reason, actor, note| Closing {
+            reason,
+            actor,
+            note,
+        };
+        Some(match end {
+            SessionEnd::Finish(finish) => {
+                let by_agent = Actor::Agent {
+                    agent: session.agent().clone(),
+                    session: session.id(),
+                };
+                match finish {
+                    Finish::Submit { note } => closing(
+                        EndReason::Submitted { commit: submitted },
+                        by_agent,
+                        note.clone(),
+                    ),
+                    Finish::Release { note } => {
+                        closing(EndReason::Released, by_agent, note.clone())
+                    }
+                    Finish::Reviewed => closing(EndReason::Reviewed, by_agent, None),
+                    Finish::Supervised => closing(EndReason::Supervised, by_agent, None),
+                    Finish::Diagnosed => closing(EndReason::Diagnosed, by_agent, None),
+                }
+            }
+            SessionEnd::Interruption(interruption) => {
+                let by_daemon = Actor::Daemon(self.principal_of(&session.device())?);
+                match interruption {
+                    Interruption::Stop | Interruption::MovedOn => {
+                        closing(EndReason::Cancelled, by_daemon, None)
+                    }
+                    Interruption::TimedOut => closing(EndReason::TimedOut, by_daemon, None),
+                    Interruption::Interrupted => closing(EndReason::Interrupted, by_daemon, None),
+                    Interruption::Failed { because } => closing(
+                        EndReason::Failed,
+                        by_daemon,
+                        Some(format!("The session failed: {because}")),
+                    ),
+                    Interruption::GaveUp {
+                        turns,
+                        last_message,
+                    } => {
+                        let without = match session.role() {
+                            SessionRole::Work => "a new commit",
+                            SessionRole::Review { .. } => "a verdict",
+                            SessionRole::Supervise => "an answer",
+                            SessionRole::Diagnose => "a report",
+                        };
+                        let gave_up = format!("Gave up: {turns} turns in a row without {without}.");
+                        let note = match last_message.trim() {
+                            "" => gave_up,
+                            said => format!(
+                                "{gave_up} The agent last said:\n\n{}",
+                                truncated(said, LAST_MESSAGE_LIMIT)
+                            ),
+                        };
+                        closing(EndReason::Released, by_daemon, Some(note))
+                    }
+                }
+            }
+        })
+    }
+
+    /// Where `item` goes when its reviewed work cannot be merged: back to its open state for a
+    /// conflict, which the next session resolves, and otherwise to its review state, where the
+    /// dispatcher tries again. `None` when its type has no such state.
+    pub fn after_failed_merge(&self, item: ItemId, failure: MergeFailure) -> Option<StateName> {
+        match failure {
+            MergeFailure::Conflict => self.first_state_of(item, StateCategory::Open),
+            MergeFailure::Transient => self.first_state_of(item, StateCategory::Review),
+        }
+    }
+
     /// The state the daemon moves the item of a work session to when the session starts: the
     /// type's active state, if it has one.
     pub fn start_move(&self, session: SessionId) -> Option<(ItemId, StateName)> {
@@ -139,7 +285,11 @@ impl State {
         }
     }
 
-    fn first_state_of(&self, item: ItemId, category: StateCategory) -> Option<StateName> {
+    pub(crate) fn first_state_of(
+        &self,
+        item: ItemId,
+        category: StateCategory,
+    ) -> Option<StateName> {
         let policy = &self.policy()?.policy;
         let ItemView::Live(item) = self.item(item)? else {
             return None;
@@ -158,5 +308,13 @@ impl State {
             Some(ItemView::Live(item)) => item.needs_review(policy),
             Some(ItemView::Archived(_)) | None => false,
         }
+    }
+}
+
+/// At most `limit` characters of `text`, cut at a character boundary.
+fn truncated(text: &str, limit: usize) -> String {
+    match text.char_indices().nth(limit) {
+        Some((end, _)) => format!("{}…", &text[..end]),
+        None => text.to_string(),
     }
 }

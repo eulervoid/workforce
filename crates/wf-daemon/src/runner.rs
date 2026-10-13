@@ -13,8 +13,11 @@ use wf_core::event::{Comment, Event, EventBody, ItemMoved, Merged, SessionEnded,
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::ItemView;
-use wf_core::lifecycle::{AfterEnd, TurnOutcome};
+use wf_core::lifecycle::{
+    AfterEnd, Closing, Finish, Interruption, MergeFailure, SessionEnd, TurnOutcome,
+};
 use wf_core::name::{AgentName, HarnessName, StateName};
+use wf_core::review::PendingMerge;
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
 use wf_harness::{
@@ -25,7 +28,6 @@ use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, VcsError, item_branch, item_name}
 
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
 use crate::machine_config::{MachineConfig, MachineConfigError, SandboxConfig};
-use crate::proto::Finish;
 use crate::{Daemon, Loaded, StorageClosed};
 
 /// How often a merge that found the target moved is tried again before giving up for now.
@@ -210,7 +212,7 @@ struct Run {
 enum End {
     /// Someone else ended the session, or stopped it.
     Over,
-    Finish(Finish),
+    Interrupt(Interruption),
 }
 
 impl Daemon {
@@ -543,7 +545,12 @@ impl Daemon {
                     wf_core::report::report(&error)
                 );
                 if let Err(ending) = self
-                    .finish_session(workforce, loaded, session, Finish::Failed { because })
+                    .finish_session(
+                        workforce,
+                        loaded,
+                        session,
+                        SessionEnd::Interruption(Interruption::Failed { because }),
+                    )
                     .await
                 {
                     tracing::warn!(
@@ -667,7 +674,7 @@ impl Daemon {
         workforce: WorkforceId,
         loaded: &Arc<Loaded>,
         session: SessionId,
-        finish: Finish,
+        end: SessionEnd,
     ) -> Result<(), SessionError> {
         let _ending = self.ending.lock().await;
         let state = self.snapshot(loaded).await?;
@@ -684,58 +691,22 @@ impl Daemon {
         let principal = self.principal_of_device(&state)?;
         let item = folded.item();
         let role = folded.role();
-        let by_agent = Actor::Agent {
-            agent: folded.agent().clone(),
-            session,
-        };
-        let by_device = Actor::Daemon(principal);
-
-        let (reason, actor, note) = match &finish {
-            Finish::Submit { note } => {
-                let commit = self.submitted_commit(workforce, &state, item).await?;
-                (
-                    EndReason::Submitted { commit },
-                    by_agent.clone(),
-                    note.clone(),
-                )
+        let submitted = match &end {
+            SessionEnd::Finish(Finish::Submit { .. }) => {
+                self.submitted_commit(workforce, &state, item).await?
             }
-            Finish::Release { note } => (EndReason::Released, by_agent.clone(), note.clone()),
-            Finish::Reviewed => (EndReason::Reviewed, by_agent.clone(), None),
-            Finish::Supervised => (EndReason::Supervised, by_agent.clone(), None),
-            Finish::Diagnosed => (EndReason::Diagnosed, by_agent.clone(), None),
-            Finish::Stop | Finish::MovedOn => (EndReason::Cancelled, by_device.clone(), None),
-            Finish::TimedOut => (EndReason::TimedOut, by_device.clone(), None),
-            Finish::Interrupted => (EndReason::Interrupted, by_device.clone(), None),
-            Finish::Failed { because } => (
-                EndReason::Failed,
-                by_device.clone(),
-                Some(format!("The session failed: {because}")),
-            ),
-            Finish::GaveUp {
-                turns,
-                last_message,
-            } => {
-                let without = match role {
-                    SessionRole::Work => "a new commit",
-                    SessionRole::Review { .. } => "a verdict",
-                    SessionRole::Supervise => "an answer",
-                    SessionRole::Diagnose => "a report",
-                };
-                let gave_up = format!("Gave up: {turns} turns in a row without {without}.");
-                (
-                    EndReason::Released,
-                    by_device.clone(),
-                    Some(if last_message.trim().is_empty() {
-                        gave_up
-                    } else {
-                        format!(
-                            "{gave_up} The agent last said:\n\n{}",
-                            truncated(last_message.trim(), LAST_MESSAGE_LIMIT)
-                        )
-                    }),
-                )
-            }
+            SessionEnd::Finish(
+                Finish::Release { .. } | Finish::Reviewed | Finish::Supervised | Finish::Diagnosed,
+            )
+            | SessionEnd::Interruption(_) => None,
         };
+        let Closing {
+            reason,
+            actor,
+            note,
+        } = state
+            .closing(session, &end, submitted)
+            .ok_or(SessionError::NotBound)?;
         // A submission with open change requests is refused before anything is written.
         state
             .check_policy(&EventBody::SessionEnded(SessionEnded { session, reason }))
@@ -789,18 +760,9 @@ impl Daemon {
         )
         .await?;
         tracing::info!("session {}: ended, {reason:?}", session.short());
-        let how = match finish {
-            Finish::Submit { .. }
-            | Finish::Release { .. }
-            | Finish::Reviewed
-            | Finish::Supervised
-            | Finish::Diagnosed => Stop::AfterTurn,
-            Finish::Stop
-            | Finish::MovedOn
-            | Finish::TimedOut
-            | Finish::Interrupted
-            | Finish::Failed { .. }
-            | Finish::GaveUp { .. } => Stop::Now,
+        let how = match end {
+            SessionEnd::Finish(_) => Stop::AfterTurn,
+            SessionEnd::Interruption(_) => Stop::Now,
         };
         self.runners.stop(session, how);
         match role {
@@ -941,14 +903,8 @@ impl Daemon {
         let policy = &state.policy().expect("a workforce has a policy").policy;
         let target = policy.merge.target.clone();
         let message = format!("Merge #{}: {}", HashId::short(&item), live.title());
-        let open = policy
-            .type_config(live.item_type())
-            .and_then(|config| config.first_state(wf_core::policy::StateCategory::Open))
-            .cloned();
-        let review = policy
-            .type_config(live.item_type())
-            .and_then(|config| config.first_state(wf_core::policy::StateCategory::Review))
-            .cloned();
+        let open = state.after_failed_merge(item, MergeFailure::Conflict);
+        let review = state.after_failed_merge(item, MergeFailure::Transient);
         let comment = |body: String| {
             self.author(
                 loaded,
@@ -1085,7 +1041,12 @@ impl Daemon {
             .collect();
         for session in stale {
             if let Err(error) = self
-                .finish_session(workforce, loaded, session, Finish::Interrupted)
+                .finish_session(
+                    workforce,
+                    loaded,
+                    session,
+                    SessionEnd::Interruption(Interruption::Interrupted),
+                )
                 .await
             {
                 tracing::warn!(
@@ -1116,9 +1077,14 @@ async fn run_session(
     mut stopped: mpsc::UnboundedReceiver<Stop>,
 ) {
     let end = drive(&daemon, &loaded, &run, &mut stopped).await;
-    if let End::Finish(finish) = end
+    if let End::Interrupt(interruption) = end
         && let Err(error) = daemon
-            .finish_session(run.workforce, &loaded, run.session, finish)
+            .finish_session(
+                run.workforce,
+                &loaded,
+                run.session,
+                SessionEnd::Interruption(interruption),
+            )
             .await
     {
         tracing::warn!(
@@ -1265,7 +1231,7 @@ async fn turns(
             () = sleep_until(deadline) => {
                 cancel.cancel();
                 let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
-                return End::Finish(Finish::TimedOut);
+                return End::Interrupt(Interruption::TimedOut);
             }
         };
         let (_stop_reason, last_message) = match result {
@@ -1295,14 +1261,14 @@ async fn turns(
                     .session(run.session)
                     .is_some_and(|session| session.is_live());
                 return if live {
-                    End::Finish(Finish::MovedOn)
+                    End::Interrupt(Interruption::MovedOn)
                 } else {
                     End::Over
                 };
             }
             TurnOutcome::Continue => prompt = wf_core::brief::nudge(run.item, run.role),
             TurnOutcome::GiveUp => {
-                return End::Finish(Finish::GaveUp {
+                return End::Interrupt(Interruption::GaveUp {
                     turns: turns_without_commit,
                     last_message,
                 });
@@ -1313,27 +1279,16 @@ async fn turns(
                     turns_without_commit = 0;
                 }
                 Parked::Over => return End::Over,
-                Parked::TimedOut => return End::Finish(Finish::TimedOut),
-                Parked::MovedOn => return End::Finish(Finish::MovedOn),
+                Parked::TimedOut => return End::Interrupt(Interruption::TimedOut),
+                Parked::MovedOn => return End::Interrupt(Interruption::MovedOn),
             },
         }
     }
 }
 
 fn failed(because: String) -> End {
-    End::Finish(Finish::Failed { because })
+    End::Interrupt(Interruption::Failed { because })
 }
-
-/// At most `limit` characters of `text`, cut at a character boundary.
-fn truncated(text: &str, limit: usize) -> String {
-    match text.char_indices().nth(limit) {
-        Some((end, _)) => format!("{}…", &text[..end]),
-        None => text.to_string(),
-    }
-}
-
-/// How much of the last words of an agent that gave up goes into the comment.
-const LAST_MESSAGE_LIMIT: usize = 600;
 
 async fn sleep_until(deadline: Option<Instant>) {
     match deadline {
@@ -1565,18 +1520,7 @@ async fn dispatch_once(
     let Ok(mut state) = daemon.snapshot(loaded).await else {
         return;
     };
-    for (item, commit) in state.pending_merges() {
-        let Some(done) = state.item(item).and_then(|view| match view {
-            ItemView::Live(live) => state
-                .policy()?
-                .policy
-                .type_config(live.item_type())?
-                .first_state(wf_core::policy::StateCategory::Done)
-                .cloned(),
-            ItemView::Archived(_) => None,
-        }) else {
-            continue;
-        };
+    for PendingMerge { item, commit, done } in state.pending_merges() {
         if let Err(error) = daemon
             .merge_item(
                 workforce,
@@ -1598,17 +1542,8 @@ async fn dispatch_once(
             );
         }
     }
-    for item in state.approved_without_commits() {
-        let done = state.item(item).and_then(|view| match view {
-            ItemView::Live(live) => state
-                .policy()?
-                .policy
-                .type_config(live.item_type())?
-                .first_state(wf_core::policy::StateCategory::Done)
-                .cloned(),
-            ItemView::Archived(_) => None,
-        });
-        let (Some(done), Ok(principal)) = (done, daemon.principal_of_device(&state)) else {
+    for (item, done) in state.approved_without_commits() {
+        let Ok(principal) = daemon.principal_of_device(&state) else {
             continue;
         };
         if let Err(error) = daemon

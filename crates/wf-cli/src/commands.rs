@@ -13,6 +13,7 @@ use wf_core::event::{
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::{Actor, MemberSeed, PrincipalSigner, Signed};
 use wf_core::item::{ItemView, Priority};
+use wf_core::lifecycle::Finish;
 use wf_core::name::{AgentName, Handle, LaneName, StateName};
 use wf_core::policy::Field;
 use wf_core::policy::{DEFAULT_POLICY_TOML, Policy};
@@ -20,7 +21,6 @@ use wf_core::refs::{self, Mention, Token};
 use wf_core::session::{CommitId, SessionRole, Verdict};
 use wf_core::state::{State, Trust};
 use wf_core::validate::OneOf;
-use wf_daemon::proto::Finish;
 use wf_store::{RedbStore, Replica};
 
 use crate::cli::*;

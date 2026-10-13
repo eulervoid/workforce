@@ -14,12 +14,13 @@ use wf_core::encoding;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
+use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::peers::PeerSync;
 
-pub const PROTOCOL_VERSION: u32 = 8;
+pub const PROTOCOL_VERSION: u32 = 9;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -92,11 +93,14 @@ pub enum Call {
         item: ItemId,
         repository: PathBuf,
     },
-    /// Ends a live session of this machine and applies what follows from it to its item.
+    /// Ends a live session of this machine after the agent's turn, as the agent says, and
+    /// applies what follows from it to its item.
     EndSession {
         session: SessionId,
         finish: Finish,
     },
+    /// Stops a live session of this machine now, for the principal.
+    StopSession(SessionId),
     /// The permission requests that sessions of this machine wait to have answered.
     Permissions,
     /// Answers the oldest permission request of a session.
@@ -123,34 +127,6 @@ pub struct HeldPermission {
     pub passed: Vec<String>,
     /// Milliseconds since the Unix epoch.
     pub since_ms: u64,
-}
-
-/// How a session ends, and so who writes the end: the agent submits or releases, the principal stops
-/// it, and the daemon ends it when its limits are reached or the harness fails.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub enum Finish {
-    /// The work is done. By the agent.
-    Submit { note: Option<String> },
-    /// The agent gives up. By the agent.
-    Release { note: Option<String> },
-    /// A review session has given its verdict. By the agent.
-    Reviewed,
-    /// A supervise session has resolved or escalated what it was started for. By the agent.
-    Supervised,
-    /// A diagnose session has said what went wrong. By the agent.
-    Diagnosed,
-    /// The principal stops it.
-    Stop,
-    /// Someone moved the item to a state where it waits, such as review, while the agent worked.
-    MovedOn,
-    /// It waited too long or ran too long.
-    TimedOut,
-    /// The harness failed or exited, or the daemon could not run it.
-    Failed { because: String },
-    /// The daemon that ran it stopped. By the daemon, for sessions a previous daemon left live.
-    Interrupted,
-    /// The agent used up its nudges without a new commit. `last_message` is what it said last.
-    GaveUp { turns: u32, last_message: String },
 }
 
 #[derive(Serialize, Deserialize)]

@@ -5,6 +5,7 @@ use std::sync::Arc;
 use tokio::net::UnixStream;
 use wf_core::id::WorkforceId;
 use wf_core::invite::{InviteCode, InviteCodeError};
+use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_net::frame::{FrameError, read_frame, write_frame};
 
 use crate::peers::{peers_of, sync_all};
@@ -64,6 +65,7 @@ async fn answer(daemon: &Arc<Daemon>, request: Request) -> Response {
         | Call::Fork(_)
         | Call::StartSession { .. }
         | Call::EndSession { .. }
+        | Call::StopSession(_)
         | Call::Permissions
         | Call::AnswerPermission { .. }
         | Call::LastSeen => daemon.workforce(request.workforce),
@@ -196,7 +198,19 @@ async fn call(
             .ok_or_else(|| "that session is not waiting for an answer".to_string()),
         Call::EndSession { session, finish } => {
             daemon
-                .finish_session(workforce, loaded, session, finish)
+                .finish_session(workforce, loaded, session, SessionEnd::Finish(finish))
+                .await
+                .map_err(|error| wf_core::report::report(&error))?;
+            Ok(Response::SessionEnded)
+        }
+        Call::StopSession(session) => {
+            daemon
+                .finish_session(
+                    workforce,
+                    loaded,
+                    session,
+                    SessionEnd::Interruption(Interruption::Stop),
+                )
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::SessionEnded)

@@ -1,7 +1,7 @@
 use crate::event::EventBody;
 use crate::id::{ItemId, SessionId};
 use crate::identity::AgentId;
-use crate::name::AgentName;
+use crate::name::{AgentName, StateName};
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, Verdict};
@@ -218,16 +218,24 @@ fn approved_work_and_work_without_review_wait_for_the_merge() {
     let running = scene.apply(create("task", "still going")).id().into();
     scene.apply(start_session("coder", running));
 
-    assert_eq!(scene.state.pending_merges(), [(unreviewed, commit(3))]);
+    let pending = |state: &State| -> Vec<(ItemId, CommitId)> {
+        let mut pending: Vec<_> = state
+            .pending_merges()
+            .into_iter()
+            .map(|pending| (pending.item, pending.commit))
+            .collect();
+        pending.sort();
+        pending
+    };
+    assert_eq!(pending(&scene.state), [(unreviewed, commit(3))]);
     scene.apply(verdict(reviewed, commit(1), Verdict::Approve));
-    let mut pending = scene.state.pending_merges();
-    pending.sort();
+    let pending_now = pending(&scene.state);
     let mut expected = vec![(reviewed, commit(1)), (unreviewed, commit(3))];
     expected.sort();
-    assert_eq!(pending, expected);
+    assert_eq!(pending_now, expected);
 
     scene.apply(merged(reviewed, commit(1), commit(9)));
-    assert_eq!(scene.state.pending_merges(), [(unreviewed, commit(3))]);
+    assert_eq!(pending(&scene.state), [(unreviewed, commit(3))]);
 }
 
 #[test]
@@ -517,7 +525,10 @@ fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
         scene.status(finding),
         Some(ReviewStatus::Approved { commit: None })
     );
-    assert_eq!(scene.state.approved_without_commits(), [finding]);
+    assert_eq!(
+        scene.state.approved_without_commits(),
+        [(finding, StateName::new("done").unwrap())]
+    );
     assert!(scene.state.pending_merges().is_empty());
 
     scene.apply(moved(finding, "done"));

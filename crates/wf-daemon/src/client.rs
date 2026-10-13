@@ -8,12 +8,13 @@ use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::invite::InviteCode;
+use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_core::state::State;
 
 use crate::peers::PeerSync;
 use crate::proto::{
-    Answer, Call, Finish, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request,
+    Answer, Call, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Request,
     Response, read_message, write_message,
 };
 
@@ -203,6 +204,18 @@ impl DaemonClient {
         finish: Finish,
     ) -> Result<(), ClientError> {
         match self.call(workforce, Call::EndSession { session, finish })? {
+            Response::SessionEnded => Ok(()),
+            _ => Err(ClientError::UnexpectedResponse),
+        }
+    }
+
+    /// Has the daemon stop a session of this machine now.
+    pub fn stop_session(
+        &mut self,
+        workforce: WorkforceId,
+        session: SessionId,
+    ) -> Result<(), ClientError> {
+        match self.call(workforce, Call::StopSession(session))? {
             Response::SessionEnded => Ok(()),
             _ => Err(ClientError::UnexpectedResponse),
         }

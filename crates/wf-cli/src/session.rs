@@ -6,7 +6,7 @@ use std::time::Duration;
 use crate::transcript::Renderer;
 use anyhow::{Context, anyhow, bail};
 use wf_core::id::{HashId, SessionId};
-use wf_daemon::proto::{Answer, Finish};
+use wf_daemon::proto::Answer;
 use wf_harness::TranscriptEntry;
 
 use crate::cli::{SessionCommand, SessionStartArgs};
@@ -46,7 +46,7 @@ pub fn session(
         }
         SessionCommand::Stop { session } => {
             let id = choose_session(workspace, mode, session, Which::LocalLive)?;
-            workspace.end_session(id, Finish::Stop)?;
+            workspace.stop_session(id)?;
             emit(
                 json,
                 &crate::commands::Done {

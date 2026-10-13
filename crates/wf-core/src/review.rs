@@ -7,10 +7,18 @@ use crate::crdt::Stamp;
 use crate::id::ItemId;
 use crate::identity::AgentId;
 use crate::item::{Item, ItemView};
-use crate::name::Requirement;
+use crate::name::{Requirement, StateName};
 use crate::policy::{ReviewStep, StateCategory};
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::State;
+
+/// Work the daemon merges into the target, then moves its item to `done`.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub struct PendingMerge {
+    pub item: ItemId,
+    pub commit: CommitId,
+    pub done: StateName,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReviewStatus {
@@ -97,8 +105,8 @@ impl State {
     }
 
     /// Items whose work is ready to merge and not merged yet: approved, or needing no review,
-    /// and waiting in a review state.
-    pub fn pending_merges(&self) -> Vec<(ItemId, CommitId)> {
+    /// and waiting in a review state of a type that has a done state.
+    pub fn pending_merges(&self) -> Vec<PendingMerge> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
@@ -117,15 +125,23 @@ impl State {
                     ) => false,
                     None => !item.needs_review(policy),
                 };
-                ready.then_some((item.id(), commit))
+                if !ready {
+                    return None;
+                }
+                Some(PendingMerge {
+                    item: item.id(),
+                    commit,
+                    done: self.first_state_of(item.id(), StateCategory::Done)?,
+                })
             })
             .collect()
     }
 
     /// Items with approved work that wait in a review state to be finished: the work was
     /// submitted without commits, so there is nothing to merge. An item that moved on after the
-    /// submission was moved by someone, and is left where it is.
-    pub fn approved_without_commits(&self) -> Vec<ItemId> {
+    /// submission was moved by someone, and is left where it is. Each comes with the done state
+    /// to move it to.
+    pub fn approved_without_commits(&self) -> Vec<(ItemId, StateName)> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
@@ -140,7 +156,12 @@ impl State {
                     Some(ReviewStatus::Approved { .. })
                 )
             })
-            .map(Item::id)
+            .filter_map(|item| {
+                Some((
+                    item.id(),
+                    self.first_state_of(item.id(), StateCategory::Done)?,
+                ))
+            })
             .collect()
     }
 

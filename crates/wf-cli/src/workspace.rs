@@ -8,9 +8,10 @@ use serde::{Deserialize, Serialize};
 use wf_core::event::{Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner, PrincipalSigner};
+use wf_core::lifecycle::Finish;
 use wf_core::state::State;
 use wf_daemon::client::DaemonClient;
-use wf_daemon::proto::{Answer, Finish, HeldPermission};
+use wf_daemon::proto::{Answer, HeldPermission};
 use wf_store::{EventStore, RedbStore, Replica};
 
 use crate::keys::DataDir;
@@ -327,6 +328,15 @@ impl Workspace {
         let workforce = self.workforce;
         let (client, state) = self.daemon("end sessions")?;
         client.end_session(workforce, session, finish)?;
+        *state = client.state(workforce)?;
+        Ok(())
+    }
+
+    /// Stops a session that runs in the daemon now.
+    pub fn stop_session(&mut self, session: SessionId) -> anyhow::Result<()> {
+        let workforce = self.workforce;
+        let (client, state) = self.daemon("stop sessions")?;
+        client.stop_session(workforce, session)?;
         *state = client.state(workforce)?;
         Ok(())
     }
