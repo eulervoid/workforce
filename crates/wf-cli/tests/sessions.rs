@@ -1240,7 +1240,6 @@ async fn only_the_items_an_agent_would_be_given_are_listed_for_it() {
     assert!(message.contains("not an agent of yours"), "{message}");
 }
 
-/// A coder and a reviewer, both started by the dispatcher.
 /// The lines the notify command of [`World::notify_to_file`] wrote.
 fn told_of(file: &Path) -> Vec<String> {
     std::fs::read_to_string(file)
@@ -1250,6 +1249,7 @@ fn told_of(file: &Path) -> Vec<String> {
         .collect()
 }
 
+/// A coder and a reviewer, both started by the dispatcher.
 async fn review_world(coder: &str, reviewer: &str) -> World {
     let world = World::agents(&[("coder", coder), ("reviewer", reviewer)]).await;
     world.automate("coder", "default");
