@@ -1121,9 +1121,11 @@ command = ["terminal-notifier", "-title", "wf: {title}", "-message", "{what}"]  
 # command = ["notify-send", "wf: {title}", "{what}"]                             # Linux
 ```
 
-The entries told of are kept beside the store of the workforce (`announced.json`), so a restart does
-not tell of them again, and an entry that was gone and comes back, such as a resubmission, is told of
-anew. Permission requests do not outlive the daemon and are told of when they are held. A command that
+The dispatcher tells of what waits after each of its turns, so approved work it is about to merge or
+finish is not told of: a merge only once the dispatcher found the target branch checked out with
+changes. The entries told of are kept in the daemon and beside the store of the workforce
+(`announced.json`), so a restart does not tell of them again, and an entry that was gone and comes
+back, such as a resubmission, is told of anew. Permission requests do not outlive the daemon and are told of when they are held. A command that
 fails or takes longer than 20 seconds is logged and stopped; nothing waits for it.
 
 ## 13. Secrets and transcripts
