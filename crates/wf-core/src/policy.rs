@@ -2,11 +2,9 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
-use std::time::Duration;
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 
-use crate::identity::Role;
 use crate::name::{
     AgentName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, StateName, TypeName,
 };
@@ -169,74 +167,9 @@ impl TypeConfig {
     }
 }
 
-/// Stored, not acted on in M0.
+/// A lane items and agents can be put in. Nothing is configured per lane yet.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct LaneConfig {
-    #[serde(default)]
-    pub claim: Vec<Role>,
-    #[serde(default)]
-    pub types: Vec<TypeName>,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum AssignmentMode {
-    #[default]
-    Dispatch,
-    Pull,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Fallback {
-    #[default]
-    Optimistic,
-    Wait,
-}
-
-/// A claim lease. Written as `30m` in TOML.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Lease(pub Duration);
-
-impl Default for Lease {
-    fn default() -> Self {
-        Lease(Duration::from_secs(30 * 60))
-    }
-}
-
-impl Serialize for Lease {
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        if serializer.is_human_readable() {
-            serializer.collect_str(&humantime::format_duration(self.0))
-        } else {
-            self.0.as_secs().serialize(serializer)
-        }
-    }
-}
-
-impl<'de> Deserialize<'de> for Lease {
-    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        if deserializer.is_human_readable() {
-            let text = String::deserialize(deserializer)?;
-            humantime::parse_duration(&text)
-                .map(Lease)
-                .map_err(serde::de::Error::custom)
-        } else {
-            u64::deserialize(deserializer).map(|secs| Lease(Duration::from_secs(secs)))
-        }
-    }
-}
-
-/// Stored, not acted on in M0.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AssignmentConfig {
-    #[serde(default)]
-    pub mode: AssignmentMode,
-    #[serde(default)]
-    pub fallback: Fallback,
-    #[serde(default)]
-    pub lease: Lease,
-}
+pub struct LaneConfig {}
 
 /// How reviewed work gets into the target branch. `origin` (push, pull requests) comes in M3.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -324,8 +257,6 @@ pub struct Policy {
     pub types: BTreeMap<TypeName, TypeConfig>,
     #[serde(default)]
     pub lanes: BTreeMap<LaneName, LaneConfig>,
-    #[serde(default)]
-    pub assignment: AssignmentConfig,
     #[serde(default)]
     pub merge: MergeConfig,
     /// Ordered from least to most strict: the position is what lowering and raising mean.
@@ -496,9 +427,12 @@ mod tests {
     }
 
     #[test]
-    fn lease_parses_humantime() {
-        let policy = Policy::default_policy();
-        assert_eq!(policy.assignment.lease, Lease(Duration::from_secs(1800)));
+    fn stored_policies_with_assignment_and_lane_claims_still_parse() {
+        let source = DEFAULT_POLICY_TOML.replace(
+            "[lanes.meta]",
+            "[lanes.meta]\nclaim = [\"member\"]\ntypes = [\"distill\"]",
+        ) + "\n[assignment]\nmode = \"dispatch\"\nlease = \"30m\"\n";
+        assert_eq!(&Policy::parse(&source).unwrap(), Policy::default_policy());
     }
 
     #[test]

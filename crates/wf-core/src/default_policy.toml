@@ -1,18 +1,9 @@
-[assignment]
-mode = "dispatch"
-fallback = "optimistic"
-lease = "30m"
-
 [lanes.default]
-claim = ["member"]
 
 [lanes.meta]
-claim = ["member"]
-types = ["distill"]
 
 # Holds no items: its agents answer and escalate blockers.
 [lanes.supervision]
-claim = ["member"]
 
 [merge]
 mode = "local"

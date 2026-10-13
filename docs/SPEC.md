@@ -782,7 +782,8 @@ per-agent `max_sessions`, parked sessions included) it starts, in this order:
 
 Agents with `start = "manual"` run only through `wf session start <item> --agent <name>`.
 
-**Across devices (M3)** `dispatch` is the default; `pull` is configurable per workforce. The dispatch
+**Across devices (M3)** `dispatch` is the default; `pull` will be configurable per workforce, in an
+`[assignment]` table with `mode`, `fallback` and `lease`. The dispatch
 target is an **agent**; the dispatcher picks any device that hosts it and has a free slot.
 
 1. A device with free capacity requests work for an agent it hosts.
@@ -1153,11 +1154,6 @@ wf policy edit | diff <file> | apply <file> | export
 ```
 
 ```toml
-[assignment]
-mode = "dispatch"        # dispatch | pull
-fallback = "optimistic"  # optimistic | wait
-lease = "30m"
-
 [merge]
 mode = "local"           # local | origin (M3)
 target = "main"
@@ -1189,12 +1185,8 @@ name = "diagnose"        # an agent says what went wrong, before the one retry
 steps = [{ agent = { requires = ["review"] } }, "retry", "principal"]
 
 [lanes.default]
-claim = ["member"]
 [lanes.meta]
-claim = ["member"]
-types = ["distill", "triage"]
 [lanes.supervision]      # holds no items: its agents supervise blockers
-claim = ["member"]
 
 [transcripts]
 publish = "none"
