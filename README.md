@@ -119,6 +119,19 @@ agent = "judge"
 `wf permissions test --command "cargo test"` runs the chain without a session; the transcript of a
 session says who decided each request and why.
 
+## Notifications
+With a command under `[notify]` in the machine config, the daemon runs it, without a shell, once
+for each new entry of `wf inbox`: a blocker, a review or merge that is yours, sessions that did not
+finish, a permission request. `{kind}`, `{item}`, `{title}` and `{what}` in its arguments are
+replaced as `wf inbox` says them. What it already told you of is not told again after a restart; a
+command that fails is logged.
+```toml
+[notify]
+command = ["terminal-notifier", "-title", "wf: {title}", "-message", "{what}"]          # macOS
+# command = ["osascript", "-e", "on run argv", "-e", "display notification (item 2 of argv) with title (item 1 of argv)", "-e", "end run", "wf: {title}", "{what}"]
+# command = ["notify-send", "wf: {title}", "{what}"]                                    # Linux
+```
+
 ## Several machines
 ```sh
 # laptop, where `wf init` ran (it holds your principal key)
