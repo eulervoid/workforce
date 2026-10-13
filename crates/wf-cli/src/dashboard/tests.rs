@@ -85,7 +85,6 @@ fn snapshot() -> Snapshot {
         ],
         working: vec![coder, parked, reviewer],
         flagged: vec!["#q9r1aa \"Watch\" is stranded: a dependency was cancelled".to_owned()],
-        latest: Some("07:04  #ab4c  coder submitted 3e8a1c → in_review\n".to_owned()),
         in_view: None,
     }
 }
@@ -93,6 +92,10 @@ fn snapshot() -> Snapshot {
 fn app() -> App {
     let mut app = App::new(snapshot(), TimeZone::UTC);
     app.resize(60);
+    app.logged([
+        "06:59  #aibaea  @ada · resolved a91d\n         Fix the formatting of the body, nothing else\n".to_owned(),
+        "07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_review\n".to_owned(),
+    ]);
     app
 }
 
@@ -237,4 +240,23 @@ fn an_item_detail_shows_the_item_as_wf_item_show_prints_it() {
     });
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&app, 60, 10));
+}
+
+#[test]
+fn the_log_tab_follows_the_stream_and_filters_it() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('4'));
+    insta::assert_snapshot!("log", screen(&app, 60, 9));
+    press(&mut app, KeyCode::Char('/'));
+    for character in "ambq".chars() {
+        press(&mut app, KeyCode::Char(character));
+    }
+    // The filter applies while it is typed, and `q` is text, not quitting.
+    assert_eq!(press(&mut app, KeyCode::Char('q')), None);
+    press(&mut app, KeyCode::Backspace);
+    insta::assert_snapshot!("log_filtered", screen(&app, 60, 9));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.log_lines().count(), 1);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.log_lines().count(), 2);
 }

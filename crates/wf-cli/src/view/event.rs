@@ -1,5 +1,7 @@
 //! Events, as `wf log` and `wf watch` show them.
 
+use std::collections::HashMap;
+
 use serde::Serialize;
 use wf_core::activity::Entry;
 use wf_core::event::{Change, Event, EventBody, Link};
@@ -24,6 +26,8 @@ pub struct WatchLineView {
 /// so far, which the activity of an item needs.
 pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchLineView> {
     let mut lines = Vec::new();
+    // The activity of an item is worked out from all events: once for each item, not each event.
+    let mut activities: HashMap<ItemId, Vec<Entry>> = HashMap::new();
     for event in new {
         let live = state.item_of(event).and_then(|id| match state.item(id) {
             Some(ItemView::Live(item)) => Some(item),
@@ -31,10 +35,12 @@ pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchL
         });
         match live {
             Some(item) => {
-                let entries: Vec<Entry> = state
-                    .activity(item.id(), events)
-                    .into_iter()
+                let entries: Vec<Entry> = activities
+                    .entry(item.id())
+                    .or_insert_with(|| state.activity(item.id(), events))
+                    .iter()
                     .filter(|entry| entry.event == event.id())
+                    .cloned()
                     .collect();
                 for activity in activity_views(state, item, &entries) {
                     lines.push(WatchLineView {

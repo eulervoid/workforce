@@ -15,11 +15,14 @@ use wf_core::id::{ItemId, SessionId};
 
 use self::app::{App, Effect};
 use self::snapshot::{Snapshot, Sources, Wanted};
-use crate::transcript;
 use crate::workspace::{self, Workspace};
+use crate::{render, transcript, view};
 
 /// How often the daemon is asked for what is new.
 const REFRESH_EVERY: Duration = Duration::from_millis(500);
+
+/// How many of the latest events the Log tab starts with.
+const BACKLOG: usize = 200;
 
 pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
@@ -33,9 +36,9 @@ fn event_loop(
     workspace: &mut Workspace,
     only: Option<ItemId>,
 ) -> anyhow::Result<()> {
-    let mut feed = Feed::new(workspace)?;
     let mut app = App::new(Snapshot::default(), jiff::tz::TimeZone::system());
     app.resize(terminal.size()?.width);
+    let mut feed = Feed::new(workspace, &mut app)?;
     if let Some(item) = only {
         app.open_item(item);
     }
@@ -62,7 +65,7 @@ fn event_loop(
             continue;
         }
         refreshed = Instant::now();
-        match feed.refresh(workspace) {
+        match feed.refresh(workspace, &mut app) {
             Ok(()) => {
                 feed.read_transcripts(workspace, &mut app);
                 let snapshot = feed.snapshot(workspace, &app);
@@ -81,17 +84,30 @@ struct Feed {
 }
 
 impl Feed {
-    fn new(workspace: &Workspace) -> anyhow::Result<Self> {
+    /// Reads the log so far, and hands the app the lines of its latest events.
+    fn new(workspace: &Workspace, app: &mut App) -> anyhow::Result<Self> {
+        let events = workspace.events()?;
+        let backlog = &events[events.len().saturating_sub(BACKLOG)..];
+        app.logged(log_lines(workspace.state(), &events, backlog, app.width));
         Ok(Self {
-            events: workspace.events()?,
+            events,
             readers: HashMap::new(),
         })
     }
 
-    fn refresh(&mut self, workspace: &mut Workspace) -> anyhow::Result<()> {
+    /// Asks the daemon for the state and the new events, and hands the app their lines.
+    fn refresh(&mut self, workspace: &mut Workspace, app: &mut App) -> anyhow::Result<()> {
         workspace.refresh()?;
         let new = workspace.events_since(self.events.len() as u64)?;
+        let known = self.events.len();
         self.events.extend(new);
+        let lines = log_lines(
+            workspace.state(),
+            &self.events,
+            &self.events[known..],
+            app.width,
+        );
+        app.logged(lines);
         Ok(())
     }
 
@@ -141,6 +157,22 @@ impl Feed {
         };
         Snapshot::take(&sources, app.wanted())
     }
+}
+
+/// What the `new` events did, as `wf watch` prints it, read against all `events`, for a window
+/// `width` wide.
+fn log_lines(
+    state: &wf_core::state::State,
+    events: &[Event],
+    new: &[Event],
+    width: u16,
+) -> Vec<String> {
+    // Within the margin of the Log tab.
+    let width = Some(usize::from(width.saturating_sub(1)).min(100));
+    view::watch_lines(state, events, new)
+        .iter()
+        .map(|line| render::watch_line_for(line, width))
+        .collect()
 }
 
 #[cfg(test)]

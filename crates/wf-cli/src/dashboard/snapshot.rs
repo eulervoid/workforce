@@ -27,8 +27,6 @@ pub struct Snapshot {
     pub working: Vec<SessionInfo>,
     /// What `wf status` flags.
     pub flagged: Vec<String>,
-    /// The latest event, as `wf watch` prints it.
-    pub latest: Option<String>,
     /// What the detail on screen shows.
     pub in_view: Option<InView>,
 }
@@ -184,11 +182,6 @@ impl Snapshot {
             waiting_on_you: waiting.len(),
             refolded: false,
         };
-        let latest = events.last().and_then(|event| {
-            view::watch_lines(state, events, std::slice::from_ref(event))
-                .last()
-                .map(render::watch_line)
-        });
         let graph = state.dependency_graph();
         let mut live: Vec<&Session> = state.live_sessions().collect();
         live.sort_by_key(|session| std::cmp::Reverse(session.started()));
@@ -202,7 +195,6 @@ impl Snapshot {
                 .map(|session| session_info(state, &graph, own, session))
                 .collect(),
             flagged: view::status(state, context).flagged,
-            latest,
             in_view: wanted
                 .and_then(|wanted| in_view(state, events, &graph, own, wanted, detail_width)),
         }

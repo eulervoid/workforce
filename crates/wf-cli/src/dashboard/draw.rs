@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 use wf_core::id::HashId;
 
-use super::app::{App, Detail, Opened, Row, Scroll, Tab};
+use super::app::{App, Detail, Opened, Prompt, Row, Scroll, Tab};
 use super::snapshot::{InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting};
 use crate::transcript::{self, Format, Now, Transcript};
 
@@ -31,7 +31,26 @@ pub fn draw(frame: &mut Frame, app: &App) {
     draw_body(frame, app, body);
     draw_rule(frame, rule_below);
     frame.render_widget(Paragraph::new(latest_line(app)), latest);
-    frame.render_widget(Paragraph::new(keys_line(app)), keys);
+    match &app.prompt {
+        Some(prompt) => draw_prompt(frame, prompt, keys),
+        None => frame.render_widget(Paragraph::new(keys_line(app)), keys),
+    }
+}
+
+/// The line the footer asks for, with the cursor in it.
+fn draw_prompt(frame: &mut Frame, prompt: &Prompt, area: Rect) {
+    let (label, input) = match prompt {
+        Prompt::Filter(input) => (" / ", input),
+    };
+    let width = usize::from(area.width).saturating_sub(label.len() + 1);
+    let scroll = input.visual_scroll(width);
+    let line = Line::from(vec![
+        Span::raw(label).bold(),
+        Span::raw(input.value().chars().skip(scroll).collect::<String>()),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+    let cursor = (input.visual_cursor().max(scroll) - scroll) as u16;
+    frame.set_cursor_position((area.x + label.len() as u16 + cursor, area.y));
 }
 
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
@@ -91,7 +110,8 @@ fn draw_rule(frame: &mut Frame, area: Rect) {
 fn draw_body(frame: &mut Frame, app: &App, area: Rect) {
     match app.tab {
         Tab::Now => draw_now(frame, app, area),
-        Tab::Items | Tab::Agents | Tab::Log => {
+        Tab::Log => draw_log(frame, app, area),
+        Tab::Items | Tab::Agents => {
             frame.render_widget(Paragraph::new(" Nothing here yet.").dim(), area);
         }
     }
@@ -493,13 +513,33 @@ fn draw_scrolled(frame: &mut Frame, text: Text<'static>, scroll: Scroll, area: R
     frame.render_widget(paragraph.scroll((top as u16, 0)), area);
 }
 
+fn draw_log(frame: &mut Frame, app: &App, area: Rect) {
+    let area = Rect {
+        x: area.x + 1,
+        width: area.width.saturating_sub(1),
+        ..area
+    };
+    let text: String = app.log_lines().map(String::as_str).collect();
+    if text.is_empty() {
+        let empty = if app.log.filter.is_empty() {
+            "no events yet"
+        } else {
+            "no events match the filter"
+        };
+        frame.render_widget(Paragraph::new(empty).dim(), area);
+        return;
+    }
+    let text: Text = text.into_text().unwrap_or_default();
+    draw_scrolled(frame, text, app.log.scroll, area, true);
+}
+
 /// The latest event, or why the last refresh failed.
 fn latest_line(app: &App) -> Line<'static> {
     if let Some(error) = &app.error {
         let first = error.lines().next().unwrap_or_default();
         return Line::from(format!(" error: {first}")).fg(Color::Red);
     }
-    match &app.snapshot.latest {
+    match app.log.lines.last() {
         Some(line) => {
             let first = line.lines().next().unwrap_or_default();
             let text: Text = first.into_text().unwrap_or_default();
@@ -525,7 +565,15 @@ fn keys_line(app: &App) -> Line<'static> {
             Some(_) => "enter open · j/k move · tab next · q quit",
             None => "j/k move · tab next · q quit",
         },
-        Tab::Items | Tab::Agents | Tab::Log => "tab next · q quit",
+        Tab::Log if !app.log.filter.is_empty() => {
+            return Line::from(format!(
+                " filter: {} · / change · esc clear · q quit",
+                app.log.filter
+            ))
+            .dim();
+        }
+        Tab::Log => "/ filter · j/k scroll · g/G top/end · q quit",
+        Tab::Items | Tab::Agents => "tab next · q quit",
     };
     Line::from(format!(" {keys}")).dim()
 }

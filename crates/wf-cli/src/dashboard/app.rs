@@ -4,7 +4,9 @@
 use std::collections::HashMap;
 
 use jiff::tz::TimeZone;
-use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ratatui::crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
+use tui_input::Input;
+use tui_input::backend::crossterm::EventHandler;
 use wf_core::id::{ItemId, SessionId};
 use wf_harness::TranscriptEntry;
 
@@ -204,12 +206,34 @@ impl<Key> Default for ListTab<Key> {
     }
 }
 
+/// How many lines of the event stream are kept.
+const LOG_LINES: usize = 1000;
+
+/// The event stream of `wf watch`.
+#[derive(Clone, Debug)]
+pub struct LogTab {
+    /// One entry for each thing an event did, as `wf watch` prints it, the oldest first.
+    pub lines: Vec<String>,
+    pub scroll: Scroll,
+    /// Only lines with this text are shown.
+    pub filter: String,
+}
+
+/// A line the footer asks for.
+#[derive(Clone, Debug)]
+pub enum Prompt {
+    /// Text the lines of the Log tab must have; it applies while it is typed.
+    Filter(Input),
+}
+
 pub struct App {
     pub snapshot: Snapshot,
     /// The transcripts of the sessions this machine runs, as far as they are read.
     pub transcripts: HashMap<SessionId, Transcript>,
     pub tab: Tab,
     pub now: ListTab<Row>,
+    pub log: LogTab,
+    pub prompt: Option<Prompt>,
     pub width: u16,
     pub time_zone: TimeZone,
     /// Why the last refresh or action failed, until the next one works.
@@ -223,6 +247,12 @@ impl App {
             transcripts: HashMap::new(),
             tab: Tab::Now,
             now: ListTab::default(),
+            log: LogTab {
+                lines: Vec::new(),
+                scroll: Scroll::FromEnd(0),
+                filter: String::new(),
+            },
+            prompt: None,
             width: 80,
             time_zone,
             error: None,
@@ -277,6 +307,25 @@ impl App {
         for entry in entries {
             transcript.push(entry);
         }
+    }
+
+    /// Takes in the lines of new events.
+    pub fn logged(&mut self, lines: impl IntoIterator<Item = String>) {
+        self.log.lines.extend(lines);
+        let over = self.log.lines.len().saturating_sub(LOG_LINES);
+        self.log.lines.drain(..over);
+    }
+
+    /// The lines of the Log tab that pass its filter.
+    pub fn log_lines(&self) -> impl Iterator<Item = &String> {
+        let filter = self.log.filter.to_lowercase();
+        self.log.lines.iter().filter(move |line| {
+            filter.is_empty()
+                || anstream::adapter::strip_str(line)
+                    .to_string()
+                    .to_lowercase()
+                    .contains(&filter)
+        })
     }
 
     /// The rows of the Now tab, in the order they are shown.
@@ -349,6 +398,10 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Some(Effect::Quit);
         }
+        if let Some(prompt) = self.prompt.take() {
+            self.prompt = self.prompt_key(prompt, key);
+            return None;
+        }
         match key.code {
             KeyCode::Char('q') => return Some(Effect::Quit),
             KeyCode::Char('1') => self.tab = Tab::Now,
@@ -359,10 +412,47 @@ impl App {
             KeyCode::BackTab => self.tab = self.tab.previous(),
             _ => match self.tab {
                 Tab::Now => self.now_key(key),
-                Tab::Items | Tab::Agents | Tab::Log => {}
+                Tab::Log => self.log_key(key),
+                Tab::Items | Tab::Agents => {}
             },
         }
         None
+    }
+
+    /// A key while the footer asks for a line; the prompt stays open unless the key closes it.
+    fn prompt_key(&mut self, prompt: Prompt, key: KeyEvent) -> Option<Prompt> {
+        match prompt {
+            Prompt::Filter(mut input) => match key.code {
+                KeyCode::Enter => None,
+                KeyCode::Esc => {
+                    self.log.filter.clear();
+                    None
+                }
+                _ => {
+                    input.handle_event(&TerminalEvent::Key(key));
+                    self.log.filter = input.value().to_owned();
+                    Some(Prompt::Filter(input))
+                }
+            },
+        }
+    }
+
+    fn log_key(&mut self, key: KeyEvent) {
+        let scroll = &mut self.log.scroll;
+        match key.code {
+            KeyCode::Down | KeyCode::Char('j') => *scroll = scroll.down(1),
+            KeyCode::Up | KeyCode::Char('k') => *scroll = scroll.up(1),
+            KeyCode::PageDown | KeyCode::Char(' ') => *scroll = scroll.down(20),
+            KeyCode::PageUp => *scroll = scroll.up(20),
+            KeyCode::Char('g') => *scroll = Scroll::FromTop(0),
+            KeyCode::Char('G') => *scroll = Scroll::FromEnd(0),
+            KeyCode::Char('/') => {
+                let input = Input::new(self.log.filter.clone());
+                self.prompt = Some(Prompt::Filter(input));
+            }
+            KeyCode::Esc => self.log.filter.clear(),
+            _ => {}
+        }
     }
 
     fn now_key(&mut self, key: KeyEvent) {

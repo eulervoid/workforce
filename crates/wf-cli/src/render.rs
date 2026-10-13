@@ -673,13 +673,18 @@ fn activity_entry(
 /// One line of `wf watch`: `14:02  #k3f7ab  @ada/coder · moved to done`, and the text of a
 /// comment below it.
 pub fn watch_line(line: &crate::view::WatchLineView) -> String {
+    watch_line_for(line, text_width())
+}
+
+/// [`watch_line`] with the text of a comment wrapped to `width`, or not at all.
+pub fn watch_line_for(line: &crate::view::WatchLineView, width: Option<usize>) -> String {
     use style::{DIM, paint};
     let (_, time) = local_date_and_time(&line.activity.at);
     let item = match &line.item {
         Some(item) => format!("{}  ", id_label(item)),
         None => String::new(),
     };
-    let (what, text) = activity_entry(&line.activity, text_width());
+    let (what, text) = activity_entry(&line.activity, width);
     let mut out = format!("{}  {item}{what}\n", paint(DIM, time));
     if let Some(text) = text {
         out.push_str(&text);
