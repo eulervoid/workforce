@@ -39,157 +39,157 @@ expression: visible(&styled)
 ␛[1m␛[35mcoder␛[0m  ␛[2m00:49␛[0m
   ␛[32m✓␛[0m ␛[1mBash␛[0m  cat README.md; ls crates; grep -A15 '^\[workspace\]' Cargo.toml; for f in crates/*/  ␛[2mallowed by you␛[0m       ␛[2m0.2s␛[0m
           Cargo.toml; do echo "$f: $(grep -m1 '^description' $f)"; done
-    ␛[2m│ ␛[0m␛[2m# workforce (`wf`)␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2mA peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.␛[0m
-    ␛[2m│ ␛[0m␛[2mEvent-sourced, forkable, built on iroh. M0 (signed event log, item model, CLI), M1 (sync between␛[0m
-    ␛[2m│ ␛[0m␛[2myour machines, device invites, daemon, fork) and M2 (agents at work on one machine: sessions, review␛[0m
-    ␛[2m│ ␛[0m␛[2mand merge) are implemented; sessions across machines come next.␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m- [docs/SPEC.md](docs/SPEC.md): the design␛[0m
-    ␛[2m│ ␛[0m␛[2m- [docs/M0.md](docs/M0.md): plan for the first milestone␛[0m
-    ␛[2m│ ␛[0m␛[2m- [docs/M1.md](docs/M1.md): sync, device invites, daemon and fork, with what was built␛[0m
-    ␛[2m│ ␛[0m␛[2m- [docs/M2.md](docs/M2.md): agents at work on one machine, with what was built␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m## Try it␛[0m
-    ␛[2m│ ␛[0m␛[2m```sh␛[0m
-    ␛[2m│ ␛[0m␛[2mcargo build␛[0m
-    ␛[2m│ ␛[0m␛[2mexport PATH="$PWD/target/debug:$PATH"␛[0m
-    ␛[2m│ ␛[0m␛[2mcd ~/src/some-repo␛[0m
-    ␛[2m│ ␛[0m␛[2mwf init --name demo␛[0m
-    ␛[2m│ ␛[0m␛[2mwf item add --title "Implement feed sync" --priority P1␛[0m
-    ␛[2m│ ␛[0m␛[2mwf item list --ready␛[0m
-    ␛[2m│ ␛[0m␛[2mwf log␛[0m
-    ␛[2m│ ␛[0m␛[2m```␛[0m
-    ␛[2m│ ␛[0m␛[2m## Agents at work␛[0m
-    ␛[2m│ ␛[0m␛[2m```sh␛[0m
-    ␛[2m│ ␛[0m␛[2mwf agent add coder --harness opencode --capability rust --lane default --start auto␛[0m
-    ␛[2m│ ␛[0m␛[2mwf agent add reviewer --harness claude-code --capability review --capability strong-model --start auto␛[0m
-    ␛[2m│ ␛[0m␛[2mwf agent add supervisor --harness claude-code --lane supervision --start auto␛[0m
-    ␛[2m│ ␛[0m␛[2mwf device edit --max-sessions 3 --agent coder=1 --agent reviewer=1 --agent supervisor=1␛[0m
-    ␛[2m│ ␛[0m␛[2mwf item add --title "Parse durations in policy" --review standard␛[0m
-    ␛[2m│ ␛[0m␛[2mwf daemon &                      # starts the agents on what is ready, and merges what is approved␛[0m
-    ␛[2m│ ␛[0m␛[2mwf session list                  # live and finished sessions␛[0m
-    ␛[2m│ ␛[0m␛[2mwf session watch <item>          # follow the transcript of the latest session on an item␛[0m
-    ␛[2m│ ␛[0m␛[2mwf watch                         # events as they arrive; answer what waits on you right there␛[0m
-    ␛[2m│ ␛[0m␛[2mwf inbox                         # what waits on you: blockers, reviews, merges, permission requests␛[0m
-    ␛[2m│ ␛[0m␛[2mwf session allow <session>       # or `deny`, for a permission request an agent is waiting on␛[0m
-    ␛[2m│ ␛[0m␛[2mwf review <item> --approve       # your step of a review level that has one␛[0m
-    ␛[2m│ ␛[0m␛[2mwf item diff <item> [--stat]     # the work, through git: your pager and delta apply␛[0m
-    ␛[2m│ ␛[0m␛[2mwf item checkout <item>          # the main checkout on the work, detached; `checkout -` goes back␛[0m
-    ␛[2m│ ␛[0m␛[2mcd $(wf item path <item>)        # the item's worktree␛[0m
-    ␛[2m│ ␛[0m␛[2m```␛[0m
-    ␛[2m│ ␛[0m␛[2mA session runs one agent on one item in its own git worktree and branch (`wf/<item>`), started by the␛[0m
-    ␛[2m│ ␛[0m␛[2mdaemon over ACP (`opencode acp`, `claude-agent-acp`, `codex-acp`, `gemini --experimental-acp`). Inside a␛[0m
-    ␛[2m│ ␛[0m␛[2msession the agent comments with `wf comment <item>` (`--block` when it needs an answer, which a␛[0m
-    ␛[2m│ ␛[0m␛[2msupervisor or you give with `--resolve`), and ends with `wf work submit` or `wf work release`.␛[0m
-    ␛[2m│ ␛[0m␛[2mSubmitted work is reviewed at the level the item names, then merged into the target branch of the␛[0m
-    ␛[2m│ ␛[0m␛[2m`[merge]` policy. Agents start with `--start manual` and `--permissions ask`; `wf session start <item>␛[0m
-    ␛[2m│ ␛[0m␛[2m--agent <name>` runs one by hand. The harnesses named above have not all been run against this build␛[0m
-    ␛[2m│ ␛[0m␛[2myet: see *As built* in [docs/M2.md](docs/M2.md).␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2mSet `default_agent = "coder"` at the top of the policy (before any `[table]`) to omit `--agent`.␛[0m
-    ␛[2m│ ␛[0m␛[2mUse `-a <name>` to override it. Missing item/session arguments open a picker at a terminal;␛[0m
-    ␛[2m│ ␛[0m␛[2mstop offers local live sessions, permission commands offer pending requests, and watch offers␛[0m
-    ␛[2m│ ␛[0m␛[2msessions with a local transcript. Add `--watch` to `session start` to follow immediately: Ctrl-C␛[0m
-    ␛[2m│ ␛[0m␛[2mdetaches without stopping the agent, and the watcher exits after the session ends.␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2mWatch renders basic markdown, distinguishes thoughts with dim styling, and shows tool results,␛[0m
-    ␛[2m│ ␛[0m␛[2mplans, and unified diffs supplied by the agent. Tool output and diffs are capped at 20 lines per␛[0m
-    ␛[2m│ ␛[0m␛[2mblock; use `--full` for everything. Use `--raw` for unrendered markdown with plain, color-free␛[0m
-    ␛[2m│ ␛[0m␛[2mlayout. Both options also work with `session start --watch`. Markdown is buffered until a␛[0m
-    ␛[2m│ ␛[0m␛[2mparagraph or event boundary; raw mode streams text chunks immediately.␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m## Permission requests␛[0m
-    ␛[2m│ ␛[0m␛[2mAn agent with `--permissions ask` asks before its harness runs a tool. The request goes through the␛[0m
-    ␛[2m│ ␛[0m␛[2mdeciders of this machine's config, `~/.config/workforce/config.toml` (or `$XDG_CONFIG_HOME`), in␛[0m
-    ␛[2m│ ␛[0m␛[2mtheir order; what all of them pass on waits for you in `wf watch` and `wf inbox`. Without a config,␛[0m
-    ␛[2m│ ␛[0m␛[2mthe built-in rules decide alone: a session may run its own `wf` commands.␛[0m
-    ␛[2m│ ␛[0m␛[2m```toml␛[0m
-    ␛[2m│ ␛[0m␛[2m[permissions]␛[0m
-    ␛[2m│ ␛[0m␛[2mguidance = "Allow reading anything and writing in the worktree. Ask about the network."␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m[[permissions.decider]]␛[0m
-    ␛[2m│ ␛[0m␛[2mkind = "rules"                   # built in: a session's own `wf` commands␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m[[permissions.decider]]␛[0m
-    ␛[2m│ ␛[0m␛[2mkind = "model"                   # a decision model over the System One API, such as Jev␛[0m
-    ␛[2m│ ␛[0m␛[2murl = "https://openrouter.ai/api/v1/systemone"␛[0m
-    ␛[2m│ ␛[0m␛[2mmodel = "typesafe/jev-1.13"␛[0m
-    ␛[2m│ ␛[0m␛[2mapi_key_env = "OPENROUTER_API_KEY"␛[0m
-    ␛[2m│ ␛[0m␛[2mquestion = { noul = { allow_above = 0.95, deny_below = 0.05 } }   # or { choice = { min_confidence = 0.8 } }␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m[[permissions.decider]]␛[0m
-    ␛[2m│ ␛[0m␛[2mkind = "hook"                    # any program: the request as JSON on stdin,␛[0m
-    ␛[2m│ ␛[0m␛[2mcommand = ["my-judge"]           # `{"permission": "allow" | "deny" | "ask", "reason": ...}` on stdout␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m[[permissions.decider]]␛[0m
-    ␛[2m│ ␛[0m␛[2mkind = "agent"                   # an agent of the workforce, in a harness session the daemon keeps␛[0m
-    ␛[2m│ ␛[0m␛[2magent = "judge"␛[0m
-    ␛[2m│ ␛[0m␛[2m```␛[0m
-    ␛[2m│ ␛[0m␛[2m`wf permissions test --command "cargo test"` runs the chain without a session; the transcript of a␛[0m
-    ␛[2m│ ␛[0m␛[2msession says who decided each request and why.␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m## Several machines␛[0m
-    ␛[2m│ ␛[0m␛[2m```sh␛[0m
-    ␛[2m│ ␛[0m␛[2m# laptop, where `wf init` ran (it holds your principal key)␛[0m
-    ␛[2m│ ␛[0m␛[2mwf daemon &                      # serves sync and join, follows gossip␛[0m
-    ␛[2m│ ␛[0m␛[2mwf invite device                 # prints wfi1...␛[0m
-    ␛[2m│ ␛[0m␛[2m# vm, inside a clone of the repository␛[0m
-    ␛[2m│ ␛[0m␛[2mwf join wfi1... --name vm        # binds this machine to you and takes in the log␛[0m
-    ␛[2m│ ␛[0m␛[2mwf daemon &␛[0m
-    ␛[2m│ ␛[0m␛[2mwf item add --title "Try sync" --priority P1␛[0m
-    ␛[2m│ ␛[0m␛[2m# anywhere␛[0m
-    ␛[2m│ ␛[0m␛[2mwf sync                          # one shot, without a daemon: `wf sync --serve` listens meanwhile␛[0m
-    ␛[2m│ ␛[0m␛[2mwf device list                   # name, last seen, flags␛[0m
-    ␛[2m│ ␛[0m␛[2mwf members␛[0m
-    ␛[2m│ ␛[0m␛[2mwf fork --exclude vm             # the vm was lost: a new workforce without it␛[0m
-    ␛[2m│ ␛[0m␛[2mwf fork accept <id>              # on each remaining device: follow the fork␛[0m
-    ␛[2m│ ␛[0m␛[2m```␛[0m
-    ␛[2m│ ␛[0m␛[2mThe principal key of a workforce is stored next to its store, in␛[0m
-    ␛[2m│ ␛[0m␛[2m`~/.local/share/workforce/<workforce id>/principal.key`; every workforce has its own. If you created a␛[0m
-    ␛[2m│ ␛[0m␛[2mworkforce before this was the case, move `~/.local/share/workforce/keys/principal.key` there.␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2mWithout a daemon the CLI opens the store itself; with one it asks the daemon, which owns the store.␛[0m
-    ␛[2m│ ␛[0m␛[2mDevices find each other through iroh (relays and address lookup from n0; `--relay <url>` replaces the␛[0m
-    ␛[2m│ ␛[0m␛[2mrelay). Run the daemon as a service yourself, for example as a systemd user unit or a launchd agent␛[0m
-    ␛[2m│ ␛[0m␛[2mrunning `wf daemon`.␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m`just check` runs formatting, clippy and all tests. Property tests default to 128 cases; for the␛[0m
-    ␛[2m│ ␛[0m␛[2m10k-case run use `PROPTEST_CASES=10000 cargo test --release -p wf-core`. The 100k-event startup check␛[0m
-    ␛[2m│ ␛[0m␛[2mis `cargo test --release -p wf-store -- --ignored --nocapture`, and the 100k-event join over loopback␛[0m
-    ␛[2m│ ␛[0m␛[2mis `cargo test --release -p wf-net --test scale -- --ignored --nocapture`. The sync simulation runs 1,000␛[0m
-    ␛[2m│ ␛[0m␛[2mschedules (`cargo test -p wf-net --test simulation`, about a minute in debug builds).␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-cli␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-core␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-daemon␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-harness␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-net␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-store␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-vcs␛[0m
-    ␛[2m│ ␛[0m␛[2m[workspace]␛[0m
-    ␛[2m│ ␛[0m␛[2mresolver = "3"␛[0m
-    ␛[2m│ ␛[0m␛[2mmembers = ["crates/*"]␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m[workspace.package]␛[0m
-    ␛[2m│ ␛[0m␛[2mversion = "0.0.0"␛[0m
-    ␛[2m│ ␛[0m␛[2medition = "2024"␛[0m
-    ␛[2m│ ␛[0m␛[2mlicense = "MIT OR Apache-2.0"␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2m[workspace.dependencies]␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-core = { path = "crates/wf-core" }␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-store = { path = "crates/wf-store" }␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-net = { path = "crates/wf-net" }␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-daemon = { path = "crates/wf-daemon" }␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-harness = { path = "crates/wf-harness" }␛[0m
-    ␛[2m│ ␛[0m␛[2mwf-vcs = { path = "crates/wf-vcs" }␛[0m
-    ␛[2m│ ␛[0m␛[2mcrates/wf-cli/Cargo.toml:␛[0m
-    ␛[2m│ ␛[0m␛[2mcrates/wf-core/Cargo.toml:␛[0m
-    ␛[2m│ ␛[0m␛[2mcrates/wf-daemon/Cargo.toml:␛[0m
-    ␛[2m│ ␛[0m␛[2mcrates/wf-harness/Cargo.toml:␛[0m
-    ␛[2m│ ␛[0m␛[2mcrates/wf-net/Cargo.toml:␛[0m
-    ␛[2m│ ␛[0m␛[2mcrates/wf-store/Cargo.toml:␛[0m
-    ␛[2m│ ␛[0m␛[2mcrates/wf-vcs/Cargo.toml:␛[0m
+      ␛[2m# workforce (`wf`)␛[0m
+
+      ␛[2mA peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.␛[0m
+      ␛[2mEvent-sourced, forkable, built on iroh. M0 (signed event log, item model, CLI), M1 (sync between␛[0m
+      ␛[2myour machines, device invites, daemon, fork) and M2 (agents at work on one machine: sessions, review␛[0m
+      ␛[2mand merge) are implemented; sessions across machines come next.␛[0m
+
+      ␛[2m- [docs/SPEC.md](docs/SPEC.md): the design␛[0m
+      ␛[2m- [docs/M0.md](docs/M0.md): plan for the first milestone␛[0m
+      ␛[2m- [docs/M1.md](docs/M1.md): sync, device invites, daemon and fork, with what was built␛[0m
+      ␛[2m- [docs/M2.md](docs/M2.md): agents at work on one machine, with what was built␛[0m
+
+      ␛[2m## Try it␛[0m
+      ␛[2m```sh␛[0m
+      ␛[2mcargo build␛[0m
+      ␛[2mexport PATH="$PWD/target/debug:$PATH"␛[0m
+      ␛[2mcd ~/src/some-repo␛[0m
+      ␛[2mwf init --name demo␛[0m
+      ␛[2mwf item add --title "Implement feed sync" --priority P1␛[0m
+      ␛[2mwf item list --ready␛[0m
+      ␛[2mwf log␛[0m
+      ␛[2m```␛[0m
+      ␛[2m## Agents at work␛[0m
+      ␛[2m```sh␛[0m
+      ␛[2mwf agent add coder --harness opencode --capability rust --lane default --start auto␛[0m
+      ␛[2mwf agent add reviewer --harness claude-code --capability review --capability strong-model --start auto␛[0m
+      ␛[2mwf agent add supervisor --harness claude-code --lane supervision --start auto␛[0m
+      ␛[2mwf device edit --max-sessions 3 --agent coder=1 --agent reviewer=1 --agent supervisor=1␛[0m
+      ␛[2mwf item add --title "Parse durations in policy" --review standard␛[0m
+      ␛[2mwf daemon &                      # starts the agents on what is ready, and merges what is approved␛[0m
+      ␛[2mwf session list                  # live and finished sessions␛[0m
+      ␛[2mwf session watch <item>          # follow the transcript of the latest session on an item␛[0m
+      ␛[2mwf watch                         # events as they arrive; answer what waits on you right there␛[0m
+      ␛[2mwf inbox                         # what waits on you: blockers, reviews, merges, permission requests␛[0m
+      ␛[2mwf session allow <session>       # or `deny`, for a permission request an agent is waiting on␛[0m
+      ␛[2mwf review <item> --approve       # your step of a review level that has one␛[0m
+      ␛[2mwf item diff <item> [--stat]     # the work, through git: your pager and delta apply␛[0m
+      ␛[2mwf item checkout <item>          # the main checkout on the work, detached; `checkout -` goes back␛[0m
+      ␛[2mcd $(wf item path <item>)        # the item's worktree␛[0m
+      ␛[2m```␛[0m
+      ␛[2mA session runs one agent on one item in its own git worktree and branch (`wf/<item>`), started by the␛[0m
+      ␛[2mdaemon over ACP (`opencode acp`, `claude-agent-acp`, `codex-acp`, `gemini --experimental-acp`). Inside a␛[0m
+      ␛[2msession the agent comments with `wf comment <item>` (`--block` when it needs an answer, which a␛[0m
+      ␛[2msupervisor or you give with `--resolve`), and ends with `wf work submit` or `wf work release`.␛[0m
+      ␛[2mSubmitted work is reviewed at the level the item names, then merged into the target branch of the␛[0m
+      ␛[2m`[merge]` policy. Agents start with `--start manual` and `--permissions ask`; `wf session start <item>␛[0m
+      ␛[2m--agent <name>` runs one by hand. The harnesses named above have not all been run against this build␛[0m
+      ␛[2myet: see *As built* in [docs/M2.md](docs/M2.md).␛[0m
+
+      ␛[2mSet `default_agent = "coder"` at the top of the policy (before any `[table]`) to omit `--agent`.␛[0m
+      ␛[2mUse `-a <name>` to override it. Missing item/session arguments open a picker at a terminal;␛[0m
+      ␛[2mstop offers local live sessions, permission commands offer pending requests, and watch offers␛[0m
+      ␛[2msessions with a local transcript. Add `--watch` to `session start` to follow immediately: Ctrl-C␛[0m
+      ␛[2mdetaches without stopping the agent, and the watcher exits after the session ends.␛[0m
+
+      ␛[2mWatch renders basic markdown, distinguishes thoughts with dim styling, and shows tool results,␛[0m
+      ␛[2mplans, and unified diffs supplied by the agent. Tool output and diffs are capped at 20 lines per␛[0m
+      ␛[2mblock; use `--full` for everything. Use `--raw` for unrendered markdown with plain, color-free␛[0m
+      ␛[2mlayout. Both options also work with `session start --watch`. Markdown is buffered until a␛[0m
+      ␛[2mparagraph or event boundary; raw mode streams text chunks immediately.␛[0m
+
+      ␛[2m## Permission requests␛[0m
+      ␛[2mAn agent with `--permissions ask` asks before its harness runs a tool. The request goes through the␛[0m
+      ␛[2mdeciders of this machine's config, `~/.config/workforce/config.toml` (or `$XDG_CONFIG_HOME`), in␛[0m
+      ␛[2mtheir order; what all of them pass on waits for you in `wf watch` and `wf inbox`. Without a config,␛[0m
+      ␛[2mthe built-in rules decide alone: a session may run its own `wf` commands.␛[0m
+      ␛[2m```toml␛[0m
+      ␛[2m[permissions]␛[0m
+      ␛[2mguidance = "Allow reading anything and writing in the worktree. Ask about the network."␛[0m
+
+      ␛[2m[[permissions.decider]]␛[0m
+      ␛[2mkind = "rules"                   # built in: a session's own `wf` commands␛[0m
+
+      ␛[2m[[permissions.decider]]␛[0m
+      ␛[2mkind = "model"                   # a decision model over the System One API, such as Jev␛[0m
+      ␛[2murl = "https://openrouter.ai/api/v1/systemone"␛[0m
+      ␛[2mmodel = "typesafe/jev-1.13"␛[0m
+      ␛[2mapi_key_env = "OPENROUTER_API_KEY"␛[0m
+      ␛[2mquestion = { noul = { allow_above = 0.95, deny_below = 0.05 } }   # or { choice = { min_confidence = 0.8 } }␛[0m
+
+      ␛[2m[[permissions.decider]]␛[0m
+      ␛[2mkind = "hook"                    # any program: the request as JSON on stdin,␛[0m
+      ␛[2mcommand = ["my-judge"]           # `{"permission": "allow" | "deny" | "ask", "reason": ...}` on stdout␛[0m
+
+      ␛[2m[[permissions.decider]]␛[0m
+      ␛[2mkind = "agent"                   # an agent of the workforce, in a harness session the daemon keeps␛[0m
+      ␛[2magent = "judge"␛[0m
+      ␛[2m```␛[0m
+      ␛[2m`wf permissions test --command "cargo test"` runs the chain without a session; the transcript of a␛[0m
+      ␛[2msession says who decided each request and why.␛[0m
+
+      ␛[2m## Several machines␛[0m
+      ␛[2m```sh␛[0m
+      ␛[2m# laptop, where `wf init` ran (it holds your principal key)␛[0m
+      ␛[2mwf daemon &                      # serves sync and join, follows gossip␛[0m
+      ␛[2mwf invite device                 # prints wfi1...␛[0m
+      ␛[2m# vm, inside a clone of the repository␛[0m
+      ␛[2mwf join wfi1... --name vm        # binds this machine to you and takes in the log␛[0m
+      ␛[2mwf daemon &␛[0m
+      ␛[2mwf item add --title "Try sync" --priority P1␛[0m
+      ␛[2m# anywhere␛[0m
+      ␛[2mwf sync                          # one shot, without a daemon: `wf sync --serve` listens meanwhile␛[0m
+      ␛[2mwf device list                   # name, last seen, flags␛[0m
+      ␛[2mwf members␛[0m
+      ␛[2mwf fork --exclude vm             # the vm was lost: a new workforce without it␛[0m
+      ␛[2mwf fork accept <id>              # on each remaining device: follow the fork␛[0m
+      ␛[2m```␛[0m
+      ␛[2mThe principal key of a workforce is stored next to its store, in␛[0m
+      ␛[2m`~/.local/share/workforce/<workforce id>/principal.key`; every workforce has its own. If you created a␛[0m
+      ␛[2mworkforce before this was the case, move `~/.local/share/workforce/keys/principal.key` there.␛[0m
+
+      ␛[2mWithout a daemon the CLI opens the store itself; with one it asks the daemon, which owns the store.␛[0m
+      ␛[2mDevices find each other through iroh (relays and address lookup from n0; `--relay <url>` replaces the␛[0m
+      ␛[2mrelay). Run the daemon as a service yourself, for example as a systemd user unit or a launchd agent␛[0m
+      ␛[2mrunning `wf daemon`.␛[0m
+
+      ␛[2m`just check` runs formatting, clippy and all tests. Property tests default to 128 cases; for the␛[0m
+      ␛[2m10k-case run use `PROPTEST_CASES=10000 cargo test --release -p wf-core`. The 100k-event startup check␛[0m
+      ␛[2mis `cargo test --release -p wf-store -- --ignored --nocapture`, and the 100k-event join over loopback␛[0m
+      ␛[2mis `cargo test --release -p wf-net --test scale -- --ignored --nocapture`. The sync simulation runs 1,000␛[0m
+      ␛[2mschedules (`cargo test -p wf-net --test simulation`, about a minute in debug builds).␛[0m
+      ␛[2mwf-cli␛[0m
+      ␛[2mwf-core␛[0m
+      ␛[2mwf-daemon␛[0m
+      ␛[2mwf-harness␛[0m
+      ␛[2mwf-net␛[0m
+      ␛[2mwf-store␛[0m
+      ␛[2mwf-vcs␛[0m
+      ␛[2m[workspace]␛[0m
+      ␛[2mresolver = "3"␛[0m
+      ␛[2mmembers = ["crates/*"]␛[0m
+
+      ␛[2m[workspace.package]␛[0m
+      ␛[2mversion = "0.0.0"␛[0m
+      ␛[2medition = "2024"␛[0m
+      ␛[2mlicense = "MIT OR Apache-2.0"␛[0m
+
+      ␛[2m[workspace.dependencies]␛[0m
+      ␛[2mwf-core = { path = "crates/wf-core" }␛[0m
+      ␛[2mwf-store = { path = "crates/wf-store" }␛[0m
+      ␛[2mwf-net = { path = "crates/wf-net" }␛[0m
+      ␛[2mwf-daemon = { path = "crates/wf-daemon" }␛[0m
+      ␛[2mwf-harness = { path = "crates/wf-harness" }␛[0m
+      ␛[2mwf-vcs = { path = "crates/wf-vcs" }␛[0m
+      ␛[2mcrates/wf-cli/Cargo.toml:␛[0m
+      ␛[2mcrates/wf-core/Cargo.toml:␛[0m
+      ␛[2mcrates/wf-daemon/Cargo.toml:␛[0m
+      ␛[2mcrates/wf-harness/Cargo.toml:␛[0m
+      ␛[2mcrates/wf-net/Cargo.toml:␛[0m
+      ␛[2mcrates/wf-store/Cargo.toml:␛[0m
+      ␛[2mcrates/wf-vcs/Cargo.toml:␛[0m
   ␛[32m✓␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7 crates under crates/ (resolver 3, edition 2024): wf-  ␛[2mallowed by you␛[0m   ␛[2m0.1s␛[0m
           core (pure domain: events, item model, lifecycle/briefs; no IO), wf-store (event log store), wf-net (sync
           protocols over iroh, generic streams + SyncLog), wf-daemon (owns the store, runs sessions, merges), wf-harness
@@ -197,10 +197,10 @@ expression: visible(&styled)
           README covers M0-M2: signed event log, multi-machine sync, agents in worktree sessions with review/merge, and
           a permission-request decider chain. No code changes made." --done 2>&1 | tail -3; wf work submit --note "No
           code changes; summary posted as a comment." 2>&1 | tail -3
-    ␛[2m│ ␛[0m␛[2mUsage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...␛[0m
-    ␛[2m│␛[0m
-    ␛[2m│ ␛[0m␛[2mFor more information, try '--help'.␛[0m
-    ␛[2m│ ␛[0m␛[2msubmitted #qp7jzs␛[0m
+      ␛[2mUsage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...␛[0m
+
+      ␛[2mFor more information, try '--help'.␛[0m
+      ␛[2msubmitted #qp7jzs␛[0m
 
   The comment failed because ␛[36m--done␛[0m needs ␛[36m--step␛[0m, but the submit went through. I'll post the comment again without
   ␛[36m--done␛[0m.
@@ -212,8 +212,8 @@ expression: visible(&styled)
           README covers M0-M2: signed event log, multi-machine sync, agents in worktree sessions with review/merge, and
           a permission-request decider chain. No code changes made." 2>&1 | tail -3
     ␛[2mallowed by rules: `wf comment` reports to wf␛[0m
-    ␛[31m│ ␛[0mWorking directory "/home/principal/.local/share/workforce/kjfllqz4/worktrees/qp7jzsdzp2cy" was deleted; shell cwd
-    ␛[31m│ ␛[0mrecovered to "/home/principal". Re-issue your command (it will run from the recovered directory).
+    ␛[31m│␛[0m Working directory "/home/principal/.local/share/workforce/kjfllqz4/worktrees/qp7jzsdzp2cy" was deleted; shell cwd
+    ␛[31m│␛[0m recovered to "/home/principal". Re-issue your command (it will run from the recovered directory).
 
   I read the README and listed the workspace crates, but the comment with the summary may not have been posted. I made
   no code changes.

@@ -291,7 +291,7 @@ mod tests {
             "{header}"
         );
         assert!(
-            output.contains("    │ second") && !output.contains("```"),
+            output.contains("      second") && !output.contains("```"),
             "{output}"
         );
     }
@@ -419,7 +419,7 @@ mod tests {
         let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 80), &entries);
         assert!(output.contains("✓ Edit  src/main.rs  +1 -1"), "{output}");
         assert!(
-            output.contains("| -before") && output.contains("| +after"),
+            output.contains("      -before") && output.contains("      +after"),
             "{output}"
         );
         assert!(!output.contains("+++"));
