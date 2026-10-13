@@ -663,6 +663,16 @@ impl Layout {
     }
 }
 
+/// `Bash  cargo test`: what a call does, in a line, for a list of sessions.
+pub fn call_line(call: &ToolCall) -> String {
+    let name = if call.name.is_empty() {
+        "Tool"
+    } else {
+        &call.name
+    };
+    format!("{name}  {}", first_line(&summary(call, name)))
+}
+
 enum Line {
     Text(String),
     Hidden(usize),

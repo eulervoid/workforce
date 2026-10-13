@@ -42,7 +42,7 @@ rand.workspace = true
 similar = "3.2"
 textwrap = "0.16"
 cliclack = "0.5"
-ratatui = "0.30"
+ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ansi-to-tui = "8"
 tui-input = "0.15"
 

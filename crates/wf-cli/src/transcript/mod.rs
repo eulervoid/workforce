@@ -17,7 +17,7 @@ use serde_json::Value;
 use wf_harness::{Decision, Direction, Permission, TranscriptEntry};
 
 pub use file::Reader;
-pub use layout::{Detail, Format, Layout, terminal_width};
+pub use layout::{Detail, Format, Layout, Spacing, call_line, terminal_width};
 pub use printer::{Printer, Session};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

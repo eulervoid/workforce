@@ -387,6 +387,11 @@ fn number_marker(text: &str) -> Option<&str> {
 }
 
 pub fn item_detail(detail: &ItemDetail) -> String {
+    item_detail_for(detail, text_width())
+}
+
+/// [`item_detail`] with prose wrapped to `width`, or not at all.
+pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
     use style::{BOLD, DIM, WARNING, paint};
 
     let summary = &detail.summary;
@@ -568,20 +573,19 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     }
     if !detail.body.is_empty() {
         out.push('\n');
-        out.push_str(&wrap_markdown(&body(&detail.body), text_width(), "  "));
+        out.push_str(&wrap_markdown(&body(&detail.body), width, "  "));
     }
     if !detail.activity.is_empty() {
-        out.push_str(&activity(&detail.activity));
+        out.push_str(&activity(&detail.activity, width));
     }
     out
 }
 
 /// The activity of an item: one line per thing that happened, and the text of comments below
 /// their line. The date heads the section and is repeated when the day changes.
-fn activity(entries: &[crate::view::ActivityView]) -> String {
+fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> String {
     use style::{BOLD, DIM, paint};
     let mut out = String::new();
-    let width = text_width();
     let mut day = None;
     for entry in entries {
         let (date, time) = local_date_and_time(&entry.at);

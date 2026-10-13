@@ -1,12 +1,14 @@
 ---
-source: crates/wf-cli/src/dashboard/mod.rs
-expression: "screen(&app, 60, 8)"
+source: crates/wf-cli/src/dashboard/tests.rs
+expression: "screen(&app, 60, 10)"
 ---
 " workforce                1 Now·3  2 Items  3 Agents  4 Log "
 " 3 live · 14 open · 1 blocked · 2 devices                   "
 "────────────────────────────────────────────────────────────"
-" Nothing here yet.                                          "
+" ← ◐ #cicicicicici (task:in_progress) Fix error spans       "
+"                                                            "
+" The span is lost.                                          "
 "                                                            "
 "────────────────────────────────────────────────────────────"
 " 07:04  #ab4c  coder submitted 3e8a1c → in_review           "
-" tab next · q quit                                          "
+" esc back · j/k scroll · g/G top/end · q quit               "

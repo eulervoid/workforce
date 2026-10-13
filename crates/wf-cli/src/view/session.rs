@@ -92,7 +92,7 @@ pub struct SessionView {
 
 /// Whether `session` is a live work session whose item waits on a dependency or on an open
 /// blocker, such as its own question.
-pub(super) fn is_parked(
+pub(crate) fn is_parked(
     state: &State,
     graph: &wf_core::graph::DependencyGraph,
     session: &wf_core::session::Session,
