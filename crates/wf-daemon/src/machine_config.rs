@@ -35,6 +35,43 @@ pub struct MachineConfig {
     pub permissions: PermissionsConfig,
     #[serde(default)]
     pub sandbox: SandboxConfig,
+    #[serde(default)]
+    pub commits: CommitsConfig,
+}
+
+/// How the commits of agents are made on this machine.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CommitsConfig {
+    #[serde(default)]
+    pub agent_signing: AgentSigning,
+}
+
+/// Whether agents sign their commits. The merge commit the daemon makes of approved work follows
+/// the git config either way, so what lands on the target is signed when signing is configured.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentSigning {
+    /// Agents commit without signing, whatever the git config says, so that they never wait for
+    /// a key the principal has to unlock or approve.
+    #[default]
+    Unsigned,
+    /// The git config decides, as for the principal's own commits.
+    AsConfigured,
+}
+
+impl AgentSigning {
+    /// The environment that makes git in the agent's processes sign as configured here.
+    pub fn git_environment(self) -> Vec<(&'static str, &'static str)> {
+        match self {
+            AgentSigning::Unsigned => vec![
+                ("GIT_CONFIG_COUNT", "1"),
+                ("GIT_CONFIG_KEY_0", "commit.gpgsign"),
+                ("GIT_CONFIG_VALUE_0", "false"),
+            ],
+            AgentSigning::AsConfigured => Vec::new(),
+        }
+    }
 }
 
 /// How agents are isolated on this machine.
@@ -290,6 +327,25 @@ mod tests {
         assert_eq!(off.permissions(PermissionMode::Allow), PermissionMode::Ask);
         assert_eq!(off.permissions(PermissionMode::Deny), PermissionMode::Deny);
         assert!(MachineConfig::parse("[sandbox]\nkind = \"off\"\nallow_domains = []\n").is_err());
+    }
+
+    #[test]
+    fn agents_commit_unsigned_unless_the_config_says_otherwise() {
+        let default = MachineConfig::parse("").ok().unwrap().commits.agent_signing;
+        assert_eq!(default, AgentSigning::Unsigned);
+        assert!(
+            default
+                .git_environment()
+                .contains(&("GIT_CONFIG_KEY_0", "commit.gpgsign"))
+        );
+        let configured = MachineConfig::parse("[commits]\nagent_signing = \"as_configured\"\n")
+            .ok()
+            .unwrap()
+            .commits
+            .agent_signing;
+        assert_eq!(configured, AgentSigning::AsConfigured);
+        assert!(configured.git_environment().is_empty());
+        assert!(MachineConfig::parse("[commits]\nagent_signing = \"always\"\n").is_err());
     }
 
     #[test]

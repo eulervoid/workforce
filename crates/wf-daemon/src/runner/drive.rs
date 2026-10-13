@@ -68,12 +68,15 @@ async fn drive(
         path.insert(0, directory);
     }
     let path = std::env::join_paths(path).unwrap_or_default();
-    let agent = run
+    let mut agent = run
         .harness
         .clone()
         .env("WF_SESSION", run.session.to_string())
         .env("WF_WORKFORCE", run.workforce.to_string())
         .env("PATH", path.to_string_lossy());
+    for (name, value) in run.agent_signing.git_environment() {
+        agent = agent.env(name, value);
+    }
     let agent = match sandboxed(daemon, run, agent) {
         Ok(agent) => agent,
         Err(problem) => {

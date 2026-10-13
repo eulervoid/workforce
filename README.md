@@ -74,6 +74,16 @@ allow_write = ["/opt/cache"]
 allow_domains = ["*.example.com"]
 ```
 
+## Signed commits
+Agents commit without signing, so that they never wait for a key you have to unlock or approve. When
+your git config signs commits (`commit.gpgsign`), the merge commit that brings approved work into the
+target is signed, as you: the signature says you accepted the work. To have agents sign as your git
+config says, set this in the machine config:
+```toml
+[commits]
+agent_signing = "as_configured"  # default "unsigned"
+```
+
 ## Permission requests
 An agent with `--permissions ask`, or any agent on a machine without a sandbox, asks before its
 harness runs a tool. The request goes through the

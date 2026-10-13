@@ -213,6 +213,7 @@ struct Run {
     max_duration: Option<Duration>,
     permissions: Arc<dyn Permissions>,
     sandbox: SandboxConfig,
+    agent_signing: crate::machine_config::AgentSigning,
     autonomy_permissions: wf_core::autonomy::PermissionMode,
 }
 

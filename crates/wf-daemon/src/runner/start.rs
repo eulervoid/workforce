@@ -18,7 +18,7 @@ use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree
 use super::drive::run_session;
 use super::{Begin, Run, SessionError, blocking};
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
-use crate::machine_config::SandboxConfig;
+use crate::machine_config::{AgentSigning, SandboxConfig};
 use crate::{Daemon, Loaded};
 
 /// The agent as the machine config says to run it: in a sandbox, or as it is. A config that is
@@ -95,7 +95,8 @@ impl Daemon {
         let harness = self
             .harness_command(&definition.harness)
             .ok_or_else(|| SessionError::UnknownHarness(definition.harness.clone()))?;
-        let sandbox = self.machine_config()?.sandbox;
+        let machine_config = self.machine_config()?;
+        let sandbox = machine_config.sandbox;
         match &sandbox {
             SandboxConfig::Fence(_) if !on_path("fence") => return Err(SessionError::NoFence),
             SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
@@ -128,6 +129,7 @@ impl Daemon {
             definition,
             harness,
             sandbox,
+            agent_signing: machine_config.commits.agent_signing,
             item_context,
             target: policy.merge.target.clone(),
             transcripts,
@@ -293,6 +295,7 @@ impl Daemon {
             definition,
             harness,
             sandbox,
+            agent_signing,
             item_context,
             target,
             transcripts,
@@ -354,6 +357,7 @@ impl Daemon {
             max_duration: autonomy.max_duration,
             permissions,
             sandbox,
+            agent_signing,
             autonomy_permissions: autonomy.permissions,
         }
     }
@@ -382,6 +386,7 @@ pub(super) struct Setup {
     pub(super) definition: AgentDefinition,
     pub(super) harness: AcpAgentConfig,
     pub(super) sandbox: SandboxConfig,
+    pub(super) agent_signing: AgentSigning,
     pub(super) item_context: ItemContext,
     pub(super) target: String,
     pub(super) transcripts: PathBuf,
