@@ -23,7 +23,8 @@ One developer with agents on their own machine, working on a real project every 
 * Nothing to run besides `wf daemon`; no network is needed.
 * Off-path cases are handled visibly: a session that fails, stalls or is interrupted never leaves an
   item stuck without saying so.
-* A daemon restart (for example after rebuilding wf) costs agent context at most, never work.
+* A daemon restart (for example after rebuilding wf) costs no work, and no agent context with an
+  agent that can resume its sessions.
 
 ### Stage 2: single user, several trusted machines
 A laptop (sleeps, roams), a cloud VM (always on), a home desktop (GPU, behind a NAT). Each runs agents.
@@ -220,8 +221,13 @@ need different capabilities.
   is ready again, or ends after the agent's `park_timeout`.
 * A supervise session ends when the supervisor resolves the blocker it was started for, or escalates it.
 * Context carries over within a session in the conversation, and across sessions through comments.
-* **Liveness:** on one machine (M2) a session is live from `SessionStarted` until `SessionEnded`; a
-  restarting daemon ends its own leftover sessions as `Interrupted`, no failure of the attempt. Across devices (M3) liveness is computed
+* **Liveness:** on one machine (M2) a session is live from `SessionStarted` until `SessionEnded`. A
+  daemon that stops leaves its sessions live: it cancels their turns and closes the harnesses. The next
+  daemon resumes each in the agent's own conversation (ACP `session/resume`, or `session/load` with the
+  replayed history left out of the transcript), by the id the agent gave the session, which the daemon
+  keeps beside the transcript. A session that was working is told that wf restarted and what others
+  wrote on its item since its last prompt; a parked one parks again. When the agent can do neither,
+  the session ends `Interrupted`, no failure of the attempt. Across devices (M3) liveness is computed
   at query time from a lease: a session without a renewal within the lease counts as dead, even without
   `SessionEnded` (crash, sleeping laptop). Its claim expires and the item becomes assignable again,
   possibly to the same agent on another device.

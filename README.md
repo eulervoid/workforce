@@ -132,7 +132,8 @@ relay). `wf daemon start` runs the daemon in the background and logs to
 `wf daemon status` do what they say. To run it as a service, have a systemd user unit or a launchd
 agent run `wf daemon run`, which stays in the foreground and stops on SIGTERM. Agents call the copy of
 `wf` the daemon made when it started, so rebuilding `wf` does not change what running agents call;
-restart the daemon to give them the new one.
+restart the daemon to give them the new one. Stopping the daemon does not end its sessions: the next
+daemon resumes them in their agents' conversations, where the agent supports that.
 
 `wf export > backup.jsonl` writes the log as JSON lines, one event per line, readable with `jq`
 (`content` is the event, `event` its signed encoding). `wf import backup.jsonl` adds those events to
