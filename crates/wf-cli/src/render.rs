@@ -828,12 +828,13 @@ pub fn sessions(sessions: &[SessionView]) -> String {
         return "no sessions\n".to_string();
     }
     let mut table = table(&[
-        "SESSION", "AGENT", "ITEM", "TITLE", "STEPS", "ROLE", "STATUS", "STARTED",
+        "SESSION", "AGENT", "MODEL", "ITEM", "TITLE", "STEPS", "ROLE", "STATUS", "STARTED",
     ]);
     for session in sessions {
         table.add_row([
             short(&session.id).to_string(),
             session.agent.clone(),
+            session.model.clone().unwrap_or_default(),
             format!("#{}", short(&session.item)),
             session.title.clone(),
             steps_label(session.steps),
@@ -866,6 +867,9 @@ pub fn session(session: &SessionView) -> String {
         session.title
     );
     let _ = writeln!(out, "  role     {}", session.role);
+    if let Some(model) = &session.model {
+        let _ = writeln!(out, "  model    {model}");
+    }
     let _ = writeln!(out, "  status   {}", session.status);
     let _ = writeln!(out, "  started  {}", short_time(&session.started));
     if let Some(ended) = &session.ended {

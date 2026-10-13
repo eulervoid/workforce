@@ -297,6 +297,34 @@ async fn manual_start_uses_the_policy_agent_unless_overridden() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_session_shows_the_model_it_runs_with() {
+    let world = World::new("say hello\nhang\n").await;
+    let default = world.wf.add(&["--title", "Default model"]);
+    let default_session = start_session(&world, &default);
+    world.wf.run(&["agent", "edit", "coder", "--model", "deep"]);
+    let chosen = world.wf.add(&["--title", "Chosen model"]);
+    let chosen_session = start_session(&world, &chosen);
+    world
+        .wait("both sessions to report their model", |world| {
+            world
+                .sessions()
+                .iter()
+                .all(|session| !session["model"].is_null())
+        })
+        .await;
+    assert_eq!(
+        world.wf(&["session", "show", &default_session])["model"],
+        "fast"
+    );
+    assert_eq!(
+        world.wf(&["session", "show", &chosen_session])["model"],
+        "deep"
+    );
+    let list = world.wf.run(&["session", "list"]);
+    assert!(list.contains("MODEL") && list.contains("deep"), "{list}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn interrupting_start_watch_detaches_without_stopping_the_agent() {
     use std::process::Stdio;
 
@@ -673,6 +701,7 @@ wf work submit
     let session = world.ended_session().await;
     assert_eq!(world.sessions().len(), 1, "the same session went on");
     assert_eq!(session["status"], "submitted", "{session}");
+    assert_eq!(session["model"], "fast", "the model is kept over a resume");
     let transcript = world.transcript(&item);
     assert!(
         transcript.contains("wf restarted while you were working"),

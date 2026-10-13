@@ -1,0 +1,35 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(&sessions)"
+---
+{
+  "schema": 4,
+  "data": [
+    {
+      "id": "hl35vvio2bzfpsjyv6alpwua377fzyhtlwqve3c2vfpmq6plih7a",
+      "agent": "@joshua/coder",
+      "item": "5equ3ajfncneo55ox2yzzi34bhm6o35r22ngkwe7vexyx762xopa",
+      "title": "Implement feed sync",
+      "role": "work",
+      "status": "live",
+      "started": "1970-01-01T00:00:05Z",
+      "ended": null,
+      "model": null,
+      "commit": null,
+      "steps": null
+    },
+    {
+      "id": "racn3c26jk2sub5wdueuylnqwiwsqanunvrn73n7x4bipb6gthqq",
+      "agent": "@joshua/coder",
+      "item": "5equ3ajfncneo55ox2yzzi34bhm6o35r22ngkwe7vexyx762xopa",
+      "title": "Implement feed sync",
+      "role": "work",
+      "status": "live",
+      "started": "1970-01-01T00:00:04Z",
+      "ended": null,
+      "model": "opus",
+      "commit": null,
+      "steps": null
+    }
+  ]
+}
