@@ -1045,7 +1045,7 @@ wf work submit
         let lines: Vec<&str> = log.lines().filter(|line| line.contains(kind)).collect();
         assert!(!lines.is_empty(), "{kind}: {log}");
         assert!(
-            lines.iter().all(|line| line.contains("daemon")),
+            lines.iter().all(|line| line.contains("@daemon")),
             "{lines:?}"
         );
     }
