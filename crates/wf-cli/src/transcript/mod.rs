@@ -564,3 +564,78 @@ impl Transcript {
         self.blocks.push(Block::Call { call, outcome });
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use serde_json::json;
+
+    use super::*;
+
+    fn entry(seconds: i64, direction: Direction, message: Value) -> TranscriptEntry {
+        TranscriptEntry {
+            at: Timestamp::from_second(seconds).unwrap(),
+            direction,
+            message,
+        }
+    }
+
+    fn update(seconds: i64, update: Value) -> TranscriptEntry {
+        entry(
+            seconds,
+            Direction::FromAgent,
+            json!({"method": "session/update", "params": {"update": update}}),
+        )
+    }
+
+    #[test]
+    fn now_is_the_latest_open_call_then_the_text_being_written() {
+        let mut transcript = Transcript::new();
+        assert!(matches!(transcript.now(), Now::Idle));
+        transcript.push(&entry(
+            0,
+            Direction::ToAgent,
+            json!({"id": 1, "method": "session/prompt", "params": {"prompt": [{"type": "text", "text": "Do it"}]}}),
+        ));
+        assert!(matches!(transcript.now(), Now::Thinking));
+        transcript.push(&update(
+            1,
+            json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Reading.\n\nNow the tests"}}),
+        ));
+        assert!(matches!(transcript.now(), Now::Writing("Now the tests")));
+        transcript.push(&update(
+            2,
+            json!({"sessionUpdate": "tool_call", "toolCallId": "1", "name": "Bash", "title": "cargo test"}),
+        ));
+        assert!(matches!(transcript.now(), Now::Calling(call) if call.title == "cargo test"));
+        transcript.push(&update(
+            3,
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "1", "status": "completed"}),
+        ));
+        assert!(matches!(transcript.now(), Now::Thinking));
+        transcript.push(&entry(
+            4,
+            Direction::FromAgent,
+            json!({"id": 1, "result": {"stopReason": "end_turn"}}),
+        ));
+        assert!(matches!(transcript.now(), Now::Idle));
+    }
+
+    #[test]
+    fn blocks_are_only_appended() {
+        let mut transcript = Transcript::new();
+        transcript.push(&update(
+            0,
+            json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "One.\n\nTwo"}}),
+        ));
+        assert!(matches!(
+            transcript.blocks(),
+            [Block::Answer { .. }, Block::Prose { text, .. }] if text == "One.\n\n"
+        ));
+        assert_eq!(transcript.open_prose().unwrap().text, "Two");
+        transcript.end();
+        assert!(matches!(
+            transcript.blocks(),
+            [_, _, Block::Prose { text, .. }] if text == "Two"
+        ));
+    }
+}
