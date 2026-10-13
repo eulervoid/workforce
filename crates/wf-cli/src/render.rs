@@ -326,15 +326,9 @@ fn wrap_markdown(text: &str, width: Option<usize>, indent: &str) -> String {
         }
         match width {
             _ if line.trim().is_empty() => {}
-            Some(width) if !(in_fence || is_fence || trimmed.starts_with('|')) => {
-                let first = format!("{indent}{line}");
+            Some(_) if !(in_fence || is_fence || trimmed.starts_with('|')) => {
                 let rest = format!("{indent}{}", hanging_indent(&plain));
-                let options = textwrap::Options::new(width)
-                    .break_words(false)
-                    .word_separator(textwrap::WordSeparator::AsciiSpace)
-                    .word_splitter(textwrap::WordSplitter::NoHyphenation)
-                    .subsequent_indent(&rest);
-                out.push_str(&textwrap::fill(&first, options));
+                out.push_str(&fill(&format!("{indent}{line}"), width, &rest));
             }
             Some(_) | None => {
                 out.push_str(indent);
@@ -344,6 +338,22 @@ fn wrap_markdown(text: &str, width: Option<usize>, indent: &str) -> String {
         out.push('\n');
     }
     out
+}
+
+/// `line` wrapped to `width` at spaces, continuing under `indent`; unchanged without a width.
+/// Words longer than the width are left whole rather than broken.
+fn fill(line: &str, width: Option<usize>, indent: &str) -> String {
+    match width {
+        Some(width) => {
+            let options = textwrap::Options::new(width)
+                .break_words(false)
+                .word_separator(textwrap::WordSeparator::AsciiSpace)
+                .word_splitter(textwrap::WordSplitter::NoHyphenation)
+                .subsequent_indent(indent);
+            textwrap::fill(line, options)
+        }
+        None => line.to_string(),
+    }
 }
 
 /// What a wrapped markdown line continues under: spaces as wide as its leading whitespace, list
@@ -663,17 +673,7 @@ fn activity_entry(
         Some(_) | None => parts.push(entry.summary.clone()),
     }
     let line = format!("{lead}{}", parts.join(&format!(" {} ", paint(DIM, "·"))));
-    let line = match width {
-        Some(width) => {
-            let options = textwrap::Options::new(width)
-                .break_words(false)
-                .word_separator(textwrap::WordSeparator::AsciiSpace)
-                .word_splitter(textwrap::WordSplitter::NoHyphenation)
-                .subsequent_indent(ACTIVITY_INDENT);
-            textwrap::fill(&line, options)
-        }
-        None => line,
-    };
+    let line = fill(&line, width, ACTIVITY_INDENT);
     let text = entry
         .comment
         .as_ref()
