@@ -439,7 +439,7 @@ wf work submit --note \"all done\"
     assert!(transcript.contains("working on item"), "{transcript}");
     assert!(transcript.contains("hello"), "{transcript}");
     assert!(
-        transcript.contains("end_turn") && !transcript.contains("cancelled"),
+        transcript.contains("finished") && !transcript.contains("stopped"),
         "an agent that submits finishes its turn: {transcript}"
     );
 
@@ -1509,7 +1509,8 @@ async fn an_agent_of_the_workforce_can_decide() {
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(
-        transcript.contains("allowed by agent judge: edits serve the item"),
+        transcript.contains("allowed by agent judge")
+            && transcript.contains("edits serve the item"),
         "{transcript}"
     );
     assert!(transcript.contains("permission: yes"), "{transcript}");

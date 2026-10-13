@@ -1,0 +1,65 @@
+---
+source: crates/wf-cli/tests/transcript.rs
+expression: visible(&styled)
+---
+␛[1m␛[36mbrief␛[0m  ␛[2m00:49␛[0m                                                            ␛[2m19 lines␛[0m
+  You are the agent `coder`, working on item #qp7jzs: Dummy: add a hello subcom…
+
+␛[1m␛[35mcoder␛[0m  ␛[2m00:49␛[0m
+  ␛[32m✓␛[0m ␛[1mBash␛[0m  cat README.md; ls crates; grep -A15 '^\[wo…  ␛[2mallowed by a person␛[0m  ␛[2m0.2s␛[0m
+    ␛[2m│ ␛[0m␛[2m# workforce (`wf`)␛[0m
+    ␛[2m│␛[0m
+    ␛[2m│ ␛[0m␛[2mA peer-to-peer, CLI-first coordination layer for coding agents and the hu…␛[0m
+    ␛[2m│ ␛[0m␛[2mEvent-sourced, forkable, built on iroh. M0 (signed event log, item model,…␛[0m
+    ␛[2m│ ␛[0m␛[2myour machines, device invites, daemon, fork) and M2 (agents at work on on…␛[0m
+    ␛[2m│ ␛[0m␛[2m… 141 lines hidden␛[0m
+    ␛[2m│ ␛[0m␛[2mcrates/wf-daemon/Cargo.toml:␛[0m
+    ␛[2m│ ␛[0m␛[2mcrates/wf-harness/Cargo.toml:␛[0m
+    ␛[2m│ ␛[0m␛[2mcrates/wf-net/Cargo.toml:␛[0m
+    ␛[2m│ ␛[0m␛[2mcrates/wf-store/Cargo.toml:␛[0m
+    ␛[2m│ ␛[0m␛[2mcrates/wf-vcs/Cargo.toml:␛[0m
+  ␛[32m✓␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7 crates…  ␛[2mallowed by a person␛[0m   ␛[2m0.1s␛[0m
+    ␛[2m│ ␛[0m␛[2mUsage: wf comment --step <NUMBER> --done <ITEM> <TEXT>...␛[0m
+    ␛[2m│␛[0m
+    ␛[2m│ ␛[0m␛[2mFor more information, try '--help'.␛[0m
+    ␛[2m│ ␛[0m␛[2msubmitted #qp7jzs␛[0m
+
+  The comment failed because ␛[36m--done␛[0m needs ␛[36m--step␛[0m, but the submit went through.
+  I'll post the comment again without ␛[36m--done␛[0m.
+
+  ␛[31m✗␛[0m ␛[1mBash␛[0m  wf comment qp7jzs "Workspace has 7 cr…  ␛[2mallowed by rules␛[0m  ␛[31mfailed  0.0s␛[0m
+    ␛[2m`wf comment` reports to wf␛[0m
+    ␛[31m│ ␛[0mWorking directory "/home/principal/.local/share/workforce/kjfllqz4/worktr…
+
+  I read the README and listed the workspace crates, but the comment with the
+  summary may not have been posted. I made no code changes.
+
+  The first ␛[36mwf comment␛[0m call failed because ␛[36m--done␛[0m requires ␛[36m--step␛[0m. I then ran ␛[36mwf
+  work submit␛[0m, which succeeded (␛[36msubmitted #qp7jzs␛[0m). When I retried the comment,
+  the worktree had already been deleted, so I don't know whether it posted. I
+  didn't retry from outside the worktree, since ␛[36mwf␛[0m needs the repo.
+
+  The summary I tried to post:
+
+  • ␛[1m␛[36mwf-core␛[0m␛[1m:␛[0m pure domain logic (events, item model, lifecycle and briefs) with
+    no IO.
+  • ␛[1m␛[36mwf-store␛[0m␛[1m:␛[0m the event-log store.
+  • ␛[1m␛[36mwf-net␛[0m␛[1m:␛[0m sync protocols over iroh, written against generic streams and a
+    ␛[36mSyncLog␛[0m trait.
+  • ␛[1m␛[36mwf-daemon␛[0m␛[1m:␛[0m owns the store while it runs, runs sessions and merges approved
+    work.
+  • ␛[1m␛[36mwf-harness␛[0m␛[1m:␛[0m runs agents over ACP.
+  • ␛[1m␛[36mwf-vcs␛[0m␛[1m:␛[0m the only crate that runs ␛[36mgit␛[0m.
+  • ␛[1m␛[36mwf-cli␛[0m␛[1m:␛[0m the ␛[36mwf␛[0m binary, which goes through ␛[36mWorkspace␛[0m.
+
+  The README covers milestones M0–M2:
+
+  • the signed event log
+  • sync between machines
+  • agent sessions in worktrees with review and merge
+  • the permission-request decider chain
+
+  Check item #qp7jzs for the comment. If it's missing, the text above is what it
+  should say.
+
+␛[2mfinished␛[0m                                                                   ␛[2m32.0s␛[0m
