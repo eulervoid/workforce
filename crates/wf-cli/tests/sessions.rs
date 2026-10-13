@@ -783,7 +783,10 @@ wf work submit
     assert_eq!(world.sessions().len(), 1);
     assert_eq!(session["status"], "submitted", "{session}");
     let transcript = world.transcript(&item);
-    assert!(transcript.contains("Use humantime"), "{transcript}");
+    assert!(
+        transcript.contains("- @joshua: Use humantime"),
+        "the answer is named by its principal: {transcript}"
+    );
     assert!(
         !transcript.contains("wf restarted while you were working"),
         "a parked session is told what it waited for, nothing else: {transcript}"
