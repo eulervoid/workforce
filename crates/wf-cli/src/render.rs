@@ -884,7 +884,7 @@ pub fn inbox(entries: &[InboxEntryView]) -> String {
     let mut table = table(&["WAITING", "ITEM", "TITLE", "WHAT"]);
     for entry in entries {
         table.add_row([
-            entry.kind.clone(),
+            entry.kind.to_string(),
             entry
                 .item
                 .as_deref()

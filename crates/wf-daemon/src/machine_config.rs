@@ -8,6 +8,7 @@ use std::time::Duration;
 use serde::{Deserialize, Deserializer};
 use url::Url;
 use wf_core::autonomy::PermissionMode;
+use wf_core::inbox::InboxKind;
 use wf_core::name::AgentName;
 use wf_vcs::CommitSigning;
 
@@ -55,7 +56,7 @@ pub struct NotifyConfig {
 /// One entry of the inbox, as a notification tells of it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Notice {
-    pub kind: &'static str,
+    pub kind: InboxKind,
     /// The short id of the item.
     pub item: String,
     pub title: String,
@@ -84,7 +85,7 @@ fn fill_placeholders(argument: &str, notice: &Notice) -> String {
         filled.push_str(&rest[..start]);
         rest = &rest[start..];
         let value = [
-            ("{kind}", notice.kind),
+            ("{kind}", notice.kind.as_str()),
             ("{item}", notice.item.as_str()),
             ("{title}", notice.title.as_str()),
             ("{what}", notice.what.as_str()),
@@ -426,7 +427,7 @@ mod tests {
     fn a_notify_command_gets_the_entry_in_its_placeholders() {
         assert_eq!(MachineConfig::parse("").ok().unwrap().notify.command, None);
         let notice = Notice {
-            kind: "blocker",
+            kind: InboxKind::Blocker,
             item: "k3f7ab".to_string(),
             title: "Says {what}".to_string(),
             what: "answer it".to_string(),

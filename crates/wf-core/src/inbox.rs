@@ -32,15 +32,47 @@ pub enum Waiting {
     },
 }
 
-impl Waiting {
-    /// The kind of what waits, as `wf inbox --json` names it.
-    pub fn kind(&self) -> &'static str {
+/// The kind of an entry of the inbox: what waits in the state, or a permission request that an
+/// agent's session holds, which the daemon keeps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InboxKind {
+    Blocker,
+    Proposal,
+    PrincipalReview,
+    Merge,
+    Recovery,
+    Permission,
+}
+
+impl InboxKind {
+    /// The kind as `wf inbox --json` names it.
+    pub fn as_str(self) -> &'static str {
         match self {
-            Waiting::Blocker { .. } => "blocker",
-            Waiting::Proposal => "proposal",
-            Waiting::PrincipalReview { .. } => "principal_review",
-            Waiting::Merge { .. } => "merge",
-            Waiting::Recovery { .. } => "recovery",
+            InboxKind::Blocker => "blocker",
+            InboxKind::Proposal => "proposal",
+            InboxKind::PrincipalReview => "principal_review",
+            InboxKind::Merge => "merge",
+            InboxKind::Recovery => "recovery",
+            InboxKind::Permission => "permission",
+        }
+    }
+}
+
+impl std::fmt::Display for InboxKind {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+impl Waiting {
+    pub fn kind(&self) -> InboxKind {
+        match self {
+            Waiting::Blocker { .. } => InboxKind::Blocker,
+            Waiting::Proposal => InboxKind::Proposal,
+            Waiting::PrincipalReview { .. } => InboxKind::PrincipalReview,
+            Waiting::Merge { .. } => InboxKind::Merge,
+            Waiting::Recovery { .. } => InboxKind::Recovery,
         }
     }
 }
@@ -50,9 +82,6 @@ pub struct InboxEntry {
     pub item: ItemId,
     pub waiting: Waiting,
 }
-
-/// The kind of a permission request that an agent's session holds, which the daemon keeps.
-pub const PERMISSION_KIND: &str = "permission";
 
 /// What a permission request held for the principal says: who asks to do what, and how to answer.
 pub fn permission_waits(agent: Option<&str>, what: &str, session: SessionId) -> String {

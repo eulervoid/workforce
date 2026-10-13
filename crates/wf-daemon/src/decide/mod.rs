@@ -9,7 +9,7 @@ use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
-use wf_core::inbox::{PERMISSION_KIND, permission_waits};
+use wf_core::inbox::{InboxKind, permission_waits};
 use wf_core::name::AgentName;
 use wf_harness::{Decision, Permission, PermissionRequest, Permissions};
 
@@ -253,7 +253,7 @@ impl Permissions for Deciding {
             crate::notify::run_command(
                 &notify,
                 &Notice {
-                    kind: PERMISSION_KIND,
+                    kind: InboxKind::Permission,
                     item: self.item.short(),
                     title: self.context.item.title.clone(),
                     what: permission_waits(Some(&self.context.agent.name), &title, self.session),

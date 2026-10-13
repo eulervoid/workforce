@@ -2,14 +2,13 @@
 
 use serde::Serialize;
 use wf_core::id::HashId;
-use wf_core::inbox::{PERMISSION_KIND, permission_waits};
+use wf_core::inbox::{InboxKind, permission_waits};
 use wf_core::state::State;
 use wf_daemon::proto::HeldPermission;
 
 #[derive(Serialize)]
 pub struct InboxEntryView {
-    /// `blocker`, `proposal`, `principal_review`, `merge`, `recovery` or `permission`.
-    pub kind: String,
+    pub kind: InboxKind,
     pub item: Option<String>,
     pub session: Option<String>,
     pub title: String,
@@ -24,7 +23,7 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
         .inbox()
         .into_iter()
         .map(|entry| InboxEntryView {
-            kind: entry.waiting.kind().to_string(),
+            kind: entry.waiting.kind(),
             item: Some(entry.item.to_base32()),
             session: None,
             title: state.inbox_title(entry.item),
@@ -35,7 +34,7 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
     entries.extend(held.iter().map(|request| {
         let session = state.session(request.session);
         InboxEntryView {
-            kind: PERMISSION_KIND.to_string(),
+            kind: InboxKind::Permission,
             item: session.map(|session| session.item().to_base32()),
             session: Some(request.session.to_base32()),
             title: session.map_or_else(String::new, |session| state.inbox_title(session.item())),
