@@ -26,6 +26,7 @@ pub mod resolve;
 pub mod review;
 pub mod session;
 pub mod state;
+pub mod stats;
 pub mod supervision;
 pub mod sync;
 pub mod validate;

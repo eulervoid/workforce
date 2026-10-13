@@ -8,4 +8,5 @@ mod items;
 mod lifecycle;
 mod review;
 mod sessions;
+mod stats;
 mod validation;
