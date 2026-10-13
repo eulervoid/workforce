@@ -10,6 +10,7 @@ mod resume;
 mod start;
 
 pub(crate) use dispatch::run_dispatcher;
+pub use resume::session_model;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

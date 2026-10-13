@@ -300,10 +300,90 @@ pub fn item_groups(grouping: ItemGrouping, groups: &[ItemGroup]) -> String {
 }
 
 /// The width prose is wrapped to: the terminal's, but not so wide that lines are hard to read.
-fn text_width() -> usize {
-    terminal_size::terminal_size()
-        .map_or(100, |(width, _)| usize::from(width.0))
-        .clamp(40, 100)
+/// `None` when output is not a terminal, so lines read by a program are never broken.
+fn text_width() -> Option<usize> {
+    terminal_size::terminal_size_of(std::io::stdout())
+        .map(|(width, _)| usize::from(width.0).clamp(40, 100))
+}
+
+/// Markdown source, each line indented by `indent` and wrapped to `width` if given. A wrapped
+/// list item or quote continues under its text; fenced code and table rows are never wrapped.
+fn wrap_markdown(text: &str, width: Option<usize>, indent: &str) -> String {
+    let mut out = String::new();
+    let mut in_fence = false;
+    for line in text.lines() {
+        let plain = anstream::adapter::strip_str(line).to_string();
+        let trimmed = plain.trim_start();
+        let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
+        if is_fence {
+            in_fence = !in_fence;
+        }
+        match width {
+            _ if line.trim().is_empty() => {}
+            Some(width) if !(in_fence || is_fence || trimmed.starts_with('|')) => {
+                let first = format!("{indent}{line}");
+                let rest = format!("{indent}{}", hanging_indent(&plain));
+                let options = textwrap::Options::new(width)
+                    .break_words(false)
+                    .word_separator(textwrap::WordSeparator::AsciiSpace)
+                    .word_splitter(textwrap::WordSplitter::NoHyphenation)
+                    .subsequent_indent(&rest);
+                out.push_str(&textwrap::fill(&first, options));
+            }
+            Some(_) | None => {
+                out.push_str(indent);
+                out.push_str(line);
+            }
+        }
+        out.push('\n');
+    }
+    out
+}
+
+/// What a wrapped markdown line continues under: spaces as wide as its leading whitespace, list
+/// marker, checkbox and step number, or its `> ` quote markers.
+fn hanging_indent(line: &str) -> String {
+    let rest = line.trim_start();
+    if rest.starts_with('>') {
+        let quotes = rest.len() - rest.trim_start_matches(['>', ' ']).len();
+        return format!("{}{}", &line[..line.len() - rest.len()], &rest[..quotes]);
+    }
+    let mut rest = rest;
+    for marker in [
+        bullet_marker as fn(&str) -> Option<&str>,
+        checkbox_marker,
+        number_marker,
+    ] {
+        if let Some(after) = marker(rest) {
+            rest = after;
+        }
+    }
+    " ".repeat(textwrap::core::display_width(
+        &line[..line.len() - rest.len()],
+    ))
+}
+
+fn bullet_marker(text: &str) -> Option<&str> {
+    ["- ", "* ", "+ "]
+        .iter()
+        .find_map(|marker| text.strip_prefix(marker))
+}
+
+fn checkbox_marker(text: &str) -> Option<&str> {
+    ["[ ] ", "[x] ", "[X] "]
+        .iter()
+        .find_map(|marker| text.strip_prefix(marker))
+}
+
+fn number_marker(text: &str) -> Option<&str> {
+    let digits = text.len() - text.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    if digits == 0 {
+        return None;
+    }
+    let after = &text[digits..];
+    after
+        .strip_prefix(". ")
+        .or_else(|| after.strip_prefix(") "))
 }
 
 pub fn item_detail(detail: &ItemDetail) -> String {
@@ -488,9 +568,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
     }
     if !detail.body.is_empty() {
         out.push('\n');
-        for line in body(&detail.body).lines() {
-            let _ = writeln!(out, "  {line}");
-        }
+        out.push_str(&wrap_markdown(&body(&detail.body), text_width(), "  "));
     }
     if !detail.activity.is_empty() {
         out.push_str(&activity(&detail.activity));
@@ -534,7 +612,10 @@ fn activity(entries: &[crate::view::ActivityView]) -> String {
 
 /// One entry of an item's activity after its time: who did what, and the text of a comment
 /// wrapped to `width` and indented, if it has one.
-fn activity_entry(entry: &crate::view::ActivityView, width: usize) -> (String, Option<String>) {
+fn activity_entry(
+    entry: &crate::view::ActivityView,
+    width: Option<usize>,
+) -> (String, Option<String>) {
     use style::{DIM, WARNING, paint};
     let mut parts = vec![paint(style::actor(&entry.by), &entry.by)];
     match &entry.comment {
@@ -579,10 +660,8 @@ fn activity_entry(entry: &crate::view::ActivityView, width: usize) -> (String, O
         .or(entry.text.as_deref())
         .filter(|text| !text.trim().is_empty())
         .map(|text| {
-            let options = textwrap::Options::new(width)
-                .initial_indent("         ")
-                .subsequent_indent("         ");
-            textwrap::fill(text, options)
+            let text = wrap_markdown(text, width, "         ");
+            text.trim_end_matches('\n').to_string()
         });
     (line, text)
 }
@@ -828,12 +907,13 @@ pub fn sessions(sessions: &[SessionView]) -> String {
         return "no sessions\n".to_string();
     }
     let mut table = table(&[
-        "SESSION", "AGENT", "ITEM", "TITLE", "STEPS", "ROLE", "STATUS", "STARTED",
+        "SESSION", "AGENT", "MODEL", "ITEM", "TITLE", "STEPS", "ROLE", "STATUS", "STARTED",
     ]);
     for session in sessions {
         table.add_row([
             short(&session.id).to_string(),
             session.agent.clone(),
+            session.model.clone().unwrap_or_default(),
             format!("#{}", short(&session.item)),
             session.title.clone(),
             steps_label(session.steps),
@@ -866,6 +946,9 @@ pub fn session(session: &SessionView) -> String {
         session.title
     );
     let _ = writeln!(out, "  role     {}", session.role);
+    if let Some(model) = &session.model {
+        let _ = writeln!(out, "  model    {model}");
+    }
     let _ = writeln!(out, "  status   {}", session.status);
     let _ = writeln!(out, "  started  {}", short_time(&session.started));
     if let Some(ended) = &session.ended {
@@ -897,4 +980,66 @@ pub fn inbox(entries: &[InboxEntryView]) -> String {
         ]);
     }
     format!("{table}\n")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wrapped_lines_keep_the_indent() {
+        let text = "one two three four five\nsix seven eight nine ten";
+        assert_eq!(
+            wrap_markdown(text, Some(16), "  "),
+            "  one two three\n  four five\n  six seven\n  eight nine ten\n"
+        );
+    }
+
+    #[test]
+    fn list_items_continue_under_their_text() {
+        assert_eq!(
+            wrap_markdown("- one two three four", Some(12), "  "),
+            "  - one two\n    three\n    four\n"
+        );
+        assert_eq!(
+            wrap_markdown("  1. one two three", Some(14), "  "),
+            "    1. one two\n       three\n"
+        );
+        assert_eq!(
+            wrap_markdown("> one two three", Some(12), "  "),
+            "  > one two\n  > three\n"
+        );
+    }
+
+    #[test]
+    fn steps_continue_under_their_text_past_the_painted_number() {
+        let step = format!("- [ ] {} one two three", style::paint(style::DIM, "1."));
+        let wrapped = wrap_markdown(&step, Some(20), "  ");
+        assert_eq!(
+            anstream::adapter::strip_str(&wrapped).to_string(),
+            "  - [ ] 1. one two\n           three\n"
+        );
+    }
+
+    #[test]
+    fn long_words_and_code_are_not_broken() {
+        assert_eq!(
+            wrap_markdown("see https://example.com/a-long/path", Some(12), "  "),
+            "  see\n  https://example.com/a-long/path\n"
+        );
+        let code = "```\nlet value = one + two + three;\n```";
+        assert_eq!(
+            wrap_markdown(code, Some(12), "  "),
+            "  ```\n  let value = one + two + three;\n  ```\n"
+        );
+    }
+
+    #[test]
+    fn blank_lines_stay_empty_and_nothing_wraps_without_a_width() {
+        let text = "one two three\n\nfour";
+        assert_eq!(
+            wrap_markdown(text, None, "  "),
+            "  one two three\n\n  four\n"
+        );
+    }
 }

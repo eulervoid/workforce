@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use crate::event::CommentKind;
 use crate::id::{CommentId, HashId, ItemId, SessionId};
-use crate::identity::Actor;
+use crate::identity::{Actor, PrincipalKey};
 use crate::item::{Item, ItemView, Standing};
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
@@ -52,8 +52,8 @@ impl Brief {
                 branch: sources.branch(item.id()),
                 target,
                 dependencies: dependencies(state, item, sources),
-                change_requests: open_change_requests(item, sources),
-                earlier: earlier(item, sources),
+                change_requests: open_change_requests(state, item, sources),
+                earlier: earlier(state, item, sources),
             }),
             SessionRole::Review { commit } => Brief::Review(ReviewBrief {
                 agent: agent.name.to_string(),
@@ -65,7 +65,7 @@ impl Brief {
                 diff: commit.map_or_else(String::new, |commit| sources.diff(&target, commit)),
                 target,
                 step: review_step(state, item.id()),
-                earlier: earlier(item, sources),
+                earlier: earlier(state, item, sources),
             }),
             SessionRole::Supervise => {
                 let blockers = state
@@ -74,22 +74,18 @@ impl Brief {
                     .filter(|blocker| state.answers(agent, blocker))
                     .map(|blocker| OpenComment {
                         comment: blocker.comment.short(),
-                        by: speaker(&item.comments()[&blocker.comment].by),
+                        by: speaker(state, &item.comments()[&blocker.comment].by),
                         text: sources.text(blocker.comment).unwrap_or_default(),
                     })
                     .collect();
-                let principal = state
-                    .members()
-                    .find(|(principal, _)| **principal == agent.principal)
-                    .map(|(_, member)| format!("@{}", member.handle))
-                    .unwrap_or_default();
+                let principal = handle(state, &agent.principal);
                 Brief::Supervise(SuperviseBrief {
                     agent: agent.name.to_string(),
                     instructions,
                     item: HashId::short(&item.id()),
                     title: item.title().to_string(),
                     body: item.body().render_numbered(),
-                    earlier: earlier(item, sources),
+                    earlier: earlier(state, item, sources),
                     blockers,
                     principal,
                 })
@@ -103,7 +99,8 @@ impl Brief {
                         match ended.reason {
                             EndReason::Released | EndReason::TimedOut | EndReason::Failed => {
                                 Some(format!(
-                                    "{} {}",
+                                    "{}/{} {}",
+                                    handle(state, &other.agent().principal),
                                     other.agent().name,
                                     ended.reason.name().replace('_', " ")
                                 ))
@@ -123,7 +120,7 @@ impl Brief {
                     item: HashId::short(&item.id()),
                     title: item.title().to_string(),
                     body: item.body().render_numbered(),
-                    earlier: earlier(item, sources),
+                    earlier: earlier(state, item, sources),
                     attempts,
                 })
             }
@@ -140,24 +137,33 @@ impl Brief {
     }
 }
 
-/// Who wrote something, as an agent is told: the agent's name, or `someone` for a principal.
-pub fn speaker(actor: &Actor) -> String {
+/// Who wrote something, as an agent is told: `@joshua` for a principal, `@joshua/coder` for an
+/// agent, and `the daemon`. A principal who is not a member is named by its short key.
+pub fn speaker(state: &State, actor: &Actor) -> String {
     match actor {
-        Actor::Principal(_) => "someone".to_string(),
+        Actor::Principal(principal) => handle(state, principal),
         Actor::Daemon(_) => "the daemon".to_string(),
-        Actor::Agent { agent, .. } => agent.name.to_string(),
+        Actor::Agent { agent, .. } => format!("{}/{}", handle(state, &agent.principal), agent.name),
     }
 }
 
+/// `@joshua`, or the short key of a principal who is not a member.
+fn handle(state: &State, principal: &PrincipalKey) -> String {
+    state.member(principal).map_or_else(
+        || principal.fmt_short(),
+        |member| format!("@{}", member.handle),
+    )
+}
+
 /// Everything said on the item, oldest first.
-fn earlier(item: &Item, sources: &impl Sources) -> Vec<Earlier> {
+fn earlier(state: &State, item: &Item, sources: &impl Sources) -> Vec<Earlier> {
     let mut comments: Vec<_> = item.comments().iter().collect();
     comments.sort_by_key(|(id, comment)| (comment.at, **id));
     comments
         .into_iter()
         .filter_map(|(id, comment)| {
             Some(Earlier {
-                by: speaker(&comment.by),
+                by: speaker(state, &comment.by),
                 kind: comment.kind.name().replace('_', " "),
                 text: sources.text(*id)?,
             })
@@ -166,7 +172,7 @@ fn earlier(item: &Item, sources: &impl Sources) -> Vec<Earlier> {
 }
 
 /// The change requests on the item nothing has resolved yet, oldest first.
-fn open_change_requests(item: &Item, sources: &impl Sources) -> Vec<OpenComment> {
+fn open_change_requests(state: &State, item: &Item, sources: &impl Sources) -> Vec<OpenComment> {
     let mut open: Vec<_> = item
         .comments()
         .iter()
@@ -176,7 +182,7 @@ fn open_change_requests(item: &Item, sources: &impl Sources) -> Vec<OpenComment>
     open.into_iter()
         .map(|(id, comment)| OpenComment {
             comment: id.short(),
-            by: speaker(&comment.by),
+            by: speaker(state, &comment.by),
             text: sources.text(*id).unwrap_or_default(),
         })
         .collect()
@@ -494,7 +500,7 @@ pub struct DiagnoseBrief {
     pub title: String,
     pub body: String,
     pub earlier: Vec<Earlier>,
-    /// The work sessions that did not finish, oldest first, as `coder released`.
+    /// The work sessions that did not finish, oldest first, as `@joshua/coder released`.
     pub attempts: Vec<String>,
 }
 
@@ -618,10 +624,36 @@ mod tests {
 
     fn earlier() -> Vec<Earlier> {
         vec![Earlier {
-            by: "coder".into(),
+            by: "@joshua/coder".into(),
             kind: "comment".into(),
             text: "tried serde first".into(),
         }]
+    }
+
+    #[test]
+    fn principals_and_agents_are_named_by_handle() {
+        use crate::testing::*;
+
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let task: ItemId = fixture
+            .apply(&mut state, 0, 2_000, create("task", "Parse durations"))
+            .id()
+            .into();
+        fixture.apply(&mut state, 0, 2_001, define_agent("coder"));
+        let session: SessionId = fixture
+            .apply(&mut state, 0, 3_000, start_session("coder", task))
+            .id()
+            .into();
+        assert_eq!(speaker(&state, &fixture.founder_actor()), "@joshua");
+        assert_eq!(
+            speaker(&state, &fixture.agent_actor("coder", session)),
+            "@joshua/coder"
+        );
+        assert_eq!(
+            speaker(&state, &Actor::Daemon(fixture.founder.key())),
+            "the daemon"
+        );
     }
 
     #[test]
@@ -651,7 +683,7 @@ mod tests {
         );
         assert!(text.contains("## Task\n\n- [ ] 1. write parser\n"));
         assert!(text.contains("- #q7x2cd Which crate? (answered): Use humantime"));
-        assert!(text.contains("- coder (comment): tried serde first"));
+        assert!(text.contains("- @joshua/coder (comment): tried serde first"));
         assert!(text.contains("`wf/k3f9ab`") && text.contains("`main`"));
         assert!(!text.contains("change request"), "{text}");
         for command in [
@@ -679,7 +711,7 @@ mod tests {
             dependencies: vec![],
             change_requests: vec![OpenComment {
                 comment: "c4d2e1".into(),
-                by: "reviewer".into(),
+                by: "@joshua/reviewer".into(),
                 text: "Exit with 2 on a missing file".into(),
             }],
             earlier: vec![],
@@ -687,7 +719,7 @@ mod tests {
         let text = brief.render();
         assert!(text.contains("## Open change requests\n"), "{text}");
         assert!(!text.contains("## Instructions"), "{text}");
-        assert!(text.contains("- c4d2e1 by reviewer: Exit with 2 on a missing file"));
+        assert!(text.contains("- c4d2e1 by @joshua/reviewer: Exit with 2 on a missing file"));
         assert!(text.contains("--resolve <id>"));
     }
 

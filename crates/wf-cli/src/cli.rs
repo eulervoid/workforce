@@ -611,10 +611,18 @@ pub enum ItemCommand {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
-    /// Hide an item from lists; its history stays.
+    /// Hide an item from lists; its history stays. `--done` and `--cancelled` archive every live
+    /// item in a state of that category, whatever its type calls the state.
     Archive {
         /// The start of an item id. Without one, pick at a terminal.
+        #[arg(conflicts_with_all = ["done", "cancelled"])]
         item: Option<String>,
+        /// Archive every live item in a done state.
+        #[arg(long)]
+        done: bool,
+        /// Archive every live item in a cancelled state.
+        #[arg(long)]
+        cancelled: bool,
     },
     /// Bring an archived item back.
     Unarchive {

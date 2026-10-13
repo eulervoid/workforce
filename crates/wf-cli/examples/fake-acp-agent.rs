@@ -16,6 +16,8 @@
 //! - `crash`: exits with an error.
 //! - `turn`: ends the turn.
 //!
+//! New sessions offer two models, `fast` and `deep`; `fast` is the default.
+//!
 //! Each session gets an id of its own and keeps how far it got in the script in
 //! `<script>.<session>`. `FAKE_AGENT_REOPENS` set to `resume` or `load` offers that way back into a
 //! session, which goes on in the script from there.
@@ -45,6 +47,18 @@ fn say(text: &str) {
             "content": {"type": "text", "text": text},
         }},
     }));
+}
+
+/// The options of a new session: its model, set to `model`.
+fn config_options(model: &str) -> Value {
+    json!([{
+        "id": "model", "name": "Model", "category": "model",
+        "type": "select", "currentValue": model,
+        "options": [
+            {"value": "fast", "name": "Fast"},
+            {"value": "deep", "name": "Deep"},
+        ],
+    }])
 }
 
 /// Splits on whitespace, keeping what is inside double quotes together.
@@ -114,7 +128,17 @@ fn main() {
                     .unwrap()
                     .as_nanos();
                 session = format!("fake-{}-{nanos}", std::process::id());
-                send(json!({"jsonrpc": "2.0", "id": id, "result": {"sessionId": session}}));
+                send(json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "result": {"sessionId": session, "configOptions": config_options("fast")},
+                }));
+            }
+            Some("session/set_config_option") => {
+                let model = request["params"]["value"].as_str().unwrap();
+                send(json!({
+                    "jsonrpc": "2.0", "id": id,
+                    "result": {"configOptions": config_options(model)},
+                }));
             }
             Some(method @ ("session/resume" | "session/load")) => {
                 if let Some(cwd) = request["params"]["cwd"].as_str() {

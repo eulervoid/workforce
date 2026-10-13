@@ -1363,3 +1363,56 @@ fn an_agent_that_starts_automatically_is_hosted_here_and_status_flags_one_that_i
     let flagged = wf.json(&["status"])["flagged"].to_string();
     assert!(flagged.contains("no device hosts it"), "{flagged}");
 }
+
+#[test]
+fn archive_by_state_category_takes_every_finished_item_whatever_its_state_is_called() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo"]);
+    let policy = wf.run(&["policy", "show"]);
+    let custom = format!(
+        "{policy}\n[types.bug]\nlane = \"default\"\ninitial = \"new\"\nstates = [{{ name = \"new\", category = \"open\" }}, {{ name = \"fixed\", category = \"done\" }}, {{ name = \"wontfix\", category = \"cancelled\" }}]\n"
+    );
+    let file = wf.repository.join("policy.toml");
+    std::fs::write(&file, &custom).unwrap();
+    wf.run(&["policy", "apply", file.to_str().unwrap()]);
+
+    let open = wf.add(&["--title", "still open"]);
+    let done_task = wf.add(&["--title", "done task"]);
+    wf.run(&["item", "move", short(&done_task), "done"]);
+    let fixed_bug = wf.add(&["--title", "fixed bug", "--type", "bug"]);
+    wf.run(&["item", "move", short(&fixed_bug), "fixed"]);
+    let dropped_task = wf.add(&["--title", "dropped task"]);
+    wf.run(&["item", "cancel", short(&dropped_task)]);
+    let wontfix_bug = wf.add(&["--title", "wontfix bug", "--type", "bug"]);
+    wf.run(&["item", "move", short(&wontfix_bug), "wontfix"]);
+
+    assert!(
+        wf.fail(&["item", "archive", short(&open), "--done"])
+            .contains("cannot be used with")
+    );
+
+    let archived = wf.json(&["item", "archive", "--done"]);
+    let mut items: Vec<&str> = archived["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|id| id.as_str().unwrap())
+        .collect();
+    items.sort();
+    let mut expected = vec![done_task.as_str(), fixed_bug.as_str()];
+    expected.sort();
+    assert_eq!(items, expected);
+    assert_eq!(archived["events"].as_array().unwrap().len(), 2);
+
+    let message = wf.run(&["item", "archive", "--cancelled"]);
+    assert!(message.starts_with("archived 2 items: #"), "{message}");
+    assert!(message.contains(short(&dropped_task)), "{message}");
+    assert!(message.contains(short(&wontfix_bug)), "{message}");
+
+    assert_eq!(titles(&wf.json(&["item", "list"])), ["still open"]);
+    let nothing = wf.run(&["item", "archive", "--done", "--cancelled"]);
+    assert!(
+        nothing.contains("nothing to archive: no live item is done or cancelled"),
+        "{nothing}"
+    );
+}

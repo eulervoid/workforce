@@ -206,6 +206,12 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
     let auto_agents = state
         .agents()
         .any(|(_, definition)| definition.autonomy.start == StartMode::Auto);
+    let an_agent_starts_here = own.is_some_and(|device| {
+        state
+            .auto_agents(device)
+            .iter()
+            .any(|(agent, _)| !state.dispatchable(device, agent).is_empty())
+    });
     let next = if state.agents().next().is_none() {
         Some("add an agent: `wf agent add`".to_string())
     } else if !daemon && auto_agents {
@@ -216,6 +222,11 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         Some("follow the agents: `wf watch`".to_string())
     } else if ready_items == 0 {
         Some("add an item: `wf item add`".to_string())
+    } else if !an_agent_starts_here {
+        let items = if ready_items == 1 { "item" } else { "items" };
+        Some(format!(
+            "{ready_items} ready {items}, but no agent starts on its own: `wf agent edit <name> --start auto`"
+        ))
     } else {
         None
     };
@@ -245,5 +256,74 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         flagged: flagged.into_iter().collect(),
         next,
         refolded,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use wf_core::autonomy::{Autonomy, StartMode};
+    use wf_core::event::{AgentDefined, DeviceProfile, EventBody};
+    use wf_core::name::{AgentName, HarnessName, LaneName};
+    use wf_core::testing::*;
+
+    use super::*;
+
+    fn agent(start: StartMode) -> EventBody {
+        EventBody::AgentDefined(AgentDefined {
+            name: AgentName::new("coder").unwrap(),
+            harness: HarnessName::new("opencode").unwrap(),
+            model: None,
+            instructions: None,
+            capabilities: vec![],
+            lanes: vec![LaneName::new("default").unwrap()],
+            autonomy: Autonomy {
+                start,
+                ..Autonomy::default()
+            },
+        })
+    }
+
+    fn hosting_coder() -> EventBody {
+        EventBody::DeviceProfile(DeviceProfile {
+            name: "laptop".into(),
+            hardware: String::new(),
+            agents: BTreeMap::from([(AgentName::new("coder").unwrap(), 1)]),
+            max_sessions: 1,
+        })
+    }
+
+    fn next(fixture: &Fixture, state: &State) -> Option<String> {
+        status(
+            state,
+            StatusContext {
+                own: Some(fixture.devices[0].key()),
+                last_seen: &BTreeMap::new(),
+                daemon: true,
+                waiting_on_you: 0,
+                refolded: false,
+            },
+        )
+        .next
+    }
+
+    #[test]
+    fn ready_items_that_no_agent_starts_on_its_own_are_pointed_out() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        fixture.apply(&mut state, 0, 2_000, agent(StartMode::Manual));
+        fixture.apply(&mut state, 0, 3_000, hosting_coder());
+        fixture.apply(&mut state, 0, 4_000, create("task", "first"));
+        fixture.apply(&mut state, 0, 5_000, create("task", "second"));
+        assert_eq!(
+            next(&fixture, &state).as_deref(),
+            Some(
+                "2 ready items, but no agent starts on its own: `wf agent edit <name> --start auto`"
+            )
+        );
+
+        fixture.apply(&mut state, 0, 6_000, agent(StartMode::Auto));
+        assert_eq!(next(&fixture, &state), None);
     }
 }

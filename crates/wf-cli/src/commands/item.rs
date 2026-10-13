@@ -9,7 +9,7 @@ use wf_core::event::{Change, EventBody, ItemCreated, ItemLinked, ItemMoved, Item
 use wf_core::id::{HashId, ItemId};
 use wf_core::item::{ItemView, Priority};
 use wf_core::name::StateName;
-use wf_core::policy::Field;
+use wf_core::policy::{Field, StateCategory};
 use wf_core::state::State;
 use wf_core::validate::OneOf;
 
@@ -358,7 +358,21 @@ pub(super) fn item(
         }
         ItemCommand::Checkout { item } => checkout(json, mode, workspace, item),
         ItemCommand::Path { item } => path(json, mode, workspace, item),
-        ItemCommand::Archive { item } => {
+        ItemCommand::Archive {
+            done: archive_done,
+            cancelled,
+            ..
+        } if archive_done || cancelled => {
+            let categories: Vec<StateCategory> = [
+                (archive_done, StateCategory::Done),
+                (cancelled, StateCategory::Cancelled),
+            ]
+            .into_iter()
+            .filter_map(|(wanted, category)| wanted.then_some(category))
+            .collect();
+            archive_finished(json, workspace, &categories)
+        }
+        ItemCommand::Archive { item, .. } => {
             let id = choose_item(workspace, mode, item, Scope::Live)?;
             let event = workspace.author(EventBody::ItemArchived(ItemRef { item: id }))?;
             done(json, format!("archived #{}", id.short()), &event, Some(id))
@@ -374,6 +388,65 @@ pub(super) fn item(
             )
         }
     }
+}
+
+#[derive(Serialize)]
+struct ArchivedFinished {
+    message: String,
+    /// One `ItemArchived` event per item, in the order of `items`.
+    events: Vec<String>,
+    items: Vec<String>,
+}
+
+/// Archives every live item whose state is in one of `categories`.
+fn archive_finished(
+    json: bool,
+    workspace: &mut Workspace,
+    categories: &[StateCategory],
+) -> anyhow::Result<()> {
+    let ids: Vec<ItemId> = {
+        let state = workspace.state();
+        let policy = &state.policy().expect("a workforce has a policy").policy;
+        sorted_views(state, false)
+            .into_iter()
+            .filter(|view| {
+                view.standing(policy)
+                    .state_category()
+                    .is_some_and(|category| categories.contains(&category))
+            })
+            .map(|view| view.id())
+            .collect()
+    };
+    let mut events = Vec::with_capacity(ids.len());
+    for id in &ids {
+        let event = workspace.author(EventBody::ItemArchived(ItemRef { item: *id }))?;
+        events.push(event.id().to_string());
+    }
+    let which = categories
+        .iter()
+        .map(ToString::to_string)
+        .collect::<Vec<_>>()
+        .join(" or ");
+    let message = match ids.len() {
+        0 => format!("nothing to archive: no live item is {which}"),
+        count => format!(
+            "archived {count} {}: {}",
+            if count == 1 { "item" } else { "items" },
+            ids.iter()
+                .map(|id| format!("#{}", id.short()))
+                .collect::<Vec<_>>()
+                .join(" ")
+        ),
+    };
+    emit(
+        json,
+        &ArchivedFinished {
+            message,
+            events,
+            items: ids.iter().map(|id| id.to_base32()).collect(),
+        },
+        |archived| format!("{}\n", archived.message),
+    )
 }
 
 #[derive(Serialize)]

@@ -36,7 +36,7 @@ expression: "Envelope::new(view::status(&scenario.state, view::StatusContext\n{\
     "after_failures": [],
     "waiting_on_you": 0,
     "flagged": [],
-    "next": null,
+    "next": "1 ready item, but no agent starts on its own: `wf agent edit <name> --start auto`",
     "refolded": false
   }
 }
