@@ -1273,11 +1273,7 @@ struct PathView {
 
 fn path(json: bool, mode: Mode, workspace: &Workspace, item: Option<String>) -> anyhow::Result<()> {
     let id = choose_item(workspace, mode, item, Scope::Live)?;
-    let path = workspace
-        .data
-        .workforce(&workspace.workforce())
-        .join("worktrees")
-        .join(wf_vcs::item_name(id));
+    let path = wf_vcs::item_worktree(&workspace.data.workforce(&workspace.workforce()), id);
     if !path.is_dir() {
         let merged = match workspace.state().review_status(id) {
             Some(wf_core::review::ReviewStatus::Merged { commit }) => {

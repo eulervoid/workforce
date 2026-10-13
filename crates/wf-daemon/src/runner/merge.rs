@@ -7,7 +7,7 @@ use wf_core::item::ItemView;
 use wf_core::lifecycle::MergeFailure;
 use wf_core::name::StateName;
 use wf_core::session::CommitId;
-use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, item_branch, item_name};
+use wf_vcs::{GitCli, MergeOutcome, VcsAdapter, item_branch, item_worktree};
 
 use super::{SessionError, blocking};
 use crate::{Daemon, Loaded};
@@ -144,9 +144,7 @@ impl Daemon {
                 .await?;
                 let (branch, worktree) = (
                     item_branch(item),
-                    self.workforce_directory(workforce)
-                        .join("worktrees")
-                        .join(item_name(item)),
+                    item_worktree(&self.workforce_directory(workforce), item),
                 );
                 let cleaned = blocking(move || {
                     let git = GitCli::open(&repository)?;

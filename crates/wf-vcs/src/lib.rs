@@ -23,6 +23,17 @@ pub fn item_name(item: ItemId) -> String {
     item.to_base32()[..NAME_LEN].to_string()
 }
 
+/// The directory of a workforce that the sessions on this machine run in: the worktree of each
+/// item, and the checkouts and empty directories of review, supervise and diagnose sessions.
+pub fn worktrees(workforce_directory: &Path) -> PathBuf {
+    workforce_directory.join("worktrees")
+}
+
+/// The worktree of the work on an item.
+pub fn item_worktree(workforce_directory: &Path, item: ItemId) -> PathBuf {
+    worktrees(workforce_directory).join(item_name(item))
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum VcsError {
     #[error("cannot run git")]

@@ -12,7 +12,7 @@ use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::name::AgentName;
 use wf_core::session::{CommitId, SessionRole};
 use wf_harness::{AcpAgentConfig, PermissionMode, PermissionRequest, Permissions};
-use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name};
+use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree, worktrees};
 
 use super::drive::run_session;
 use super::{Run, SessionError, blocking};
@@ -50,91 +50,6 @@ fn on_path(program: &str) -> bool {
 }
 
 impl Daemon {
-    /// Starts a work session of `agent` on `item`: the worktree and the branch, the
-    /// `SessionStarted` event, the item in its active state, and a task that runs the harness.
-    pub(crate) async fn start_session(
-        self: &Arc<Self>,
-        workforce: WorkforceId,
-        loaded: &Arc<Loaded>,
-        agent: AgentName,
-        item: ItemId,
-        repository: PathBuf,
-    ) -> Result<SessionId, SessionError> {
-        self.begin_session(
-            workforce,
-            loaded,
-            agent,
-            item,
-            SessionRole::Work,
-            repository,
-        )
-        .await
-    }
-
-    /// Starts a review session of `agent` on the work submitted for `item`: a detached checkout
-    /// of `commit`, or an empty directory when it was submitted without commits.
-    pub(crate) async fn start_review(
-        self: &Arc<Self>,
-        workforce: WorkforceId,
-        loaded: &Arc<Loaded>,
-        agent: AgentName,
-        item: ItemId,
-        commit: Option<CommitId>,
-        repository: PathBuf,
-    ) -> Result<SessionId, SessionError> {
-        self.begin_session(
-            workforce,
-            loaded,
-            agent,
-            item,
-            SessionRole::Review { commit },
-            repository,
-        )
-        .await
-    }
-
-    /// Starts a supervise session of `agent` on `item`, to answer or escalate the blockers that
-    /// wait on it, in an empty directory.
-    pub(crate) async fn start_supervision(
-        self: &Arc<Self>,
-        workforce: WorkforceId,
-        loaded: &Arc<Loaded>,
-        agent: AgentName,
-        item: ItemId,
-        repository: PathBuf,
-    ) -> Result<SessionId, SessionError> {
-        self.begin_session(
-            workforce,
-            loaded,
-            agent,
-            item,
-            SessionRole::Supervise,
-            repository,
-        )
-        .await
-    }
-
-    /// Starts a diagnose session of `agent` on `item`, to say what went wrong in the work that
-    /// did not finish, in an empty directory.
-    pub(crate) async fn start_diagnosis(
-        self: &Arc<Self>,
-        workforce: WorkforceId,
-        loaded: &Arc<Loaded>,
-        agent: AgentName,
-        item: ItemId,
-        repository: PathBuf,
-    ) -> Result<SessionId, SessionError> {
-        self.begin_session(
-            workforce,
-            loaded,
-            agent,
-            item,
-            SessionRole::Diagnose,
-            repository,
-        )
-        .await
-    }
-
     /// The empty directory a supervise or diagnose session runs in. One session of each runs per
     /// item.
     pub(super) fn empty_directory(
@@ -143,8 +58,7 @@ impl Daemon {
         item: ItemId,
         purpose: &str,
     ) -> PathBuf {
-        self.workforce_directory(workforce)
-            .join("worktrees")
+        worktrees(&self.workforce_directory(workforce))
             .join(format!("{}-{purpose}", item_name(item)))
     }
 
@@ -158,12 +72,16 @@ impl Daemon {
         let suffix = commit.map_or("answer".to_string(), |commit| {
             commit.to_string()[..8].into()
         });
-        self.workforce_directory(workforce)
-            .join("worktrees")
+        worktrees(&self.workforce_directory(workforce))
             .join(format!("{}-{suffix}", item_name(item)))
     }
 
-    async fn begin_session(
+    /// Starts a session of `agent` on `item`, and a task that runs the harness. A work session
+    /// runs in the item's worktree on its branch, and moves the item to its active state; a
+    /// review session in a detached checkout of the commit under review, or an empty directory
+    /// when it was submitted without commits; a supervise or diagnose session in an empty
+    /// directory.
+    pub(crate) async fn start_session(
         self: &Arc<Self>,
         workforce: WorkforceId,
         loaded: &Arc<Loaded>,
@@ -227,10 +145,7 @@ impl Daemon {
         let branch = item_branch(item);
         let (worktree, repository) = match role {
             SessionRole::Work => {
-                let worktree = self
-                    .workforce_directory(workforce)
-                    .join("worktrees")
-                    .join(item_name(item));
+                let worktree = item_worktree(&self.workforce_directory(workforce), item);
                 let (branch, path, target) = (branch.clone(), worktree.clone(), target.clone());
                 let repository = blocking(move || {
                     let git = GitCli::open(&repository)?;

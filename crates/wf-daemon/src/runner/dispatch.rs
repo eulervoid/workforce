@@ -6,6 +6,7 @@ use std::time::Duration;
 use wf_core::id::{HashId, ItemId, WorkforceId};
 use wf_core::name::AgentName;
 use wf_core::review::PendingMerge;
+use wf_core::session::SessionRole;
 
 use super::merge::{Attempt, MergeRequest};
 use crate::{Daemon, Loaded};
@@ -116,44 +117,10 @@ async fn dispatch_once(
                 .diagnosable(&agent)
                 .into_iter()
                 .find(|item| !failed.contains(&(*item, agent.name.clone())));
-            let started = match (review, supervision, diagnosis) {
-                (Some((item, commit)), _, _) => (
-                    item,
-                    daemon
-                        .start_review(
-                            workforce,
-                            loaded,
-                            agent.name.clone(),
-                            item,
-                            commit,
-                            repository.clone(),
-                        )
-                        .await,
-                ),
-                (None, None, Some(item)) => (
-                    item,
-                    daemon
-                        .start_diagnosis(
-                            workforce,
-                            loaded,
-                            agent.name.clone(),
-                            item,
-                            repository.clone(),
-                        )
-                        .await,
-                ),
-                (None, Some(item), _) => (
-                    item,
-                    daemon
-                        .start_supervision(
-                            workforce,
-                            loaded,
-                            agent.name.clone(),
-                            item,
-                            repository.clone(),
-                        )
-                        .await,
-                ),
+            let (item, role) = match (review, supervision, diagnosis) {
+                (Some((item, commit)), _, _) => (item, SessionRole::Review { commit }),
+                (None, Some(item), _) => (item, SessionRole::Supervise),
+                (None, None, Some(item)) => (item, SessionRole::Diagnose),
                 (None, None, None) => {
                     let Some(item) = state
                         .dispatchable(device, &agent)
@@ -163,21 +130,20 @@ async fn dispatch_once(
                     else {
                         break;
                     };
-                    (
-                        item,
-                        daemon
-                            .start_session(
-                                workforce,
-                                loaded,
-                                agent.name.clone(),
-                                item,
-                                repository.clone(),
-                            )
-                            .await,
-                    )
+                    (item, SessionRole::Work)
                 }
             };
-            if let (item, Err(error)) = started {
+            let started = daemon
+                .start_session(
+                    workforce,
+                    loaded,
+                    agent.name.clone(),
+                    item,
+                    role,
+                    repository.clone(),
+                )
+                .await;
+            if let Err(error) = started {
                 failed.insert((item, agent.name.clone()));
                 tracing::warn!(
                     "could not start {} on #{}: {}",

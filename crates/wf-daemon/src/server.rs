@@ -6,6 +6,7 @@ use tokio::net::UnixStream;
 use wf_core::id::WorkforceId;
 use wf_core::invite::{InviteCode, InviteCodeError};
 use wf_core::lifecycle::{Interruption, SessionEnd};
+use wf_core::session::SessionRole;
 use wf_net::frame::{FrameError, read_frame, write_frame};
 
 use crate::peers::{peers_of, sync_all};
@@ -185,7 +186,14 @@ async fn call(
             repository,
         } => {
             let session = daemon
-                .start_session(workforce, loaded, agent, item, repository)
+                .start_session(
+                    workforce,
+                    loaded,
+                    agent,
+                    item,
+                    SessionRole::Work,
+                    repository,
+                )
                 .await
                 .map_err(|error| wf_core::report::report(&error))?;
             Ok(Response::SessionStarted(session))

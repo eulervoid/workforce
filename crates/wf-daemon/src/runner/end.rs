@@ -9,7 +9,7 @@ use wf_core::lifecycle::{AfterEnd, Closing, Finish, Interruption, SessionEnd};
 use wf_core::name::StateName;
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
-use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name};
+use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_worktree};
 
 use super::merge::{Attempt, MergeRequest};
 use super::{SessionError, Stop, blocking};
@@ -187,10 +187,7 @@ impl Daemon {
             return;
         };
         let branch = item_branch(item);
-        let worktree = self
-            .workforce_directory(workforce)
-            .join("worktrees")
-            .join(item_name(item));
+        let worktree = item_worktree(&self.workforce_directory(workforce), item);
         let removed = blocking(move || {
             let git = GitCli::open(&repository)?;
             git.remove_worktree(&worktree)?;
