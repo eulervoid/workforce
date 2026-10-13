@@ -650,16 +650,6 @@ wf work submit
             text.starts_with("Waiting to merge") && text.contains("changes to .workforce.toml.")
         })
     }));
-    let waiting = inbox(&world);
-    assert!(
-        waiting.iter().any(|entry| {
-            entry["kind"] == "merge"
-                && entry["what"]
-                    .as_str()
-                    .is_some_and(|what| what.contains("changes to .workforce.toml;"))
-        }),
-        "{waiting:?}"
-    );
     assert!(
         std::fs::read_to_string(&file)
             .unwrap()

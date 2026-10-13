@@ -189,23 +189,6 @@ impl GitCli {
         Ok(self.changed_paths(worktree)?.is_empty())
     }
 
-    /// Where `branch` is checked out with changes, if it is.
-    pub fn dirty_checkout(&self, branch: &str) -> Result<Option<DirtyCheckout>, VcsError> {
-        let reference = format!("refs/heads/{branch}");
-        let Some(worktree) = self
-            .worktrees()?
-            .into_iter()
-            .find(|worktree| worktree.branch.as_deref() == Some(reference.as_str()))
-        else {
-            return Ok(None);
-        };
-        let paths = self.changed_paths(&worktree.path)?;
-        Ok((!paths.is_empty()).then_some(DirtyCheckout {
-            worktree: worktree.path,
-            paths,
-        }))
-    }
-
     /// Moves `target` from `old` to `new`, if nothing moved it in the meantime. Where the target
     /// is checked out it must be clean and is fast-forwarded there, so the files follow.
     fn advance(&self, target: &str, old: &CommitId, new: &CommitId) -> Result<Advance, VcsError> {
@@ -990,10 +973,10 @@ mod tests {
         git_in(&main, &["mv", "file.txt", "file with space.txt"]);
         repo.write(&main, "second.txt", "two\n");
         repo.write(&main, "untracked.txt", "new\n");
-        let dirty = repo.git.dirty_checkout("main").unwrap().unwrap();
-        assert_eq!(dirty.worktree, main);
-        assert_eq!(dirty.paths, ["file with space.txt", "second.txt"]);
-        assert_eq!(repo.git.dirty_checkout("wf/k3f9").unwrap(), None);
+        assert_eq!(
+            repo.git.changed_paths(&main).unwrap(),
+            ["file with space.txt", "second.txt"]
+        );
     }
 
     #[test]

@@ -59,12 +59,7 @@ pub fn recovery_waits(
 }
 
 /// The kind of what waits, as `wf inbox --json` names it, and what it says to the principal.
-/// With the repository at hand, a waiting merge names the files that block it as they are now.
-pub fn what_waits(
-    state: &State,
-    git: Option<&wf_vcs::GitCli>,
-    entry: &InboxEntry,
-) -> (&'static str, String) {
+pub fn what_waits(state: &State, entry: &InboxEntry) -> (&'static str, String) {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     match entry.waiting {
         Waiting::Blocker { comment } => (
@@ -98,25 +93,14 @@ pub fn what_waits(
                 None => "review of work without commits: read it, then `wf review`".to_string(),
             },
         ),
-        Waiting::Merge { commit } => {
-            let commit = &commit.to_string()[..8];
-            let target = &policy.merge.target;
-            let dirty = git.map(|git| git.dirty_checkout(target));
-            (
-                "merge",
-                match dirty {
-                    Some(Ok(Some(dirty))) => format!(
-                        "{commit} is ready to merge, but {target} is checked out in {} with changes to {}; commit or stash them",
-                        dirty.worktree.display(),
-                        dirty.files()
-                    ),
-                    Some(Ok(None)) => format!("{commit} is ready to merge into {target}"),
-                    Some(Err(_)) | None => format!(
-                        "{commit} is ready to merge, but {target} is checked out with changes"
-                    ),
-                },
-            )
-        }
+        Waiting::Merge { commit } => (
+            "merge",
+            format!(
+                "{} is ready to merge, but {} is checked out with changes; the daemon's comment on the item names them",
+                &commit.to_string()[..8],
+                policy.merge.target
+            ),
+        ),
         Waiting::Recovery {
             role,
             failures,
@@ -129,11 +113,7 @@ pub fn what_waits(
 }
 
 /// What waits on the principal: what the state says, and the permission requests the daemon holds.
-pub fn inbox_views(
-    state: &State,
-    git: Option<&wf_vcs::GitCli>,
-    held: &[HeldPermission],
-) -> Vec<InboxEntryView> {
+pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView> {
     let title_of = |item: ItemId| match state.item(item) {
         Some(ItemView::Live(live)) => live.title().to_string(),
         Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
@@ -142,7 +122,7 @@ pub fn inbox_views(
         .inbox()
         .into_iter()
         .map(|entry| {
-            let (kind, what) = what_waits(state, git, &entry);
+            let (kind, what) = what_waits(state, &entry);
             InboxEntryView {
                 kind: kind.to_string(),
                 item: Some(entry.item.to_base32()),
