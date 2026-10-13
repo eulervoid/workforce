@@ -31,7 +31,7 @@ wf item add --title "Parse durations in policy" --review standard
 wf daemon start                  # starts the agents on what is ready, and merges what is approved
 wf session list                  # live and finished sessions
 wf session watch <item>          # follow the transcript of the latest session on an item
-wf watch                         # events as they arrive; answer what waits on you right there
+wf watch                         # the dashboard: what waits on you, who works on what, and more
 wf inbox                         # what waits on you: blockers, reviews, merges, permission requests
 wf session allow <session>       # or `deny`, for a permission request an agent is waiting on
 wf review <item> --approve       # your step of a review level that has one
@@ -60,6 +60,15 @@ plans, and unified diffs supplied by the agent. Tool output and diffs are capped
 block; use `--full` for everything. Use `--raw` for unrendered markdown with plain, color-free
 layout. Both options also work with `session start --watch`. Markdown is buffered until a
 paragraph or event boundary; raw mode streams text chunks immediately.
+
+## The dashboard
+`wf watch` at a terminal is a dashboard to keep open, for example in a pane next to your editor.
+Its first tab lists what waits on you, the agents at work with what each is doing right now, and
+what is stuck; `a`/`d` answer a permission request, `r` a blocker, `v` a review, right where they
+are listed. `enter` opens an item, or a session on its live transcript. The other tabs are the
+items grouped as `wf item list --group-by` does, the agents with their sessions and how they are
+doing, and the event stream. `?` lists the keys. Piped or with `--json`, `wf watch` prints the
+events as they arrive instead.
 
 ## Sandbox
 The daemon runs every agent in [Fence](https://github.com/fencesandbox/fence), which has to be

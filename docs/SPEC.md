@@ -1287,7 +1287,7 @@ wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | 
 wf mentions <@handle | @handle/agent>
 wf review <item> --approve|--request-changes|--escalate [--note]
 wf inbox                                  # blockers, reviews, merges, recovery, permission requests
-wf watch [--item <item>]                  # events as they arrive; answer what waits on you
+wf watch [--item <item>]                  # the dashboard; piped, the events as they arrive
 wf agent add|list|edit|remove             # harness, model, capabilities, lanes, instructions, autonomy
 wf harness models <harness>               # the models a harness offers
 wf session start|list [--live]|show|stop|watch|allow|deny

@@ -108,7 +108,8 @@ pub enum Command {
     Review(ReviewArgs),
     /// What waits on you: blockers, reviews, merges and permission requests.
     Inbox,
-    /// Follow the events of the workforce, and answer what waits on you as it comes.
+    /// The dashboard: what waits on you, who works on what, items and agents. Piped, the events
+    /// as they arrive.
     Watch(WatchArgs),
     /// Try out how this machine decides the permission requests of agents.
     #[command(subcommand)]
@@ -157,7 +158,7 @@ pub enum Command {
 
 #[derive(Args)]
 pub struct WatchArgs {
-    /// Follow only this item.
+    /// Open the dashboard on this item; piped, print only its events.
     #[arg(long)]
     pub item: Option<String>,
 }
