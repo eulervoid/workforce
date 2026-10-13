@@ -320,10 +320,10 @@ fn startup_with_100k_events_and_a_snapshot_is_fast() {
         now += 1;
         let body = match (index % 10, items.last().copied()) {
             (0..=2, _) | (_, None) => {
-                create_with_body("task", &format!("task {index}"), "see #zzzz and @joshua")
+                create_with_body("task", &format!("task {index}"), "see #zzzz and @ada")
             }
             (3..=5, Some(item)) => edit(item, Change::Title(format!("renamed {index}"))),
-            (6..=7, Some(item)) => comment(item, "progress note @joshua"),
+            (6..=7, Some(item)) => comment(item, "progress note @ada"),
             (_, Some(item)) => moved(item, "in_progress"),
         };
         let event = fixture.author(&state, 0, now, body);

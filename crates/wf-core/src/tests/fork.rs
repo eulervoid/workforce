@@ -215,8 +215,8 @@ fn a_new_principal_keeps_the_handle_of_events_in_the_history() {
     let new = PrincipalSigner::from_bytes(&[200; 32]).unwrap().key();
     let old = scenario.fixture.founder.key();
 
-    assert_eq!(state.member(&old).unwrap().handle.as_str(), "joshua");
-    assert_eq!(state.member(&new).unwrap().handle.as_str(), "joshua");
+    assert_eq!(state.member(&old).unwrap().handle.as_str(), "ada");
+    assert_eq!(state.member(&new).unwrap().handle.as_str(), "ada");
     assert_eq!(state.workforce.as_ref().unwrap().canonical(&old), new);
     assert_eq!(
         state.principal_of(&scenario.fixture.devices[0].key()),

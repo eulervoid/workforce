@@ -20,11 +20,20 @@ pub(crate) struct AgentSessionRecord {
     /// When the daemon last prompted the agent, in milliseconds since the epoch; `None` before
     /// the brief was sent.
     pub(crate) prompted_ms: Option<u64>,
+    /// The current value of the agent's model option once the session opened; `None` when the
+    /// agent has no model option or the record is older than this field.
+    pub(crate) model: Option<String>,
 }
 
 /// Where the record of `session` is kept, beside its transcript.
 pub(crate) fn record_path(transcripts: &Path, session: SessionId) -> PathBuf {
     transcripts.join(format!("{session}.agent-session.json"))
+}
+
+/// The model `session` runs with, as the record beside its transcript in `transcripts` keeps it;
+/// `None` when it is not known on this machine.
+pub fn session_model(transcripts: &Path, session: SessionId) -> Option<String> {
+    AgentSessionRecord::read(&record_path(transcripts, session))?.model
 }
 
 impl AgentSessionRecord {

@@ -52,7 +52,7 @@ impl Sandbox {
             .env("XDG_RUNTIME_DIR", self.root.path().join("run"))
             .env("XDG_CONFIG_HOME", self.root.path().join("config"))
             .env("PATH", &self.bin)
-            .env("USER", "joshua");
+            .env("USER", "ada");
         command
     }
 

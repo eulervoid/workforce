@@ -200,12 +200,13 @@ impl Daemon {
                         .await?;
                 }
             }
-            MergeOutcome::DirtyCheckout { .. } | MergeOutcome::TargetMoved
+            MergeOutcome::DirtyCheckout(_) | MergeOutcome::TargetMoved
                 if attempt == Attempt::Retry => {}
-            MergeOutcome::DirtyCheckout { worktree } => {
+            MergeOutcome::DirtyCheckout(dirty) => {
                 comment(format!(
-                    "Waiting to merge: {target} is checked out in {} with changes.",
-                    worktree.display()
+                    "Waiting to merge: {target} is checked out in {} with changes to {}. Commit or stash them.",
+                    dirty.worktree.display(),
+                    dirty.files()
                 ))
                 .await?;
                 if let Some(review) = review.clone() {

@@ -117,6 +117,15 @@ impl WorkforceJudges {
         let command = daemon
             .harness_command(&definition.harness)
             .ok_or_else(|| format!("wf does not know the harness `{}`", definition.harness))?;
+        let environment = daemon
+            .machine_config()
+            .map_err(|error| error.to_string())?
+            .environment_of(agent);
+        let command = crate::environment::confine(
+            command,
+            &environment,
+            crate::environment::daemon_variables(),
+        );
         let workforce = daemon.workforce_directory(self.workforce);
         let directory = workforce.join("judges").join(agent.as_str());
         let transcripts = workforce.join("transcripts");

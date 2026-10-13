@@ -231,7 +231,7 @@ async fn start_daemon(
                     "XDG_RUNTIME_DIR",
                     wf.root.path().join("run").to_string_lossy(),
                 )
-                .env("USER", "joshua")
+                .env("USER", "ada")
                 .env("FAKE_AGENT_REOPENS", reopens),
         );
     }
@@ -304,6 +304,34 @@ async fn manual_start_uses_the_policy_agent_unless_overridden() {
         session["agent"].as_str().unwrap().contains("other"),
         "{session}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_shows_the_model_it_runs_with() {
+    let world = World::new("say hello\nhang\n").await;
+    let default = world.wf.add(&["--title", "Default model"]);
+    let default_session = start_session(&world, &default);
+    world.wf.run(&["agent", "edit", "coder", "--model", "deep"]);
+    let chosen = world.wf.add(&["--title", "Chosen model"]);
+    let chosen_session = start_session(&world, &chosen);
+    world
+        .wait("both sessions to report their model", |world| {
+            world
+                .sessions()
+                .iter()
+                .all(|session| !session["model"].is_null())
+        })
+        .await;
+    assert_eq!(
+        world.wf(&["session", "show", &default_session])["model"],
+        "fast"
+    );
+    assert_eq!(
+        world.wf(&["session", "show", &chosen_session])["model"],
+        "deep"
+    );
+    let list = world.wf.run(&["session", "list"]);
+    assert!(list.contains("MODEL") && list.contains("deep"), "{list}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -449,7 +477,7 @@ wf work submit --note \"all done\"
     assert!(transcript.contains("working on item"), "{transcript}");
     assert!(transcript.contains("hello"), "{transcript}");
     assert!(
-        transcript.contains("end_turn") && !transcript.contains("cancelled"),
+        transcript.contains("finished") && !transcript.contains("stopped"),
         "an agent that submits finishes its turn: {transcript}"
     );
 
@@ -507,7 +535,7 @@ wf work submit
             &world.wf.repository,
             &["log", "-1", "--format=%an|%cn", "main^2"]
         ),
-        "@joshua/coder|@joshua/coder",
+        "@ada/coder|@ada/coder",
         "the agent commits as itself"
     );
 }
@@ -539,7 +567,7 @@ wf work submit
         .unwrap();
     let said = String::from_utf8_lossy(&verified.stderr);
     assert!(verified.status.success(), "{said}");
-    assert!(said.contains("joshua@"), "{said}");
+    assert!(said.contains("ada@"), "{said}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -628,9 +656,9 @@ wf work submit
     let shown = world.item(&item);
     assert_eq!(shown["state"], "in_review", "{shown}");
     assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
-        note["text"]
-            .as_str()
-            .is_some_and(|text| text.starts_with("Waiting to merge"))
+        note["text"].as_str().is_some_and(|text| {
+            text.starts_with("Waiting to merge") && text.contains("changes to .workforce.toml.")
+        })
     }));
     assert!(
         std::fs::read_to_string(&file)
@@ -757,6 +785,7 @@ wf work submit
     let session = world.ended_session().await;
     assert_eq!(world.sessions().len(), 1, "the same session went on");
     assert_eq!(session["status"], "submitted", "{session}");
+    assert_eq!(session["model"], "fast", "the model is kept over a resume");
     let transcript = world.transcript(&item);
     assert!(
         transcript.contains("wf restarted while you were working"),
@@ -793,7 +822,10 @@ wf work submit
     assert_eq!(world.sessions().len(), 1);
     assert_eq!(session["status"], "submitted", "{session}");
     let transcript = world.transcript(&item);
-    assert!(transcript.contains("Use humantime"), "{transcript}");
+    assert!(
+        transcript.contains("- @ada: Use humantime"),
+        "the answer is named by its principal: {transcript}"
+    );
     assert!(
         !transcript.contains("wf restarted while you were working"),
         "a parked session is told what it waited for, nothing else: {transcript}"
@@ -1154,8 +1186,7 @@ turn
 sh echo done > a.txt && git add a.txt && git commit -q -m a
 wf work submit
 ";
-    let supervisor =
-        "wf comment {item} \"@joshua this is about intent\" --block --resolve-blockers\n";
+    let supervisor = "wf comment {item} \"@ada this is about intent\" --block --resolve-blockers\n";
     let world = World::agents(&[("coder", coder), ("supervisor", supervisor)]).await;
     world.automate("coder", "default");
     world.automate("supervisor", "supervision");
@@ -1338,6 +1369,7 @@ sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" comme
         "watch",
         short(second_work["id"].as_str().unwrap()),
         "--no-follow",
+        "--full",
     ]);
     assert!(
         transcript.contains("add a test"),
@@ -1667,7 +1699,8 @@ async fn an_agent_of_the_workforce_can_decide() {
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(
-        transcript.contains("allowed by agent judge: edits serve the item"),
+        transcript.contains("allowed by agent judge")
+            && transcript.contains("edits serve the item"),
         "{transcript}"
     );
     assert!(transcript.contains("permission: yes"), "{transcript}");

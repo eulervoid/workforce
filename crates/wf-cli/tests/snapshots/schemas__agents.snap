@@ -6,7 +6,7 @@ expression: "Envelope::new(view::agent_views(&scenario.state))"
   "schema": 4,
   "data": [
     {
-      "id": "@joshua/coder",
+      "id": "@ada/coder",
       "harness": "opencode",
       "model": null,
       "capabilities": [],

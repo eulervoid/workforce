@@ -224,7 +224,7 @@ impl State {
                 None => "review of work without commits: read it, then `wf review`".to_string(),
             },
             Waiting::Merge { commit } => format!(
-                "{} is ready to merge, but {} is checked out with changes",
+                "{} is ready to merge, but {} is checked out with changes; the daemon's comment on the item names them",
                 &commit.to_string()[..8],
                 policy.merge.target
             ),

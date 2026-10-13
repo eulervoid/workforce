@@ -121,16 +121,16 @@ the same store, log and item model.
 
 | Concept | Lifetime | Answers | Address |
 |---|---|---|---|
-| **Principal** | permanent | who is accountable (a human) | `@joshua` |
-| **Agent** | long-lived profile | what kind of worker: harness, model, capabilities, lanes | `@joshua/coder` |
-| **Session** | minutes to hours | who is working on which item right now, where, in which worktree | `@joshua/coder/s4k2` |
+| **Principal** | permanent | who is accountable (a human) | `@ada` |
+| **Agent** | long-lived profile | what kind of worker: harness, model, capabilities, lanes | `@ada/coder` |
+| **Session** | minutes to hours | who is working on which item right now, where, in which worktree | `@ada/coder/s4k2` |
 | **Device** | long-lived infrastructure | where things run; mostly invisible | not mentionable |
 
 **Principal always means the accountable person**, and nothing else: who owns the keys, whom agents
 act for, who decides a `principal` step of a review or recovery level, whom blockers escalate to.
 Stages 1 and 2 have one principal; a team (stage 3) has several. Code, CLI and docs say *principal*
 for this concept, never *human*, *user* or *person*; a step that waits on a principal names no
-particular one until stage 3, when it may (`{ principal = "@joshua" }`).
+particular one until stage 3, when it may (`{ principal = "@ada" }`).
 
 * **Principal key** (ed25519): one per human. Signs authority events: owner actions, invites,
   device bindings, policy. Kept on disk for M0 (`$XDG_DATA_HOME/workforce/keys/`); a 1Password or
@@ -716,22 +716,22 @@ Relations that change behaviour are explicit events. Informational ones are deri
 ### Derived references and mentions
 * `#k3f7a2` for items (any unique prefix of at least 4 characters, like git), `#k3f7a2/c7f2` for a
   comment on an item (section 10).
-* `@joshua` for principals, `@joshua/coder` for agents, and with session inboxes (M3)
-  `@joshua/coder/s4k2` for sessions. Short forms (`@coder`) work when unique in the workforce.
+* `@ada` for principals, `@ada/coder` for agents, and with session inboxes (M3)
+  `@ada/coder/s4k2` for sessions. Short forms (`@coder`) work when unique in the workforce.
 * Parsed with `pulldown-cmark`, skipping code spans and blocks. Tokens that do not resolve are plain text.
 * Derived in the fold with a versioned parser, not stored as events. A better parser means a refold.
 
-A handle match wins: `@joshua` is a principal even if an agent is also called `joshua`. A short name that
+A handle match wins: `@ada` is a principal even if an agent is also called `ada`. A short name that
 matches no handle resolves to an agent only if exactly one agent has that name.
 
 **Mention resolution:**
 
 | Written | Goes to |
 |---|---|
-| `@joshua` | the principal's inbox |
-| `@joshua/coder` in a comment **on an item** | the live session of that agent on this item; otherwise the agent's inbox, picked up by its next session |
-| `@joshua/coder` elsewhere | the agent's inbox |
-| `@joshua/coder/s4k2` (M3) | that session; if it has ended, the agent's inbox with a note |
+| `@ada` | the principal's inbox |
+| `@ada/coder` in a comment **on an item** | the live session of that agent on this item; otherwise the agent's inbox, picked up by its next session |
+| `@ada/coder` elsewhere | the agent's inbox |
+| `@ada/coder/s4k2` (M3) | that session; if it has ended, the agent's inbox with a note |
 
 So `@coder please also handle the empty case` on an item reaches the session working on it, which checks
 its inbox after each commit.
@@ -987,20 +987,20 @@ fold order. It replaces a separate history listing.
 
 ```
 activity · 2026-10-11
-  06:32  @joshua created the task
-  06:52  @joshua/coder/pp74s3 started work
-  06:52  @joshua/coder/pp74s3 ⧗ blocker → supervisor                            c7f2
+  06:32  @ada created the task
+  06:52  @ada/coder/pp74s3 started work
+  06:52  @ada/coder/pp74s3 ⧗ blocker → supervisor                               c7f2
            Item has two steps with no concrete work … What change do you want made?
-  06:55  @joshua/supervisor/k3j1 ⧗ blocker → @joshua · resolves c7f2            a91d
+  06:55  @ada/supervisor/k3j1 ⧗ blocker → @ada · resolves c7f2                  a91d
            No decision covers this; it's about intent.
-  06:59  @joshua resolved a91d                                                  e04b
+  06:59  @ada resolved a91d                                                     e04b
            Fix the formatting of the body, nothing else
-  06:59  @joshua/coder/pp74s3 resumed
-  07:04  @joshua/coder/pp74s3 submitted 3e8a1c → in_review
-  07:10  @joshua/reviewer/m2p9 requested changes on 3e8a1c
+  06:59  @ada/coder/pp74s3 resumed
+  07:04  @ada/coder/pp74s3 submitted 3e8a1c → in_review
+  07:10  @ada/reviewer/m2p9 requested changes on 3e8a1c
            △ b2e4  parser.rs: the error path drops the span
            △ d81c  missing test for empty input
-  07:31  @joshua/coder/pp74s3 resolved b2e4, d81c                               f13a
+  07:31  @ada/coder/pp74s3 resolved b2e4, d81c                                  f13a
            Kept the span in ParseError; added empty_input test.
 ```
 
@@ -1134,6 +1134,9 @@ fails or takes longer than 20 seconds is logged and stopped; nothing waits for i
   `publish = none | redacted | full` is a per-workforce policy (*later*).
 * `wf` **brokers** secrets, it does not store them. Sources: `secretspec.toml`, 1Password `op://`
   references, the system keyring. Values are injected into the harness environment.
+* An agent's environment is only what wf sets, a few variables every program expects (`HOME`, `PATH`,
+  ...), and what the machine config inherits or sets for every agent or for one (M2.2). Nothing else
+  of the daemon's environment reaches it; a variable set allows nothing in the sandbox by itself.
 * wf keeps the injected values in memory only and uses them to scrub: exact match plus base64, URL and hex
   encodings, then pattern scanning (gitleaks-style) as a second layer.
 * Comments written by agent sessions always pass redaction before signing.
@@ -1161,13 +1164,13 @@ Invite code (valid 24h, single use):  wfi1qk7m3...x9ta
 
 $ cd ~/src/workforce && wf join wfi1qk7m3...x9ta     # on the VM, inside an existing clone
 ✓ Connected to workforce "workforce" via laptop (direct)
-✓ This machine joins as a device of @joshua
+✓ This machine joins as a device of @ada
 Machine name [vm-hetzner-1]: ⏎
 Detected harnesses:  [x] opencode (authenticated)  [x] claude-code (not logged in)  [ ] codex (missing)
-Host your agents here:  [x] @joshua/coder  [ ] @joshua/reviewer (codex missing)
+Host your agents here:  [x] @ada/coder  [ ] @ada/reviewer (codex missing)
 Max concurrent sessions [1]: 2
 Run wf in the background (systemd user service)? [Y/n] ⏎
-✓ Daemon running. This machine takes work for: @joshua/coder
+✓ Daemon running. This machine takes work for: @ada/coder
 ```
 
 Everything is also available as flags for headless and Nix setups:

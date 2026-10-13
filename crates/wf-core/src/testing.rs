@@ -18,7 +18,7 @@ use crate::policy::DEFAULT_POLICY_TOML;
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::{State, Trust};
 
-/// A workforce founded by `@joshua` (an owner with several devices) plus a plain member `@ada`.
+/// A workforce founded by `@ada` (an owner with several devices) plus a plain member `@grace`.
 pub struct Fixture {
     pub founder: PrincipalSigner,
     pub member: PrincipalSigner,
@@ -47,13 +47,13 @@ impl Fixture {
             name: "demo".into(),
             founder: MemberSeed {
                 principal: founder.key(),
-                handle: Handle::new("joshua").unwrap(),
+                handle: Handle::new("ada").unwrap(),
                 devices: devices.iter().map(DeviceSigner::key).collect(),
                 previous: vec![],
             },
             members: vec![MemberSeed {
                 principal: member.key(),
-                handle: Handle::new("ada").unwrap(),
+                handle: Handle::new("grace").unwrap(),
                 devices: vec![member_device.key()],
                 previous: vec![],
             }],
@@ -141,7 +141,7 @@ impl Fixture {
             name: "demo (fork)".into(),
             founder: MemberSeed {
                 principal: founder.key(),
-                handle: Handle::new("joshua").unwrap(),
+                handle: Handle::new("ada").unwrap(),
                 devices: vec![self.devices[0].key()],
                 previous: if founder.key() == old {
                     vec![]
@@ -151,7 +151,7 @@ impl Fixture {
             },
             members: vec![MemberSeed {
                 principal: self.member.key(),
-                handle: Handle::new("ada").unwrap(),
+                handle: Handle::new("grace").unwrap(),
                 devices: vec![self.member_device.key()],
                 previous: vec![],
             }],

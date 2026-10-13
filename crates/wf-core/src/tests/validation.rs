@@ -121,9 +121,9 @@ fn genesis_rules() {
     );
     assert_eq!(
         forged_genesis(&fixture, &fixture.devices[0], |genesis| {
-            genesis.members[0].handle = Handle::new("joshua").unwrap()
+            genesis.members[0].handle = Handle::new("ada").unwrap()
         }),
-        Err(GenesisError::DuplicateHandle("joshua".into()).into())
+        Err(GenesisError::DuplicateHandle("ada".into()).into())
     );
     assert_eq!(
         forged_genesis(&fixture, &fixture.devices[0], |genesis| {

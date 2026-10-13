@@ -7,7 +7,7 @@ use anyhow::Context;
 use serde::Serialize;
 use wf_daemon::decide::{AgentContext, DeciderRequest, ItemContext, run_chain};
 use wf_daemon::machine_config::MachineConfig;
-use wf_harness::{Permission, PermissionRequest};
+use wf_harness::{Decider, Permission, PermissionRequest};
 
 use crate::cli::PermissionsCommand;
 use crate::commands::emit;
@@ -19,7 +19,7 @@ struct ChainView {
     passed: Vec<String>,
     /// `allow` or `deny`, or `None` when the principal would be asked.
     permission: Option<Permission>,
-    by: Option<String>,
+    by: Option<Decider>,
     reason: Option<String>,
 }
 

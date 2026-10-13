@@ -88,6 +88,11 @@ async fn drive(
             return failed(format!("the sandbox could not be set up: {problem}"));
         }
     };
+    let agent = crate::environment::confine(
+        agent,
+        &run.environment,
+        crate::environment::daemon_variables(),
+    );
     let opening = match &run.begin {
         Begin::New => Opening::New,
         Begin::Resume(record) => Opening::Resume(AgentSessionId(record.id.clone())),
@@ -142,6 +147,14 @@ async fn drive(
             Begin::New => None,
             Begin::Resume(record) => record.prompted_ms,
         },
+        // An agent that does not report its options again on a resume runs the model it ran.
+        model: conversation
+            .model()
+            .map(str::to_string)
+            .or_else(|| match &run.begin {
+                Begin::New => None,
+                Begin::Resume(record) => record.model.clone(),
+            }),
     };
     if let Err(error) = record.write(&run.agent_session) {
         // Without the record the session still runs; it only cannot be resumed after a restart.

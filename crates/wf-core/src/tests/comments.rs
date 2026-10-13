@@ -234,7 +234,7 @@ mod supervision {
         );
 
         fixture.apply(&mut state, 0, 2_003, define_supervisor("boss"));
-        fixture.apply(&mut state, 0, 2_004, blocker(task, "@joshua is it wanted?"));
+        fixture.apply(&mut state, 0, 2_004, blocker(task, "@ada is it wanted?"));
         fixture.apply(&mut state, 0, 2_005, blocker(task, "@coder why this way?"));
         assert_eq!(
             waits_on(&state, task),

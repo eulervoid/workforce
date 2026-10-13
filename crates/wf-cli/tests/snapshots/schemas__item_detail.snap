@@ -5,7 +5,7 @@ expression: "Envelope::new(&detail)"
 {
   "schema": 4,
   "data": {
-    "id": "2wj7ok3ecrjs5xgeib7m4rdrbitzykdbquwcaboqrt4jdiolr5ha",
+    "id": "rgrqrrkituoxhn5ct5kwybsbbrdx4irvxwsi72anpo6f23jdv5aq",
     "type": "task",
     "title": "Implement feed sync",
     "state": "open",
@@ -13,7 +13,7 @@ expression: "Envelope::new(&detail)"
     "readiness": "blocked",
     "blocked_by": [
       {
-        "id": "p62cy5u3k7ekbg5a7n2ixiscgcp7wpuk6o2nesskvkx6oxev44ja",
+        "id": "c4idpbeqgbeliompco4f3euoet6ibmul672xn2xwezizh5jgmbna",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -28,10 +28,10 @@ expression: "Envelope::new(&detail)"
     "body": [
       {
         "kind": "markdown",
-        "text": "blocked on #p62cy5, ask @coder"
+        "text": "blocked on #c4idpb, ask @coder"
       }
     ],
-    "author": "@joshua",
+    "author": "@ada",
     "created": "1970-01-01T00:00:05Z",
     "updated": "1970-01-01T00:00:09Z",
     "review": null,
@@ -41,7 +41,7 @@ expression: "Envelope::new(&detail)"
     "requires": [],
     "depends_on": [
       {
-        "id": "p62cy5u3k7ekbg5a7n2ixiscgcp7wpuk6o2nesskvkx6oxev44ja",
+        "id": "c4idpbeqgbeliompco4f3euoet6ibmul672xn2xwezizh5jgmbna",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -52,7 +52,7 @@ expression: "Envelope::new(&detail)"
     "supersedes": null,
     "references": [
       {
-        "id": "p62cy5u3k7ekbg5a7n2ixiscgcp7wpuk6o2nesskvkx6oxev44ja",
+        "id": "c4idpbeqgbeliompco4f3euoet6ibmul672xn2xwezizh5jgmbna",
         "type": "task",
         "title": "Pick a hash for event ids",
         "state": "open",
@@ -62,13 +62,13 @@ expression: "Envelope::new(&detail)"
     ],
     "referenced_by": [],
     "mentions": [
-      "@joshua",
-      "@joshua/coder"
+      "@ada",
+      "@ada/coder"
     ],
     "activity": [
       {
         "at": "1970-01-01T00:00:05Z",
-        "by": "@joshua",
+        "by": "@ada",
         "kind": "created",
         "summary": "created the task",
         "comment": null,
@@ -76,7 +76,7 @@ expression: "Envelope::new(&detail)"
       },
       {
         "at": "1970-01-01T00:00:07Z",
-        "by": "@joshua",
+        "by": "@ada",
         "kind": "edited",
         "summary": "set priority P1",
         "comment": null,
@@ -84,24 +84,24 @@ expression: "Envelope::new(&detail)"
       },
       {
         "at": "1970-01-01T00:00:08Z",
-        "by": "@joshua",
+        "by": "@ada",
         "kind": "depends_on",
-        "summary": "now depends on #p62cy5",
+        "summary": "now depends on #c4idpb",
         "comment": null,
         "text": null
       },
       {
         "at": "1970-01-01T00:00:09Z",
-        "by": "@joshua",
+        "by": "@ada",
         "kind": "comment",
         "summary": "comment",
         "comment": {
-          "id": "7ixk6cfci5cawzwlalwykw7vyvsxh7bf4oi3ldura2qvec3zxica",
-          "short": "7ixk",
+          "id": "dwf44pbuftft5dx4r4mh3yxvhtdpi5my6hemh7idnr6m56uyzjlq",
+          "short": "dwf4",
           "kind": "comment",
-          "by": "@joshua",
+          "by": "@ada",
           "at": "1970-01-01T00:00:09Z",
-          "text": "see #p62cy5, @joshua please check",
+          "text": "see #c4idpb, @ada please check",
           "session": null,
           "step": null,
           "resolves": [],

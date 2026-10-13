@@ -1,7 +1,7 @@
 //! Sessions and agents, as `wf session list` and `wf agent list` show them.
 
 use serde::Serialize;
-use wf_core::id::HashId;
+use wf_core::id::{HashId, SessionId};
 use wf_core::item::ItemView;
 use wf_core::resolve::MentionTarget;
 use wf_core::session::{EndReason, Session, SessionRole};
@@ -81,6 +81,9 @@ pub struct SessionView {
     pub status: String,
     pub started: String,
     pub ended: Option<String>,
+    /// The model the session runs with, as the agent reported it; `None` when that is not known
+    /// on this machine.
+    pub model: Option<String>,
     /// What the session submitted, or the commit a review session reviews.
     pub commit: Option<String>,
     /// How many steps of the item are checked off.
@@ -106,8 +109,12 @@ pub(super) fn is_parked(
                 .is_empty())
 }
 
-/// Live sessions first, then the others, each the newest first.
-pub fn session_views(state: &State) -> Vec<SessionView> {
+/// Live sessions first, then the others, each the newest first. `model_of` tells the model a
+/// session runs with, where this machine knows it.
+pub fn session_views(
+    state: &State,
+    model_of: impl Fn(SessionId) -> Option<String>,
+) -> Vec<SessionView> {
     let graph = state.dependency_graph();
     let mut sessions: Vec<_> = state.sessions().collect();
     sessions.sort_by_key(|session| (!session.is_live(), std::cmp::Reverse(session.started())));
@@ -143,6 +150,7 @@ pub fn session_views(state: &State) -> Vec<SessionView> {
                 },
                 started: timestamp(session.started().hlc),
                 ended: session.ended().map(|ended| timestamp(ended.at())),
+                model: model_of(session.id()),
                 commit,
                 steps,
             }

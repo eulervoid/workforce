@@ -4,6 +4,7 @@
 
 pub mod client;
 pub mod decide;
+mod environment;
 mod judges;
 pub mod machine_config;
 mod notify;
@@ -29,7 +30,7 @@ use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
-pub use runner::SessionError;
+pub use runner::{SessionError, session_model};
 pub use wf_net::{StorageClosed, StorageHandle};
 
 pub const STORE_FILE: &str = "store.redb";

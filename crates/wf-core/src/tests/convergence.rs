@@ -240,9 +240,7 @@ impl Simulation {
                     self.submit(device, edit(item, change));
                 }
             }
-            (13, Some(item)) => {
-                self.submit(device, comment(item, &format!("note {second} @joshua")))
-            }
+            (13, Some(item)) => self.submit(device, comment(item, &format!("note {second} @ada"))),
             (14, Some(item)) if second % 4 == 3 => {
                 let coder = crate::name::AgentName::new("coder").unwrap();
                 if self.replicas[device]

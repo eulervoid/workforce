@@ -37,12 +37,17 @@ pub struct TranscriptEntry {
 }
 
 impl TranscriptEntry {
-    /// `{"decision": {"permission": "allow", "by": "rules", "reason": ...}}`.
-    pub fn decision(at: Timestamp, decision: &crate::permission::Decision) -> Self {
+    /// `{"toolCallId": ..., "decision": {"permission": "allow", "by": {"kind": "rules"}, ...}}`:
+    /// the decision on the permission request for the tool call `tool_call`.
+    pub fn decision(
+        at: Timestamp,
+        tool_call: &str,
+        decision: &crate::permission::Decision,
+    ) -> Self {
         TranscriptEntry {
             at,
             direction: Direction::Wf,
-            message: serde_json::json!({ "decision": decision }),
+            message: serde_json::json!({ "toolCallId": tool_call, "decision": decision }),
         }
     }
 

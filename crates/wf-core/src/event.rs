@@ -596,7 +596,7 @@ mod tests {
         let (principal, device) = signers();
         let seed = MemberSeed {
             principal: principal.key(),
-            handle: Handle::new("joshua").unwrap(),
+            handle: Handle::new("ada").unwrap(),
             devices: vec![device.key()],
             previous: vec![],
         };
@@ -684,8 +684,8 @@ mod tests {
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
     ];
 
-    const GOLDEN_LEN: usize = 346;
-    const GOLDEN_ID: &str = "3jkx6ttzy4aogbqzz7wbac7ywc3m7jatkkfurqhwwmyynterg2pa";
+    const GOLDEN_LEN: usize = 343;
+    const GOLDEN_ID: &str = "x47qrvvox2dqfkr2nzucimqflq2usnxuo3o65b5uagx7xge7ipxa";
 
     #[test]
     fn round_trips_and_verifies() {

@@ -51,7 +51,7 @@ fn scenario() -> Scenario {
         &mut state,
         comment(
             task,
-            &format!("see #{}, @joshua please check", dependency.short()),
+            &format!("see #{}, @ada please check", dependency.short()),
         ),
     );
     apply(&mut state, moved(done, "done"));
@@ -126,4 +126,21 @@ fn events_and_status() {
     );
     insta::assert_json_snapshot!("agents", Envelope::new(view::agent_views(&scenario.state)));
     let _ = scenario.done;
+}
+
+#[test]
+fn sessions() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    fixture.apply(&mut state, 0, 2_000, define_agent("coder"));
+    let item: ItemId = fixture
+        .apply(&mut state, 0, 3_000, create("task", "Implement feed sync"))
+        .id()
+        .into();
+    let known = fixture.apply(&mut state, 0, 4_000, start_session("coder", item));
+    fixture.apply(&mut state, 0, 5_000, start_session("coder", item));
+    let sessions = view::session_views(&state, |session| {
+        (session == known.id().into()).then(|| "opus".to_string())
+    });
+    insta::assert_json_snapshot!("sessions", Envelope::new(&sessions));
 }

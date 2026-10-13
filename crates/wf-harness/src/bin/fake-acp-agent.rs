@@ -28,6 +28,18 @@ fn chunk(text: &str) {
     }));
 }
 
+/// The options of a session: its model, set to `model`.
+fn config_options(model: &str) -> Value {
+    json!([{
+        "id": "model", "name": "Model", "category": "model",
+        "type": "select", "currentValue": model,
+        "options": [
+            {"value": "fast", "name": "Fast"},
+            {"value": "deep", "name": "Deep"},
+        ],
+    }])
+}
+
 fn main() {
     let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
     let mut lines = std::io::stdin().lock().lines();
@@ -49,17 +61,11 @@ fn main() {
             }
             Some("session/new") => send(json!({
                 "jsonrpc": "2.0", "id": id,
-                "result": {
-                    "sessionId": "fake",
-                    "configOptions": [{
-                        "id": "model", "name": "Model", "category": "model",
-                        "type": "select", "currentValue": "fast",
-                        "options": [
-                            {"value": "fast", "name": "Fast"},
-                            {"value": "deep", "name": "Deep"},
-                        ],
-                    }],
-                },
+                "result": {"sessionId": "fake", "configOptions": config_options("fast")},
+            })),
+            Some("session/set_config_option") => send(json!({
+                "jsonrpc": "2.0", "id": id,
+                "result": {"configOptions": config_options(request["params"]["value"].as_str().unwrap())},
             })),
             Some("session/prompt") => {
                 eprintln!("fake agent got a prompt");

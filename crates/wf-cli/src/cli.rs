@@ -90,7 +90,7 @@ pub enum Command {
     Comment(CommentArgs),
     /// Show where a principal or agent is mentioned.
     Mentions {
-        /// `@joshua` or `@joshua/coder`
+        /// `@ada` or `@ada/coder`
         target: String,
     },
     /// Show or change the policy.
@@ -451,7 +451,7 @@ pub struct InitArgs {
     /// permissions and model.
     #[arg(long, short)]
     pub interactive: bool,
-    /// Your handle, the `joshua` in `@joshua`. Defaults to `$USER`.
+    /// Your handle, the `ada` in `@ada`. Defaults to `$USER`.
     #[arg(long)]
     pub handle: Option<String>,
     /// A name for this machine, shown by `wf device list`. Defaults to its host name.
@@ -476,7 +476,7 @@ pub enum AgentCommand {
 
 #[derive(Args)]
 pub struct AgentAddArgs {
-    /// The agent's name, the `coder` in `@joshua/coder`.
+    /// The agent's name, the `coder` in `@ada/coder`.
     pub name: AgentName,
     /// The program that runs the agent: `claude-code`, `opencode`, `codex` or `gemini-cli`.
     #[arg(long)]
@@ -611,10 +611,18 @@ pub enum ItemCommand {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
-    /// Hide an item from lists; its history stays.
+    /// Hide an item from lists; its history stays. `--done` and `--cancelled` archive every live
+    /// item in a state of that category, whatever its type calls the state.
     Archive {
         /// The start of an item id. Without one, pick at a terminal.
+        #[arg(conflicts_with_all = ["done", "cancelled"])]
         item: Option<String>,
+        /// Archive every live item in a done state.
+        #[arg(long)]
+        done: bool,
+        /// Archive every live item in a cancelled state.
+        #[arg(long)]
+        cancelled: bool,
     },
     /// Bring an archived item back.
     Unarchive {

@@ -6,10 +6,10 @@ expression: "Envelope::new(view::status(&scenario.state, view::StatusContext\n{\
   "schema": 4,
   "data": {
     "name": "demo",
-    "id": "oshizzmggvbbc53t4p3tjwrhklex2r324swvo3jnttyxdu4bvn5q",
+    "id": "3iesfvprxzu3q6ysoc2o5goojgtewtbpvzn4fl7s5jvjonaw7hua",
     "members": [
-      "@ada (member)",
-      "@joshua (owner)"
+      "@grace (member)",
+      "@ada (owner)"
     ],
     "agents": 1,
     "events": 10,
@@ -36,7 +36,7 @@ expression: "Envelope::new(view::status(&scenario.state, view::StatusContext\n{\
     "after_failures": [],
     "waiting_on_you": 0,
     "flagged": [],
-    "next": null,
+    "next": "1 ready item, but no agent starts on its own: `wf agent edit <name> --start auto`",
     "refolded": false
   }
 }

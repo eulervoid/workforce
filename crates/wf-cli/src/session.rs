@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 use std::time::Duration;
 
-use crate::transcript::Renderer;
+use crate::transcript::{self, Detail, Format, Renderer};
 use anyhow::{Context, anyhow, bail};
 use wf_core::id::{HashId, SessionId};
 use wf_harness::Permission;
@@ -29,7 +29,7 @@ pub fn session(
     match command {
         SessionCommand::Start(args) => start(json, mode, workspace, args, cwd),
         SessionCommand::List { live } => {
-            let views: Vec<_> = view::session_views(workspace.state())
+            let views: Vec<_> = view::session_views(workspace.state(), session_model(workspace))
                 .into_iter()
                 .filter(|view| !live || view.ended.is_none())
                 .collect();
@@ -37,7 +37,7 @@ pub fn session(
         }
         SessionCommand::Show { session } => {
             let id = choose_session(workspace, mode, session, Which::Any)?;
-            let views = view::session_views(workspace.state());
+            let views = view::session_views(workspace.state(), session_model(workspace));
             let shown = views
                 .into_iter()
                 .find(|view| view.id == id.to_base32())
@@ -137,7 +137,7 @@ fn pick_session(workspace: &Workspace, mode: Mode, which: Which) -> anyhow::Resu
         })
         .map(|session| session.id().to_base32())
         .collect();
-    let choices = view::session_views(state)
+    let choices = view::session_views(state, session_model(workspace))
         .iter()
         .filter(|view| eligible.contains(&view.id))
         .map(|view| Choice {
@@ -239,12 +239,21 @@ fn wait_for_transcript(path: &Path) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn transcript_path(workspace: &Workspace, session: SessionId) -> std::path::PathBuf {
+fn transcripts(workspace: &Workspace) -> std::path::PathBuf {
     workspace
         .data
         .workforce(&workspace.workforce())
         .join("transcripts")
-        .join(format!("{session}.jsonl"))
+}
+
+fn transcript_path(workspace: &Workspace, session: SessionId) -> std::path::PathBuf {
+    transcripts(workspace).join(format!("{session}.jsonl"))
+}
+
+/// The model of a session as the daemon of this machine recorded it beside the transcript.
+fn session_model(workspace: &Workspace) -> impl Fn(SessionId) -> Option<String> {
+    let transcripts = transcripts(workspace);
+    move |session| wf_daemon::session_model(&transcripts, session)
 }
 
 fn watch(
@@ -261,7 +270,19 @@ fn watch(
             path.display()
         )
     })?;
-    let mut renderer = Renderer::new(raw, full);
+    let agent = workspace.state().session(session).map_or_else(
+        || "agent".to_owned(),
+        |session| session.agent().name.to_string(),
+    );
+    let format = if raw { Format::Raw } else { Format::Styled };
+    let detail = if full { Detail::Full } else { Detail::Abridged };
+    let mut renderer = Renderer::new(
+        &agent,
+        transcript::terminal_width(),
+        format,
+        detail,
+        jiff::tz::TimeZone::system(),
+    );
     let mut pending = String::new();
     let mut buffer = [0u8; 8192];
     let mut unfinished_bytes = Vec::new();
@@ -271,10 +292,22 @@ fn watch(
         let read = file.read(&mut buffer)?;
         if read == 0 {
             if no_follow || ended {
-                anstream::print!("{}", renderer.finish());
+                let ended = ended
+                    || workspace
+                        .state()
+                        .session(session)
+                        .is_some_and(|session| !session.is_live());
+                let session = if ended {
+                    transcript::Session::Ended
+                } else {
+                    transcript::Session::Live
+                };
+                anstream::print!("{}", renderer.finish(session));
                 std::io::stdout().flush()?;
                 return Ok(());
             }
+            anstream::print!("{}", renderer.caught_up(jiff::Timestamp::now()));
+            std::io::stdout().flush()?;
             if last_refresh.elapsed() >= Duration::from_secs(1) {
                 workspace.refresh()?;
                 ended = workspace

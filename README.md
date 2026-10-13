@@ -74,6 +74,28 @@ allow_write = ["/opt/cache"]
 allow_domains = ["*.example.com"]
 ```
 
+## Environment
+Agents get only what wf sets for them (`WF_SESSION`, `WF_WORKFORCE`, `PATH`, their git identity),
+the variables every program expects (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `LC_ALL`,
+`LC_CTYPE`, the `XDG_*_HOME` directories), and what the machine config names; nothing else of the
+daemon's environment, so the API key of a model decider does not reach them. Values set are expanded
+when the config is read: `~`, `$NAME` and `${NAME}` from the daemon's environment, `$$` for a `$`. A
+variable that is not set is an error, and a relative path is relative to the agent's directory. Setting
+a variable allows nothing: a directory an agent is to write to goes in `allow_write` as well.
+```toml
+[environment]
+inherit = ["ANTHROPIC_API_KEY"]  # passed on from the daemon's environment, when set
+set = { CARGO_TARGET_DIR = "~/.cache/workforce/target" }   # one build cache for every worktree
+
+[sandbox]
+kind = "fence"
+allow_write = ["~/.cache/workforce/target"]
+
+[agent.coder]                    # on top of the above, for one agent
+environment = { set = { RUST_LOG = "debug" } }
+sandbox = { allow_domains = ["docs.rs"] }
+```
+
 ## Commits and signatures
 Agents commit as themselves, `@you/coder`, and without signing, so that they never wait for a key you
 have to unlock or approve. When your git config signs commits (`commit.gpgsign`), the merge commit

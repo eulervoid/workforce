@@ -10,6 +10,7 @@ mod resume;
 mod start;
 
 pub(crate) use dispatch::run_dispatcher;
+pub use resume::session_model;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -217,6 +218,8 @@ struct Run {
     sandbox: SandboxConfig,
     /// What git in the agent's processes signs with and commits as.
     git_environment: Vec<(String, String)>,
+    /// What the machine config gives the agent in its environment.
+    environment: crate::machine_config::EnvironmentConfig,
     autonomy_permissions: wf_core::autonomy::PermissionMode,
 }
 

@@ -74,10 +74,40 @@ impl PermissionRequest {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Decision {
     pub permission: Permission,
-    /// Which decider answered: `rules`, a hook, a model, an agent, the principal, or the agent's
-    /// fixed permissions.
-    pub by: String,
+    pub by: Decider,
     pub reason: Option<String>,
+}
+
+/// Who answers a permission request: one of the deciders of the machine config, the principal,
+/// or the agent's fixed permissions.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Decider {
+    /// The principal, asked because no decider decided.
+    Principal,
+    /// The agent's fixed permissions, so nobody weighed the request.
+    FixedPermissions,
+    /// The built-in rules.
+    Rules,
+    /// A hook, by the program it runs.
+    Hook { program: String },
+    /// A decision model, by its name.
+    Model { model: String },
+    /// An agent of the workforce, by its name.
+    Agent { agent: String },
+}
+
+impl std::fmt::Display for Decider {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Decider::Principal => write!(formatter, "the principal"),
+            Decider::FixedPermissions => write!(formatter, "the agent's permissions"),
+            Decider::Rules => write!(formatter, "rules"),
+            Decider::Hook { program } => write!(formatter, "hook {program}"),
+            Decider::Model { model } => write!(formatter, "model {model}"),
+            Decider::Agent { agent } => write!(formatter, "agent {agent}"),
+        }
+    }
 }
 
 /// Decides what a request of the agent for permission is answered with. The principal may be asked,
@@ -93,7 +123,7 @@ impl Permissions for Permission {
     ) -> agent_client_protocol::BoxFuture<'_, Decision> {
         let decision = Decision {
             permission: *self,
-            by: "the agent's permissions".to_string(),
+            by: Decider::FixedPermissions,
             reason: None,
         };
         Box::pin(async move { decision })
