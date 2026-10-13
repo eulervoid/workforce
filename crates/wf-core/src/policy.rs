@@ -48,7 +48,7 @@ pub enum PolicyError {
         level: ReviewLevelName,
     },
     #[error("type `{0}` has a review level but no review state to wait in")]
-    ReviewWithoutBlocked(TypeName),
+    ReviewWithoutReviewState(TypeName),
     #[error("recovery level `{0}` is defined twice")]
     DuplicateRecoveryLevel(RecoveryLevelName),
     #[error("`default` is not a recovery level name: it resets an item to the level of its type")]
@@ -367,7 +367,7 @@ impl Policy {
                     .review_level(level)
                     .is_some_and(|level| !level.steps.is_empty());
                 if reviews && !has(StateCategory::Review) {
-                    return Err(PolicyError::ReviewWithoutBlocked(name.clone()));
+                    return Err(PolicyError::ReviewWithoutReviewState(name.clone()));
                 }
             }
             if let Some(level) = &config.recovery
@@ -654,7 +654,7 @@ mod tests {
         );
         assert_eq!(
             Policy::parse(&unreviewable),
-            Err(PolicyError::ReviewWithoutBlocked(type_name("bug")))
+            Err(PolicyError::ReviewWithoutReviewState(type_name("bug")))
         );
     }
 

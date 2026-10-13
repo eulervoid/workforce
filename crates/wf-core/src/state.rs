@@ -522,11 +522,12 @@ impl State {
         })
     }
 
-    pub(crate) fn raw_item(&self, id: ItemId) -> Option<&Item> {
+    /// An item with all its data, also when it is archived and [`State::item`] shows a stub.
+    pub(crate) fn item_including_archived(&self, id: ItemId) -> Option<&Item> {
         self.workforce.as_ref()?.items.get(&id)
     }
 
-    pub(crate) fn raw_items(&self) -> impl Iterator<Item = &Item> {
+    pub(crate) fn items_including_archived(&self) -> impl Iterator<Item = &Item> {
         self.workforce
             .iter()
             .flat_map(|workforce| workforce.items.values())

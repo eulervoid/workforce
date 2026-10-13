@@ -337,7 +337,7 @@ mod tag {
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
 /// carry bodies it does not understand without losing a byte.
 #[derive(Serialize, Deserialize)]
-struct RawBody {
+struct TaggedBody {
     tag: u16,
     payload: Vec<u8>,
 }
@@ -398,7 +398,7 @@ impl EventBody {
         }
     }
 
-    fn to_raw(&self) -> Result<RawBody, EncodingError> {
+    fn to_tagged(&self) -> Result<TaggedBody, EncodingError> {
         let (tag, payload) = match self {
             EventBody::Genesis(body) => (tag::GENESIS, encoding::encode(body)?),
             EventBody::PolicySet(body) => (tag::POLICY_SET, encoding::encode(body)?),
@@ -421,12 +421,12 @@ impl EventBody {
             EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
             EventBody::Unknown { tag, payload } => (*tag, payload.clone()),
         };
-        Ok(RawBody { tag, payload })
+        Ok(TaggedBody { tag, payload })
     }
 
-    fn from_raw(raw: RawBody) -> Result<Self, EncodingError> {
-        let payload = raw.payload.as_slice();
-        Ok(match raw.tag {
+    fn from_tagged(tagged: TaggedBody) -> Result<Self, EncodingError> {
+        let payload = tagged.payload.as_slice();
+        Ok(match tagged.tag {
             tag::GENESIS => EventBody::Genesis(encoding::decode(payload)?),
             tag::POLICY_SET => EventBody::PolicySet(encoding::decode(payload)?),
             tag::AGENT_DEFINED => EventBody::AgentDefined(encoding::decode(payload)?),
@@ -448,7 +448,7 @@ impl EventBody {
             tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
             tag => EventBody::Unknown {
                 tag,
-                payload: raw.payload,
+                payload: tagged.payload,
             },
         })
     }
@@ -456,7 +456,7 @@ impl EventBody {
 
 impl Serialize for EventBody {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        self.to_raw()
+        self.to_tagged()
             .map_err(serde::ser::Error::custom)?
             .serialize(serializer)
     }
@@ -464,8 +464,8 @@ impl Serialize for EventBody {
 
 impl<'de> Deserialize<'de> for EventBody {
     fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
-        let raw = RawBody::deserialize(deserializer)?;
-        EventBody::from_raw(raw).map_err(serde::de::Error::custom)
+        let tagged = TaggedBody::deserialize(deserializer)?;
+        EventBody::from_tagged(tagged).map_err(serde::de::Error::custom)
     }
 }
 
@@ -742,11 +742,11 @@ mod tests {
 
     #[test]
     fn known_tag_with_corrupt_payload_is_rejected() {
-        let raw = RawBody {
+        let tagged = TaggedBody {
             tag: tag::COMMENT,
             payload: vec![1, 2, 3],
         };
-        let bytes = encoding::encode(&raw).unwrap();
+        let bytes = encoding::encode(&tagged).unwrap();
         assert!(encoding::decode::<EventBody>(&bytes).is_err());
     }
 }

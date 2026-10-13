@@ -88,7 +88,7 @@ impl DependencyGraph {
 impl State {
     pub fn dependency_graph(&self) -> DependencyGraph {
         let mut edges: Vec<(Stamp, Edge)> = Vec::new();
-        for item in self.raw_items() {
+        for item in self.items_including_archived() {
             for target in item.depends_on().values() {
                 let stamp = item
                     .depends_on()

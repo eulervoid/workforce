@@ -62,7 +62,7 @@ fn child(scenario: &Scenario) -> State {
 }
 
 fn items_of(state: &State) -> Vec<&crate::item::Item> {
-    state.raw_items().collect()
+    state.items_including_archived().collect()
 }
 
 /// Hands the state what it asks for, newest first, until it asks for nothing.

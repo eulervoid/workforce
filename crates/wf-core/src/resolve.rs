@@ -70,7 +70,7 @@ impl State {
         Resolver {
             state: self,
             items: self
-                .raw_items()
+                .items_including_archived()
                 .map(|item| (item.id().to_base32(), item.id()))
                 .collect(),
             sessions: self
@@ -135,7 +135,7 @@ impl Resolver<'_> {
         let item = self.item(item_prefix)?;
         let comments = self
             .state
-            .raw_item(item)
+            .item_including_archived(item)
             .into_iter()
             .flat_map(|item| item.comments().keys().copied());
         let comment = resolve_prefix(comment_prefix, comments)?;
