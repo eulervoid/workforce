@@ -71,11 +71,10 @@ impl Notifier {
         let Ok(state) = daemon.snapshot(loaded).await else {
             return;
         };
-        let finishing = state.approved_without_commits();
         let waits_on_principal = |entry: &InboxEntry| match &entry.waiting {
             Waiting::Merge { .. } => waiting_merges.contains(&entry.item),
-            Waiting::Proposal => !finishing.iter().any(|(item, _)| *item == entry.item),
-            Waiting::Blocker { .. }
+            Waiting::Proposal
+            | Waiting::Blocker { .. }
             | Waiting::PrincipalReview { .. }
             | Waiting::Recovery { .. } => true,
         };

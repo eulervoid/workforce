@@ -96,7 +96,7 @@ async fn dispatch_once(
             ),
         }
     }
-    for (item, done) in state.approved_without_commits() {
+    for (item, done) in state.finished_reviews() {
         let Ok(principal) = daemon.principal_of_device(&state) else {
             continue;
         };

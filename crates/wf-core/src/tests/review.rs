@@ -549,7 +549,7 @@ fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
     scene.apply(moved(finding, "in_review"));
     scene.apply(end_session(session, EndReason::Submitted { commit: None }));
     assert_eq!(scene.status(finding), Some(awaiting_human()));
-    assert!(scene.state.approved_without_commits().is_empty());
+    assert!(scene.state.finished_reviews().is_empty());
 
     scene.apply(verdict(finding, None, Verdict::Approve));
     assert_eq!(
@@ -557,13 +557,58 @@ fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
         Some(ReviewStatus::Approved { commit: None })
     );
     assert_eq!(
-        scene.state.approved_without_commits(),
+        scene.state.finished_reviews(),
         [(finding, StateName::new("done").unwrap())]
     );
     assert!(scene.state.pending_merges().is_empty());
 
     scene.apply(moved(finding, "done"));
-    assert!(scene.state.approved_without_commits().is_empty());
+    assert!(scene.state.finished_reviews().is_empty());
+}
+
+#[test]
+fn merged_work_is_finished_by_the_daemon_and_waits_on_nobody() {
+    let mut scene = Scene::new();
+    let item = scene
+        .apply(create_reviewed("task", "parse durations", "standard"))
+        .id()
+        .into();
+    // As the daemon writes a submission: the item moves to review, then the session ends.
+    let session: SessionId = scene.apply(start_session("coder", item)).id().into();
+    scene.apply(moved(item, "in_review"));
+    scene.apply(end_session(
+        session,
+        EndReason::Submitted {
+            commit: Some(commit(1)),
+        },
+    ));
+    scene.apply(verdict(item, commit(1), Verdict::Approve));
+    assert!(
+        scene.state.finished_reviews().is_empty(),
+        "it is merged first"
+    );
+
+    scene.apply(merged(item, commit(1), commit(9)));
+    assert_eq!(
+        scene.state.finished_reviews(),
+        [(item, StateName::new("done").unwrap())]
+    );
+    assert!(
+        scene.state.inbox().is_empty(),
+        "merged work waiting to be moved is no proposal"
+    );
+
+    scene.apply(moved(item, "open"));
+    scene.apply(moved(item, "in_review"));
+    assert!(scene.state.finished_reviews().is_empty());
+    assert_eq!(
+        scene.state.inbox(),
+        [crate::inbox::InboxEntry {
+            item,
+            waiting: crate::inbox::Waiting::Proposal
+        }],
+        "moved back into review by hand, it is the principal's to move on"
+    );
 }
 
 #[test]
@@ -579,7 +624,7 @@ fn approved_work_without_commits_does_not_finish_an_item_that_was_moved_since() 
     scene.apply(verdict(finding, None, Verdict::Approve));
     scene.apply(moved(finding, "open"));
     scene.apply(moved(finding, "in_review"));
-    assert!(scene.state.approved_without_commits().is_empty());
+    assert!(scene.state.finished_reviews().is_empty());
 }
 
 #[test]

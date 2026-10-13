@@ -137,11 +137,11 @@ impl State {
             .collect()
     }
 
-    /// Items with approved work that wait in a review state to be finished: the work was
-    /// submitted without commits, so there is nothing to merge. An item that moved on after the
-    /// submission was moved by someone, and is left where it is. Each comes with the done state
-    /// to move it to.
-    pub fn approved_without_commits(&self) -> Vec<(ItemId, StateName)> {
+    /// Items whose review is over and that wait in a review state only to be moved to a done
+    /// state: approved work submitted without commits, so there is nothing to merge, and merged
+    /// work. An item that moved on after the submission was moved by someone, and is left where it
+    /// is. Each comes with the done state to move it to.
+    pub fn finished_reviews(&self) -> Vec<(ItemId, StateName)> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
@@ -150,10 +150,10 @@ impl State {
             .filter(|item| {
                 matches!(
                     self.submission(item.id()),
-                    Some((None, submitted)) if item.moved() < submitted
+                    Some((_, submitted)) if item.moved() < submitted
                 ) && matches!(
                     self.review_status(item.id()),
-                    Some(ReviewStatus::Approved { .. })
+                    Some(ReviewStatus::Approved { commit: None } | ReviewStatus::Merged { .. })
                 )
             })
             .filter_map(|item| {

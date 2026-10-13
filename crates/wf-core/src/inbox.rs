@@ -100,6 +100,7 @@ impl State {
             return Vec::new();
         };
         let merges = self.pending_merges();
+        let finished = self.finished_reviews();
         let mut entries: Vec<_> = self
             .live_items()
             .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
@@ -117,12 +118,20 @@ impl State {
                     Some(ReviewStatus::Approved { .. })
                     | Some(ReviewStatus::ChangesRequested)
                     | Some(ReviewStatus::Merged { .. })
-                    | None => match merges.iter().find(|pending| pending.item == item.id()) {
-                        Some(pending) => Waiting::Merge {
-                            commit: pending.commit,
-                        },
-                        None => Waiting::Proposal,
-                    },
+                    | None => {
+                        if let Some(pending) =
+                            merges.iter().find(|pending| pending.item == item.id())
+                        {
+                            Waiting::Merge {
+                                commit: pending.commit,
+                            }
+                        } else if finished.iter().any(|(done, _)| *done == item.id()) {
+                            // The daemon moves it to its done state.
+                            return None;
+                        } else {
+                            Waiting::Proposal
+                        }
+                    }
                 };
                 Some((
                     item.updated(),
