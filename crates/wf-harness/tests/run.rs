@@ -178,6 +178,32 @@ async fn the_models_an_agent_offers_are_read_from_a_new_session() {
     );
 }
 
+async fn model_of_a_new_session(model: Option<&str>) -> Option<String> {
+    let directory = tempfile::tempdir().unwrap();
+    let conversation = Conversation::start(Launch {
+        agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        opening: Opening::New,
+        model: model.map(str::to_string),
+        directory: directory.path().to_path_buf(),
+        permissions: Arc::new(Permission::Allow),
+        transcript: SharedBuffer::default(),
+    })
+    .await
+    .unwrap();
+    let current = conversation.model().map(str::to_string);
+    conversation.close().await.unwrap();
+    current
+}
+
+#[tokio::test]
+async fn a_conversation_knows_the_model_its_session_runs_with() {
+    assert_eq!(model_of_a_new_session(None).await.as_deref(), Some("fast"));
+    assert_eq!(
+        model_of_a_new_session(Some("Deep")).await.as_deref(),
+        Some("deep")
+    );
+}
+
 /// Reopens the session `fake` with an agent that offers `reopens`, prompts it once and returns
 /// the transcript, or why it could not be opened.
 async fn reopen(reopens: &str) -> Result<(String, Vec<TranscriptEntry>), Error> {
