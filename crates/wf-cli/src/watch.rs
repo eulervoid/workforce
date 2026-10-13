@@ -153,9 +153,13 @@ fn ask_what_waits(
             Prompt::PrincipalReview { item } => ask_review(workspace, item),
             Prompt::Notice { item, what } => {
                 println!("{} {}", title(workspace, item), what);
-                Ok(true)
+                continue;
             }
         };
+        // A question stands apart from the events around it, before and after.
+        if matches!(outcome, Ok(true)) {
+            println!();
+        }
         match outcome {
             Ok(true) => {}
             Ok(false) => return Ok(false),
@@ -204,10 +208,20 @@ fn ask_permission(workspace: &mut Workspace, held: &HeldPermission) -> anyhow::R
         let answer = match answer.as_str() {
             "a" | "allow" | "y" | "yes" => Permission::Allow,
             "d" | "deny" | "n" | "no" => Permission::Deny,
-            "s" | "skip" | "" => return Ok(true),
+            "s" | "skip" | "" => {
+                println!("  skipped");
+                return Ok(true);
+            }
             _ => continue,
         };
         workspace.answer_permission(held.session, answer)?;
+        println!(
+            "  {}",
+            match answer {
+                Permission::Allow => "allowed",
+                Permission::Deny => "denied",
+            }
+        );
         return Ok(true);
     }
 }
@@ -240,6 +254,7 @@ fn ask_blocker(
         return Ok(false);
     };
     if answer.is_empty() {
+        println!("  skipped");
         return Ok(true);
     }
     workspace.author(EventBody::Commented(Comment {
@@ -297,7 +312,10 @@ fn ask_review(workspace: &mut Workspace, item: ItemId) -> anyhow::Result<bool> {
                 review(false, Mode::Scripted, workspace, verdict(false))?;
                 return Ok(true);
             }
-            "s" | "skip" | "" => return Ok(true),
+            "s" | "skip" | "" => {
+                println!("  skipped");
+                return Ok(true);
+            }
             _ => {}
         }
     }
