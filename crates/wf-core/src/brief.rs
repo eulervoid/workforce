@@ -138,11 +138,11 @@ impl Brief {
 }
 
 /// Who wrote something, as an agent is told: `@ada` for a principal, `@ada/coder` for an
-/// agent, and `the daemon`. A principal who is not a member is named by its short key.
+/// agent, and `@daemon`. A principal who is not a member is named by its short key.
 pub fn speaker(state: &State, actor: &Actor) -> String {
     match actor {
         Actor::Principal(principal) => handle(state, principal),
-        Actor::Daemon(_) => "the daemon".to_string(),
+        Actor::Daemon(_) => "@daemon".to_string(),
         Actor::Agent { agent, .. } => format!("{}/{}", handle(state, &agent.principal), agent.name),
     }
 }
@@ -652,7 +652,7 @@ mod tests {
         );
         assert_eq!(
             speaker(&state, &Actor::Daemon(fixture.founder.key())),
-            "the daemon"
+            "@daemon"
         );
     }
 
