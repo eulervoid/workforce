@@ -187,7 +187,7 @@ fn edit(json: bool, workspace: &mut Workspace, args: DeviceEditArgs) -> anyhow::
         json,
         &crate::commands::Done {
             message,
-            event: wf_core::id::HashId::to_base32(&event.id()),
+            event: Some(wf_core::id::HashId::to_base32(&event.id())),
             item: None,
         },
         |done| format!("{}\n", done.message),

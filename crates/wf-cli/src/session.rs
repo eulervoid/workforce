@@ -51,7 +51,7 @@ pub fn session(
                 json,
                 &crate::commands::Done {
                     message: format!("stopped session {}", id.short()),
-                    event: String::new(),
+                    event: None,
                     item: None,
                 },
                 |done| format!("{}\n", done.message),
@@ -90,7 +90,7 @@ fn answer(
         json,
         &crate::commands::Done {
             message: format!("{verb}: {}", held.what),
-            event: String::new(),
+            event: None,
             item: None,
         },
         |done| format!("{}\n", done.message),
@@ -212,7 +212,7 @@ fn start(
                 agent,
                 item.short()
             ),
-            event: session.to_base32(),
+            event: Some(session.to_base32()),
             item: Some(item.to_base32()),
         },
         |done| format!("{}\n", done.message),

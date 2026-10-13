@@ -476,7 +476,7 @@ fn edit(
             json,
             &Done {
                 message: "nothing changed".into(),
-                event: String::new(),
+                event: None,
                 item: Some(id.to_base32()),
             },
             |done| format!("{}\n", done.message),
@@ -528,7 +528,7 @@ fn check(json: bool, workspace: &mut Workspace, args: ItemCheckArgs) -> anyhow::
                 json,
                 &Done {
                     message: format!("nothing changed: {} already {verb}", labels.join(", ")),
-                    event: String::new(),
+                    event: None,
                     item: Some(id.to_base32()),
                 },
                 |done| format!("{}\n", done.message),

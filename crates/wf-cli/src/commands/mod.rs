@@ -81,7 +81,8 @@ fn emit_paged<T: Serialize>(
 #[derive(Serialize)]
 pub struct Done {
     pub message: String,
-    pub event: String,
+    /// The event the command wrote; `None` when it wrote none.
+    pub event: Option<String>,
     pub item: Option<String>,
 }
 
@@ -90,7 +91,7 @@ fn done(json: bool, message: String, event: &Event, item: Option<ItemId>) -> any
         json,
         &Done {
             message,
-            event: event.id().to_string(),
+            event: Some(event.id().to_string()),
             item: item.map(|id| id.to_base32()),
         },
         |done| format!("{}\n", done.message),

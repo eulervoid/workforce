@@ -110,7 +110,7 @@ fn end(
         json,
         &Done {
             message: format!("{verb} #{}", item.short()),
-            event: String::new(),
+            event: None,
             item: Some(item.to_base32()),
         },
         |done| format!("{}\n", done.message),
