@@ -80,6 +80,17 @@ fn accent(app: &App, place: KeysAt) -> Color {
     }
 }
 
+/// The bar left of a selection in `accent`, on the background of the selection: white while the
+/// accent is full, in the dimmed accent itself otherwise, so only the dimmed background shows.
+fn selection_bar(accent: Color) -> Span<'static> {
+    let color = if accent == ACCENT {
+        Color::White
+    } else {
+        accent
+    };
+    Span::styled("▎", Style::new().fg(color).bg(accent))
+}
+
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Draws the dashboard, and keeps the scroll of the text and of the list to what is shown of them.
@@ -195,8 +206,7 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
         .enumerate()
         .map(|(index, option)| {
             if index == choice.index() {
-                let bar = Span::styled("▎", Style::new().fg(accent).bg(Color::Reset));
-                Line::from(vec![bar, Span::raw(format!("{option} "))])
+                Line::from(vec![selection_bar(accent), Span::raw(format!("{option} "))])
                     .bold()
                     .bg(accent)
             } else {
@@ -711,11 +721,10 @@ impl RowLines {
         lines
     }
 
-    /// The marker column: the bar of the selection, on every line of it, apart from its
-    /// background.
+    /// The marker column: the bar of the selection, on every line of it.
     fn marker(&self) -> Span<'static> {
         if self.selected {
-            Span::styled("▎", Style::new().fg(self.accent).bg(Color::Reset))
+            selection_bar(self.accent)
         } else {
             Span::raw(" ")
         }

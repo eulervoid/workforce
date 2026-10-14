@@ -1261,7 +1261,9 @@ fn the_bar_and_the_background_cover_every_line_of_the_selection() {
     let (_, row) = find(&mut app, 60, 22, "blocker from");
     for line in [row, row + 1] {
         assert_eq!(symbol_at(&mut app, 60, 22, 0, line), "▎");
-        assert_eq!(style_at(&mut app, 60, 22, 0, line).fg, Some(ACCENT));
+        // The bar is white, on the background of the row, with no gap to the left edge.
+        assert_eq!(style_at(&mut app, 60, 22, 0, line).fg, Some(Color::White));
+        assert_eq!(bg_at(&mut app, 60, 22, 0, line), Some(ACCENT));
         assert_eq!(bg_at(&mut app, 60, 22, 10, line), Some(ACCENT));
     }
     // The line after the entry is the next one's.
@@ -1305,8 +1307,13 @@ fn while_the_terminal_pane_is_not_focused_the_accent_is_dimmed() {
     assert!(app.terminal_focus(false));
     assert!(!app.terminal_focus(false));
     assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT_DIMMED));
+    // The bar takes the colour of the dimmed background, so it does not show.
+    let bar = style_at(&mut app, 60, 16, 0, row);
+    assert_eq!((bar.fg, bar.bg), (Some(ACCENT_DIMMED), Some(ACCENT_DIMMED)));
     assert!(app.terminal_focus(true));
     assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
+    let bar = style_at(&mut app, 60, 16, 0, row);
+    assert_eq!((bar.fg, bar.bg), (Some(Color::White), Some(ACCENT)));
 }
 
 #[test]
