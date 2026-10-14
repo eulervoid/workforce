@@ -995,10 +995,10 @@ fn draw_session(
         })
         .collect();
     let usage = app.transcripts.get(&session.id).and_then(Transcript::usage);
-    let [context, body, bar] = Layout::vertical([
-        Constraint::Length(u16::from(usage.is_some())),
+    let [body, bar, context] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(u16::from(!asks.is_empty())),
+        Constraint::Length(u16::from(usage.is_some())),
     ])
     .areas(body);
     if let Some(usage) = usage {
