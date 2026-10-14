@@ -202,17 +202,19 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
     let mut tabs = Vec::new();
     for tab in Tab::ALL {
         if !tabs.is_empty() {
-            tabs.push(Span::raw("  "));
+            tabs.push(Span::raw(" "));
         }
         let style = if tab == app.tab {
             Style::new().bold().reversed()
         } else {
             Style::new().dim()
         };
-        let mut label = format!("{} {}", tab.key(), tab.name());
+        // A column of the highlight on either side of the label.
+        let mut label = format!(" {} {}", tab.key(), tab.name());
         if tab == Tab::Now && !app.snapshot.waiting.is_empty() {
             label.push_str(&format!("·{}", app.snapshot.waiting.len()));
         }
+        label.push(' ');
         tabs.push(Span::styled(label, style));
     }
     let tabs = Line::from(tabs);
