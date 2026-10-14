@@ -549,7 +549,11 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             );
             let mut more = vec![Span::raw("   ")];
             more.extend(quote);
-            row.lines(first, row.keys("r").map(Line::from), vec![Line::from(more).dim()])
+            row.lines(
+                first,
+                row.keys("r").map(Line::from),
+                vec![Line::from(more).dim()],
+            )
         }
         Waiting::Review { item, commit } => {
             let mut first = vec![Span::raw("◎ ").fg(Color::Yellow)];
@@ -624,11 +628,7 @@ fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'s
 /// `right`, then how full the session's context is, `· 69k/1M`, when its agent reported it.
 fn with_context(app: &App, session: &SessionInfo, right: String) -> Line<'static> {
     let mut line = Line::from(Span::raw(right).dim());
-    if let Some(usage) = app
-        .transcripts
-        .get(&session.id)
-        .and_then(Transcript::usage)
-    {
+    if let Some(usage) = app.transcripts.get(&session.id).and_then(Transcript::usage) {
         line.push_span(Span::raw(" · ").dim());
         line.push_span(context_span(
             usage,
@@ -636,6 +636,24 @@ fn with_context(app: &App, session: &SessionInfo, right: String) -> Line<'static
         ));
     }
     line
+}
+
+/// `context 69k of 1M (7%) · $0.42`, the cost only when the agent reports it.
+fn context_line(usage: &Usage) -> Line<'static> {
+    let mut text = format!(
+        "context {} of {} ({}%)",
+        tokens(usage.used),
+        tokens(usage.size),
+        context_percent(usage)
+    );
+    if let Some(cost) = &usage.cost {
+        let amount = match cost.currency.as_str() {
+            "USD" => format!("${:.2}", cost.amount),
+            currency => format!("{:.2} {currency}", cost.amount),
+        };
+        text = format!("{text} · {amount}");
+    }
+    Line::from(context_span(usage, text))
 }
 
 /// `text` about `usage`: yellow once the context is nearly full, dim before.
@@ -647,9 +665,11 @@ fn context_span(usage: &Usage, text: String) -> Span<'static> {
     }
 }
 
-/// How much of the context window is used, in percent.
+/// How much of the context window is used, in whole percent.
 fn context_percent(usage: &Usage) -> u64 {
-    (usage.used * 100).checked_div(usage.size).unwrap_or(0)
+    (usage.used * 100 + usage.size / 2)
+        .checked_div(usage.size)
+        .unwrap_or(0)
 }
 
 /// A count of tokens, short: `850`, `69k`, `1M`, `1.5M`.
@@ -974,11 +994,16 @@ fn draw_session(
             | Waiting::Notice { .. } => None,
         })
         .collect();
-    let [body, bar] = Layout::vertical([
+    let usage = app.transcripts.get(&session.id).and_then(Transcript::usage);
+    let [context, body, bar] = Layout::vertical([
+        Constraint::Length(u16::from(usage.is_some())),
         Constraint::Fill(1),
         Constraint::Length(u16::from(!asks.is_empty())),
     ])
     .areas(body);
+    if let Some(usage) = usage {
+        frame.render_widget(Paragraph::new(context_line(usage)), context);
+    }
     let shown = draw_scrolled(frame, text, scroll, body, false);
     if let Some(what) = asks.first() {
         let line = Line::from(vec![
