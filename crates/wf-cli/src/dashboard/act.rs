@@ -45,9 +45,11 @@ pub fn carry_out(
 }
 
 /// The agents of the principal of this machine, the policy's default agent first. A draft can be
-/// released for the dispatcher too, which comes first.
+/// released for the dispatcher too, which comes first. An item that a live session holds is
+/// refused right away, before a starter is picked for nothing.
 fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
+    wf_daemon::ensure_unclaimed(state, item)?;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let draft = matches!(
         state.item(item),

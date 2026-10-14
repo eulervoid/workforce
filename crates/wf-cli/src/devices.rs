@@ -13,7 +13,6 @@ use crate::cli::{DeviceCommand, DeviceEditArgs};
 use crate::commands::emit;
 use crate::network::parse_agents;
 use crate::render;
-use crate::view::actor_label;
 use crate::workspace::Workspace;
 
 /// When each device was last heard from, in milliseconds since the epoch. Local to this machine
@@ -47,7 +46,7 @@ pub fn device_views(state: &State, own: DeviceKey, last_seen: &LastSeen) -> Vec<
             DeviceView {
                 device: info.device.to_string(),
                 name: info.profile.map(|profile| profile.name.clone()),
-                principal: actor_label(state, &wf_core::identity::Actor::Principal(info.principal)),
+                principal: state.actor_label(&wf_core::identity::Actor::Principal(info.principal)),
                 hardware: info.profile.map(|profile| profile.hardware.clone()),
                 max_sessions: info.profile.map(|profile| profile.max_sessions),
                 agents: info

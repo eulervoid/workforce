@@ -312,7 +312,7 @@ fn item_ref(state: &State, id: ItemId) -> ItemRef {
 fn who(state: &State, actor: &Actor) -> String {
     match actor {
         Actor::Agent { agent, .. } => agent.name.to_string(),
-        Actor::Principal(_) | Actor::Daemon(_) => view::actor_label(state, actor),
+        Actor::Principal(_) | Actor::Daemon(_) => state.actor_label(actor),
     }
 }
 

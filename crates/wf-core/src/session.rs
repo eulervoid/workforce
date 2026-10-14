@@ -8,7 +8,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::crdt::Stamp;
 use crate::id::{ItemId, SessionId};
-use crate::identity::{AgentId, DeviceKey};
+use crate::identity::{Actor, AgentId, DeviceKey};
 
 const GIT_OID_LEN: usize = 20;
 
@@ -201,6 +201,14 @@ impl Session {
 
     pub fn item(&self) -> ItemId {
         self.item
+    }
+
+    /// Who acts in the session: its agent, as this session.
+    pub fn actor(&self) -> Actor {
+        Actor::Agent {
+            agent: self.agent.clone(),
+            session: self.id,
+        }
     }
 
     pub fn role(&self) -> SessionRole {

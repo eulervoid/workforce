@@ -194,7 +194,7 @@ fn start(
                 anyhow!("missing --agent; pass one, or set `default_agent` in the policy")
             })?,
     };
-    let item = choose_item(workspace, mode, args.item, Scope::Live)?;
+    let item = choose_item(workspace, mode, args.item, Scope::Unclaimed)?;
     let (file, _) = workspace::find_workforce(cwd)?;
     let repository = file
         .parent()

@@ -11,7 +11,10 @@ use wf_core::item::{ItemState, Priority};
 use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
-use super::app::{AgentRow, App, Choice, Effect, Opened, Prompt, Row, Scroll, Starter, Tab, Wheel};
+use super::app::{
+    AgentRow, App, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll, Starter, Tab,
+    Wheel,
+};
 use super::draw;
 use super::snapshot::{
     AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Place, SessionInfo,
@@ -437,7 +440,7 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
 #[test]
 fn what_an_action_did_shows_until_the_next_key() {
     let mut app = app();
-    app.did("allowed: rm -rf target".to_owned());
+    app.did("allowed: rm -rf target".to_owned(), NOW_MS);
     assert!(screen(&mut app, 60, 8).contains("✓ allowed: rm -rf target"));
     app.refresh(snapshot());
     assert!(
@@ -445,6 +448,24 @@ fn what_an_action_did_shows_until_the_next_key() {
         "a refresh keeps it"
     );
     press(&mut app, KeyCode::Char('j'));
+    assert!(!screen(&mut app, 60, 8).contains("✓ allowed"));
+}
+
+#[test]
+fn an_action_error_goes_away_after_its_time() {
+    let mut app = app();
+    app.action_failed(&anyhow::anyhow!("the daemon refused"), NOW_MS);
+    let later = |ms| Snapshot {
+        now_ms: NOW_MS + ms,
+        ..snapshot()
+    };
+    app.refresh(later(STATUS_LASTS_MS - 1));
+    assert!(screen(&mut app, 60, 8).contains("error: the daemon refused"));
+    app.refresh(later(STATUS_LASTS_MS));
+    assert!(!screen(&mut app, 60, 8).contains("error"));
+
+    app.did("allowed: rm -rf target".to_owned(), NOW_MS);
+    app.refresh(later(STATUS_LASTS_MS));
     assert!(!screen(&mut app, 60, 8).contains("✓ allowed"));
 }
 
@@ -1140,4 +1161,121 @@ fn a_list_moves_only_as_far_as_keeps_the_selection_on_screen() {
     assert_eq!(list_top(5, Some(0), 40, 10), 0);
     // A list that got shorter is drawn to its end.
     assert_eq!(list_top(30, None, 12, 10), 2);
+}
+
+/// What the coder of `#parse` does after [`coder_transcript`]: the tests pass, it thinks, sums up
+/// in markdown and ends its turn; then the next turn starts.
+fn coder_transcript_continued() -> Vec<TranscriptEntry> {
+    vec![
+        update(
+            5,
+            json!({"sessionUpdate": "tool_call_update", "toolCallId": "2", "status": "completed",
+                "content": [{"type": "content", "content": {"type": "text", "text": "```console\ntest result: ok. 12 passed\n```"}}]}),
+        ),
+        update(
+            6,
+            json!({"sessionUpdate": "agent_thought_chunk", "content": {"type": "text", "text": "The tests pass; the **loader** is done."}}),
+        ),
+        update(
+            7,
+            json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "## Done\n\n- `Config::load` is lazy now\n- a test covers the first access, which is a long line that wraps at a narrow width\n"}}),
+        ),
+        entry(
+            8,
+            Direction::FromAgent,
+            json!({"id": 1, "result": {"stopReason": "end_turn"}}),
+        ),
+        entry(
+            9,
+            Direction::ToAgent,
+            json!({"id": 2, "method": "session/prompt", "params": {"prompt": [{"type": "text", "text": "Now the spans."}]}}),
+        ),
+        update(
+            10,
+            json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Looking at the spans"}}),
+        ),
+    ]
+}
+
+/// `transcript` laid out at once into one text, as the session detail did before it kept the
+/// lines of each block.
+fn laid_out_at_once(
+    layout: &crate::transcript::Layout,
+    transcript: &crate::transcript::Transcript,
+) -> Vec<ratatui::text::Line<'static>> {
+    use crate::transcript::Spacing;
+    use ansi_to_tui::IntoText;
+    let mut out = String::new();
+    let mut last = Spacing::Nothing;
+    let mut add = |opens: Spacing, leaves: Spacing, text: String| {
+        if !text.is_empty() {
+            out.push_str(last.before(opens));
+            out.push_str(&text);
+            last = leaves;
+        }
+    };
+    for block in transcript.blocks() {
+        add(block.opens(), block.leaves(), layout.block(block));
+    }
+    if let Some(prose) = transcript.open_prose() {
+        add(
+            Spacing::Prose,
+            Spacing::Prose,
+            layout.prose(prose.kind, &prose.text),
+        );
+    }
+    for call in transcript.open_calls() {
+        add(Spacing::Tool, Spacing::Tool, layout.running(call));
+    }
+    out.into_text().unwrap().lines
+}
+
+#[test]
+fn the_kept_lines_of_a_transcript_are_those_of_laying_it_out_at_once() {
+    use super::transcript_lines::TranscriptLines;
+    use crate::transcript::{Format, Layout, Transcript, Verbosity};
+    let layout = |width| {
+        Layout::new(
+            "coder",
+            width,
+            Format::Styled,
+            Verbosity::Abridged,
+            TimeZone::UTC,
+        )
+    };
+    let mut transcript = Transcript::new();
+    let mut lines = TranscriptLines::new(layout(60));
+    // Parsed as one text, the styles a block ends with are reset in the next one, rather than
+    // left out: they differ as spans, so they are compared as drawn.
+    let drawn = |lines: Vec<ratatui::text::Line<'static>>, width: usize| {
+        let area = ratatui::layout::Rect::new(0, 0, width as u16, lines.len() as u16);
+        let mut buffer = ratatui::buffer::Buffer::empty(area);
+        ratatui::widgets::Widget::render(
+            ratatui::widgets::Paragraph::new(lines),
+            area,
+            &mut buffer,
+        );
+        buffer
+    };
+    let assert_same = |lines: &TranscriptLines, transcript: &Transcript, width| {
+        let mut kept = lines.lines().to_vec();
+        kept.extend(lines.open_lines(transcript));
+        let at_once = laid_out_at_once(&layout(width), transcript);
+        assert_eq!(kept.len(), at_once.len());
+        assert_eq!(drawn(kept, width), drawn(at_once, width));
+    };
+    let mut entries = coder_transcript();
+    entries.extend(coder_transcript_continued());
+    // Taken in a few entries at a time, with a call or some prose open in between.
+    for step in entries.chunks(3) {
+        for entry in step {
+            transcript.push(entry);
+        }
+        lines.update(layout(60), &transcript);
+        assert_same(&lines, &transcript, 60);
+    }
+    assert!(lines.lines().len() > 20, "{}", lines.lines().len());
+    // A narrower window lays it all out again.
+    lines.update(layout(30), &transcript);
+    assert_same(&lines, &transcript, 30);
 }

@@ -44,17 +44,21 @@ pub(crate) fn sorted_views(state: &State, include_archived: bool) -> Vec<ItemVie
 #[derive(Clone, Copy)]
 pub(crate) enum Scope {
     Live,
+    /// Live items that no live work session holds, to start one on.
+    Unclaimed,
     Archived,
     Any,
 }
 
 impl Scope {
-    fn includes(self, view: &ItemView<'_>) -> bool {
+    fn includes(self, state: &State, view: &ItemView<'_>) -> bool {
         match (self, view) {
+            (Scope::Unclaimed, ItemView::Live(item)) => state.claim(item.id()).is_none(),
             (Scope::Any, _)
             | (Scope::Live, ItemView::Live(_))
             | (Scope::Archived, ItemView::Archived(_)) => true,
-            (Scope::Live, ItemView::Archived(_)) | (Scope::Archived, ItemView::Live(_)) => false,
+            (Scope::Live | Scope::Unclaimed, ItemView::Archived(_))
+            | (Scope::Archived, ItemView::Live(_)) => false,
         }
     }
 }
@@ -79,7 +83,7 @@ fn pick_item(
     let graph = state.dependency_graph();
     let choices = sorted_views(state, true)
         .into_iter()
-        .filter(|view| scope.includes(view))
+        .filter(|view| scope.includes(state, view))
         .map(|view| item_choice(&view::summary(state, &graph, view)))
         .collect();
     let picked = interactive::pick(what, choices)?;
@@ -783,4 +787,38 @@ fn pick_dependency(workspace: &Workspace, id: ItemId) -> anyhow::Result<ItemId> 
         .map(|view| item_choice(&view::summary(state, &graph, view)))
         .collect();
     workspace.resolve_item(&interactive::pick("dependency", choices)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use wf_core::testing::{Fixture, create, define_agent, start_session};
+
+    use super::*;
+
+    #[test]
+    fn the_start_picker_leaves_out_an_item_with_a_live_session() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        fixture.apply(&mut state, 0, 2_000, define_agent("coder"));
+        let busy = ItemId::from(
+            fixture
+                .apply(&mut state, 0, 2_001, create("task", "Busy"))
+                .id(),
+        );
+        let free = ItemId::from(
+            fixture
+                .apply(&mut state, 0, 2_002, create("task", "Free"))
+                .id(),
+        );
+        fixture.apply(&mut state, 0, 3_000, start_session("coder", busy));
+        let offered = |scope: Scope| -> Vec<ItemId> {
+            state
+                .items()
+                .filter(|view| scope.includes(&state, view))
+                .map(|view| view.id())
+                .collect()
+        };
+        assert_eq!(offered(Scope::Unclaimed), vec![free]);
+        assert_eq!(offered(Scope::Live).len(), 2);
+    }
 }

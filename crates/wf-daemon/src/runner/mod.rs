@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use wf_core::event::{Event, EventBody};
-use wf_core::id::{ItemId, SessionId, WorkforceId};
+use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::lifecycle::Interruption;
 use wf_core::name::{AgentName, HarnessName};
@@ -40,13 +40,19 @@ pub enum SessionError {
     UnknownAgent(AgentName),
     #[error("harness `{0}` is not one wf knows how to start; see `wf agent list`")]
     UnknownHarness(HarnessName),
-    #[error("there is no item {0}")]
+    #[error("there is no item #{}", .0.short())]
     UnknownItem(ItemId),
-    #[error("{0} is archived")]
+    #[error("#{} is archived", .0.short())]
     Archived(ItemId),
-    #[error("{0} already has a live session; stop it first")]
-    Claimed(ItemId),
-    #[error("there is no session {0}")]
+    #[error("#{} already has a live session, {holder}; stop it first", .item.short())]
+    Claimed {
+        item: ItemId,
+        /// The session that holds the item, as [`State::actor_label`] names it.
+        holder: String,
+    },
+    #[error("a session is already starting on #{}", .0.short())]
+    Starting(ItemId),
+    #[error("there is no session {}", .0.short())]
     UnknownSession(SessionId),
     #[error("the session runs on another machine")]
     NotOurs(SessionId),
@@ -73,6 +79,17 @@ pub enum SessionError {
         #[source]
         source: std::io::Error,
     },
+}
+
+/// Refuses a work session on `item` while a live one holds it.
+pub fn ensure_unclaimed(state: &State, item: ItemId) -> Result<(), SessionError> {
+    match state.claim(item) {
+        Some(holder) => Err(SessionError::Claimed {
+            item,
+            holder: state.actor_label(&holder.actor()),
+        }),
+        None => Ok(()),
+    }
 }
 
 /// Tells the task of a running session that it has ended and its harness is to be stopped.
@@ -334,5 +351,40 @@ impl Daemon {
             path: directory,
             source,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wf_core::id::SessionId;
+    use wf_core::testing::{Fixture, create, define_agent, start_session};
+
+    use super::*;
+
+    #[test]
+    fn a_refusal_names_the_item_short_and_the_session_that_holds_it() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        fixture.apply(&mut state, 0, 2_000, define_agent("coder"));
+        let item = ItemId::from(
+            fixture
+                .apply(&mut state, 0, 2_001, create("task", "Busy"))
+                .id(),
+        );
+        assert!(ensure_unclaimed(&state, item).is_ok());
+        let started = fixture.apply(&mut state, 0, 3_000, start_session("coder", item));
+        let session = SessionId::from(started.id());
+        let holder = state.actor_label(&fixture.agent_actor("coder", session));
+        assert!(
+            holder.ends_with(&format!("/coder/{}", session.short())),
+            "{holder}"
+        );
+        assert_eq!(
+            ensure_unclaimed(&state, item).unwrap_err().to_string(),
+            format!(
+                "#{} already has a live session, {holder}; stop it first",
+                item.short()
+            )
+        );
     }
 }

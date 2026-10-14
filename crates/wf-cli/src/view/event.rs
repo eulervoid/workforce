@@ -10,7 +10,7 @@ use wf_core::item::ItemView;
 use wf_core::state::State;
 
 use super::detail::{ActivityKind, ActivityView, activity_views};
-use super::{actor_label, timestamp};
+use super::timestamp;
 
 /// One line of `wf watch`: what an event did, and to which item.
 #[derive(Serialize)]
@@ -162,7 +162,7 @@ pub fn event_view(state: &State, event: &Event, verified: bool) -> EventView {
         id: event.id().to_string(),
         seq: event.content.seq,
         device: event.content.author.fmt_short(),
-        actor: actor_label(state, &event.content.actor),
+        actor: state.actor_label(&event.content.actor),
         at: timestamp(event.content.hlc),
         kind: event.content.body.name().to_string(),
         summary: describe(state, &event.content.body),

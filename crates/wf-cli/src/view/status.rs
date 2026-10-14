@@ -12,7 +12,7 @@ use wf_core::item::ItemView;
 use wf_core::state::State;
 
 use super::session::is_parked;
-use super::{actor_label, device_label, timestamp_ms};
+use super::{device_label, timestamp_ms};
 
 #[derive(Serialize)]
 pub struct StatusView {
@@ -175,7 +175,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
     for announcement in state.announcements() {
         flagged.insert(format!(
             "{} forked this workforce to {}; `wf fork accept {}` follows it",
-            actor_label(state, &Actor::Principal(announcement.by)),
+            state.actor_label(&Actor::Principal(announcement.by)),
             announcement.to,
             announcement.to
         ));

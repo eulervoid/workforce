@@ -1872,6 +1872,15 @@ async fn an_item_with_a_live_session_is_not_started_twice() {
     let message = world
         .wf
         .fail(&["session", "start", short(&item), "--agent", "coder"]);
-    assert!(message.contains("already has a live session"), "{message}");
-    assert_eq!(world.sessions().len(), 1);
+    let sessions = world.sessions();
+    assert_eq!(sessions.len(), 1);
+    let session = sessions[0]["id"].as_str().unwrap();
+    assert!(
+        message.contains(&format!("#{} already has a live session, @", short(&item))),
+        "{message}"
+    );
+    assert!(
+        message.contains(&format!("/coder/{}; stop it first", short(session))),
+        "{message}"
+    );
 }

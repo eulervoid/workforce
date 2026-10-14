@@ -8,7 +8,7 @@ use crate::autonomy::Autonomy;
 use crate::crdt::{Lww, Stamp};
 use crate::event::{DeviceProfile, Event, EventBuilder, InviteKind};
 use crate::hlc::Hlc;
-use crate::id::{EventId, ItemId, SessionId, WorkforceId};
+use crate::id::{EventId, HashId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, InviteKey, PrincipalKey, Role};
 use crate::item::{Item, ItemView};
 use crate::name::{AgentName, Handle, HarnessName, LaneName, Requirement};
@@ -409,6 +409,27 @@ impl State {
     pub fn member(&self, principal: &PrincipalKey) -> Option<&Member> {
         let workforce = self.workforce.as_ref()?;
         workforce.members.get(&workforce.canonical(principal))
+    }
+
+    /// `@ada` for a principal, `@ada/coder/3f9a2c` for an agent in its session, and `@daemon`.
+    /// A principal who is not a member is named by its short key.
+    pub fn actor_label(&self, actor: &Actor) -> String {
+        let principal = |key: &PrincipalKey| {
+            self.member(key)
+                .map_or_else(|| key.fmt_short(), |member| format!("@{}", member.handle))
+        };
+        match actor {
+            Actor::Principal(key) => principal(key),
+            Actor::Daemon(_) => "@daemon".to_string(),
+            Actor::Agent { agent, session } => {
+                format!(
+                    "{}/{}/{}",
+                    principal(&agent.principal),
+                    agent.name,
+                    session.short()
+                )
+            }
+        }
     }
 
     /// The workforce this one was forked from and the heads it was forked at.
