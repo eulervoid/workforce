@@ -7,7 +7,7 @@ pub mod signing;
 use std::path::{Path, PathBuf};
 
 use wf_core::id::{HashId, ItemId};
-use wf_core::session::CommitId;
+use wf_core::session::{CommitId, GitOid};
 
 pub use git::GitCli;
 
@@ -154,6 +154,12 @@ pub trait VcsAdapter {
 
     /// Checks `commit` out, detached, in a new worktree at `path`, for a reviewer.
     fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError>;
+
+    /// Makes the worktree at `path` hold the files of `tree`, a tree or a commit, and nothing
+    /// else: tracked files are reset and untracked ones removed. Ignored files, such as build
+    /// output, stay. A commit is checked out with HEAD detached at it. The worktree is made,
+    /// detached, when it is not there yet.
+    fn check_out_tree(&self, path: &Path, tree: GitOid) -> Result<(), VcsError>;
 
     /// Removes the worktree at `path` together with whatever is uncommitted in it.
     fn remove_worktree(&self, path: &Path) -> Result<(), VcsError>;

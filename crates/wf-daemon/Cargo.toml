@@ -17,6 +17,8 @@ tokio = { workspace = true, features = ["process"] }
 toml.workspace = true
 tracing.workspace = true
 humantime.workspace = true
+jiff.workspace = true
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 data-encoding.workspace = true
 rand.workspace = true
 url = { version = "2", features = ["serde"] }

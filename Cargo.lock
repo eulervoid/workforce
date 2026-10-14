@@ -6007,6 +6007,8 @@ dependencies = [
  "data-encoding",
  "globset",
  "humantime",
+ "jiff",
+ "nix 0.31.3",
  "rand 0.10.3",
  "reqwest",
  "rustls",
