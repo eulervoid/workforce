@@ -734,6 +734,9 @@ pub struct App {
     /// the latest event.
     pub hovered: Option<Spot>,
     pub unconfirmed_allow: Option<UnconfirmedAllow>,
+    /// Whether the terminal pane the dashboard runs in is focused, as far as the terminal reports
+    /// it; a terminal that does not report it counts as focused.
+    pub terminal_focused: bool,
 }
 
 impl App {
@@ -768,6 +771,7 @@ impl App {
             pointer: None,
             hovered: None,
             unconfirmed_allow: None,
+            terminal_focused: true,
         };
         app.refresh(snapshot);
         app
@@ -1526,6 +1530,20 @@ impl App {
         let changed = under != self.hovered;
         self.hovered = under;
         changed
+    }
+
+    /// The terminal pane was focused, or left. Returns whether that changed anything, which is
+    /// drawn again only then. Leaving it lets go of the link or button under the pointer.
+    pub fn terminal_focus(&mut self, focused: bool) -> bool {
+        if self.terminal_focused == focused {
+            return false;
+        }
+        self.terminal_focused = focused;
+        if !focused {
+            self.pointer = None;
+            self.hovered = None;
+        }
+        true
     }
 
     /// The link or button at `position` as last drawn, while the mouse acts.
