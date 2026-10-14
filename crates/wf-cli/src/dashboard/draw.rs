@@ -20,7 +20,7 @@ use super::snapshot::{
 use super::snapshot::{Detail, ItemRow};
 use crate::cli::ItemGrouping;
 use crate::render;
-use crate::transcript::{self, Format, Now, Transcript};
+use crate::transcript::{self, Format, Now, Transcript, Usage};
 use wf_core::stats::ProjectStats;
 
 /// The background of the selected row while the list has the keys.
@@ -446,7 +446,7 @@ impl RowLines {
     fn lines(
         &self,
         first: Vec<Span<'static>>,
-        right: Option<Span<'static>>,
+        right: Option<Line<'static>>,
         more: Vec<Line<'static>>,
     ) -> Vec<Line<'static>> {
         let marker = if self.selected {
@@ -463,7 +463,7 @@ impl RowLines {
             Some(right) => {
                 let padding = width.saturating_sub(used + right.width() + 1).max(2);
                 spans.push(Span::raw(" ".repeat(padding)));
-                spans.push(right);
+                spans.extend(right.spans);
                 spans.push(Span::raw(" "));
             }
             // Across the whole width, for the background of the selection.
@@ -533,7 +533,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             }
             first.push(Span::raw(" wants: "));
             first.push(Span::raw(what.clone()));
-            row.lines(first, row.keys("a / d"), Vec::new())
+            row.lines(first, row.keys("a / d").map(Line::from), Vec::new())
         }
         Waiting::Blocker { item, by, text, .. } => {
             let mut first = vec![Span::raw("⧗ ").fg(Color::Yellow)];
@@ -549,7 +549,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             );
             let mut more = vec![Span::raw("   ")];
             more.extend(quote);
-            row.lines(first, row.keys("r"), vec![Line::from(more).dim()])
+            row.lines(first, row.keys("r").map(Line::from), vec![Line::from(more).dim()])
         }
         Waiting::Review { item, commit } => {
             let mut first = vec![Span::raw("◎ ").fg(Color::Yellow)];
@@ -559,7 +559,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
                 first.push(Span::raw(format!(" {}", &commit.to_string()[..8])).dim());
             }
             first.push(Span::raw(format!("  {}", item.title)));
-            row.lines(first, row.keys("v"), Vec::new())
+            row.lines(first, row.keys("v").map(Line::from), Vec::new())
         }
         Waiting::Notice { item, kind, what } => {
             let mut first = vec![Span::raw("• ").fg(Color::Yellow)];
@@ -616,9 +616,53 @@ fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'s
         .map(|line| Line::from(cut_spans(line.spans, usize::from(row.width))).dim());
     row.lines(
         first,
-        Some(Span::raw(right).dim()),
+        Some(with_context(app, session, right)),
         more.into_iter().collect(),
     )
+}
+
+/// `right`, then how full the session's context is, `· 69k/1M`, when its agent reported it.
+fn with_context(app: &App, session: &SessionInfo, right: String) -> Line<'static> {
+    let mut line = Line::from(Span::raw(right).dim());
+    if let Some(usage) = app
+        .transcripts
+        .get(&session.id)
+        .and_then(Transcript::usage)
+    {
+        line.push_span(Span::raw(" · ").dim());
+        line.push_span(context_span(
+            usage,
+            format!("{}/{}", tokens(usage.used), tokens(usage.size)),
+        ));
+    }
+    line
+}
+
+/// `text` about `usage`: yellow once the context is nearly full, dim before.
+fn context_span(usage: &Usage, text: String) -> Span<'static> {
+    if context_percent(usage) >= 80 {
+        Span::raw(text).fg(Color::Yellow)
+    } else {
+        Span::raw(text).dim()
+    }
+}
+
+/// How much of the context window is used, in percent.
+fn context_percent(usage: &Usage) -> u64 {
+    (usage.used * 100).checked_div(usage.size).unwrap_or(0)
+}
+
+/// A count of tokens, short: `850`, `69k`, `1M`, `1.5M`.
+fn tokens(count: u64) -> String {
+    let thousands = (count + 500) / 1000;
+    if count < 1000 {
+        count.to_string()
+    } else if thousands < 1000 {
+        format!("{thousands}k")
+    } else {
+        let millions = format!("{:.1}", count as f64 / 1_000_000.0);
+        format!("{}M", millions.trim_end_matches(".0"))
+    }
 }
 
 /// The rows of the Now tab under their sections.
@@ -706,7 +750,7 @@ fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
         right.push(priority.to_string());
     }
     let right = (!right.is_empty()).then(|| Span::raw(right.join(" ")).dim());
-    row.lines(first, right, Vec::new())
+    row.lines(first, right.map(Line::from), Vec::new())
 }
 
 fn state_color(item: &ItemRow) -> Color {
@@ -770,7 +814,7 @@ fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
         Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).dim(),
         None => Span::raw(format!("{live} live · not here")).dim(),
     };
-    row.lines(first, Some(load), Vec::new())
+    row.lines(first, Some(Line::from(load)), Vec::new())
 }
 
 /// A session under its agent: `◆ #k3j1 Parse config lazily  work 12m`.
@@ -798,7 +842,7 @@ fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<L
             )
         }
     };
-    row.lines(first, Some(Span::raw(right).dim()), Vec::new())
+    row.lines(first, Some(with_context(app, session, right)), Vec::new())
 }
 
 /// The agents with their sessions under the stats of the project.
@@ -943,7 +987,7 @@ fn draw_session(
         ]);
         let keys = Span::raw("a allow · d deny").fg(Color::Yellow);
         let row = RowLines::new(app, false, bar.width);
-        let mut lines = row.lines(line.spans, Some(keys), Vec::new());
+        let mut lines = row.lines(line.spans, Some(Line::from(keys)), Vec::new());
         frame.render_widget(Paragraph::new(lines.remove(0)), bar);
     }
     shown
