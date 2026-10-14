@@ -79,7 +79,12 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
 
     let session = scene.start(task);
     scene.apply(moved(task, ItemState::Active));
-    assert_eq!(after(&scene, session, submitted), AfterEnd::MergeThenDone);
+    assert_eq!(
+        after(&scene, session, submitted),
+        AfterEnd::MergeThenDone {
+            wait_in: Some(ItemState::Review)
+        }
+    );
     scene.end(session, submitted);
 
     let session = scene.start(reviewed);
