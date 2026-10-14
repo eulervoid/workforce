@@ -19,7 +19,7 @@ use crate::cli::ForkArgs;
 use crate::commands::emit;
 use crate::data_dir::DataDir;
 use crate::network::{network_for, sync_devices};
-use crate::view::{actor_label, device_label};
+use crate::view::device_label;
 use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
 
 /// The directory of a fork that is being made, removed again unless the fork is completed.
@@ -242,21 +242,18 @@ pub fn fork(
             excluded_devices: excluded_devices.iter().map(describe).collect(),
             excluded_members: excluded_members
                 .iter()
-                .map(|principal| actor_label(&state, &Actor::Principal(*principal)))
+                .map(|principal| state.actor_label(&Actor::Principal(*principal)))
                 .collect(),
             members: kept
                 .iter()
                 .map(|principal| {
-                    actor_label(
-                        &state,
-                        &Actor::Principal(
-                            if args.new_principal && *principal == founder_key.key() {
-                                own_principal
-                            } else {
-                                *principal
-                            },
-                        ),
-                    )
+                    state.actor_label(&Actor::Principal(
+                        if args.new_principal && *principal == founder_key.key() {
+                            own_principal
+                        } else {
+                            *principal
+                        },
+                    ))
                 })
                 .collect(),
             announced: announce,
@@ -442,11 +439,11 @@ pub fn list(json: bool, workspace: &Workspace) -> anyhow::Result<()> {
             .announcements()
             .map(|announcement| ForkedView {
                 workforce: announcement.to.to_string(),
-                announced_by: actor_label(state, &Actor::Principal(announcement.by)),
+                announced_by: state.actor_label(&Actor::Principal(announcement.by)),
                 members: announcement
                     .members
                     .iter()
-                    .map(|principal| actor_label(state, &Actor::Principal(*principal)))
+                    .map(|principal| state.actor_label(&Actor::Principal(*principal)))
                     .collect(),
             })
             .collect(),

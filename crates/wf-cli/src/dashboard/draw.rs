@@ -1204,8 +1204,10 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
 /// The latest event, or why the last refresh failed.
 fn latest_line(app: &App) -> Line<'static> {
     match &app.status {
-        Some(Status::Done(what)) => return Line::from(format!(" ✓ {what}")).fg(Color::Green),
-        Some(Status::ActionFailed(error) | Status::RefreshFailed(error)) => {
+        Some(Status::Done { what, .. }) => {
+            return Line::from(format!(" ✓ {what}")).fg(Color::Green);
+        }
+        Some(Status::ActionFailed { error, .. } | Status::RefreshFailed(error)) => {
             let first = error.lines().next().unwrap_or_default();
             return Line::from(format!(" error: {first}")).fg(Color::Red);
         }
