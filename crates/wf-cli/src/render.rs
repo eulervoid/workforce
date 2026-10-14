@@ -1002,8 +1002,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn an_item_that_references_this_one_several_times_is_listed_once_with_a_count() {
-        use std::collections::BTreeSet;
+    fn an_item_that_references_this_one_several_times_is_listed_once() {
         use wf_core::id::{CommentId, HashId, ItemId};
         use wf_core::item::ItemView;
         use wf_core::testing::*;
@@ -1045,27 +1044,26 @@ mod tests {
         };
         let detail = crate::view::item_detail(&state, item, &[]);
         let shown = anstream::adapter::strip_str(&item_detail_for(&detail, None)).to_string();
-        let backlinks: BTreeSet<&str> = shown
+        let mut backlinks: Vec<&str> = shown
             .lines()
             .filter(|line| line.contains("referenced by"))
             .map(str::trim)
             .collect();
+        backlinks.sort();
         let line = |item: ItemId, rest: &str| format!("↳ referenced by #{}{rest}", item.short());
-        let expected = [
+        let mut expected = vec![
             line(body_only, " \"Body only\""),
-            line(everywhere, " \"Everywhere\" (3x, 2 in comments)"),
-            line(one_comment, " \"One comment\" (in a comment)"),
-            line(comments_only, " \"Comments only\" (2x, 2 in comments)"),
+            line(everywhere, " \"Everywhere\""),
+            line(one_comment, " \"One comment\""),
+            line(comments_only, " \"Comments only\""),
             line(note_and_item, " \"Note and item\""),
             format!(
-                "↳ {note} referenced by #{} \"Note and item\" (in a comment)",
+                "↳ {note} referenced by #{} \"Note and item\"",
                 note_and_item.short()
             ),
         ];
-        assert_eq!(
-            backlinks,
-            expected.iter().map(String::as_str).collect::<BTreeSet<_>>()
-        );
+        expected.sort();
+        assert_eq!(backlinks, expected);
     }
 
     #[test]
