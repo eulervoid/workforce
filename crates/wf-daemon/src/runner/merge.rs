@@ -375,7 +375,7 @@ impl Daemon {
             }
             MergeOutcome::Conflict { paths } => {
                 comment(format!(
-                    "Merging into {target} conflicts in {}. The next session merges {target} into the branch first.",
+                    "Merging into {target} conflicts in {}. The next session starts with {target} merged into the branch.",
                     paths.join(", ")
                 ))
                 .await?;
