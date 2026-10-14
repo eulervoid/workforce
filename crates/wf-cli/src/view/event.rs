@@ -1,4 +1,4 @@
-//! Events, as `wf log` and `wf watch` show them.
+//! Events, as `wf log` and the dashboard show them.
 
 use std::collections::HashMap;
 
@@ -12,9 +12,9 @@ use wf_core::state::State;
 use super::detail::{ActivityKind, ActivityView, activity_views};
 use super::timestamp;
 
-/// One line of `wf watch`: what an event did, and to which item.
+/// One line of `wf log --follow` and the event stream of the dashboard: what an event did, and to which item.
 #[derive(Serialize)]
-pub struct WatchLineView {
+pub struct EventLineView {
     pub event: String,
     pub item: Option<String>,
     pub title: Option<String>,
@@ -24,7 +24,7 @@ pub struct WatchLineView {
 
 /// What the `new` events did, one line for each thing, read against `events`: all that is known
 /// so far, which the activity of an item needs.
-pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchLineView> {
+pub fn event_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<EventLineView> {
     let mut lines = Vec::new();
     // The activity of an item is worked out from all events: once for each item, not each event.
     let mut activities: HashMap<ItemId, Vec<Entry>> = HashMap::new();
@@ -43,7 +43,7 @@ pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchL
                     .cloned()
                     .collect();
                 for activity in activity_views(state, item, &entries) {
-                    lines.push(WatchLineView {
+                    lines.push(EventLineView {
                         event: event.id().to_string(),
                         item: Some(item.id().to_base32()),
                         title: Some(item.title().to_string()),
@@ -51,7 +51,7 @@ pub fn watch_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<WatchL
                     });
                 }
             }
-            None => lines.push(WatchLineView {
+            None => lines.push(EventLineView {
                 event: event.id().to_string(),
                 item: state.item_of(event).map(|id| id.to_base32()),
                 title: None,

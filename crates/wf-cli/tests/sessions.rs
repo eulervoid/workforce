@@ -1578,18 +1578,19 @@ wf work release --note later
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn watch_prints_events_as_they_arrive() {
+async fn log_follow_prints_events_as_they_arrive() {
     let world =
         World::new("say hello\nwf comment {item} \"halfway there\"\nwf work release --note done\n")
             .await;
     let item = world.wf.add(&["--title", "Watched"]);
-    let mut watch = world
+    world.wf.add(&["--title", "Not followed"]);
+    let mut follow = world
         .wf
-        .command(&["watch", "--json"])
+        .command(&["log", "--follow", "--item", &item, "--json"])
         .stdout(std::process::Stdio::piped())
         .spawn()
         .unwrap();
-    let stdout = watch.stdout.take().unwrap();
+    let stdout = follow.stdout.take().unwrap();
     let (lines, received) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         for line in std::io::BufRead::lines(std::io::BufReader::new(stdout)) {
@@ -1599,7 +1600,7 @@ async fn watch_prints_events_as_they_arrive() {
             }
         }
     });
-    // The backlog ends with the item.
+    // The log of the item starts with its creation.
     loop {
         let line = received.recv_timeout(Duration::from_secs(10)).unwrap();
         if line.contains("\"created\"") {
@@ -1612,13 +1613,14 @@ async fn watch_prints_events_as_they_arrive() {
     let mut kinds = Vec::new();
     while let Ok(line) = received.recv_timeout(Duration::from_secs(5)) {
         let line: Value = serde_json::from_str(&line).unwrap();
+        assert_eq!(line["data"]["title"], "Watched", "{line}");
         kinds.push(line["data"]["kind"].as_str().unwrap().to_string());
         if kinds.last().map(String::as_str) == Some("session_ended") {
             break;
         }
     }
-    watch.kill().unwrap();
-    watch.wait().unwrap();
+    follow.kill().unwrap();
+    follow.wait().unwrap();
     assert!(kinds.contains(&"session_started".to_string()), "{kinds:?}");
     assert!(kinds.contains(&"comment".to_string()), "{kinds:?}");
     assert_eq!(

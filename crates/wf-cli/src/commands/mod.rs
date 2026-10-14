@@ -101,7 +101,10 @@ fn done(json: bool, message: String, event: &Event, item: Option<ItemId>) -> any
 pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     let json = cli.json;
     let mode = Mode::detect(json);
-    match cli.command {
+    let Some(command) = cli.command else {
+        return dashboard(mode, data, cwd, cli.item.as_deref());
+    };
+    match command {
         Command::Init(args) => init(json, mode, args, data, cwd),
         Command::Join(args) => crate::network::join(json, mode, args, data, cwd),
         Command::Fork {
@@ -144,7 +147,6 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 }
                 Command::Work(command) => work(json, command, &mut workspace),
                 Command::Review(args) => review(json, mode, &mut workspace, args),
-                Command::Watch(args) => crate::watch::watch(json, mode, &mut workspace, args),
                 Command::Inbox => {
                     let views = view::inbox_views(workspace.state(), &workspace.held_permissions());
                     emit(json, &views, |views| render::inbox(views))
@@ -154,7 +156,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Comment(args) => comment(json, mode, &mut workspace, args),
                 Command::Mentions { target } => mentions(json, &workspace, &target),
                 Command::Policy(command) => policy(json, command, &mut workspace),
-                Command::Log => log(json, mode, &workspace),
+                Command::Log(args) => log(json, mode, &mut workspace, args),
                 Command::Export => crate::export::export(&workspace),
                 Command::Device(command) => crate::devices::device(json, command, &mut workspace),
                 Command::Members => crate::devices::members(json, &workspace),
@@ -177,6 +179,28 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// Plain `wf`: the dashboard at a terminal. Anywhere else nobody could use it, so the help.
+fn dashboard(mode: Mode, data: DataDir, cwd: &Path, item: Option<&str>) -> anyhow::Result<()> {
+    match (mode, item) {
+        (Mode::Interactive, _) => {}
+        (Mode::Scripted, Some(item)) => {
+            bail!(
+                "the dashboard needs a terminal; `wf log --follow --item {item}` prints the events of the item"
+            )
+        }
+        (Mode::Scripted, None) => {
+            anstream::eprint!("{}", crate::cli::command().render_help().ansi());
+            std::process::exit(2);
+        }
+    }
+    let mut workspace = Workspace::open(data, cwd, false)?;
+    if !workspace.follows_daemon() {
+        bail!("the dashboard follows the daemon; start it with `wf daemon start`");
+    }
+    let only = item.map(|text| workspace.resolve_item(text)).transpose()?;
+    crate::dashboard::run(&mut workspace, only)
 }
 
 fn handle_from_environment() -> Handle {

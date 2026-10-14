@@ -427,6 +427,45 @@ fn agents_and_policy() {
 }
 
 #[test]
+fn plain_wf_without_a_terminal_prints_the_help() {
+    let wf = Sandbox::new();
+    let help = wf.fail(&[]);
+    assert!(help.contains("Usage:"), "{help}");
+    assert!(help.contains("opens the dashboard"), "{help}");
+    assert!(wf.fail(&["--item", "x"]).contains("needs a terminal"));
+}
+
+#[test]
+fn item_opens_the_dashboard_and_takes_no_command() {
+    let wf = Sandbox::new();
+    assert!(
+        wf.fail(&["--item", "x", "item", "list"])
+            .contains("takes no command")
+    );
+    assert!(wf.fail(&["item", "list", "--item", "x"]).contains("--item"));
+}
+
+#[test]
+fn log_item_prints_only_the_events_of_the_item() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo"]);
+    let shown = wf.add(&["--title", "Shown"]);
+    wf.add(&["--title", "Hidden"]);
+    wf.run(&["comment", &shown, "on the shown item"]);
+    let events = wf.json(&["log", "--item", &shown])["events"].clone();
+    let summaries: Vec<&str> = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|event| event["summary"].as_str().unwrap())
+        .collect();
+    assert_eq!(summaries.len(), 2, "{summaries:?}");
+    assert!(summaries[0].contains("Shown"), "{summaries:?}");
+    assert!(summaries[1].contains("commented"), "{summaries:?}");
+    assert!(!wf.run(&["log", "--item", &shown]).contains("Hidden"));
+}
+
+#[test]
 fn commands_outside_a_workforce_explain_what_to_do() {
     let wf = Sandbox::new();
     assert!(wf.fail(&["item", "list"]).contains("wf init"));

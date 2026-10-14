@@ -119,7 +119,7 @@ it, the same as the analysis of a recovery agent step.
   wrote. Run commands in Fence with the review checkout writable, like agents? Probably yes, with an
   opt-out per command.
 * **Long-running commands.** CI-like gates take minutes. The step holds the item meanwhile, like a
-  review session; is a timeout enough, or do commands need progress output for `wf watch`?
+  review session; is a timeout enough, or do commands need progress output for the dashboard and `wf log --follow`?
 * **Scheduler hook.** SPEC §12 mentions a scheduler hook for dispatch decisions. It should use this
   same protocol; whether it belongs in this plan or its own is open.
 * **Distribution of commands across machines.** A policy step that only one machine can take ties
