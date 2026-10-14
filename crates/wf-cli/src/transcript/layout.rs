@@ -4,7 +4,6 @@
 use anstyle::{AnsiColor, Style};
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
-use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde_json::Value;
 use similar::TextDiff;
 use wf_harness::{Decider, Decision, Permission};
@@ -294,7 +293,7 @@ impl Layout {
         let room = self.width - MARGIN;
         let rendered = match self.format {
             Format::Raw => self.fit(text.trim_end(), MARGIN, true).join("\n"),
-            Format::Styled => markdown(text, room),
+            Format::Styled => crate::markdown::render(text, Some(room), ""),
         };
         let rendered = match (kind, self.format) {
             (Thinking::Thought, Format::Styled) => {
@@ -846,181 +845,4 @@ pub(super) fn paragraph_boundary(text: &str) -> Option<usize> {
         }
     }
     None
-}
-
-/// Markdown for a terminal: wrapped to `width`, with hanging indents for lists and quotes.
-fn markdown(text: &str, width: usize) -> String {
-    let mut writer = MarkdownWriter {
-        width,
-        ..MarkdownWriter::default()
-    };
-    for event in Parser::new(text) {
-        writer.event(event);
-    }
-    writer.out
-}
-
-#[derive(Default)]
-struct MarkdownWriter {
-    width: usize,
-    out: String,
-    /// The inline text of the block being written.
-    line: String,
-    /// Each open list: the next number, or `None` for bullets.
-    lists: Vec<Option<u64>>,
-    quotes: usize,
-    /// The marker of the item being written, until its first line is out.
-    marker: Option<String>,
-    styles: Vec<Style>,
-    in_code: bool,
-}
-
-impl MarkdownWriter {
-    fn indent(&self) -> String {
-        format!(
-            "{}{}",
-            "│ ".repeat(self.quotes),
-            "  ".repeat(self.lists.len().saturating_sub(1))
-        )
-    }
-
-    fn flush(&mut self) {
-        if self.line.is_empty() {
-            return;
-        }
-        let line = std::mem::take(&mut self.line);
-        let indent = self.indent();
-        let first = match self.marker.take() {
-            Some(marker) => format!("{indent}{marker}"),
-            None if self.lists.is_empty() => indent.clone(),
-            None => format!("{indent}  "),
-        };
-        let rest = format!(
-            "{indent}{}",
-            " ".repeat(first.chars().count() - indent.chars().count())
-        );
-        let options = textwrap::Options::new(self.width)
-            .initial_indent(&first)
-            .subsequent_indent(&rest);
-        self.out.push_str(&textwrap::fill(&line, options));
-        self.out.push('\n');
-    }
-
-    fn blank(&mut self) {
-        if self.lists.is_empty() {
-            self.out.push('\n');
-        }
-    }
-
-    fn style_on(&mut self, style: Style) {
-        self.line.push_str(&style.to_string());
-        self.styles.push(style);
-    }
-
-    fn style_off(&mut self) {
-        self.styles.pop();
-        self.line.push_str(&format!("{:#}", Style::new().bold()));
-        for style in &self.styles {
-            self.line.push_str(&style.to_string());
-        }
-    }
-
-    fn event(&mut self, event: Event<'_>) {
-        match event {
-            Event::Start(Tag::Strong) => self.style_on(Style::new().bold()),
-            Event::Start(Tag::Emphasis) => self.style_on(Style::new().italic()),
-            Event::Start(Tag::Heading { .. }) => self.style_on(Style::new().bold()),
-            Event::End(TagEnd::Strong | TagEnd::Emphasis) => self.style_off(),
-            Event::End(TagEnd::Heading(_)) => {
-                self.style_off();
-                self.flush();
-                self.blank();
-            }
-            Event::Start(Tag::List(start)) => {
-                self.flush();
-                self.lists.push(start);
-            }
-            Event::End(TagEnd::List(_)) => {
-                self.lists.pop();
-                self.blank();
-            }
-            Event::Start(Tag::Item) => {
-                self.flush();
-                let marker = match self.lists.last_mut() {
-                    Some(Some(number)) => {
-                        let marker = format!("{number}. ");
-                        *number += 1;
-                        marker
-                    }
-                    _ => "• ".to_owned(),
-                };
-                self.marker = Some(marker);
-            }
-            Event::End(TagEnd::Item) => self.flush(),
-            Event::Start(Tag::BlockQuote(_)) => {
-                self.flush();
-                self.quotes += 1;
-            }
-            Event::End(TagEnd::BlockQuote(_)) => {
-                self.flush();
-                self.quotes -= 1;
-                self.blank();
-            }
-            Event::End(TagEnd::Paragraph) => {
-                self.flush();
-                self.blank();
-            }
-            Event::Start(Tag::CodeBlock(_)) => {
-                self.flush();
-                self.in_code = true;
-            }
-            Event::End(TagEnd::CodeBlock) => {
-                self.in_code = false;
-                self.blank();
-            }
-            Event::Text(text) if self.in_code => {
-                let indent = self.indent();
-                for line in text.lines() {
-                    self.out
-                        .push_str(&format!("{indent}    {DIM}{line}{DIM:#}\n"));
-                }
-            }
-            Event::Text(text) => self.line.push_str(&text),
-            Event::Code(text) => {
-                let code = color(AnsiColor::Cyan);
-                self.line.push_str(&format!("{code}{text}{code:#}"));
-                for style in &self.styles {
-                    self.line.push_str(&style.to_string());
-                }
-            }
-            Event::SoftBreak => self.line.push(' '),
-            Event::HardBreak => self.line.push('\n'),
-            Event::Rule => {
-                self.flush();
-                self.out
-                    .push_str(&format!("{DIM}{}{DIM:#}\n", "─".repeat(self.width.min(40))));
-                self.blank();
-            }
-            Event::Html(text) | Event::InlineHtml(text) => self.line.push_str(&text),
-            _ => {}
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn list_items_wrap_under_their_text() {
-        let output = anstream::adapter::strip_str(&markdown(
-            "- one two three four five six seven\n- next\n\nAfter.",
-            20,
-        ))
-        .to_string();
-        assert_eq!(
-            output,
-            "• one two three four\n  five six seven\n• next\n\nAfter.\n\n"
-        );
-    }
 }
