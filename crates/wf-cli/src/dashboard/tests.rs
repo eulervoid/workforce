@@ -477,6 +477,51 @@ fn a_blocker_is_answered_in_the_footer() {
 }
 
 #[test]
+fn ctrl_g_carries_what_is_typed_into_the_editor() {
+    use ratatui::crossterm::event::KeyModifiers;
+    let ctrl_g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('r'));
+    for character in "Keep it".chars() {
+        press(&mut app, KeyCode::Char(character));
+    }
+    // A plain g is text.
+    assert_eq!(press(&mut app, KeyCode::Char('g')), None);
+    assert_eq!(
+        app.key(ctrl_g),
+        Some(Effect::ResolveInEditor {
+            item: ItemId::from_bytes([2; 32]),
+            blocker: CommentId::from_bytes([21; 32]),
+            text: "Keep itg".to_owned(),
+        })
+    );
+    assert!(app.prompt.is_none());
+    assert_eq!(
+        press(&mut app, KeyCode::Char('R')),
+        Some(Effect::ResolveInEditor {
+            item: ItemId::from_bytes([2; 32]),
+            blocker: CommentId::from_bytes([21; 32]),
+            text: String::new(),
+        }),
+        "R starts from nothing"
+    );
+    press(&mut app, KeyCode::Char('c'));
+    for character in "Longer than a line".chars() {
+        press(&mut app, KeyCode::Char(character));
+    }
+    insta::assert_snapshot!(screen(&mut app, 80, 8));
+    assert_eq!(
+        app.key(ctrl_g),
+        Some(Effect::CommentInEditor {
+            item: ItemId::from_bytes([2; 32]),
+            text: "Longer than a line".to_owned(),
+        })
+    );
+    assert!(app.prompt.is_none());
+}
+
+#[test]
 fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
     let mut app = app();
     let archive = ItemId::from_bytes([3; 32]);
