@@ -632,6 +632,22 @@ fn draw_list(
     let scroll = u16::try_from(top).unwrap_or(u16::MAX);
     frame.render_widget(Paragraph::new(list.lines).scroll((scroll, 0)), area);
     let height = usize::from(area.height);
+    let bottom = (top + height).min(list.entries.len());
+    // What is out of view, counted in entries rather than lines.
+    let mut indicators = Vec::new();
+    let above = entries_among(&list.entries[..top.min(bottom)]);
+    if above > 0 {
+        indicators.push(draw_indicator(frame, row(area, 0), &format!("↑ {above}")));
+    }
+    let below = entries_among(&list.entries[bottom..]);
+    if below > 0 {
+        let last = area.height.saturating_sub(1);
+        indicators.push(draw_indicator(
+            frame,
+            row(area, last),
+            &format!("↓ {below}"),
+        ));
+    }
     for ListButton {
         line,
         start,
@@ -640,12 +656,14 @@ fn draw_list(
     } in list.buttons
     {
         if (top..top + height).contains(&line) {
-            let line = Rect {
-                y: area.y + (line - top) as u16,
-                height: 1,
-                ..area
-            };
-            spots.push(button(line, start, width, target));
+            let spot = button(row(area, (line - top) as u16), start, width, target);
+            // A button under an indicator is not on screen: a click there is one on its row.
+            if !indicators
+                .iter()
+                .any(|indicator| indicator.intersects(spot.area))
+            {
+                spots.push(spot);
+            }
         }
     }
     let entries = list
@@ -655,6 +673,70 @@ fn draw_list(
         .take(usize::from(area.height))
         .collect();
     (top, ClickableList { area, entries })
+}
+
+/// How many entries have a line among `lines`; an entry of two lines counts once.
+fn entries_among(lines: &[Option<usize>]) -> usize {
+    let mut entries: Vec<usize> = lines.iter().flatten().copied().collect();
+    entries.dedup();
+    entries.len()
+}
+
+/// The row of `area` `index` rows down from its top.
+fn row(area: Rect, index: u16) -> Rect {
+    Rect {
+        y: area.y + index,
+        height: 1,
+        ..area
+    }
+}
+
+/// Draws `text` dim at the right end of `row`, a space either side of it, over what is there,
+/// with the background of the row's end behind it; returns where it was drawn.
+fn draw_indicator(frame: &mut Frame, row: Rect, text: &str) -> Rect {
+    let text = format!(" {text} ");
+    let width = (textwrap::core::display_width(&text) as u16).min(row.width);
+    let area = Rect {
+        x: row.right() - width,
+        width,
+        ..row
+    };
+    if area.is_empty() {
+        return area;
+    }
+    let buffer = frame.buffer_mut();
+    let background = buffer[(row.right() - 1, row.y)].bg;
+    for x in area.left()..area.right() {
+        buffer[(x, row.y)].reset();
+    }
+    let style = Style::new().dim().bg(background);
+    buffer.set_stringn(area.x, area.y, text, usize::from(width), style);
+    area
+}
+
+/// Draws where a scrolled text `area` high is, at the right end of its last row, as neovim's
+/// ruler shows it: `Top`, `Bot`, or how far down as a percentage. Nothing when all of the text
+/// is on screen, as for a list that fits.
+fn draw_position(frame: &mut Frame, area: Rect, top: usize, last_top: usize) {
+    if last_top == 0 || area.height == 0 {
+        return;
+    }
+    let position = if top == 0 {
+        "Top".to_owned()
+    } else if top >= last_top {
+        "Bot".to_owned()
+    } else {
+        format!("{}%", top * 100 / last_top)
+    };
+    draw_indicator(frame, row(area, area.height - 1), &position);
+}
+
+/// `area` without its last column, which keeps text off the right edge and out of the corner.
+fn padded(area: Rect) -> Rect {
+    Rect {
+        width: area.width.saturating_sub(1),
+        ..area
+    }
 }
 
 /// The first line of a list of `lines` drawn `height` high: `previous`, moved only as far as
@@ -1297,7 +1379,7 @@ fn draw_session(
             (Place::Here, Some(transcript)) => {
                 let layout = transcript::Layout::new(
                     &session.agent,
-                    usize::from(body.width).max(20),
+                    usize::from(padded(body).width).max(20),
                     Format::Styled,
                     app.verbosity,
                     app.time_zone.clone(),
@@ -1468,20 +1550,22 @@ fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
     ]
 }
 
-/// Draws `text` wrapped at `scroll`, kept to what the text allows; returns the scroll it was
-/// drawn at.
+/// Draws `text` wrapped to `area` without its last column at `scroll`, kept to what the text
+/// allows; returns the scroll it was drawn at.
 fn draw_scrolled(frame: &mut Frame, text: Text<'static>, scroll: Scroll, area: Rect) -> Scroll {
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
-    let lines = paragraph.line_count(area.width);
-    let scroll = scroll.within(lines.saturating_sub(usize::from(area.height)));
+    let lines = paragraph.line_count(padded(area).width);
+    let last_top = lines.saturating_sub(usize::from(area.height));
+    let scroll = scroll.within(last_top);
     let top = u16::try_from(scroll.top()).unwrap_or(u16::MAX);
-    frame.render_widget(paragraph.scroll((top, 0)), area);
+    frame.render_widget(paragraph.scroll((top, 0)), padded(area));
+    draw_position(frame, area, scroll.top(), last_top);
     scroll
 }
 
-/// Draws `lines` then `more`, wrapped already, at `scroll`, kept to what they allow; returns the
-/// scroll they were drawn at. Only the lines on screen are handed to ratatui, so a frame costs
-/// what is shown rather than all there is.
+/// Draws `lines` then `more`, wrapped already to `area` without its last column, at `scroll`,
+/// kept to what they allow; returns the scroll they were drawn at. Only the lines on screen are
+/// handed to ratatui, so a frame costs what is shown rather than all there is.
 fn draw_lines(
     frame: &mut Frame,
     lines: &[Line<'static>],
@@ -1490,7 +1574,8 @@ fn draw_lines(
     area: Rect,
 ) -> Scroll {
     let height = usize::from(area.height);
-    let scroll = scroll.within((lines.len() + more.len()).saturating_sub(height));
+    let last_top = (lines.len() + more.len()).saturating_sub(height);
+    let scroll = scroll.within(last_top);
     let shown: Vec<Line> = lines
         .iter()
         .chain(more)
@@ -1498,7 +1583,8 @@ fn draw_lines(
         .take(height)
         .cloned()
         .collect();
-    frame.render_widget(Paragraph::new(shown), area);
+    frame.render_widget(Paragraph::new(shown), padded(area));
+    draw_position(frame, area, scroll.top(), last_top);
     scroll
 }
 

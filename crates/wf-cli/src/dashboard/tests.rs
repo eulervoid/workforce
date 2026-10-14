@@ -264,7 +264,7 @@ fn h_and_l_fold_the_list_or_the_detail_to_a_strip() {
     // Shift → gives the detail the window, with the list a strip at the left.
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     assert!(!app.list_has_keys());
-    assert_eq!(app.detail_width(), 127);
+    assert_eq!(app.detail_width(), 126);
     insta::assert_snapshot!("detail_only", screen(&mut app, 130, 14));
     // Esc goes back to the list in the whole window, as in a narrow one.
     press(&mut app, KeyCode::Esc);
@@ -372,13 +372,14 @@ fn scrolled_up_text_holds_still_and_follows_again_at_its_end() {
     screen(&mut app, 60, 10);
     press(&mut app, KeyCode::Char('k'));
     press(&mut app, KeyCode::Char('k'));
-    // The body, without the latest event under it.
+    // The body, without the latest event under it, nor the position at its right end, which
+    // moves up as the text grows.
     let body = |app: &mut App| -> Vec<String> {
         screen(app, 60, 10)
             .lines()
             .skip(3)
             .take(4)
-            .map(str::to_owned)
+            .map(|line| line.chars().take(50).collect())
             .collect()
     };
     let scrolled = body(&mut app);
@@ -1955,4 +1956,129 @@ fn an_inactive_tab_under_the_pointer_is_drawn_stronger_than_the_others() {
     assert!(!app.hover(items + 3, row));
     assert!(app.hover(items, row + 3));
     assert!(modifiers(&mut app, items).contains(Modifier::DIM));
+}
+
+/// The lines of the screen with `app` drawn, unquoted.
+fn screen_lines(app: &mut App, width: u16, height: u16) -> Vec<String> {
+    screen(app, width, height)
+        .lines()
+        .map(|line| line.trim_matches('"').to_owned())
+        .collect()
+}
+
+#[test]
+fn a_long_item_shows_how_far_down_it_is_scrolled_and_keeps_off_the_right_edge() {
+    let mut app = app();
+    let spans = ItemId::from_bytes([2; 32]);
+    app.open_item(spans);
+    let mut snapshot = snapshot();
+    // A word too long for the pane, then twelve short lines.
+    let mut text = format!("{}\n", "x".repeat(200));
+    text.extend((1..=12).map(|line| format!("line {line}\n")));
+    snapshot.in_view = Some(InView::Item {
+        id: spans,
+        text,
+        session: None,
+    });
+    app.refresh(snapshot);
+    // The body is on rows 4 to 6, its text 58 columns wide after the margin at the left: 16
+    // lines, scrolled from 0 to 13.
+    let body = |app: &mut App| -> Vec<String> { screen_lines(app, 60, 10)[4..=6].to_vec() };
+    let at_top = body(&mut app);
+    assert!(at_top[2].ends_with(" Top "), "{at_top:#?}");
+    // The long word is wrapped a column short of the edge.
+    assert!(at_top[0].starts_with(&format!(" {} ", "x".repeat(58))));
+    for _ in 0..6 {
+        press(&mut app, KeyCode::Char('j'));
+        screen(&mut app, 60, 10);
+    }
+    let halfway = body(&mut app);
+    assert!(halfway[2].ends_with(" 46% "), "{halfway:#?}");
+    for _ in 0..20 {
+        press(&mut app, KeyCode::Char('j'));
+        screen(&mut app, 60, 10);
+    }
+    let at_end = body(&mut app);
+    assert!(at_end[2].ends_with(" Bot "), "{at_end:#?}");
+    assert_eq!(at_end[0].trim(), "line 10");
+    // No text in the last column, at any scroll.
+    for line in at_top.iter().chain(&halfway).chain(&at_end) {
+        assert!(line.ends_with(' '), "{line:?}");
+    }
+}
+
+#[test]
+fn a_line_as_wide_as_the_laid_out_item_stays_one_line() {
+    let mut app = app();
+    let spans = ItemId::from_bytes([2; 32]);
+    app.open_item(spans);
+    screen(&mut app, 60, 10);
+    // Words filling exactly the width the item is laid out for.
+    let width = usize::from(app.detail_width());
+    let mut full = "word ".repeat(width / 5);
+    full.truncate(full.len() - 1);
+    full.push_str(&"x".repeat(width - full.len()));
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Item {
+        id: spans,
+        text: format!("{full}\nnext\n"),
+        session: None,
+    });
+    app.refresh(snapshot);
+    let body = screen_lines(&mut app, 60, 10)[4..=6].to_vec();
+    assert_eq!(body[0].trim(), full, "{body:#?}");
+    assert_eq!(body[1].trim(), "next", "{body:#?}");
+}
+
+#[test]
+fn an_item_that_fits_shows_no_position() {
+    let mut app = app();
+    let spans = ItemId::from_bytes([2; 32]);
+    app.open_item(spans);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Item {
+        id: spans,
+        text: "line 1\nline 2\n".to_owned(),
+        session: None,
+    });
+    app.refresh(snapshot);
+    let body = screen_lines(&mut app, 60, 10)[4..=6].join("\n");
+    for position in ["Top", "Bot", "All", "%"] {
+        assert!(!body.contains(position), "{body}");
+    }
+}
+
+#[test]
+fn a_long_list_counts_the_entries_out_of_view() {
+    let mut app = app();
+    // Everything fits: no indicator.
+    let all = screen(&mut app, 60, 24);
+    assert!(!all.contains('↑') && !all.contains('↓'), "{all}");
+    // Below the review: the three sessions and the flag, the reviewer's two lines counting once.
+    let top = screen_lines(&mut app, 60, 12);
+    assert!(top[8].ends_with(" ↓ 4 "), "{top:#?}");
+    assert!(!top.join("").contains('↑'));
+    // At the end, above the reviewer: the three waiting and the other two sessions, the
+    // blocker's two lines counting once.
+    for _ in 0..6 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let end = screen_lines(&mut app, 60, 12);
+    assert!(end[3].contains("Archive by category"));
+    assert!(end[3].ends_with(" ↑ 5 "), "{end:#?}");
+    assert!(!end.join("").contains('↓'));
+    // A click on the indicator is one on its row.
+    app.click(57, 3);
+    let reviewer = SessionId::from_bytes([13; 32]);
+    assert_eq!(app.now.selection.get(), Some(&Row::Session(reviewer)));
+}
+
+#[test]
+fn an_indicator_on_the_selection_has_its_background() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    // Three rows of the list: the request, then both lines of the selected blocker.
+    let lines = screen_lines(&mut app, 60, 9);
+    assert!(lines[5].ends_with(" ↓ 5 "), "{lines:#?}");
+    assert_eq!(bg_at(&mut app, 60, 9, 57, 5), Some(ACCENT));
 }

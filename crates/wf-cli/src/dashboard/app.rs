@@ -877,14 +877,14 @@ impl App {
     }
 
     /// How many columns the text of a detail has: what the list or the strip leave of the
-    /// window, less the margin.
+    /// window, less the margin on the left and the padding column on the right.
     pub fn detail_width(&self) -> u16 {
         let pane = match (self.is_wide(), self.split) {
             (false, _) => self.width,
             (true, Split::Both) => self.width.saturating_sub(self.list_width() + 1),
             (true, Split::One) => self.width.saturating_sub(STRIP),
         };
-        pane.saturating_sub(1)
+        pane.saturating_sub(2)
     }
 
     /// Takes in what a session's agent wrote to its transcript since the last time.
