@@ -13,9 +13,7 @@ pub fn watch_panics() -> Panics {
     let (sender, receiver) = watch::channel(None);
     std::panic::set_hook(Box::new(move |info| {
         let thread = std::thread::current();
-        let message = info
-            .payload_as_str()
-            .unwrap_or("a panic without a message");
+        let message = info.payload_as_str().unwrap_or("a panic without a message");
         let report = match info.location() {
             Some(location) => format!(
                 "thread '{}' panicked at {location}: {message}",
