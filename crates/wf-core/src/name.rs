@@ -118,7 +118,7 @@ name_type!(
     Handle, "handle", SLUG, is_slug_char
 );
 name_type!(
-    /// An agent's role name, the `coder` in `@ada/coder`. Unique per principal.
+    /// An agent's name, the `grace` in `@ada/grace`. Unique per principal.
     AgentName, "agent name", SLUG, is_slug_char
 );
 name_type!(

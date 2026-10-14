@@ -138,17 +138,13 @@ pub fn init_dialog(name: Option<String>, harnesses: &[&str]) -> anyhow::Result<I
 
     let mut agents: Vec<AgentSetup> = Vec::new();
     for harness in picked {
-        let suggested = if agents.is_empty() {
-            "coder".to_string()
-        } else {
-            format!("coder-{harness}")
-        };
-        let taken: Vec<String> = agents.iter().map(|agent| agent.name.to_string()).collect();
+        let taken: Vec<AgentName> = agents.iter().map(|agent| agent.name.clone()).collect();
+        let suggested = crate::agent_names::free(&taken);
         let agent_name: AgentName = cliclack::input(format!("Name of the {harness} agent"))
-            .default_input(&suggested)
+            .default_input(suggested.as_str())
             .validate(move |input: &String| match AgentName::new(input) {
                 Err(error) => Err(error.to_string()),
-                Ok(_) if taken.contains(input) => Err(format!("`{input}` is already taken")),
+                Ok(name) if taken.contains(&name) => Err(format!("`{input}` is already taken")),
                 Ok(_) => Ok(()),
             })
             .interact()?;

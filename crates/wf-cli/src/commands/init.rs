@@ -152,7 +152,7 @@ pub(super) fn init(
             }
             out.push_str("found harnesses; add an agent for the one wf should use:\n");
             for harness in &init.harnesses {
-                out.push_str(&format!("  wf agent add coder --harness {harness}\n"));
+                out.push_str(&format!("  wf agent add --harness {harness}\n"));
             }
             out
         },

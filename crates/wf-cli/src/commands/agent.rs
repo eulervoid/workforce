@@ -28,13 +28,24 @@ pub(super) fn agent(
             emit(json, &agents, |agents| render::agents(agents))
         }
         AgentCommand::Add(args) => {
-            if workspace.state().agent(&args.name, principal).is_some() {
-                bail!("agent `{}` already exists; use `wf agent edit`", args.name);
+            let name = match args.name {
+                Some(name) => name,
+                None => {
+                    let taken: Vec<AgentName> = workspace
+                        .state()
+                        .agents()
+                        .map(|(id, _)| id.name.clone())
+                        .collect();
+                    crate::agent_names::free(&taken)
+                }
+            };
+            if workspace.state().agent(&name, principal).is_some() {
+                bail!("agent `{name}` already exists; use `wf agent edit`");
             }
             let autonomy = args.autonomy.applied_to(Autonomy::default());
             let start = autonomy.start;
             let event = workspace.author(EventBody::AgentDefined(AgentDefined {
-                name: args.name.clone(),
+                name: name.clone(),
                 harness: args.harness,
                 model: args.model,
                 capabilities: args.capabilities,
@@ -42,8 +53,8 @@ pub(super) fn agent(
                 autonomy,
                 instructions: args.instructions.and_then(instructions),
             }))?;
-            let message = format!("defined agent {}", args.name);
-            let message = hosting_note(workspace, &args.name, start, message)?;
+            let message = format!("defined agent {name}");
+            let message = hosting_note(workspace, &name, start, message)?;
             done(json, message, &event, None)
         }
         AgentCommand::Remove { name } => {

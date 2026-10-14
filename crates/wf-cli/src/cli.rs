@@ -477,8 +477,9 @@ pub enum AgentCommand {
 
 #[derive(Args)]
 pub struct AgentAddArgs {
-    /// The agent's name, the `coder` in `@ada/coder`.
-    pub name: AgentName,
+    /// The agent's name, the `grace` in `@ada/grace`. Defaults to the first name of a scientist
+    /// that no agent in the workforce has.
+    pub name: Option<AgentName>,
     /// The program that runs the agent: `claude-code`, `opencode`, `codex` or `gemini-cli`.
     #[arg(long)]
     pub harness: HarnessName,
