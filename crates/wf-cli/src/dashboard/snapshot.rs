@@ -1,5 +1,7 @@
 //! What the dashboard shows at one refresh, taken from the workspace.
 
+use std::collections::{HashMap, HashSet};
+
 use wf_core::event::{Event, EventBody};
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
@@ -7,6 +9,7 @@ use wf_core::identity::AgentId;
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::inbox::{InboxKind, Waiting as InboxWaiting};
 use wf_core::item::{ItemState, ItemView, Priority};
+use wf_core::resolve::MentionTarget;
 use wf_core::session::{CommitId, EndReason, Session, SessionRole};
 use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
@@ -38,6 +41,56 @@ pub struct Snapshot {
     pub agents: Vec<AgentInfo>,
     /// How the workforce is doing, when the Agents tab is on screen.
     pub stats: ProjectStats,
+    pub links: Links,
+}
+
+/// What the ids and names written in the text on screen point at, by how they are written.
+#[derive(Clone, Debug, Default)]
+pub struct Links {
+    /// Every item, by its short id: `k3f9ab`.
+    pub items: HashMap<String, ItemId>,
+    /// The comments of every live item, by the item and the comment's short id: `k3f9`.
+    pub comments: HashSet<(ItemId, String)>,
+    /// Every agent, by its label: `@ada/grace`.
+    pub agents: HashMap<String, AgentId>,
+    /// Every session, by its label: `@ada/grace/s4k2ab`.
+    pub sessions: HashMap<String, SessionId>,
+}
+
+impl Links {
+    fn take(state: &State) -> Self {
+        Links {
+            items: state
+                .items()
+                .map(|item| (item.id().short(), item.id()))
+                .collect(),
+            comments: state
+                .live_items()
+                .flat_map(|item| {
+                    item.comments()
+                        .keys()
+                        .map(|comment| (item.id(), comment.short()))
+                })
+                .collect(),
+            agents: state
+                .agents()
+                .map(|(id, _)| {
+                    let label = view::mention_label(state, &MentionTarget::Agent(id.clone()));
+                    (label, id.clone())
+                })
+                .collect(),
+            sessions: state
+                .sessions()
+                .map(|session| {
+                    let actor = Actor::Agent {
+                        agent: session.agent().clone(),
+                        session: session.id(),
+                    };
+                    (state.actor_label(&actor), session.id())
+                })
+                .collect(),
+        }
+    }
 }
 
 /// How many sessions of an agent that ended are listed under it.
@@ -278,6 +331,7 @@ impl Snapshot {
                 .items
                 .map(|grouping| item_groups(state, &graph, grouping))
                 .unwrap_or_default(),
+            links: Links::take(state),
         }
     }
 }

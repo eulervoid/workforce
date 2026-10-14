@@ -6,7 +6,7 @@ use ratatui::backend::TestBackend;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use serde_json::json;
 use wf_core::graph::Readiness;
-use wf_core::id::{CommentId, ItemId, SessionId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::item::{ItemState, Priority};
 use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
@@ -17,7 +17,7 @@ use super::app::{
 };
 use super::draw;
 use super::snapshot::{
-    AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Place, SessionInfo,
+    AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Links, Place, SessionInfo,
     SessionStatus, Snapshot, Waiting,
 };
 use wf_core::identity::AgentId;
@@ -99,6 +99,7 @@ fn snapshot() -> Snapshot {
         items: Vec::new(),
         agents: Vec::new(),
         stats: ProjectStats::default(),
+        links: Links::default(),
     }
 }
 
@@ -950,10 +951,10 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     app.wheel(100, Wheel::Down);
     assert_eq!(
         app.stack(),
-        Some(&vec![Opened {
+        &vec![Opened {
             detail: Detail::Session(SessionId::from_bytes([11; 32])),
             scroll: Scroll::END,
-        }])
+        }]
     );
     assert!(!app.list_has_keys());
     press(&mut app, KeyCode::Esc);
@@ -963,19 +964,19 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     app.wheel(100, Wheel::Down);
     assert_eq!(
         app.stack(),
-        Some(&vec![Opened {
+        &vec![Opened {
             detail: item.clone(),
             scroll: Scroll::At(6),
-        }])
+        }]
     );
     // Over the list, the first notch only gives the list the keys back; the detail stays.
     app.wheel(10, Wheel::Down);
     assert!(app.list_has_keys());
-    assert_eq!(app.stack().map(Vec::len), Some(1));
+    assert_eq!(app.stack().len(), 1);
     assert_eq!(app.wanted().detail, Some(item.clone()));
     // The next ones move the selection, whose detail takes the place of the one opened.
     app.wheel(10, Wheel::Down);
-    assert_eq!(app.stack().map(Vec::len), Some(0));
+    assert_eq!(app.stack().len(), 0);
     assert_eq!(app.wanted().detail, Some(blocked));
     app.wheel(10, Wheel::Up);
     assert_eq!(app.wanted().detail, Some(item.clone()));
@@ -997,9 +998,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     press(&mut app, KeyCode::Enter);
     app.wheel(10, Wheel::Down);
     assert_eq!(
-        app.stack()
-            .and_then(|stack| stack.last())
-            .map(|opened| opened.scroll),
+        app.stack().last().map(|opened| opened.scroll),
         Some(Scroll::At(3))
     );
 }
@@ -1148,7 +1147,7 @@ fn a_click_beside_the_list_gives_the_detail_the_keys() {
     let (column, row) = find(&mut app, 130, 24, "claude-code · opus");
     app.click(column, row);
     assert!(app.list_has_keys());
-    assert_eq!(app.stack().map(Vec::len), Some(1));
+    assert_eq!(app.stack().len(), 1);
     app.click(column, row);
     assert!(!app.list_has_keys());
     // A click on another entry selects it, and its detail takes the place of the one opened.
@@ -1452,4 +1451,210 @@ fn the_kept_lines_of_a_transcript_are_those_of_laying_it_out_at_once() {
     // A narrower window lays it all out again.
     lines.update(layout(30), &transcript);
     assert_same(&lines, &transcript, 30);
+}
+
+/// The agent `coder` of `@ada`.
+fn coder_agent() -> AgentId {
+    AgentId {
+        principal: wf_core::testing::Fixture::new(1).founder.key(),
+        name: AgentName::new("coder").unwrap(),
+    }
+}
+
+/// [`snapshot`] with the names its text can link to, and the item `#spans` open, whose text
+/// mentions another item, an agent, a session, a principal and a commit.
+fn with_links() -> Snapshot {
+    let parse = ItemId::from_bytes([1; 32]);
+    let spans = ItemId::from_bytes([2; 32]);
+    let coder = SessionId::from_bytes([11; 32]);
+    let mut snapshot = snapshot();
+    snapshot.links = Links {
+        items: [parse, spans].map(|id| (id.short(), id)).into(),
+        comments: [(spans, CommentId::from_bytes([21; 32]).short())].into(),
+        agents: [("@ada/coder".to_owned(), coder_agent())].into(),
+        sessions: [(format!("@ada/coder/{}", coder.short()), coder)].into(),
+    };
+    snapshot.in_view = Some(InView::Item {
+        id: spans,
+        text: format!(
+            "◐ #{} (task:in_progress) Fix error spans\n  review: merged a8d49484\n\nAfter #{}, ask @ada/coder.\n\n  07:00  @ada/coder/{} · commented\n  07:01  @ada · moved to review\n",
+            spans.short(),
+            parse.short(),
+            coder.short(),
+        ),
+        session: None,
+    });
+    snapshot
+}
+
+/// The app with `#spans` open on the Now tab.
+fn app_with_links() -> App {
+    let mut app = app();
+    app.open_item(ItemId::from_bytes([2; 32]));
+    app.refresh(with_links());
+    app
+}
+
+#[test]
+fn a_click_on_an_item_id_an_agent_or_a_session_opens_it_and_esc_comes_back() {
+    let mut app = app_with_links();
+    let spans = Detail::Item(ItemId::from_bytes([2; 32]));
+    let opens = [
+        ("#aeaqca", Detail::Item(ItemId::from_bytes([1; 32]))),
+        ("@ada/coder.", Detail::Agent(coder_agent())),
+        (
+            "@ada/coder/",
+            Detail::Session(SessionId::from_bytes([11; 32])),
+        ),
+    ];
+    for (text, detail) in opens {
+        let (column, row) = find(&mut app, 60, 24, text);
+        assert_eq!(app.click(column + 1, row), None);
+        assert_eq!(app.path(), vec![spans.clone(), detail], "{text}");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.path(), vec![spans.clone()]);
+    }
+    // A principal has no detail, and the item on screen is no link to itself.
+    let (column, row) = find(&mut app, 60, 24, "@ada ·");
+    app.click(column + 1, row);
+    let (column, row) = find(&mut app, 60, 24, "#aibaea (task");
+    app.click(column + 1, row);
+    assert_eq!(app.path(), vec![spans]);
+}
+
+#[test]
+fn a_click_on_a_commit_shows_the_diff_of_its_item() {
+    let mut app = app_with_links();
+    let (column, row) = find(&mut app, 60, 24, "a8d49484");
+    assert_eq!(
+        app.click(column, row),
+        Some(Effect::ShowDiff {
+            item: ItemId::from_bytes([2; 32])
+        })
+    );
+}
+
+#[test]
+fn a_link_in_the_log_opens_in_its_place_and_esc_goes_back_to_the_log() {
+    let mut app = app_with_links();
+    press(&mut app, KeyCode::Char('4'));
+    let comment = CommentId::from_bytes([21; 32]).short();
+    app.logged([format!(
+        "07:05  #aibaea  @ada · commented · {comment}\n         Keep the span on the error.\n"
+    )]);
+    // A comment is about the item on its line.
+    let (column, row) = find(&mut app, 60, 24, &comment);
+    app.click(column, row);
+    let spans = Detail::Item(ItemId::from_bytes([2; 32]));
+    assert_eq!(app.wanted().detail, Some(spans.clone()));
+    assert!(screen(&mut app, 60, 24).contains("Log › #aibaea"));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.wanted().detail, None);
+    assert!(screen(&mut app, 60, 24).contains("Keep the span"));
+    // A word as long as a comment id that is none is no link.
+    let (column, row) = find(&mut app, 60, 24, "Keep");
+    app.click(column, row);
+    assert_eq!(app.wanted().detail, None);
+}
+
+#[test]
+fn a_click_on_a_key_hint_does_what_its_key_does() {
+    let mut app = app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    let (column, row) = find(&mut app, 60, 24, "v review");
+    assert_eq!(app.click(column + 3, row), None);
+    assert!(matches!(app.prompt, Some(Prompt::Verdict { item }) if item == archive));
+    press(&mut app, KeyCode::Esc);
+    let (column, row) = find(&mut app, 60, 24, "D diff");
+    assert_eq!(
+        app.click(column, row),
+        Some(Effect::ShowDiff { item: archive })
+    );
+    // `j/k` names two keys, and the space between two hints is none.
+    let selected = app.now.selection.get().cloned();
+    let (column, row) = find(&mut app, 60, 24, "j/k move");
+    app.click(column, row);
+    app.click(column - 2, row);
+    assert_eq!(app.now.selection.get().cloned(), selected);
+    assert_eq!(app.wanted().detail, None);
+    let (column, row) = find(&mut app, 60, 24, "enter open");
+    app.click(column, row);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(archive)));
+}
+
+#[test]
+fn a_click_on_a_part_of_the_breadcrumb_goes_back_to_it() {
+    let mut app = app_with_links();
+    let spans = Detail::Item(ItemId::from_bytes([2; 32]));
+    let open_parse = |app: &mut App| {
+        let (column, row) = find(app, 60, 24, "#aeaqca,");
+        app.click(column, row);
+        assert_eq!(app.path().len(), 2);
+    };
+    open_parse(&mut app);
+    // The detail on top is where the breadcrumb is already.
+    let (column, row) = find(&mut app, 60, 24, "#aeaqca ");
+    app.click(column, row);
+    assert_eq!(app.path().len(), 2);
+    let (column, row) = find(&mut app, 60, 24, "#aibaea ›");
+    app.click(column + 6, row);
+    assert_eq!(app.path(), vec![spans]);
+    open_parse(&mut app);
+    let (column, row) = find(&mut app, 60, 24, "Now ›");
+    app.click(column, row);
+    assert!(app.stack().is_empty());
+    assert!(app.list_has_keys());
+}
+
+#[test]
+fn a_move_draws_again_only_onto_or_off_a_link_or_a_button() {
+    let mut app = app_with_links();
+    let (column, row) = find(&mut app, 60, 24, "#aeaqca,");
+    let (plain, plain_row) = find(&mut app, 60, 24, "After");
+    assert!(!app.hover(plain, plain_row));
+    assert!(!app.hover(plain + 2, plain_row));
+    assert!(app.hover(column, row));
+    // Along the same link.
+    assert!(!app.hover(column + 3, row));
+    assert!(app.hover(plain, plain_row));
+    // Onto a button.
+    let (column, row) = find(&mut app, 60, 24, "esc back");
+    assert!(app.hover(column, row));
+}
+
+#[test]
+fn a_link_under_the_pointer_is_underlined_and_its_tip_shows() {
+    use ratatui::style::Modifier;
+    let mut app = app_with_links();
+    let latest = find(&mut app, 60, 24, "submitted 3e8a1c").1;
+    let tips = [
+        ("#aeaqca,", "open #aeaqca"),
+        ("@ada/coder.", "open @ada/coder"),
+        ("@ada/coder/", "open the transcript of @ada/coder/bmfqwc"),
+        ("a8d49484", "open the diff of a8d49484"),
+        ("esc back", "back (esc)"),
+        ("Now ›", "back to Now"),
+    ];
+    for (text, tip) in tips {
+        let (column, row) = find(&mut app, 60, 24, text);
+        app.hover(column + 1, row);
+        assert!(
+            style_at(&mut app, 60, 24, column + 1, row)
+                .add_modifier
+                .contains(Modifier::UNDERLINED),
+            "{text}"
+        );
+        assert_eq!(find(&mut app, 60, 24, tip), (1, latest), "{text}");
+    }
+    // Back on plain text, the latest event shows again.
+    let (column, row) = find(&mut app, 60, 24, "After");
+    app.hover(column, row);
+    assert_eq!(find(&mut app, 60, 24, "submitted 3e8a1c").1, latest);
+    assert!(
+        !style_at(&mut app, 60, 24, column, row)
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
 }
