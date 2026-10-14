@@ -26,8 +26,59 @@ use crate::render;
 use crate::transcript::{self, Format, Now, Transcript, Usage};
 use wf_core::stats::ProjectStats;
 
-/// The background of the selected row while the list has the keys.
-const SELECTION: Color = Color::DarkGray;
+/// Marine blue: marks the one place that has the keys.
+pub const ACCENT: Color = Color::Rgb(30, 80, 160);
+/// The accent, dimmed: marks a place that had the keys but has not now, or every place while the
+/// terminal pane is not focused.
+pub const ACCENT_DIMMED: Color = Color::Rgb(30, 45, 75);
+
+/// The place on screen the keys go to, which the accent marks.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum KeysAt {
+    /// The list of the tab: its selection.
+    List,
+    /// A detail: the last part of its breadcrumb.
+    Detail,
+    /// The Log tab without a detail opened: its label.
+    Log,
+    /// What the footer asks for: its label.
+    Footer,
+    /// A list to pick from: the option picked.
+    Choice,
+    /// The keys: their title.
+    Keys,
+}
+
+impl KeysAt {
+    fn of(app: &App) -> Self {
+        match &app.prompt {
+            Some(
+                Prompt::Filter { .. }
+                | Prompt::Answer { .. }
+                | Prompt::Verdict { .. }
+                | Prompt::Comment { .. }
+                | Prompt::Stop { .. },
+            ) => KeysAt::Footer,
+            Some(Prompt::Choose(_)) => KeysAt::Choice,
+            Some(Prompt::Keys) => KeysAt::Keys,
+            None => match (app.tab, app.list_has_keys()) {
+                (Tab::Now | Tab::Items | Tab::Agents, true) => KeysAt::List,
+                (Tab::Log, true) => KeysAt::Log,
+                (Tab::Now | Tab::Items | Tab::Agents | Tab::Log, false) => KeysAt::Detail,
+            },
+        }
+    }
+}
+
+/// The accent of `place`: full while it has the keys and the terminal pane is focused, dimmed
+/// otherwise.
+fn accent(app: &App, place: KeysAt) -> Color {
+    if app.terminal_focused && KeysAt::of(app) == place {
+        ACCENT
+    } else {
+        ACCENT_DIMMED
+    }
+}
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
@@ -68,14 +119,14 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     }
     match &app.prompt {
         Some(Prompt::Choose(choice)) => {
-            draw_choice(frame, choice, body);
+            draw_choice(frame, choice, accent(app, KeysAt::Choice), body);
             frame.render_widget(
                 Paragraph::new(Line::from(" j/k move · enter pick · esc cancel").dim()),
                 keys,
             );
         }
         Some(Prompt::Keys) => {
-            draw_keys(frame, body);
+            draw_keys(frame, accent(app, KeysAt::Keys), body);
             frame.render_widget(Paragraph::new(Line::from(" any key closes").dim()), keys);
         }
         Some(prompt) => draw_prompt(frame, app, prompt, keys),
@@ -100,8 +151,8 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     shown
 }
 
-/// A list to pick from, at the bottom of the body.
-fn draw_choice(frame: &mut Frame, choice: &Choice, body: Rect) {
+/// A list to pick from, at the bottom of the body, with the option picked in `accent`.
+fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
     let (title, options): (String, Vec<String>) = match choice {
         Choice::Start { item, starters, .. } => (
             format!(" start #{} ", item.short()),
@@ -126,9 +177,12 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, body: Rect) {
         .enumerate()
         .map(|(index, option)| {
             if index == choice.index() {
-                Line::from(format!("▸ {option}")).bold().reversed()
+                let bar = Span::styled("▎", Style::new().fg(accent).bg(Color::Reset));
+                Line::from(vec![bar, Span::raw(format!("{option} "))])
+                    .bold()
+                    .bg(accent)
             } else {
-                Line::from(format!("  {option}"))
+                Line::from(format!(" {option}"))
             }
         })
         .collect();
@@ -174,9 +228,11 @@ const KEYS: &[(&str, &str)] = &[
     ("i f", "a session's item, full transcript"),
     ("o / F", "items: grouping, filter, readiness"),
     ("q", "quit"),
+    ("tmux", "focus-events on: dims when unfocused"),
 ];
 
-fn draw_keys(frame: &mut Frame, body: Rect) {
+/// Draws the keys, under their title in `accent`.
+fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
     let lines: Vec<Line> = KEYS
         .iter()
         .map(|(keys, what)| {
@@ -195,14 +251,17 @@ fn draw_keys(frame: &mut Frame, body: Rect) {
     };
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title(" keys ")),
+        Paragraph::new(lines)
+            .block(Block::bordered().title(Line::from(" keys ").bold().bg(accent))),
         area,
     );
 }
 
 /// The line the footer asks for, with the cursor in it.
 fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
-    let question = |text: String| Line::from(text).bold();
+    // The label of what is asked has the accent.
+    let label_style = Style::new().bold().bg(accent(app, KeysAt::Footer));
+    let question = |text: String| Line::from(Span::styled(text, label_style));
     let (label, input, hint) = match prompt {
         Prompt::Filter { input, .. } => (" / ".to_owned(), input, ""),
         Prompt::Comment { item, input } => (
@@ -231,7 +290,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
         ),
         Prompt::Verdict { item } => {
             let line = Line::from(vec![
-                Span::raw(format!(" ◎ #{}: ", item.short())).bold(),
+                Span::styled(format!(" ◎ #{}: ", item.short()), label_style),
                 Span::raw("a approve · r changes · D diff · esc"),
             ]);
             frame.render_widget(Paragraph::new(line), area);
@@ -252,7 +311,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     let width = usize::from(area.width).saturating_sub(label_width + 1);
     let scroll = input.visual_scroll(width);
     let line = Line::from(vec![
-        Span::raw(label).bold(),
+        Span::styled(label, label_style),
         Span::raw(input.value().chars().skip(scroll).collect::<String>()),
     ]);
     frame.render_widget(Paragraph::new(line), area);
@@ -269,7 +328,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
         if !tabs.is_empty() {
             tabs.push(Span::raw(" "));
         }
-        let style = if tab == app.tab {
+        let style = if tab == app.tab && tab == Tab::Log {
+            // The log is the list of its tab: its label has the accent, as a selection would.
+            Style::new().bold().bg(accent(app, KeysAt::Log))
+        } else if tab == app.tab {
             Style::new().bold().reversed()
         } else {
             Style::new().dim()
@@ -589,8 +651,8 @@ fn section(title: &str) -> Line<'static> {
 /// flush against the right edge; then the lines under it.
 struct RowLines {
     selected: bool,
-    /// Whether the keys go to the list, rather than to a detail opened from it.
-    focused: bool,
+    /// The accent of the selection: full while the list has the keys.
+    accent: Color,
     width: u16,
 }
 
@@ -598,7 +660,7 @@ impl RowLines {
     fn new(app: &App, selected: bool, width: u16) -> Self {
         Self {
             selected,
-            focused: app.list_has_keys(),
+            accent: accent(app, KeysAt::List),
             width,
         }
     }
@@ -608,20 +670,16 @@ impl RowLines {
         self.selected.then(|| Span::raw(keys).fg(Color::Yellow))
     }
 
+    /// The lines of the row; `more` start right of the marker column, and are cut to fit.
     fn lines(
         &self,
         first: Vec<Span<'static>>,
         right: Option<Line<'static>>,
         more: Vec<Line<'static>>,
     ) -> Vec<Line<'static>> {
-        let marker = if self.selected {
-            Span::raw("▸").bold()
-        } else {
-            Span::raw(" ")
-        };
         let width = usize::from(self.width);
         let right_width = right.as_ref().map_or(0, |right| right.width() + 2);
-        let mut spans = vec![marker];
+        let mut spans = vec![self.marker()];
         spans.extend(cut_spans(first, width.saturating_sub(1 + right_width + 1)));
         let used: usize = spans.iter().map(Span::width).sum();
         match right {
@@ -637,15 +695,29 @@ impl RowLines {
         let mut first = Line::from(spans);
         if self.selected {
             first = first.bold();
-            // While the list has the keys, the selection stands out; behind an open detail it
-            // only keeps its marker.
-            if self.focused {
-                first = first.bg(SELECTION);
-            }
         }
         let mut lines = vec![first];
-        lines.extend(more);
+        for line in more {
+            let mut spans = vec![self.marker()];
+            spans.extend(cut_spans(line.spans, width.saturating_sub(1)));
+            let used: usize = spans.iter().map(Span::width).sum();
+            spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
+            lines.push(Line::from(spans).style(line.style));
+        }
+        if self.selected {
+            lines = lines.into_iter().map(|line| line.bg(self.accent)).collect();
+        }
         lines
+    }
+
+    /// The marker column: the bar of the selection, on every line of it, apart from its
+    /// background.
+    fn marker(&self) -> Span<'static> {
+        if self.selected {
+            Span::styled("▎", Style::new().fg(self.accent).bg(Color::Reset))
+        } else {
+            Span::raw(" ")
+        }
     }
 }
 
@@ -723,7 +795,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
                 vec![Span::raw(format!("\"{quote}\""))],
                 usize::from(row.width).saturating_sub(4),
             );
-            let mut more = vec![Span::raw("   ")];
+            let mut more = vec![Span::raw("  ")];
             more.extend(quote);
             row.lines(
                 first,
@@ -744,11 +816,8 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
         Waiting::Notice { item, kind, what } => {
             let mut first = vec![Span::raw("• ").fg(Color::Yellow)];
             first.extend(item_spans(item));
-            let more = cut_spans(
-                vec![Span::raw(format!("   {kind}: {what}"))],
-                usize::from(row.width),
-            );
-            row.lines(first, None, vec![Line::from(more).dim()])
+            let more = Line::from(format!("  {kind}: {what}")).dim();
+            row.lines(first, None, vec![more])
         }
     }
 }
@@ -761,7 +830,7 @@ fn age(since_ms: u64, now_ms: u64) -> String {
 /// What a session does now, from its transcript.
 fn activity(app: &App, session: &SessionInfo) -> Option<Line<'static>> {
     if let Place::Elsewhere(device) = &session.place {
-        return Some(Line::from(format!("   on {device}")).dim());
+        return Some(Line::from(format!("  on {device}")).dim());
     }
     let transcript = app.transcripts.get(&session.id)?;
     let spinner = SPINNER[(app.snapshot.now_ms / 500) as usize % SPINNER.len()];
@@ -771,10 +840,10 @@ fn activity(app: &App, session: &SessionInfo) -> Option<Line<'static>> {
                 transcript::Asked::Waiting => " · waits for permission",
                 transcript::Asked::Not | transcript::Asked::Answered(_) => "",
             };
-            format!("   {spinner} {}{waits}", transcript::call_line(call))
+            format!("  {spinner} {}{waits}", transcript::call_line(call))
         }
-        Now::Writing(text) => format!("   {text}"),
-        Now::Thinking => format!("   {spinner} thinking"),
+        Now::Writing(text) => format!("  {text}"),
+        Now::Thinking => format!("  {spinner} thinking"),
         Now::Idle => return None,
     };
     Some(Line::from(line).dim())
@@ -792,12 +861,10 @@ fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'s
     if session.status == SessionStatus::Parked {
         right = format!("parked {right}");
     }
-    let more = activity(app, session)
-        .map(|line| Line::from(cut_spans(line.spans, usize::from(row.width))).dim());
     row.lines(
         first,
         Some(with_context(app, session, right)),
-        more.into_iter().collect(),
+        activity(app, session).into_iter().collect(),
     )
 }
 
@@ -1260,8 +1327,7 @@ fn draw_session(
 }
 
 /// Draws where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part
-/// stands out while the detail has the keys, and is dim while it only shows what the list
-/// selects. Returns the parts that go back to a detail opened before, or to the list.
+/// has the accent, full while the detail has the keys. Returns the parts that go back to a detail opened before, or to the list.
 fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let separator = || Span::raw(" › ").dim();
     // Each part, with how many of the details opened it goes back to; `None` for an item named
@@ -1302,7 +1368,7 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
             }
         }
     }
-    let focused = !app.list_has_keys();
+    let last_style = Style::new().bold().bg(accent(app, KeysAt::Detail));
     let last = crumbs.len() - 1;
     // Only what was opened, below the detail on top, is there to go back to.
     let opened = app.stack().len();
@@ -1332,9 +1398,10 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
             });
         }
         for span in crumb {
-            spans.push(match (index == last, focused) {
-                (true, true) => span.bold(),
-                (true, false) | (false, _) => span.dim(),
+            spans.push(if index == last {
+                span.patch_style(last_style)
+            } else {
+                span.dim()
             });
         }
     }

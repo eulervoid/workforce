@@ -14,8 +14,8 @@ use std::time::{Duration, Instant};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, Event as TerminalEvent, KeyEventKind, MouseButton, MouseEvent,
-    MouseEventKind,
+    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, Event as TerminalEvent,
+    KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use wf_core::event::Event;
@@ -34,16 +34,17 @@ const BACKLOG: usize = 200;
 
 pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
-    // A panic restores the terminal through ratatui's hook, which leaves the mouse reported.
+    // A panic restores the terminal through ratatui's hook, which leaves the mouse and the focus
+    // reported.
     let restore = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
-        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        let _ = stop_reports();
         restore(info);
     }));
-    let result = report_mouse()
+    let result = start_reports()
         .map_err(anyhow::Error::from)
         .and_then(|()| event_loop(&mut terminal, workspace, only));
-    let _ = execute!(std::io::stdout(), DisableMouseCapture);
+    let _ = stop_reports();
     ratatui::restore();
     result
 }
@@ -51,12 +52,18 @@ pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()
 /// Asks the terminal to report presses of the mouse and its wheel, so a click picks and the wheel
 /// scrolls what is under the pointer, rather than the wheel sending arrow keys; and every move of
 /// the pointer, so a link under it stands out. A move costs a frame only when it goes onto or off
-/// a link or button.
-pub(super) fn report_mouse() -> std::io::Result<()> {
+/// a link or button. And whether the terminal pane is focused, so the accent dims while it is
+/// not; tmux passes that on only with `set -g focus-events on`.
+pub(super) fn start_reports() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     // Presses, releases and moves (1003), in the SGR encoding (1006).
     stdout.write_all(b"\x1b[?1003h\x1b[?1006h")?;
-    stdout.flush()
+    execute!(stdout, EnableFocusChange)
+}
+
+/// Stops the reports [`start_reports`] asked for.
+pub(super) fn stop_reports() -> std::io::Result<()> {
+    execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange)
 }
 
 /// What an event from the terminal came to.
@@ -161,6 +168,14 @@ fn handle(
             ..
         }) => {
             return if app.hover(column, row) {
+                Handled::Moved
+            } else {
+                Handled::Ignored
+            };
+        }
+        TerminalEvent::FocusGained | TerminalEvent::FocusLost => {
+            let focused = matches!(event, TerminalEvent::FocusGained);
+            return if app.terminal_focus(focused) {
                 Handled::Moved
             } else {
                 Handled::Ignored
