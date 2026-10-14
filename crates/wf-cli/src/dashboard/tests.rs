@@ -1301,6 +1301,23 @@ fn the_log_tab_and_a_prompt_have_the_accent() {
 }
 
 #[test]
+fn the_review_prompt_has_the_accent_on_the_whole_line() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('v'));
+    assert!(matches!(app.prompt, Some(Prompt::Verdict { .. })));
+    let (column, row) = find(&mut app, 60, 24, "r changes");
+    assert_eq!(row, 23);
+    // The key and its words, and the last column of the line.
+    let key = style_at(&mut app, 60, 24, column, row);
+    assert_eq!(key.bg, Some(ACCENT));
+    assert!(key.add_modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(bg_at(&mut app, 60, 24, column + 3, row), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 24, 59, row), Some(ACCENT));
+}
+
+#[test]
 fn while_the_terminal_pane_is_not_focused_the_accent_is_dimmed() {
     let mut app = app();
     let (_, row) = find(&mut app, 60, 16, "wants:");

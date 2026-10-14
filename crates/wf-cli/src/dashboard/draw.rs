@@ -287,7 +287,8 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
 
 /// The line the footer asks for, with the cursor in it.
 fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
-    // The label of what is asked has the accent.
+    // The label of what is asked has the accent; a question answered with keys has it on the
+    // whole line.
     let label_style = Style::new().bold().bg(accent(app, KeysAt::Footer));
     let question = |text: String| Line::from(Span::styled(text, label_style));
     let (label, input, hint) = match prompt {
@@ -306,8 +307,9 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
                 .map_or_else(String::new, |working| {
                     format!("{} on #{} ", working.agent, working.item.id.short())
                 });
-            let line = question(format!(" stop {agent}now? y/n"));
-            frame.render_widget(Paragraph::new(line), area);
+            let mut line = question(format!(" stop {agent}now? "));
+            line.extend(answer_keys(&["y/n"]));
+            draw_question(frame, app, line, area);
             return;
         }
         Prompt::Choose(_) | Prompt::Keys => return,
@@ -317,11 +319,9 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
             "enter resolve · ctrl+g editor · esc cancel ",
         ),
         Prompt::Verdict { item } => {
-            let line = Line::from(vec![
-                Span::styled(format!(" ◎ #{}: ", item.short()), label_style),
-                Span::raw("a approve · r changes · D diff · esc"),
-            ]);
-            frame.render_widget(Paragraph::new(line), area);
+            let mut line = question(format!(" ◎ #{}: ", item.short()));
+            line.extend(answer_keys(&["a approve", "r changes", "D diff", "esc"]));
+            draw_question(frame, app, line, area);
             return;
         }
     };
@@ -345,6 +345,30 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     frame.render_widget(Paragraph::new(line), area);
     let cursor = (input.visual_cursor().max(scroll) - scroll) as u16;
     frame.set_cursor_position((area.x + label_width as u16 + cursor, area.y));
+}
+
+/// Draws a question answered with keys: the accent covers the whole line, so the keys read as
+/// part of it.
+fn draw_question(frame: &mut Frame, app: &App, line: Line, area: Rect) {
+    let style = Style::new().bg(accent(app, KeysAt::Footer));
+    frame.render_widget(Paragraph::new(line).style(style), area);
+}
+
+/// The `keys` that answer a question, each a key and what it does: the key in bold, the words in
+/// normal weight.
+fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    for (index, hint) in keys.iter().enumerate() {
+        if index > 0 {
+            spans.push(Span::raw(SEPARATOR));
+        }
+        let (key, what) = hint.split_once(' ').unwrap_or((hint, ""));
+        spans.push(Span::styled(key, Style::new().bold().fg(Color::White)));
+        if !what.is_empty() {
+            spans.push(Span::raw(format!(" {what}")));
+        }
+    }
+    spans
 }
 
 /// Draws the name of the project and the tabs; returns where the label of each tab went.
