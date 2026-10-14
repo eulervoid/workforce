@@ -92,7 +92,7 @@ pub fn short(id: &str) -> &str {
 }
 
 /// The comments in the activity of an item `wf item show --json` printed, oldest first: comments
-/// of their own and the reasons given with moves and verdicts.
+/// of their own and the reasons given with moves and verdicts, each with the text of its entry.
 pub fn comments(shown: &Value) -> Value {
     Value::Array(
         shown["activity"]
@@ -100,7 +100,11 @@ pub fn comments(shown: &Value) -> Value {
             .unwrap()
             .iter()
             .filter(|entry| entry["comment"].is_object())
-            .map(|entry| entry["comment"].clone())
+            .map(|entry| {
+                let mut comment = entry["comment"].clone();
+                comment["text"] = entry["text"].clone();
+                comment
+            })
             .collect(),
     )
 }

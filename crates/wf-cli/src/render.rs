@@ -611,8 +611,8 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
 /// Where a wrapped `↳` line of an item's header continues: under the text after `↳ `.
 const LINK_INDENT: &str = "    ";
 
-/// The activity of an item: one line per thing that happened, and the text of comments below
-/// their line. The date heads the section and is repeated when the day changes.
+/// The activity of an item: one line per thing that happened, and the text that goes with it
+/// below. The date heads the section and is repeated when the day changes.
 fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> String {
     use style::{BOLD, DIM, paint};
     let mut out = String::new();
@@ -644,15 +644,12 @@ fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> Stri
     out
 }
 
-/// Where a wrapped line of an activity entry continues: under what happened, past the time.
-const ACTIVITY_INDENT: &str = "         ";
+/// Where the text of an activity entry starts, and where a long line of who did what continues:
+/// two columns further in than what happened, to set it apart.
+const ACTIVITY_TEXT_INDENT: &str = "           ";
 
-/// Where the text of a comment starts: two columns further in than what happened, to set it apart.
-const COMMENT_INDENT: &str = "           ";
-
-/// One entry of an item's activity: `lead` (its time), who did what, and the text of a comment,
-/// if it has one. Both are wrapped to `width`, the line continuing under [`ACTIVITY_INDENT`] and
-/// the text under [`COMMENT_INDENT`].
+/// One entry of an item's activity: `lead` (its time), who did what, and the text that goes with
+/// it, if it has any. Both are wrapped to `width` under [`ACTIVITY_TEXT_INDENT`].
 fn activity_entry(
     entry: &crate::view::ActivityView,
     lead: &str,
@@ -695,22 +692,20 @@ fn activity_entry(
         Some(_) | None => parts.push(entry.summary.clone()),
     }
     let line = format!("{lead}{}", parts.join(&format!(" {} ", paint(DIM, "·"))));
-    let line = fill(&line, width, ACTIVITY_INDENT);
+    let line = fill(&line, width, ACTIVITY_TEXT_INDENT);
     let text = entry
-        .comment
-        .as_ref()
-        .and_then(|comment| comment.text.as_deref())
-        .or(entry.text.as_deref())
+        .text
+        .as_deref()
         .filter(|text| !text.trim().is_empty())
         .map(|text| {
-            let text = wrap_markdown(text, width, COMMENT_INDENT);
+            let text = wrap_markdown(text, width, ACTIVITY_TEXT_INDENT);
             text.trim_end_matches('\n').to_string()
         });
     (line, text)
 }
 
-/// One line of `wf watch`: `14:02  #k3f7ab  @ada/coder · moved to done`, and the text of a
-/// comment below it.
+/// One line of `wf watch`: `14:02  #k3f7ab  @ada/coder · moved to done`, and the text that goes
+/// with it below.
 pub fn watch_line(line: &crate::view::WatchLineView) -> String {
     watch_line_for(line, text_width())
 }
@@ -1091,24 +1086,43 @@ mod tests {
                 label: "@ada/coder/bh2m".to_string(),
             },
             kind: ActivityKind::Edited,
-            summary: format!("checked step 1: {text}"),
+            summary: "checked step 1".to_string(),
             comment: None,
-            text: None,
+            text: Some(text.to_string()),
         }
     }
 
     #[test]
-    fn long_activity_lines_continue_under_the_comment_text() {
+    fn the_text_of_an_activity_entry_is_wrapped_below_its_line() {
         let entry = checked_step("wrap long activity lines under their indent");
+        let (line, text) = activity_entry(&entry, "  00:27  ", Some(44));
+        assert_eq!(
+            anstream::adapter::strip_str(&line).to_string(),
+            "  00:27  @ada/coder/bh2m · checked step 1"
+        );
+        assert_eq!(
+            anstream::adapter::strip_str(&text.unwrap()).to_string(),
+            "           wrap long activity lines under\n           their indent"
+        );
+        let (line, text) = activity_entry(&entry, "  00:27  ", None);
+        assert_eq!(
+            anstream::adapter::strip_str(&line).to_string(),
+            "  00:27  @ada/coder/bh2m · checked step 1"
+        );
+        assert_eq!(
+            anstream::adapter::strip_str(&text.unwrap()).to_string(),
+            "           wrap long activity lines under their indent"
+        );
+    }
+
+    #[test]
+    fn a_long_activity_line_continues_under_the_text() {
+        let mut entry = checked_step("");
+        entry.summary = "renamed it to \"a title too long for one line\"".to_string();
         let (line, _) = activity_entry(&entry, "  00:27  ", Some(40));
         assert_eq!(
             anstream::adapter::strip_str(&line).to_string(),
-            "  00:27  @ada/coder/bh2m · checked step\n         1: wrap long activity lines\n         under their indent"
-        );
-        let (line, _) = activity_entry(&entry, "  00:27  ", None);
-        assert_eq!(
-            anstream::adapter::strip_str(&line).to_string(),
-            "  00:27  @ada/coder/bh2m · checked step 1: wrap long activity lines under their indent"
+            "  00:27  @ada/coder/bh2m · renamed it\n           to \"a title too long for\n           one line\""
         );
     }
 
