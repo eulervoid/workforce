@@ -147,7 +147,8 @@ enum Actor {
 }
 ```
 
-  The device is trusted to state the actor truthfully (members are trusted in v1). Attribution chain:
+  The device is trusted to state the actor truthfully (members are trusted in v1); on the device, the
+  daemon decides it from the connection, not from what a client says (below). Attribution chain:
   principal → agent → session → device signature. Actors are shown as `@ada`, `@ada/coder` and
   `@daemon`.
 * **Workforce id**: BLAKE3 hash of the genesis event. Identifies, but is not a capability, so it may be
@@ -235,12 +236,37 @@ need different capabilities.
 * The claim belongs to the earliest live work session of an item by `(hlc, EventId)`; a later one
   cancels itself (M3: two daemons can only start sessions on one item at the same time across devices).
   On one machine `wf session start` refuses an item that has a live work session.
-* Agents run `wf` with `WF_SESSION` and `WF_WORKFORCE` set by the runner, so their events carry
-  `Actor::Agent{agent, session}` and they address the workforce of the session, whatever the committed
-  `.workforce.toml` of their checkout says.
+* Agents run `wf` with `WF_SESSION`, `WF_SESSION_TOKEN` and `WF_WORKFORCE` set by the runner, so
+  their events carry `Actor::Agent{agent, session}` and they address the workforce of the session,
+  whatever the committed `.workforce.toml` of their checkout says.
 * Location transparency stops at uncommitted work. Reassignment carries over only what was pushed, which
   is why agents commit small.
 * wf session ids are separate from ACP session ids; the ACP id is a local detail of the runner.
+
+### Who the daemon acts for
+Everything written on a machine is signed by its daemon, which authors it for whom the connection to
+its socket acts for. A request never names an actor; the daemon decides it once per connection, from
+the token the client presents first:
+
+* **A session token** acts as that session's agent, in the session's workforce, and nothing else. The
+  runner draws a new one each time it starts the session's harness (`WF_SESSION_TOKEN`, next to
+  `WF_SESSION`) and forgets it when the harness is gone. What the connection authors carries
+  `Actor::Agent{agent, session}`; it may read, author, sync and end its own session, and nothing that is
+  the principal's: answer permission requests, start or stop sessions, join, follow or fork.
+* **The principal token** acts as the principal of the machine's device. The daemon draws it when it
+  starts and writes it to `keys/principal.token` in wf's data directory (mode 0600), where the agent
+  sandbox denies reading it, as it denies the keys. `wf` presents it when it runs outside a session.
+* **No token, or one the daemon did not hand out,** is refused.
+
+What the agent may then author is for wf-core to say (`check_actor`, the guards below): the daemon
+only makes sure the actor is the true one.
+
+Decision: a principal token the sandbox keeps from agents, not peer credentials and the session's
+process tree. The peer's uid is the same for the principal and the agents, and a pid only says where a
+process started: a process can leave its session's tree (`setsid`, a double fork, `launchd`), a pid can
+be reused, and walking the tree is code of its own for each OS. The token puts the boundary where the
+keys already have it, in the sandbox: an agent that runs without one can read the principal token,
+as it can read the principal key.
 
 ### Roles (v1)
 | Role | Can do |
@@ -249,7 +275,8 @@ need different capabilities.
 | `member` | items, claims, comments, reviews, decisions |
 
 Agent actors act for their principal with the member's rights, minus a few **guards** (authoring checks
-against mistakes and shortcuts, not attacks): a session cannot resolve a blocker it wrote, cannot lower
+against mistakes and shortcuts; as the daemon decides the actor, they also hold against an agent in its
+sandbox, though not against members): a session cannot resolve a blocker it wrote, cannot lower
 the review level of an item its agent worked on, cannot move its own item to a done state (it submits),
 and cannot write `AgentDefined` or authority bodies. A reviewer or supervisor agent never worked on the
 item it reviews or supervises.
@@ -1065,7 +1092,7 @@ authenticated) is *later*. wf never handles harness credentials.
 
 | ACP | Use |
 |---|---|
-| `session/new` + MCP servers | start in the item's worktree with `WF_SESSION` set; attach the `wf` MCP server (`item_show`, `comment`, `inbox`, `search`, `decision_propose`, M3) |
+| `session/new` + MCP servers | start in the item's worktree with `WF_SESSION` and its token `WF_SESSION_TOKEN` set (section 5, *Who the daemon acts for*); attach the `wf` MCP server (`item_show`, `comment`, `inbox`, `search`, `decision_propose`, M3) |
 | `session/prompt` | send the brief: item, dependencies, comments of earlier sessions, open change requests, the agent rules; later ratified decisions and search hits |
 | end of a prompt turn | decides the next step (below) |
 | `session/update` | transcript capture (local, `wf session watch`), redaction (M3), presence |
@@ -1119,8 +1146,9 @@ machine config lists them, until one answers. Each one allows, denies or passes 
 * **`agent`**: an agent that the daemon keeps one live session of, prompted with the request, the
   item and the guidance. It answers like a hook.
 
-What every decider passes on goes to a person, through `wf inbox`, the dashboard (`wf`) or
-`wf session allow|deny`. Without a config the chain is `rules`, then the person. Deciders are set in the
+What every decider passes on goes to the principal, through `wf inbox`, the dashboard (`wf`) or
+`wf session allow|deny`. Only a connection that acts for the principal answers it: a session cannot
+answer its own request, nor another's. Without a config the chain is `rules`, then the person. Deciders are set in the
 machine config (`$XDG_CONFIG_HOME/workforce/config.toml`), never in the signed policy: policy that syncs
 must not make other machines run programs or call paid APIs. Each decision, its decider and its reason
 go into the transcript of the session that asked.
@@ -1161,8 +1189,9 @@ stopped; nothing waits for it.
   commits go, the daemon's socket, temporary files, the caches and state of agent tools, and what the
   machine config adds; nowhere else in `~/.config` or `~/.local/share`, so not wf's stores nor the
   worktrees of other items. Whatever the machine config adds, the sandbox denies:
-  * reading or writing the device key, the principal keys and the machine config, with which an
-    agent would sign as the device or the principal, or turn its sandbox off;
+  * reading or writing the device key, the principal keys, the principal token and the machine
+    config, with which an agent would sign as the device or the principal, have the daemon act for
+    the principal, or turn its sandbox off;
   * writing the repository's `.git/config` and `.git/hooks`, the worktree's `.git` file and the
     `commondir` it leads to, and git's own config (`~/.gitconfig`, `~/.config/git`), with which git
     would run the agent's code outside the sandbox. wf also runs every git command with
