@@ -44,7 +44,7 @@ impl Notifier {
     }
 
     /// Tells of what waits on the principal and was not told of yet. `waiting_merges` are the
-    /// items whose merge the dispatcher just tried and found the checkout with changes.
+    /// items whose last merge by the merge task found the target checked out with changes.
     pub(crate) async fn announce(
         &mut self,
         daemon: &Daemon,
