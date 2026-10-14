@@ -45,9 +45,13 @@ pub(super) fn agent(
                     anyhow!("there is no agent `{agent}`; {}", OneOf::new(all))
                 })?;
             let events = workspace.events()?;
-            let own = workspace_device(workspace)?;
-            let detail = view::agent_detail(workspace.state(), &id, &events, Some(own))
-                .context("a listed agent is defined")?;
+            let detail = view::agent_detail(
+                workspace.state(),
+                &id,
+                &events,
+                Some(workspace.device_key()),
+            )
+            .context("a listed agent is defined")?;
             emit(json, &detail, render::agent_detail)
         }
         AgentCommand::Add(args) => {
