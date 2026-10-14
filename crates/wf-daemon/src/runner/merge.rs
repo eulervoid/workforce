@@ -438,6 +438,10 @@ impl Daemon {
                  The conflicts are left in the worktree; resolve them and commit the merge before you go on.",
                 paths.join(", ")
             ),
+            Ok(TargetMerge::Uncommitted) => format!(
+                "The merge of {target} into the branch, since the work conflicted with it, is still \
+                 in the worktree with every conflict resolved; commit it before you go on."
+            ),
             Err(error) => format!(
                 "Could not merge {target} into the branch, though the work conflicted with it: {}",
                 wf_core::error_chain(&error)

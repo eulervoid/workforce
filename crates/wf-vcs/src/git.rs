@@ -551,9 +551,11 @@ impl VcsAdapter for GitCli {
         let in_progress =
             Self::run_in(worktree, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"])?;
         if in_progress.success {
-            return Ok(TargetMerge::Conflict {
-                paths: self.unmerged_paths(worktree)?,
-            });
+            let paths = self.unmerged_paths(worktree)?;
+            if paths.is_empty() {
+                return Ok(TargetMerge::Uncommitted);
+            }
+            return Ok(TargetMerge::Conflict { paths });
         }
         let reference = format!("refs/heads/{target}");
         if !self.branch_exists(target)? {
@@ -1095,6 +1097,28 @@ mod tests {
         repo.write(&worktree, "file.txt", "one\nTWO\nthree\n");
         repo.commit(&worktree, "resolve");
         assert_eq!(merge(), TargetMerge::UpToDate);
+    }
+
+    #[test]
+    fn a_resolved_merge_into_the_branch_only_needs_committing() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "file.txt", "one\nTWO\nthree\n");
+        let main = repo.directory();
+        repo.write(&main, "file.txt", "one\n2\nthree\n");
+        repo.commit(&main, "conflicting change");
+        let worktree = repo.worktree_path("wf/k3f9");
+        let merge = || {
+            repo.git
+                .merge_target(&worktree, "main", "Merge main", &CommitSigning::Unsigned)
+                .unwrap()
+        };
+        assert!(matches!(merge(), TargetMerge::Conflict { .. }));
+
+        // Resolved and staged, but the session ended before the commit.
+        repo.write(&worktree, "file.txt", "one\nTWO\nthree\n");
+        git_in(&worktree, &["add", "file.txt"]);
+        assert_eq!(merge(), TargetMerge::Uncommitted);
+        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
     }
 
     #[test]

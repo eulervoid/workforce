@@ -120,6 +120,9 @@ pub enum TargetMerge {
     /// The merge conflicts in these files, relative to the worktree. The merge is left in the
     /// worktree, for whoever works there to resolve the conflicts and commit it.
     Conflict { paths: Vec<String> },
+    /// A merge from earlier is still in the worktree with every conflict resolved; it only needs
+    /// committing.
+    Uncommitted,
 }
 
 /// A worktree with uncommitted changes to tracked files.
