@@ -867,7 +867,9 @@ timeout = \"20m\"
         ));
         assert_eq!(
             Policy::parse(&repeated),
-            Err(PolicyError::DuplicateCheck(CommandName::new("fmt").unwrap()))
+            Err(PolicyError::DuplicateCheck(
+                CommandName::new("fmt").unwrap()
+            ))
         );
     }
 
@@ -876,7 +878,9 @@ timeout = \"20m\"
         let empty = with_custom("[[merge.check]]\nname = \"nothing\"\nrun = []\n");
         assert_eq!(
             Policy::parse(&empty),
-            Err(PolicyError::EmptyCheck(CommandName::new("nothing").unwrap()))
+            Err(PolicyError::EmptyCheck(
+                CommandName::new("nothing").unwrap()
+            ))
         );
     }
 }
