@@ -311,7 +311,9 @@ impl Snapshot {
             in_view: wanted
                 .detail
                 .clone()
-                .and_then(|wanted| in_view(state, events, &graph, own, wanted, detail_width)),
+                .and_then(|wanted| {
+                    in_view(state, events, &graph, own, now_ms, wanted, detail_width)
+                }),
             agents: if wanted.agents {
                 agents(state, &graph, own)
             } else {
@@ -472,6 +474,7 @@ fn in_view(
     events: &[Event],
     graph: &wf_core::graph::DependencyGraph,
     own: DeviceKey,
+    now_ms: u64,
     wanted: Detail,
     width: u16,
 ) -> Option<InView> {
@@ -499,13 +502,15 @@ fn in_view(
             Some(InView::Session(session_info(state, graph, own, session)))
         }
         Detail::Agent(id) => {
-            let label =
-                view::mention_label(state, &wf_core::resolve::MentionTarget::Agent(id.clone()));
-            let definition = view::agent_views(state)
-                .into_iter()
-                .find(|agent| agent.id == label)?;
+            let detail = view::agent_detail(state, &id, events, Some(own))?;
+            let now = jiff::Timestamp::from_millisecond(i64::try_from(now_ms).ok()?).ok()?;
             Some(InView::Agent {
-                text: agent_text(&definition, &state.agent_stats(&id)),
+                text: render::agent_detail_for(
+                    &detail,
+                    Some(usize::from(width).min(100)),
+                    Format::Styled,
+                    now,
+                ),
                 id,
             })
         }
@@ -550,61 +555,6 @@ fn agents(
             }
         })
         .collect()
-}
-
-/// `14m`, `3h05m`, `2d`.
-pub fn duration(millis: u64) -> String {
-    let minutes = millis / 60_000;
-    match minutes {
-        0..60 => format!("{minutes}m"),
-        60..1440 => format!("{}h{:02}m", minutes / 60, minutes % 60),
-        _ => format!("{}d", minutes / 1440),
-    }
-}
-
-/// An agent's definition as `wf agent list` knows it, and how it is doing.
-fn agent_text(agent: &view::AgentView, stats: &AgentStats) -> String {
-    let mut lines = vec![
-        format!("runs      {}", agent.harness),
-        format!(
-            "model     {}",
-            agent.model.as_deref().unwrap_or("the harness's")
-        ),
-        format!("lanes     {}", list_or_none(&agent.lanes)),
-        format!("can       {}", list_or_none(&agent.capabilities)),
-        format!(
-            "starts    {} · permissions {} · {} nudges · parks for {}",
-            agent.start, agent.permissions, agent.nudges, agent.park_timeout
-        ),
-    ];
-    if let Some(max) = &agent.max_duration {
-        lines.push(format!("at most   {max}"));
-    }
-    let median = stats
-        .median_duration_ms
-        .map(|millis| format!(" · median {}", duration(millis)))
-        .unwrap_or_default();
-    lines.push(String::new());
-    lines.push(format!(
-        "sessions  {} · {} live · {} finished · {} failed{median}",
-        stats.sessions, stats.live, stats.finished, stats.failed
-    ));
-    if let Some(instructions) = &agent.instructions {
-        lines.push(String::new());
-        lines.push("instructions".to_owned());
-        lines.extend(instructions.lines().map(|line| format!("  {line}")));
-    }
-    let mut text = lines.join("\n");
-    text.push('\n');
-    text
-}
-
-fn list_or_none(values: &[String]) -> String {
-    if values.is_empty() {
-        "none".to_owned()
-    } else {
-        values.join(", ")
-    }
 }
 
 fn item_groups(

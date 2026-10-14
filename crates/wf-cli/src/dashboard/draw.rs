@@ -17,12 +17,12 @@ use super::app::{
 };
 use super::links;
 use super::snapshot::{
-    AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
+    AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting,
 };
 use super::snapshot::{Detail, ItemRow};
 use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;
-use crate::render;
+use crate::render::{self, duration};
 use crate::transcript::{self, Format, Now, Transcript, Usage};
 use wf_core::stats::ProjectStats;
 
@@ -1329,7 +1329,7 @@ fn draw_detail(
             else {
                 return None;
             };
-            let text = Text::from(text.clone());
+            let text: Text = text.into_text().unwrap_or_default();
             (draw_scrolled(frame, text, opened.scroll, body), None)
         }
         Detail::Session(id) => {
