@@ -13,6 +13,7 @@ mod printer;
 use std::collections::HashSet;
 
 use jiff::{SignedDuration, Timestamp};
+use serde::Deserialize;
 use serde_json::Value;
 use wf_harness::{Decision, Direction, Permission, TranscriptEntry};
 
@@ -118,6 +119,24 @@ impl StopReason {
     }
 }
 
+/// How full the agent's context window is, as its latest `usage_update` says.
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Usage {
+    /// Tokens in the context now.
+    pub used: u64,
+    /// Tokens the context window holds.
+    pub size: u64,
+    /// What the whole session cost so far, when the agent says.
+    pub cost: Option<Cost>,
+}
+
+#[derive(Clone, Debug, PartialEq, Deserialize)]
+pub struct Cost {
+    pub amount: f64,
+    /// An ISO 4217 code, such as `USD`.
+    pub currency: String,
+}
+
 /// A part of the transcript that no longer changes.
 #[derive(Clone, Debug)]
 pub enum Block {
@@ -192,6 +211,7 @@ pub struct Transcript {
     calls: Vec<ToolCall>,
     /// Calls of this turn that were denied: what the agent says of them later is left out.
     denied: HashSet<String>,
+    usage: Option<Usage>,
 }
 
 impl Default for Transcript {
@@ -210,7 +230,13 @@ impl Transcript {
             prompts: 0,
             calls: Vec::new(),
             denied: HashSet::new(),
+            usage: None,
         }
+    }
+
+    /// How full the agent's context window is, when it reported it.
+    pub fn usage(&self) -> Option<&Usage> {
+        self.usage.as_ref()
     }
 
     /// The blocks that no longer change, in order. New ones are only ever appended.
@@ -499,6 +525,11 @@ impl Transcript {
                     .collect();
                 self.blocks.push(Block::Plan(entries));
             }
+            Some("usage_update") => {
+                if let Ok(usage) = Usage::deserialize(update) {
+                    self.usage = Some(usage);
+                }
+            }
             _ => {}
         }
     }
@@ -620,6 +651,35 @@ mod tests {
             json!({"id": 1, "result": {"stopReason": "end_turn"}}),
         ));
         assert!(matches!(transcript.now(), Now::Idle));
+    }
+
+    #[test]
+    fn usage_is_the_latest_update() {
+        let mut transcript = Transcript::new();
+        transcript.push(&update(
+            0,
+            json!({"sessionUpdate": "agent_message_chunk", "content": {"type": "text", "text": "Hi"}}),
+        ));
+        assert_eq!(transcript.usage(), None);
+        transcript.push(&update(
+            1,
+            json!({"sessionUpdate": "usage_update", "used": 1000, "size": 200000}),
+        ));
+        transcript.push(&update(
+            2,
+            json!({"sessionUpdate": "usage_update", "used": 68620, "size": 1000000, "cost": {"amount": 0.0014, "currency": "USD"}}),
+        ));
+        assert_eq!(
+            transcript.usage(),
+            Some(&Usage {
+                used: 68620,
+                size: 1000000,
+                cost: Some(Cost {
+                    amount: 0.0014,
+                    currency: "USD".to_owned(),
+                }),
+            })
+        );
     }
 
     #[test]
