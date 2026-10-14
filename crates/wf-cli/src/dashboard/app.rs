@@ -917,8 +917,11 @@ impl App {
     }
 
     /// The details on the way from the list to what is on screen: those opened, or in a wide
-    /// window the selection's.
+    /// window the selection's. None with only the list on screen, even with details kept.
     pub fn path(&self) -> Vec<Detail> {
+        if !self.shows_both() && self.list_has_keys() {
+            return Vec::new();
+        }
         match self.stack() {
             Some(stack) if !stack.is_empty() => {
                 stack.iter().map(|opened| opened.detail.clone()).collect()
@@ -1013,8 +1016,7 @@ impl App {
     /// What waits that the keys on screen act on: the selected entry, the permission request of
     /// a selected or open session, or what waits about the selected or open item.
     pub fn subjects(&self) -> Vec<&Waiting> {
-        let opened = self.stack().and_then(|stack| stack.last());
-        if opened.is_none()
+        if self.list_has_keys()
             && self.tab == Tab::Now
             && let Some(Row::Waiting(key)) = self.now.selection.get()
         {
@@ -1089,16 +1091,24 @@ impl App {
     }
 
     /// Opens `detail`: on top of the one with the keys, or from the list in place of those
-    /// opened before.
+    /// opened before. Those opened from the list on `detail` before are given the keys back as
+    /// they were left.
     fn open(&mut self, detail: Detail) {
         let from_list = self.list_has_keys();
         let Some(panes) = self.panes_mut() else {
             return;
         };
+        panes.focus = Pane::Detail;
         if from_list {
+            if panes
+                .stack
+                .first()
+                .is_some_and(|opened| opened.detail == detail)
+            {
+                return;
+            }
             panes.stack.clear();
         }
-        panes.focus = Pane::Detail;
         panes.stack.push(Opened {
             scroll: detail.start(),
             detail,
@@ -1518,10 +1528,11 @@ impl App {
         };
         let item_of_session = self.item_subject();
         let page = self.page();
-        let Some(stack) = self.stack_mut() else {
+        let Some(panes) = self.panes_mut() else {
             return;
         };
-        let Some(opened) = stack.last_mut() else {
+        let opened_from_list = panes.stack.len() == 1;
+        let Some(opened) = panes.stack.last_mut() else {
             return;
         };
         if let Some(scroll) = opened.scroll.key(key, page) {
@@ -1529,8 +1540,12 @@ impl App {
             return;
         }
         match (key.code, &opened.detail) {
+            // The detail opened from the list stays as it is, to come back to with `l`.
+            (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) if opened_from_list => {
+                panes.focus = Pane::List;
+            }
             (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) => {
-                stack.pop();
+                panes.stack.pop();
             }
             (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'), Detail::Item(_)) => {
                 if let Some(session) = item_session {
