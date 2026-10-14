@@ -1023,9 +1023,25 @@ fn usage(seconds: i64, used: u64, size: u64, cost: Option<f64>) -> TranscriptEnt
     update(seconds, usage)
 }
 
-/// The coder at 7% of its context, the parked coder at 85%; the reviewer runs elsewhere.
+/// The result of `session/new`, saying the agent runs Opus 5.5.
+fn session_on_opus() -> TranscriptEntry {
+    entry(
+        0,
+        Direction::FromAgent,
+        json!({"id": "0", "result": {"sessionId": "s", "configOptions": [
+            {"id": "model", "category": "model", "currentValue": "opus", "type": "select", "options": [
+                {"value": "default", "name": "Default (recommended)"},
+                {"value": "opus", "name": "Opus 5.5"},
+            ]},
+        ]}}),
+    )
+}
+
+/// The coder on Opus 5.5 at 7% of its context, the parked coder at 85% on a model it did not
+/// name; the reviewer runs elsewhere.
 fn with_usage(app: &mut App) {
-    let mut coder = coder_transcript();
+    let mut coder = vec![session_on_opus()];
+    coder.extend(coder_transcript());
     coder.push(usage(5, 1000, 1_000_000, None));
     coder.push(usage(6, 68_620, 1_000_000, Some(0.4213)));
     app.transcribed(app.snapshot.working[0].id, &coder);
@@ -1084,11 +1100,25 @@ fn a_nearly_full_context_is_yellow_in_the_detail() {
     insta::assert_snapshot!("detail_context_full", screen(&mut app, 130, 14));
     let line = screen(&mut app, 130, 14)
         .lines()
-        .position(|line| line.contains("context 170k of 200k (85%)"))
+        .position(|line| line.contains("170k of 200k (85%)"))
         .unwrap();
     let x = app.list_width() + 3;
     let y = u16::try_from(line).unwrap();
     assert_eq!(style_at(&mut app, 130, 14, x, y).fg, Some(Color::Yellow));
+}
+
+#[test]
+fn a_session_detail_names_its_model_before_any_usage() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    let mut transcript = vec![session_on_opus()];
+    transcript.extend(coder_transcript());
+    app.transcribed(coder.id, &transcript);
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(coder));
+    app.refresh(snapshot);
+    insta::assert_snapshot!("detail_model", screen(&mut app, 60, 16));
 }
 
 #[test]
