@@ -133,9 +133,9 @@ fn handle(
             Some(Effect::Quit) => return Handled::Quit,
             Some(effect) => {
                 match act::carry_out(effect, workspace, terminal) {
-                    Ok(act::Outcome::Did(what)) => app.did(what),
+                    Ok(act::Outcome::Did(what)) => app.did(what, workspace::now_ms()),
                     Ok(act::Outcome::Choose(choice)) => app.choose(choice),
-                    Err(error) => app.action_failed(&error),
+                    Err(error) => app.action_failed(&error, workspace::now_ms()),
                 }
                 // Show what the action changed right away.
                 if let Err(error) = feed.refresh(workspace, app) {

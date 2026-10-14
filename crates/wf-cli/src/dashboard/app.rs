@@ -550,13 +550,16 @@ pub enum Filtered {
     Log,
 }
 
+/// How long the footer says what an action did or why it failed, unless a key is pressed first.
+pub const STATUS_LASTS_MS: u64 = 5_000;
+
 /// What the footer says instead of the latest event.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Status {
-    /// What an action did, until the next key.
-    Done(String),
-    /// Why an action failed, until the next key.
-    ActionFailed(String),
+    /// What an action did, said at `at_ms`, until the next key or [`STATUS_LASTS_MS`] later.
+    Done { what: String, at_ms: u64 },
+    /// Why an action failed, said at `at_ms`, until the next key or [`STATUS_LASTS_MS`] later.
+    ActionFailed { error: String, at_ms: u64 },
     /// Why the workforce could not be read, until it can again.
     RefreshFailed(String),
 }
@@ -625,8 +628,14 @@ impl App {
 
     pub fn refresh(&mut self, snapshot: Snapshot) {
         self.snapshot = snapshot;
-        if matches!(self.status, Some(Status::RefreshFailed(_))) {
-            self.status = None;
+        match self.status {
+            Some(Status::RefreshFailed(_)) => self.status = None,
+            Some(Status::Done { at_ms, .. } | Status::ActionFailed { at_ms, .. })
+                if self.snapshot.now_ms >= at_ms + STATUS_LASTS_MS =>
+            {
+                self.status = None;
+            }
+            Some(Status::Done { .. } | Status::ActionFailed { .. }) | None => {}
         }
         let rows = self.now_rows();
         self.now.selection.update(&rows);
@@ -648,13 +657,20 @@ impl App {
         self.status = Some(Status::RefreshFailed(format!("{error:#}")));
     }
 
-    pub fn action_failed(&mut self, error: &anyhow::Error) {
-        self.status = Some(Status::ActionFailed(format!("{error:#}")));
+    /// Says why an action failed, at `now_ms`.
+    pub fn action_failed(&mut self, error: &anyhow::Error, now_ms: u64) {
+        self.status = Some(Status::ActionFailed {
+            error: format!("{error:#}"),
+            at_ms: now_ms,
+        });
     }
 
-    /// Says what an action did.
-    pub fn did(&mut self, what: String) {
-        self.status = (!what.is_empty()).then_some(Status::Done(what));
+    /// Says what an action did, at `now_ms`.
+    pub fn did(&mut self, what: String, now_ms: u64) {
+        self.status = (!what.is_empty()).then_some(Status::Done {
+            what,
+            at_ms: now_ms,
+        });
     }
 
     /// Asks the principal to pick one of `choice`.
@@ -1059,7 +1075,10 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Some(Effect::Quit);
         }
-        if matches!(self.status, Some(Status::Done(_) | Status::ActionFailed(_))) {
+        if matches!(
+            self.status,
+            Some(Status::Done { .. } | Status::ActionFailed { .. })
+        ) {
             self.status = None;
         }
         if let Some(prompt) = self.prompt.take() {

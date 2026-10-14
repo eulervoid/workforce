@@ -18,7 +18,6 @@ pub use status::*;
 use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::hlc::Hlc;
-use wf_core::id::HashId;
 use wf_core::identity::Actor;
 use wf_core::resolve::MentionTarget;
 use wf_core::state::State;
@@ -75,27 +74,7 @@ pub fn actor_view(state: &State, actor: &Actor) -> ActorView {
     };
     ActorView {
         kind,
-        label: actor_label(state, actor),
-    }
-}
-
-pub fn actor_label(state: &State, actor: &Actor) -> String {
-    let principal = |key: &wf_core::identity::PrincipalKey| {
-        state
-            .member(key)
-            .map_or_else(|| key.fmt_short(), |member| format!("@{}", member.handle))
-    };
-    match actor {
-        Actor::Principal(key) => principal(key),
-        Actor::Daemon(_) => "@daemon".to_string(),
-        Actor::Agent { agent, session } => {
-            format!(
-                "{}/{}/{}",
-                principal(&agent.principal),
-                agent.name,
-                session.short()
-            )
-        }
+        label: state.actor_label(actor),
     }
 }
 
@@ -104,7 +83,7 @@ pub fn device_label(state: &State, device: wf_core::identity::DeviceKey) -> Stri
     match state.principal_of(&device) {
         Some(principal) => format!(
             "{} ({})",
-            actor_label(state, &Actor::Principal(principal)),
+            state.actor_label(&Actor::Principal(principal)),
             device.fmt_short()
         ),
         None => device.fmt_short(),
@@ -128,7 +107,7 @@ pub fn mention_view(state: &State, target: &MentionTarget) -> ActorView {
 
 pub fn mention_label(state: &State, target: &MentionTarget) -> String {
     match target {
-        MentionTarget::Principal(key) => actor_label(state, &Actor::Principal(*key)),
+        MentionTarget::Principal(key) => state.actor_label(&Actor::Principal(*key)),
         MentionTarget::Agent(agent) => {
             let handle = state.member(&agent.principal).map_or_else(
                 || agent.principal.fmt_short(),
