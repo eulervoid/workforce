@@ -405,10 +405,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
         if !tabs.is_empty() {
             tabs.push(Span::raw(" "));
         }
-        let mut label = format!("{} {}", tab.key(), tab.name());
-        if tab == Tab::Now && !app.snapshot.waiting.is_empty() {
-            label.push_str(&format!("·{}", app.snapshot.waiting.len()));
-        }
+        let label = format!("{} {}", tab.key(), tab.name());
         let label = if tab == app.tab && tab == Tab::Log {
             // The log is the list of its tab: its label has the accent, as a selection would.
             highlight(
@@ -460,13 +457,17 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
         .collect()
 }
 
-/// `3 live · 14 open · 1 blocked · 2 devices`, leaving out what is none.
+/// `3 live · 14 open · 2 waiting · 1 blocked · 2 devices`, leaving out what is none; `waiting`
+/// counts every entry that waits on the principal.
 fn counts_line(app: &App) -> Line<'static> {
     let counts = app.snapshot.counts;
     let mut parts = vec![
         format!("{} live", counts.live_sessions),
         format!("{} open", counts.open_items),
     ];
+    if !app.snapshot.waiting.is_empty() {
+        parts.push(format!("{} waiting", app.snapshot.waiting.len()));
+    }
     if counts.blocked_items > 0 {
         parts.push(format!("{} blocked", counts.blocked_items));
     }

@@ -1343,8 +1343,8 @@ fn a_breadcrumb_cut_short_leaves_out_the_end_of_its_highlight() {
 fn the_active_tab_has_its_ends_in_the_colour_of_its_highlight() {
     let mut app = app();
     // Reversed, the highlight has the colour of the text, which the ends take.
-    assert_ends(&mut app, 60, 16, "1 Now·3", Color::Reset);
-    let (column, row) = find(&mut app, 60, 16, "1 Now·3");
+    assert_ends(&mut app, 60, 16, "1 Now", Color::Reset);
+    let (column, row) = find(&mut app, 60, 16, "1 Now");
     let label = style_at(&mut app, 60, 16, column, row);
     assert!(
         label

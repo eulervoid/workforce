@@ -2,8 +2,8 @@
 source: crates/wf-cli/src/dashboard/tests.rs
 expression: "screen(&mut app, 130, 14)"
 ---
-" workforce                                                                                 ▐1 Now·3▌  2 Items   3 Agents   4 Log  "
-" 3 live · 14 open · 1 blocked · 2 devices                                                                                         "
+" workforce                                                                                   ▐1 Now▌  2 Items   3 Agents   4 Log  "
+" 3 live · 14 open · 3 waiting · 1 blocked · 2 devices                                                                             "
 "──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
 " ⧗ #aibaea blocker from coder                                                                                               ↑ 1   "
 "   "Should the span live on ParseError or Location?"                                                                              "
