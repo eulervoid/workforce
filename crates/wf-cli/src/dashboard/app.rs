@@ -110,10 +110,11 @@ pub enum Effect {
         blocker: CommentId,
         text: String,
     },
-    /// Writes the comment that resolves a blocker in `$EDITOR`.
+    /// Writes the comment that resolves a blocker in `$EDITOR`, starting from `text`.
     ResolveInEditor {
         item: ItemId,
         blocker: CommentId,
+        text: String,
     },
     Approve {
         item: ItemId,
@@ -146,6 +147,11 @@ pub enum Effect {
         state: ItemState,
     },
     Comment {
+        item: ItemId,
+        text: String,
+    },
+    /// Writes a comment in `$EDITOR`, starting from `text`, then posts it.
+    CommentInEditor {
         item: ItemId,
         text: String,
     },
@@ -1393,7 +1399,11 @@ impl App {
             }
             KeyCode::Char('R') => {
                 let (item, blocker) = blocker?;
-                Some(Effect::ResolveInEditor { item, blocker })
+                Some(Effect::ResolveInEditor {
+                    item,
+                    blocker,
+                    text: String::new(),
+                })
             }
             KeyCode::Char('v') => {
                 self.prompt = Some(Prompt::Verdict { item: review? });
@@ -1452,6 +1462,14 @@ impl App {
                 mut input,
             } => match key.code {
                 KeyCode::Esc => (None, None),
+                KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
+                    None,
+                    Some(Effect::ResolveInEditor {
+                        item,
+                        blocker,
+                        text: input.value().trim().to_owned(),
+                    }),
+                ),
                 KeyCode::Enter if input.value().trim().is_empty() => (None, None),
                 KeyCode::Enter => {
                     let text = input.value().trim().to_owned();
@@ -1478,6 +1496,13 @@ impl App {
             },
             Prompt::Comment { item, mut input } => match key.code {
                 KeyCode::Esc => (None, None),
+                KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
+                    None,
+                    Some(Effect::CommentInEditor {
+                        item,
+                        text: input.value().trim().to_owned(),
+                    }),
+                ),
                 KeyCode::Enter if input.value().trim().is_empty() => (None, None),
                 KeyCode::Enter => {
                     let text = input.value().trim().to_owned();
