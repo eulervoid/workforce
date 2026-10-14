@@ -59,7 +59,8 @@ pub struct Closing {
 /// Why reviewed work could not be merged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergeFailure {
-    /// The work conflicts with the target: a session has to merge the target into the branch.
+    /// The work conflicts with the target: the next session starts with the target merged into
+    /// the branch and resolves the conflict.
     Conflict,
     /// It may merge later: the target's checkout has changes, the target kept moving, or git
     /// failed. The dispatcher tries again.
