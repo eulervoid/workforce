@@ -8,9 +8,9 @@ use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
 use crate::view::{
-    ActivityKind, AgentView, BacklinkView, BodyPartView, CommentKindView, InboxEntryView,
-    ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, ReviewStatusView, SessionView,
-    SourceView, StatusView, StepRefView, StepsView,
+    ActivityKind, AgentView, BodyPartView, CommentKindView, InboxEntryView, ItemDetail, ItemGroup,
+    ItemSummary, LogView, MentionsView, ReviewStatusView, SessionView, SourceView, StatusView,
+    StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
 use wf_core::item::ItemState;
@@ -39,20 +39,6 @@ fn written_in(source: &SourceView) -> &'static str {
     match source.in_comment {
         None => "body",
         Some(_) => "comment",
-    }
-}
-
-/// How many places of the referencing item a backlink is written in, and how many are comments;
-/// nothing for a single place in the body.
-fn places(backlink: &BacklinkView) -> String {
-    let places = backlink.places();
-    let comments = backlink.in_comments.len();
-    match (places, comments) {
-        (1, 0) => String::new(),
-        (1, 1) => " (in a comment)".to_string(),
-        (_, 0) => format!(" ({places}x)"),
-        (_, 1) => format!(" ({places}x, 1 in a comment)"),
-        _ => format!(" ({places}x, {comments} in comments)"),
     }
 }
 
@@ -569,10 +555,9 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
         };
         line(
             format!(
-                "  ↳ {what}referenced by {} \"{}\"{}",
+                "  ↳ {what}referenced by {} \"{}\"",
                 id_label(&backlink.item),
-                backlink.title,
-                places(backlink)
+                backlink.title
             ),
             LINK_INDENT,
         );

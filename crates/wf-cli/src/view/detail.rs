@@ -52,31 +52,20 @@ pub struct ReferenceView {
     pub comment: Option<String>,
 }
 
-/// An item that references this one, or a comment on it, with every place it does so.
+/// An item that references this one, or a comment on it; once, however often it does so.
 #[derive(Serialize)]
 pub struct BacklinkView {
     pub item: String,
     pub title: String,
     /// The short id of the comment of this item referenced, when it is one.
     pub comment: Option<String>,
-    /// The reference is in the body of the referencing item.
-    pub in_body: bool,
-    /// The comments and move notes of the referencing item the reference is in, by id.
-    pub in_comments: Vec<String>,
-}
-
-impl BacklinkView {
-    /// How many places the reference is written in.
-    pub fn places(&self) -> usize {
-        usize::from(self.in_body) + self.in_comments.len()
-    }
 }
 
 /// One [`BacklinkView`] per referencing item and comment of this item referenced.
 fn backlink_views(state: &State, target: ItemId) -> Vec<BacklinkView> {
     let mut views = BTreeMap::new();
     for backlink in state.backlinks(target) {
-        let view = views
+        views
             .entry((backlink.from.item, backlink.comment))
             .or_insert_with(|| BacklinkView {
                 item: backlink.from.item.to_base32(),
@@ -85,13 +74,7 @@ fn backlink_views(state: &State, target: ItemId) -> Vec<BacklinkView> {
                     .map(|view| view.title().to_string())
                     .unwrap_or_default(),
                 comment: backlink.comment.map(|comment| comment.short()),
-                in_body: false,
-                in_comments: Vec::new(),
             });
-        match backlink.from.written_in {
-            WrittenIn::Body => view.in_body = true,
-            WrittenIn::Comment(id) => view.in_comments.push(id.to_string()),
-        }
     }
     views.into_values().collect()
 }

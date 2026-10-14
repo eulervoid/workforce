@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&sessions)"
 ---
 {
-  "schema": 6,
+  "schema": 7,
   "data": [
     {
       "id": "ykf2hpy4e4wtasvknnnnngzajchh35aua6kx4lcegq6lepdw4qxq",
