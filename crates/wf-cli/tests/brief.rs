@@ -66,6 +66,7 @@ fn briefs() -> Vec<String> {
         wf_core::brief::nudge(item, wf_core::session::SessionRole::Work),
         wf_core::brief::nudge(item, wf_core::session::SessionRole::Review { commit: None }),
         wf_core::brief::nudge(item, wf_core::session::SessionRole::Supervise),
+        wf_core::brief::rebase_nudge(item, "main", &["src/lib.rs".into()]),
         work.render(),
         review(Some("abc123")).render(),
         review(None).render(),

@@ -8,7 +8,7 @@ use tokio::time::Instant;
 use wf_core::event::CommentKind;
 use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
-use wf_core::session::CommitId;
+use wf_core::session::{CommitId, SessionRole};
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
 use wf_vcs::{GitCli, VcsAdapter};
 
@@ -262,7 +262,7 @@ async fn turns(
                     End::Over
                 };
             }
-            TurnOutcome::Continue => prompt = wf_core::brief::nudge(run.item, run.role),
+            TurnOutcome::Continue => prompt = nudge(run).await,
             TurnOutcome::GiveUp => {
                 return End::Interrupt(Interruption::GaveUp {
                     turns: turns_without_commit,
@@ -340,6 +340,28 @@ async fn sleep_until(deadline: Option<Instant>) {
     match deadline {
         Some(deadline) => tokio::time::sleep_until(deadline).await,
         None => std::future::pending().await,
+    }
+}
+
+/// What a session that goes on is told after a turn: how to end it, and for work whose
+/// submission left a rebase stopped at a conflict, which files to resolve.
+async fn nudge(run: &Run) -> String {
+    let stopped = match run.role {
+        SessionRole::Work => {
+            let (repository, worktree) = (run.repository.clone(), run.worktree.clone());
+            blocking(move || GitCli::open(&repository)?.stopped_rebase(&worktree))
+                .await
+                .ok()
+                .and_then(Result::ok)
+                .flatten()
+        }
+        SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
+    };
+    match stopped {
+        Some(paths) if !paths.is_empty() => {
+            wf_core::brief::rebase_nudge(run.item, &run.target, &paths)
+        }
+        Some(_) | None => wf_core::brief::nudge(run.item, run.role),
     }
 }
 

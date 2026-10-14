@@ -15,7 +15,8 @@ use crate::{Daemon, Loaded, caches};
 
 impl Daemon {
     /// Removes the directory an ended session ran in, unless it is the worktree of the item,
-    /// which later sessions continue.
+    /// which later sessions continue: there only a rebase stopped by a refused submission is
+    /// given up.
     pub(super) async fn discard_session_directory(
         &self,
         workforce: WorkforceId,
@@ -24,7 +25,7 @@ impl Daemon {
     ) {
         let directory = self.session_directory(workforce, item, role);
         let removed = match role {
-            SessionRole::Work => return,
+            SessionRole::Work => return self.abort_stopped_rebase(workforce, item).await,
             SessionRole::Review { commit: Some(_) } => {
                 let Some(repository) = self.repository_of(workforce) else {
                     return;
@@ -48,6 +49,26 @@ impl Daemon {
             tracing::warn!(
                 "could not remove the directory of a session on #{}: {error}",
                 item.short()
+            );
+        }
+    }
+
+    /// Gives up a rebase that a refused submission left stopped in the worktree of `item`, once
+    /// its session ended without submitting, so the next session finds the branch checked out.
+    async fn abort_stopped_rebase(&self, workforce: WorkforceId, item: ItemId) {
+        let Some(repository) = self.repository_of(workforce) else {
+            return;
+        };
+        let worktree = item_worktree(&self.workforce_directory(workforce), item);
+        if !worktree.exists() {
+            return;
+        }
+        let aborted = blocking(move || GitCli::open(&repository)?.abort_rebase(&worktree)).await;
+        if let Ok(Err(error)) = aborted {
+            tracing::warn!(
+                "could not give up the stopped rebase of #{}: {}",
+                item.short(),
+                wf_core::error_chain(&error)
             );
         }
     }

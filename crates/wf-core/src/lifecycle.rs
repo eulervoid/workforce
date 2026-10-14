@@ -59,8 +59,8 @@ pub struct Closing {
 /// Why reviewed work could not be merged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergeFailure {
-    /// The work conflicts with the target: the next session starts with the target merged into
-    /// the branch and resolves the conflict.
+    /// The work conflicts with the target: the item goes back to work, and the next submission
+    /// rebases the branch onto the target.
     Conflict,
     /// It may merge later: the target's checkout has changes, the target kept moving, or git
     /// failed. The dispatcher tries again.
@@ -172,8 +172,8 @@ impl State {
     }
 
     /// Where `item` goes when its reviewed work cannot be merged: back to `open` for a conflict,
-    /// which the next session resolves, and otherwise to `review`, where the dispatcher tries
-    /// again. `None` when its type does not use the state.
+    /// which the next session resolves as it submits, and otherwise to `review`, where the
+    /// dispatcher tries again. `None` when its type does not use the state.
     pub fn after_failed_merge(&self, item: ItemId, failure: MergeFailure) -> Option<ItemState> {
         match failure {
             MergeFailure::Conflict => self.state_if_used(item, ItemState::Open),
@@ -192,10 +192,11 @@ impl State {
         Some((session.item(), active))
     }
 
-    /// Whether the daemon merges the target into the item's branch as `session` starts, before
-    /// the agent works: when the last merge of the item's work failed, so that its work was ready
-    /// to merge and is not merged, yet the item is back at work, as a conflict sends it.
-    pub fn merges_target_first(&self, session: SessionId) -> bool {
+    /// Whether the daemon rebases the item's branch onto the target as `session` submits, before
+    /// anything is written: for work on an item that is being worked on. Nobody has approved its
+    /// commits yet, so rewriting them costs nothing, and the reviewer sees them as they will land.
+    /// Approved work, which waits in review for its merge, is never rewritten.
+    pub fn rebases_at_submit(&self, session: SessionId) -> bool {
         let Some(session) = self.session(session) else {
             return false;
         };
@@ -203,12 +204,12 @@ impl State {
             SessionRole::Work => true,
             SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => false,
         };
-        let back_at_work = match self.live_state(session.item()) {
+        let at_work = match self.live_state(session.item()) {
             Some(ItemState::Open | ItemState::Active) => true,
             Some(ItemState::Review | ItemState::Done | ItemState::Cancelled | ItemState::Draft)
             | None => false,
         };
-        working && back_at_work && self.unmerged_work(session.item()).is_some()
+        working && at_work
     }
 
     /// What happens to the item of `session` when it ends for `reason`. The daemon does it before
