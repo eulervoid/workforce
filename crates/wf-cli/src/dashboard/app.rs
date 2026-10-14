@@ -153,41 +153,52 @@ impl Detail {
     /// Where a detail starts: a transcript at its end, which is what happens now.
     fn start(&self) -> Scroll {
         match self {
-            Detail::Item(_) | Detail::Agent(_) => Scroll::FromTop(0),
-            Detail::Session(_) => Scroll::FromEnd(0),
+            Detail::Item(_) | Detail::Agent(_) => Scroll::At(0),
+            Detail::Session(_) => Scroll::END,
         }
     }
 }
 
-/// Which part of a detail is on screen.
+/// Which part of a text is on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scroll {
-    /// This many lines below the top.
-    FromTop(u16),
-    /// This many lines above the end; at 0 it follows what is added.
-    FromEnd(u16),
+    /// From this line down; it stays there as the text grows.
+    At(u16),
+    /// The end, following what is added to it. `top` is the line the end was last drawn from,
+    /// where scrolling up starts.
+    End { top: u16 },
 }
 
 impl Scroll {
+    /// The end of a text not drawn yet.
+    pub const END: Scroll = Scroll::End { top: u16::MAX };
+
     fn down(self, lines: u16) -> Scroll {
         match self {
-            Scroll::FromTop(offset) => Scroll::FromTop(offset.saturating_add(lines)),
-            Scroll::FromEnd(offset) => Scroll::FromEnd(offset.saturating_sub(lines)),
+            Scroll::At(top) => Scroll::At(top.saturating_add(lines)),
+            Scroll::End { .. } => self,
         }
     }
 
     fn up(self, lines: u16) -> Scroll {
         match self {
-            Scroll::FromTop(offset) => Scroll::FromTop(offset.saturating_sub(lines)),
-            Scroll::FromEnd(offset) => Scroll::FromEnd(offset.saturating_add(lines)),
+            Scroll::At(top) | Scroll::End { top } => Scroll::At(top.saturating_sub(lines)),
         }
     }
 
-    /// The scroll kept to a text whose top can go no further down than `last_top`.
+    /// The scroll kept to a text whose top can go no further down than `last_top`. Reaching the
+    /// end follows it again.
     pub fn within(self, last_top: u16) -> Scroll {
         match self {
-            Scroll::FromTop(offset) => Scroll::FromTop(offset.min(last_top)),
-            Scroll::FromEnd(offset) => Scroll::FromEnd(offset.min(last_top)),
+            Scroll::At(top) if top < last_top => self,
+            Scroll::At(_) | Scroll::End { .. } => Scroll::End { top: last_top },
+        }
+    }
+
+    /// The line drawn at the top.
+    pub fn top(self) -> u16 {
+        match self {
+            Scroll::At(top) | Scroll::End { top } => top,
         }
     }
 
@@ -198,8 +209,8 @@ impl Scroll {
             KeyCode::Up | KeyCode::Char('k') => self.up(1),
             KeyCode::PageDown | KeyCode::Char(' ') => self.down(20),
             KeyCode::PageUp => self.up(20),
-            KeyCode::Char('g') => Scroll::FromTop(0),
-            KeyCode::Char('G') => Scroll::FromEnd(0),
+            KeyCode::Char('g') => Scroll::At(0),
+            KeyCode::Char('G') => Scroll::END,
             _ => return None,
         })
     }
@@ -498,7 +509,7 @@ impl App {
             agents: ListTab::default(),
             log: LogTab {
                 lines: Vec::new(),
-                scroll: Scroll::FromEnd(0),
+                scroll: Scroll::END,
                 filter: String::new(),
             },
             prompt: None,
@@ -1053,7 +1064,11 @@ impl App {
             Prompt::Filter(mut input) => {
                 let filter = match self.tab {
                     Tab::Items => &mut self.items.filter,
-                    Tab::Now | Tab::Agents | Tab::Log => &mut self.log.filter,
+                    Tab::Now | Tab::Agents | Tab::Log => {
+                        // A line of the lines that matched is no place in those that match now.
+                        self.log.scroll = Scroll::END;
+                        &mut self.log.filter
+                    }
                 };
                 match key.code {
                     KeyCode::Enter => (None, None),
@@ -1174,6 +1189,8 @@ impl App {
                 }
             }
             (KeyCode::Char('f'), Detail::Session(_)) => {
+                // A line of one transcript is no place in the other: start again at the end.
+                opened.scroll = Scroll::END;
                 self.full_transcripts = !self.full_transcripts;
             }
             _ => {}
@@ -1244,7 +1261,10 @@ impl App {
             KeyCode::Char('/') => {
                 self.prompt = Some(Prompt::Filter(Input::new(self.log.filter.clone())));
             }
-            KeyCode::Esc => self.log.filter.clear(),
+            KeyCode::Esc => {
+                self.log.filter.clear();
+                self.log.scroll = Scroll::END;
+            }
             _ => {}
         }
     }

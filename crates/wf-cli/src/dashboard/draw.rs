@@ -118,7 +118,7 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, body: Rect) {
 /// Every key, by where it works.
 const KEYS: &[(&str, &str)] = &[
     ("1-4 tab", "switch tabs"),
-    ("j/k g/G", "move, top, end"),
+    ("j/k g/G", "move, top, end (and follow)"),
     ("enter esc", "open, go back"),
     ("a d", "allow, deny a permission request"),
     ("r R", "answer a blocker here, in $EDITOR"),
@@ -978,11 +978,7 @@ fn draw_scrolled(
     let lines = paragraph.line_count(area.width);
     let last_top = u16::try_from(lines.saturating_sub(height)).unwrap_or(u16::MAX);
     let scroll = scroll.within(last_top);
-    let top = match scroll {
-        Scroll::FromTop(offset) => offset,
-        Scroll::FromEnd(offset) => last_top - offset,
-    };
-    frame.render_widget(paragraph.scroll((top, 0)), area);
+    frame.render_widget(paragraph.scroll((scroll.top(), 0)), area);
     scroll
 }
 
@@ -1057,21 +1053,30 @@ fn keys_line(app: &App) -> Line<'static> {
             ..
         })
     );
-    let opened = app
-        .stack()
-        .and_then(|stack| stack.last())
-        .map(|opened| &opened.detail);
-    let navigation = match (app.tab, opened) {
+    let opened = app.stack().and_then(|stack| stack.last());
+    let navigation = match (app.tab, opened.map(|opened| &opened.detail)) {
         (_, Some(Detail::Session(_))) => "esc back · j/k scroll · i item · f full",
         (_, Some(Detail::Item(_))) if item_session => "esc back · j/k scroll · enter session",
         (_, Some(Detail::Item(_) | Detail::Agent(_))) => "esc back · j/k scroll",
         (Tab::Now, None) => "enter open · j/k move",
         (Tab::Items, None) => "enter open · o group · / filter · F ready",
         (Tab::Log, None) if !app.log.filter.is_empty() => "/ change filter · esc clear",
-        (Tab::Log, None) => "/ filter · j/k scroll · G end",
+        (Tab::Log, None) => "/ filter · j/k scroll",
         (Tab::Agents, None) => "enter open · j/k move",
     };
+    // What follows what is added, once scrolled away from its end.
+    let followed = match (app.tab, opened) {
+        (Tab::Log, _) => Some(app.log.scroll),
+        (_, Some(opened)) => match opened.detail {
+            Detail::Session(_) => Some(opened.scroll),
+            Detail::Item(_) | Detail::Agent(_) => None,
+        },
+        (Tab::Now | Tab::Items | Tab::Agents, None) => None,
+    };
     let mut parts: Vec<&str> = vec![navigation];
+    if let Some(Scroll::At(_)) = followed {
+        parts.push("G follow");
+    }
     parts.extend(acts);
     parts.push("? keys");
     Line::from(format!(" {}", parts.join(" · "))).dim()

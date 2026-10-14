@@ -293,6 +293,41 @@ fn scrolling_stops_at_the_end_of_a_detail() {
 }
 
 #[test]
+fn scrolled_up_text_holds_still_and_follows_again_at_its_end() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('4'));
+    let lines = |from: usize, to: usize| -> Vec<String> {
+        (from..=to)
+            .map(|line| format!("07:{line:02}  @ada · line {line}\n"))
+            .collect()
+    };
+    app.logged(lines(10, 30));
+    screen(&mut app, 60, 10);
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::Char('k'));
+    // The body, without the latest event under it.
+    let body = |app: &mut App| -> Vec<String> {
+        screen(app, 60, 10)
+            .lines()
+            .skip(3)
+            .take(4)
+            .map(str::to_owned)
+            .collect()
+    };
+    let scrolled = body(&mut app);
+    // What is added below does not move what is being read.
+    app.logged(lines(31, 35));
+    assert_eq!(body(&mut app), scrolled);
+    // Back at the end, the log follows again.
+    for _ in 0..10 {
+        press(&mut app, KeyCode::Char('j'));
+        screen(&mut app, 60, 10);
+    }
+    app.logged(lines(36, 36));
+    assert!(screen(&mut app, 60, 10).contains("line 36"));
+}
+
+#[test]
 fn the_log_tab_follows_the_stream_and_filters_it() {
     let mut app = app();
     press(&mut app, KeyCode::Char('4'));
@@ -715,7 +750,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
         app.stack(),
         Some(&vec![Opened {
             detail: Detail::Session(SessionId::from_bytes([11; 32])),
-            scroll: Scroll::FromEnd(0),
+            scroll: Scroll::END,
         }])
     );
     assert!(!app.list_has_keys());
@@ -728,7 +763,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
         app.stack(),
         Some(&vec![Opened {
             detail: item.clone(),
-            scroll: Scroll::FromTop(6),
+            scroll: Scroll::At(6),
         }])
     );
     // Over the list, the list takes the keys back and the wheel moves its selection.
@@ -748,7 +783,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
         app.stack()
             .and_then(|stack| stack.last())
             .map(|opened| opened.scroll),
-        Some(Scroll::FromTop(3))
+        Some(Scroll::At(3))
     );
 }
 
