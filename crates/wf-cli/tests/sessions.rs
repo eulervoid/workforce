@@ -26,11 +26,7 @@ fn fake_agent() -> PathBuf {
 }
 
 fn git(directory: &Path, args: &[&str]) -> String {
-    let output = Command::new("git")
-        .args(args)
-        .current_dir(directory)
-        .output()
-        .unwrap();
+    let output = common::output(Command::new("git").args(args).current_dir(directory));
     assert!(
         output.status.success(),
         "git {args:?}: {}{}",
@@ -568,15 +564,15 @@ wf work submit
         .await;
     let allowed = world.wf.root.path().join("allowed_signers");
     std::fs::write(&allowed, world.wf.run(&["device", "allowed-signers"])).unwrap();
-    let verified = Command::new("git")
-        .args([
-            "-c",
-            &format!("gpg.ssh.allowedSignersFile={}", allowed.display()),
-        ])
-        .args(["verify-commit", "main"])
-        .current_dir(&world.wf.repository)
-        .output()
-        .unwrap();
+    let verified = common::output(
+        Command::new("git")
+            .args([
+                "-c",
+                &format!("gpg.ssh.allowedSignersFile={}", allowed.display()),
+            ])
+            .args(["verify-commit", "main"])
+            .current_dir(&world.wf.repository),
+    );
     let said = String::from_utf8_lossy(&verified.stderr);
     assert!(verified.status.success(), "{said}");
     assert!(said.contains("ada@"), "{said}");
@@ -796,11 +792,11 @@ wf work submit
             world.item(&item)["state"] == "done"
         })
         .await;
-    let merged = std::process::Command::new("git")
-        .args(["show", "main:hello.txt"])
-        .current_dir(&world.wf.repository)
-        .output()
-        .unwrap();
+    let merged = common::output(
+        Command::new("git")
+            .args(["show", "main:hello.txt"])
+            .current_dir(&world.wf.repository),
+    );
     assert!(merged.status.success(), "hello.txt is on main");
 }
 
@@ -2081,4 +2077,20 @@ hang
     world.wf.run(&["session", "stop", short(&session_text)]);
     assert_eq!(world.ended_session().await["status"], "cancelled");
     assert!(matches!(connect(token), Err(ClientError::Unrecognized)));
+}
+
+/// A command whose output another process keeps open, as an agent that inherited it did, fails
+/// the test with what it ran instead of blocking it.
+#[test]
+fn a_command_that_runs_past_its_limit_fails_with_what_it_ran() {
+    let failure = std::panic::catch_unwind(|| {
+        common::output_within(
+            Command::new("sh").args(["-c", "sleep 5 & exit 0"]),
+            Duration::from_millis(500),
+        )
+    })
+    .unwrap_err();
+    let message = failure.downcast_ref::<String>().unwrap();
+    assert!(message.contains("sleep 5 & exit 0"), "{message}");
+    assert!(message.contains("did not finish"), "{message}");
 }
