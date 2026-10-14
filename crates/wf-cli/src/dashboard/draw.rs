@@ -11,8 +11,8 @@ use wf_core::id::HashId;
 use wf_core::item::ItemState;
 
 use super::app::{
-    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, Scroll, Starter,
-    Status, Tab,
+    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, STRIP, Scroll,
+    Starter, Status, Tab,
 };
 use super::snapshot::{
     AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
@@ -134,6 +134,7 @@ const KEYS: &[(&str, &str)] = &[
     ("click", "pick a tab or an entry, again to open"),
     ("shift-drag", "select text, as without the dashboard"),
     ("enter esc", "open, go back"),
+    ("H L", "one pane or both, also shift ←/→"),
     ("a d", "allow, deny a permission request"),
     ("r R", "answer a blocker here, in $EDITOR"),
     ("v D", "review, show the diff"),
@@ -298,11 +299,18 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
     }
 }
 
-/// The list, and the detail on screen: in its place, or right of it in a wide window.
+/// The list, and the detail on screen: right of it in a wide window, or in its place in a
+/// narrow one or with the other pane folded away to a strip.
 fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -> Drawn {
     let in_view = app.in_view();
-    if !app.is_wide() {
-        return match in_view {
+    if !app.shows_both() {
+        let (area, strip) = if app.is_wide() {
+            let (pane, strip) = draw_strip(frame, app, area);
+            (pane, Some(strip))
+        } else {
+            (area, None)
+        };
+        let mut drawn = match in_view {
             Some(opened) => Drawn {
                 text: draw_detail(frame, app, opened, area),
                 ..Drawn::default()
@@ -319,6 +327,8 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
                 }
             }
         };
+        drawn.clickable.strip = strip;
+        return drawn;
     }
     let [list, rule, detail] = Layout::horizontal([
         Constraint::Length(app.list_width()),
@@ -338,6 +348,25 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
             ..Clickable::default()
         },
     }
+}
+
+/// Draws the strip of the pane folded away at its edge, with a chevron halfway down: `‹` for the
+/// list at the left, `›` for the detail at the right. Returns what is left for the pane on
+/// screen, and the strip.
+fn draw_strip(frame: &mut Frame, app: &App, area: Rect) -> (Rect, Rect) {
+    let (pane, strip, chevron) = if app.list_has_keys() {
+        let [pane, strip] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(STRIP)]).areas(area);
+        (pane, strip, " ›")
+    } else {
+        let [strip, pane] =
+            Layout::horizontal([Constraint::Length(STRIP), Constraint::Fill(1)]).areas(area);
+        (pane, strip, "‹ ")
+    };
+    let mut lines = vec![Line::default(); usize::from(strip.height / 2)];
+    lines.push(Line::from(chevron));
+    frame.render_widget(Paragraph::new(lines).dim(), strip);
+    (pane, strip)
 }
 
 /// The lines of a list `width` wide.
@@ -1077,8 +1106,8 @@ fn breadcrumb(app: &App, width: u16) -> Line<'static> {
                     != Some(format!("#{}", item.short()).as_str())
                 {
                     let mut crumb = vec![Span::raw(format!("#{}", item.short()))];
-                    // In a narrow window the list with its title is not on screen.
-                    if !app.is_wide()
+                    // With the detail in its place, the list with its title is not on screen.
+                    if !app.shows_both()
                         && let Some(title) = app.item_title(item)
                     {
                         crumb.push(Span::raw(format!(" {title}")));
