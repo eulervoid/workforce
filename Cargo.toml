@@ -5,7 +5,7 @@ members = ["crates/*"]
 [workspace.package]
 version = "0.0.0"
 edition = "2024"
-license = "MIT OR Apache-2.0"
+license = "GPL-3.0-only"
 
 [workspace.dependencies]
 wf-core = { path = "crates/wf-core" }
@@ -38,3 +38,7 @@ tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread
 data-encoding = "2"
 humantime = "2"
 tracing = "0.1"
+
+[profile.dev]
+# Line tables keep backtraces with file and line, at about half the size of a target directory.
+debug = "line-tables-only"

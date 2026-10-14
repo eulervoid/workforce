@@ -81,9 +81,10 @@ while the terminal pane is not focused; in tmux that needs `set -g focus-events 
 ## Sandbox
 The daemon runs every agent in [Fence](https://github.com/fencesandbox/fence), which has to be
 installed: an agent may write only in its worktree and where it needs to commit and talk to the
-daemon, and reach model APIs and package registries. Inside it, agents are allowed what they ask by
-default. The machine config can add to what Fence allows, or turn the sandbox off; then agents run
-with your privileges, and those set to `allow` are asked instead.
+daemon, and reach model APIs and package registries. It never reads wf's keys or config, nor changes
+git's config or hooks. Inside it, agents are allowed what they ask by default. The machine config can
+add to what Fence allows, or turn the sandbox off; then agents run with your privileges, and those
+set to `allow` are asked instead.
 ```toml
 [sandbox]
 kind = "fence"                   # or "off"

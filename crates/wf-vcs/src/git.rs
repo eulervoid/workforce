@@ -14,6 +14,19 @@ pub struct GitCli {
     repository: PathBuf,
 }
 
+/// `git`, kept from running code that an agent could have put in the repository's config: hooks
+/// and an fsmonitor run outside the agent's sandbox, with the privileges of whoever runs git.
+fn git() -> Command {
+    let mut command = Command::new("git");
+    command.args([
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+    ]);
+    command
+}
+
 /// What `git` said, for commands whose failure is an answer and not an error.
 struct Finished {
     success: bool,
@@ -69,7 +82,7 @@ impl GitCli {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let output: Output = Command::new("git")
+        let output: Output = git()
             .args(args)
             .current_dir(directory)
             .env("LC_ALL", "C")
@@ -416,7 +429,7 @@ impl VcsAdapter for GitCli {
     fn show_diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<(), VcsError> {
         let range = format!("refs/heads/{target}...{commit}");
         // The user's environment stays as it is, so the pager, colors and locale are theirs.
-        let status = Command::new("git")
+        let status = git()
             .arg("diff")
             .arg(&range)
             .args(args)
@@ -666,6 +679,46 @@ mod tests {
             "the branch continues where it was"
         );
         assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), first);
+    }
+
+    #[test]
+    fn hooks_and_an_fsmonitor_in_the_config_never_run() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TestRepo::new();
+        let ran = repo.root.path().join("ran");
+        let script = |name: &str| {
+            let path = repo.root.path().join("hooks").join(name);
+            std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+            let marker = ran.join(name);
+            std::fs::write(
+                &path,
+                format!(
+                    "#!/bin/sh\nmkdir -p '{}' && touch '{}'\n",
+                    ran.display(),
+                    marker.display()
+                ),
+            )
+            .unwrap();
+            std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+            path
+        };
+        script("post-checkout");
+        let hooks = repo.root.path().join("hooks");
+        let fsmonitor = script("fsmonitor");
+        git_in(
+            &repo.directory(),
+            &["config", "core.hooksPath", hooks.to_str().unwrap()],
+        );
+        git_in(
+            &repo.directory(),
+            &["config", "core.fsmonitor", fsmonitor.to_str().unwrap()],
+        );
+
+        let path = repo.worktree_path("wf/k3f9");
+        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        assert!(repo.git.is_clean(&path).unwrap());
+        assert!(!ran.exists(), "git ran {:?}", std::fs::read_dir(&ran).ok());
     }
 
     #[test]

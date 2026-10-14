@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::autonomy::Autonomy;
 use crate::crdt::{Lww, Stamp};
-use crate::event::{DeviceProfile, Event, EventBuilder, InviteKind};
+use crate::event::{AgentDefined, DeviceProfile, Event, EventBody, EventBuilder, InviteKind};
 use crate::hlc::Hlc;
 use crate::id::{EventId, HashId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, InviteKey, PrincipalKey, Role};
@@ -64,6 +64,14 @@ pub struct AgentDefinition {
     pub lanes: Vec<LaneName>,
     pub autonomy: Autonomy,
     pub instructions: Option<String>,
+}
+
+/// What an event did to an agent.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AgentChange<'a> {
+    /// Defined it, or defined it again with what it now is.
+    Defined(&'a AgentDefined),
+    Removed,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -491,6 +499,34 @@ impl State {
             .iter()
             .flat_map(|workforce| workforce.agents.iter())
             .filter_map(|(id, definition)| Some((id, definition.value().as_ref()?)))
+    }
+
+    /// What `events` did to `agent`, in the order they fold: each definition and removal, with
+    /// its event.
+    pub fn agent_history<'a>(
+        &self,
+        agent: &AgentId,
+        events: &'a [Event],
+    ) -> Vec<(&'a Event, AgentChange<'a>)> {
+        let Some(workforce) = &self.workforce else {
+            return Vec::new();
+        };
+        let mut history: Vec<(&Event, AgentChange)> = events
+            .iter()
+            .filter_map(|event| {
+                let (name, change) = if let EventBody::AgentDefined(defined) = &event.content.body {
+                    (&defined.name, AgentChange::Defined(defined))
+                } else if let EventBody::AgentRemoved(removed) = &event.content.body {
+                    (&removed.name, AgentChange::Removed)
+                } else {
+                    return None;
+                };
+                let principal = workforce.canonical(&event.content.actor.principal());
+                (*name == agent.name && principal == agent.principal).then_some((event, change))
+            })
+            .collect();
+        history.sort_by_key(|(event, _)| (event.content.hlc, event.id()));
+        history
     }
 
     pub fn agent(&self, name: &AgentName, principal: PrincipalKey) -> Option<&AgentDefinition> {

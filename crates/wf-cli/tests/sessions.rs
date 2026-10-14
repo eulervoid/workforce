@@ -434,6 +434,10 @@ wf work submit --note \"all done\"
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
     assert!(session["commit"].is_string());
+    // The merge task merges after the session has ended.
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
     let moves: Vec<String> = world.wf(&["log"])["events"]
         .as_array()
         .unwrap()
@@ -442,14 +446,22 @@ wf work submit --note \"all done\"
         .map(|event| event["summary"].as_str().unwrap().to_string())
         .collect();
     let for_session = format!("for session {}", short(session["id"].as_str().unwrap()));
-    assert_eq!(moves.len(), 2, "{moves:?}");
-    assert!(
-        moves.iter().all(|summary| summary.ends_with(&for_session)),
-        "the start and the end move the item for the session: {moves:?}"
+    let states: Vec<&str> = moves
+        .iter()
+        .map(|summary| {
+            let state = summary
+                .strip_suffix(&format!(" {for_session}"))
+                .unwrap_or_else(|| panic!("each move is for the session: {moves:?}"));
+            state.rsplit(" -> ").next().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        states,
+        ["active", "review", "done"],
+        "the start, the end and the merge move the item: {moves:?}"
     );
 
     let shown = world.item(&item);
-    assert_eq!(shown["state"], "done", "{shown}");
     let notes = comments(&shown);
     let notes = notes.as_array().unwrap();
     assert!(
@@ -653,13 +665,23 @@ wf work submit
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
+    // The merge task tries after the session has ended.
+    world
+        .wait("the waiting merge", |world| {
+            comments(&world.item(&item))
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| {
+                    note["text"].as_str().is_some_and(|text| {
+                        text.starts_with("Waiting to merge")
+                            && text.contains("changes to .workforce.toml.")
+                    })
+                })
+        })
+        .await;
     let shown = world.item(&item);
     assert_eq!(shown["state"], "review", "{shown}");
-    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
-        note["text"].as_str().is_some_and(|text| {
-            text.starts_with("Waiting to merge") && text.contains("changes to .workforce.toml.")
-        })
-    }));
     assert!(
         std::fs::read_to_string(&file)
             .unwrap()
@@ -707,13 +729,22 @@ wf work submit
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
+    // The merge task tries after the session has ended.
+    world
+        .wait("the refused merge", |world| {
+            comments(&world.item(&item))
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| {
+                    note["text"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("Could not merge into main"))
+                })
+        })
+        .await;
     let shown = world.item(&item);
     assert_eq!(shown["state"], "review", "not left active: {shown}");
-    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
-        note["text"]
-            .as_str()
-            .is_some_and(|text| text.starts_with("Could not merge into main"))
-    }));
 
     std::fs::remove_file(&lock).unwrap();
     world.wf.run(&["comment", short(&item), "the lock is gone"]);
@@ -908,7 +939,10 @@ wf work submit
     let session = world.ended_session().await;
     assert_eq!(world.sessions().len(), 1, "the same session continued");
     assert_eq!(session["status"], "submitted", "{session}");
-    assert_eq!(world.item(&item)["state"], "done");
+    // The merge task merges after the session has ended.
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
     let transcript = world
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
@@ -1484,8 +1518,11 @@ wf work submit
 
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
+    // The merge task merges after the session has ended.
+    world
+        .wait("the conflict", |world| world.item(&item)["state"] == "open")
+        .await;
     let shown = world.item(&item);
-    assert_eq!(shown["state"], "open", "{shown}");
     assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
         note["text"]
             .as_str()
@@ -1538,7 +1575,10 @@ wf work submit
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(transcript.contains("permission: yes"), "{transcript}");
-    assert!(inbox(&world).is_empty());
+    // The merge task merges after the session has ended.
+    world
+        .wait("an empty inbox", |world| inbox(world).is_empty())
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1850,6 +1890,10 @@ wf work submit
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
+    // The merge task merges after the session has ended.
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
     let brief = git(&world.wf.repository, &["show", "main:brief.md"]);
     assert!(
         brief.contains("## Instructions\n\nPrefer the standard library.\n"),
@@ -1888,4 +1932,80 @@ async fn an_item_with_a_live_session_is_not_started_twice() {
         message.contains(&format!("/coder/{}; stop it first", short(session))),
         "{message}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_token_acts_for_the_session_and_never_for_the_principal() {
+    use wf_core::event::{Comment, EventBody, ItemMoved, Review};
+    use wf_core::identity::Actor;
+    use wf_core::item::ItemState;
+    use wf_core::session::Verdict;
+    use wf_daemon::caller::{Caller, Token};
+    use wf_daemon::client::{ClientError, DaemonClient};
+
+    let script = "\
+sh printf %s \"$WF_SESSION_TOKEN\" > \"$FAKE_AGENT_SCRIPT.token\"
+hang
+";
+    let world = World::new(script).await;
+    let item_text = world.wf.add(&["--title", "Guarded"]);
+    start_session(&world, &item_text);
+    let leaked = world.scripts["fake-coder"].with_extension("txt.token");
+    world
+        .wait("the token", |_| {
+            std::fs::metadata(&leaked).is_ok_and(|file| file.len() > 0)
+        })
+        .await;
+    let token: Token = std::fs::read_to_string(&leaked).unwrap().parse().unwrap();
+    let socket = world.wf.root.path().join("run/workforce/daemon.sock");
+    let (_, workforce) = wf_cli::workspace::find_workforce(&world.wf.repository).unwrap();
+    let item = item_text.parse().unwrap();
+    let session_text = world.sessions()[0]["id"].as_str().unwrap().to_string();
+    let session = session_text.parse().unwrap();
+
+    let connect = {
+        let socket = socket.clone();
+        move |token: Token| DaemonClient::connect(&socket, Some(token))
+    };
+    let mut client = connect(token.clone()).unwrap().expect("a daemon");
+    assert_eq!(client.caller(), Caller::Session { workforce, session });
+
+    let comment = client
+        .author(
+            workforce,
+            EventBody::Commented(Comment::plain(item, "as the agent")),
+        )
+        .unwrap();
+    assert!(
+        matches!(&comment.content.actor, Actor::Agent { session: acting, .. } if *acting == session),
+        "{:?}",
+        comment.content.actor
+    );
+    let approve = EventBody::Reviewed(Review {
+        item,
+        commit: None,
+        verdict: Verdict::Approve,
+        because: None,
+    });
+    let refused = client.author(workforce, approve).unwrap_err();
+    assert!(refused.to_string().contains("review"), "{refused}");
+    let finish = EventBody::ItemMoved(ItemMoved {
+        item,
+        to: ItemState::Done.into(),
+        by_session: None,
+        because: None,
+    });
+    assert!(client.author(workforce, finish).is_err());
+    let answer = client.answer_permission(workforce, session, wf_harness::Permission::Allow);
+    assert!(
+        matches!(&answer, Err(ClientError::Failed(message)) if message.contains("only the principal")),
+        "{:?}",
+        answer.map(|_| ())
+    );
+    assert!(client.stop_session(workforce, session).is_err());
+
+    // The principal's CLI still can, and the token is over with its session.
+    world.wf.run(&["session", "stop", short(&session_text)]);
+    assert_eq!(world.ended_session().await["status"], "cancelled");
+    assert!(matches!(connect(token), Err(ClientError::Unrecognized)));
 }

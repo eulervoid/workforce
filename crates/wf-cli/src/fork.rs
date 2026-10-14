@@ -319,7 +319,7 @@ pub fn accept(
     }
     let own = workspace.device_key();
     let bootstrap = bootstrap_devices(workspace.state(), child, own);
-    let (replicated, device, _) = workspace.into_replicated();
+    let (replicated, _) = workspace.into_replicated();
 
     // Whoever keeps the log of this machine (the daemon, or this process) takes the fork in. The
     // history comes from the workforce it was forked from when this machine has it.
@@ -333,7 +333,7 @@ pub fn accept(
             check_member(&state, own, child)?;
             state.event_count()
         }
-        Replicated::Local(parent) => {
+        Replicated::Local(parent, device) => {
             let store = workspace::store_path(&data, &child)?;
             let mut replica = Replica::open(RedbStore::open(&store)?, child)?;
             replica.set_history_source(parent);

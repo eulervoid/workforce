@@ -264,7 +264,7 @@ fn h_and_l_fold_the_list_or_the_detail_to_a_strip() {
     // Shift → gives the detail the window, with the list a strip at the left.
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     assert!(!app.list_has_keys());
-    assert_eq!(app.detail_width(), 126);
+    assert_eq!(app.detail_width(), 127);
     insta::assert_snapshot!("detail_only", screen(&mut app, 130, 14));
     // Esc goes back to the list in the whole window, as in a narrow one.
     press(&mut app, KeyCode::Esc);
@@ -1332,6 +1332,86 @@ fn the_accent_goes_to_the_breadcrumb_on_enter_and_back_on_esc() {
     assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
 }
 
+/// Asserts that the highlight `text` on screen has half blocks around it in `background`, on the
+/// background of the line, and `background` itself under its text.
+fn assert_ends(app: &mut App, width: u16, height: u16, text: &str, background: Color) {
+    let (column, row) = find(app, width, height, &format!("▐{text}▌"));
+    let end = column + text.chars().count() as u16 + 1;
+    for (x, symbol) in [(column, "▐"), (end, "▌")] {
+        assert_eq!(symbol_at(app, width, height, x, row), symbol);
+        let style = style_at(app, width, height, x, row);
+        assert_eq!((style.fg, style.bg), (Some(background), Some(Color::Reset)));
+    }
+    assert_eq!(bg_at(app, width, height, column + 1, row), Some(background));
+}
+
+#[test]
+fn the_last_part_of_the_breadcrumb_has_its_ends_in_its_accent() {
+    let mut app = app();
+    app.resize(130, 24);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    app.refresh(snapshot.clone());
+    let crumb = "coder · work · 40m ◇ parked";
+    // The list has the keys: the ends are dimmed with the rest of the highlight.
+    assert_ends(&mut app, 130, 14, crumb, ACCENT_DIMMED);
+    press(&mut app, KeyCode::Char('l'));
+    app.refresh(snapshot);
+    assert_ends(&mut app, 130, 14, crumb, ACCENT);
+}
+
+#[test]
+fn a_breadcrumb_cut_short_leaves_out_the_end_of_its_highlight() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(coder));
+    app.refresh(snapshot);
+    // Wide enough for the text and its end, for the text only, and for neither.
+    let (column, row) = find(&mut app, 60, 16, "◆▌");
+    let fits = column + 1;
+    for (width, last) in [(fits + 1, "▌"), (fits, "◆"), (fits - 5, "…")] {
+        assert_eq!(symbol_at(&mut app, width, 16, width - 1, row), last);
+        assert_eq!(
+            bg_at(&mut app, width, 16, width - 1, row) == Some(ACCENT),
+            last != "▌"
+        );
+    }
+}
+
+#[test]
+fn the_active_tab_has_its_ends_in_the_colour_of_its_highlight() {
+    let mut app = app();
+    // Reversed, the highlight has the colour of the text, which the ends take.
+    assert_ends(&mut app, 60, 16, "1 Now·3", Color::Reset);
+    let (column, row) = find(&mut app, 60, 16, "1 Now·3");
+    let label = style_at(&mut app, 60, 16, column, row);
+    assert!(
+        label
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+    // The others have spaces in their place, and are clicked there too.
+    assert_eq!(symbol_at(&mut app, 60, 16, column + 9, row), " ");
+    app.click(column + 9, row);
+    assert_eq!(app.tab, Tab::Items);
+    assert_ends(&mut app, 60, 16, "2 Items", Color::Reset);
+    // The log has the accent, as its list would.
+    press(&mut app, KeyCode::Char('4'));
+    assert_ends(&mut app, 60, 16, "4 Log", ACCENT);
+    // Its ends are part of it.
+    let (column, row) = find(&mut app, 60, 16, "▐4 Log▌");
+    for end in [column, column + 6] {
+        press(&mut app, KeyCode::Char('1'));
+        app.click(end, row);
+        assert_eq!(app.tab, Tab::Log);
+    }
+}
+
 #[test]
 fn the_log_tab_and_a_prompt_have_the_accent() {
     let mut app = app();
@@ -1721,7 +1801,7 @@ fn a_link_in_the_log_opens_in_its_place_and_esc_goes_back_to_the_log() {
     app.click(column, row);
     let spans = Detail::Item(ItemId::from_bytes([2; 32]));
     assert_eq!(app.wanted().detail, Some(spans.clone()));
-    assert!(screen(&mut app, 60, 24).contains("Log › #aibaea"));
+    assert!(screen(&mut app, 60, 24).contains("Log ›▐#aibaea"));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.wanted().detail, None);
     assert!(screen(&mut app, 60, 24).contains("Keep the span"));
@@ -1784,7 +1864,7 @@ fn a_click_on_a_part_of_the_breadcrumb_goes_back_to_it() {
     };
     open_parse(&mut app);
     // The detail on top is where the breadcrumb is already.
-    let (column, row) = find(&mut app, 60, 24, "#aeaqca ");
+    let (column, row) = find(&mut app, 60, 24, "#aeaqca▌");
     app.click(column, row);
     assert_eq!(app.path().len(), 2);
     let (column, row) = find(&mut app, 60, 24, "#aibaea ›");
@@ -2150,4 +2230,145 @@ fn an_indicator_on_the_selection_has_its_background() {
     let lines = screen_lines(&mut app, 60, 9);
     assert!(lines[5].ends_with(" ↓ 5 "), "{lines:#?}");
     assert_eq!(bg_at(&mut app, 60, 9, 57, 5), Some(ACCENT));
+}
+
+/// A session of `coder` as `wf agent show` lists it, `minutes` old, or ended `minutes` ago.
+fn session_view(seed: u8, item: &ItemRef, status: &str, minutes: u64) -> crate::view::SessionView {
+    let at = crate::view::timestamp_ms(NOW_MS - minutes * 60_000);
+    let live = matches!(status, "live" | "parked");
+    crate::view::SessionView {
+        id: SessionId::from_bytes([seed; 32]).to_base32(),
+        agent: "@ada/coder".to_owned(),
+        item: item.id.to_base32(),
+        title: item.title.clone(),
+        role: "work".to_owned(),
+        status: status.to_owned(),
+        started: crate::view::timestamp_ms(NOW_MS - (minutes + 30) * 60_000),
+        ended: (!live).then_some(at),
+        model: None,
+        commit: None,
+        steps: None,
+    }
+}
+
+/// `coder` with a live session and two that ended, instructions with markdown, hosted here or
+/// only on another device.
+fn coder_detail(hosted_here: bool) -> crate::view::AgentDetail {
+    let host = |device: &str, sessions, this_device| crate::view::HostView {
+        device: device.to_owned(),
+        sessions,
+        this_device,
+    };
+    let mut hosts = vec![host("laptop", 1, false)];
+    if hosted_here {
+        hosts.insert(0, host("namioka", 2, true));
+    }
+    crate::view::AgentDetail {
+        definition: crate::view::AgentView {
+            id: "@ada/coder".to_owned(),
+            harness: "claude-code".to_owned(),
+            model: Some("opus".to_owned()),
+            capabilities: vec!["rust".to_owned(), "review".to_owned()],
+            lanes: vec!["default".to_owned()],
+            start: "auto".to_owned(),
+            permissions: "allow".to_owned(),
+            nudges: 3,
+            park_timeout: "2h".to_owned(),
+            max_duration: Some("1h".to_owned()),
+            instructions: Some(
+                "Work in **small** commits.\n\n- run `cargo test` first\n- ask before a rewrite"
+                    .to_owned(),
+            ),
+        },
+        hosts,
+        stats: AgentStats {
+            sessions: 14,
+            live: 1,
+            finished: 11,
+            failed: 2,
+            median_duration_ms: Some(4 * 60_000),
+        },
+        sessions: vec![
+            session_view(11, &item(1, "Parse config lazily"), "live", 12),
+            session_view(14, &item(4, "Dashboard"), "submitted", 120),
+            session_view(15, &item(2, "Fix error spans"), "timed_out", 60 * 26),
+        ],
+        older_sessions: 11,
+        activity: Vec::new(),
+    }
+}
+
+/// The app with the agent `coder` open from the Agents tab, at `width`, showing `detail`.
+fn app_with_agent(width: u16, detail: &crate::view::AgentDetail) -> App {
+    let mut app = app();
+    app.resize(width, 24);
+    press(&mut app, KeyCode::Char('3'));
+    app.refresh(with_agents());
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = with_agents();
+    let coder = SessionId::from_bytes([11; 32]);
+    snapshot.links = Links {
+        items: [1, 2, 4]
+            .map(|seed| {
+                let id = ItemId::from_bytes([seed; 32]);
+                (id.short(), id)
+            })
+            .into(),
+        sessions: [(format!("@ada/coder/{}", coder.short()), coder)].into(),
+        ..Links::default()
+    };
+    snapshot.in_view = Some(InView::Agent {
+        id: coder_agent(),
+        text: crate::render::agent_detail_for(
+            detail,
+            Some(usize::from(app.detail_width())),
+            crate::transcript::Format::Styled,
+            jiff::Timestamp::from_millisecond(NOW_MS as i64).unwrap(),
+        ),
+    });
+    app.refresh(snapshot);
+    app
+}
+
+#[test]
+fn an_agent_detail_shows_its_state_config_hosts_sessions_and_instructions() {
+    let mut app = app_with_agent(80, &coder_detail(true));
+    insta::assert_snapshot!("agent_detail", screen(&mut app, 80, 30));
+}
+
+#[test]
+fn an_agent_not_hosted_here_says_so() {
+    let mut app = app_with_agent(80, &coder_detail(false));
+    let lines = screen_lines(&mut app, 80, 30);
+    assert!(lines[4].contains("1 live · not hosted here"), "{lines:#?}");
+    assert!(lines[7].contains("hosted by laptop up to 1"), "{lines:#?}");
+}
+
+#[test]
+fn in_a_narrow_window_the_agent_detail_wraps_off_the_right_edge() {
+    let mut app = app_with_agent(40, &coder_detail(true));
+    insta::assert_snapshot!("agent_detail_narrow", screen(&mut app, 40, 40));
+    for line in &screen_lines(&mut app, 40, 40)[3..37] {
+        assert!(line.ends_with(' '), "{line:?}");
+    }
+}
+
+#[test]
+fn a_click_on_an_item_or_a_session_of_an_agent_opens_it() {
+    let mut app = app_with_agent(80, &coder_detail(true));
+    let agent = Detail::Agent(coder_agent());
+    let opens = [
+        ("#aeaqca", Detail::Item(ItemId::from_bytes([1; 32]))),
+        (
+            "@ada/coder/",
+            Detail::Session(SessionId::from_bytes([11; 32])),
+        ),
+    ];
+    for (text, detail) in opens {
+        let (column, row) = find(&mut app, 80, 30, text);
+        assert_eq!(app.click(column + 1, row), None);
+        assert_eq!(app.path(), vec![agent.clone(), detail], "{text}");
+        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.path(), vec![agent.clone()]);
+    }
 }

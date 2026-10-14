@@ -144,3 +144,23 @@ fn sessions() {
     });
     insta::assert_json_snapshot!("sessions", Envelope::new(&sessions));
 }
+
+#[test]
+fn agent_detail() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let mut events = Vec::new();
+    let mut apply = |state: &mut State, now, body| {
+        events.push(fixture.apply(state, 0, now, body));
+    };
+    apply(&mut state, 2_000, define_agent("coder"));
+    apply(&mut state, 3_000, define_agent_with("coder", &["rust"]));
+    let item: ItemId = fixture
+        .apply(&mut state, 0, 4_000, create("task", "Implement feed sync"))
+        .id()
+        .into();
+    apply(&mut state, 5_000, start_session("coder", item));
+    let agent = state.agents().next().unwrap().0.clone();
+    let detail = view::agent_detail(&state, &agent, &events, Some(fixture.devices[0].key()));
+    insta::assert_json_snapshot!("agent_detail", Envelope::new(detail.unwrap()));
+}

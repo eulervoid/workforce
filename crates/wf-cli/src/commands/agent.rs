@@ -4,6 +4,7 @@ use anyhow::{Context, anyhow, bail};
 use wf_core::autonomy::Autonomy;
 use wf_core::event::{AgentDefined, AgentRemoved, EventBody};
 use wf_core::name::AgentName;
+use wf_core::resolve::MentionTarget;
 use wf_core::validate::OneOf;
 
 use super::{done, emit};
@@ -20,12 +21,38 @@ pub(super) fn agent(
 ) -> anyhow::Result<()> {
     let principal = workspace
         .state()
-        .principal_of(&workspace_device(workspace)?)
+        .principal_of(&workspace.device_key())
         .context("device is not bound")?;
     match command {
         AgentCommand::List => {
             let agents = view::agent_views(workspace.state());
             emit(json, &agents, |agents| render::agents(agents))
+        }
+        AgentCommand::Show { agent } => {
+            let state = workspace.state();
+            let id = state
+                .agents()
+                .map(|(id, _)| id)
+                .find(|id| {
+                    (id.principal == principal && id.name.as_str() == agent)
+                        || view::mention_label(state, &MentionTarget::Agent((*id).clone())) == agent
+                })
+                .cloned()
+                .ok_or_else(|| {
+                    let all = state.agents().map(|(id, _)| {
+                        view::mention_label(state, &MentionTarget::Agent(id.clone()))
+                    });
+                    anyhow!("there is no agent `{agent}`; {}", OneOf::new(all))
+                })?;
+            let events = workspace.events()?;
+            let detail = view::agent_detail(
+                workspace.state(),
+                &id,
+                &events,
+                Some(workspace.device_key()),
+            )
+            .context("a listed agent is defined")?;
+            emit(json, &detail, render::agent_detail)
         }
         AgentCommand::Add(args) => {
             let name = match args.name {
@@ -143,12 +170,4 @@ fn hosting_note(
         )),
         StartMode::Auto | StartMode::Manual => Ok(message),
     }
-}
-
-fn workspace_device(workspace: &Workspace) -> anyhow::Result<wf_core::identity::DeviceKey> {
-    Ok(workspace
-        .data
-        .device(false)?
-        .context("no device key")?
-        .key())
 }

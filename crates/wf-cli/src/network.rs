@@ -8,11 +8,10 @@ use std::time::Duration;
 use anyhow::{Context, bail};
 use serde::Serialize;
 use wf_core::event::{DeviceProfile, EventBody, InviteCreated, InviteKind};
-use wf_core::identity::{Actor, DeviceKey, DeviceSigner, InviteSigner, Signed};
+use wf_core::identity::{Actor, DeviceKey, InviteSigner, Signed};
 use wf_core::invite::InviteCode;
 use wf_core::name::AgentName;
 use wf_core::state::State;
-use wf_daemon::client::DaemonClient;
 use wf_daemon::{PeerOutcome, PeerSync, peers_of, sync_all};
 use wf_net::replica::{self, Joined};
 use wf_net::{NetError, Network, Node, StorageHandle};
@@ -121,19 +120,20 @@ pub fn network_for(relay: Option<&str>) -> anyhow::Result<Network> {
 pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<()> {
     let network = network_for(args.relay.as_deref())?;
     let store = workspace::store_path(&workspace.data, &workspace.workforce())?;
-    let (replicated, device, workforce) = workspace.into_replicated();
-    let replica = match replicated {
-        Replicated::Local(replica) => *replica,
+    let own = workspace.device_key();
+    let (replicated, workforce) = workspace.into_replicated();
+    let (replica, device) = match replicated {
+        Replicated::Local(replica, device) => (*replica, device),
         Replicated::Daemon(mut client) => {
             if args.serve {
                 bail!("the daemon of this machine is already serving; no need for --serve");
             }
             let peers = client.sync_now(workforce)?;
             let state = client.state(workforce)?;
-            return finish(json, &device, &peers, state.event_count(), false);
+            return finish(json, own, &peers, state.event_count(), false);
         }
     };
-    let peers: Vec<(DeviceKey, String)> = peers_of(replica.state(), device.key())
+    let peers: Vec<(DeviceKey, String)> = peers_of(replica.state(), own)
         .into_iter()
         .map(|peer| (peer, device_label(replica.state(), peer)))
         .collect();
@@ -154,7 +154,7 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
         if args.serve {
             eprintln!(
                 "serving as device {} since {}; interrupt to stop",
-                device.key(),
+                own,
                 timestamp_now()
             );
         }
@@ -162,7 +162,7 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
         let events = storage
             .with(|replica| replica.state().event_count())
             .await?;
-        finish(json, &device, &results, events, args.serve)?;
+        finish(json, own, &results, events, args.serve)?;
         if args.serve {
             tokio::signal::ctrl_c().await?;
         }
@@ -172,13 +172,13 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
 
 fn finish(
     json: bool,
-    device: &DeviceSigner,
+    device: DeviceKey,
     peers: &[PeerSync],
     events: usize,
     serving: bool,
 ) -> anyhow::Result<()> {
     let view = SyncView {
-        device: device.key().to_string(),
+        device: device.to_string(),
         peers: peers.iter().map(PeerView::from).collect(),
         events,
         serving,
@@ -346,7 +346,7 @@ pub fn join(
         }
     }
     // A daemon on this machine owns the device key, the stores and the endpoint: it joins.
-    if let Some(mut client) = DaemonClient::connect(&data.daemon_socket())? {
+    if let Some(mut client) = data.connect_daemon()? {
         client.join(code.workforce, &code, profile)?;
         let state = client.state(code.workforce)?;
         let device = data

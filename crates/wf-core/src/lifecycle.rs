@@ -75,8 +75,11 @@ pub enum AfterEnd {
     /// The item stays where it is.
     Nothing,
     MoveTo(ItemState),
-    /// The work needs no review: merge it, then move the item to `done`.
-    MergeThenDone,
+    /// The work needs no review: move the item to `wait_in` while the merge waits for its turn,
+    /// as a merge that may succeed later does, then merge it and move the item to `done`.
+    MergeThenDone {
+        wait_in: Option<ItemState>,
+    },
 }
 
 /// What to do when a turn of a session has ended.
@@ -203,7 +206,9 @@ impl State {
             EndReason::Submitted { commit } => match (self.needs_review(item), commit) {
                 (true, _) => move_to(used(ItemState::Review)),
                 (false, Some(_)) => match used(ItemState::Done) {
-                    Some(_) => AfterEnd::MergeThenDone,
+                    Some(_) => AfterEnd::MergeThenDone {
+                        wait_in: self.after_failed_merge(item, MergeFailure::Transient),
+                    },
                     None => AfterEnd::Nothing,
                 },
                 (false, None) => move_to(used(ItemState::Done)),

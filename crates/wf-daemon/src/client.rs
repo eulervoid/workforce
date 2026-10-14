@@ -1,23 +1,24 @@
 //! The CLI's side of the socket. Blocking, because the CLI is.
 
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
 use serde::de::DeserializeOwned;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, DeviceKey};
+use wf_core::identity::DeviceKey;
 use wf_core::invite::InviteCode;
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_core::state::State;
 use wf_harness::Permission;
 
+use crate::caller::{Caller, Token};
 use crate::peers::PeerSync;
 use crate::proto::{
-    Call, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Reply, Request,
-    read_message, write_message,
+    Call, Credential, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Reply,
+    Request, read_message, write_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -26,16 +27,24 @@ pub enum ClientError {
     Proto(#[from] ProtoError),
     #[error("the daemon refused: {0}")]
     Failed(String),
+    #[error(
+        "the daemon does not know whom this connection acts for: a session presents its token, \
+         the principal the daemon's principal token"
+    )]
+    Unrecognized,
 }
 
 pub struct DaemonClient {
     stream: UnixStream,
+    device: DeviceKey,
+    caller: Caller,
 }
 
 impl DaemonClient {
-    /// `Ok(None)` when no daemon is listening.
-    pub fn connect(socket: &Path) -> Result<Option<Self>, ClientError> {
-        let stream = match UnixStream::connect(socket) {
+    /// Connects as whom `token` makes the connection act for. `Ok(None)` when no daemon is
+    /// listening.
+    pub fn connect(socket: &Path, token: Option<Token>) -> Result<Option<Self>, ClientError> {
+        let mut stream = match UnixStream::connect(socket) {
             Ok(stream) => stream,
             // A path longer than a socket address holds cannot be listened on either.
             Err(error)
@@ -48,21 +57,29 @@ impl DaemonClient {
             }
             Err(error) => return Err(ProtoError::from(error).into()),
         };
-        let mut client = Self { stream };
-        write_message(
-            &mut client.stream,
-            &Hello {
-                version: PROTOCOL_VERSION,
-            },
-        )?;
-        match read_message(&mut client.stream)? {
-            HelloReply::Ready { .. } => Ok(Some(client)),
+        match handshake(&mut stream, token)? {
+            HelloReply::Ready { device, caller, .. } => Ok(Some(Self {
+                stream,
+                device,
+                caller,
+            })),
+            HelloReply::Unrecognized => Err(ClientError::Unrecognized),
             HelloReply::Refused { version } => Err(ProtoError::VersionMismatch {
                 daemon: version,
                 client: PROTOCOL_VERSION,
             }
             .into()),
         }
+    }
+
+    /// The device the daemon signs as: this machine's.
+    pub fn device(&self) -> DeviceKey {
+        self.device
+    }
+
+    /// Whom the daemon acts for on this connection.
+    pub fn caller(&self) -> Caller {
+        self.caller
     }
 
     /// Makes `call` and reads its [`Reply`] as the type the call is answered with.
@@ -111,19 +128,14 @@ impl DaemonClient {
         }
     }
 
+    /// Has the daemon author `body` as whom the connection acts for.
     pub fn author(
         &mut self,
         workforce: WorkforceId,
-        actor: Actor,
         body: EventBody,
     ) -> Result<Event, ClientError> {
-        self.call(
-            workforce,
-            Call::Author {
-                actor,
-                body: Box::new(body),
-            },
-        )
+        let body = Box::new(body);
+        self.call(workforce, Call::Author { body })
     }
 
     pub fn sync_now(&mut self, workforce: WorkforceId) -> Result<Vec<PeerSync>, ClientError> {
@@ -174,14 +186,13 @@ impl DaemonClient {
         self.call(workforce, call)
     }
 
-    /// Has the daemon end a session of this machine.
+    /// Has the daemon end the session the connection acts for.
     pub fn end_session(
         &mut self,
         workforce: WorkforceId,
-        session: SessionId,
         finish: Finish,
     ) -> Result<(), ClientError> {
-        self.call(workforce, Call::EndSession { session, finish })
+        self.call(workforce, Call::EndSession { finish })
     }
 
     /// Has the daemon stop a session of this machine now.
@@ -219,14 +230,83 @@ impl DaemonClient {
     }
 }
 
+/// Presents `token` and reads the daemon's answer. A daemon of another version answers the Hello
+/// and closes without reading on, so writing the Credential can fail while the refusal already
+/// waits to be read: a failed write only counts when there is no answer.
+fn handshake<S: Read + Write>(
+    stream: &mut S,
+    token: Option<Token>,
+) -> Result<HelloReply, ProtoError> {
+    let written = write_message(
+        stream,
+        &Hello {
+            version: PROTOCOL_VERSION,
+        },
+    )
+    .and_then(|()| write_message(stream, &Credential { token }));
+    match (read_message(stream), written) {
+        (Ok(reply), _) => Ok(reply),
+        (Err(_), Err(error)) | (Err(error), Ok(())) => Err(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
+
+    /// A daemon of another version: it has refused the Hello and closed, so a write after the
+    /// Hello fails as on a closed socket, while its refusal waits to be read.
+    struct ClosedAfterHello {
+        refusal: Cursor<Vec<u8>>,
+        hello_written: bool,
+    }
+
+    impl Read for ClosedAfterHello {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.refusal.read(buffer)
+        }
+    }
+
+    impl Write for ClosedAfterHello {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.hello_written {
+                return Err(ErrorKind::BrokenPipe.into());
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.hello_written = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_daemon_that_refuses_and_closes_before_the_credential_is_still_a_refusal() {
+        let mut refusal = Vec::new();
+        write_message(
+            &mut refusal,
+            &HelloReply::Refused {
+                version: PROTOCOL_VERSION + 1,
+            },
+        )
+        .unwrap();
+        let mut daemon = ClosedAfterHello {
+            refusal: Cursor::new(refusal),
+            hello_written: false,
+        };
+        assert!(matches!(
+            handshake(&mut daemon, None),
+            Ok(HelloReply::Refused { .. })
+        ));
+    }
 
     #[test]
     fn no_daemon_listens_on_a_socket_path_too_long_for_one() {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("d".repeat(200)).join("daemon.sock");
-        assert!(matches!(DaemonClient::connect(&socket), Ok(None)));
+        assert!(matches!(DaemonClient::connect(&socket, None), Ok(None)));
     }
 }

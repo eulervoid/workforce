@@ -2,7 +2,7 @@
 source: crates/wf-cli/src/dashboard/tests.rs
 expression: text
 ---
-" workforce            1 Now·3   2 Items   3 Agents   4 Log  "
+" workforce           ▐1 Now·3▌  2 Items   3 Agents   4 Log  "
 " 3 live · 14 open · 1 blocked · 2 devices                   "
 "────────────────────────────────────────────────────────────"
 " WAITING ON YOU                                             "

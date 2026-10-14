@@ -2,6 +2,7 @@
 //! stored on it. It owns the replicas, answers sync and join from other devices, keeps in touch
 //! with them, and serves the replica to the CLI over a unix socket.
 
+pub mod caller;
 pub mod client;
 pub mod decide;
 mod environment;
@@ -110,6 +111,7 @@ pub struct Config {
 
 pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
+    pub(crate) merges: runner::MergeQueue,
 }
 
 /// Serves the workforce to its other devices and keeps in sync with them, from when it first has
@@ -229,12 +231,13 @@ pub struct Daemon {
     node: tokio::sync::OnceCell<Arc<Node<StorageHandle>>>,
     presence: Presence,
     runners: runner::Runners,
-    merging: runner::ItemLocks,
     starting: runner::ItemLocks,
     /// Taken while a session ends, so that two ends of one session, such as the agent's submit
     /// and a timeout, do not both act.
     ending: tokio::sync::Mutex<()>,
     held: Arc<permissions::Held>,
+    /// Whom each connection to the socket acts for.
+    callers: caller::Callers,
     judges: judges::Judges,
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
     /// Stores that failed to open, so each is reported once.
@@ -254,10 +257,10 @@ impl Daemon {
             node: tokio::sync::OnceCell::new(),
             presence: Presence::default(),
             runners: runner::Runners::default(),
-            merging: runner::ItemLocks::default(),
             starting: runner::ItemLocks::default(),
             ending: tokio::sync::Mutex::new(()),
             held: Arc::default(),
+            callers: caller::Callers::default(),
             judges: judges::Judges::default(),
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
@@ -384,8 +387,16 @@ impl Daemon {
             id,
             storage.clone(),
         ));
-        let entry = Arc::new(Loaded { storage });
+        let entry = Arc::new(Loaded {
+            storage,
+            merges: runner::MergeQueue::default(),
+        });
         loaded.insert(id, Arc::clone(&entry));
+        tokio::spawn(runner::run_merger(
+            Arc::downgrade(self),
+            id,
+            Arc::clone(&entry),
+        ));
         let daemon = Arc::clone(self);
         let started = Arc::clone(&entry);
         tokio::spawn(async move {
@@ -538,6 +549,14 @@ impl Daemon {
             }
             let _ = std::fs::remove_file(&self.config.socket);
         }
+        // After a running daemon would have answered, so its token stays; before the socket
+        // takes connections, so a client finds this daemon's token.
+        self.callers
+            .publish(&self.config.data_dir)
+            .map_err(|source| DaemonError::Io {
+                path: caller::principal_token_path(&self.config.data_dir),
+                source,
+            })?;
         let listener = UnixListener::bind(&self.config.socket).map_err(socket_error)?;
         std::fs::set_permissions(&self.config.socket, std::fs::Permissions::from_mode(0o600))
             .map_err(socket_error)?;

@@ -11,7 +11,7 @@ use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
 use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_worktree};
 
-use super::merge::{Attempt, MergeRequest};
+use super::merge::{Attempt, MergeRequest, Reservation};
 use super::{SessionError, Stop, blocking};
 use crate::{Daemon, Loaded};
 
@@ -99,32 +99,33 @@ impl Daemon {
         };
         // The item moves while the session still holds it, so that it is never ready in between.
         let effect = match state.after_end(session, reason) {
-            None | Some(AfterEnd::Nothing) => Ok(()),
-            Some(AfterEnd::MoveTo(to)) => {
-                self.move_item(loaded, principal, item, to, because, Some(session))
-                    .await
-            }
-            Some(AfterEnd::MergeThenDone) => {
+            None | Some(AfterEnd::Nothing) => Ok(None),
+            Some(AfterEnd::MoveTo(to)) => self
+                .move_item(loaded, principal, item, to, because, Some(session))
+                .await
+                .map(|()| None),
+            Some(AfterEnd::MergeThenDone { wait_in }) => {
                 let EndReason::Submitted {
                     commit: Some(commit),
                 } = reason
                 else {
                     unreachable!("only submitted work with commits is merged");
                 };
-                self.merge_item(
-                    workforce,
-                    loaded,
-                    MergeRequest {
-                        item,
-                        commit,
-                        because,
-                        attempt: Attempt::First { session },
-                    },
-                )
-                .await
-                // A merge that waits on the principal is told of by the dispatcher, which tries
-                // it again.
-                .map(|_| ())
+                // Reserved before the move, which wakes the dispatcher: none of its retries may
+                // merge the item before the session's first attempt.
+                let first_attempt = loaded.merges.reserve(MergeRequest {
+                    item,
+                    commit,
+                    because,
+                    attempt: Attempt::First { session },
+                });
+                match wait_in {
+                    Some(to) => self
+                        .move_item(loaded, principal, item, to, because, Some(session))
+                        .await
+                        .map(|()| Some(first_attempt)),
+                    None => Ok(Some(first_attempt)),
+                }
             }
         };
         self.author(
@@ -133,6 +134,10 @@ impl Daemon {
             EventBody::SessionEnded(SessionEnded { session, reason }),
         )
         .await?;
+        // The merge task merges it after the merges before it, now that the submission is
+        // written; one that waits on the principal is told of by the dispatcher, which queues it
+        // again.
+        let effect = effect.map(|first_attempt| first_attempt.map(Reservation::queue));
         tracing::info!("session {}: ended, {reason:?}", session.short());
         let how = match end {
             SessionEnd::Finish(_) => Stop::AfterTurn,

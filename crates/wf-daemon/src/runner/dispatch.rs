@@ -1,6 +1,5 @@
-//! The dispatcher: merges what is ready and starts agents on what they may take.
+//! The dispatcher: queues what is ready to merge and starts agents on what they may take.
 
-use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -10,7 +9,7 @@ use wf_core::name::AgentName;
 use wf_core::review::PendingMerge;
 use wf_core::session::SessionRole;
 
-use super::merge::{Attempt, MergeEnd, MergeRequest};
+use super::merge::{Attempt, MergeRequest};
 use crate::notify::Notifier;
 use crate::{Daemon, Loaded};
 
@@ -38,8 +37,10 @@ pub(crate) async fn run_dispatcher(
         if *strong.halted.borrow() {
             return;
         }
-        let waiting_merges = dispatch_once(&strong, workforce, &loaded, &mut failed).await;
-        notifier.announce(&strong, &loaded, &waiting_merges).await;
+        dispatch_once(&strong, workforce, &loaded, &mut failed).await;
+        notifier
+            .announce(&strong, &loaded, &loaded.merges.waiting())
+            .await;
         let halted = async { strong.until_halted().await };
         tokio::select! {
             changed = heads.changed() => {
@@ -47,54 +48,36 @@ pub(crate) async fn run_dispatcher(
                     return;
                 }
             }
+            () = loaded.merges.waiting_changed() => {}
             () = halted => return,
             () = tokio::time::sleep(DISPATCH_TICK) => {}
         }
     }
 }
 
-/// Merges what is ready, then gives every hosted auto agent with a free slot a review first, then
-/// a blocker to supervise, then work to diagnose, and otherwise the first item it may take. Whatever could not be started is not tried again by
-/// this daemon. Returns the items whose merge waits for the target branch to be checked out
-/// without changes.
+/// Queues what is ready to merge for the merge task, then gives every hosted auto agent with a
+/// free slot a review first, then a blocker to supervise, then work to diagnose, and otherwise the
+/// first item it may take. Whatever could not be started is not tried again by this daemon.
 async fn dispatch_once(
     daemon: &Arc<Daemon>,
     workforce: WorkforceId,
     loaded: &Arc<Loaded>,
     failed: &mut std::collections::BTreeSet<(ItemId, AgentName)>,
-) -> BTreeSet<ItemId> {
-    let mut waiting_merges = BTreeSet::new();
+) {
     let Some(repository) = daemon.repository_of(workforce) else {
-        return waiting_merges;
+        return;
     };
     let device = daemon.device();
     let Ok(mut state) = daemon.snapshot(loaded).await else {
-        return waiting_merges;
+        return;
     };
     for PendingMerge { item, commit } in state.pending_merges() {
-        match daemon
-            .merge_item(
-                workforce,
-                loaded,
-                MergeRequest {
-                    item,
-                    commit,
-                    because: None,
-                    attempt: Attempt::Retry,
-                },
-            )
-            .await
-        {
-            Ok(MergeEnd::Handled) => {}
-            Ok(MergeEnd::WaitsForCleanCheckout) => {
-                waiting_merges.insert(item);
-            }
-            Err(error) => tracing::warn!(
-                "could not merge #{}: {}",
-                item.short(),
-                wf_core::error_chain(&error)
-            ),
-        }
+        loaded.merges.push(MergeRequest {
+            item,
+            commit,
+            because: None,
+            attempt: Attempt::Retry,
+        });
     }
     for item in state.finished_reviews() {
         let Ok(principal) = daemon.principal_of_device(&state) else {
@@ -112,7 +95,7 @@ async fn dispatch_once(
         }
     }
     let Ok(fresh) = daemon.snapshot(loaded).await else {
-        return waiting_merges;
+        return;
     };
     state = fresh;
 
@@ -171,10 +154,9 @@ async fn dispatch_once(
                 );
             }
             let Ok(fresh) = daemon.snapshot(loaded).await else {
-                return waiting_merges;
+                return;
             };
             state = fresh;
         }
     }
-    waiting_merges
 }
