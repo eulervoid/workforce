@@ -5951,6 +5951,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "anyhow",
+ "bytesize",
  "clap",
  "cliclack",
  "comfy-table",
