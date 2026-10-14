@@ -13,6 +13,7 @@ mod inherit;
 mod judges;
 pub mod machine_config;
 mod notify;
+mod panics;
 mod peers;
 mod permissions;
 pub mod proto;
@@ -34,6 +35,7 @@ use wf_net::replica::bind_device;
 use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
+pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, ensure_unclaimed, session_model};
 pub use wf_net::{StorageClosed, StorageHandle};
