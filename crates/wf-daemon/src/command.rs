@@ -113,7 +113,7 @@ impl CommandRunner<'_> {
             .stdin(Stdio::null())
             .stdout(output)
             .stderr(errors)
-            // Its own process group, so that a timeout stops whatever it started too.
+            // Its own process group, so that whatever it started can be stopped with it.
             .process_group(0)
             .kill_on_drop(true)
             .spawn()
@@ -121,6 +121,8 @@ impl CommandRunner<'_> {
                 path: command.command().to_path_buf(),
                 source,
             })?;
+        // The group keeps the leader's id while any member lives, even once the leader is reaped.
+        let group = child.id().map(|id| nix::unistd::Pid::from_raw(id as i32));
         let outcome = match tokio::time::timeout(timeout, child.wait()).await {
             Ok(status) => {
                 let status = status.map_err(io_error)?;
@@ -130,18 +132,16 @@ impl CommandRunner<'_> {
                     Outcome::Failed(status)
                 }
             }
-            Err(_) => {
-                if let Some(id) = child.id() {
-                    // The group may be gone already; then there is nothing left to stop.
-                    let _ = nix::sys::signal::killpg(
-                        nix::unistd::Pid::from_raw(id as i32),
-                        nix::sys::signal::Signal::SIGKILL,
-                    );
-                }
-                child.wait().await.map_err(io_error)?;
-                Outcome::TimedOut
-            }
+            Err(_) => Outcome::TimedOut,
         };
+        // Nothing it left running may write to the worktree after the run, or into the next one.
+        if let Some(group) = group {
+            // The group may be gone already; then there is nothing left to stop.
+            let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
+        }
+        if matches!(outcome, Outcome::TimedOut) {
+            child.wait().await.map_err(io_error)?;
+        }
         let tail = tail(&log).map_err(io_error)?;
         Ok(CommandRun { outcome, tail, log })
     }
@@ -335,6 +335,17 @@ mod tests {
         assert_eq!(run.outcome, Outcome::TimedOut);
         assert_eq!(run.tail, "working");
         assert!(started.elapsed() < Duration::from_secs(10));
+        tokio::time::sleep(Duration::from_millis(1500)).await;
+        assert!(!setup.path("check").join("late.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn what_a_command_leaves_running_is_stopped_when_it_exits() {
+        let setup = Setup::new();
+        let run = setup
+            .run(&["sh", "-c", "(sleep 1; touch late.txt) & exit 0"])
+            .await;
+        assert_eq!(run.outcome, Outcome::Passed);
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert!(!setup.path("check").join("late.txt").exists());
     }
