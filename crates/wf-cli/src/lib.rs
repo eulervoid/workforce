@@ -10,6 +10,7 @@ pub mod export;
 pub mod fork;
 pub mod harness;
 pub mod interactive;
+mod markdown;
 pub mod network;
 pub mod permissions;
 pub mod render;

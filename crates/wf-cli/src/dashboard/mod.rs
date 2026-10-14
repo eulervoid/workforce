@@ -23,6 +23,7 @@ use wf_core::id::{ItemId, SessionId};
 
 use self::app::{App, Effect, Wheel};
 use self::snapshot::{Detail, Snapshot, Sources};
+use crate::transcript::Format;
 use crate::workspace::{self, Workspace};
 use crate::{render, transcript, view};
 
@@ -311,7 +312,7 @@ fn log_lines(
     let width = Some(usize::from(width.saturating_sub(1)).min(100));
     view::event_lines(state, events, new)
         .iter()
-        .map(|line| render::event_line_for(line, width))
+        .map(|line| render::event_line_for(line, width, Format::Styled))
         .collect()
 }
 
