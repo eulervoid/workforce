@@ -106,7 +106,8 @@ impl CommandRunner<'_> {
         }
         let output = std::fs::File::create(&log).map_err(io_error)?;
         let errors = output.try_clone().map_err(io_error)?;
-        let mut child = tokio::process::Command::new(command.command())
+        let mut process = tokio::process::Command::new(command.command());
+        process
             .args(command.arguments())
             .envs(command.environment())
             .current_dir(self.access.worktree)
@@ -115,7 +116,9 @@ impl CommandRunner<'_> {
             .stderr(errors)
             // Its own process group, so that whatever it started can be stopped with it.
             .process_group(0)
-            .kill_on_drop(true)
+            .kill_on_drop(true);
+        crate::inherit::only_stdio(&mut process);
+        let mut child = process
             .spawn()
             .map_err(|source| CommandError::Io {
                 path: command.command().to_path_buf(),
