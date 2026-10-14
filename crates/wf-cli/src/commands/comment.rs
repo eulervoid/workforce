@@ -79,8 +79,8 @@ pub(super) fn comment(
             .session(*session)
             .is_some_and(|session| session.item() == id && session.role() == SessionRole::Supervise)
     });
-    if let (Some(session), false) = (supervising, resolves.is_empty()) {
-        workspace.end_session(session, Finish::Supervised)?;
+    if let (Some(_), false) = (supervising, resolves.is_empty()) {
+        workspace.end_session(Finish::Supervised)?;
     }
     // A diagnose session is over once it has said what went wrong.
     let diagnosing = workspace.session().filter(|session| {
@@ -89,8 +89,8 @@ pub(super) fn comment(
             .session(*session)
             .is_some_and(|session| session.item() == id && session.role() == SessionRole::Diagnose)
     });
-    if let Some(session) = diagnosing {
-        workspace.end_session(session, Finish::Diagnosed)?;
+    if diagnosing.is_some() {
+        workspace.end_session(Finish::Diagnosed)?;
     }
     done(json, message, &event, Some(id))
 }

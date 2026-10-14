@@ -44,6 +44,7 @@ pub(super) async fn run_session(
     }
     daemon.runners.stop(run.session, Stop::Now);
     daemon.held.forget(run.session);
+    daemon.callers.revoke(run.session);
 }
 
 async fn drive(
@@ -68,10 +69,13 @@ async fn drive(
         path.insert(0, directory);
     }
     let path = std::env::join_paths(path).unwrap_or_default();
+    // What the agent's `wf` presents to the daemon, so it acts as the session and nothing else.
+    let token = daemon.callers.issue(run.workforce, run.session);
     let mut agent = run
         .harness
         .clone()
         .env("WF_SESSION", run.session.to_string())
+        .env(crate::caller::SESSION_TOKEN_VARIABLE, token.to_string())
         .env("WF_WORKFORCE", run.workforce.to_string())
         .env("PATH", path.to_string_lossy());
     for (name, value) in &run.git_environment {

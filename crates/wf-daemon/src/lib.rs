@@ -2,6 +2,7 @@
 //! stored on it. It owns the replicas, answers sync and join from other devices, keeps in touch
 //! with them, and serves the replica to the CLI over a unix socket.
 
+pub mod caller;
 pub mod client;
 #[allow(dead_code, reason = "checks before merging use it next")]
 mod command;
@@ -237,6 +238,8 @@ pub struct Daemon {
     /// and a timeout, do not both act.
     ending: tokio::sync::Mutex<()>,
     held: Arc<permissions::Held>,
+    /// Whom each connection to the socket acts for.
+    callers: caller::Callers,
     judges: judges::Judges,
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
     /// Stores that failed to open, so each is reported once.
@@ -259,6 +262,7 @@ impl Daemon {
             starting: runner::ItemLocks::default(),
             ending: tokio::sync::Mutex::new(()),
             held: Arc::default(),
+            callers: caller::Callers::default(),
             judges: judges::Judges::default(),
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
@@ -547,6 +551,14 @@ impl Daemon {
             }
             let _ = std::fs::remove_file(&self.config.socket);
         }
+        // After a running daemon would have answered, so its token stays; before the socket
+        // takes connections, so a client finds this daemon's token.
+        self.callers
+            .publish(&self.config.data_dir)
+            .map_err(|source| DaemonError::Io {
+                path: caller::principal_token_path(&self.config.data_dir),
+                source,
+            })?;
         let listener = UnixListener::bind(&self.config.socket).map_err(socket_error)?;
         std::fs::set_permissions(&self.config.socket, std::fs::Permissions::from_mode(0o600))
             .map_err(socket_error)?;

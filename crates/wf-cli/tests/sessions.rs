@@ -1930,3 +1930,79 @@ async fn an_item_with_a_live_session_is_not_started_twice() {
         "{message}"
     );
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_token_acts_for_the_session_and_never_for_the_principal() {
+    use wf_core::event::{Comment, EventBody, ItemMoved, Review};
+    use wf_core::identity::Actor;
+    use wf_core::item::ItemState;
+    use wf_core::session::Verdict;
+    use wf_daemon::caller::{Caller, Token};
+    use wf_daemon::client::{ClientError, DaemonClient};
+
+    let script = "\
+sh printf %s \"$WF_SESSION_TOKEN\" > \"$FAKE_AGENT_SCRIPT.token\"
+hang
+";
+    let world = World::new(script).await;
+    let item_text = world.wf.add(&["--title", "Guarded"]);
+    start_session(&world, &item_text);
+    let leaked = world.scripts["fake-coder"].with_extension("txt.token");
+    world
+        .wait("the token", |_| {
+            std::fs::metadata(&leaked).is_ok_and(|file| file.len() > 0)
+        })
+        .await;
+    let token: Token = std::fs::read_to_string(&leaked).unwrap().parse().unwrap();
+    let socket = world.wf.root.path().join("run/workforce/daemon.sock");
+    let (_, workforce) = wf_cli::workspace::find_workforce(&world.wf.repository).unwrap();
+    let item = item_text.parse().unwrap();
+    let session_text = world.sessions()[0]["id"].as_str().unwrap().to_string();
+    let session = session_text.parse().unwrap();
+
+    let connect = {
+        let socket = socket.clone();
+        move |token: Token| DaemonClient::connect(&socket, Some(token))
+    };
+    let mut client = connect(token.clone()).unwrap().expect("a daemon");
+    assert_eq!(client.caller(), Caller::Session { workforce, session });
+
+    let comment = client
+        .author(
+            workforce,
+            EventBody::Commented(Comment::plain(item, "as the agent")),
+        )
+        .unwrap();
+    assert!(
+        matches!(&comment.content.actor, Actor::Agent { session: acting, .. } if *acting == session),
+        "{:?}",
+        comment.content.actor
+    );
+    let approve = EventBody::Reviewed(Review {
+        item,
+        commit: None,
+        verdict: Verdict::Approve,
+        because: None,
+    });
+    let refused = client.author(workforce, approve).unwrap_err();
+    assert!(refused.to_string().contains("review"), "{refused}");
+    let finish = EventBody::ItemMoved(ItemMoved {
+        item,
+        to: ItemState::Done.into(),
+        by_session: None,
+        because: None,
+    });
+    assert!(client.author(workforce, finish).is_err());
+    let answer = client.answer_permission(workforce, session, wf_harness::Permission::Allow);
+    assert!(
+        matches!(&answer, Err(ClientError::Failed(message)) if message.contains("only the principal")),
+        "{:?}",
+        answer.map(|_| ())
+    );
+    assert!(client.stop_session(workforce, session).is_err());
+
+    // The principal's CLI still can, and the token is over with its session.
+    world.wf.run(&["session", "stop", short(&session_text)]);
+    assert_eq!(world.ended_session().await["status"], "cancelled");
+    assert!(matches!(connect(token), Err(ClientError::Unrecognized)));
+}

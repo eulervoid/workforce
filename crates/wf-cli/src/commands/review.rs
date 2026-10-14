@@ -54,8 +54,8 @@ pub(crate) fn review(
         verdict,
         because,
     }))?;
-    if let Some((session, _, SessionRole::Review { .. })) = own_session {
-        workspace.end_session(session, Finish::Reviewed)?;
+    if let Some((_, _, SessionRole::Review { .. })) = own_session {
+        workspace.end_session(Finish::Reviewed)?;
     }
     let message = match verdict {
         Verdict::Approve => format!("approved #{}", item.short()),
