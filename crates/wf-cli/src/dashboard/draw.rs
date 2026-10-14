@@ -1176,20 +1176,28 @@ fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
         Span::raw(" "),
         Span::raw(item.title.clone()),
     ];
-    let mut right = Vec::new();
+    let mut annotations = Vec::new();
     match item.readiness {
-        Some(Readiness::Blocked) => right.push("blocked".to_owned()),
-        Some(Readiness::Stranded) => right.push("stranded".to_owned()),
+        Some(Readiness::Blocked) => annotations.push("blocked".to_owned()),
+        Some(Readiness::Stranded) => annotations.push("stranded".to_owned()),
         Some(Readiness::Ready | Readiness::Claimed) | None => {}
     }
     if let Some((done, total)) = item.steps {
-        right.push(format!("{done}/{total}"));
+        annotations.push(format!("{done}/{total}"));
+    }
+    // The annotations dim, the priority in its own style, as `wf item list` shows it.
+    let mut right = Vec::new();
+    if !annotations.is_empty() {
+        right.push(Span::raw(annotations.join(" ")).dim());
     }
     if let Some(priority) = item.priority {
-        right.push(priority.to_string());
+        if !right.is_empty() {
+            right.push(Span::raw(" "));
+        }
+        right.push(themed(priority.to_string(), theme::priority(priority)));
     }
-    let right = (!right.is_empty()).then(|| Span::raw(right.join(" ")).dim());
-    row.lines(first, right.map(Line::from), Vec::new())
+    let right = (!right.is_empty()).then(|| Line::from(right));
+    row.lines(first, right, Vec::new())
 }
 
 /// The style of an item's icon: its state's, or a warning while the item is stranded.
