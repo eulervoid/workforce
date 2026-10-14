@@ -21,7 +21,7 @@ use super::snapshot::{
     SessionStatus, Snapshot, Waiting,
 };
 use crate::theme;
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use wf_core::identity::AgentId;
 use wf_core::session::EndReason;
 use wf_core::stats::{AgentStats, ProjectStats};
@@ -622,6 +622,7 @@ fn with_items() -> Snapshot {
             name: "active".to_owned(),
             items: vec![ItemRow {
                 steps: Some((2, 5)),
+                priority: Some(Priority::P0),
                 ..item_row(1, "Parse config lazily", ItemState::Active)
             }],
         },
@@ -654,6 +655,27 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
     assert_eq!(titles, ["Parse config lazily"]);
     press(&mut app, KeyCode::Char('o'));
     assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::Lane));
+}
+
+#[test]
+fn an_item_row_shows_its_priority_in_the_style_of_wf_item_list() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    let text = screen(&mut app, 60, 14);
+    let (y, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("Parse config lazily"))
+        .unwrap();
+    let column = |text: &str| u16::try_from(line[1..line.find(text).unwrap()].chars().count());
+    let y = u16::try_from(y).unwrap();
+    let look = |style: Style| (style.fg, style.add_modifier);
+    let priority = style_at(&mut app, 60, 14, column("P0").unwrap(), y);
+    let p0 = Style::from(theme::priority(Priority::P0));
+    assert_eq!(look(priority), look(p0));
+    let steps = style_at(&mut app, 60, 14, column("2/5").unwrap(), y);
+    assert_eq!(look(steps), (Some(Color::Reset), Modifier::DIM));
 }
 
 #[test]
