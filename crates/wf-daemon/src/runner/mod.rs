@@ -8,6 +8,7 @@ mod end;
 mod merge;
 mod resume;
 mod start;
+mod worktrees;
 
 pub(crate) use dispatch::run_dispatcher;
 pub(crate) use merge::{MergeQueue, run_merger};

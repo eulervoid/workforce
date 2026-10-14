@@ -2,6 +2,7 @@
 //! stored on it. It owns the replicas, answers sync and join from other devices, keeps in touch
 //! with them, and serves the replica to the CLI over a unix socket.
 
+pub mod caches;
 pub mod caller;
 pub mod client;
 pub mod decide;
@@ -401,6 +402,7 @@ impl Daemon {
         let started = Arc::clone(&entry);
         tokio::spawn(async move {
             daemon.resume_sessions(id, &started).await;
+            daemon.keep_caches_in_budget(id, &started).await;
             let weak = Arc::downgrade(&daemon);
             drop(daemon);
             runner::run_dispatcher(weak, id, started).await;

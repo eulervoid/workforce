@@ -45,6 +45,15 @@ pub(super) async fn run_session(
     daemon.runners.stop(run.session, Stop::Now);
     daemon.held.forget(run.session);
     daemon.callers.revoke(run.session);
+    // A session that is still live was only stopped, as when the daemon halts.
+    let ended = daemon.snapshot(&loaded).await.is_ok_and(|state| {
+        state
+            .session(run.session)
+            .is_some_and(|session| !session.is_live())
+    });
+    if ended {
+        daemon.keep_caches_in_budget(run.workforce, &loaded).await;
+    }
 }
 
 async fn drive(
