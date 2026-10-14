@@ -104,27 +104,31 @@ impl Daemon {
                 self.move_item(loaded, principal, item, to, because, Some(session))
                     .await
             }
-            Some(AfterEnd::MergeThenDone) => {
+            Some(AfterEnd::MergeThenDone { wait_in }) => {
                 let EndReason::Submitted {
                     commit: Some(commit),
                 } = reason
                 else {
                     unreachable!("only submitted work with commits is merged");
                 };
-                self.merge_item(
-                    workforce,
-                    loaded,
-                    MergeRequest {
+                let moved = match wait_in {
+                    Some(to) => {
+                        self.move_item(loaded, principal, item, to, because, Some(session))
+                            .await
+                    }
+                    None => Ok(()),
+                };
+                // The merge task merges it after the merges before it; one that waits on the
+                // principal is told of by the dispatcher, which queues it again.
+                if moved.is_ok() {
+                    loaded.merges.push(MergeRequest {
                         item,
                         commit,
                         because,
                         attempt: Attempt::First { session },
-                    },
-                )
-                .await
-                // A merge that waits on the principal is told of by the dispatcher, which tries
-                // it again.
-                .map(|_| ())
+                    });
+                }
+                moved
             }
         };
         self.author(

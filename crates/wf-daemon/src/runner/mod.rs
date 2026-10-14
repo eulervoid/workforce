@@ -10,6 +10,7 @@ mod resume;
 mod start;
 
 pub(crate) use dispatch::run_dispatcher;
+pub(crate) use merge::{MergeQueue, run_merger};
 pub use resume::session_model;
 
 use std::collections::BTreeMap;
@@ -178,7 +179,7 @@ impl Runners {
     }
 }
 
-/// The items one kind of operation runs on right now, such as merging, so that it runs on an
+/// The items one kind of operation runs on right now, such as starting a session, so that it runs on an
 /// item once at a time.
 #[derive(Default)]
 pub(crate) struct ItemLocks {
