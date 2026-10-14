@@ -115,12 +115,12 @@ sandbox = { allow_domains = ["docs.rs"] }
 ```
 
 ## Storage
-A shared build cache mixes the builds of different branches; one in each worktree
-(`CARGO_TARGET_DIR = "target"`) does not, but each takes its own space, also while its item waits in
-review. With a budget, the daemon keeps the caches in the worktrees under it: when a session ends and
-when the daemon starts, it deletes the caches of the least recently built worktree that no session runs
-in, whole, until the rest fits. A cold build the next time is the only cost. Without `[storage]`,
-nothing is deleted. `wf status` shows what the caches take.
+A shared build cache mixes the builds of different branches; one in each worktree (cargo's default
+`target`, without `CARGO_TARGET_DIR`) does not, but each takes its own space, also while its item
+waits in review. With a budget, the daemon keeps the caches in the worktrees under it: when a session
+ends and when the daemon starts, it deletes the caches of the least recently built worktree that no
+session runs in, whole, until the rest fits. A cold build the next time is the only cost. Without
+`[storage]`, nothing is deleted. `wf status` shows what the caches take.
 ```toml
 [storage]
 budget = "20GB"

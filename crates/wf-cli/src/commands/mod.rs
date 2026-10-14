@@ -182,7 +182,6 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     }
 }
 
-/// Plain `wf`: the dashboard at a terminal. Anywhere else nobody could use it, so the help.
 /// What the caches in the worktrees of the workforce take on this machine, when the machine
 /// config sets a budget for them.
 fn cache_usage(workspace: &Workspace) -> Option<view::CacheUsage> {
@@ -198,6 +197,7 @@ fn cache_usage(workspace: &Workspace) -> Option<view::CacheUsage> {
     })
 }
 
+/// Plain `wf`: the dashboard at a terminal. Anywhere else nobody could use it, so the help.
 fn dashboard(mode: Mode, data: DataDir, cwd: &Path, item: Option<&str>) -> anyhow::Result<()> {
     match (mode, item) {
         (Mode::Interactive, _) => {}
