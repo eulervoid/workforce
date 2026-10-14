@@ -212,6 +212,8 @@ pub struct Transcript {
     /// Calls of this turn that were denied: what the agent says of them later is left out.
     denied: HashSet<String>,
     usage: Option<Usage>,
+    /// The model the agent runs, by the name it gives it.
+    model: Option<String>,
 }
 
 impl Default for Transcript {
@@ -231,7 +233,13 @@ impl Transcript {
             calls: Vec::new(),
             denied: HashSet::new(),
             usage: None,
+            model: None,
         }
+    }
+
+    /// The model the agent runs, by the name it gives it, when it said.
+    pub fn model(&self) -> Option<&str> {
+        self.model.as_deref()
     }
 
     /// How full the agent's context window is, when it reported it.
@@ -316,6 +324,10 @@ impl Transcript {
                 }
                 Some(_) => {}
                 None => {
+                    // The result of session/new, session/load or session/set_config_option.
+                    if let Some(options) = message["result"].get("configOptions") {
+                        self.model = model(options);
+                    }
                     if let Some(reason) = message["result"]["stopReason"].as_str() {
                         let elapsed = self.close_turn(entry.at);
                         self.blocks.push(Block::Footer {
@@ -530,6 +542,7 @@ impl Transcript {
                     self.usage = Some(usage);
                 }
             }
+            Some("config_option_update") => self.model = model(&update["configOptions"]),
             _ => {}
         }
     }
@@ -596,6 +609,26 @@ impl Transcript {
         let call = self.calls.remove(index);
         self.blocks.push(Block::Call { call, outcome });
     }
+}
+
+/// The model among the session config options `options`: the name of its current value, or the
+/// value itself when the agent gives it no name.
+fn model(options: &Value) -> Option<String> {
+    let model = options
+        .as_array()?
+        .iter()
+        .find(|option| option["category"] == "model")?;
+    let current = model["currentValue"].as_str()?;
+    // The values may come in groups, each with values of its own.
+    let values = model["options"].as_array().into_iter().flatten();
+    let name = values
+        .flat_map(|value| match value["options"].as_array() {
+            Some(group) => group.iter().collect(),
+            None => vec![value],
+        })
+        .find(|value| value["value"] == current)
+        .and_then(|value| value["name"].as_str());
+    Some(name.unwrap_or(current).to_owned())
 }
 
 #[cfg(test)]
@@ -680,6 +713,50 @@ mod tests {
                 }),
             })
         );
+    }
+
+    fn options(current: &str) -> Value {
+        json!([
+            {"id": "mode", "category": "mode", "currentValue": "default", "type": "select", "options": [{"value": "default", "name": "Manual"}]},
+            {"id": "model", "category": "model", "currentValue": current, "type": "select", "options": [
+                {"value": "opus", "name": "Opus 5.5"},
+                {"value": "sonnet", "name": "Sonnet 5.5"},
+                {"value": "custom"},
+            ]},
+        ])
+    }
+
+    #[test]
+    fn model_is_the_name_of_the_current_option() {
+        let mut transcript = Transcript::new();
+        transcript.push(&entry(
+            0,
+            Direction::FromAgent,
+            json!({"id": "1", "result": {"sessionId": "s", "configOptions": options("opus")}}),
+        ));
+        assert_eq!(transcript.model(), Some("Opus 5.5"));
+        transcript.push(&update(
+            1,
+            json!({"sessionUpdate": "config_option_update", "configOptions": options("sonnet")}),
+        ));
+        assert_eq!(transcript.model(), Some("Sonnet 5.5"));
+        transcript.push(&entry(
+            2,
+            Direction::FromAgent,
+            json!({"id": "2", "result": {"configOptions": options("custom")}}),
+        ));
+        assert_eq!(transcript.model(), Some("custom"));
+    }
+
+    #[test]
+    fn model_is_none_without_config_options() {
+        let mut transcript = Transcript::new();
+        transcript.push(&entry(
+            0,
+            Direction::FromAgent,
+            json!({"id": "1", "result": {"sessionId": "s"}}),
+        ));
+        assert_eq!(transcript.model(), None);
     }
 
     #[test]
