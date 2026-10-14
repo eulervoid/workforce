@@ -434,6 +434,10 @@ wf work submit --note \"all done\"
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
     assert!(session["commit"].is_string());
+    // The merge task merges after the session has ended.
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
     let moves: Vec<String> = world.wf(&["log"])["events"]
         .as_array()
         .unwrap()
@@ -442,14 +446,22 @@ wf work submit --note \"all done\"
         .map(|event| event["summary"].as_str().unwrap().to_string())
         .collect();
     let for_session = format!("for session {}", short(session["id"].as_str().unwrap()));
-    assert_eq!(moves.len(), 2, "{moves:?}");
-    assert!(
-        moves.iter().all(|summary| summary.ends_with(&for_session)),
-        "the start and the end move the item for the session: {moves:?}"
+    let states: Vec<&str> = moves
+        .iter()
+        .map(|summary| {
+            let state = summary
+                .strip_suffix(&format!(" {for_session}"))
+                .unwrap_or_else(|| panic!("each move is for the session: {moves:?}"));
+            state.rsplit(" -> ").next().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        states,
+        ["active", "review", "done"],
+        "the start, the end and the merge move the item: {moves:?}"
     );
 
     let shown = world.item(&item);
-    assert_eq!(shown["state"], "done", "{shown}");
     let notes = comments(&shown);
     let notes = notes.as_array().unwrap();
     assert!(
