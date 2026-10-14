@@ -76,8 +76,8 @@ pub struct Request {
 /// Each call is answered with a [`Reply`] of the type its documentation names.
 ///
 /// A connection that acts for a session makes calls in the session's workforce only: the reads
-/// (`State`, `Event`, `Events`, `LastSeen`, `Permissions`), `Author`, `SyncNow` and `EndSession`. `EndSession` is for sessions only; the other calls are
-/// for the principal only.
+/// (`State`, `Event`, `Events`, `LastSeen`, `Permissions`), `Author`, `SyncNow` and
+/// `EndSession`. `EndSession` is for sessions only; the other calls are for the principal only.
 #[derive(Serialize, Deserialize)]
 pub enum Call {
     /// The encoded [`wf_core::state::State`], as `Vec<u8>`.

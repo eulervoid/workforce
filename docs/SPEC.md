@@ -1148,10 +1148,10 @@ machine config lists them, until one answers. Each one allows, denies or passes 
 
 What every decider passes on goes to the principal, through `wf inbox`, the dashboard (`wf`) or
 `wf session allow|deny`. Only a connection that acts for the principal answers it: a session cannot
-answer its own request, nor another's. Without a config the chain is `rules`, then the person. Deciders are set in the
-machine config (`$XDG_CONFIG_HOME/workforce/config.toml`), never in the signed policy: policy that syncs
-must not make other machines run programs or call paid APIs. Each decision, its decider and its reason
-go into the transcript of the session that asked.
+answer its own request, nor another's. Without a config the chain is `rules`, then the principal.
+Deciders are set in the machine config (`$XDG_CONFIG_HOME/workforce/config.toml`), never in the
+signed policy: policy that syncs must not make other machines run programs or call paid APIs. Each
+decision, its decider and its reason go into the transcript of the session that asked.
 
 ### Notifications
 The principal does not have to watch `wf inbox`: with a command under `[notify]` in the machine
