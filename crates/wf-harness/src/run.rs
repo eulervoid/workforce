@@ -43,6 +43,20 @@ pub enum Error {
     },
 }
 
+impl Error {
+    /// Whether the agent says that it needs a login first, as one whose login lapsed does.
+    pub fn needs_login(&self) -> bool {
+        match self {
+            Error::Protocol(error) => error.code == agent_client_protocol::ErrorCode::AuthRequired,
+            Error::Transcript(_)
+            | Error::Closed
+            | Error::Silent(_)
+            | Error::CannotResume
+            | Error::UnknownModel { .. } => false,
+        }
+    }
+}
+
 /// A model an agent offers, as its model option lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Model {

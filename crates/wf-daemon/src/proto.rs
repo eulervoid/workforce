@@ -23,7 +23,7 @@ use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 13;
+pub const PROTOCOL_VERSION: u32 = 14;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -76,7 +76,7 @@ pub struct Request {
 /// Each call is answered with a [`Reply`] of the type its documentation names.
 ///
 /// A connection that acts for a session makes calls in the session's workforce only: the reads
-/// (`State`, `Event`, `Events`, `LastSeen`, `Permissions`, `OutOfSpace`), `Author`, `SyncNow` and
+/// (`State`, `Event`, `Events`, `LastSeen`, `Permissions`, `MachineFaults`), `Author`, `SyncNow` and
 /// `EndSession`. `EndSession` is for sessions only; the other calls are for the principal only.
 #[derive(Serialize, Deserialize)]
 pub enum Call {
@@ -130,9 +130,9 @@ pub enum Call {
         session: SessionId,
         answer: Permission,
     },
-    /// Whether the daemon's writes fail for lack of space, as `Option<OutOfSpace>`: the first
-    /// such failure, until a write succeeds again.
-    OutOfSpace,
+    /// What is wrong with the machine, as [`MachineFaults`](crate::MachineFaults): that the
+    /// daemon's writes fail for lack of space, and the harnesses whose sessions cannot run.
+    MachineFaults,
 }
 
 /// A request of an agent for permission to do something, held until the principal answers.

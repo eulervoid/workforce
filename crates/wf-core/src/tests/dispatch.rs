@@ -6,7 +6,7 @@ use crate::id::ItemId;
 use crate::identity::AgentId;
 use crate::name::{AgentName, HarnessName, LaneName, Requirement};
 use crate::recovery::Recovery;
-use crate::session::{EndReason, SessionRole};
+use crate::session::{EndReason, MachineFault, SessionRole};
 use crate::state::State;
 use crate::testing::*;
 
@@ -193,6 +193,31 @@ fn sessions_that_do_not_finish_are_retried_as_the_recovery_level_says() {
         Recovery::Fresh
     );
     assert!(scene.offered().contains(&"fails three times".to_string()));
+}
+
+#[test]
+fn sessions_the_machine_ended_are_not_attempts() {
+    let mut scene = Scene::new();
+    scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
+    let task: ItemId = scene.apply(create("task", "stranded")).id().into();
+    scene.apply(edit(
+        task,
+        crate::event::Change::RecoveryLevel(Some("none".parse().unwrap())),
+    ));
+    for fault in [
+        MachineFault::LoginLapsed,
+        MachineFault::NoSpace,
+        MachineFault::HarnessUnreachable,
+    ] {
+        let session = scene.apply(start_session("coder", task)).id().into();
+        scene.apply(end_session(session, EndReason::MachineFault(fault)));
+        assert_eq!(
+            scene.state.recovery(task, SessionRole::Work),
+            Recovery::Fresh,
+            "{fault:?}"
+        );
+    }
+    assert_eq!(scene.offered(), ["stranded"]);
 }
 
 #[test]

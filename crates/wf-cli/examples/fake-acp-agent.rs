@@ -14,6 +14,7 @@
 //! - `permission <command>`: asks to run the command, with `{item}` replaced.
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
+//! - `login`: answers the prompt `Authentication required`, as a harness whose login lapsed.
 //! - `turn`: ends the turn.
 //!
 //! New sessions offer two models, `fast` and `deep`; `fast` is the default.
@@ -170,6 +171,7 @@ fn main() {
                         .collect();
                 }
                 let mut stop = "end_turn";
+                let mut logged_out = false;
                 for operation in operations.by_ref() {
                     done += 1;
                     std::fs::write(progress_file(&script_path, &session), done.to_string())
@@ -253,11 +255,22 @@ fn main() {
                             break;
                         }
                         "crash" => std::process::exit(1),
+                        "login" => {
+                            logged_out = true;
+                            break;
+                        }
                         "turn" => break,
                         other => panic!("unknown operation {other}"),
                     }
                 }
-                send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": stop}}));
+                if logged_out {
+                    send(json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32000, "message": "Authentication required"},
+                    }));
+                } else {
+                    send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": stop}}));
+                }
             }
             _ => {}
         }

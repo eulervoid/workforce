@@ -9,6 +9,7 @@ pub mod client;
 mod command;
 pub mod decide;
 mod environment;
+mod faults;
 mod inherit;
 mod judges;
 pub mod machine_config;
@@ -20,7 +21,6 @@ pub mod proto;
 mod runner;
 mod sandbox;
 mod server;
-mod space;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -36,10 +36,10 @@ use wf_net::replica::bind_device;
 use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
+pub use faults::{HarnessFault, MachineFaults, OutOfSpace, RETRY_HARNESS};
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, ensure_unclaimed, session_model};
-pub use space::OutOfSpace;
 pub use wf_net::{StorageClosed, StorageHandle};
 
 pub const STORE_FILE: &str = "store.redb";
@@ -252,8 +252,8 @@ pub struct Daemon {
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
     /// Turns true when the daemon halts; its background tasks then return.
     halted: tokio::sync::watch::Sender<bool>,
-    /// Whether the disk is full, as the last failed write said.
-    space: space::Space,
+    /// What is wrong with this machine, as what failed said.
+    faults: faults::Faults,
 }
 
 impl Daemon {
@@ -275,7 +275,7 @@ impl Daemon {
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
             halted: tokio::sync::watch::Sender::new(false),
-            space: space::Space::default(),
+            faults: faults::Faults::default(),
         });
         daemon.load_stored_workforces();
         tokio::spawn(rescan(Arc::downgrade(&daemon)));
@@ -396,7 +396,7 @@ impl Daemon {
             move |failed: &str| {
                 let space = |error: &(dyn std::error::Error + 'static)| {
                     if let Some(daemon) = daemon.upgrade() {
-                        daemon.space.note("the event log", error);
+                        daemon.faults.note_space("the event log", error);
                     }
                 };
                 space(&std::io::Error::other(failed.to_owned()));

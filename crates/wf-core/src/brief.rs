@@ -110,7 +110,8 @@ impl Brief {
                             | EndReason::Supervised
                             | EndReason::Cancelled
                             | EndReason::Interrupted
-                            | EndReason::Diagnosed => None,
+                            | EndReason::Diagnosed
+                            | EndReason::MachineFault(_) => None,
                         }
                     })
                     .collect();

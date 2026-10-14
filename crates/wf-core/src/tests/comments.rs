@@ -176,7 +176,7 @@ fn an_open_blocker_holds_up_the_work_until_it_is_resolved() {
     let asked = fixture.author_as(&state, 0, actor, 3_001, blocker(task, "which crate?"));
     state.receive(asked.clone(), Trust::Untrusted).unwrap();
     assert_eq!(
-        state.turn_outcome(session, 1, 3),
+        state.turn_outcome(session, 1, 3, None),
         crate::lifecycle::TurnOutcome::Park
     );
 

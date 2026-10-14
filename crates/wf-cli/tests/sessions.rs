@@ -742,6 +742,51 @@ async fn a_harness_that_crashes_fails_the_session() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_lapsed_login_ends_sessions_for_the_machine_and_the_inbox_says_so_once() {
+    let world = World::new("login\n").await;
+    // Without a recovery level, one failure would leave the item to the principal.
+    let item = world
+        .wf
+        .add(&["--title", "Logged out", "--recovery", "none"]);
+    world.automate("coder", "default");
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "login_lapsed");
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "open");
+    assert_eq!(comments(&shown), Value::Array(Vec::new()), "{shown}");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(
+        world.sessions().len(),
+        1,
+        "the agent waits until it is time to try the harness again"
+    );
+
+    start_session(&world, &item);
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "login_lapsed");
+    let entries = inbox(&world);
+    let kinds: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["machine_fault"], "{entries:?}");
+    assert_eq!(entries[0]["title"], "The login of fake-coder has lapsed");
+    assert!(
+        entries[0]["what"]
+            .as_str()
+            .unwrap()
+            .starts_with("log in to fake-coder again"),
+        "{entries:?}"
+    );
+    let shown = world.wf.run(&["item", "show", short(&item)]);
+    assert!(
+        shown.contains("was ended by the machine: login lapsed → open"),
+        "{shown}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_session_whose_record_cannot_be_written_fails() {
     // The first turn takes the write permission of the directory the records of sessions are
     // kept in, beside the transcripts, as a full disk would; the next prompt cannot be recorded.

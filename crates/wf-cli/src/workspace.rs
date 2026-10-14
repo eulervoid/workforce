@@ -10,7 +10,7 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey, DeviceSigner, PrincipalSigner};
 use wf_core::lifecycle::Finish;
 use wf_core::state::State;
-use wf_daemon::OutOfSpace;
+use wf_daemon::MachineFaults;
 use wf_daemon::caller::Caller;
 use wf_daemon::client::DaemonClient;
 use wf_daemon::proto::HeldPermission;
@@ -328,15 +328,14 @@ impl Workspace {
         }
     }
 
-    /// Whether the daemon's writes fail for lack of space; `None` without a daemon.
-    pub fn out_of_space(&self) -> Option<OutOfSpace> {
+    /// What is wrong with the machine, as the daemon learnt it; nothing without a daemon.
+    pub fn machine_faults(&self) -> MachineFaults {
         match &self.source {
-            Source::Local(..) => None,
+            Source::Local(..) => MachineFaults::default(),
             Source::Daemon { client, .. } => client
                 .borrow_mut()
-                .out_of_space(self.workforce)
-                .ok()
-                .flatten(),
+                .machine_faults(self.workforce)
+                .unwrap_or_default(),
         }
     }
 

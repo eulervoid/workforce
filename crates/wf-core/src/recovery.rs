@@ -82,7 +82,9 @@ impl State {
                     }
                     (false, SessionRole::Diagnose, reason) if role == SessionRole::Work => {
                         match reason {
-                            EndReason::Interrupted | EndReason::Cancelled => None,
+                            EndReason::Interrupted
+                            | EndReason::Cancelled
+                            | EndReason::MachineFault(_) => None,
                             EndReason::Diagnosed
                             | EndReason::Released
                             | EndReason::TimedOut

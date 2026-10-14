@@ -120,7 +120,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             let waiting_on_you = view::inbox_views(
                 workspace.state(),
                 &workspace.held_permissions(),
-                workspace.out_of_space().as_ref(),
+                &workspace.machine_faults(),
             )
             .len();
             let context = view::StatusContext {
@@ -156,7 +156,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                     let views = view::inbox_views(
                         workspace.state(),
                         &workspace.held_permissions(),
-                        workspace.out_of_space().as_ref(),
+                        &workspace.machine_faults(),
                     );
                     emit(json, &views, |views| render::inbox(views))
                 }

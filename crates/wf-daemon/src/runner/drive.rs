@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use wf_core::event::CommentKind;
 use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
-use wf_core::session::{CommitId, SessionRole};
+use wf_core::session::{CommitId, MachineFault, SessionRole};
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
 use wf_vcs::{GitCli, VcsAdapter};
 
@@ -110,15 +110,13 @@ async fn drive(
     run: &Run,
     stopped: &mut mpsc::UnboundedReceiver<Stop>,
 ) -> End {
-    let Ok(transcript) = std::fs::OpenOptions::new()
+    let transcript = match std::fs::OpenOptions::new()
         .create(true)
         .append(true)
         .open(&run.transcript)
-    else {
-        return failed(format!(
-            "the transcript {} cannot be written",
-            run.transcript.display()
-        ));
+    {
+        Ok(transcript) => transcript,
+        Err(error) => return transcript_failed(daemon, run, &error),
     };
     let mut path =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>();
@@ -129,7 +127,7 @@ async fn drive(
     // What the agent's `wf` presents to the daemon, so it acts as the session and nothing else.
     let token = daemon.callers.issue(run.workforce, run.session);
     let mut agent = run
-        .harness
+        .command
         .clone()
         .env("WF_SESSION", run.session.to_string())
         .env(crate::caller::SESSION_TOKEN_VARIABLE, token.to_string())
@@ -173,15 +171,23 @@ async fn drive(
         started = start => started,
         Some(_) = stopped.recv() => return End::Over,
         () = tokio::time::sleep(START_TIMEOUT) => {
-            return failed(format!(
+            return harness_fault(daemon, run, MachineFault::HarnessUnreachable, format!(
                 "{} did not start within {}",
-                run.agent,
+                run.harness,
                 humantime::format_duration(START_TIMEOUT)
             ));
         }
     };
     let mut conversation = match started {
         Ok(conversation) => conversation,
+        Err(error) if error.needs_login() => {
+            return harness_fault(
+                daemon,
+                run,
+                MachineFault::LoginLapsed,
+                wf_core::error_chain(&error),
+            );
+        }
         // The agent could not take the conversation up again: the session ends as any session an
         // earlier daemon left behind.
         Err(error) if matches!(run.begin, Begin::Resume(_)) => {
@@ -193,14 +199,33 @@ async fn drive(
             );
             return End::Interrupt(Interruption::Interrupted);
         }
-        Err(error) => {
+        Err(wf_harness::Error::Transcript(error)) => return transcript_failed(daemon, run, &error),
+        // The agent's own config is at fault, not the machine.
+        Err(error @ wf_harness::Error::UnknownModel { .. }) => {
+            return failed(format!(
+                "{} did not start: {}",
+                run.agent,
+                wf_core::error_chain(&error)
+            ));
+        }
+        Err(
+            error @ (wf_harness::Error::Protocol(_)
+            | wf_harness::Error::Closed
+            | wf_harness::Error::Silent(_)
+            | wf_harness::Error::CannotResume),
+        ) => {
             let report = wf_core::error_chain(&error);
             tracing::warn!(
                 "could not start {} for session {}: {report}",
                 run.agent,
                 run.session
             );
-            return failed(format!("{} did not start: {report}", run.agent));
+            return harness_fault(
+                daemon,
+                run,
+                MachineFault::HarnessUnreachable,
+                format!("{} did not start: {report}", run.harness),
+            );
         }
     };
     let mut record = AgentSessionRecord {
@@ -272,14 +297,26 @@ async fn turns(
         };
         let (_stop_reason, last_message) = match result {
             Ok(reply) => reply,
-            Err(wf_harness::Error::Transcript(error)) => {
-                daemon.space.note("a transcript", &error);
-                return failed(format!(
-                    "the transcript {} cannot be written: {error}",
-                    run.transcript.display()
-                ));
+            Err(error) if error.needs_login() => {
+                return harness_fault(
+                    daemon,
+                    run,
+                    MachineFault::LoginLapsed,
+                    wf_core::error_chain(&error),
+                );
             }
-            Err(error) => {
+            Err(wf_harness::Error::Transcript(error)) => {
+                return transcript_failed(daemon, run, &error);
+            }
+            // A harness that crashes, hangs or refuses a turn it was reached for may do so for
+            // the work.
+            Err(
+                error @ (wf_harness::Error::Protocol(_)
+                | wf_harness::Error::Closed
+                | wf_harness::Error::Silent(_)
+                | wf_harness::Error::CannotResume
+                | wf_harness::Error::UnknownModel { .. }),
+            ) => {
                 return failed(format!(
                     "{} stopped answering: {}",
                     run.agent,
@@ -287,6 +324,7 @@ async fn turns(
                 ));
             }
         };
+        daemon.faults.harness_answered(&run.harness);
 
         let head = branch_head(run).await;
         if head != last_head {
@@ -298,7 +336,8 @@ async fn turns(
         let Ok(state) = daemon.snapshot(loaded).await else {
             return failed("the workforce could not be read".to_string());
         };
-        match state.turn_outcome(run.session, turns_without_commit, run.nudges) {
+        let machine_fault = daemon.faults.blocking_all();
+        match state.turn_outcome(run.session, turns_without_commit, run.nudges, machine_fault) {
             TurnOutcome::Close => {
                 let live = state
                     .session(run.session)
@@ -310,6 +349,9 @@ async fn turns(
                 };
             }
             TurnOutcome::Continue => prompt = nudge(run).await,
+            TurnOutcome::MachineFault(fault) => {
+                return End::Interrupt(Interruption::MachineFault(fault));
+            }
             TurnOutcome::GiveUp => {
                 return End::Interrupt(Interruption::GaveUp {
                     turns: turns_without_commit,
@@ -355,7 +397,8 @@ async fn first_prompt(
         }),
         Some(ItemView::Archived(_)) | None => false,
     };
-    match state.turn_outcome(run.session, 0, run.nudges) {
+    match state.turn_outcome(run.session, 0, run.nudges, daemon.faults.blocking_all()) {
+        TurnOutcome::MachineFault(fault) => Err(End::Interrupt(Interruption::MachineFault(fault))),
         TurnOutcome::Continue | TurnOutcome::GiveUp if asked => Ok(resumed(loaded, run).await),
         TurnOutcome::Continue | TurnOutcome::GiveUp => {
             Ok(restarted(loaded, run, prompted_ms).await)
@@ -385,11 +428,31 @@ fn failed(because: String) -> End {
 
 /// The session's record cannot be written, so a restart would not resume it as it is.
 fn not_kept(daemon: &Daemon, run: &Run, error: &std::io::Error) -> End {
-    daemon.space.note("the record of a session", error);
+    if daemon.faults.note_space("the record of a session", error) {
+        return End::Interrupt(Interruption::MachineFault(MachineFault::NoSpace));
+    }
     failed(format!(
         "the record of the session {} cannot be written: {error}",
         run.agent_session.display()
     ))
+}
+
+/// The session's transcript cannot be written, so nobody could follow it.
+fn transcript_failed(daemon: &Daemon, run: &Run, error: &std::io::Error) -> End {
+    if daemon.faults.note_space("a transcript", error) {
+        return End::Interrupt(Interruption::MachineFault(MachineFault::NoSpace));
+    }
+    failed(format!(
+        "the transcript {} cannot be written: {error}",
+        run.transcript.display()
+    ))
+}
+
+/// The harness of the session cannot carry it, as `what` says: the session ends for `fault`, and
+/// the agents of the harness wait until it is tried again.
+fn harness_fault(daemon: &Daemon, run: &Run, fault: MachineFault, what: String) -> End {
+    daemon.faults.note_harness(&run.harness, fault, what);
+    End::Interrupt(Interruption::MachineFault(fault))
 }
 
 async fn sleep_until(deadline: Option<Instant>) {
@@ -450,8 +513,9 @@ async fn park(
         let Ok(state) = daemon.snapshot(loaded).await else {
             return Parked::Over;
         };
-        match state.turn_outcome(run.session, 0, run.nudges) {
-            TurnOutcome::Park => {}
+        // A parked session needs nothing of the machine: it waits, whatever is wrong with it.
+        match state.turn_outcome(run.session, 0, run.nudges, None) {
+            TurnOutcome::Park | TurnOutcome::MachineFault(_) => {}
             TurnOutcome::Close => {
                 let live = state
                     .session(run.session)

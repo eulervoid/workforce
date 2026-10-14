@@ -10,7 +10,7 @@ use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::name::AgentName;
-use wf_core::session::{CommitId, SessionRole};
+use wf_core::session::{CommitId, MachineFault, SessionRole};
 use wf_core::state::{AgentDefinition, State};
 use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
 use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree, worktrees};
@@ -253,16 +253,22 @@ impl Daemon {
         }
         .await;
         if let Err(error) = prepared {
-            let because = format!(
-                "the daemon could not set it up: {}",
-                wf_core::error_chain(&error)
-            );
+            let interruption = if self.faults.note_space("the start of a session", &error) {
+                Interruption::MachineFault(MachineFault::NoSpace)
+            } else {
+                Interruption::Failed {
+                    because: format!(
+                        "the daemon could not set it up: {}",
+                        wf_core::error_chain(&error)
+                    ),
+                }
+            };
             if let Err(ending) = self
                 .finish_session(
                     workforce,
                     loaded,
                     session,
-                    SessionEnd::Interruption(Interruption::Failed { because }),
+                    SessionEnd::Interruption(interruption),
                 )
                 .await
             {
@@ -359,7 +365,8 @@ impl Daemon {
             item,
             role,
             agent,
-            harness,
+            harness: definition.harness.clone(),
+            command: harness,
             model: definition.model.clone(),
             worktree,
             transcript: transcripts.join(format!("{session}.jsonl")),

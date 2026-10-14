@@ -44,7 +44,7 @@ pub(crate) async fn run_dispatcher(
         if *strong.halted.borrow() {
             return;
         }
-        strong.space.check(&strong.config.data_dir);
+        strong.faults.check_space(&strong.config.data_dir);
         dispatch_once(&strong, workforce, &loaded, &mut failed).await;
         notifier
             .announce(&strong, &loaded, &loaded.merges.waiting())
@@ -66,7 +66,8 @@ pub(crate) async fn run_dispatcher(
 /// Queues what is ready to merge for the merge task, then gives every hosted auto agent with a
 /// free slot a review first, then a blocker to supervise, then work to diagnose, and otherwise the
 /// first item it may take. Whatever could not be started is tried again after
-/// [`RETRY_FAILED_START`].
+/// [`RETRY_FAILED_START`]. Nothing is started while the disk is full, and no agent of a harness
+/// whose login lapsed or that cannot be reached until it is tried again.
 async fn dispatch_once(
     daemon: &Arc<Daemon>,
     workforce: WorkforceId,
@@ -109,9 +110,13 @@ async fn dispatch_once(
     };
     state = fresh;
 
+    // An agent whose session would fail for what is wrong with the machine waits until it is
+    // fine, or until it is time to try again whether it is.
+    let now_ms = crate::now_ms();
     let agents: Vec<_> = state
         .auto_agents(device)
         .into_iter()
+        .filter(|(_, definition)| !daemon.faults.holds(&definition.harness, now_ms))
         .map(|(agent, _)| agent)
         .collect();
     for agent in agents {
@@ -155,7 +160,7 @@ async fn dispatch_once(
                 )
                 .await;
             if let Err(error) = started {
-                daemon.space.note(
+                daemon.faults.note_space(
                     &format!("the start of {} on #{}", agent.name, item.short()),
                     &error,
                 );

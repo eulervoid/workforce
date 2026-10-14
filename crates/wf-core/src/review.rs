@@ -52,7 +52,8 @@ impl State {
                     | EndReason::Failed
                     | EndReason::Cancelled
                     | EndReason::Interrupted
-                    | EndReason::Diagnosed => None,
+                    | EndReason::Diagnosed
+                    | EndReason::MachineFault(_) => None,
                 }
             })
             .max_by_key(|(_, stamp)| *stamp)

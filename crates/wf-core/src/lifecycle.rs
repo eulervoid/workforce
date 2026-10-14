@@ -9,7 +9,7 @@ use crate::event::CommentKind;
 use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{ItemState, ItemView};
-use crate::session::{CommitId, EndReason, SessionRole};
+use crate::session::{CommitId, EndReason, MachineFault, SessionRole};
 use crate::state::State;
 
 /// How an agent ends its session. The session ends after the agent's turn, and the agent writes
@@ -43,6 +43,9 @@ pub enum Interruption {
     Interrupted,
     /// The agent used up its nudges without progress. `last_message` is what it said last.
     GaveUp { turns: u32, last_message: String },
+    /// The machine cannot carry the session. Nothing is commented: the inbox says once what is
+    /// wrong with the machine, for all the sessions it ends.
+    MachineFault(MachineFault),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -111,6 +114,9 @@ pub enum TurnOutcome {
     Continue,
     /// The nudges are used up without a new commit.
     GiveUp,
+    /// The machine is at fault: the session ends without using up the nudges, and the item is
+    /// tried again once the machine is fine.
+    MachineFault(MachineFault),
 }
 
 impl State {
@@ -157,6 +163,9 @@ impl State {
                     }
                     Interruption::TimedOut => closing(EndReason::TimedOut, by_daemon, None),
                     Interruption::Interrupted => closing(EndReason::Interrupted, by_daemon, None),
+                    Interruption::MachineFault(fault) => {
+                        closing(EndReason::MachineFault(*fault), by_daemon, None)
+                    }
                     Interruption::Failed { because } => closing(
                         EndReason::Failed,
                         by_daemon,
@@ -232,7 +241,8 @@ impl State {
                     | EndReason::Failed
                     | EndReason::Cancelled
                     | EndReason::Interrupted
-                    | EndReason::Diagnosed => None,
+                    | EndReason::Diagnosed
+                    | EndReason::MachineFault(_) => None,
                 }
             })
             .collect();
@@ -312,7 +322,8 @@ impl State {
             | EndReason::TimedOut
             | EndReason::Failed
             | EndReason::Cancelled
-            | EndReason::Interrupted => {
+            | EndReason::Interrupted
+            | EndReason::MachineFault(_) => {
                 let held_by_another = self
                     .claim(item)
                     .is_some_and(|holder| holder.id() != session.id());
@@ -328,12 +339,14 @@ impl State {
     }
 
     /// What to do after a turn. `nudges_used` counts the turns in a row that ended without a new
-    /// commit on the branch, this one included.
+    /// commit on the branch, this one included. `machine_fault` is what is wrong with the machine
+    /// the session runs on, if anything: a turn on a machine at fault says nothing about the work.
     pub fn turn_outcome(
         &self,
         session: SessionId,
         nudges_used: u32,
         nudges_allowed: u32,
+        machine_fault: Option<MachineFault>,
     ) -> TurnOutcome {
         let Some(folded) = self.session(session).filter(|session| session.is_live()) else {
             return TurnOutcome::Close;
@@ -351,6 +364,9 @@ impl State {
         };
         if working && moved_on {
             return TurnOutcome::Close;
+        }
+        if let Some(fault) = machine_fault {
+            return TurnOutcome::MachineFault(fault);
         }
         let blocked_by_comment = match self.item(item) {
             Some(ItemView::Live(live)) => live.has_open_blocker(),

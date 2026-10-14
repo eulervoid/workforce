@@ -140,11 +140,38 @@ pub enum EndReason {
     Interrupted,
     /// A diagnose session said what went wrong.
     Diagnosed,
+    /// The machine could not carry the session. Not a failure of the attempt: the item is tried
+    /// again once the machine is fine.
+    MachineFault(MachineFault),
+}
+
+/// What was wrong with the machine a session ran on, as opposed to with its work.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum MachineFault {
+    /// The harness says its login has lapsed.
+    LoginLapsed,
+    /// The disk is full.
+    NoSpace,
+    /// The harness could not be started.
+    HarnessUnreachable,
+}
+
+impl MachineFault {
+    pub fn name(&self) -> &'static str {
+        match self {
+            MachineFault::LoginLapsed => "login_lapsed",
+            MachineFault::NoSpace => "no_space",
+            MachineFault::HarnessUnreachable => "harness_unreachable",
+        }
+    }
 }
 
 impl EndReason {
+    /// The reason's name; a fault of the machine goes by the fault's, so that a sessions list
+    /// names it.
     pub fn name(&self) -> &'static str {
         match self {
+            EndReason::MachineFault(fault) => fault.name(),
             EndReason::Submitted { .. } => "submitted",
             EndReason::Reviewed => "reviewed",
             EndReason::Released => "released",

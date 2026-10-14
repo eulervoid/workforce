@@ -3,9 +3,10 @@
 use serde::Serialize;
 use wf_core::id::HashId;
 use wf_core::inbox::{InboxKind, permission_waits};
+use wf_core::session::MachineFault;
 use wf_core::state::State;
-use wf_daemon::OutOfSpace;
 use wf_daemon::proto::HeldPermission;
+use wf_daemon::{MachineFaults, RETRY_HARNESS};
 
 #[derive(Serialize)]
 pub struct InboxEntryView {
@@ -19,11 +20,11 @@ pub struct InboxEntryView {
 }
 
 /// What waits on the principal: what the state says, the permission requests the daemon holds,
-/// and that the daemon's writes fail for lack of space.
+/// and what is wrong with the machine.
 pub fn inbox_views(
     state: &State,
     held: &[HeldPermission],
-    out_of_space: Option<&OutOfSpace>,
+    machine_faults: &MachineFaults,
 ) -> Vec<InboxEntryView> {
     let mut entries: Vec<InboxEntryView> = state
         .inbox()
@@ -52,18 +53,65 @@ pub fn inbox_views(
             passed: request.passed.clone(),
         }
     }));
-    entries.extend(out_of_space.map(|full| InboxEntryView {
-        kind: InboxKind::OutOfSpace,
+    entries.extend(machine_fault_views(machine_faults));
+    entries
+}
+
+/// One entry for each thing wrong with the machine, however many sessions it ended: what it is
+/// and what the principal does about it.
+fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
+    let entry = |title: String, what: String| InboxEntryView {
+        kind: InboxKind::MachineFault,
         item: None,
         session: None,
-        title: "The disk is full".to_string(),
-        what: format!(
-            "nothing moves until there is space; since {}, the daemon could not write {}",
-            jiff::Timestamp::from_millisecond(i64::try_from(full.since_ms).unwrap_or(i64::MAX))
-                .map_or_else(|_| full.since_ms.to_string(), |at| at.to_string()),
-            full.what
-        ),
+        title,
+        what,
         passed: Vec::new(),
+    };
+    let retried = humantime::format_duration(RETRY_HARNESS);
+    let mut entries: Vec<InboxEntryView> = faults
+        .out_of_space
+        .iter()
+        .map(|full| {
+            entry(
+                "The disk is full".to_string(),
+                format!(
+                    "free space on this machine, such as with `cargo clean` in old worktrees; \
+                     nothing is started until there is. Since {}, the daemon could not write {}",
+                    since(full.since_ms),
+                    full.what
+                ),
+            )
+        })
+        .collect();
+    entries.extend(faults.harnesses.iter().map(|(harness, fault)| {
+        let (title, todo) = match fault.fault {
+            MachineFault::LoginLapsed => (
+                format!("The login of {harness} has lapsed"),
+                format!("log in to {harness} again on this machine"),
+            ),
+            MachineFault::HarnessUnreachable => (
+                format!("{harness} cannot be reached"),
+                format!("check that {harness} is installed and starts on this machine"),
+            ),
+            MachineFault::NoSpace => (
+                "The disk is full".to_string(),
+                "free space on this machine".to_string(),
+            ),
+        };
+        entry(
+            title,
+            format!(
+                "{todo}; its agents are tried again every {retried}. Since {}: {}",
+                since(fault.since_ms),
+                fault.what
+            ),
+        )
     }));
     entries
+}
+
+fn since(at_ms: u64) -> String {
+    jiff::Timestamp::from_millisecond(i64::try_from(at_ms).unwrap_or(i64::MAX))
+        .map_or_else(|_| at_ms.to_string(), |at| at.to_string())
 }
