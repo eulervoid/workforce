@@ -165,6 +165,7 @@ const KEYS: &[(&str, &str)] = &[
     ("H L", "one pane or both, also shift ←/→"),
     ("a d", "allow, deny a permission request"),
     ("r R", "answer a blocker here, in $EDITOR"),
+    ("ctrl+g", "carry a comment or answer to $EDITOR"),
     ("v D", "review, show the diff"),
     ("s x", "start a session, stop one"),
     ("m c e", "move, comment on, edit an item"),
@@ -200,9 +201,13 @@ fn draw_keys(frame: &mut Frame, body: Rect) {
 /// The line the footer asks for, with the cursor in it.
 fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     let question = |text: String| Line::from(text).bold();
-    let (label, input) = match prompt {
-        Prompt::Filter { input, .. } => (" / ".to_owned(), input),
-        Prompt::Comment { item, input } => (format!(" comment on #{}: ", item.short()), input),
+    let (label, input, hint) = match prompt {
+        Prompt::Filter { input, .. } => (" / ".to_owned(), input, ""),
+        Prompt::Comment { item, input } => (
+            format!(" comment on #{}: ", item.short()),
+            input,
+            "enter post · ctrl+g editor · esc cancel ",
+        ),
         Prompt::Stop { session } => {
             let agent = app
                 .snapshot
@@ -217,9 +222,11 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
             return;
         }
         Prompt::Choose(_) | Prompt::Keys => return,
-        Prompt::Answer { blocker, input, .. } => {
-            (format!(" ⧗ {} answer: ", blocker.short()), input)
-        }
+        Prompt::Answer { blocker, input, .. } => (
+            format!(" ⧗ {} answer: ", blocker.short()),
+            input,
+            "enter resolve · ctrl+g editor · esc cancel ",
+        ),
         Prompt::Verdict { item } => {
             let line = Line::from(vec![
                 Span::raw(format!(" ◎ #{}: ", item.short())).bold(),
@@ -230,6 +237,16 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
         }
     };
     let label_width = textwrap::core::display_width(&label);
+    // The hint keeps to the right while it leaves room to type; a narrow footer leaves it out.
+    let hint_width = textwrap::core::display_width(hint) as u16;
+    let area = if area.width >= label_width as u16 + hint_width + 16 {
+        let [typed, hint_area] =
+            Layout::horizontal([Constraint::Fill(1), Constraint::Length(hint_width)]).areas(area);
+        frame.render_widget(Paragraph::new(Line::from(hint).dim()), hint_area);
+        typed
+    } else {
+        area
+    };
     let width = usize::from(area.width).saturating_sub(label_width + 1);
     let scroll = input.visual_scroll(width);
     let line = Line::from(vec![
@@ -1190,8 +1207,9 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     }
     let focused = !app.list_has_keys();
     let last = crumbs.len() - 1;
-    // Only what was opened, below the detail on top, is there to go back to.
-    let opened = app.stack().len();
+    // Only what was opened, below the detail on top, is there to go back to; nothing while the
+    // list has the keys, even with a detail kept beside it.
+    let opened = if focused { app.stack().len() } else { 0 };
     let mut spots = Vec::new();
     let mut spans = vec![Span::raw(" ")];
     for (index, (crumb, depth)) in crumbs.into_iter().enumerate() {
@@ -1411,7 +1429,8 @@ fn hints(app: &App) -> Vec<&'static str> {
             ..
         })
     );
-    let opened = app.stack().last();
+    // A detail kept while the list has the keys takes none.
+    let opened = app.stack().last().filter(|_| !app.list_has_keys());
     let navigation: &[&str] = match (app.tab, opened.map(|opened| &opened.detail)) {
         (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full"],
         (_, Some(Detail::Item(_))) if item_session => &["esc back", "j/k scroll", "enter session"],

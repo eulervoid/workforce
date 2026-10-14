@@ -110,10 +110,11 @@ pub enum Effect {
         blocker: CommentId,
         text: String,
     },
-    /// Writes the comment that resolves a blocker in `$EDITOR`.
+    /// Writes the comment that resolves a blocker in `$EDITOR`, starting from `text`.
     ResolveInEditor {
         item: ItemId,
         blocker: CommentId,
+        text: String,
     },
     Approve {
         item: ItemId,
@@ -146,6 +147,11 @@ pub enum Effect {
         state: ItemState,
     },
     Comment {
+        item: ItemId,
+        text: String,
+    },
+    /// Writes a comment in `$EDITOR`, starting from `text`, then posts it.
+    CommentInEditor {
         item: ItemId,
         text: String,
     },
@@ -995,8 +1001,11 @@ impl App {
     }
 
     /// The details on the way from the list to what is on screen: those opened, or in a wide
-    /// window the selection's.
+    /// window the selection's. None with only the list on screen, even with details kept.
     pub fn path(&self) -> Vec<Detail> {
+        if !self.shows_both() && self.list_has_keys() {
+            return Vec::new();
+        }
         match self.stack() {
             stack if !stack.is_empty() => {
                 stack.iter().map(|opened| opened.detail.clone()).collect()
@@ -1091,8 +1100,7 @@ impl App {
     /// What waits that the keys on screen act on: the selected entry, the permission request of
     /// a selected or open session, or what waits about the selected or open item.
     pub fn subjects(&self) -> Vec<&Waiting> {
-        let opened = self.stack().last();
-        if opened.is_none()
+        if self.list_has_keys()
             && self.tab == Tab::Now
             && let Some(Row::Waiting(key)) = self.now.selection.get()
         {
@@ -1167,15 +1175,21 @@ impl App {
     }
 
     /// Opens `detail`: on top of the one with the keys, or from the list in place of those
-    /// opened before.
+    /// opened before. Those opened from the list on `detail` before are given the keys back as
+    /// they were left.
     fn open(&mut self, detail: Detail) {
-        if self.list_has_keys() {
-            self.stack_mut().clear();
-        }
+        let from_list = self.list_has_keys();
         if let Some(panes) = self.panes_mut() {
             panes.focus = Pane::Detail;
         }
-        self.stack_mut().push(Opened {
+        let stack = self.stack_mut();
+        if from_list {
+            if stack.first().is_some_and(|opened| opened.detail == detail) {
+                return;
+            }
+            stack.clear();
+        }
+        stack.push(Opened {
             scroll: detail.start(),
             detail,
         });
@@ -1513,7 +1527,11 @@ impl App {
             }
             KeyCode::Char('R') => {
                 let (item, blocker) = blocker?;
-                Some(Effect::ResolveInEditor { item, blocker })
+                Some(Effect::ResolveInEditor {
+                    item,
+                    blocker,
+                    text: String::new(),
+                })
             }
             KeyCode::Char('v') => {
                 self.prompt = Some(Prompt::Verdict { item: review? });
@@ -1572,6 +1590,14 @@ impl App {
                 mut input,
             } => match key.code {
                 KeyCode::Esc => (None, None),
+                KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
+                    None,
+                    Some(Effect::ResolveInEditor {
+                        item,
+                        blocker,
+                        text: input.value().trim().to_owned(),
+                    }),
+                ),
                 KeyCode::Enter if input.value().trim().is_empty() => (None, None),
                 KeyCode::Enter => {
                     let text = input.value().trim().to_owned();
@@ -1598,6 +1624,13 @@ impl App {
             },
             Prompt::Comment { item, mut input } => match key.code {
                 KeyCode::Esc => (None, None),
+                KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
+                    None,
+                    Some(Effect::CommentInEditor {
+                        item,
+                        text: input.value().trim().to_owned(),
+                    }),
+                ),
                 KeyCode::Enter if input.value().trim().is_empty() => (None, None),
                 KeyCode::Enter => {
                     let text = input.value().trim().to_owned();
@@ -1648,6 +1681,9 @@ impl App {
         };
         let item_of_session = self.item_subject();
         let page = self.page();
+        // On a tab with panes, the detail opened from the list stays as it is, to come back to
+        // with `l`; the log has no pane to give the keys to, so it is closed.
+        let kept = self.panes().is_some() && self.stack().len() == 1;
         let stack = self.stack_mut();
         let Some(opened) = stack.last_mut() else {
             return;
@@ -1657,6 +1693,11 @@ impl App {
             return;
         }
         match (key.code, &opened.detail) {
+            (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) if kept => {
+                if let Some(panes) = self.panes_mut() {
+                    panes.focus = Pane::List;
+                }
+            }
             (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) => {
                 stack.pop();
             }

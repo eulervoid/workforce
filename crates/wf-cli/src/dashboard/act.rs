@@ -150,10 +150,7 @@ fn done(
             }))?;
             Ok(format!("#{} is {state}", item.short()))
         }
-        Effect::Comment { item, text } => {
-            workspace.author(EventBody::Commented(Comment::plain(item, text)))?;
-            Ok(format!("commented on #{}", item.short()))
-        }
+        Effect::Comment { item, text } => comment(workspace, item, text),
         Effect::Edit { item } => {
             let draft = {
                 let ItemView::Live(live) = workspace
@@ -191,10 +188,31 @@ fn done(
             blocker,
             text,
         } => resolve(workspace, item, blocker, text),
-        Effect::ResolveInEditor { item, blocker } => {
+        Effect::CommentInEditor { item, text } => {
+            let title = workspace
+                .state()
+                .item(item)
+                .map(|view| format!(" \"{}\"", view.title()))
+                .unwrap_or_default();
+            let template = format!(
+                "{text}\n{SCISSORS}\nYour comment on #{}{title}\n",
+                item.short()
+            );
+            let text = suspended(terminal, || edit_in_editor(&template, ".md"))??;
+            let text = above_scissors(&text);
+            if text.is_empty() {
+                return Ok("nothing written, no comment posted".to_owned());
+            }
+            comment(workspace, item, text)
+        }
+        Effect::ResolveInEditor {
+            item,
+            blocker,
+            text,
+        } => {
             let question = blocker_text(workspace, blocker);
             let template = format!(
-                "\n{SCISSORS}\nYour answer to the blocker {} on #{}:\n\n{question}\n",
+                "{text}\n{SCISSORS}\nYour answer to the blocker {} on #{}:\n\n{question}\n",
                 blocker.short(),
                 item.short()
             );
@@ -259,6 +277,11 @@ fn done(
             Ok(String::new())
         }
     }
+}
+
+fn comment(workspace: &mut Workspace, item: ItemId, text: String) -> anyhow::Result<String> {
+    workspace.author(EventBody::Commented(Comment::plain(item, text)))?;
+    Ok(format!("commented on #{}", item.short()))
 }
 
 fn resolve(
