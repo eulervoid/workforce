@@ -10,7 +10,7 @@ use wf_core::graph::Readiness;
 use wf_core::id::HashId;
 use wf_core::policy::StateCategory;
 
-use super::app::{AgentRow, App, Choice, Opened, Prompt, Row, Scroll, Status, Tab};
+use super::app::{AgentRow, App, Choice, Drawn, Opened, Prompt, Row, Scroll, Status, Tab};
 use super::snapshot::{
     AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
 };
@@ -25,15 +25,14 @@ const SELECTION: Color = Color::DarkGray;
 
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
-/// Draws the dashboard, and keeps the scroll of the text with the keys to what is shown of it.
+/// Draws the dashboard, and keeps the scroll of the text and of the list to what is shown of them.
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    if let Some(scroll) = draw_all(frame, app) {
-        app.shown(scroll);
-    }
+    let drawn = draw_all(frame, app);
+    app.shown(drawn);
 }
 
-/// Draws the dashboard; the scroll of the text with the keys as it is shown, if one is.
-fn draw_all(frame: &mut Frame, app: &App) -> Option<Scroll> {
+/// Draws the dashboard; where the text and the list on screen ended up.
+fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     let [header, counts, rule, body, rule_below, latest, keys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -254,30 +253,31 @@ fn draw_rule(frame: &mut Frame, area: Rect) {
     frame.render_widget(Paragraph::new(rule).dim(), area);
 }
 
-fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
+fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
     match app.tab {
-        Tab::Now => draw_split(frame, app, area, draw_now_list),
-        Tab::Items => draw_split(frame, app, area, draw_items_list),
-        Tab::Log => draw_log(frame, app, area),
-        Tab::Agents => draw_split(frame, app, area, draw_agents_list),
+        Tab::Now => draw_split(frame, app, area, now_lines),
+        Tab::Items => draw_split(frame, app, area, items_lines),
+        Tab::Log => Drawn {
+            text: draw_log(frame, app, area),
+            list_top: None,
+        },
+        Tab::Agents => draw_split(frame, app, area, agents_lines),
     }
 }
 
 /// The list, and the detail on screen: in its place, or right of it in a wide window.
-fn draw_split(
-    frame: &mut Frame,
-    app: &App,
-    area: Rect,
-    draw_list: fn(&mut Frame, &App, Rect),
-) -> Option<Scroll> {
+fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -> Drawn {
     let in_view = app.in_view();
     if !app.is_wide() {
         return match in_view {
-            Some(opened) => draw_detail(frame, app, opened, area),
-            None => {
-                draw_list(frame, app, area);
-                None
-            }
+            Some(opened) => Drawn {
+                text: draw_detail(frame, app, opened, area),
+                list_top: None,
+            },
+            None => Drawn {
+                text: None,
+                list_top: Some(draw_list(frame, app, list_lines, area)),
+            },
         };
     }
     let [list, rule, detail] = Layout::horizontal([
@@ -286,10 +286,53 @@ fn draw_split(
         Constraint::Fill(1),
     ])
     .areas(area);
-    draw_list(frame, app, list);
+    let list_top = draw_list(frame, app, list_lines, list);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).dim(), rule);
-    draw_detail(frame, app, in_view?, detail)
+    Drawn {
+        text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail)),
+        list_top: Some(list_top),
+    }
+}
+
+/// The lines of a list `width` wide, and the line its selection starts on.
+type ListLines = fn(&App, u16) -> (Vec<Line<'static>>, Option<usize>);
+
+/// Draws a list from where it was, moved only as far as keeps the selection on screen; returns
+/// the first line drawn.
+fn draw_list(frame: &mut Frame, app: &App, list_lines: ListLines, area: Rect) -> usize {
+    let (lines, selected_line) = list_lines(app, area.width);
+    let previous = app.panes().map_or(0, |panes| panes.list_top);
+    let top = list_top(
+        previous,
+        selected_line,
+        lines.len(),
+        usize::from(area.height),
+    );
+    let scroll = u16::try_from(top).unwrap_or(u16::MAX);
+    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
+    top
+}
+
+/// The first line of a list of `lines` drawn `height` high: `previous`, moved only as far as
+/// keeps the selection on screen with the line before it (a heading, maybe) and the line after
+/// it (the rest of its row, maybe).
+pub fn list_top(
+    previous: usize,
+    selected_line: Option<usize>,
+    lines: usize,
+    height: usize,
+) -> usize {
+    let mut top = previous.min(lines.saturating_sub(height));
+    if let Some(line) = selected_line {
+        if line < top + 1 {
+            top = line.saturating_sub(1);
+        }
+        if line + 2 > top + height {
+            top = (line + 2).saturating_sub(height);
+        }
+    }
+    top
 }
 
 fn section(title: &str) -> Line<'static> {
@@ -547,15 +590,6 @@ fn now_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
     (lines, selected_line)
 }
 
-fn draw_now_list(frame: &mut Frame, app: &App, area: Rect) {
-    let (lines, selected_line) = now_lines(app, area.width);
-    // Keep the selection and the line after it on screen.
-    let offset = selected_line
-        .map(|line| (line + 2).saturating_sub(usize::from(area.height)))
-        .unwrap_or_default();
-    frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
-}
-
 /// `in_progress · ready · "parse"`: how the items are grouped and filtered.
 fn items_heading(app: &App) -> Line<'static> {
     let grouping = match app.items.grouping {
@@ -696,9 +730,11 @@ fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<L
     row.lines(first, Some(Span::raw(right).dim()), Vec::new())
 }
 
-fn draw_agents_list(frame: &mut Frame, app: &App, area: Rect) {
+/// The agents with their sessions under the stats of the project, and the line the selection
+/// starts on.
+fn agents_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
     let selected = app.agents.selection.get();
-    let mut lines = stats_lines(&app.snapshot.stats, area.width);
+    let mut lines = stats_lines(&app.snapshot.stats, width);
     let mut selected_line = None;
     for agent in &app.snapshot.agents {
         lines.push(Line::default());
@@ -708,7 +744,7 @@ fn draw_agents_list(frame: &mut Frame, app: &App, area: Rect) {
         }
         lines.extend(agent_lines(
             agent,
-            RowLines::new(app, selected == Some(&row), area.width),
+            RowLines::new(app, selected == Some(&row), width),
         ));
         for session in &agent.sessions {
             let row = AgentRow::Session(session.id);
@@ -718,20 +754,18 @@ fn draw_agents_list(frame: &mut Frame, app: &App, area: Rect) {
             lines.extend(agent_session_lines(
                 app,
                 session,
-                RowLines::new(app, selected == Some(&row), area.width),
+                RowLines::new(app, selected == Some(&row), width),
             ));
         }
     }
     if app.snapshot.agents.is_empty() {
         lines.push(Line::from(" no agents yet; `wf agent add` defines one").dim());
     }
-    let offset = selected_line
-        .map(|line| (line + 2).saturating_sub(usize::from(area.height)))
-        .unwrap_or_default();
-    frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
+    (lines, selected_line)
 }
 
-fn draw_items_list(frame: &mut Frame, app: &App, area: Rect) {
+/// The items in their groups under how they are grouped, and the line the selection starts on.
+fn items_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
     let selected = app.items.list.selection.get();
     let mut lines = vec![items_heading(app)];
     let mut selected_line = None;
@@ -742,17 +776,14 @@ fn draw_items_list(frame: &mut Frame, app: &App, area: Rect) {
             if selected == Some(&item.id) {
                 selected_line = Some(lines.len());
             }
-            let row = RowLines::new(app, selected == Some(&item.id), area.width);
+            let row = RowLines::new(app, selected == Some(&item.id), width);
             lines.extend(item_row_lines(item, row));
         }
     }
     if lines.len() == 1 {
         lines.push(Line::from(" no items match").dim());
     }
-    let offset = selected_line
-        .map(|line| (line + 2).saturating_sub(usize::from(area.height)))
-        .unwrap_or_default();
-    frame.render_widget(Paragraph::new(lines).scroll((offset as u16, 0)), area);
+    (lines, selected_line)
 }
 
 fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Option<Scroll> {

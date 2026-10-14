@@ -102,7 +102,7 @@ fn snapshot() -> Snapshot {
 
 fn app() -> App {
     let mut app = App::new(snapshot(), TimeZone::UTC);
-    app.resize(60);
+    app.resize(60, 24);
     app.logged([
         "06:59  #aibaea  @ada · resolved a91d\n         Fix the formatting of the body, nothing else\n".to_owned(),
         "07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_review\n".to_owned(),
@@ -219,7 +219,7 @@ fn a_session_opens_on_its_transcript_and_esc_goes_back() {
 #[test]
 fn a_wide_window_shows_the_selection_beside_the_list() {
     let mut app = app();
-    app.resize(130);
+    app.resize(130, 24);
     let blocked = SessionId::from_bytes([12; 32]);
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
@@ -741,7 +741,7 @@ fn the_agents_tab_lists_each_agent_with_its_sessions() {
 #[test]
 fn the_wheel_moves_what_is_under_the_pointer() {
     let mut app = app();
-    app.resize(130);
+    app.resize(130, 24);
     let item = Detail::Item(ItemId::from_bytes([4; 32]));
     let blocked = Detail::Item(ItemId::from_bytes([5; 32]));
     // Over the detail beside the list, the wheel gives the detail the keys and scrolls it.
@@ -766,14 +766,29 @@ fn the_wheel_moves_what_is_under_the_pointer() {
             scroll: Scroll::At(6),
         }])
     );
-    // Over the list, the list takes the keys back and the wheel moves its selection.
+    // Over the list, the first notch only gives the list the keys back; the detail stays.
     app.wheel(10, Wheel::Down);
     assert!(app.list_has_keys());
+    assert_eq!(app.stack().map(Vec::len), Some(1));
+    assert_eq!(app.wanted().detail, Some(item.clone()));
+    // The next ones move the selection, whose detail takes the place of the one opened.
+    app.wheel(10, Wheel::Down);
+    assert_eq!(app.stack().map(Vec::len), Some(0));
     assert_eq!(app.wanted().detail, Some(blocked));
     app.wheel(10, Wheel::Up);
     assert_eq!(app.wanted().detail, Some(item.clone()));
+    // Over the detail of a selection without one, there is nothing to scroll.
+    press(&mut app, KeyCode::Char('1'));
+    app.refresh(snapshot());
+    press(&mut app, KeyCode::Char('G'));
+    assert!(matches!(app.now.selection.get(), Some(Row::Flag(_))));
+    app.wheel(100, Wheel::Down);
+    assert!(matches!(app.now.selection.get(), Some(Row::Flag(_))));
+    assert!(app.list_has_keys());
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
     // In a narrow window the wheel moves what is on screen, wherever the pointer is.
-    app.resize(60);
+    app.resize(60, 24);
     app.wheel(50, Wheel::Down);
     assert!(app.list_has_keys());
     press(&mut app, KeyCode::Char('k'));
@@ -835,7 +850,7 @@ fn style_at(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> ratatui::
 fn the_part_with_the_keys_stands_out() {
     use ratatui::style::{Color, Modifier};
     let mut app = app();
-    app.resize(130);
+    app.resize(130, 24);
     let blocked = SessionId::from_bytes([12; 32]);
     for _ in 0..4 {
         press(&mut app, KeyCode::Char('j'));
@@ -876,4 +891,18 @@ fn the_part_with_the_keys_stands_out() {
             .add_modifier
             .contains(Modifier::BOLD)
     );
+}
+
+#[test]
+fn a_list_moves_only_as_far_as_keeps_the_selection_on_screen() {
+    use super::draw::list_top;
+    // Within the lines on screen, the list stays.
+    assert_eq!(list_top(5, Some(10), 40, 10), 5);
+    // Past its end, it moves to keep the selection and the line after it on screen.
+    assert_eq!(list_top(5, Some(14), 40, 10), 6);
+    // Above its top, it moves to keep the line before the selection on screen.
+    assert_eq!(list_top(5, Some(5), 40, 10), 4);
+    assert_eq!(list_top(5, Some(0), 40, 10), 0);
+    // A list that got shorter is drawn to its end.
+    assert_eq!(list_top(30, None, 12, 10), 2);
 }

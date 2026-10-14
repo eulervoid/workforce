@@ -202,13 +202,14 @@ impl Scroll {
         }
     }
 
-    /// What the keys of a scrolled text do to it; `None` for a key it does not take.
-    fn key(self, key: KeyEvent) -> Option<Scroll> {
+    /// What the keys of a scrolled text do to it, a page being `page` lines; `None` for a key it
+    /// does not take.
+    fn key(self, key: KeyEvent, page: u16) -> Option<Scroll> {
         Some(match key.code {
             KeyCode::Down | KeyCode::Char('j') => self.down(1),
             KeyCode::Up | KeyCode::Char('k') => self.up(1),
-            KeyCode::PageDown | KeyCode::Char(' ') => self.down(20),
-            KeyCode::PageUp => self.up(20),
+            KeyCode::PageDown | KeyCode::Char(' ') => self.down(page),
+            KeyCode::PageUp => self.up(page),
             KeyCode::Char('g') => Scroll::At(0),
             KeyCode::Char('G') => Scroll::END,
             _ => return None,
@@ -274,15 +275,16 @@ impl<Key: Clone + PartialEq> Selection<Key> {
         self.selected = rows.get(self.index).cloned();
     }
 
-    /// What the keys of a list do to its selection; `false` for a key it does not take.
-    fn key(&mut self, rows: &[Key], key: KeyEvent) -> bool {
+    /// What the keys of a list do to its selection, a page being `page` rows; `false` for a key
+    /// it does not take.
+    fn key(&mut self, rows: &[Key], key: KeyEvent, page: usize) -> bool {
         self.update(rows);
         let last = rows.len().saturating_sub(1);
         self.index = match key.code {
             KeyCode::Down | KeyCode::Char('j') => (self.index + 1).min(last),
             KeyCode::Up | KeyCode::Char('k') => self.index.saturating_sub(1),
-            KeyCode::PageDown => (self.index + 20).min(last),
-            KeyCode::PageUp => self.index.saturating_sub(20),
+            KeyCode::PageDown => (self.index + page).min(last),
+            KeyCode::PageUp => self.index.saturating_sub(page),
             KeyCode::Char('g') => 0,
             KeyCode::Char('G') => last,
             _ => return false,
@@ -292,20 +294,49 @@ impl<Key: Clone + PartialEq> Selection<Key> {
     }
 }
 
-/// A tab of a list and the details opened from it, the latest on top.
+/// Which of the list and the detail beside it has the keys, in a wide window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Focus {
+    List,
+    Detail,
+}
+
+/// What a tab of a list shows besides its selection.
+#[derive(Clone, Debug)]
+pub struct Panes {
+    /// The details opened from the list, the latest on top.
+    pub stack: Vec<Opened>,
+    /// In a wide window, which of the list and the detail opened beside it has the keys.
+    pub focus: Focus,
+    /// The first line of the list on screen, kept while the selection moves within it.
+    pub list_top: usize,
+}
+
+/// A tab of a list and the details opened from it.
 #[derive(Clone, Debug)]
 pub struct ListTab<Key> {
     pub selection: Selection<Key>,
-    pub stack: Vec<Opened>,
+    pub panes: Panes,
 }
 
 impl<Key> Default for ListTab<Key> {
     fn default() -> Self {
         Self {
             selection: Selection::default(),
-            stack: Vec::new(),
+            panes: Panes {
+                stack: Vec::new(),
+                focus: Focus::Detail,
+                list_top: 0,
+            },
         }
     }
+}
+
+/// What drawing showed: where the text with the keys and the list ended up.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Drawn {
+    pub text: Option<Scroll>,
+    pub list_top: Option<usize>,
 }
 
 /// Which items the Items tab lists, by their readiness.
@@ -489,6 +520,7 @@ pub struct App {
     /// Whether transcripts show everything, as `wf session watch --full` does.
     pub full_transcripts: bool,
     pub width: u16,
+    pub height: u16,
     pub time_zone: TimeZone,
     pub status: Option<Status>,
 }
@@ -515,6 +547,7 @@ impl App {
             prompt: None,
             full_transcripts: false,
             width: 80,
+            height: 24,
             time_zone,
             status: None,
         };
@@ -567,8 +600,16 @@ impl App {
         self.prompt = Some(Prompt::Choose(choice));
     }
 
-    pub fn resize(&mut self, width: u16) {
+    pub fn resize(&mut self, width: u16, height: u16) {
         self.width = width;
+        self.height = height;
+    }
+
+    /// How many lines or rows a page moves: about what a detail shows.
+    fn page(&self) -> u16 {
+        // Less the header, the counts, the rules, the latest event, the keys and the breadcrumb,
+        // and a line kept from the page before.
+        self.height.saturating_sub(8).max(1)
     }
 
     pub fn is_wide(&self) -> bool {
@@ -699,26 +740,42 @@ impl App {
 
     /// The details opened on the tab on screen, the latest on top.
     pub fn stack(&self) -> Option<&Vec<Opened>> {
-        match self.tab {
-            Tab::Now => Some(&self.now.stack),
-            Tab::Items => Some(&self.items.list.stack),
-            Tab::Agents => Some(&self.agents.stack),
-            Tab::Log => None,
-        }
+        self.panes().map(|panes| &panes.stack)
     }
 
     fn stack_mut(&mut self) -> Option<&mut Vec<Opened>> {
+        self.panes_mut().map(|panes| &mut panes.stack)
+    }
+
+    pub fn panes(&self) -> Option<&Panes> {
         match self.tab {
-            Tab::Now => Some(&mut self.now.stack),
-            Tab::Items => Some(&mut self.items.list.stack),
-            Tab::Agents => Some(&mut self.agents.stack),
+            Tab::Now => Some(&self.now.panes),
+            Tab::Items => Some(&self.items.list.panes),
+            Tab::Agents => Some(&self.agents.panes),
             Tab::Log => None,
         }
     }
 
-    /// Keeps the scroll of the text with the keys to what drawing showed of it, so that the next
-    /// key moves the text from there rather than from past its end.
-    pub fn shown(&mut self, scroll: Scroll) {
+    fn panes_mut(&mut self) -> Option<&mut Panes> {
+        match self.tab {
+            Tab::Now => Some(&mut self.now.panes),
+            Tab::Items => Some(&mut self.items.list.panes),
+            Tab::Agents => Some(&mut self.agents.panes),
+            Tab::Log => None,
+        }
+    }
+
+    /// Keeps the scroll of the text on screen and the top of the list to what drawing showed of
+    /// them, so that the next key moves them from there rather than from past their end.
+    pub fn shown(&mut self, drawn: Drawn) {
+        if let Some(list_top) = drawn.list_top
+            && let Some(panes) = self.panes_mut()
+        {
+            panes.list_top = list_top;
+        }
+        let Some(scroll) = drawn.text else {
+            return;
+        };
         match self.stack_mut() {
             Some(stack) => {
                 if let Some(opened) = stack.last_mut() {
@@ -730,9 +787,11 @@ impl App {
     }
 
     /// Whether the keys go to the list of the tab on screen, rather than to a detail opened from
-    /// it.
+    /// it: when none is, or in a wide window when the list has taken them back.
     pub fn list_has_keys(&self) -> bool {
-        self.stack().is_none_or(|stack| stack.is_empty())
+        self.panes().is_none_or(|panes| {
+            panes.stack.is_empty() || (self.is_wide() && panes.focus == Focus::List)
+        })
     }
 
     /// The details on the way from the list to what is on screen: those opened, or in a wide
@@ -906,11 +965,18 @@ impl App {
         review.or_else(|| self.item_subject())
     }
 
+    /// Opens `detail`: on top of the one with the keys, or from the list in place of those
+    /// opened before.
     fn open(&mut self, detail: Detail) {
-        let Some(stack) = self.stack_mut() else {
+        let from_list = self.list_has_keys();
+        let Some(panes) = self.panes_mut() else {
             return;
         };
-        stack.push(Opened {
+        if from_list {
+            panes.stack.clear();
+        }
+        panes.focus = Focus::Detail;
+        panes.stack.push(Opened {
             scroll: detail.start(),
             detail,
         });
@@ -945,18 +1011,15 @@ impl App {
             KeyCode::BackTab => self.tab = self.tab.previous(),
             // A detail covers the list behind it, so the list takes no keys while one is open.
             _ if !self.list_has_keys() => self.detail_key(key),
-            _ => match self.tab {
-                Tab::Now => self.now_key(key),
-                Tab::Items => self.items_key(key),
-                Tab::Log => self.log_key(key),
-                Tab::Agents => self.agents_key(key),
-            },
+            _ if self.tab == Tab::Log => self.log_key(key),
+            _ if self.move_selection(key) => {}
+            _ => self.list_key(key),
         }
         None
     }
 
-    /// The mouse wheel turned over `column`. What is under the pointer takes the keys and moves:
-    /// in a wide window the list or the detail beside it, otherwise what is on screen.
+    /// The mouse wheel turned over `column`. It moves what is under the pointer: in a wide window
+    /// the list or the detail beside it, which takes the keys; otherwise what is on screen.
     pub fn wheel(&mut self, column: u16, wheel: Wheel) {
         if self.prompt.is_some() {
             return;
@@ -965,33 +1028,43 @@ impl App {
             self.log.scroll = wheel.scroll(self.log.scroll);
             return;
         }
-        if self.is_wide() {
-            if column < self.list_width() {
-                if let Some(stack) = self.stack_mut() {
-                    stack.clear();
+        let over_list = if self.is_wide() {
+            column < self.list_width()
+        } else {
+            self.list_has_keys()
+        };
+        if over_list {
+            if !self.list_has_keys() {
+                // The first notch only takes the keys from the detail, which stays as it is.
+                if let Some(panes) = self.panes_mut() {
+                    panes.focus = Focus::List;
                 }
-            } else if self.list_has_keys()
-                && let Some(detail) = self.selected_detail()
-            {
-                // Its detail is on screen already: opening it only gives it the keys.
+                return;
+            }
+            let code = match wheel {
+                Wheel::Up => KeyCode::Up,
+                Wheel::Down => KeyCode::Down,
+            };
+            self.move_selection(KeyEvent::new(code, KeyModifiers::NONE));
+            return;
+        }
+        if self.list_has_keys() {
+            let Some(panes) = self.panes_mut() else {
+                return;
+            };
+            if panes.stack.is_empty() {
+                // The detail of the selection is on screen beside the list already: opening it
+                // only gives it the keys. Without one, there is nothing to scroll.
+                let Some(detail) = self.selected_detail() else {
+                    return;
+                };
                 self.open(detail);
+            } else {
+                panes.focus = Focus::Detail;
             }
         }
-        match self.stack_mut().and_then(|stack| stack.last_mut()) {
-            Some(opened) => opened.scroll = wheel.scroll(opened.scroll),
-            None => {
-                let code = match wheel {
-                    Wheel::Up => KeyCode::Up,
-                    Wheel::Down => KeyCode::Down,
-                };
-                let key = KeyEvent::new(code, KeyModifiers::NONE);
-                match self.tab {
-                    Tab::Now => self.now_key(key),
-                    Tab::Items => self.items_key(key),
-                    Tab::Agents => self.agents_key(key),
-                    Tab::Log => self.log_key(key),
-                }
-            }
+        if let Some(opened) = self.stack_mut().and_then(|stack| stack.last_mut()) {
+            opened.scroll = wheel.scroll(opened.scroll);
         }
     }
 
@@ -1164,13 +1237,14 @@ impl App {
             Some(InView::Session(_) | InView::Agent { .. }) | None => None,
         };
         let item_of_session = self.item_subject();
+        let page = self.page();
         let Some(stack) = self.stack_mut() else {
             return;
         };
         let Some(opened) = stack.last_mut() else {
             return;
         };
-        if let Some(scroll) = opened.scroll.key(key) {
+        if let Some(scroll) = opened.scroll.key(key, page) {
             opened.scroll = scroll;
             return;
         }
@@ -1197,63 +1271,60 @@ impl App {
         }
     }
 
-    fn now_key(&mut self, key: KeyEvent) {
-        let rows = self.now_rows();
-        if self.now.selection.key(&rows, key) {
-            return;
+    /// Moves the selection of the list on screen as `key` asks; `false` for a key that does not
+    /// move it. The details opened before give way to the selection's.
+    fn move_selection(&mut self, key: KeyEvent) -> bool {
+        let page = usize::from(self.page());
+        let moved = match self.tab {
+            Tab::Now => {
+                let rows = self.now_rows();
+                self.now.selection.key(&rows, key, page)
+            }
+            Tab::Items => {
+                let rows = self.item_rows();
+                self.items.list.selection.key(&rows, key, page)
+            }
+            Tab::Agents => {
+                let rows = self.agent_rows();
+                self.agents.selection.key(&rows, key, page)
+            }
+            Tab::Log => false,
+        };
+        if moved && let Some(stack) = self.stack_mut() {
+            stack.clear();
         }
-        if matches!(
-            key.code,
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
-        ) && let Some(detail) = self.selected_detail()
-        {
-            self.open(detail);
-        }
+        moved
     }
 
-    fn agents_key(&mut self, key: KeyEvent) {
-        let rows = self.agent_rows();
-        if self.agents.selection.key(&rows, key) {
-            return;
-        }
-        if matches!(
-            key.code,
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l')
-        ) && let Some(detail) = self.selected_detail()
-        {
-            self.open(detail);
-        }
-    }
-
-    fn items_key(&mut self, key: KeyEvent) {
-        let rows = self.item_rows();
-        if self.items.list.selection.key(&rows, key) {
-            return;
-        }
-        match key.code {
-            KeyCode::Enter | KeyCode::Right | KeyCode::Char('l') => {
+    /// The keys of the list on screen, besides those that move its selection.
+    fn list_key(&mut self, key: KeyEvent) {
+        match (self.tab, key.code) {
+            (
+                Tab::Now | Tab::Items | Tab::Agents,
+                KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'),
+            ) => {
                 if let Some(detail) = self.selected_detail() {
                     self.open(detail);
                 }
             }
-            KeyCode::Char('o') => {
+            (Tab::Items, KeyCode::Char('o')) => {
                 let index = GROUPINGS
                     .iter()
                     .position(|grouping| *grouping == self.items.grouping)
                     .map_or(0, |index| (index + 1) % GROUPINGS.len());
                 self.items.grouping = GROUPINGS[index];
             }
-            KeyCode::Char('F') => self.items.readiness = self.items.readiness.next(),
-            KeyCode::Char('/') => {
+            (Tab::Items, KeyCode::Char('F')) => self.items.readiness = self.items.readiness.next(),
+            (Tab::Items, KeyCode::Char('/')) => {
                 self.prompt = Some(Prompt::Filter(Input::new(self.items.filter.clone())));
             }
-            KeyCode::Esc => self.items.filter.clear(),
-            _ => {}
+            (Tab::Items, KeyCode::Esc) => self.items.filter.clear(),
+            (Tab::Now | Tab::Items | Tab::Agents | Tab::Log, _) => {}
         }
     }
 
     fn log_key(&mut self, key: KeyEvent) {
-        if let Some(scroll) = self.log.scroll.key(key) {
+        if let Some(scroll) = self.log.scroll.key(key, self.page()) {
             self.log.scroll = scroll;
             return;
         }

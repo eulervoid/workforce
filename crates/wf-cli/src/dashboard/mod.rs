@@ -65,7 +65,8 @@ fn event_loop(
     only: Option<ItemId>,
 ) -> anyhow::Result<()> {
     let mut app = App::new(Snapshot::default(), jiff::tz::TimeZone::system());
-    app.resize(terminal.size()?.width);
+    let size = terminal.size()?;
+    app.resize(size.width, size.height);
     let mut feed = Feed::new(workspace, &mut app)?;
     if let Some(item) = only {
         app.open_item(item);
@@ -146,8 +147,8 @@ fn handle(
             column,
             ..
         }) => app.wheel(column, Wheel::Down),
-        TerminalEvent::Resize(width, _) => {
-            app.resize(width);
+        TerminalEvent::Resize(width, height) => {
+            app.resize(width, height);
             return Handled::Changed;
         }
         _ => return Handled::Ignored,
