@@ -5,7 +5,7 @@ use std::process::{Command, Output};
 
 use wf_core::session::{CommitId, GitOid};
 
-use crate::{CommitSigning, DirtyCheckout, MergeOutcome, Rebase, VcsAdapter, VcsError};
+use crate::{CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Rebase, VcsAdapter, VcsError};
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
 
@@ -546,17 +546,27 @@ impl VcsAdapter for GitCli {
         message: &str,
         signing: &CommitSigning,
     ) -> Result<MergeOutcome, VcsError> {
-        let old = self.branch_head(target)?;
+        match self.merge_tree(target, commit)? {
+            MergeTree::Landed { commit } => Ok(MergeOutcome::Merged { commit }),
+            MergeTree::Conflict { paths } => Ok(MergeOutcome::Conflict { paths }),
+            MergeTree::Clean { base, tree } => {
+                self.commit_merge(target, base, tree, commit, message, signing)
+            }
+        }
+    }
+
+    fn merge_tree(&self, target: &str, commit: CommitId) -> Result<MergeTree, VcsError> {
+        let base = self.branch_head(target)?;
         // Merged already, by a merge whose event was never written: merging again would only add
         // an empty merge commit.
-        if let Some(landed) = self.landed(commit, old)? {
-            return Ok(MergeOutcome::Merged { commit: landed });
+        if let Some(landed) = self.landed(commit, base)? {
+            return Ok(MergeTree::Landed { commit: landed });
         }
         let merged = self.attempt([
             "merge-tree",
             "--write-tree",
             "--name-only",
-            &old.to_string(),
+            &base.to_string(),
             &commit.to_string(),
         ])?;
         let mut lines = merged.stdout.lines();
@@ -572,9 +582,25 @@ impl VcsAdapter for GitCli {
                 .take_while(|line| !line.is_empty())
                 .map(str::to_string)
                 .collect();
-            return Ok(MergeOutcome::Conflict { paths });
+            return Ok(MergeTree::Conflict { paths });
         }
-        let tree = lines.next().unwrap_or_default().trim().to_string();
+        let tree = lines.next().unwrap_or_default().trim();
+        let tree = tree.parse().map_err(|_| VcsError::UnexpectedOutput {
+            command: "merge-tree --write-tree".into(),
+            output: tree.into(),
+        })?;
+        Ok(MergeTree::Clean { base, tree })
+    }
+
+    fn commit_merge(
+        &self,
+        target: &str,
+        base: CommitId,
+        tree: GitOid,
+        commit: CommitId,
+        message: &str,
+        signing: &CommitSigning,
+    ) -> Result<MergeOutcome, VcsError> {
         // Unlike `git commit`, `commit-tree` signs only when told to.
         let sign = match signing {
             CommitSigning::AsConfigured if self.signs_commits()? => "-S",
@@ -589,9 +615,9 @@ impl VcsAdapter for GitCli {
             [
                 "commit-tree",
                 sign,
-                &tree,
+                &tree.to_string(),
                 "-p",
-                &old.to_string(),
+                &base.to_string(),
                 "-p",
                 &commit.to_string(),
                 "-m",
@@ -608,11 +634,23 @@ impl VcsAdapter for GitCli {
         }
         let new = made.stdout;
         let new = self.oid("commit-tree", &new)?;
-        Ok(match self.advance(target, &old, &new)? {
+        Ok(match self.advance(target, &base, &new)? {
             Advance::Done => MergeOutcome::Merged { commit: new },
             Advance::Dirty(dirty) => MergeOutcome::DirtyCheckout(dirty),
             Advance::Moved => MergeOutcome::TargetMoved,
         })
+    }
+
+    fn tree_of(&self, commit: CommitId) -> Result<GitOid, VcsError> {
+        let revision = format!("{commit}^{{tree}}");
+        let output = self.succeed(["rev-parse", "--verify", &revision])?;
+        output
+            .trim()
+            .parse()
+            .map_err(|_| VcsError::UnexpectedOutput {
+                command: "rev-parse".into(),
+                output: output.trim().into(),
+            })
     }
 
     fn rebase(
@@ -1182,6 +1220,47 @@ mod tests {
             String::from_utf8_lossy(&verified.stderr)
         );
         assert!(String::from_utf8_lossy(&verified.stderr).contains("ada@laptop"));
+    }
+
+    #[test]
+    fn a_merge_tree_is_committed_only_while_the_target_is_where_it_was_made() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "a.txt", "a\n");
+        let MergeTree::Clean { base, tree } = repo.git.merge_tree("main", work).unwrap() else {
+            panic!("expected a clean merge");
+        };
+        assert_eq!(base, repo.git.branch_head("main").unwrap());
+        let main = repo.directory();
+        assert_eq!(
+            git_in(&main, &["ls-tree", "--name-only", &tree.to_string()]),
+            "a.txt\nfile.txt"
+        );
+        assert_eq!(repo.git.tree_of(base).unwrap().to_string().len(), 40);
+
+        repo.write(&main, "b.txt", "b\n");
+        repo.commit(&main, "main moves on");
+        let moved = repo
+            .git
+            .commit_merge("main", base, tree, work, "Merge", &CommitSigning::Unsigned)
+            .unwrap();
+        assert_eq!(moved, MergeOutcome::TargetMoved);
+
+        let MergeTree::Clean { base, tree } = repo.git.merge_tree("main", work).unwrap() else {
+            panic!("expected a clean merge");
+        };
+        let MergeOutcome::Merged { commit } = repo
+            .git
+            .commit_merge("main", base, tree, work, "Merge", &CommitSigning::Unsigned)
+            .unwrap()
+        else {
+            panic!("expected a merge");
+        };
+        assert_eq!(repo.git.branch_head("main").unwrap(), commit);
+        assert_eq!(repo.git.tree_of(commit).unwrap(), tree);
+        assert_eq!(
+            repo.git.merge_tree("main", work).unwrap(),
+            MergeTree::Landed { commit }
+        );
     }
 
     #[test]
