@@ -7,11 +7,13 @@ use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
 use wf_core::event::{Comment, EventBody, Merged};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::Actor;
+use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::item::{ItemState, ItemView};
 use wf_core::lifecycle::MergeFailure;
 use wf_core::session::CommitId;
-use wf_vcs::{CommitSigning, GitCli, MergeOutcome, VcsAdapter, item_branch, item_worktree};
+use wf_vcs::{
+    CommitSigning, GitCli, MergeOutcome, TargetMerge, VcsAdapter, item_branch, item_worktree,
+};
 
 use super::{SessionError, blocking};
 use crate::machine_config::MergeSigningConfig;
@@ -373,7 +375,7 @@ impl Daemon {
             }
             MergeOutcome::Conflict { paths } => {
                 comment(format!(
-                    "Merging into {target} conflicts in {}. The next session merges {target} into the branch first.",
+                    "Merging into {target} conflicts in {}. The next session starts with {target} merged into the branch.",
                     paths.join(", ")
                 ))
                 .await?;
@@ -401,6 +403,59 @@ impl Daemon {
 }
 
 impl Daemon {
+    /// Merges `target` into the branch of `item` in its `worktree`, as a session starts on it
+    /// after its merge failed, and says on the item what happened, which the session's brief
+    /// shows. A conflict is left in the worktree for the session to resolve. Nothing is said when
+    /// the branch has the target already, as after a session that resolved the conflict.
+    pub(super) async fn merge_target_first(
+        &self,
+        loaded: &Loaded,
+        principal: PrincipalKey,
+        item: ItemId,
+        worktree: PathBuf,
+        repository: PathBuf,
+        target: String,
+    ) -> Result<(), SessionError> {
+        let message = format!("Merge {target} into #{}", HashId::short(&item));
+        let merged = match self.merge_signing() {
+            Ok(signing) => {
+                let target = target.clone();
+                blocking(move || {
+                    GitCli::open(&repository)?.merge_target(&worktree, &target, &message, &signing)
+                })
+                .await?
+                .map_err(SessionError::from)
+            }
+            Err(error) => Err(error),
+        };
+        let note = match merged {
+            Ok(TargetMerge::UpToDate) => return Ok(()),
+            Ok(TargetMerge::Merged) => format!(
+                "Merged {target} into the branch, since the work conflicted with it: it merged cleanly."
+            ),
+            Ok(TargetMerge::Conflict { paths }) => format!(
+                "Merged {target} into the branch, since the work conflicted with it: it conflicts in {}. \
+                 The conflicts are left in the worktree; resolve them and commit the merge before you go on.",
+                paths.join(", ")
+            ),
+            Ok(TargetMerge::Uncommitted) => format!(
+                "The merge of {target} into the branch, since the work conflicted with it, is still \
+                 in the worktree with every conflict resolved; commit it before you go on."
+            ),
+            Err(error) => format!(
+                "Could not merge {target} into the branch, though the work conflicted with it: {}",
+                wf_core::error_chain(&error)
+            ),
+        };
+        self.author(
+            loaded,
+            Actor::Daemon(principal),
+            EventBody::Commented(Comment::plain(item, note)),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// How the merge commit is signed, as the machine config says now.
     fn merge_signing(&self) -> Result<CommitSigning, SessionError> {
         Ok(match self.machine_config()?.commits.merge_signing {

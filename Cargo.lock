@@ -544,6 +544,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "bytesize"
+version = "2.7.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7354288c522e7e980fafd2075d63d1285794c3a6a16cdd492f189ea406e5f18b"
+dependencies = [
+ "serde_core",
+]
+
+[[package]]
 name = "castaway"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5942,6 +5951,7 @@ dependencies = [
  "anstream",
  "anstyle",
  "anyhow",
+ "bytesize",
  "clap",
  "cliclack",
  "comfy-table",
@@ -5993,6 +6003,7 @@ dependencies = [
 name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
+ "bytesize",
  "data-encoding",
  "globset",
  "humantime",
@@ -6008,6 +6019,7 @@ dependencies = [
  "toml",
  "tracing",
  "url",
+ "walkdir",
  "wf-core",
  "wf-harness",
  "wf-net",

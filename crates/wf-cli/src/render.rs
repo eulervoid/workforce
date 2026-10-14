@@ -1178,6 +1178,14 @@ pub fn status(view: &StatusView) -> String {
     if let Some(next) = &view.next {
         let _ = writeln!(out, "next: {next}");
     }
+    if let Some(caches) = &view.caches {
+        let _ = writeln!(
+            out,
+            "caches: {} of {}",
+            bytesize::ByteSize::b(caches.used_bytes).display().si(),
+            bytesize::ByteSize::b(caches.budget_bytes).display().si()
+        );
+    }
     if view.refolded {
         let _ = writeln!(out, "refolded from the log and wrote a fresh snapshot");
     }

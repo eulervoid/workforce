@@ -911,8 +911,10 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
   compare-and-swap `git update-ref`. A dirty checkout makes the merge wait: the item sits in its review
   state with one comment, `wf inbox` shows it, and the dispatcher tries again on every change and
   tick without saying so again. A conflict sends the item back to work with a comment naming the
-  files, and the next session merges the target into the branch first. Then `Merged{item, reviewed,
-  commit}`, the branch and worktree are removed, and the item is done. Work without a review level
+  files. When the next session starts, the daemon merges the target into the branch, and says on
+  the item whether it merged cleanly or which files conflict; a conflict is left in the worktree for
+  the agent to resolve and commit. Once the work is merged: `Merged{item, reviewed, commit}`, the
+  branch and worktree are removed, and the item is done. Work without a review level
   merges as its session ends; approved work is merged by the dispatcher, one merge per item at a time.
 * **`origin` (M3):** a central origin (GitHub etc.). wf pushes approved branches and opens pull requests;
   **the origin decides merging** (branch protection). `wf` observes it and emits `Merged` when a
