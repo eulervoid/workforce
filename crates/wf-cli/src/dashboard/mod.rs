@@ -5,6 +5,7 @@ mod act;
 mod app;
 mod draw;
 mod snapshot;
+mod transcript_lines;
 
 use std::collections::HashMap;
 use std::io::Write;

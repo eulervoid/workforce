@@ -1,6 +1,7 @@
 //! The state of the dashboard and what keys do to it. Pure: what a key asks of the workforce comes
 //! back as an [`Effect`], which the loop carries out.
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 
 use jiff::tz::TimeZone;
@@ -18,6 +19,7 @@ use wf_harness::{Permission, TranscriptEntry};
 use super::snapshot::{
     Detail, InView, ItemRow, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey, Wanted,
 };
+use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;
 use crate::transcript::{Transcript, Verbosity};
 
@@ -25,7 +27,7 @@ use crate::transcript::{Transcript, Verbosity};
 pub const WIDE: u16 = 120;
 
 /// How many lines a text moves for a notch of the mouse wheel.
-const WHEEL_LINES: u16 = 3;
+const WHEEL_LINES: usize = 3;
 
 /// Which way the mouse wheel turned.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -164,24 +166,24 @@ impl Detail {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scroll {
     /// From this line down; it stays there as the text grows.
-    At(u16),
+    At(usize),
     /// The end, following what is added to it. `top` is the line the end was last drawn from,
     /// where scrolling up starts.
-    End { top: u16 },
+    End { top: usize },
 }
 
 impl Scroll {
     /// The end of a text not drawn yet.
-    pub const END: Scroll = Scroll::End { top: u16::MAX };
+    pub const END: Scroll = Scroll::End { top: usize::MAX };
 
-    fn down(self, lines: u16) -> Scroll {
+    fn down(self, lines: usize) -> Scroll {
         match self {
             Scroll::At(top) => Scroll::At(top.saturating_add(lines)),
             Scroll::End { .. } => self,
         }
     }
 
-    fn up(self, lines: u16) -> Scroll {
+    fn up(self, lines: usize) -> Scroll {
         match self {
             Scroll::At(top) | Scroll::End { top } => Scroll::At(top.saturating_sub(lines)),
         }
@@ -189,7 +191,7 @@ impl Scroll {
 
     /// The scroll kept to a text whose top can go no further down than `last_top`. Reaching the
     /// end follows it again.
-    pub fn within(self, last_top: u16) -> Scroll {
+    pub fn within(self, last_top: usize) -> Scroll {
         match self {
             Scroll::At(top) if top < last_top => self,
             Scroll::At(_) | Scroll::End { .. } => Scroll::End { top: last_top },
@@ -197,7 +199,7 @@ impl Scroll {
     }
 
     /// The line drawn at the top.
-    pub fn top(self) -> u16 {
+    pub fn top(self) -> usize {
         match self {
             Scroll::At(top) | Scroll::End { top } => top,
         }
@@ -205,7 +207,7 @@ impl Scroll {
 
     /// What the keys of a scrolled text do to it, a page being `page` lines; `None` for a key it
     /// does not take.
-    fn key(self, key: KeyEvent, page: u16) -> Option<Scroll> {
+    fn key(self, key: KeyEvent, page: usize) -> Option<Scroll> {
         Some(match key.code {
             KeyCode::Down | KeyCode::Char('j') => self.down(1),
             KeyCode::Up | KeyCode::Char('k') => self.up(1),
@@ -563,6 +565,9 @@ pub struct App {
     pub snapshot: Snapshot,
     /// The transcripts of the sessions this machine runs, as far as they are read.
     pub transcripts: HashMap<SessionId, Transcript>,
+    /// The lines of the transcripts as last drawn, kept so that drawing lays out only what was
+    /// added since.
+    pub transcript_lines: RefCell<HashMap<SessionId, TranscriptLines>>,
     pub tab: Tab,
     pub now: ListTab<Row>,
     pub items: ItemsTab,
@@ -585,6 +590,7 @@ impl App {
         let mut app = Self {
             snapshot: Snapshot::default(),
             transcripts: HashMap::new(),
+            transcript_lines: RefCell::default(),
             tab: Tab::Now,
             now: ListTab::default(),
             items: ItemsTab {
@@ -662,10 +668,10 @@ impl App {
     }
 
     /// How many lines or rows a page moves: about what a detail shows.
-    fn page(&self) -> u16 {
+    fn page(&self) -> usize {
         // Less the header, the counts, the rules, the latest event, the keys and the breadcrumb,
         // and a line kept from the page before.
-        self.height.saturating_sub(8).max(1)
+        usize::from(self.height.saturating_sub(8).max(1))
     }
 
     pub fn is_wide(&self) -> bool {
@@ -699,6 +705,9 @@ impl App {
     /// Lets go of the transcripts of sessions other than `sessions`.
     pub fn keep_transcripts(&mut self, sessions: &[SessionId]) {
         self.transcripts
+            .retain(|session, _| sessions.contains(session));
+        self.transcript_lines
+            .get_mut()
             .retain(|session, _| sessions.contains(session));
     }
 
@@ -1444,7 +1453,7 @@ impl App {
     /// Moves the selection of the list on screen as `key` asks; `false` for a key that does not
     /// move it. The details opened before give way to the selection's.
     fn move_selection(&mut self, key: KeyEvent) -> bool {
-        let page = usize::from(self.page());
+        let page = self.page();
         let moved = match self.tab {
             Tab::Now => {
                 let rows = self.now_rows();

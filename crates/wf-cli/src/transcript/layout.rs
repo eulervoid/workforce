@@ -110,6 +110,7 @@ impl Block {
     }
 }
 
+#[derive(Clone, PartialEq)]
 pub struct Layout {
     agent: String,
     width: usize,

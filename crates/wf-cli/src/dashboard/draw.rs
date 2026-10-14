@@ -18,6 +18,7 @@ use super::snapshot::{
     AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
 };
 use super::snapshot::{Detail, ItemRow};
+use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;
 use crate::render;
 use crate::transcript::{self, Format, Now, Transcript, Usage};
@@ -945,7 +946,7 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
                 return None;
             };
             let text: Text = text.into_text().unwrap_or_default();
-            Some(draw_scrolled(frame, text, opened.scroll, body, true))
+            Some(draw_scrolled(frame, text, opened.scroll, body))
         }
         Detail::Agent(id) => {
             let Some(InView::Agent { text, .. }) = in_view
@@ -958,7 +959,6 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
                 Text::from(text.clone()),
                 opened.scroll,
                 body,
-                true,
             ))
         }
         Detail::Session(id) => {
@@ -979,16 +979,30 @@ fn draw_session(
     scroll: Scroll,
     body: Rect,
 ) -> Scroll {
-    let text = match (&session.place, app.transcripts.get(&session.id)) {
-        (Place::Elsewhere(device), _) => {
-            Text::from(Line::from(format!(" transcript on {device}")).dim())
-        }
-        (Place::Here, None) => Text::from(Line::from(" no transcript yet").dim()),
-        (Place::Here, Some(transcript)) => {
-            let width = usize::from(body.width).max(20);
-            transcript_text(app, &session.agent, transcript, width)
-        }
-    };
+    let mut transcript_lines = app.transcript_lines.borrow_mut();
+    let (lines, open): (&[Line<'static>], Vec<Line<'static>>) =
+        match (&session.place, app.transcripts.get(&session.id)) {
+            (Place::Elsewhere(device), _) => (
+                &[],
+                vec![Line::from(format!(" transcript on {device}")).dim()],
+            ),
+            (Place::Here, None) => (&[], vec![Line::from(" no transcript yet").dim()]),
+            (Place::Here, Some(transcript)) => {
+                let layout = transcript::Layout::new(
+                    &session.agent,
+                    usize::from(body.width).max(20),
+                    Format::Styled,
+                    app.verbosity,
+                    app.time_zone.clone(),
+                );
+                let laid_out = transcript_lines
+                    .entry(session.id)
+                    .or_insert_with(|| TranscriptLines::new(layout.clone()));
+                laid_out.update(layout, transcript);
+                let open = laid_out.open_lines(transcript);
+                (laid_out.lines(), open)
+            }
+        };
     let asks: Vec<&str> = app
         .snapshot
         .waiting
@@ -1019,7 +1033,7 @@ fn draw_session(
     if let Some(line) = bottom {
         frame.render_widget(Paragraph::new(line), context);
     }
-    let shown = draw_scrolled(frame, text, scroll, body, false);
+    let shown = draw_lines(frame, lines, &open, scroll, body);
     if let Some(what) = asks.first() {
         let line = Line::from(vec![
             Span::raw("? ").fg(Color::Yellow).bold(),
@@ -1104,61 +1118,37 @@ fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
     ]
 }
 
-/// The whole transcript laid out for `width`: its blocks, then what is still open.
-fn transcript_text(app: &App, agent: &str, transcript: &Transcript, width: usize) -> Text<'static> {
-    let layout = transcript::Layout::new(
-        agent,
-        width,
-        Format::Styled,
-        app.verbosity,
-        app.time_zone.clone(),
-    );
-    let mut out = String::new();
-    let mut last = transcript::Spacing::Nothing;
-    let mut add = |out: &mut String, opens: transcript::Spacing, leaves, text: String| {
-        if text.is_empty() {
-            return;
-        }
-        out.push_str(last.before(opens));
-        out.push_str(&text);
-        last = leaves;
-    };
-    for block in transcript.blocks() {
-        add(&mut out, block.opens(), block.leaves(), layout.block(block));
-    }
-    if let Some(prose) = transcript.open_prose() {
-        let spacing = transcript::Spacing::Prose;
-        add(
-            &mut out,
-            spacing,
-            spacing,
-            layout.prose(prose.kind, &prose.text),
-        );
-    }
-    for call in transcript.open_calls() {
-        let spacing = transcript::Spacing::Tool;
-        add(&mut out, spacing, spacing, layout.running(call));
-    }
-    out.into_text().unwrap_or_default()
+/// Draws `text` wrapped at `scroll`, kept to what the text allows; returns the scroll it was
+/// drawn at.
+fn draw_scrolled(frame: &mut Frame, text: Text<'static>, scroll: Scroll, area: Rect) -> Scroll {
+    let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
+    let lines = paragraph.line_count(area.width);
+    let scroll = scroll.within(lines.saturating_sub(usize::from(area.height)));
+    let top = u16::try_from(scroll.top()).unwrap_or(u16::MAX);
+    frame.render_widget(paragraph.scroll((top, 0)), area);
+    scroll
 }
 
-/// Draws `text` at `scroll`, kept to what the text allows; returns the scroll it was drawn at.
-fn draw_scrolled(
+/// Draws `lines` then `more`, wrapped already, at `scroll`, kept to what they allow; returns the
+/// scroll they were drawn at. Only the lines on screen are handed to ratatui, so a frame costs
+/// what is shown rather than all there is.
+fn draw_lines(
     frame: &mut Frame,
-    text: Text<'static>,
+    lines: &[Line<'static>],
+    more: &[Line<'static>],
     scroll: Scroll,
     area: Rect,
-    wrap: bool,
 ) -> Scroll {
     let height = usize::from(area.height);
-    let mut paragraph = Paragraph::new(text);
-    if wrap {
-        paragraph = paragraph.wrap(Wrap { trim: false });
-    }
-    let lines = paragraph.line_count(area.width);
-    let last_top = u16::try_from(lines.saturating_sub(height)).unwrap_or(u16::MAX);
-    let scroll = scroll.within(last_top);
-    frame.render_widget(paragraph.scroll((scroll.top(), 0)), area);
+    let scroll = scroll.within((lines.len() + more.len()).saturating_sub(height));
+    let shown: Vec<Line> = lines
+        .iter()
+        .chain(more)
+        .skip(scroll.top())
+        .take(height)
+        .cloned()
+        .collect();
+    frame.render_widget(Paragraph::new(shown), area);
     scroll
 }
 
@@ -1179,7 +1169,7 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
         return None;
     }
     let text: Text = text.into_text().unwrap_or_default();
-    Some(draw_scrolled(frame, text, app.log.scroll, area, true))
+    Some(draw_scrolled(frame, text, app.log.scroll, area))
 }
 
 /// The latest event, or why the last refresh failed.
