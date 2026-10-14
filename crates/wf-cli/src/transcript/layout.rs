@@ -41,7 +41,7 @@ pub fn terminal_width() -> usize {
         .clamp(MIN_WIDTH, MAX_WIDTH)
 }
 
-/// How the transcript is drawn.
+/// How a transcript, or the markdown of an item, is drawn.
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub enum Format {
     /// Color, box characters and rendered markdown.

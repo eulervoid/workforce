@@ -17,6 +17,7 @@ use wf_daemon::proto::HeldPermission;
 
 use crate::cli::ItemGrouping;
 use crate::commands::sorted_views;
+use crate::transcript::Format;
 use crate::{render, view};
 
 /// Everything the dashboard draws besides transcripts, as plain data: the loop takes one at each
@@ -481,6 +482,7 @@ fn in_view(
                 ItemView::Live(live) => render::item_detail_for(
                     &view::item_detail(state, live, events),
                     Some(usize::from(width).min(100)),
+                    Format::Styled,
                 ),
                 ItemView::Archived(_) => format!("#{} {} (archived)\n", id.short(), item.title()),
             };

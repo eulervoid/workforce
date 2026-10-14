@@ -1,12 +1,15 @@
 //! Plain text output, rendered from the same views `--json` prints.
 
 use std::fmt::Write;
+use std::io::IsTerminal;
 
 use comfy_table::presets::NOTHING;
 use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 
 use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
+use crate::markdown;
+use crate::transcript::Format;
 use crate::view::{
     ActivityKind, AgentView, BodyPartView, CommentKindView, InboxEntryView, ItemDetail, ItemGroup,
     ItemSummary, LogView, MentionsView, ReviewStatusView, SessionView, SourceView, StatusView,
@@ -297,34 +300,6 @@ fn text_width() -> Option<usize> {
         .map(|(width, _)| usize::from(width.0).clamp(40, 100))
 }
 
-/// Markdown source, each line indented by `indent` and wrapped to `width` if given. A wrapped
-/// list item or quote continues under its text; fenced code and table rows are never wrapped.
-fn wrap_markdown(text: &str, width: Option<usize>, indent: &str) -> String {
-    let mut out = String::new();
-    let mut in_fence = false;
-    for line in text.lines() {
-        let plain = anstream::adapter::strip_str(line).to_string();
-        let trimmed = plain.trim_start();
-        let is_fence = trimmed.starts_with("```") || trimmed.starts_with("~~~");
-        if is_fence {
-            in_fence = !in_fence;
-        }
-        match width {
-            _ if line.trim().is_empty() => {}
-            Some(_) if !(in_fence || is_fence || trimmed.starts_with('|')) => {
-                let rest = format!("{indent}{}", hanging_indent(&plain));
-                out.push_str(&fill(&format!("{indent}{line}"), width, &rest));
-            }
-            Some(_) | None => {
-                out.push_str(indent);
-                out.push_str(line);
-            }
-        }
-        out.push('\n');
-    }
-    out
-}
-
 /// `line` wrapped to `width` at spaces, continuing under `indent`; unchanged without a width.
 /// Words longer than the width are left whole rather than broken.
 fn fill(line: &str, width: Option<usize>, indent: &str) -> String {
@@ -341,58 +316,48 @@ fn fill(line: &str, width: Option<usize>, indent: &str) -> String {
     }
 }
 
-/// What a wrapped markdown line continues under: spaces as wide as its leading whitespace, list
-/// marker, checkbox and step number, or its `> ` quote markers.
-fn hanging_indent(line: &str) -> String {
-    let rest = line.trim_start();
-    if rest.starts_with('>') {
-        let quotes = rest.len() - rest.trim_start_matches(['>', ' ']).len();
-        return format!("{}{}", &line[..line.len() - rest.len()], &rest[..quotes]);
+/// Rendered markdown at a terminal; piped, the markdown as written, for the agent or script
+/// reading it.
+fn text_format() -> Format {
+    if std::io::stdout().is_terminal() {
+        Format::Styled
+    } else {
+        Format::Raw
     }
-    let mut rest = rest;
-    for marker in [
-        bullet_marker as fn(&str) -> Option<&str>,
-        checkbox_marker,
-        number_marker,
-    ] {
-        if let Some(after) = marker(rest) {
-            rest = after;
-        }
-    }
-    " ".repeat(textwrap::core::display_width(
-        &line[..line.len() - rest.len()],
-    ))
 }
 
-fn bullet_marker(text: &str) -> Option<&str> {
-    ["- ", "* ", "+ "]
-        .iter()
-        .find_map(|marker| text.strip_prefix(marker))
-}
-
-fn checkbox_marker(text: &str) -> Option<&str> {
-    ["[ ] ", "[x] ", "[X] "]
-        .iter()
-        .find_map(|marker| text.strip_prefix(marker))
-}
-
-fn number_marker(text: &str) -> Option<&str> {
-    let digits = text.len() - text.trim_start_matches(|c: char| c.is_ascii_digit()).len();
-    if digits == 0 {
-        return None;
+/// Markdown `text` with each line indented by `indent`: rendered and wrapped to `width` if
+/// styled, as written if raw. No newline at the end.
+fn markdown_text(text: &str, width: Option<usize>, indent: &str, format: Format) -> String {
+    match format {
+        Format::Styled => markdown::render(text, width, indent)
+            .trim_end_matches('\n')
+            .to_string(),
+        Format::Raw => indented(text, indent),
     }
-    let after = &text[digits..];
-    after
-        .strip_prefix(". ")
-        .or_else(|| after.strip_prefix(") "))
+}
+
+/// `text` as written, each line that is not blank indented by `indent`.
+fn indented(text: &str, indent: &str) -> String {
+    text.trim_end()
+        .lines()
+        .map(|line| {
+            if line.trim().is_empty() {
+                String::new()
+            } else {
+                format!("{indent}{line}")
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 pub fn item_detail(detail: &ItemDetail) -> String {
-    item_detail_for(detail, text_width())
+    item_detail_for(detail, text_width(), text_format())
 }
 
-/// [`item_detail`] with prose wrapped to `width`, or not at all.
-pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
+/// [`item_detail`] with prose wrapped to `width`, or not at all, and its markdown in `format`.
+pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format) -> String {
     use style::{BOLD, DIM, WARNING, paint};
 
     let summary = &detail.summary;
@@ -568,10 +533,10 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
     }
     if !detail.body.is_empty() {
         out.push('\n');
-        out.push_str(&wrap_markdown(&body(&detail.body), width, "  "));
+        out.push_str(&body(&detail.body, width, format));
     }
     if !detail.activity.is_empty() {
-        out.push_str(&activity(&detail.activity, width));
+        out.push_str(&activity(&detail.activity, width, format));
     }
     out
 }
@@ -581,7 +546,7 @@ const LINK_INDENT: &str = "    ";
 
 /// The activity of an item: one line per thing that happened, and the text that goes with it
 /// below. The date heads the section and is repeated when the day changes.
-fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> String {
+fn activity(entries: &[crate::view::ActivityView], width: Option<usize>, format: Format) -> String {
     use style::{BOLD, DIM, paint};
     let mut out = String::new();
     let mut day = None;
@@ -603,7 +568,8 @@ fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> Stri
             }
             day = Some(date);
         }
-        let (line, text) = activity_entry(entry, &format!("  {}  ", paint(DIM, time)), width);
+        let (line, text) =
+            activity_entry(entry, &format!("  {}  ", paint(DIM, time)), width, format);
         let _ = writeln!(out, "{line}");
         if let Some(text) = text {
             let _ = writeln!(out, "{text}");
@@ -617,11 +583,13 @@ fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> Stri
 const ACTIVITY_TEXT_INDENT: &str = "           ";
 
 /// One entry of an item's activity: `lead` (its time), who did what, and the text that goes with
-/// it, if it has any. Both are wrapped to `width` under [`ACTIVITY_TEXT_INDENT`].
+/// it, if it has any, its markdown in `format`. Both are wrapped to `width` under
+/// [`ACTIVITY_TEXT_INDENT`].
 fn activity_entry(
     entry: &crate::view::ActivityView,
     lead: &str,
     width: Option<usize>,
+    format: Format,
 ) -> (String, Option<String>) {
     use style::{BOLD, DIM, WARNING, paint};
     let mut parts = vec![style::paint_actor(&entry.by)];
@@ -668,21 +636,22 @@ fn activity_entry(
         .text
         .as_deref()
         .filter(|text| !text.trim().is_empty())
-        .map(|text| {
-            let text = wrap_markdown(text, width, ACTIVITY_TEXT_INDENT);
-            text.trim_end_matches('\n').to_string()
-        });
+        .map(|text| markdown_text(text, width, ACTIVITY_TEXT_INDENT, format));
     (line, text)
 }
 
 /// One line of `wf log --follow`: `14:02  #k3f7ab  @ada/coder · moved to done`, and the text that goes
 /// with it below.
 pub fn event_line(line: &crate::view::EventLineView) -> String {
-    event_line_for(line, text_width())
+    event_line_for(line, text_width(), text_format())
 }
 
-/// [`event_line`] wrapped to `width`, or not at all.
-pub fn event_line_for(line: &crate::view::EventLineView, width: Option<usize>) -> String {
+/// [`event_line`] wrapped to `width`, or not at all, its markdown in `format`.
+pub fn event_line_for(
+    line: &crate::view::EventLineView,
+    width: Option<usize>,
+    format: Format,
+) -> String {
     use style::{DIM, paint};
     let (_, time) = local_date_and_time(&line.activity.at);
     let item = match &line.item {
@@ -690,7 +659,7 @@ pub fn event_line_for(line: &crate::view::EventLineView, width: Option<usize>) -
         None => String::new(),
     };
     let lead = format!("{}  {item}", paint(DIM, time));
-    let (entry, text) = activity_entry(&line.activity, &lead, width);
+    let (entry, text) = activity_entry(&line.activity, &lead, width, format);
     let mut out = format!("{entry}\n");
     if let Some(text) = text {
         out.push_str(&text);
@@ -730,8 +699,10 @@ fn comment_kind_label(kind: CommentKindView) -> &'static str {
     }
 }
 
-/// The body as markdown with each step's number before its text: `- [ ] 1. write parser`.
-fn body(parts: &[BodyPartView]) -> String {
+/// The body, indented by two columns, with each step's number before its text:
+/// `- [ ] 1. write parser`. Styled, the markdown is rendered and wrapped to `width` and a step's
+/// text continues under its text.
+fn body(parts: &[BodyPartView], width: Option<usize>, format: Format) -> String {
     let mut out = String::new();
     let mut previous_was_step = false;
     for (index, part) in parts.iter().enumerate() {
@@ -744,15 +715,25 @@ fn body(parts: &[BodyPartView]) -> String {
             });
         }
         match part {
-            BodyPartView::Markdown { text } => out.push_str(text),
+            BodyPartView::Markdown { text } => {
+                out.push_str(&markdown_text(text, width, "  ", format));
+            }
             BodyPartView::Step { number, done, text } => {
                 let checkbox = if *done { "[x]" } else { "[ ]" };
                 let number = style::paint(style::DIM, format!("{number}."));
-                let _ = write!(out, "- {checkbox} {number} {text}");
+                let marker = format!("- {checkbox} {number} ");
+                let step = match format {
+                    Format::Styled => markdown::render_after(&marker, text, width, "  ")
+                        .trim_end_matches('\n')
+                        .to_string(),
+                    Format::Raw => indented(&format!("{marker}{text}"), "  "),
+                };
+                out.push_str(&step);
             }
         }
         previous_was_step = is_step;
     }
+    out.push('\n');
     out
 }
 
@@ -1043,7 +1024,8 @@ mod tests {
             panic!()
         };
         let detail = crate::view::item_detail(&state, item, &[]);
-        let shown = anstream::adapter::strip_str(&item_detail_for(&detail, None)).to_string();
+        let shown =
+            anstream::adapter::strip_str(&item_detail_for(&detail, None, Format::Raw)).to_string();
         let mut backlinks: Vec<&str> = shown
             .lines()
             .filter(|line| line.contains("referenced by"))
@@ -1066,54 +1048,6 @@ mod tests {
         assert_eq!(backlinks, expected);
     }
 
-    #[test]
-    fn wrapped_lines_keep_the_indent() {
-        let text = "one two three four five\nsix seven eight nine ten";
-        assert_eq!(
-            wrap_markdown(text, Some(16), "  "),
-            "  one two three\n  four five\n  six seven\n  eight nine ten\n"
-        );
-    }
-
-    #[test]
-    fn list_items_continue_under_their_text() {
-        assert_eq!(
-            wrap_markdown("- one two three four", Some(12), "  "),
-            "  - one two\n    three\n    four\n"
-        );
-        assert_eq!(
-            wrap_markdown("  1. one two three", Some(14), "  "),
-            "    1. one two\n       three\n"
-        );
-        assert_eq!(
-            wrap_markdown("> one two three", Some(12), "  "),
-            "  > one two\n  > three\n"
-        );
-    }
-
-    #[test]
-    fn steps_continue_under_their_text_past_the_painted_number() {
-        let step = format!("- [ ] {} one two three", style::paint(style::DIM, "1."));
-        let wrapped = wrap_markdown(&step, Some(20), "  ");
-        assert_eq!(
-            anstream::adapter::strip_str(&wrapped).to_string(),
-            "  - [ ] 1. one two\n           three\n"
-        );
-    }
-
-    #[test]
-    fn long_words_and_code_are_not_broken() {
-        assert_eq!(
-            wrap_markdown("see https://example.com/a-long/path", Some(12), "  "),
-            "  see\n  https://example.com/a-long/path\n"
-        );
-        let code = "```\nlet value = one + two + three;\n```";
-        assert_eq!(
-            wrap_markdown(code, Some(12), "  "),
-            "  ```\n  let value = one + two + three;\n  ```\n"
-        );
-    }
-
     fn checked_step(text: &str) -> crate::view::ActivityView {
         crate::view::ActivityView {
             at: "not a timestamp".to_string(),
@@ -1131,7 +1065,7 @@ mod tests {
     #[test]
     fn the_text_of_an_activity_entry_is_wrapped_below_its_line() {
         let entry = checked_step("wrap long activity lines under their indent");
-        let (line, text) = activity_entry(&entry, "  00:27  ", Some(44));
+        let (line, text) = activity_entry(&entry, "  00:27  ", Some(44), Format::Styled);
         assert_eq!(
             anstream::adapter::strip_str(&line).to_string(),
             "  00:27  @ada/coder/bh2m · checked step 1"
@@ -1140,7 +1074,7 @@ mod tests {
             anstream::adapter::strip_str(&text.unwrap()).to_string(),
             "           wrap long activity lines under\n           their indent"
         );
-        let (line, text) = activity_entry(&entry, "  00:27  ", None);
+        let (line, text) = activity_entry(&entry, "  00:27  ", None, Format::Raw);
         assert_eq!(
             anstream::adapter::strip_str(&line).to_string(),
             "  00:27  @ada/coder/bh2m · checked step 1"
@@ -1155,7 +1089,7 @@ mod tests {
     fn a_long_activity_line_continues_under_the_text() {
         let mut entry = checked_step("");
         entry.summary = "renamed it to \"a title too long for one line\"".to_string();
-        let (line, _) = activity_entry(&entry, "  00:27  ", Some(40));
+        let (line, _) = activity_entry(&entry, "  00:27  ", Some(40), Format::Styled);
         assert_eq!(
             anstream::adapter::strip_str(&line).to_string(),
             "  00:27  @ada/coder/bh2m · renamed it\n           to \"a title too long for\n           one line\""
@@ -1218,7 +1152,9 @@ mod tests {
             "Wrap the header of wf item show under its indent",
             "Wrap long activity lines under their indent",
         );
-        let shown = anstream::adapter::strip_str(&item_detail_for(&detail, Some(40))).to_string();
+        let shown =
+            anstream::adapter::strip_str(&item_detail_for(&detail, Some(40), Format::Styled))
+                .to_string();
         assert_eq!(
             shown,
             "○ #dm3q4j (task:open) Wrap the header of\n\
@@ -1230,7 +1166,8 @@ mod tests {
              \x20   \"Wrap long activity lines under\n\
              \x20   their indent\"\n"
         );
-        let shown = anstream::adapter::strip_str(&item_detail_for(&detail, None)).to_string();
+        let shown =
+            anstream::adapter::strip_str(&item_detail_for(&detail, None, Format::Raw)).to_string();
         assert_eq!(
             shown,
             "○ #dm3q4j (task:open) Wrap the header of wf item show under its indent\n\
@@ -1239,12 +1176,113 @@ mod tests {
         );
     }
 
+    const BODY: &str = "## Plan\n\nKeep **bold** and `#k3f9` as links.\n\n- one\n- two\n\n```\nlet value = 1;\n```";
+
+    fn detail_with_a_body() -> ItemDetail {
+        let mut detail = detail_with_a_reference("Render", "Other");
+        detail.references.clear();
+        detail.body = vec![
+            BodyPartView::Markdown {
+                text: BODY.to_string(),
+            },
+            BodyPartView::Step {
+                number: 1,
+                done: true,
+                text: "render the **body**".to_string(),
+            },
+            BodyPartView::Step {
+                number: 2,
+                done: false,
+                text: "render the comments under their line".to_string(),
+            },
+        ];
+        detail
+    }
+
+    fn body_of(shown: &str) -> String {
+        let plain = anstream::adapter::strip_str(shown).to_string();
+        let (_, body) = plain.split_once("\n\n").unwrap();
+        body.to_string()
+    }
+
     #[test]
-    fn blank_lines_stay_empty_and_nothing_wraps_without_a_width() {
-        let text = "one two three\n\nfour";
+    fn a_body_is_rendered_when_styled() {
+        let shown = item_detail_for(&detail_with_a_body(), Some(30), Format::Styled);
+        assert!(shown.contains(&style::paint(style::BOLD, "bold")));
+        assert!(shown.contains(&style::paint(style::DIM, "2.")));
         assert_eq!(
-            wrap_markdown(text, None, "  "),
-            "  one two three\n\n  four\n"
+            body_of(&shown),
+            "  Plan\n\
+             \n\
+             \x20 Keep bold and #k3f9 as\n\
+             \x20 links.\n\
+             \n\
+             \x20 • one\n\
+             \x20 • two\n\
+             \n\
+             \x20     let value = 1;\n\
+             \n\
+             \x20 - [x] 1. render the body\n\
+             \x20 - [ ] 2. render the comments\n\
+             \x20          under their line\n"
+        );
+    }
+
+    #[test]
+    fn a_body_is_its_markdown_when_raw() {
+        let shown = item_detail_for(&detail_with_a_body(), None, Format::Raw);
+        let indented: String = BODY
+            .lines()
+            .map(|line| match line {
+                "" => "\n".to_string(),
+                line => format!("  {line}\n"),
+            })
+            .collect();
+        assert_eq!(
+            body_of(&shown),
+            format!(
+                "{indented}\n  - [x] 1. render the **body**\n  - [ ] 2. render the comments under their line\n"
+            )
+        );
+    }
+
+    #[test]
+    fn a_comment_is_rendered_under_its_line_at_the_comment_indent() {
+        let by = crate::view::ActorView {
+            kind: crate::view::ActorKind::Agent,
+            label: "@ada/coder/bh2m".to_string(),
+        };
+        let entry = crate::view::ActivityView {
+            at: "not a timestamp".to_string(),
+            by: by.clone(),
+            kind: ActivityKind::Comment,
+            summary: "commented".to_string(),
+            comment: Some(crate::view::CommentView {
+                id: "nn73nn73nn73".to_string(),
+                short: "nn73".to_string(),
+                kind: CommentKindView::Comment,
+                by,
+                at: "not a timestamp".to_string(),
+                session: None,
+                step: None,
+                resolves: Vec::new(),
+                resolved_by: None,
+            }),
+            text: Some("Chose **this**:\n\n- see `#k3f9`".to_string()),
+        };
+        let (line, text) = activity_entry(&entry, "  00:27  ", Some(60), Format::Styled);
+        assert_eq!(
+            anstream::adapter::strip_str(&line).to_string(),
+            "  00:27  @ada/coder/bh2m · commented · nn73"
+        );
+        assert_eq!(
+            anstream::adapter::strip_str(&text.unwrap()).to_string(),
+            format!("{ACTIVITY_TEXT_INDENT}Chose this:\n\n{ACTIVITY_TEXT_INDENT}• see #k3f9")
+        );
+        let (_, text) = activity_entry(&entry, "  00:27  ", None, Format::Raw);
+        assert_eq!(
+            text.unwrap(),
+            format!("{ACTIVITY_TEXT_INDENT}Chose **this**:\n\n{ACTIVITY_TEXT_INDENT}- see `#k3f9`")
         );
     }
 }
