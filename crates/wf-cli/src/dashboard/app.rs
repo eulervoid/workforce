@@ -882,7 +882,8 @@ impl App {
         let pane = match (self.is_wide(), self.split) {
             (false, _) => self.width,
             (true, Split::Both) => self.width.saturating_sub(self.list_width() + 1),
-            (true, Split::One) => self.width.saturating_sub(STRIP),
+            // The list folded away keeps one column: the detail's margin is the strip's other.
+            (true, Split::One) => self.width.saturating_sub(STRIP - 1),
         };
         pane.saturating_sub(2)
     }

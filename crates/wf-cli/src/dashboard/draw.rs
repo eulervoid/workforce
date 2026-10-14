@@ -558,9 +558,10 @@ fn draw_strip(frame: &mut Frame, app: &App, area: Rect) -> (Rect, Rect) {
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(STRIP)]).areas(area);
         (pane, strip, " ›")
     } else {
+        // The detail keeps its own margin, which stands in for the strip's second column.
         let [strip, pane] =
-            Layout::horizontal([Constraint::Length(STRIP), Constraint::Fill(1)]).areas(area);
-        (pane, strip, "‹ ")
+            Layout::horizontal([Constraint::Length(STRIP - 1), Constraint::Fill(1)]).areas(area);
+        (pane, strip, "‹")
     };
     let mut lines = vec![Line::default(); usize::from(strip.height / 2)];
     lines.push(Line::from(chevron));

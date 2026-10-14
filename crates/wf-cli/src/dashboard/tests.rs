@@ -264,7 +264,7 @@ fn h_and_l_fold_the_list_or_the_detail_to_a_strip() {
     // Shift → gives the detail the window, with the list a strip at the left.
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     assert!(!app.list_has_keys());
-    assert_eq!(app.detail_width(), 126);
+    assert_eq!(app.detail_width(), 127);
     insta::assert_snapshot!("detail_only", screen(&mut app, 130, 14));
     // Esc goes back to the list in the whole window, as in a narrow one.
     press(&mut app, KeyCode::Esc);
