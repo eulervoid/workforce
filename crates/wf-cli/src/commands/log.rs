@@ -1,15 +1,36 @@
-//! `wf log`: the events of the workforce.
+//! `wf log`: the events of the workforce, and with `--follow` those that arrive.
+
+use std::time::Duration;
 
 use anyhow::bail;
+use wf_core::event::Event;
+use wf_core::id::ItemId;
 use wf_core::state::{State, Trust};
 
-use super::emit_paged;
+use super::{emit_line, emit_paged};
+use crate::cli::LogArgs;
 use crate::interactive::Mode;
 use crate::render;
 use crate::view::{self, LogView};
 use crate::workspace::Workspace;
 
-pub(super) fn log(json: bool, mode: Mode, workspace: &Workspace) -> anyhow::Result<()> {
+/// How often the daemon is asked for what is new.
+const POLL_EVERY: Duration = Duration::from_millis(500);
+
+pub(super) fn log(
+    json: bool,
+    mode: Mode,
+    workspace: &mut Workspace,
+    args: LogArgs,
+) -> anyhow::Result<()> {
+    let only = args
+        .item
+        .as_deref()
+        .map(|text| workspace.resolve_item(text))
+        .transpose()?;
+    if args.follow {
+        return follow(json, workspace, only);
+    }
     let state = workspace.state();
     // Replay in the order the events were applied into an empty state with full verification:
     // signatures, feeds and authority. A fork takes in its history newest event first, so this
@@ -22,6 +43,9 @@ pub(super) fn log(json: bool, mode: Mode, workspace: &Workspace) -> anyhow::Resu
     for event in workspace.events()? {
         let verified = event.verify_signature().is_ok()
             && replay.receive(event.clone(), Trust::Untrusted).is_ok();
+        if !concerns(state, &event, only) {
+            continue;
+        }
         views.push((
             (event.content.hlc, event.id()),
             view::event_view(state, &event, verified),
@@ -40,4 +64,44 @@ pub(super) fn log(json: bool, mode: Mode, workspace: &Workspace) -> anyhow::Resu
         events: views,
     };
     emit_paged(json, mode, &log, render::log)
+}
+
+/// Prints the whole log, then the events as they arrive, until interrupted.
+fn follow(json: bool, workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
+    if !workspace.follows_daemon() {
+        bail!("`wf log --follow` follows the daemon; start it with `wf daemon start`");
+    }
+    let mut events = workspace.events()?;
+    let shown: Vec<Event> = events
+        .iter()
+        .filter(|event| concerns(workspace.state(), event, only))
+        .cloned()
+        .collect();
+    show(json, workspace, &events, &shown)?;
+    loop {
+        std::thread::sleep(POLL_EVERY);
+        workspace.refresh()?;
+        let new = workspace.events_since(events.len() as u64)?;
+        if new.is_empty() {
+            continue;
+        }
+        events.extend(new.iter().cloned());
+        let shown: Vec<Event> = new
+            .into_iter()
+            .filter(|event| concerns(workspace.state(), event, only))
+            .collect();
+        show(json, workspace, &events, &shown)?;
+    }
+}
+
+/// Whether `event` is shown: every event without `--item`, otherwise those of the item.
+fn concerns(state: &State, event: &Event, only: Option<ItemId>) -> bool {
+    only.is_none() || state.item_of(event) == only
+}
+
+fn show(json: bool, workspace: &Workspace, events: &[Event], new: &[Event]) -> anyhow::Result<()> {
+    for line in view::watch_lines(workspace.state(), events, new) {
+        emit_line(json, &line, render::watch_line)?;
+    }
+    Ok(())
 }

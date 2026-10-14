@@ -15,15 +15,22 @@ use wf_core::name::{
 #[command(
     name = "wf",
     version,
-    about = "Coordination for coding agents and the humans who work with them"
+    about = "Coordination for coding agents and the humans who work with them\n\n\
+             Plain `wf` at a terminal opens the dashboard: what waits on you, who works on what, \
+             items and agents."
 )]
 pub struct Cli {
     /// Print machine-readable output with a versioned schema.
     #[arg(long, global = true)]
     pub json: bool,
 
+    /// Open the dashboard on this item.
+    #[arg(long)]
+    pub item: Option<String>,
+
+    // `None` opens the dashboard at a terminal and prints the help otherwise.
     #[command(subcommand)]
-    pub command: Command,
+    pub command: Option<Command>,
 }
 
 /// How the commands are grouped in `wf --help`, a blank line between groups. Clap lists
@@ -32,7 +39,7 @@ const COMMAND_GROUPS: &[&[&str]] = &[
     &[
         "init", "status", "policy", "log", "export", "import", "members", "fork",
     ],
-    &["item", "comment", "mentions", "review", "inbox", "watch"],
+    &["item", "comment", "mentions", "review", "inbox"],
     &["agent", "harness", "session", "work", "permissions"],
     &["daemon", "sync", "invite", "join", "device"],
 ];
@@ -73,8 +80,18 @@ pub fn command() -> clap::Command {
 /// Parses the arguments of this process, and exits with help or an error as clap does.
 pub fn parse() -> Cli {
     let mut matches = command().get_matches();
-    Cli::from_arg_matches_mut(&mut matches)
-        .unwrap_or_else(|error| error.format(&mut command()).exit())
+    let cli = Cli::from_arg_matches_mut(&mut matches)
+        .unwrap_or_else(|error| error.format(&mut command()).exit());
+    // `args_conflicts_with_subcommands` would refuse `--json` with a command as well.
+    if cli.item.is_some() && cli.command.is_some() {
+        command()
+            .error(
+                clap::error::ErrorKind::ArgumentConflict,
+                "`--item` opens the dashboard on an item and takes no command",
+            )
+            .exit();
+    }
+    cli
 }
 
 #[derive(Subcommand)]
@@ -98,7 +115,7 @@ pub enum Command {
     #[command(subcommand)]
     Policy(PolicyCommand),
     /// Print every event of the log, verified.
-    Log,
+    Log(LogArgs),
     /// Start agents on items, and watch, stop or answer their sessions.
     #[command(subcommand)]
     Session(SessionCommand),
@@ -109,9 +126,6 @@ pub enum Command {
     Review(ReviewArgs),
     /// What waits on you: blockers, reviews, merges and permission requests.
     Inbox,
-    /// The dashboard: what waits on you, who works on what, items and agents. Piped, the events
-    /// as they arrive.
-    Watch(WatchArgs),
     /// Try out how this machine decides the permission requests of agents.
     #[command(subcommand)]
     Permissions(PermissionsCommand),
@@ -158,8 +172,13 @@ pub enum Command {
 }
 
 #[derive(Args)]
-pub struct WatchArgs {
-    /// Open the dashboard on this item; piped, print only its events.
+pub struct LogArgs {
+    /// Print the whole log, then the events as they arrive, until interrupted: one line for
+    /// each thing an event did, as the dashboard shows them, instead of the table. With
+    /// `--json`, one object per line in that form, instead of one object for the log.
+    #[arg(long, short)]
+    pub follow: bool,
+    /// Print only the events of this item.
     #[arg(long)]
     pub item: Option<String>,
 }
