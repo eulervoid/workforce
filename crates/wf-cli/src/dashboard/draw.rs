@@ -91,6 +91,25 @@ fn selection_bar(accent: Color) -> Span<'static> {
     Span::styled("▎", Style::new().fg(color).bg(accent))
 }
 
+/// The ends of a highlight inside a line, on `background`: a right half block before it and a left
+/// half block after it, in `background` on the background of the line, so the colour reaches half
+/// a cell past the text on either side.
+fn highlight_ends(background: Color) -> (Span<'static>, Span<'static>) {
+    let style = Style::new().fg(background);
+    (Span::styled("▐", style), Span::styled("▌", style))
+}
+
+/// `content` highlighted inside a line: in `style` on `background`, between its ends. The ends
+/// take a cell each, where the line would otherwise have a space around the text.
+fn highlight(content: Vec<Span<'static>>, style: Style, background: Color) -> Vec<Span<'static>> {
+    let (start, end) = highlight_ends(background);
+    let style = style.bg(background);
+    let mut spans = vec![start];
+    spans.extend(content.into_iter().map(|span| span.patch_style(style)));
+    spans.push(end);
+    spans
+}
+
 const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
 
 /// Draws the dashboard, and keeps the scroll of the text and of the list to what is shown of them.
@@ -206,9 +225,11 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
         .enumerate()
         .map(|(index, option)| {
             if index == choice.index() {
-                Line::from(vec![selection_bar(accent), Span::raw(format!("{option} "))])
-                    .bold()
-                    .bg(accent)
+                Line::from(highlight(
+                    vec![Span::raw(option)],
+                    Style::new().bold(),
+                    accent,
+                ))
             } else {
                 Line::from(format!(" {option}"))
             }
@@ -279,8 +300,11 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
     };
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines)
-            .block(Block::bordered().title(Line::from(" keys ").bold().bg(accent))),
+        Paragraph::new(lines).block(Block::bordered().title(Line::from(highlight(
+            vec![Span::raw("keys")],
+            Style::new().bold(),
+            accent,
+        )))),
         area,
     );
 }
@@ -289,12 +313,12 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
 fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     // The label of what is asked has the accent; a question answered with keys has it on the
     // whole line.
-    let label_style = Style::new().bold().bg(accent(app, KeysAt::Footer));
-    let question = |text: String| Line::from(Span::styled(text, label_style));
+    let accent = accent(app, KeysAt::Footer);
+    let question = |text: String| Line::from(Span::styled(text, Style::new().bold().bg(accent)));
     let (label, input, hint) = match prompt {
-        Prompt::Filter { input, .. } => (" / ".to_owned(), input, ""),
+        Prompt::Filter { input, .. } => ("/".to_owned(), input, ""),
         Prompt::Comment { item, input } => (
-            format!(" comment on #{}: ", item.short()),
+            format!("comment on #{}:", item.short()),
             input,
             "enter post · ctrl+g editor · esc cancel ",
         ),
@@ -314,7 +338,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
         }
         Prompt::Choose(_) | Prompt::Keys => return,
         Prompt::Answer { blocker, input, .. } => (
-            format!(" ⧗ {} answer: ", blocker.short()),
+            format!("⧗ {} answer:", blocker.short()),
             input,
             "enter resolve · ctrl+g editor · esc cancel ",
         ),
@@ -325,7 +349,10 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
             return;
         }
     };
-    let label_width = textwrap::core::display_width(&label);
+    // The label between its ends, and a space before what is typed.
+    let mut label = highlight(vec![Span::raw(label)], Style::new().bold(), accent);
+    label.push(Span::raw(" "));
+    let label_width: usize = label.iter().map(Span::width).sum();
     // The hint keeps to the right while it leaves room to type; a narrow footer leaves it out.
     let hint_width = textwrap::core::display_width(hint) as u16;
     let area = if area.width >= label_width as u16 + hint_width + 16 {
@@ -338,10 +365,10 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     };
     let width = usize::from(area.width).saturating_sub(label_width + 1);
     let scroll = input.visual_scroll(width);
-    let line = Line::from(vec![
-        Span::styled(label, label_style),
-        Span::raw(input.value().chars().skip(scroll).collect::<String>()),
-    ]);
+    label.push(Span::raw(
+        input.value().chars().skip(scroll).collect::<String>(),
+    ));
+    let line = Line::from(label);
     frame.render_widget(Paragraph::new(line), area);
     let cursor = (input.visual_cursor().max(scroll) - scroll) as u16;
     frame.set_cursor_position((area.x + label_width as u16 + cursor, area.y));
@@ -380,24 +407,32 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
         if !tabs.is_empty() {
             tabs.push(Span::raw(" "));
         }
-        let style = if tab == app.tab && tab == Tab::Log {
-            // The log is the list of its tab: its label has the accent, as a selection would.
-            Style::new().bold().bg(accent(app, KeysAt::Log))
-        } else if tab == app.tab {
-            Style::new().bold().reversed()
-        } else {
-            Style::new().dim()
-        };
-        // A column of the highlight on either side of the label.
-        let mut label = format!(" {} {}", tab.key(), tab.name());
+        let mut label = format!("{} {}", tab.key(), tab.name());
         if tab == Tab::Now && !app.snapshot.waiting.is_empty() {
             label.push_str(&format!("·{}", app.snapshot.waiting.len()));
         }
-        label.push(' ');
-        let label = Span::styled(label, style);
+        let label = if tab == app.tab && tab == Tab::Log {
+            // The log is the list of its tab: its label has the accent, as a selection would.
+            highlight(
+                vec![Span::raw(label)],
+                Style::new().bold(),
+                accent(app, KeysAt::Log),
+            )
+        } else if tab == app.tab {
+            // Reversed, the background of the label is the colour of the text.
+            highlight(
+                vec![Span::raw(label)],
+                Style::new().bold().reversed(),
+                Color::Reset,
+            )
+        } else {
+            // A space where the active tab has its ends, so the tabs keep their places.
+            vec![Span::raw(format!(" {label} ")).dim()]
+        };
         let start: usize = tabs.iter().map(Span::width).sum();
-        labels.push((tab, start, label.width()));
-        tabs.push(label);
+        let width: usize = label.iter().map(Span::width).sum();
+        labels.push((tab, start, width));
+        tabs.extend(label);
     }
     let tabs = Line::from(tabs);
     let [name, tabs_area] = Layout::horizontal([
@@ -1439,7 +1474,6 @@ fn draw_session(
 /// Draws where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part
 /// has the accent, full while the detail has the keys. Returns the parts that go back to a detail opened before, or to the list.
 fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
-    let separator = || Span::raw(" › ").dim();
     // Each part, with how many of the details opened it goes back to; `None` for an item named
     // only for its session, which was not opened.
     let mut crumbs: Vec<(Vec<Span<'static>>, Option<usize>)> =
@@ -1478,7 +1512,8 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
             }
         }
     }
-    let last_style = Style::new().bold().bg(accent(app, KeysAt::Detail));
+    let accent = accent(app, KeysAt::Detail);
+    let (start_of_last, end_of_last) = highlight_ends(accent);
     let last = crumbs.len() - 1;
     // Only what was opened, below the detail on top, is there to go back to; nothing while the
     // list has the keys, even with a detail kept beside it.
@@ -1488,11 +1523,17 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
         app.stack().len()
     };
     let mut spots = Vec::new();
-    let mut spans = vec![Span::raw(" ")];
+    let mut spans = Vec::new();
     for (index, (crumb, depth)) in crumbs.into_iter().enumerate() {
         if index > 0 {
-            spans.push(separator());
+            spans.push(Span::raw(" ›").dim());
         }
+        // The last part has its start of the highlight where the others have a space.
+        spans.push(if index == last {
+            start_of_last.clone()
+        } else {
+            Span::raw(" ")
+        });
         let start: usize = spans.iter().map(Span::width).sum();
         let width: usize = crumb.iter().map(Span::width).sum();
         if let Some(depth) = depth.filter(|depth| *depth < opened)
@@ -1514,13 +1555,20 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
         }
         for span in crumb {
             spans.push(if index == last {
-                span.patch_style(last_style)
+                span.patch_style(Style::new().bold().bg(accent))
             } else {
                 span.dim()
             });
         }
     }
-    let line = Line::from(cut_spans(spans, usize::from(area.width)));
+    // A breadcrumb cut short leaves out the end of the highlight, as it does the rest.
+    let room = usize::from(area.width);
+    let width: usize = spans.iter().map(Span::width).sum();
+    let mut spans = cut_spans(spans, room);
+    if width < room {
+        spans.push(end_of_last);
+    }
+    let line = Line::from(spans);
     frame.render_widget(Paragraph::new(line), area);
     spots.retain(|spot| !spot.area.is_empty());
     spots

@@ -1288,6 +1288,86 @@ fn the_accent_goes_to_the_breadcrumb_on_enter_and_back_on_esc() {
     assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
 }
 
+/// Asserts that the highlight `text` on screen has half blocks around it in `background`, on the
+/// background of the line, and `background` itself under its text.
+fn assert_ends(app: &mut App, width: u16, height: u16, text: &str, background: Color) {
+    let (column, row) = find(app, width, height, &format!("▐{text}▌"));
+    let end = column + text.chars().count() as u16 + 1;
+    for (x, symbol) in [(column, "▐"), (end, "▌")] {
+        assert_eq!(symbol_at(app, width, height, x, row), symbol);
+        let style = style_at(app, width, height, x, row);
+        assert_eq!((style.fg, style.bg), (Some(background), Some(Color::Reset)));
+    }
+    assert_eq!(bg_at(app, width, height, column + 1, row), Some(background));
+}
+
+#[test]
+fn the_last_part_of_the_breadcrumb_has_its_ends_in_its_accent() {
+    let mut app = app();
+    app.resize(130, 24);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    app.refresh(snapshot.clone());
+    let crumb = "coder · work · 40m ◇ parked";
+    // The list has the keys: the ends are dimmed with the rest of the highlight.
+    assert_ends(&mut app, 130, 14, crumb, ACCENT_DIMMED);
+    press(&mut app, KeyCode::Char('l'));
+    app.refresh(snapshot);
+    assert_ends(&mut app, 130, 14, crumb, ACCENT);
+}
+
+#[test]
+fn a_breadcrumb_cut_short_leaves_out_the_end_of_its_highlight() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(coder));
+    app.refresh(snapshot);
+    // Wide enough for the text and its end, for the text only, and for neither.
+    let (column, row) = find(&mut app, 60, 16, "◆▌");
+    let fits = column + 1;
+    for (width, last) in [(fits + 1, "▌"), (fits, "◆"), (fits - 5, "…")] {
+        assert_eq!(symbol_at(&mut app, width, 16, width - 1, row), last);
+        assert_eq!(
+            bg_at(&mut app, width, 16, width - 1, row) == Some(ACCENT),
+            last != "▌"
+        );
+    }
+}
+
+#[test]
+fn the_active_tab_has_its_ends_in_the_colour_of_its_highlight() {
+    let mut app = app();
+    // Reversed, the highlight has the colour of the text, which the ends take.
+    assert_ends(&mut app, 60, 16, "1 Now·3", Color::Reset);
+    let (column, row) = find(&mut app, 60, 16, "1 Now·3");
+    let label = style_at(&mut app, 60, 16, column, row);
+    assert!(
+        label
+            .add_modifier
+            .contains(ratatui::style::Modifier::REVERSED)
+    );
+    // The others have spaces in their place, and are clicked there too.
+    assert_eq!(symbol_at(&mut app, 60, 16, column + 9, row), " ");
+    app.click(column + 9, row);
+    assert_eq!(app.tab, Tab::Items);
+    assert_ends(&mut app, 60, 16, "2 Items", Color::Reset);
+    // The log has the accent, as its list would.
+    press(&mut app, KeyCode::Char('4'));
+    assert_ends(&mut app, 60, 16, "4 Log", ACCENT);
+    // Its ends are part of it.
+    let (column, row) = find(&mut app, 60, 16, "▐4 Log▌");
+    for end in [column, column + 6] {
+        press(&mut app, KeyCode::Char('1'));
+        app.click(end, row);
+        assert_eq!(app.tab, Tab::Log);
+    }
+}
+
 #[test]
 fn the_log_tab_and_a_prompt_have_the_accent() {
     let mut app = app();
@@ -1677,7 +1757,7 @@ fn a_link_in_the_log_opens_in_its_place_and_esc_goes_back_to_the_log() {
     app.click(column, row);
     let spans = Detail::Item(ItemId::from_bytes([2; 32]));
     assert_eq!(app.wanted().detail, Some(spans.clone()));
-    assert!(screen(&mut app, 60, 24).contains("Log › #aibaea"));
+    assert!(screen(&mut app, 60, 24).contains("Log ›▐#aibaea"));
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.wanted().detail, None);
     assert!(screen(&mut app, 60, 24).contains("Keep the span"));
@@ -1740,7 +1820,7 @@ fn a_click_on_a_part_of_the_breadcrumb_goes_back_to_it() {
     };
     open_parse(&mut app);
     // The detail on top is where the breadcrumb is already.
-    let (column, row) = find(&mut app, 60, 24, "#aeaqca ");
+    let (column, row) = find(&mut app, 60, 24, "#aeaqca▌");
     app.click(column, row);
     assert_eq!(app.path().len(), 2);
     let (column, row) = find(&mut app, 60, 24, "#aibaea ›");
