@@ -103,8 +103,9 @@ impl State {
         })
     }
 
-    /// Items whose work is ready to merge and not merged yet: approved, or needing no review,
-    /// and waiting in `review`, of a type that uses `done`.
+    /// Items whose work is ready to merge, approved or needing no review, and waiting in
+    /// `review`, of a type that uses `done`. Work merged already is among them until its item is
+    /// moved to `done`, so that only the merge moves it, unless it was moved since.
     pub fn pending_merges(&self) -> Vec<PendingMerge> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
@@ -112,16 +113,13 @@ impl State {
         self.live_items()
             .filter(|item| item.state(policy) == ItemState::Review)
             .filter_map(|item| {
-                let (Some(commit), _) = self.submission(item.id())? else {
+                let (Some(commit), submitted) = self.submission(item.id())? else {
                     return None;
                 };
                 let ready = match self.review_status(item.id()) {
                     Some(ReviewStatus::Approved { .. }) => true,
-                    Some(
-                        ReviewStatus::Awaiting { .. }
-                        | ReviewStatus::ChangesRequested
-                        | ReviewStatus::Merged { .. },
-                    ) => false,
+                    Some(ReviewStatus::Merged { .. }) => item.moved() < submitted,
+                    Some(ReviewStatus::Awaiting { .. } | ReviewStatus::ChangesRequested) => false,
                     None => !item.needs_review(policy),
                 };
                 if !ready {
@@ -137,9 +135,9 @@ impl State {
     }
 
     /// Items whose review is over and that wait in `review` only to be moved to `done`: approved
-    /// work submitted without commits, so there is nothing to merge, and merged work. An item that
-    /// moved on after the submission was moved by someone, and is left where it is. Only items of
-    /// types that use `done`.
+    /// work submitted without commits, so there is nothing to merge. Merged work is moved by its
+    /// merge, see [`State::pending_merges`]. An item that moved on after the submission was moved
+    /// by someone, and is left where it is. Only items of types that use `done`.
     pub fn finished_reviews(&self) -> Vec<ItemId> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
@@ -152,7 +150,7 @@ impl State {
                     Some((_, submitted)) if item.moved() < submitted
                 ) && matches!(
                     self.review_status(item.id()),
-                    Some(ReviewStatus::Approved { commit: None } | ReviewStatus::Merged { .. })
+                    Some(ReviewStatus::Approved { commit: None })
                 )
             })
             .filter_map(|item| {
