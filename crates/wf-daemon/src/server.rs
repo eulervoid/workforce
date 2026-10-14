@@ -33,6 +33,7 @@ async fn converse(daemon: &Arc<Daemon>, stream: &mut UnixStream) -> Result<(), F
         stream,
         &HelloReply::Ready {
             version: PROTOCOL_VERSION,
+            device: daemon.device(),
         },
     )
     .await?;

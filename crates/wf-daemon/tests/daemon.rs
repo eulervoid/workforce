@@ -90,8 +90,14 @@ async fn the_daemon_serves_the_state_events_and_authoring() {
     let workforce = running.fixture.workforce();
     let actor = running.fixture.founder_actor();
 
+    let device = running.fixture.devices[0].key();
     let (state, events, authored, after) = blocking(move || {
         let mut client = connect(&socket);
+        assert_eq!(
+            client.device(),
+            device,
+            "the daemon says which device it signs as"
+        );
         let state = client.state(workforce).unwrap();
         let events = client.events(workforce).unwrap();
         let authored = client
