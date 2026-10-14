@@ -5,7 +5,7 @@ use std::io::Write;
 
 use anyhow::{anyhow, bail};
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, DisableMouseCapture, Event as TerminalEvent, KeyEventKind};
+use ratatui::crossterm::event::{self, Event as TerminalEvent, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use wf_core::event::{Comment, CommentKind, EventBody, ItemEdited, ItemMoved, Review};
@@ -341,12 +341,12 @@ fn above_scissors(text: &str) -> String {
 /// Runs `run` on the plain terminal, as the dashboard left it, and draws the dashboard again
 /// afterwards.
 fn suspended<T>(terminal: &mut DefaultTerminal, run: impl FnOnce() -> T) -> anyhow::Result<T> {
-    execute!(std::io::stdout(), DisableMouseCapture)?;
+    super::stop_reports()?;
     ratatui::restore();
     let result = run();
     enable_raw_mode()?;
     execute!(std::io::stdout(), EnterAlternateScreen)?;
-    super::report_mouse()?;
+    super::start_reports()?;
     terminal.clear()?;
     Ok(result)
 }

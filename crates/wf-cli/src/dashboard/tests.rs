@@ -15,11 +15,12 @@ use super::app::{
     AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, ReadinessFilter, Row,
     STATUS_LASTS_MS, Scroll, Split, Starter, Tab, Target, Wheel,
 };
-use super::draw;
+use super::draw::{self, ACCENT, ACCENT_DIMMED};
 use super::snapshot::{
     AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Links, Place, SessionInfo,
     SessionStatus, Snapshot, Waiting,
 };
+use ratatui::style::Color;
 use wf_core::identity::AgentId;
 use wf_core::session::EndReason;
 use wf_core::stats::{AgentStats, ProjectStats};
@@ -1214,8 +1215,7 @@ fn style_at(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> ratatui::
 }
 
 #[test]
-fn the_part_with_the_keys_stands_out() {
-    use ratatui::style::{Color, Modifier};
+fn the_part_with_the_keys_has_the_accent_and_the_other_the_dimmed_accent() {
     let mut app = app();
     app.resize(130, 24);
     let blocked = SessionId::from_bytes([12; 32]);
@@ -1226,41 +1226,101 @@ fn the_part_with_the_keys_stands_out() {
     snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
     app.refresh(snapshot.clone());
     // The parked coder is selected on line 9; the breadcrumb is on line 3, right of the list.
-    let (row, crumb_y) = (9, 3);
-    let crumb_x = app.list_width() + 3;
+    let row = 9;
+    let (crumb_x, crumb_y) = find(&mut app, 130, 14, "coder · work");
     assert_eq!(app.wanted().detail, Some(Detail::Session(blocked)));
+    assert_eq!(bg_at(&mut app, 130, 14, 30, row), Some(ACCENT));
     assert_eq!(
-        style_at(&mut app, 130, 14, 30, row).bg,
-        Some(Color::DarkGray)
+        bg_at(&mut app, 130, 14, crumb_x, crumb_y),
+        Some(ACCENT_DIMMED)
     );
-    assert!(
-        style_at(&mut app, 130, 14, crumb_x, crumb_y)
-            .add_modifier
-            .contains(Modifier::DIM)
-    );
-    // In the detail, the list lets go of the selection's background, and the breadcrumb lights up.
+    // In the detail, the list keeps the selection in the dimmed accent, and the breadcrumb has
+    // the accent.
     press(&mut app, KeyCode::Char('l'));
     app.refresh(snapshot);
-    assert_ne!(
-        style_at(&mut app, 130, 14, 30, row).bg,
-        Some(Color::DarkGray)
-    );
-    // Where `coder · work` starts: the backend quotes each line, which the column leaves out.
-    let line = screen(&mut app, 130, 14)
-        .lines()
-        .nth(usize::from(crumb_y))
-        .unwrap()
-        .to_owned();
-    let before = &line[1..line.find("coder ·").unwrap()];
-    let column = u16::try_from(before.chars().count()).unwrap();
-    assert!(
-        style_at(&mut app, 130, 14, column, crumb_y)
-            .add_modifier
-            .contains(Modifier::BOLD)
-    );
+    assert_eq!(bg_at(&mut app, 130, 14, 30, row), Some(ACCENT_DIMMED));
+    assert_eq!(bg_at(&mut app, 130, 14, crumb_x, crumb_y), Some(ACCENT));
 }
 
-/// What the agent last said of its context: `used` of `size` tokens, and the cost so far.
+/// The background of the cell at `x`, `y` once `app` is drawn.
+fn bg_at(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> Option<Color> {
+    style_at(app, width, height, x, y).bg
+}
+
+/// The text of the cell at `x`, `y` once `app` is drawn.
+fn symbol_at(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> String {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| draw::draw(frame, app)).unwrap();
+    terminal.backend().buffer()[(x, y)].symbol().to_owned()
+}
+
+#[test]
+fn the_bar_and_the_background_cover_every_line_of_the_selection() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    let (_, row) = find(&mut app, 60, 22, "blocker from");
+    for line in [row, row + 1] {
+        assert_eq!(symbol_at(&mut app, 60, 22, 0, line), "▎");
+        assert_eq!(style_at(&mut app, 60, 22, 0, line).fg, Some(ACCENT));
+        assert_eq!(bg_at(&mut app, 60, 22, 10, line), Some(ACCENT));
+    }
+    // The line after the entry is the next one's.
+    assert_eq!(symbol_at(&mut app, 60, 22, 0, row + 2), " ");
+    assert_ne!(bg_at(&mut app, 60, 22, 10, row + 2), Some(ACCENT));
+}
+
+#[test]
+fn the_accent_goes_to_the_breadcrumb_on_enter_and_back_on_esc() {
+    let mut app = app();
+    let coder = app.snapshot.working[0].clone();
+    let (_, row) = find(&mut app, 60, 16, "wants:");
+    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(coder));
+    app.refresh(snapshot);
+    let (column, crumb_y) = find(&mut app, 60, 16, "coder · work");
+    assert_eq!(bg_at(&mut app, 60, 16, column, crumb_y), Some(ACCENT));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
+}
+
+#[test]
+fn the_log_tab_and_a_prompt_have_the_accent() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('4'));
+    let (column, row) = find(&mut app, 60, 16, "4 Log");
+    assert_eq!(bg_at(&mut app, 60, 16, column, row), Some(ACCENT));
+    // The filter takes the keys: its label has the accent, and the label of the log keeps the
+    // dimmed accent.
+    press(&mut app, KeyCode::Char('/'));
+    assert_eq!(bg_at(&mut app, 60, 16, 1, 15), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 16, column, row), Some(ACCENT_DIMMED));
+}
+
+#[test]
+fn while_the_terminal_pane_is_not_focused_the_accent_is_dimmed() {
+    let mut app = app();
+    let (_, row) = find(&mut app, 60, 16, "wants:");
+    assert!(app.terminal_focus(false));
+    assert!(!app.terminal_focus(false));
+    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT_DIMMED));
+    assert!(app.terminal_focus(true));
+    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
+}
+
+#[test]
+fn leaving_the_terminal_pane_lets_go_of_the_link_under_the_pointer() {
+    let mut app = app();
+    let (column, row) = find(&mut app, 60, 24, "a / d");
+    assert!(app.hover(column, row));
+    screen(&mut app, 60, 24);
+    assert!(app.hovered.is_some());
+    app.terminal_focus(false);
+    screen(&mut app, 60, 24);
+    assert!(app.hovered.is_none());
+}
+
 fn usage(seconds: i64, used: u64, size: u64, cost: Option<f64>) -> TranscriptEntry {
     let mut usage = json!({"sessionUpdate": "usage_update", "used": used, "size": size});
     if let Some(amount) = cost {
