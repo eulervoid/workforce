@@ -373,6 +373,8 @@ pub struct Drawn {
     pub text: Option<Scroll>,
     pub list_top: Option<usize>,
     pub clickable: Clickable,
+    /// The link or button under the pointer.
+    pub hovered: Option<Spot>,
 }
 
 /// Where drawing put what a click can land on.
@@ -385,6 +387,111 @@ pub struct Clickable {
     pub detail: Option<Rect>,
     /// The strip of the pane folded away, in a wide window that shows one.
     pub strip: Option<Rect>,
+    /// The links in the text, and the buttons.
+    pub spots: Vec<Spot>,
+}
+
+impl Clickable {
+    /// The link or button at `position`.
+    pub fn spot(&self, position: Position) -> Option<&Spot> {
+        self.spots.iter().find(|spot| spot.area.contains(position))
+    }
+}
+
+/// A link or a button, where drawing put it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Spot {
+    pub target: Target,
+    pub area: Rect,
+}
+
+/// What a click on a link or a button does.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Target {
+    /// Opens a detail; `name` is how it was written: `#k3f9ab`, `@ada/grace`.
+    Open { detail: Detail, name: String },
+    /// Shows the work of an item, as `D` does, from one of its commits.
+    Diff { item: ItemId, commit: String },
+    /// A key hint of the footer: does what its key does.
+    Key {
+        code: KeyCode,
+        key: &'static str,
+        what: &'static str,
+    },
+    /// A part of the breadcrumb: goes back to the first `depth` details opened.
+    Back { depth: usize, name: String },
+    /// Allows a permission request on a second click, so that a click that slipped allows
+    /// nothing.
+    Allow(Request),
+    /// Denies a permission request at once.
+    Deny(Request),
+    /// A count in the header: the Items tab, filtered to what it counts.
+    Count(Counted),
+}
+
+/// A permission request, as a click answers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub session: SessionId,
+    pub since_ms: u64,
+}
+
+impl Waiting {
+    /// The permission request this is, if it is one.
+    pub fn request(&self) -> Option<Request> {
+        match self {
+            Waiting::Permission {
+                session, since_ms, ..
+            } => Some(Request {
+                session: *session,
+                since_ms: *since_ms,
+            }),
+            Waiting::Blocker { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
+        }
+    }
+}
+
+/// What a count in the header counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Counted {
+    Open,
+    Blocked,
+}
+
+/// How long a first click on allow waits for the second that confirms it.
+pub const CONFIRM_LASTS_MS: u64 = 3_000;
+
+/// A first click on allow, at `at_ms`, until a second confirms it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnconfirmedAllow {
+    pub request: Request,
+    pub at_ms: u64,
+}
+
+impl Target {
+    /// What a click does, for the latest-event line while the pointer is over it.
+    pub fn tip(&self) -> String {
+        match self {
+            Target::Open {
+                detail: Detail::Session(_),
+                name,
+            } => format!("open the transcript of {name}"),
+            Target::Open {
+                detail: Detail::Item(_) | Detail::Agent(_),
+                name,
+            } => format!("open {name}"),
+            Target::Diff { commit, .. } => {
+                let short: String = commit.chars().take(8).collect();
+                format!("open the diff of {short}")
+            }
+            Target::Key { key, what, .. } => format!("{what} ({key})"),
+            Target::Back { name, .. } => format!("back to {name}"),
+            Target::Allow(_) => "allow the request: click twice".to_owned(),
+            Target::Deny(_) => "deny the request".to_owned(),
+            Target::Count(Counted::Open) => "show the items by state".to_owned(),
+            Target::Count(Counted::Blocked) => "show only the blocked items".to_owned(),
+        }
+    }
 }
 
 /// A list as it is on screen.
@@ -470,6 +577,8 @@ pub struct LogTab {
     pub scroll: Scroll,
     /// Only lines with this text are shown.
     pub filter: String,
+    /// The details opened from links in the log, the latest on top, in its place.
+    pub stack: Vec<Opened>,
 }
 
 /// Who starts work on an item.
@@ -619,6 +728,12 @@ pub struct App {
     pub status: Option<Status>,
     /// What a click can land on, as last drawn.
     pub clickable: Clickable,
+    /// Where the pointer was last reported.
+    pub pointer: Option<Position>,
+    /// The link or button under the pointer, as last drawn: underlined, with its tip in place of
+    /// the latest event.
+    pub hovered: Option<Spot>,
+    pub unconfirmed_allow: Option<UnconfirmedAllow>,
 }
 
 impl App {
@@ -640,6 +755,7 @@ impl App {
                 lines: Vec::new(),
                 scroll: Scroll::END,
                 filter: String::new(),
+                stack: Vec::new(),
             },
             prompt: None,
             verbosity: Verbosity::Abridged,
@@ -649,6 +765,9 @@ impl App {
             time_zone,
             status: None,
             clickable: Clickable::default(),
+            pointer: None,
+            hovered: None,
+            unconfirmed_allow: None,
         };
         app.refresh(snapshot);
         app
@@ -670,6 +789,12 @@ impl App {
                 self.status = None;
             }
             Some(Status::Done { .. } | Status::ActionFailed { .. }) | None => {}
+        }
+        // A first click on allow lapses after its time, or with its request.
+        if let Some(unconfirmed) = self.unconfirmed_allow
+            && !self.confirms(unconfirmed, unconfirmed.request)
+        {
+            self.unconfirmed_allow = None;
         }
         let rows = self.now_rows();
         self.now.selection.update(&rows);
@@ -866,12 +991,22 @@ impl App {
     }
 
     /// The details opened on the tab on screen, the latest on top.
-    pub fn stack(&self) -> Option<&Vec<Opened>> {
-        self.panes().map(|panes| &panes.stack)
+    pub fn stack(&self) -> &Vec<Opened> {
+        match self.tab {
+            Tab::Now => &self.now.panes.stack,
+            Tab::Items => &self.items.list.panes.stack,
+            Tab::Agents => &self.agents.panes.stack,
+            Tab::Log => &self.log.stack,
+        }
     }
 
-    fn stack_mut(&mut self) -> Option<&mut Vec<Opened>> {
-        self.panes_mut().map(|panes| &mut panes.stack)
+    fn stack_mut(&mut self) -> &mut Vec<Opened> {
+        match self.tab {
+            Tab::Now => &mut self.now.panes.stack,
+            Tab::Items => &mut self.items.list.panes.stack,
+            Tab::Agents => &mut self.agents.panes.stack,
+            Tab::Log => &mut self.log.stack,
+        }
     }
 
     pub fn panes(&self) -> Option<&Panes> {
@@ -897,6 +1032,7 @@ impl App {
     /// where a click lands.
     pub fn shown(&mut self, drawn: Drawn) {
         self.clickable = drawn.clickable;
+        self.hovered = drawn.hovered;
         if let Some(list_top) = drawn.list_top
             && let Some(panes) = self.panes_mut()
         {
@@ -905,21 +1041,21 @@ impl App {
         let Some(scroll) = drawn.text else {
             return;
         };
-        match self.stack_mut() {
-            Some(stack) => {
-                if let Some(opened) = stack.last_mut() {
-                    opened.scroll = scroll;
-                }
-            }
-            None => self.log.scroll = scroll,
+        let is_log = self.tab == Tab::Log;
+        match self.stack_mut().last_mut() {
+            Some(opened) => opened.scroll = scroll,
+            None if is_log => self.log.scroll = scroll,
+            None => {}
         }
     }
 
     /// Whether the keys go to the list of the tab on screen, rather than to a detail opened from
-    /// it: when none is, or when the list has taken them back.
+    /// it: when none is, or when the list has taken them back. The log is the list of its tab.
     pub fn list_has_keys(&self) -> bool {
-        self.panes()
-            .is_none_or(|panes| panes.stack.is_empty() || panes.focus == Pane::List)
+        match self.panes() {
+            Some(panes) => panes.stack.is_empty() || panes.focus == Pane::List,
+            None => self.log.stack.is_empty(),
+        }
     }
 
     /// The details on the way from the list to what is on screen: those opened, or in a wide
@@ -929,10 +1065,10 @@ impl App {
             return Vec::new();
         }
         match self.stack() {
-            Some(stack) if !stack.is_empty() => {
+            stack if !stack.is_empty() => {
                 stack.iter().map(|opened| opened.detail.clone()).collect()
             }
-            Some(_) | None => self
+            _ => self
                 .in_view()
                 .map(|opened| opened.detail)
                 .into_iter()
@@ -988,7 +1124,7 @@ impl App {
 
     /// The detail the keys act on: the one opened last, else the selection's.
     fn focus(&self) -> Option<Detail> {
-        match self.stack().and_then(|stack| stack.last()) {
+        match self.stack().last() {
             Some(opened) => Some(opened.detail.clone()),
             None => self.selected_detail(),
         }
@@ -1000,7 +1136,7 @@ impl App {
         if !self.shows_both() && self.list_has_keys() {
             return None;
         }
-        if let Some(opened) = self.stack().and_then(|stack| stack.last()) {
+        if let Some(opened) = self.stack().last() {
             return Some(opened.clone());
         }
         let detail = self.selected_detail()?;
@@ -1101,21 +1237,17 @@ impl App {
     /// they were left.
     fn open(&mut self, detail: Detail) {
         let from_list = self.list_has_keys();
-        let Some(panes) = self.panes_mut() else {
-            return;
-        };
-        panes.focus = Pane::Detail;
+        if let Some(panes) = self.panes_mut() {
+            panes.focus = Pane::Detail;
+        }
+        let stack = self.stack_mut();
         if from_list {
-            if panes
-                .stack
-                .first()
-                .is_some_and(|opened| opened.detail == detail)
-            {
+            if stack.first().is_some_and(|opened| opened.detail == detail) {
                 return;
             }
-            panes.stack.clear();
+            stack.clear();
         }
-        panes.stack.push(Opened {
+        stack.push(Opened {
             scroll: detail.start(),
             detail,
         });
@@ -1125,6 +1257,7 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Some(Effect::Quit);
         }
+        self.unconfirmed_allow = None;
         if matches!(
             self.status,
             Some(Status::Done { .. } | Status::ActionFailed { .. })
@@ -1205,7 +1338,10 @@ impl App {
             return;
         }
         if self.tab == Tab::Log {
-            self.log.scroll = wheel.scroll(self.log.scroll);
+            match self.log.stack.last_mut() {
+                Some(opened) => opened.scroll = wheel.scroll(opened.scroll),
+                None => self.log.scroll = wheel.scroll(self.log.scroll),
+            }
             return;
         }
         let over_list = if self.shows_both() {
@@ -1228,37 +1364,49 @@ impl App {
         }
         self.focus_detail();
         // Without a detail to give the keys to, there is nothing to scroll.
-        if let Some(opened) = self.stack_mut().and_then(|stack| stack.last_mut()) {
+        if let Some(opened) = self.stack_mut().last_mut() {
             opened.scroll = wheel.scroll(opened.scroll);
         }
     }
 
-    /// The left button pressed at `column`, `row`. On a tab it switches to it; on an entry of a
-    /// list it selects it and gives the list the keys, and opens it when it was selected already;
-    /// on the detail beside a list it gives the detail the keys; on the strip of a pane folded
-    /// away it brings both back.
-    pub fn click(&mut self, column: u16, row: u16) {
+    /// The left button pressed at `column`, `row`. On a link or a button it does what that does;
+    /// on a tab it switches to it; on an entry of a list it selects it and gives the list the
+    /// keys, and opens it when it was selected already; on the detail beside a list it gives the
+    /// detail the keys; on the strip of a pane folded away it brings both back.
+    pub fn click(&mut self, column: u16, row: u16) -> Option<Effect> {
         if !self.mouse_passes() {
-            return;
+            return None;
         }
         let position = Position::new(column, row);
+        // The pointer is where it clicked, even without a report of its moves.
+        self.pointer = Some(position);
+        // Only the very next click confirms an allow.
+        let unconfirmed = self.unconfirmed_allow.take();
         let clickable = &self.clickable;
+        let in_detail = clickable
+            .detail
+            .is_some_and(|detail| detail.contains(position));
+        if let Some(spot) = clickable.spot(position) {
+            let target = spot.target.clone();
+            // The filter of the log, the only prompt a click goes through, is taken as typed.
+            self.prompt = None;
+            return self.follow(target, in_detail, unconfirmed);
+        }
         if let Some((tab, _)) = clickable
             .tabs
             .iter()
             .find(|(_, label)| label.contains(position))
         {
             self.tab = *tab;
-            // The filter of the log, the only prompt a click goes through, is taken as typed.
             self.prompt = None;
-            return;
+            return None;
         }
         if clickable
             .strip
             .is_some_and(|strip| strip.contains(position))
         {
             self.split = Split::Both;
-            return;
+            return None;
         }
         if let Some(list) = &clickable.list
             && list.area.contains(position)
@@ -1267,14 +1415,125 @@ impl App {
             if let Some(Some(entry)) = list.entries.get(line).copied() {
                 self.click_entry(entry);
             }
-            return;
+            return None;
         }
-        if clickable
-            .detail
-            .is_some_and(|detail| detail.contains(position))
-        {
+        if in_detail {
             self.focus_detail();
         }
+        None
+    }
+
+    /// Does what a click on a link or a button does; `in_detail` when it is in the detail beside
+    /// the list, `unconfirmed` the click on allow before it.
+    fn follow(
+        &mut self,
+        target: Target,
+        in_detail: bool,
+        unconfirmed: Option<UnconfirmedAllow>,
+    ) -> Option<Effect> {
+        match target {
+            Target::Open { detail, .. } => {
+                // On top of the detail it is in, so esc goes back to it.
+                if in_detail {
+                    self.focus_detail();
+                }
+                self.open(detail);
+                None
+            }
+            Target::Diff { item, .. } => Some(Effect::ShowDiff { item }),
+            Target::Key { code, .. } => self.key(KeyEvent::from(code)),
+            Target::Back { depth, .. } => {
+                self.stack_mut().truncate(depth);
+                if depth > 0
+                    && let Some(panes) = self.panes_mut()
+                {
+                    panes.focus = Pane::Detail;
+                }
+                None
+            }
+            Target::Allow(request) => {
+                if unconfirmed.is_some_and(|unconfirmed| self.confirms(unconfirmed, request)) {
+                    return Some(Effect::Permit {
+                        session: request.session,
+                        answer: Permission::Allow,
+                    });
+                }
+                self.unconfirmed_allow = Some(UnconfirmedAllow {
+                    request,
+                    at_ms: self.snapshot.now_ms,
+                });
+                None
+            }
+            Target::Deny(request) => Some(Effect::Permit {
+                session: request.session,
+                answer: Permission::Deny,
+            }),
+            Target::Count(counted) => {
+                self.tab = Tab::Items;
+                let items = &mut self.items;
+                items.list.panes.stack.clear();
+                items.filter.clear();
+                match counted {
+                    Counted::Open => {
+                        items.grouping = ItemGrouping::State;
+                        items.readiness = ReadinessFilter::All;
+                    }
+                    Counted::Blocked => items.readiness = ReadinessFilter::Blocked,
+                }
+                None
+            }
+        }
+    }
+
+    /// Whether a click on allow for `request` confirms `unconfirmed`: the first click was on
+    /// the same request, which still waits, not longer than [`CONFIRM_LASTS_MS`] ago.
+    fn confirms(&self, unconfirmed: UnconfirmedAllow, request: Request) -> bool {
+        unconfirmed.request == request
+            && self.snapshot.now_ms < unconfirmed.at_ms + CONFIRM_LASTS_MS
+            && self
+                .snapshot
+                .waiting
+                .iter()
+                .any(|entry| entry.request() == Some(request))
+    }
+
+    /// What a click on `target` does, for the latest-event line while the pointer is over it.
+    pub fn tip(&self, target: &Target) -> String {
+        match target {
+            Target::Allow(request)
+                if self
+                    .unconfirmed_allow
+                    .is_some_and(|unconfirmed| unconfirmed.request == *request) =>
+            {
+                "allow: click again to confirm".to_owned()
+            }
+            Target::Open { .. }
+            | Target::Diff { .. }
+            | Target::Key { .. }
+            | Target::Back { .. }
+            | Target::Allow(_)
+            | Target::Deny(_)
+            | Target::Count(_) => target.tip(),
+        }
+    }
+
+    /// The pointer moved to `column`, `row`. Returns whether that took it onto or off a link or
+    /// button, which is drawn again only then.
+    pub fn hover(&mut self, column: u16, row: u16) -> bool {
+        let position = Position::new(column, row);
+        self.pointer = Some(position);
+        let under = self.hovered_at(position);
+        let changed = under != self.hovered;
+        self.hovered = under;
+        changed
+    }
+
+    /// The link or button at `position` as last drawn, while the mouse acts.
+    fn hovered_at(&self, position: Position) -> Option<Spot> {
+        if !self.mouse_passes() {
+            return None;
+        }
+        self.clickable.spot(position).cloned()
     }
 
     /// Selects the entry at `index` of the list on screen and gives the list the keys; opens it
@@ -1342,7 +1601,7 @@ impl App {
 
     /// Whether the mouse acts while the footer asks for something: only while the log is
     /// filtered, so the wheel goes through what matches.
-    fn mouse_passes(&self) -> bool {
+    pub fn mouse_passes(&self) -> bool {
         match &self.prompt {
             None
             | Some(Prompt::Filter {
@@ -1553,11 +1812,17 @@ impl App {
         };
         let item_of_session = self.item_subject();
         let page = self.page();
-        let Some(panes) = self.panes_mut() else {
+        if matches!(key.code, KeyCode::Esc | KeyCode::Left | KeyCode::Char('h')) {
+            match self.panes_mut() {
+                // The detail opened from the list stays as it is, to come back to with `l`.
+                Some(panes) if panes.stack.len() == 1 => panes.focus = Pane::List,
+                Some(_) | None => {
+                    self.stack_mut().pop();
+                }
+            }
             return;
-        };
-        let opened_from_list = panes.stack.len() == 1;
-        let Some(opened) = panes.stack.last_mut() else {
+        }
+        let Some(opened) = self.stack_mut().last_mut() else {
             return;
         };
         if let Some(scroll) = opened.scroll.key(key, page) {
@@ -1565,13 +1830,6 @@ impl App {
             return;
         }
         match (key.code, &opened.detail) {
-            // The detail opened from the list stays as it is, to come back to with `l`.
-            (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) if opened_from_list => {
-                panes.focus = Pane::List;
-            }
-            (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) => {
-                panes.stack.pop();
-            }
             (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'), Detail::Item(_)) => {
                 if let Some(session) = item_session {
                     self.open(Detail::Session(session));
@@ -1613,8 +1871,8 @@ impl App {
             }
             Tab::Log => false,
         };
-        if moved && let Some(stack) = self.stack_mut() {
-            stack.clear();
+        if moved {
+            self.stack_mut().clear();
         }
         moved
     }

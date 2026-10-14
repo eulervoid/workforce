@@ -2,6 +2,7 @@
 
 use ansi_to_tui::IntoText;
 use ratatui::Frame;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
@@ -11,9 +12,10 @@ use wf_core::id::HashId;
 use wf_core::item::ItemState;
 
 use super::app::{
-    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, STRIP, Scroll,
-    Starter, Status, Tab,
+    AgentRow, App, Choice, Clickable, ClickableList, Counted, Drawn, Opened, Prompt, Request, Row,
+    STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
+use super::links;
 use super::snapshot::{
     AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
 };
@@ -48,12 +50,22 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     ])
     .areas(frame.area());
     let tabs = draw_header(frame, app, header);
-    frame.render_widget(Paragraph::new(counts_line(app)), counts);
+    let counts = draw_counts(frame, app, counts);
     draw_rule(frame, rule);
     let mut shown = draw_body(frame, app, body);
     shown.clickable.tabs = tabs;
+    shown.clickable.spots.extend(counts);
     draw_rule(frame, rule_below);
     frame.render_widget(Paragraph::new(latest_line(app)), latest);
+    if app.status.is_none() {
+        shown.clickable.spots.extend(links::find(
+            frame.buffer_mut(),
+            latest,
+            None,
+            None,
+            &app.snapshot.links,
+        ));
+    }
     match &app.prompt {
         Some(Prompt::Choose(choice)) => {
             draw_choice(frame, choice, body);
@@ -67,7 +79,23 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
             frame.render_widget(Paragraph::new(Line::from(" any key closes").dim()), keys);
         }
         Some(prompt) => draw_prompt(frame, app, prompt, keys),
-        None => frame.render_widget(Paragraph::new(keys_line(app)), keys),
+        None => shown.clickable.spots.extend(draw_hints(frame, app, keys)),
+    }
+    shown.hovered = app
+        .pointer
+        .filter(|_| app.mouse_passes())
+        .and_then(|pointer| shown.clickable.spot(pointer))
+        .cloned();
+    if let Some(spot) = &shown.hovered {
+        frame
+            .buffer_mut()
+            .set_style(spot.area, Style::new().underlined());
+        // A link in the latest event says itself where it is.
+        if !spot.area.intersects(latest) {
+            frame.render_widget(Clear, latest);
+            let tip = Line::from(format!(" {}", app.tip(&spot.target)));
+            frame.render_widget(Paragraph::new(tip), latest);
+        }
     }
     shown
 }
@@ -132,10 +160,12 @@ const KEYS: &[(&str, &str)] = &[
     ("pgup/pgdn", "a page up, down; also space"),
     ("wheel", "move what is under the pointer"),
     ("click", "pick a tab or an entry, again to open"),
+    ("", "follow a link, hint, crumb or count"),
     ("shift-drag", "select text, as without the dashboard"),
     ("enter esc", "open, go back"),
     ("H L", "one pane or both, also shift ←/→"),
     ("a d", "allow, deny a permission request"),
+    ("", "a click on allow asks for a second"),
     ("r R", "answer a blocker here, in $EDITOR"),
     ("ctrl+g", "carry a comment or answer to $EDITOR"),
     ("v D", "review, show the diff"),
@@ -283,20 +313,51 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
         .collect()
 }
 
-/// `3 live · 14 open · 1 blocked · 2 devices`, leaving out what is none.
-fn counts_line(app: &App) -> Line<'static> {
+/// Draws `3 live · 14 open · 1 blocked · 2 devices`, leaving out what is none; returns the counts
+/// that open the Items tab filtered to them.
+fn draw_counts(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let counts = app.snapshot.counts;
     let mut parts = vec![
-        format!("{} live", counts.live_sessions),
-        format!("{} open", counts.open_items),
+        (format!("{} live", counts.live_sessions), None),
+        (format!("{} open", counts.open_items), Some(Counted::Open)),
     ];
     if counts.blocked_items > 0 {
-        parts.push(format!("{} blocked", counts.blocked_items));
+        parts.push((
+            format!("{} blocked", counts.blocked_items),
+            Some(Counted::Blocked),
+        ));
     }
     if counts.devices > 1 {
-        parts.push(format!("{} devices", counts.devices));
+        parts.push((format!("{} devices", counts.devices), None));
     }
-    Line::from(format!(" {}", parts.join(" · "))).dim()
+    let mut spots = Vec::new();
+    let mut start = 1;
+    for (part, counted) in &parts {
+        let width = textwrap::core::display_width(part);
+        if let Some(counted) = counted {
+            spots.push(button(area, start, width, Target::Count(*counted)));
+        }
+        start += width + textwrap::core::display_width(SEPARATOR);
+    }
+    let parts: Vec<&str> = parts.iter().map(|(part, _)| part.as_str()).collect();
+    let line = Line::from(format!(" {}", parts.join(SEPARATOR))).dim();
+    frame.render_widget(Paragraph::new(line), area);
+    spots.retain(|spot| !spot.area.is_empty());
+    spots
+}
+
+/// A button `width` columns wide, `start` columns into the line `area`; what a narrow window cuts
+/// off cannot be clicked.
+fn button(area: Rect, start: usize, width: usize, target: Target) -> Spot {
+    let button = Rect {
+        x: area.x.saturating_add(start as u16),
+        width: width as u16,
+        ..area
+    };
+    Spot {
+        target,
+        area: button.intersection(area),
+    }
 }
 
 fn draw_rule(frame: &mut Frame, area: Rect) {
@@ -308,10 +369,21 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
     match app.tab {
         Tab::Now => draw_split(frame, app, area, now_lines),
         Tab::Items => draw_split(frame, app, area, items_lines),
-        Tab::Log => Drawn {
-            text: draw_log(frame, app, area),
-            ..Drawn::default()
-        },
+        Tab::Log => {
+            let mut spots = Vec::new();
+            let text = match app.in_view() {
+                Some(opened) => draw_detail(frame, app, opened, area, &mut spots),
+                None => draw_log(frame, app, area, &mut spots),
+            };
+            Drawn {
+                text,
+                clickable: Clickable {
+                    spots,
+                    ..Clickable::default()
+                },
+                ..Drawn::default()
+            }
+        }
         Tab::Agents => draw_split(frame, app, area, agents_lines),
     }
 }
@@ -328,19 +400,29 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
             (area, None)
         };
         let mut drawn = match in_view {
-            Some(opened) => Drawn {
-                text: draw_detail(frame, app, opened, area),
-                ..Drawn::default()
-            },
+            Some(opened) => {
+                let mut spots = Vec::new();
+                Drawn {
+                    text: draw_detail(frame, app, opened, area, &mut spots),
+                    clickable: Clickable {
+                        spots,
+                        ..Clickable::default()
+                    },
+                    ..Drawn::default()
+                }
+            }
             None => {
-                let (list_top, list) = draw_list(frame, app, list_lines, area);
+                let mut spots = Vec::new();
+                let (list_top, list) = draw_list(frame, app, list_lines, area, &mut spots);
                 Drawn {
                     text: None,
                     list_top: Some(list_top),
                     clickable: Clickable {
                         list: Some(list),
+                        spots,
                         ..Clickable::default()
                     },
+                    ..Drawn::default()
                 }
             }
         };
@@ -353,17 +435,20 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
         Constraint::Fill(1),
     ])
     .areas(area);
-    let (list_top, list) = draw_list(frame, app, list_lines, list);
+    let mut spots = Vec::new();
+    let (list_top, list) = draw_list(frame, app, list_lines, list, &mut spots);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).dim(), rule);
     Drawn {
-        text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail)),
+        text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail, &mut spots)),
         list_top: Some(list_top),
         clickable: Clickable {
             list: Some(list),
             detail: Some(detail),
+            spots,
             ..Clickable::default()
         },
+        ..Drawn::default()
     }
 }
 
@@ -400,6 +485,15 @@ struct ListText {
     selected_line: Option<usize>,
     /// How many entries there are so far.
     count: usize,
+    buttons: Vec<ListButton>,
+}
+
+/// A button on a line of a list, `start` columns into it.
+struct ListButton {
+    line: usize,
+    start: usize,
+    width: usize,
+    target: Target,
 }
 
 impl ListText {
@@ -428,6 +522,7 @@ fn draw_list(
     app: &App,
     list_lines: ListLines,
     area: Rect,
+    spots: &mut Vec<Spot>,
 ) -> (usize, ClickableList) {
     let list = list_lines(app, area.width);
     let previous = app.panes().map_or(0, |panes| panes.list_top);
@@ -439,6 +534,23 @@ fn draw_list(
     );
     let scroll = u16::try_from(top).unwrap_or(u16::MAX);
     frame.render_widget(Paragraph::new(list.lines).scroll((scroll, 0)), area);
+    let height = usize::from(area.height);
+    for ListButton {
+        line,
+        start,
+        width,
+        target,
+    } in list.buttons
+    {
+        if (top..top + height).contains(&line) {
+            let line = Rect {
+                y: area.y + (line - top) as u16,
+                height: 1,
+                ..area
+            };
+            spots.push(button(line, start, width, target));
+        }
+    }
     let entries = list
         .entries
         .into_iter()
@@ -574,6 +686,17 @@ fn item_spans(item: &ItemRef) -> Vec<Span<'static>> {
     ]
 }
 
+/// The keys that answer a permission request, on its row: allow first, deny last.
+const ROW_ANSWERS: &str = "a / d";
+
+/// Where `right` starts on the first line of a row drawn with it: flush against the right edge,
+/// before the margin.
+fn right_start(first: &Line, right: &str) -> usize {
+    first
+        .width()
+        .saturating_sub(textwrap::core::display_width(right) + 1)
+}
+
 fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
     match entry {
         Waiting::Permission {
@@ -586,7 +709,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             }
             first.push(Span::raw(" wants: "));
             first.push(Span::raw(what.clone()));
-            row.lines(first, row.keys("a / d").map(Line::from), Vec::new())
+            row.lines(first, row.keys(ROW_ANSWERS).map(Line::from), Vec::new())
         }
         Waiting::Blocker { item, by, text, .. } => {
             let mut first = vec![Span::raw("⧗ ").fg(Color::Yellow)];
@@ -758,10 +881,25 @@ fn now_lines(app: &App, width: u16) -> ListText {
         list.push(section("WAITING ON YOU"));
         for entry in &snapshot.waiting {
             let is_selected = selected == Some(&Row::Waiting(entry.key()));
-            list.entry(
-                waiting_lines(entry, RowLines::new(app, is_selected, width)),
-                is_selected,
-            );
+            let lines = waiting_lines(entry, RowLines::new(app, is_selected, width));
+            // The keys of the selected request answer it on a click.
+            if is_selected && let Some(request) = entry.request() {
+                let start = right_start(&lines[0], ROW_ANSWERS);
+                let line = list.lines.len();
+                list.buttons.push(ListButton {
+                    line,
+                    start,
+                    width: 1,
+                    target: Target::Allow(request),
+                });
+                list.buttons.push(ListButton {
+                    line,
+                    start: start + ROW_ANSWERS.len() - 1,
+                    width: 1,
+                    target: Target::Deny(request),
+                });
+            }
+            list.entry(lines, is_selected);
         }
         list.push(Line::default());
     }
@@ -979,7 +1117,15 @@ fn items_lines(app: &App, width: u16) -> ListText {
     list
 }
 
-fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Option<Scroll> {
+/// Draws a detail under its breadcrumb; returns the scroll it was drawn at, and adds its links to
+/// `spots`.
+fn draw_detail(
+    frame: &mut Frame,
+    app: &App,
+    opened: Opened,
+    area: Rect,
+    spots: &mut Vec<Spot>,
+) -> Option<Scroll> {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     // The same margin as the lists.
     let body = Rect {
@@ -987,10 +1133,10 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
         width: body.width.saturating_sub(1),
         ..body
     };
-    frame.render_widget(Paragraph::new(breadcrumb(app, title.width)), title);
+    spots.extend(draw_breadcrumb(frame, app, title));
     let in_view = app.snapshot.in_view.as_ref();
     // Until the snapshot has caught up with what was opened, the detail stays empty.
-    match &opened.detail {
+    let (scroll, item) = match &opened.detail {
         Detail::Item(id) => {
             let Some(InView::Item { text, .. }) = in_view
                 .filter(|shown| matches!(shown, InView::Item { id: shown, .. } if shown == id))
@@ -998,7 +1144,7 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
                 return None;
             };
             let text: Text = text.into_text().unwrap_or_default();
-            Some(draw_scrolled(frame, text, opened.scroll, body))
+            (draw_scrolled(frame, text, opened.scroll, body), Some(*id))
         }
         Detail::Agent(id) => {
             let Some(InView::Agent { text, .. }) = in_view
@@ -1006,12 +1152,8 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
             else {
                 return None;
             };
-            Some(draw_scrolled(
-                frame,
-                Text::from(text.clone()),
-                opened.scroll,
-                body,
-            ))
+            let text = Text::from(text.clone());
+            (draw_scrolled(frame, text, opened.scroll, body), None)
         }
         Detail::Session(id) => {
             let Some(InView::Session(session)) =
@@ -1019,17 +1161,29 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
             else {
                 return None;
             };
-            Some(draw_session(frame, app, session, opened.scroll, body))
+            let scroll = draw_session(frame, app, session, opened.scroll, body, spots);
+            (scroll, Some(session.item.id))
         }
-    }
+    };
+    spots.extend(links::find(
+        frame.buffer_mut(),
+        body,
+        item,
+        Some(&opened.detail),
+        &app.snapshot.links,
+    ));
+    Some(scroll)
 }
 
+/// Draws a session's transcript, with its permission request under it; returns the scroll it was
+/// drawn at, and adds the answers to the request to `spots`.
 fn draw_session(
     frame: &mut Frame,
     app: &App,
     session: &SessionInfo,
     scroll: Scroll,
     body: Rect,
+    spots: &mut Vec<Spot>,
 ) -> Scroll {
     let mut transcript_lines = app.transcript_lines.borrow_mut();
     let (lines, open): (&[Line<'static>], Vec<Line<'static>>) =
@@ -1055,7 +1209,7 @@ fn draw_session(
                 (laid_out.lines(), open)
             }
         };
-    let asks: Vec<&str> = app
+    let asks: Vec<(&str, Request)> = app
         .snapshot
         .waiting
         .iter()
@@ -1064,7 +1218,7 @@ fn draw_session(
                 session: asking,
                 what,
                 ..
-            } if *asking == session.id => Some(what.as_str()),
+            } if *asking == session.id => Some((what.as_str(), entry.request()?)),
             Waiting::Permission { .. }
             | Waiting::Blocker { .. }
             | Waiting::Review { .. }
@@ -1086,39 +1240,52 @@ fn draw_session(
         frame.render_widget(Paragraph::new(line), context);
     }
     let shown = draw_lines(frame, lines, &open, scroll, body);
-    if let Some(what) = asks.first() {
+    if let Some((what, request)) = asks.first() {
         let line = Line::from(vec![
             Span::raw("? ").fg(Color::Yellow).bold(),
             Span::raw(format!("wants: {what}")),
         ]);
-        let keys = Span::raw("a allow · d deny").fg(Color::Yellow);
+        let keys = [ALLOW, DENY].join(SEPARATOR);
         let row = RowLines::new(app, false, bar.width);
-        let mut lines = row.lines(line.spans, Some(Line::from(keys)), Vec::new());
-        frame.render_widget(Paragraph::new(lines.remove(0)), bar);
+        let right = Line::from(Span::raw(keys.clone()).fg(Color::Yellow));
+        let first = row.lines(line.spans, Some(right), Vec::new()).remove(0);
+        let allow = right_start(&first, &keys);
+        let width = textwrap::core::display_width;
+        let deny = allow + width(ALLOW) + width(SEPARATOR);
+        spots.push(button(bar, allow, width(ALLOW), Target::Allow(*request)));
+        spots.push(button(bar, deny, width(DENY), Target::Deny(*request)));
+        frame.render_widget(Paragraph::new(first), bar);
     }
     shown
 }
 
-/// Where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part stands
-/// out while the detail has the keys, and is dim while it only shows what the list selects.
-fn breadcrumb(app: &App, width: u16) -> Line<'static> {
+/// Draws where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part
+/// stands out while the detail has the keys, and is dim while it only shows what the list
+/// selects. Returns the parts that go back to a detail opened before, or to the list.
+fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let separator = || Span::raw(" › ").dim();
-    let mut crumbs: Vec<Vec<Span<'static>>> = vec![vec![Span::raw(app.tab.name())]];
+    // Each part, with how many of the details opened it goes back to; `None` for an item named
+    // only for its session, which was not opened.
+    let mut crumbs: Vec<(Vec<Span<'static>>, Option<usize>)> =
+        vec![(vec![Span::raw(app.tab.name())], Some(0))];
     let path = app.path();
-    for detail in &path {
+    for (index, detail) in path.iter().enumerate() {
+        let depth = Some(index + 1);
         match detail {
-            Detail::Item(item) => crumbs.push(vec![Span::raw(format!("#{}", item.short()))]),
-            Detail::Agent(agent) => crumbs.push(vec![Span::raw(agent.name.to_string())]),
+            Detail::Item(item) => {
+                crumbs.push((vec![Span::raw(format!("#{}", item.short()))], depth));
+            }
+            Detail::Agent(agent) => crumbs.push((vec![Span::raw(agent.name.to_string())], depth)),
             Detail::Session(id) => {
                 let Some(session) = app.session_info(*id) else {
-                    crumbs.push(vec![Span::raw(id.short())]);
+                    crumbs.push((vec![Span::raw(id.short())], depth));
                     continue;
                 };
                 // A session is about an item: named, unless the way here went through it.
                 let item = session.item.id;
                 if crumbs
                     .last()
-                    .and_then(|crumb| crumb.first())
+                    .and_then(|(crumb, _)| crumb.first())
                     .map(|span| span.content.as_ref())
                     != Some(format!("#{}", item.short()).as_str())
                 {
@@ -1129,18 +1296,40 @@ fn breadcrumb(app: &App, width: u16) -> Line<'static> {
                     {
                         crumb.push(Span::raw(format!(" {title}")));
                     }
-                    crumbs.push(crumb);
+                    crumbs.push((crumb, None));
                 }
-                crumbs.push(session_crumb(app, session));
+                crumbs.push((session_crumb(app, session), depth));
             }
         }
     }
     let focused = !app.list_has_keys();
     let last = crumbs.len() - 1;
+    // Only what was opened, below the detail on top, is there to go back to.
+    let opened = app.stack().len();
+    let mut spots = Vec::new();
     let mut spans = vec![Span::raw(" ")];
-    for (index, crumb) in crumbs.into_iter().enumerate() {
+    for (index, (crumb, depth)) in crumbs.into_iter().enumerate() {
         if index > 0 {
             spans.push(separator());
+        }
+        let start: usize = spans.iter().map(Span::width).sum();
+        let width: usize = crumb.iter().map(Span::width).sum();
+        if let Some(depth) = depth.filter(|depth| *depth < opened)
+            && let Some(name) = crumb.first()
+        {
+            let button = Rect {
+                x: area.x.saturating_add(start as u16),
+                width: width as u16,
+                ..area
+            };
+            spots.push(Spot {
+                target: Target::Back {
+                    depth,
+                    name: name.content.trim().to_owned(),
+                },
+                // What a narrow window cuts off cannot be clicked.
+                area: button.intersection(area),
+            });
         }
         for span in crumb {
             spans.push(match (index == last, focused) {
@@ -1149,7 +1338,10 @@ fn breadcrumb(app: &App, width: u16) -> Line<'static> {
             });
         }
     }
-    Line::from(cut_spans(spans, usize::from(width)))
+    let line = Line::from(cut_spans(spans, usize::from(area.width)));
+    frame.render_widget(Paragraph::new(line), area);
+    spots.retain(|spot| !spot.area.is_empty());
+    spots
 }
 
 /// `coder · work · 12m ◆`
@@ -1204,7 +1396,7 @@ fn draw_lines(
     scroll
 }
 
-fn draw_log(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
+fn draw_log(frame: &mut Frame, app: &App, area: Rect, spots: &mut Vec<Spot>) -> Option<Scroll> {
     let area = Rect {
         x: area.x + 1,
         width: area.width.saturating_sub(1),
@@ -1221,7 +1413,15 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
         return None;
     }
     let text: Text = text.into_text().unwrap_or_default();
-    Some(draw_scrolled(frame, text, app.log.scroll, area))
+    let scroll = draw_scrolled(frame, text, app.log.scroll, area);
+    spots.extend(links::find(
+        frame.buffer_mut(),
+        area,
+        None,
+        None,
+        &app.snapshot.links,
+    ));
+    Some(scroll)
 }
 
 /// The latest event, or why the last refresh failed.
@@ -1254,12 +1454,61 @@ fn latest_line(app: &App) -> Line<'static> {
     }
 }
 
-/// The keys that work on what is on screen.
-fn keys_line(app: &App) -> Line<'static> {
+/// Draws the keys that work on what is on screen; returns them as buttons, but for `j/k`.
+fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
+    let hints = hints(app);
+    let request = app.subjects().into_iter().find_map(Waiting::request);
+    let mut spots = Vec::new();
+    let mut start = 1;
+    for hint in &hints {
+        let width = textwrap::core::display_width(hint);
+        if let Some((key, what)) = hint.split_once(' ')
+            && let Some(target) = hint_target(key, what, request)
+        {
+            spots.push(button(area, start, width, target));
+        }
+        start += width + textwrap::core::display_width(SEPARATOR);
+    }
+    let line = Line::from(format!(" {}", hints.join(SEPARATOR))).dim();
+    frame.render_widget(Paragraph::new(line), area);
+    spots.retain(|spot| !spot.area.is_empty());
+    spots
+}
+
+/// Between two hints.
+const SEPARATOR: &str = " · ";
+
+/// The hints that answer a permission request.
+const ALLOW: &str = "a allow";
+const DENY: &str = "d deny";
+
+/// What a click on the hint for `key` does: what the key does, but for allow, which asks for a
+/// second click; `None` for a hint that is no button. `request` is the permission request the
+/// keys answer.
+fn hint_target(key: &'static str, what: &'static str, request: Option<Request>) -> Option<Target> {
+    let code = match key {
+        "a" => return request.map(Target::Allow),
+        "d" => return request.map(Target::Deny),
+        "enter" => KeyCode::Enter,
+        "esc" => KeyCode::Esc,
+        "j/k" => return None,
+        _ => {
+            let mut characters = key.chars();
+            match (characters.next(), characters.next()) {
+                (Some(character), None) => KeyCode::Char(character),
+                _ => return None,
+            }
+        }
+    };
+    Some(Target::Key { code, key, what })
+}
+
+/// The keys that work on what is on screen: `esc back`, `v review`.
+fn hints(app: &App) -> Vec<&'static str> {
     let mut acts: Vec<&str> = Vec::new();
     for entry in app.subjects() {
         let keys: &[&str] = match entry {
-            Waiting::Permission { .. } => &["a allow", "d deny"],
+            Waiting::Permission { .. } => &[ALLOW, DENY],
             Waiting::Blocker { .. } => &["r answer", "R in editor"],
             Waiting::Review { .. } => &["v review", "D diff"],
             Waiting::Notice { .. } => &[],
@@ -1278,34 +1527,31 @@ fn keys_line(app: &App) -> Line<'static> {
         })
     );
     // A detail kept while the list has the keys takes none.
-    let opened = app
-        .stack()
-        .and_then(|stack| stack.last())
-        .filter(|_| !app.list_has_keys());
-    let navigation = match (app.tab, opened.map(|opened| &opened.detail)) {
-        (_, Some(Detail::Session(_))) => "esc back · j/k scroll · i item · f full",
-        (_, Some(Detail::Item(_))) if item_session => "esc back · j/k scroll · enter session",
-        (_, Some(Detail::Item(_) | Detail::Agent(_))) => "esc back · j/k scroll",
-        (Tab::Now, None) => "enter open · j/k move",
-        (Tab::Items, None) => "enter open · o group · / filter · F ready",
-        (Tab::Log, None) if !app.log.filter.is_empty() => "/ change filter · esc clear",
-        (Tab::Log, None) => "/ filter · j/k scroll",
-        (Tab::Agents, None) => "enter open · j/k move",
+    let opened = app.stack().last().filter(|_| !app.list_has_keys());
+    let navigation: &[&str] = match (app.tab, opened.map(|opened| &opened.detail)) {
+        (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full"],
+        (_, Some(Detail::Item(_))) if item_session => &["esc back", "j/k scroll", "enter session"],
+        (_, Some(Detail::Item(_) | Detail::Agent(_))) => &["esc back", "j/k scroll"],
+        (Tab::Now, None) => &["enter open", "j/k move"],
+        (Tab::Items, None) => &["enter open", "o group", "/ filter", "F ready"],
+        (Tab::Log, None) if !app.log.filter.is_empty() => &["/ change filter", "esc clear"],
+        (Tab::Log, None) => &["/ filter", "j/k scroll"],
+        (Tab::Agents, None) => &["enter open", "j/k move"],
     };
     // What follows what is added, once scrolled away from its end.
     let followed = match (app.tab, opened) {
-        (Tab::Log, _) => Some(app.log.scroll),
         (_, Some(opened)) => match opened.detail {
             Detail::Session(_) => Some(opened.scroll),
             Detail::Item(_) | Detail::Agent(_) => None,
         },
+        (Tab::Log, None) => Some(app.log.scroll),
         (Tab::Now | Tab::Items | Tab::Agents, None) => None,
     };
-    let mut parts: Vec<&str> = vec![navigation];
+    let mut hints = navigation.to_vec();
     if let Some(Scroll::At(_)) = followed {
-        parts.push("G follow");
+        hints.push("G follow");
     }
-    parts.extend(acts);
-    parts.push("? keys");
-    Line::from(format!(" {}", parts.join(" · "))).dim()
+    hints.extend(acts);
+    hints.push("? keys");
+    hints
 }

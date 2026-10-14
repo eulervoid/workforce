@@ -4,6 +4,7 @@
 mod act;
 mod app;
 mod draw;
+mod links;
 mod snapshot;
 mod transcript_lines;
 
@@ -48,12 +49,13 @@ pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()
 }
 
 /// Asks the terminal to report presses of the mouse and its wheel, so a click picks and the wheel
-/// scrolls what is under the pointer, rather than the wheel sending arrow keys. Unlike crossterm's `EnableMouseCapture`, it
-/// asks for no report on every move of the pointer.
+/// scrolls what is under the pointer, rather than the wheel sending arrow keys; and every move of
+/// the pointer, so a link under it stands out. A move costs a frame only when it goes onto or off
+/// a link or button.
 pub(super) fn report_mouse() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
-    // Press and release reports (1000), in the SGR encoding (1006).
-    stdout.write_all(b"\x1b[?1000h\x1b[?1006h")?;
+    // Presses, releases and moves (1003), in the SGR encoding (1006).
+    stdout.write_all(b"\x1b[?1003h\x1b[?1006h")?;
     stdout.flush()
 }
 
@@ -128,46 +130,64 @@ fn handle(
     workspace: &mut Workspace,
     terminal: &mut DefaultTerminal,
 ) -> Handled {
-    match event {
-        TerminalEvent::Key(key) if key.kind == KeyEventKind::Press => match app.key(key) {
-            Some(Effect::Quit) => return Handled::Quit,
-            Some(effect) => {
-                match act::carry_out(effect, workspace, terminal) {
-                    Ok(act::Outcome::Did(what)) => app.did(what, workspace::now_ms()),
-                    Ok(act::Outcome::Choose(choice)) => app.choose(choice),
-                    Err(error) => app.action_failed(&error, workspace::now_ms()),
-                }
-                // Show what the action changed right away.
-                if let Err(error) = feed.refresh(workspace, app) {
-                    app.refresh_failed(&error);
-                }
-                return Handled::Changed;
-            }
-            None => {}
-        },
+    let effect = match event {
+        TerminalEvent::Key(key) if key.kind == KeyEventKind::Press => app.key(key),
         TerminalEvent::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
             column,
             ..
-        }) => app.wheel(column, Wheel::Up),
+        }) => {
+            app.wheel(column, Wheel::Up);
+            None
+        }
         TerminalEvent::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
             column,
             ..
-        }) => app.wheel(column, Wheel::Down),
+        }) => {
+            app.wheel(column, Wheel::Down);
+            None
+        }
         TerminalEvent::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column,
             row,
             ..
         }) => app.click(column, row),
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column,
+            row,
+            ..
+        }) => {
+            return if app.hover(column, row) {
+                Handled::Moved
+            } else {
+                Handled::Ignored
+            };
+        }
         TerminalEvent::Resize(width, height) => {
             app.resize(width, height);
             return Handled::Changed;
         }
         _ => return Handled::Ignored,
+    };
+    match effect {
+        Some(Effect::Quit) => Handled::Quit,
+        Some(effect) => {
+            match act::carry_out(effect, workspace, terminal) {
+                Ok(act::Outcome::Did(what)) => app.did(what, workspace::now_ms()),
+                Ok(act::Outcome::Choose(choice)) => app.choose(choice),
+                Err(error) => app.action_failed(&error, workspace::now_ms()),
+            }
+            // Show what the action changed right away.
+            if let Err(error) = feed.refresh(workspace, app) {
+                app.refresh_failed(&error);
+            }
+            Handled::Changed
+        }
+        None => Handled::Moved,
     }
-    Handled::Moved
 }
 
 /// What the dashboard has read from the workforce so far.
