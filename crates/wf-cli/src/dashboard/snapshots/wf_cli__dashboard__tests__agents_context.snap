@@ -1,0 +1,20 @@
+---
+source: crates/wf-cli/src/dashboard/tests.rs
+expression: "screen(&mut app, 60, 16)"
+---
+" workforce            1 Now·3   2 Items   3 Agents   4 Log  "
+" 3 live · 14 open · 1 blocked · 2 devices                   "
+"────────────────────────────────────────────────────────────"
+" this week: 5 done · 3h00m start to done                    "
+" 2 of 9 attempts failed · 0.5 change requests a merge       "
+"                                                            "
+"▸coder  claude-code · opus                         2/2 busy "
+"   ◆ #aeaqca Parse config lazily          work 12m · 69k/1M "
+"   ◇ #aibaea Fix error spans    work parked 40m · 170k/200k "
+"   · #aqcaib Dashboard                  submitted 2h00m ago "
+"                                                            "
+" reviewer  claude-code                    1 live · not here "
+"   ◆ #ambqga Archive by category                    work 2m "
+"────────────────────────────────────────────────────────────"
+" 07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_r"
+" enter open · j/k move · ? keys                             "
