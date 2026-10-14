@@ -1260,7 +1260,11 @@ fn keys_line(app: &App) -> Line<'static> {
             ..
         })
     );
-    let opened = app.stack().and_then(|stack| stack.last());
+    // A detail kept while the list has the keys takes none.
+    let opened = app
+        .stack()
+        .and_then(|stack| stack.last())
+        .filter(|_| !app.list_has_keys());
     let navigation = match (app.tab, opened.map(|opened| &opened.detail)) {
         (_, Some(Detail::Session(_))) => "esc back · j/k scroll · i item · f full",
         (_, Some(Detail::Item(_))) if item_session => "esc back · j/k scroll · enter session",
