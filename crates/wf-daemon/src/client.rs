@@ -1,6 +1,6 @@
 //! The CLI's side of the socket. Blocking, because the CLI is.
 
-use std::io::ErrorKind;
+use std::io::{ErrorKind, Read, Write};
 use std::os::unix::net::UnixStream;
 use std::path::Path;
 
@@ -57,14 +57,7 @@ impl DaemonClient {
             }
             Err(error) => return Err(ProtoError::from(error).into()),
         };
-        write_message(
-            &mut stream,
-            &Hello {
-                version: PROTOCOL_VERSION,
-            },
-        )?;
-        write_message(&mut stream, &Credential { token })?;
-        match read_message(&mut stream)? {
+        match handshake(&mut stream, token)? {
             HelloReply::Ready { device, caller, .. } => Ok(Some(Self {
                 stream,
                 device,
@@ -237,9 +230,78 @@ impl DaemonClient {
     }
 }
 
+/// Presents `token` and reads the daemon's answer. A daemon of another version answers the Hello
+/// and closes without reading on, so writing the Credential can fail while the refusal already
+/// waits to be read: a failed write only counts when there is no answer.
+fn handshake<S: Read + Write>(
+    stream: &mut S,
+    token: Option<Token>,
+) -> Result<HelloReply, ProtoError> {
+    let written = write_message(
+        stream,
+        &Hello {
+            version: PROTOCOL_VERSION,
+        },
+    )
+    .and_then(|()| write_message(stream, &Credential { token }));
+    match (read_message(stream), written) {
+        (Ok(reply), _) => Ok(reply),
+        (Err(_), Err(error)) | (Err(error), Ok(())) => Err(error),
+    }
+}
+
 #[cfg(test)]
 mod tests {
+    use std::io::Cursor;
+
     use super::*;
+
+    /// A daemon of another version: it has refused the Hello and closed, so a write after the
+    /// Hello fails as on a closed socket, while its refusal waits to be read.
+    struct ClosedAfterHello {
+        refusal: Cursor<Vec<u8>>,
+        hello_written: bool,
+    }
+
+    impl Read for ClosedAfterHello {
+        fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+            self.refusal.read(buffer)
+        }
+    }
+
+    impl Write for ClosedAfterHello {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            if self.hello_written {
+                return Err(ErrorKind::BrokenPipe.into());
+            }
+            Ok(bytes.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            self.hello_written = true;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_daemon_that_refuses_and_closes_before_the_credential_is_still_a_refusal() {
+        let mut refusal = Vec::new();
+        write_message(
+            &mut refusal,
+            &HelloReply::Refused {
+                version: PROTOCOL_VERSION + 1,
+            },
+        )
+        .unwrap();
+        let mut daemon = ClosedAfterHello {
+            refusal: Cursor::new(refusal),
+            hello_written: false,
+        };
+        assert!(matches!(
+            handshake(&mut daemon, None),
+            Ok(HelloReply::Refused { .. })
+        ));
+    }
 
     #[test]
     fn no_daemon_listens_on_a_socket_path_too_long_for_one() {
