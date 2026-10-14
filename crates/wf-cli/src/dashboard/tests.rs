@@ -1445,3 +1445,54 @@ fn a_link_in_the_log_opens_in_its_place_and_esc_goes_back_to_the_log() {
     app.click(column, row);
     assert_eq!(app.wanted().detail, None);
 }
+
+#[test]
+fn a_click_on_a_key_hint_does_what_its_key_does() {
+    let mut app = app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    let (column, row) = find(&mut app, 60, 24, "v review");
+    assert_eq!(app.click(column + 3, row), None);
+    assert!(matches!(app.prompt, Some(Prompt::Verdict { item }) if item == archive));
+    press(&mut app, KeyCode::Esc);
+    let (column, row) = find(&mut app, 60, 24, "D diff");
+    assert_eq!(
+        app.click(column, row),
+        Some(Effect::ShowDiff { item: archive })
+    );
+    // `j/k` names two keys, and the space between two hints is none.
+    let selected = app.now.selection.get().cloned();
+    let (column, row) = find(&mut app, 60, 24, "j/k move");
+    app.click(column, row);
+    app.click(column - 2, row);
+    assert_eq!(app.now.selection.get().cloned(), selected);
+    assert_eq!(app.wanted().detail, None);
+    let (column, row) = find(&mut app, 60, 24, "enter open");
+    app.click(column, row);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(archive)));
+}
+
+#[test]
+fn a_click_on_a_part_of_the_breadcrumb_goes_back_to_it() {
+    let mut app = app_with_links();
+    let spans = Detail::Item(ItemId::from_bytes([2; 32]));
+    let open_parse = |app: &mut App| {
+        let (column, row) = find(app, 60, 24, "#aeaqca,");
+        app.click(column, row);
+        assert_eq!(app.path().len(), 2);
+    };
+    open_parse(&mut app);
+    // The detail on top is where the breadcrumb is already.
+    let (column, row) = find(&mut app, 60, 24, "#aeaqca ");
+    app.click(column, row);
+    assert_eq!(app.path().len(), 2);
+    let (column, row) = find(&mut app, 60, 24, "#aibaea ›");
+    app.click(column + 6, row);
+    assert_eq!(app.path(), vec![spans]);
+    open_parse(&mut app);
+    let (column, row) = find(&mut app, 60, 24, "Now ›");
+    app.click(column, row);
+    assert!(app.stack().is_empty());
+    assert!(app.list_has_keys());
+}

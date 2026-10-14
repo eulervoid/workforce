@@ -2,6 +2,7 @@
 
 use ansi_to_tui::IntoText;
 use ratatui::Frame;
+use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span, Text};
@@ -12,7 +13,7 @@ use wf_core::item::ItemState;
 
 use super::app::{
     AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, STRIP, Scroll,
-    Spot, Starter, Status, Tab,
+    Spot, Starter, Status, Tab, Target,
 };
 use super::links;
 use super::snapshot::{
@@ -77,7 +78,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
             frame.render_widget(Paragraph::new(Line::from(" any key closes").dim()), keys);
         }
         Some(prompt) => draw_prompt(frame, app, prompt, keys),
-        None => frame.render_widget(Paragraph::new(keys_line(app)), keys),
+        None => shown.clickable.spots.extend(draw_hints(frame, app, keys)),
     }
     shown
 }
@@ -1008,7 +1009,7 @@ fn draw_detail(
         width: body.width.saturating_sub(1),
         ..body
     };
-    frame.render_widget(Paragraph::new(breadcrumb(app, title.width)), title);
+    spots.extend(draw_breadcrumb(frame, app, title));
     let in_view = app.snapshot.in_view.as_ref();
     // Until the snapshot has caught up with what was opened, the detail stays empty.
     let (scroll, item) = match &opened.detail {
@@ -1125,26 +1126,33 @@ fn draw_session(
     shown
 }
 
-/// Where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part stands
-/// out while the detail has the keys, and is dim while it only shows what the list selects.
-fn breadcrumb(app: &App, width: u16) -> Line<'static> {
+/// Draws where the detail on screen is: `Now › #k3j1 › coder · work · 12m ◆`. Its last part
+/// stands out while the detail has the keys, and is dim while it only shows what the list
+/// selects. Returns the parts that go back to a detail opened before, or to the list.
+fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let separator = || Span::raw(" › ").dim();
-    let mut crumbs: Vec<Vec<Span<'static>>> = vec![vec![Span::raw(app.tab.name())]];
+    // Each part, with how many of the details opened it goes back to; `None` for an item named
+    // only for its session, which was not opened.
+    let mut crumbs: Vec<(Vec<Span<'static>>, Option<usize>)> =
+        vec![(vec![Span::raw(app.tab.name())], Some(0))];
     let path = app.path();
-    for detail in &path {
+    for (index, detail) in path.iter().enumerate() {
+        let depth = Some(index + 1);
         match detail {
-            Detail::Item(item) => crumbs.push(vec![Span::raw(format!("#{}", item.short()))]),
-            Detail::Agent(agent) => crumbs.push(vec![Span::raw(agent.name.to_string())]),
+            Detail::Item(item) => {
+                crumbs.push((vec![Span::raw(format!("#{}", item.short()))], depth));
+            }
+            Detail::Agent(agent) => crumbs.push((vec![Span::raw(agent.name.to_string())], depth)),
             Detail::Session(id) => {
                 let Some(session) = app.session_info(*id) else {
-                    crumbs.push(vec![Span::raw(id.short())]);
+                    crumbs.push((vec![Span::raw(id.short())], depth));
                     continue;
                 };
                 // A session is about an item: named, unless the way here went through it.
                 let item = session.item.id;
                 if crumbs
                     .last()
-                    .and_then(|crumb| crumb.first())
+                    .and_then(|(crumb, _)| crumb.first())
                     .map(|span| span.content.as_ref())
                     != Some(format!("#{}", item.short()).as_str())
                 {
@@ -1155,18 +1163,40 @@ fn breadcrumb(app: &App, width: u16) -> Line<'static> {
                     {
                         crumb.push(Span::raw(format!(" {title}")));
                     }
-                    crumbs.push(crumb);
+                    crumbs.push((crumb, None));
                 }
-                crumbs.push(session_crumb(app, session));
+                crumbs.push((session_crumb(app, session), depth));
             }
         }
     }
     let focused = !app.list_has_keys();
     let last = crumbs.len() - 1;
+    // Only what was opened, below the detail on top, is there to go back to.
+    let opened = app.stack().len();
+    let mut spots = Vec::new();
     let mut spans = vec![Span::raw(" ")];
-    for (index, crumb) in crumbs.into_iter().enumerate() {
+    for (index, (crumb, depth)) in crumbs.into_iter().enumerate() {
         if index > 0 {
             spans.push(separator());
+        }
+        let start: usize = spans.iter().map(Span::width).sum();
+        let width: usize = crumb.iter().map(Span::width).sum();
+        if let Some(depth) = depth.filter(|depth| *depth < opened)
+            && let Some(name) = crumb.first()
+        {
+            let button = Rect {
+                x: area.x.saturating_add(start as u16),
+                width: width as u16,
+                ..area
+            };
+            spots.push(Spot {
+                target: Target::Back {
+                    depth,
+                    name: name.content.trim().to_owned(),
+                },
+                // What a narrow window cuts off cannot be clicked.
+                area: button.intersection(area),
+            });
         }
         for span in crumb {
             spans.push(match (index == last, focused) {
@@ -1175,7 +1205,10 @@ fn breadcrumb(app: &App, width: u16) -> Line<'static> {
             });
         }
     }
-    Line::from(cut_spans(spans, usize::from(width)))
+    let line = Line::from(cut_spans(spans, usize::from(area.width)));
+    frame.render_widget(Paragraph::new(line), area);
+    spots.retain(|spot| !spot.area.is_empty());
+    spots
 }
 
 /// `coder · work · 12m ◆`
@@ -1288,8 +1321,56 @@ fn latest_line(app: &App) -> Line<'static> {
     }
 }
 
-/// The keys that work on what is on screen.
-fn keys_line(app: &App) -> Line<'static> {
+/// Draws the keys that work on what is on screen; returns them as buttons, but for `j/k` and the
+/// answers to a permission request, which a click is not to give by accident.
+fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
+    let hints = hints(app);
+    let mut spots = Vec::new();
+    let mut start = 1;
+    for hint in &hints {
+        let width = textwrap::core::display_width(hint);
+        if let Some((key, what)) = hint.split_once(' ')
+            && let Some(code) = hint_key(key)
+        {
+            let button = Rect {
+                x: area.x.saturating_add(start as u16),
+                width: width as u16,
+                ..area
+            };
+            spots.push(Spot {
+                target: Target::Key { code, key, what },
+                area: button.intersection(area),
+            });
+        }
+        start += width + textwrap::core::display_width(SEPARATOR);
+    }
+    let line = Line::from(format!(" {}", hints.join(SEPARATOR))).dim();
+    frame.render_widget(Paragraph::new(line), area);
+    spots.retain(|spot| !spot.area.is_empty());
+    spots
+}
+
+/// Between two hints.
+const SEPARATOR: &str = " · ";
+
+/// The key a hint names, if a click on it does what the key does.
+fn hint_key(key: &str) -> Option<KeyCode> {
+    match key {
+        "enter" => Some(KeyCode::Enter),
+        "esc" => Some(KeyCode::Esc),
+        "j/k" | "a" | "d" => None,
+        _ => {
+            let mut characters = key.chars();
+            match (characters.next(), characters.next()) {
+                (Some(character), None) => Some(KeyCode::Char(character)),
+                _ => None,
+            }
+        }
+    }
+}
+
+/// The keys that work on what is on screen: `esc back`, `v review`.
+fn hints(app: &App) -> Vec<&'static str> {
     let mut acts: Vec<&str> = Vec::new();
     for entry in app.subjects() {
         let keys: &[&str] = match entry {
@@ -1312,30 +1393,30 @@ fn keys_line(app: &App) -> Line<'static> {
         })
     );
     let opened = app.stack().last();
-    let navigation = match (app.tab, opened.map(|opened| &opened.detail)) {
-        (_, Some(Detail::Session(_))) => "esc back · j/k scroll · i item · f full",
-        (_, Some(Detail::Item(_))) if item_session => "esc back · j/k scroll · enter session",
-        (_, Some(Detail::Item(_) | Detail::Agent(_))) => "esc back · j/k scroll",
-        (Tab::Now, None) => "enter open · j/k move",
-        (Tab::Items, None) => "enter open · o group · / filter · F ready",
-        (Tab::Log, None) if !app.log.filter.is_empty() => "/ change filter · esc clear",
-        (Tab::Log, None) => "/ filter · j/k scroll",
-        (Tab::Agents, None) => "enter open · j/k move",
+    let navigation: &[&str] = match (app.tab, opened.map(|opened| &opened.detail)) {
+        (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full"],
+        (_, Some(Detail::Item(_))) if item_session => &["esc back", "j/k scroll", "enter session"],
+        (_, Some(Detail::Item(_) | Detail::Agent(_))) => &["esc back", "j/k scroll"],
+        (Tab::Now, None) => &["enter open", "j/k move"],
+        (Tab::Items, None) => &["enter open", "o group", "/ filter", "F ready"],
+        (Tab::Log, None) if !app.log.filter.is_empty() => &["/ change filter", "esc clear"],
+        (Tab::Log, None) => &["/ filter", "j/k scroll"],
+        (Tab::Agents, None) => &["enter open", "j/k move"],
     };
     // What follows what is added, once scrolled away from its end.
     let followed = match (app.tab, opened) {
-        (Tab::Log, _) => Some(app.log.scroll),
         (_, Some(opened)) => match opened.detail {
             Detail::Session(_) => Some(opened.scroll),
             Detail::Item(_) | Detail::Agent(_) => None,
         },
+        (Tab::Log, None) => Some(app.log.scroll),
         (Tab::Now | Tab::Items | Tab::Agents, None) => None,
     };
-    let mut parts: Vec<&str> = vec![navigation];
+    let mut hints = navigation.to_vec();
     if let Some(Scroll::At(_)) = followed {
-        parts.push("G follow");
+        hints.push("G follow");
     }
-    parts.extend(acts);
-    parts.push("? keys");
-    Line::from(format!(" {}", parts.join(" · "))).dim()
+    hints.extend(acts);
+    hints.push("? keys");
+    hints
 }
