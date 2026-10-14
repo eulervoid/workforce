@@ -1,5 +1,7 @@
 //! How the workforce is doing: counts over items and sessions, at a time given by the caller.
 
+use serde::Serialize;
+
 use crate::event::CommentKind;
 use crate::identity::AgentId;
 use crate::item::{Item, ItemState};
@@ -27,7 +29,7 @@ pub struct ProjectStats {
 }
 
 /// How an agent is doing, over all its sessions.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub struct AgentStats {
     pub sessions: usize,
     pub live: usize,

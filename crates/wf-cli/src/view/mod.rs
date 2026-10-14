@@ -1,6 +1,7 @@
 //! What commands print. Each view is a plain serializable struct: `--json` prints it inside a
 //! versioned [`Envelope`], text output is rendered from the same struct in `render`.
 
+mod agent;
 mod detail;
 mod event;
 mod inbox;
@@ -8,6 +9,7 @@ mod item;
 mod session;
 mod status;
 
+pub use agent::*;
 pub use detail::*;
 pub use event::*;
 pub use inbox::*;
