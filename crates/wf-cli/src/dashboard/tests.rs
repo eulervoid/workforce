@@ -1985,7 +1985,7 @@ fn a_long_item_shows_how_far_down_it_is_scrolled_and_keeps_off_the_right_edge() 
     // lines, scrolled from 0 to 13.
     let body = |app: &mut App| -> Vec<String> { screen_lines(app, 60, 10)[4..=6].to_vec() };
     let at_top = body(&mut app);
-    assert!(at_top[2].ends_with(" Top "), "{at_top:#?}");
+    assert!(at_top[2].ends_with(" 0% "), "{at_top:#?}");
     // The long word is wrapped a column short of the edge.
     assert!(at_top[0].starts_with(&format!(" {} ", "x".repeat(58))));
     for _ in 0..6 {
@@ -1999,7 +1999,7 @@ fn a_long_item_shows_how_far_down_it_is_scrolled_and_keeps_off_the_right_edge() 
         screen(&mut app, 60, 10);
     }
     let at_end = body(&mut app);
-    assert!(at_end[2].ends_with(" Bot "), "{at_end:#?}");
+    assert!(at_end[2].ends_with(" 100% "), "{at_end:#?}");
     assert_eq!(at_end[0].trim(), "line 10");
     // No text in the last column, at any scroll.
     for line in at_top.iter().chain(&halfway).chain(&at_end) {
@@ -2028,6 +2028,31 @@ fn a_line_as_wide_as_the_laid_out_item_stays_one_line() {
     let body = screen_lines(&mut app, 60, 10)[4..=6].to_vec();
     assert_eq!(body[0].trim(), full, "{body:#?}");
     assert_eq!(body[1].trim(), "next", "{body:#?}");
+}
+
+#[test]
+fn rendered_markdown_is_laid_out_at_the_width_it_was_rendered_for() {
+    let mut app = app();
+    let spans = ItemId::from_bytes([2; 32]);
+    app.open_item(spans);
+    screen(&mut app, 60, 10);
+    // Bold words fill each line up to the width; their escape codes take no columns.
+    let words = "**word** ".repeat(usize::from(app.detail_width()) / 5 * 2);
+    let text = crate::markdown::render(&words, Some(usize::from(app.detail_width())), "  ");
+    let rendered: Vec<String> = text
+        .lines()
+        .map(|line| anstream::adapter::strip_str(line).to_string())
+        .collect();
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Item {
+        id: spans,
+        text,
+        session: None,
+    });
+    app.refresh(snapshot);
+    let body = screen_lines(&mut app, 60, 10)[4..=5].to_vec();
+    assert_eq!(body[0].trim(), rendered[0].trim(), "{body:#?}");
+    assert_eq!(body[1].trim(), rendered[1].trim(), "{body:#?}");
 }
 
 #[test]
