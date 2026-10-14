@@ -367,6 +367,8 @@ pub struct Drawn {
     pub text: Option<Scroll>,
     pub list_top: Option<usize>,
     pub clickable: Clickable,
+    /// The link or button under the pointer.
+    pub hovered: Option<Spot>,
 }
 
 /// Where drawing put what a click can land on.
@@ -670,6 +672,11 @@ pub struct App {
     pub status: Option<Status>,
     /// What a click can land on, as last drawn.
     pub clickable: Clickable,
+    /// Where the pointer was last reported.
+    pub pointer: Option<Position>,
+    /// The link or button under the pointer, as last drawn: underlined, with its tip in place of
+    /// the latest event.
+    pub hovered: Option<Spot>,
 }
 
 impl App {
@@ -701,6 +708,8 @@ impl App {
             time_zone,
             status: None,
             clickable: Clickable::default(),
+            pointer: None,
+            hovered: None,
         };
         app.refresh(snapshot);
         app
@@ -959,6 +968,7 @@ impl App {
     /// where a click lands.
     pub fn shown(&mut self, drawn: Drawn) {
         self.clickable = drawn.clickable;
+        self.hovered = drawn.hovered;
         if let Some(list_top) = drawn.list_top
             && let Some(panes) = self.panes_mut()
         {
@@ -1362,6 +1372,25 @@ impl App {
         }
     }
 
+    /// The pointer moved to `column`, `row`. Returns whether that took it onto or off a link or
+    /// button, which is drawn again only then.
+    pub fn hover(&mut self, column: u16, row: u16) -> bool {
+        let position = Position::new(column, row);
+        self.pointer = Some(position);
+        let under = self.hovered_at(position);
+        let changed = under != self.hovered;
+        self.hovered = under;
+        changed
+    }
+
+    /// The link or button at `position` as last drawn, while the mouse acts.
+    fn hovered_at(&self, position: Position) -> Option<Spot> {
+        if !self.mouse_passes() {
+            return None;
+        }
+        self.clickable.spot(position).cloned()
+    }
+
     /// Selects the entry at `index` of the list on screen and gives the list the keys; opens it
     /// when it was selected already and the list had the keys, as enter would.
     fn click_entry(&mut self, index: usize) {
@@ -1427,7 +1456,7 @@ impl App {
 
     /// Whether the mouse acts while the footer asks for something: only while the log is
     /// filtered, so the wheel goes through what matches.
-    fn mouse_passes(&self) -> bool {
+    pub fn mouse_passes(&self) -> bool {
         match &self.prompt {
             None
             | Some(Prompt::Filter {

@@ -49,12 +49,13 @@ pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()
 }
 
 /// Asks the terminal to report presses of the mouse and its wheel, so a click picks and the wheel
-/// scrolls what is under the pointer, rather than the wheel sending arrow keys. Unlike crossterm's `EnableMouseCapture`, it
-/// asks for no report on every move of the pointer.
+/// scrolls what is under the pointer, rather than the wheel sending arrow keys; and every move of
+/// the pointer, so a link under it stands out. A move costs a frame only when it goes onto or off
+/// a link or button.
 pub(super) fn report_mouse() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
-    // Press and release reports (1000), in the SGR encoding (1006).
-    stdout.write_all(b"\x1b[?1000h\x1b[?1006h")?;
+    // Presses, releases and moves (1003), in the SGR encoding (1006).
+    stdout.write_all(b"\x1b[?1003h\x1b[?1006h")?;
     stdout.flush()
 }
 
@@ -153,6 +154,18 @@ fn handle(
             row,
             ..
         }) => app.click(column, row),
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Moved,
+            column,
+            row,
+            ..
+        }) => {
+            return if app.hover(column, row) {
+                Handled::Moved
+            } else {
+                Handled::Ignored
+            };
+        }
         TerminalEvent::Resize(width, height) => {
             app.resize(width, height);
             return Handled::Changed;

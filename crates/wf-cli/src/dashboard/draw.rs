@@ -80,6 +80,22 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         Some(prompt) => draw_prompt(frame, app, prompt, keys),
         None => shown.clickable.spots.extend(draw_hints(frame, app, keys)),
     }
+    shown.hovered = app
+        .pointer
+        .filter(|_| app.mouse_passes())
+        .and_then(|pointer| shown.clickable.spot(pointer))
+        .cloned();
+    if let Some(spot) = &shown.hovered {
+        frame
+            .buffer_mut()
+            .set_style(spot.area, Style::new().underlined());
+        // A link in the latest event says itself where it is.
+        if !spot.area.intersects(latest) {
+            frame.render_widget(Clear, latest);
+            let tip = Line::from(format!(" {}", spot.target.tip()));
+            frame.render_widget(Paragraph::new(tip), latest);
+        }
+    }
     shown
 }
 
@@ -353,6 +369,7 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
                         list: Some(list),
                         ..Clickable::default()
                     },
+                    ..Drawn::default()
                 }
             }
         };
@@ -378,6 +395,7 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
             spots,
             ..Clickable::default()
         },
+        ..Drawn::default()
     }
 }
 

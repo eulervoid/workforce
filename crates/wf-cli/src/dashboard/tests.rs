@@ -1496,3 +1496,54 @@ fn a_click_on_a_part_of_the_breadcrumb_goes_back_to_it() {
     assert!(app.stack().is_empty());
     assert!(app.list_has_keys());
 }
+
+#[test]
+fn a_move_draws_again_only_onto_or_off_a_link_or_a_button() {
+    let mut app = app_with_links();
+    let (column, row) = find(&mut app, 60, 24, "#aeaqca,");
+    let (plain, plain_row) = find(&mut app, 60, 24, "After");
+    assert!(!app.hover(plain, plain_row));
+    assert!(!app.hover(plain + 2, plain_row));
+    assert!(app.hover(column, row));
+    // Along the same link.
+    assert!(!app.hover(column + 3, row));
+    assert!(app.hover(plain, plain_row));
+    // Onto a button.
+    let (column, row) = find(&mut app, 60, 24, "esc back");
+    assert!(app.hover(column, row));
+}
+
+#[test]
+fn a_link_under_the_pointer_is_underlined_and_its_tip_shows() {
+    use ratatui::style::Modifier;
+    let mut app = app_with_links();
+    let latest = find(&mut app, 60, 24, "submitted 3e8a1c").1;
+    let tips = [
+        ("#aeaqca,", "open #aeaqca"),
+        ("@ada/coder.", "open @ada/coder"),
+        ("@ada/coder/", "open the transcript of @ada/coder/bmfqwc"),
+        ("a8d49484", "open the diff of a8d49484"),
+        ("esc back", "back (esc)"),
+        ("Now ›", "back to Now"),
+    ];
+    for (text, tip) in tips {
+        let (column, row) = find(&mut app, 60, 24, text);
+        app.hover(column + 1, row);
+        assert!(
+            style_at(&mut app, 60, 24, column + 1, row)
+                .add_modifier
+                .contains(Modifier::UNDERLINED),
+            "{text}"
+        );
+        assert_eq!(find(&mut app, 60, 24, tip), (1, latest), "{text}");
+    }
+    // Back on plain text, the latest event shows again.
+    let (column, row) = find(&mut app, 60, 24, "After");
+    app.hover(column, row);
+    assert_eq!(find(&mut app, 60, 24, "submitted 3e8a1c").1, latest);
+    assert!(
+        !style_at(&mut app, 60, 24, column, row)
+            .add_modifier
+            .contains(Modifier::UNDERLINED)
+    );
+}
