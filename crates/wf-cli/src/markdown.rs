@@ -116,12 +116,12 @@ impl MarkdownWriter {
 
     fn style_off(&mut self) {
         self.styles.pop();
+        self.line.push_str(&format!("{:#}", Style::new().bold()));
         self.restyle();
     }
 
-    /// Ends every style and starts again those still open.
+    /// Starts again the styles still open, after a reset.
     fn restyle(&mut self) {
-        self.line.push_str(&format!("{:#}", Style::new().bold()));
         for style in &self.styles {
             self.line.push_str(&style.to_string());
         }
