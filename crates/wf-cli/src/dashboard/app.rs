@@ -23,6 +23,25 @@ use crate::transcript::Transcript;
 /// From this width the detail sits right of the list, instead of in its place.
 pub const WIDE: u16 = 120;
 
+/// How many lines a text moves for a notch of the mouse wheel.
+const WHEEL_LINES: u16 = 3;
+
+/// Which way the mouse wheel turned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Wheel {
+    Up,
+    Down,
+}
+
+impl Wheel {
+    fn scroll(self, scroll: Scroll) -> Scroll {
+        match self {
+            Wheel::Up => scroll.up(WHEEL_LINES),
+            Wheel::Down => scroll.down(WHEEL_LINES),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Tab {
     Now,
@@ -923,6 +942,46 @@ impl App {
             },
         }
         None
+    }
+
+    /// The mouse wheel turned over `column`. What is under the pointer takes the keys and moves:
+    /// in a wide window the list or the detail beside it, otherwise what is on screen.
+    pub fn wheel(&mut self, column: u16, wheel: Wheel) {
+        if self.prompt.is_some() {
+            return;
+        }
+        if self.tab == Tab::Log {
+            self.log.scroll = wheel.scroll(self.log.scroll);
+            return;
+        }
+        if self.is_wide() {
+            if column < self.list_width() {
+                if let Some(stack) = self.stack_mut() {
+                    stack.clear();
+                }
+            } else if self.list_has_keys()
+                && let Some(detail) = self.selected_detail()
+            {
+                // Its detail is on screen already: opening it only gives it the keys.
+                self.open(detail);
+            }
+        }
+        match self.stack_mut().and_then(|stack| stack.last_mut()) {
+            Some(opened) => opened.scroll = wheel.scroll(opened.scroll),
+            None => {
+                let code = match wheel {
+                    Wheel::Up => KeyCode::Up,
+                    Wheel::Down => KeyCode::Down,
+                };
+                let key = KeyEvent::new(code, KeyModifiers::NONE);
+                match self.tab {
+                    Tab::Now => self.now_key(key),
+                    Tab::Items => self.items_key(key),
+                    Tab::Agents => self.agents_key(key),
+                    Tab::Log => self.log_key(key),
+                }
+            }
+        }
     }
 
     /// The keys that act on what waits, on items and on sessions, for whatever is on screen.

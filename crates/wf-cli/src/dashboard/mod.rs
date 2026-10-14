@@ -10,11 +10,15 @@ use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event as TerminalEvent, KeyEventKind};
+use ratatui::crossterm::event::{
+    self, DisableMouseCapture, EnableMouseCapture, Event as TerminalEvent, KeyEventKind,
+    MouseEvent, MouseEventKind,
+};
+use ratatui::crossterm::execute;
 use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
 
-use self::app::{App, Effect};
+use self::app::{App, Effect, Wheel};
 use self::snapshot::{Detail, Snapshot, Sources};
 use crate::workspace::{self, Workspace};
 use crate::{render, transcript, view};
@@ -27,7 +31,10 @@ const BACKLOG: usize = 200;
 
 pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
+    // The wheel scrolls what is under the pointer, rather than sending arrow keys.
+    execute!(std::io::stdout(), EnableMouseCapture)?;
     let result = event_loop(&mut terminal, workspace, only);
+    let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
 }
@@ -67,6 +74,16 @@ fn event_loop(
                     }
                     None => {}
                 },
+                TerminalEvent::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollUp,
+                    column,
+                    ..
+                }) => app.wheel(column, Wheel::Up),
+                TerminalEvent::Mouse(MouseEvent {
+                    kind: MouseEventKind::ScrollDown,
+                    column,
+                    ..
+                }) => app.wheel(column, Wheel::Down),
                 TerminalEvent::Resize(width, _) => app.resize(width),
                 _ => continue,
             }

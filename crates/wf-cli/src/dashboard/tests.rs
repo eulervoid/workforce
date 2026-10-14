@@ -12,7 +12,7 @@ use wf_core::name::{AgentName, StateName};
 use wf_core::policy::StateCategory;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
-use super::app::{AgentRow, App, Choice, Effect, Prompt, Row, Tab};
+use super::app::{AgentRow, App, Choice, Effect, Opened, Prompt, Row, Scroll, Tab, Wheel};
 use super::draw;
 use super::snapshot::{
     AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Place, SessionInfo,
@@ -701,6 +701,55 @@ fn the_agents_tab_lists_each_agent_with_its_sessions() {
     // A session that ended cannot be stopped.
     assert_eq!(press(&mut app, KeyCode::Char('x')), None);
     assert!(app.prompt.is_none());
+}
+
+#[test]
+fn the_wheel_moves_what_is_under_the_pointer() {
+    let mut app = app();
+    app.resize(130);
+    let item = Detail::Item(ItemId::from_bytes([4; 32]));
+    let blocked = Detail::Item(ItemId::from_bytes([5; 32]));
+    // Over the detail beside the list, the wheel gives the detail the keys and scrolls it.
+    app.wheel(100, Wheel::Down);
+    assert_eq!(
+        app.stack(),
+        Some(&vec![Opened {
+            detail: Detail::Session(SessionId::from_bytes([11; 32])),
+            scroll: Scroll::FromEnd(0),
+        }])
+    );
+    assert!(!app.list_has_keys());
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    app.wheel(100, Wheel::Down);
+    app.wheel(100, Wheel::Down);
+    assert_eq!(
+        app.stack(),
+        Some(&vec![Opened {
+            detail: item.clone(),
+            scroll: Scroll::FromTop(6),
+        }])
+    );
+    // Over the list, the list takes the keys back and the wheel moves its selection.
+    app.wheel(10, Wheel::Down);
+    assert!(app.list_has_keys());
+    assert_eq!(app.wanted().detail, Some(blocked));
+    app.wheel(10, Wheel::Up);
+    assert_eq!(app.wanted().detail, Some(item.clone()));
+    // In a narrow window the wheel moves what is on screen, wherever the pointer is.
+    app.resize(60);
+    app.wheel(50, Wheel::Down);
+    assert!(app.list_has_keys());
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::Enter);
+    app.wheel(10, Wheel::Down);
+    assert_eq!(
+        app.stack()
+            .and_then(|stack| stack.last())
+            .map(|opened| opened.scroll),
+        Some(Scroll::FromTop(3))
+    );
 }
 
 #[test]
