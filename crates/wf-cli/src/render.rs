@@ -701,6 +701,10 @@ fn agent_load(detail: &AgentDetail) -> String {
             style::color(anstyle::AnsiColor::Blue),
             format!("{live}/{} busy", host.sessions),
         ),
+        Some(host) if live > 0 => paint(
+            style::color(anstyle::AnsiColor::Blue),
+            format!("{live}/{} live", host.sessions),
+        ),
         Some(host) => paint(DIM, format!("{live}/{} idle", host.sessions)),
         None => paint(DIM, format!("{live} live · not hosted here")),
     };

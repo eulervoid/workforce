@@ -1,6 +1,5 @@
 ---
 source: crates/wf-cli/src/dashboard/tests.rs
-assertion_line: 2226
 expression: "screen(&mut app, 40, 40)"
 ---
 "  1 Now·3   2 Items   3 Agents   4 Log  "
@@ -8,7 +7,7 @@ expression: "screen(&mut app, 40, 40)"
 "────────────────────────────────────────"
 " Agents › coder                         "
 " @ada/coder  claude-code · opus         "
-"   ◆ 1/2 idle                           "
+"   ◆ 1/2 live                           "
 "   lanes default · can rust, review ·   "
 "   starts auto · permissions allow      "
 "   nudges 3 · parks for 2h · at most 1h "

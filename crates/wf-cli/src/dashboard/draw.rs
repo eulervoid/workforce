@@ -1197,7 +1197,7 @@ fn stats_lines(stats: &ProjectStats, width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// `coder  claude-code · opus  2/2 busy`
+/// `coder  claude-code · opus  2/2 busy`, `1/2 live` while there is room, `0/2 idle`
 fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
     let first = vec![
         Span::raw(agent.id.name.to_string()).bold(),
@@ -1208,6 +1208,7 @@ fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
         Some(capacity) if live as u32 >= capacity => {
             Span::raw(format!("{live}/{capacity} busy")).fg(Color::Blue)
         }
+        Some(capacity) if live > 0 => Span::raw(format!("{live}/{capacity} live")).fg(Color::Blue),
         Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).dim(),
         None => Span::raw(format!("{live} live · not here")).dim(),
     };
