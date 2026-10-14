@@ -16,6 +16,7 @@ use crate::view::{
     StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
+use wf_core::inbox::InboxKind;
 use wf_core::item::ItemState;
 use wf_core::item::Priority;
 
@@ -408,9 +409,6 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
     if let Some(steps) = summary.steps {
         status.push(format!("steps {}", steps_label(Some(steps))));
     }
-    if let Some(waits) = &detail.waits_after_failures {
-        status.push(paint(style::WARNING, format!("waits for you: {waits}")));
-    }
     if let Some(review) = &detail.review_status {
         let short_commit = |commit: &str| commit[..commit.len().min(8)].to_string();
         let text = match review {
@@ -450,9 +448,6 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         ),
         "  ",
     );
-    for flag in &detail.flags {
-        line(format!("  {}", paint(WARNING, format!("! {flag}"))), "    ");
-    }
     if !detail.open.is_empty() {
         let open: Vec<String> = detail
             .open
@@ -531,6 +526,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         let mentions: Vec<String> = detail.mentions.iter().map(style::paint_actor).collect();
         line(format!("  ↳ mentions {}", mentions.join(" ")), LINK_INDENT);
     }
+    out.push_str(&notices(detail, width, format));
     if !detail.body.is_empty() {
         out.push('\n');
         out.push_str(&body(&detail.body, width, format));
@@ -543,6 +539,85 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
 
 /// Where a wrapped `↳` line of an item's header continues: under the text after `↳ `.
 const LINK_INDENT: &str = "    ";
+
+/// What about an item waits on the principal and what needs attention, in full. Styled, a block
+/// under a bar: yellow for what waits, red for failed sessions and the item's flags, each entry
+/// under a heading. Raw, one `!` line per entry with what it points to indented below.
+fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String {
+    use anstyle::AnsiColor;
+    use style::{BOLD, WARNING, paint};
+    let mut out = String::new();
+    match format {
+        Format::Styled => {
+            let mut entries: Vec<(AnsiColor, &str, Vec<String>)> = detail
+                .waiting
+                .iter()
+                .map(|waiting| {
+                    let color = match waiting.kind {
+                        InboxKind::Recovery => AnsiColor::Red,
+                        InboxKind::Blocker
+                        | InboxKind::Proposal
+                        | InboxKind::PrincipalReview
+                        | InboxKind::Merge
+                        | InboxKind::Permission => AnsiColor::Yellow,
+                    };
+                    let paragraphs = std::iter::once(&waiting.what)
+                        .chain(&waiting.points_to)
+                        .cloned()
+                        .collect();
+                    (color, waiting.heading.as_str(), paragraphs)
+                })
+                .collect();
+            if !detail.flags.is_empty() {
+                let flags: Vec<String> = detail
+                    .flags
+                    .iter()
+                    .map(|flag| format!("- {flag}"))
+                    .collect();
+                entries.push((AnsiColor::Red, "needs attention", vec![flags.join("\n")]));
+            }
+            if entries.is_empty() {
+                return out;
+            }
+            out.push('\n');
+            // The bar and the space after it.
+            let inner = width.map(|width| width.saturating_sub(4));
+            for (index, (color, heading, paragraphs)) in entries.into_iter().enumerate() {
+                let bar = paint(style::color(color), "┃");
+                if index > 0 {
+                    let _ = writeln!(out, "  {bar}");
+                }
+                let heading = paint(BOLD.fg_color(Some(anstyle::Color::Ansi(color))), heading);
+                let _ = writeln!(out, "  {bar} {heading}");
+                for paragraph in paragraphs {
+                    for line in markdown::render(&paragraph, inner, "")
+                        .trim_end_matches('\n')
+                        .lines()
+                    {
+                        let _ = writeln!(out, "  {bar} {line}");
+                    }
+                }
+            }
+        }
+        Format::Raw => {
+            for waiting in &detail.waiting {
+                let line = format!("! {}: {}", waiting.heading, waiting.what);
+                let _ = writeln!(out, "  {}", paint(WARNING, fill(&line, width, "    ")));
+                for paragraph in &waiting.points_to {
+                    let _ = writeln!(out, "{}", indented(paragraph, "    "));
+                }
+            }
+            for flag in &detail.flags {
+                let _ = writeln!(
+                    out,
+                    "  {}",
+                    paint(WARNING, fill(&format!("! {flag}"), width, "    "))
+                );
+            }
+        }
+    }
+    out
+}
 
 /// The activity of an item: one line per thing that happened, and the text that goes with it
 /// below. The date heads the section and is repeated when the day changes.
@@ -1123,7 +1198,7 @@ mod tests {
             review: None,
             review_status: None,
             recovery: None,
-            waits_after_failures: None,
+            waiting: Vec::new(),
             requires: Vec::new(),
             depends_on: Vec::new(),
             required_by: Vec::new(),
@@ -1288,5 +1363,134 @@ mod tests {
             text.unwrap(),
             format!("{ACTIVITY_TEXT_INDENT}Chose **this**:\n\n{ACTIVITY_TEXT_INDENT}- see `#k3f9`")
         );
+    }
+
+    /// The detail of an approved item whose merge waits on a dirty checkout, which the daemon
+    /// commented on twice.
+    fn held_merge() -> ItemDetail {
+        use wf_core::id::{ItemId, SessionId};
+        use wf_core::identity::Actor;
+        use wf_core::item::ItemView;
+        use wf_core::session::{CommitId, EndReason, Verdict};
+        use wf_core::testing::*;
+
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let mut events = Vec::new();
+        let mut now = 2_000;
+        let mut apply = |state: &mut wf_core::state::State, actor: Actor, body| {
+            now += 1_000;
+            let event = fixture.author_as(state, 0, actor, now, body);
+            state
+                .receive(event.clone(), wf_core::state::Trust::Untrusted)
+                .unwrap();
+            events.push(event.clone());
+            event
+        };
+        let principal = fixture.founder_actor();
+        let daemon = Actor::Daemon(fixture.founder.key());
+        let commit = CommitId::Git("75eba435".repeat(5).parse().unwrap());
+        apply(&mut state, principal.clone(), define_agent("coder"));
+        let item: ItemId = apply(
+            &mut state,
+            principal.clone(),
+            create_reviewed("task", "Held", "standard"),
+        )
+        .id()
+        .into();
+        let session: SessionId = apply(&mut state, principal.clone(), start_session("coder", item))
+            .id()
+            .into();
+        let submitted = EndReason::Submitted {
+            commit: Some(commit),
+        };
+        apply(
+            &mut state,
+            principal.clone(),
+            end_session(session, submitted),
+        );
+        apply(
+            &mut state,
+            principal.clone(),
+            moved(item, ItemState::Review),
+        );
+        apply(
+            &mut state,
+            principal.clone(),
+            verdict(item, commit, Verdict::Approve),
+        );
+        apply(
+            &mut state,
+            daemon.clone(),
+            comment(item, "Waiting to merge: main kept moving."),
+        );
+        apply(
+            &mut state,
+            daemon,
+            comment(
+                item,
+                "Waiting to merge: main is checked out in /src/app with changes to src/lib.rs, Cargo.toml. Commit or stash them.",
+            ),
+        );
+        let ItemView::Live(live) = state.item(item).unwrap() else {
+            panic!()
+        };
+        crate::view::item_detail(&state, live, &events)
+    }
+
+    /// The lines of the notice box, without the bar.
+    fn boxed(shown: &str) -> Vec<String> {
+        anstream::adapter::strip_str(shown)
+            .to_string()
+            .lines()
+            .filter_map(|line| line.strip_prefix("  ┃"))
+            .map(|line| line.trim().to_string())
+            .collect()
+    }
+
+    #[test]
+    fn a_held_merge_shows_in_full_with_its_files_in_the_box() {
+        let detail = held_merge();
+        let what = &detail.waiting[0].what;
+        assert!(what.contains("is ready to merge"), "{what}");
+        let shown = item_detail_for(&detail, Some(40), Format::Styled);
+        let plain = anstream::adapter::strip_str(&shown).to_string();
+        assert!(
+            plain
+                .lines()
+                .all(|line| textwrap::core::display_width(line) <= 40),
+            "{plain}"
+        );
+        let boxed = boxed(&shown);
+        assert_eq!(boxed[0], "merge waits");
+        let text = boxed[1..].join(" ");
+        assert!(text.contains(what.as_str()), "{text}");
+        assert!(
+            text.contains("with changes to src/lib.rs, Cargo.toml. Commit or stash them."),
+            "{text}"
+        );
+        assert!(!text.contains("kept moving"), "only the latest: {text}");
+        let body = plain.find("activity").unwrap();
+        assert!(plain.find("merge waits").unwrap() < body, "{plain}");
+    }
+
+    #[test]
+    fn an_item_with_nothing_waiting_has_no_box() {
+        let shown = item_detail_for(&detail_with_a_body(), Some(40), Format::Styled);
+        assert!(boxed(&shown).is_empty(), "{shown}");
+    }
+
+    #[test]
+    fn piped_what_waits_and_the_flags_are_plain_lines() {
+        let mut detail = held_merge();
+        detail.flags = vec!["a task needs a priority".to_string()];
+        let shown =
+            anstream::adapter::strip_str(&item_detail_for(&detail, None, Format::Raw)).to_string();
+        assert!(!shown.contains('┃'), "{shown}");
+        let expected = format!(
+            "  ! merge waits: {}\n    Waiting to merge: main is checked out in /src/app with changes to src/lib.rs, Cargo.toml. Commit or stash them.\n  ! a task needs a priority\n",
+            detail.waiting[0].what
+        );
+        assert!(shown.contains(&expected), "{shown}");
     }
 }

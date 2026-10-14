@@ -40,7 +40,7 @@ expression: "Envelope::new(&detail)"
     "review": null,
     "review_status": null,
     "recovery": "standard",
-    "waits_after_failures": null,
+    "waiting": [],
     "requires": [],
     "depends_on": [
       {

@@ -9,12 +9,14 @@ use wf_core::crdt::SetChange;
 use wf_core::event::{Change, CommentKind, Event};
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, HashId, ItemId};
-use wf_core::inbox::Waiting;
+use wf_core::identity::Actor;
+use wf_core::inbox::{InboxKind, Waiting};
 use wf_core::item::{Item, ItemState, ItemView, WrittenIn};
 use wf_core::policy::{Field, ReviewStep};
 use wf_core::review::ReviewStatus;
 use wf_core::session::{CommitId, EndReason, SessionRole, Verdict};
 use wf_core::state::State;
+use wf_core::supervision::WaitsOn;
 
 use super::item::{ItemSummary, summary};
 use super::session::session_label;
@@ -243,8 +245,8 @@ pub struct ItemDetail {
     pub review_status: Option<ReviewStatusView>,
     /// What happens when a session ends without finishing: its own level, or its type's.
     pub recovery: Option<String>,
-    /// Sessions ended without finishing and the recovery level leaves the item to the principal.
-    pub waits_after_failures: Option<String>,
+    /// What about the item waits on the principal, as `wf inbox` lists it, in full.
+    pub waiting: Vec<WaitingView>,
     pub requires: Vec<String>,
     pub depends_on: Vec<LinkView>,
     pub required_by: Vec<LinkView>,
@@ -256,6 +258,21 @@ pub struct ItemDetail {
     pub activity: Vec<ActivityView>,
     pub open: Vec<OpenCommentView>,
     pub flags: Vec<String>,
+}
+
+/// Something about the item that waits on the principal, with what it points to, so nothing has
+/// to be looked up.
+#[derive(Serialize)]
+pub struct WaitingView {
+    pub kind: InboxKind,
+    /// A few words that head it: `merge waits`, `blocker`, `2 sessions failed`.
+    pub heading: String,
+    /// What `wf inbox` says about it.
+    pub what: String,
+    /// What it points to, each a paragraph of markdown: the daemon's comment that names the
+    /// changed files of a held merge, how the last failed session ended, who a blocker is from
+    /// and what it says.
+    pub points_to: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -581,6 +598,105 @@ fn step_ref(body: &Body, step: StepId) -> StepRefView {
     }
 }
 
+/// What about `item` waits on the principal, each with what it points to, taken from the item's
+/// activity `entries` and its sessions.
+fn waiting_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<WaitingView> {
+    let comments = || {
+        entries.iter().filter_map(|entry| {
+            let Activity::Commented { comment, text, .. } = &entry.activity else {
+                return None;
+            };
+            Some((entry, *comment, text.as_str()))
+        })
+    };
+    state
+        .inbox()
+        .into_iter()
+        .filter(|entry| entry.item == item.id())
+        .map(|entry| {
+            let (heading, points_to) = match entry.waiting {
+                Waiting::Blocker { comment } => {
+                    let from = comments().find(|(_, id, _)| *id == comment);
+                    let waits_on = state
+                        .open_blockers_of(item)
+                        .into_iter()
+                        .find(|blocker| blocker.comment == comment)
+                        .map(|blocker| match blocker.waits_on {
+                            WaitsOn::Principal(key) => state.actor_label(&Actor::Principal(key)),
+                            WaitsOn::Agent(agent) => agent.name.to_string(),
+                            WaitsOn::Supervisor => "a supervisor".to_string(),
+                        });
+                    let mut points_to = Vec::new();
+                    if let Some((entry, _, text)) = from {
+                        let by = state.actor_label(&entry.by);
+                        points_to.push(match waits_on {
+                            Some(waits_on) => format!("from {by}, waits on {waits_on}:"),
+                            None => format!("from {by}:"),
+                        });
+                        points_to.push(quoted(text));
+                    }
+                    ("blocker".to_string(), points_to)
+                }
+                Waiting::Proposal => ("proposal".to_string(), Vec::new()),
+                Waiting::PrincipalReview { .. } => ("review".to_string(), Vec::new()),
+                Waiting::Merge { .. } => {
+                    let named = comments()
+                        .rev()
+                        .find(|(entry, _, _)| matches!(entry.by, Actor::Daemon(_)))
+                        .map(|(_, _, text)| text.to_string());
+                    ("merge waits".to_string(), named.into_iter().collect())
+                }
+                Waiting::Recovery {
+                    role,
+                    failures,
+                    last,
+                } => {
+                    let sessions = match role {
+                        SessionRole::Work => "session",
+                        SessionRole::Review { .. } => "review session",
+                        SessionRole::Supervise => "supervise session",
+                        SessionRole::Diagnose => "diagnose session",
+                    };
+                    let heading = match failures {
+                        1 => format!("a {sessions} failed"),
+                        failures => format!("{failures} {sessions}s failed"),
+                    };
+                    let mut points_to = Vec::new();
+                    if let Some(session) = state.session(last) {
+                        let ended = session.ended().map_or_else(
+                            || "ended".to_string(),
+                            |ended| ended.reason.name().replace('_', " "),
+                        );
+                        points_to.push(format!("the last, {}: {ended}", session_label(session)));
+                        if let Some((_, _, text)) = comments().rev().find(|(entry, _, _)| {
+                            matches!(entry.by, Actor::Agent { session, .. } if session == last)
+                        })
+                        {
+                            points_to.push(format!("its last comment:\n\n{}", quoted(text)));
+                        }
+                    }
+                    (heading, points_to)
+                }
+            };
+            WaitingView {
+                kind: entry.waiting.kind(),
+                heading,
+                what: state.what_waits(&entry),
+                points_to,
+            }
+        })
+        .collect()
+}
+
+/// `text` as a markdown quote.
+fn quoted(text: &str) -> String {
+    text.trim_end()
+        .lines()
+        .map(|line| format!("> {line}"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The detail of a live item. `events` is the log, for the item's activity.
 pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
     let graph = state.dependency_graph();
@@ -635,7 +751,8 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         );
     }
 
-    let activity = activity_views(state, item, &state.activity(item.id(), events));
+    let entries = state.activity(item.id(), events);
+    let activity = activity_views(state, item, &entries);
     let open = item
         .open_comments()
         .into_iter()
@@ -657,21 +774,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         recovery: item
             .effective_recovery_level(policy)
             .map(ToString::to_string),
-        waits_after_failures: state
-            .inbox()
-            .into_iter()
-            .filter(|entry| entry.item == item.id())
-            .find_map(|entry| match entry.waiting {
-                Waiting::Recovery {
-                    role,
-                    failures,
-                    last,
-                } => Some(state.recovery_waits(item.id(), role, failures, last)),
-                Waiting::Blocker { .. }
-                | Waiting::Proposal
-                | Waiting::PrincipalReview { .. }
-                | Waiting::Merge { .. } => None,
-            }),
+        waiting: waiting_views(state, item, &entries),
         requires: item.requires().values().map(ToString::to_string).collect(),
         depends_on,
         required_by,
