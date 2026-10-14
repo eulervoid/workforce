@@ -6,15 +6,16 @@ use crate::crdt::SetChange;
 use crate::event::{
     AgentDefined, Change, Comment, CommentKind, DeviceBound, Event, EventBody, EventBuilder,
     ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemMoved,
-    ItemRef, Link, PolicySet, SessionEnded, SessionStarted,
+    ItemRef, Link, PolicySet, SessionEnded, SessionStarted, WrittenState,
 };
 use crate::id::{CommentId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
     Actor, AgentId, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed,
 };
+pub use crate::item::ItemState;
 use crate::item::Priority;
-use crate::name::{AgentName, Handle, HarnessName, LaneName, ReviewLevelName, StateName, TypeName};
-use crate::policy::DEFAULT_POLICY_TOML;
+use crate::name::{AgentName, Handle, HarnessName, LaneName, ReviewLevelName, TypeName};
+use crate::policy::{DEFAULT_POLICY_TOML, Policy};
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::{State, Trust};
 
@@ -244,7 +245,27 @@ pub fn create(item_type: &str, title: &str) -> EventBody {
         labels: vec![],
         requires: vec![],
         review: None,
+        state: Policy::default_policy()
+            .type_config(&TypeName::new(item_type).unwrap())
+            .map(|config| config.initial.into()),
     })
+}
+
+pub fn create_in(item_type: &str, title: &str, state: ItemState) -> EventBody {
+    let EventBody::ItemCreated(mut created) = create(item_type, title) else {
+        unreachable!()
+    };
+    created.state = Some(state.into());
+    EventBody::ItemCreated(created)
+}
+
+/// An item as created before `ItemCreated` carried a state.
+pub fn create_without_state(item_type: &str, title: &str) -> EventBody {
+    let EventBody::ItemCreated(mut created) = create(item_type, title) else {
+        unreachable!()
+    };
+    created.state = None;
+    EventBody::ItemCreated(created)
 }
 
 pub fn create_with_body(item_type: &str, title: &str, body: &str) -> EventBody {
@@ -255,10 +276,20 @@ pub fn create_with_body(item_type: &str, title: &str, body: &str) -> EventBody {
     EventBody::ItemCreated(created)
 }
 
-pub fn moved(item: ItemId, to: &str) -> EventBody {
+pub fn moved(item: ItemId, to: ItemState) -> EventBody {
     EventBody::ItemMoved(ItemMoved {
         item,
-        to: StateName::new(to).unwrap(),
+        to: to.into(),
+        by_session: None,
+        because: None,
+    })
+}
+
+/// A move as an older version wrote it, to a state named the way its type did.
+pub fn moved_as_written(item: ItemId, to: &str) -> EventBody {
+    EventBody::ItemMoved(ItemMoved {
+        item,
+        to: WrittenState::as_written(to),
         by_session: None,
         because: None,
     })

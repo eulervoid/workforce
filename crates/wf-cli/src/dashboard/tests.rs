@@ -7,13 +7,13 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use serde_json::json;
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, ItemId, SessionId};
-use wf_core::item::Priority;
-use wf_core::name::{AgentName, StateName};
-use wf_core::policy::StateCategory;
+use wf_core::item::{ItemState, Priority};
+use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
-    AgentRow, App, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll, Split, Tab, Wheel,
+    AgentRow, App, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll, Split, Starter,
+    Tab, Wheel,
 };
 use super::draw;
 use super::snapshot::{
@@ -532,12 +532,11 @@ fn an_action_error_goes_away_after_its_time() {
     assert!(!screen(&mut app, 60, 8).contains("✓ allowed"));
 }
 
-fn item_row(seed: u8, title: &str, category: StateCategory, state: &str) -> ItemRow {
+fn item_row(seed: u8, title: &str, state: ItemState) -> ItemRow {
     ItemRow {
         id: ItemId::from_bytes([seed; 32]),
         title: title.to_owned(),
-        state: state.to_owned(),
-        state_category: Some(category),
+        state,
         priority: None,
         readiness: None,
         steps: None,
@@ -554,24 +553,19 @@ fn with_items() -> Snapshot {
                 ItemRow {
                     priority: Some(Priority::P1),
                     readiness: Some(Readiness::Ready),
-                    ..item_row(4, "Dashboard", StateCategory::Open, "open")
+                    ..item_row(4, "Dashboard", ItemState::Open)
                 },
                 ItemRow {
                     readiness: Some(Readiness::Blocked),
-                    ..item_row(5, "Session subscription", StateCategory::Open, "open")
+                    ..item_row(5, "Session subscription", ItemState::Open)
                 },
             ],
         },
         ItemGroup {
-            name: "in_progress".to_owned(),
+            name: "active".to_owned(),
             items: vec![ItemRow {
                 steps: Some((2, 5)),
-                ..item_row(
-                    1,
-                    "Parse config lazily",
-                    StateCategory::Active,
-                    "in_progress",
-                )
+                ..item_row(1, "Parse config lazily", ItemState::Active)
             }],
         },
     ];
@@ -641,13 +635,13 @@ fn item_keys_act_on_the_selected_item() {
     let dashboard = ItemId::from_bytes([4; 32]);
     assert_eq!(
         press(&mut app, KeyCode::Char('s')),
-        Some(Effect::ChooseAgent { item: dashboard })
+        Some(Effect::ChooseStart { item: dashboard })
     );
-    app.choose(Choice::Agent {
+    app.choose(Choice::Start {
         item: dashboard,
-        agents: vec![
-            AgentName::new("coder").unwrap(),
-            AgentName::new("reviewer").unwrap(),
+        starters: vec![
+            Starter::Agent(AgentName::new("coder").unwrap()),
+            Starter::Agent(AgentName::new("reviewer").unwrap()),
         ],
         index: 0,
     });
@@ -666,10 +660,7 @@ fn item_keys_act_on_the_selected_item() {
     );
     app.choose(Choice::State {
         item: dashboard,
-        states: vec![
-            (StateName::new("open").unwrap(), StateCategory::Open),
-            (StateName::new("done").unwrap(), StateCategory::Done),
-        ],
+        states: vec![ItemState::Draft, ItemState::Done, ItemState::Cancelled],
         index: 0,
     });
     press(&mut app, KeyCode::Char('j'));
@@ -677,8 +668,25 @@ fn item_keys_act_on_the_selected_item() {
         press(&mut app, KeyCode::Enter),
         Some(Effect::Move {
             item: dashboard,
-            state: StateName::new("done").unwrap()
+            state: ItemState::Done
         })
+    );
+    app.choose(Choice::Start {
+        item: dashboard,
+        starters: vec![
+            Starter::Dispatcher,
+            Starter::Agent(AgentName::new("coder").unwrap()),
+        ],
+        index: 0,
+    });
+    insta::assert_snapshot!("choose_release", screen(&mut app, 60, 12));
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        Some(Effect::Move {
+            item: dashboard,
+            state: ItemState::Open
+        }),
+        "s enter releases a draft"
     );
     assert_eq!(press(&mut app, KeyCode::Char('c')), None);
     for character in "Start with the Now tab".chars() {
@@ -982,7 +990,7 @@ fn a_click_on_an_entry_selects_it_and_a_second_opens_it() {
     assert_eq!(app.items.list.selection.get(), Some(&blocked));
     assert_eq!(app.wanted().detail, None);
     // A heading or a blank line is no entry.
-    let (_, heading) = find(&mut app, 60, 11, "in_progress (1)");
+    let (_, heading) = find(&mut app, 60, 11, "active (1)");
     app.click(20, heading);
     app.click(20, heading - 1);
     assert_eq!(app.items.list.selection.get(), Some(&blocked));

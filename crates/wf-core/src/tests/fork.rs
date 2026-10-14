@@ -1,6 +1,7 @@
 use crate::event::{Change, Event, EventBody};
 use crate::id::WorkforceId;
 use crate::identity::{PrincipalSigner, Signed};
+use crate::item::ItemState;
 use crate::state::{Disposition, State, Trust};
 use crate::testing::*;
 use crate::validate::Invalid;
@@ -31,7 +32,7 @@ fn scenario(new_principal: bool) -> Scenario {
     let second = parent.items().nth(1).expect("two items exist").id();
     let later = [
         edit(first, Change::Title("renamed in the parent".into())),
-        moved(second, "done"),
+        moved(second, ItemState::Done),
         depends_on(first, second),
         comment(second, "a second note"),
         archive(second),

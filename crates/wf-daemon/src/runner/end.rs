@@ -5,8 +5,8 @@ use std::sync::Arc;
 use wf_core::event::{Comment, EventBody, ItemMoved, SessionEnded};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
+use wf_core::item::ItemState;
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
-use wf_core::name::StateName;
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
 use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_worktree};
@@ -21,7 +21,7 @@ impl Daemon {
         loaded: &Loaded,
         principal: wf_core::identity::PrincipalKey,
         item: ItemId,
-        to: StateName,
+        to: ItemState,
         because: Option<CommentId>,
         by_session: Option<SessionId>,
     ) -> Result<(), SessionError> {
@@ -30,7 +30,7 @@ impl Daemon {
             Actor::Daemon(principal),
             EventBody::ItemMoved(ItemMoved {
                 item,
-                to,
+                to: to.into(),
                 by_session,
                 because,
             }),
@@ -104,7 +104,7 @@ impl Daemon {
                 self.move_item(loaded, principal, item, to, because, Some(session))
                     .await
             }
-            Some(AfterEnd::MergeThen { done }) => {
+            Some(AfterEnd::MergeThenDone) => {
                 let EndReason::Submitted {
                     commit: Some(commit),
                 } = reason
@@ -117,7 +117,6 @@ impl Daemon {
                     MergeRequest {
                         item,
                         commit,
-                        done,
                         because,
                         attempt: Attempt::First { session },
                     },

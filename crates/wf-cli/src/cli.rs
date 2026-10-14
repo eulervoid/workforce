@@ -1,13 +1,14 @@
 use std::num::NonZeroUsize;
 use std::path::PathBuf;
 
+use clap::builder::{PossibleValuesParser, TypedValueParser};
 use clap::{ArgGroup, Args, CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 use wf_core::autonomy::{Autonomy, PermissionMode, StartMode};
 use wf_core::graph::Readiness;
-use wf_core::item::Priority;
+use wf_core::item::{ItemState, Priority};
 use wf_core::name::{
     AgentName, HarnessName, Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName,
-    StateName, TypeName,
+    TypeName,
 };
 
 #[derive(Parser)]
@@ -574,18 +575,14 @@ pub enum ItemCommand {
     Edit(ItemEditArgs),
     /// Tick steps of an item, numbered as `wf item show` prints them: `wf item check k3f 1 3`.
     Check(ItemCheckArgs),
-    /// Move an item to another state of its type.
-    Move {
-        /// The start of an item id. Without one, pick at a terminal.
-        item: Option<String>,
-        /// A state of the item's type. Without one, pick at a terminal.
-        state: Option<StateName>,
-        /// Why, kept with the move.
-        #[arg(long)]
-        note: Option<String>,
-    },
-    /// Move an item to the cancelled state of its type, such as `dropped`. A session working on
-    /// it stops after its current turn.
+    /// Release drafts for the dispatcher, or reopen items: `wf item open k3f a8c`.
+    Open(ItemMoveArgs),
+    /// Hold items back as drafts: nothing starts a draft until `wf item open`.
+    Draft(ItemMoveArgs),
+    /// Finish items without a session. For a proposed decision: accept it.
+    Done(ItemMoveArgs),
+    /// Cancel an item. For a proposed decision: reject it. A session working on it stops after
+    /// its current turn.
     Cancel {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
@@ -614,15 +611,15 @@ pub enum ItemCommand {
         item: Option<String>,
     },
     /// Hide an item from lists; its history stays. `--done` and `--cancelled` archive every live
-    /// item in a state of that category, whatever its type calls the state.
+    /// item that is done or cancelled.
     Archive {
         /// The start of an item id. Without one, pick at a terminal.
         #[arg(conflicts_with_all = ["done", "cancelled"])]
         item: Option<String>,
-        /// Archive every live item in a done state.
+        /// Archive every live item that is done.
         #[arg(long)]
         done: bool,
-        /// Archive every live item in a cancelled state.
+        /// Archive every live item that is cancelled.
         #[arg(long)]
         cancelled: bool,
     },
@@ -631,6 +628,21 @@ pub enum ItemCommand {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
+}
+
+#[derive(Args)]
+pub struct ItemMoveArgs {
+    /// The starts of item ids. Without any, pick one at a terminal.
+    pub items: Vec<String>,
+    /// Why, kept with each move.
+    #[arg(long)]
+    pub note: Option<String>,
+}
+
+/// The states, as `--state` takes them: the values complete and show in `--help`.
+fn item_state_parser() -> impl TypedValueParser<Value = ItemState> {
+    PossibleValuesParser::new(ItemState::ALL.map(ItemState::name))
+        .map(|name| name.parse().expect("every possible value is a state"))
 }
 
 /// Without `--title`, opens a new item as markdown with TOML front matter in `$VISUAL` or
@@ -665,6 +677,9 @@ pub struct ItemAddArgs {
     /// `[[recovery]]` list.
     #[arg(long)]
     pub recovery: Option<RecoveryLevelName>,
+    /// Create it as a draft: nothing starts it until `wf item open`.
+    #[arg(long)]
+    pub draft: bool,
     /// Open the item in the editor before creating it, filled in with the flags given.
     #[arg(long)]
     pub edit: bool,
@@ -675,9 +690,9 @@ pub struct ItemListArgs {
     /// Only items of this type.
     #[arg(long = "type")]
     pub item_type: Option<TypeName>,
-    /// Only items in this state.
-    #[arg(long)]
-    pub state: Option<StateName>,
+    /// Only items in these states, such as `draft,open`.
+    #[arg(long, value_delimiter = ',', value_parser = item_state_parser())]
+    pub state: Vec<ItemState>,
     /// Only items with this label.
     #[arg(long)]
     pub label: Option<Label>,
@@ -710,7 +725,7 @@ pub struct ItemListArgs {
 /// What `wf item list --group-by` groups by.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, ValueEnum)]
 pub enum ItemGrouping {
-    /// By state, ordered by state category: `open`, `in_progress`, `done`, ...
+    /// By state, in the order `draft`, `open`, `active`, `review`, `done`, `cancelled`.
     State,
     /// Open items by `ready`, `blocked` and `stranded`; the rest as `not_open`.
     Readiness,
@@ -852,7 +867,8 @@ pub struct ItemLinkArgs {
     /// Remove a dependency.
     #[arg(long)]
     pub remove_depends_on: Option<String>,
-    /// For decisions: the target moves to `superseded`.
+    /// For decisions: this one replaces the target, which keeps its state and shows as
+    /// superseded.
     #[arg(long)]
     pub supersedes: Option<String>,
 }

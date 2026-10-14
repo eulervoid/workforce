@@ -1,6 +1,6 @@
 use crate::event::Event;
 use crate::id::{ItemId, SessionId};
-use crate::item::ItemView;
+use crate::item::{ItemState, ItemView};
 use crate::name::ReviewLevelName;
 use crate::session::EndReason;
 use crate::state::{State, Trust};
@@ -238,15 +238,21 @@ mod actors {
         let (fixture, mut state, task, session) = working();
         let other = item_id(&fixture.apply(&mut state, 0, 3_002, create("task", "other")));
         assert_eq!(
-            check(&fixture, &state, 0, session, &moved(task, "done")),
+            check(&fixture, &state, 0, session, &moved(task, ItemState::Done)),
             Err(PolicyViolation::SessionFinishesItsItem)
         );
         assert_eq!(
-            check(&fixture, &state, 0, session, &moved(task, "in_review")),
+            check(
+                &fixture,
+                &state,
+                0,
+                session,
+                &moved(task, ItemState::Review)
+            ),
             Ok(())
         );
         assert_eq!(
-            check(&fixture, &state, 0, session, &moved(other, "done")),
+            check(&fixture, &state, 0, session, &moved(other, ItemState::Done)),
             Ok(())
         );
     }

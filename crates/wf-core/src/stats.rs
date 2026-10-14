@@ -2,8 +2,7 @@
 
 use crate::event::CommentKind;
 use crate::identity::AgentId;
-use crate::item::Item;
-use crate::policy::StateCategory;
+use crate::item::{Item, ItemState};
 use crate::session::{EndReason, Session, SessionRole};
 use crate::state::State;
 
@@ -84,7 +83,7 @@ impl State {
         let mut leads = Vec::new();
         for item in self.all_items() {
             let done_at = item.state.stamp().hlc.wall_ms();
-            let done = item.standing(policy).state_category() == Some(StateCategory::Done);
+            let done = item.state(policy) == ItemState::Done;
             if done && now_ms.saturating_sub(done_at) <= RECENT_MS {
                 stats.done_lately += 1;
                 let first_work = self

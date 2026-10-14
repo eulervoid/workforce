@@ -2,9 +2,9 @@ use crate::crdt::SetChange;
 use crate::event::Change;
 use crate::graph::Readiness;
 use crate::id::{HashId, ItemId};
-use crate::item::{ItemView, Standing, WrittenIn};
-use crate::name::{Label, StateName};
-use crate::policy::{DEFAULT_POLICY_TOML, StateCategory};
+use crate::item::{ItemState, ItemView, WrittenIn};
+use crate::name::Label;
+use crate::policy::DEFAULT_POLICY_TOML;
 use crate::refs::Mention;
 use crate::resolve::{Backlink, MentionTarget, Reference, Source};
 use crate::state::State;
@@ -14,9 +14,9 @@ fn item_id(event: &crate::event::Event) -> ItemId {
     event.id().into()
 }
 
-fn state_category(state: &State, item: ItemId) -> Option<StateCategory> {
+fn state_of(state: &State, item: ItemId) -> ItemState {
     let policy = &state.policy().unwrap().policy;
-    state.item(item).unwrap().standing(policy).state_category()
+    state.item(item).unwrap().state(policy)
 }
 
 fn ready_ids(state: &State) -> Vec<ItemId> {
@@ -29,19 +29,95 @@ fn new_items_start_in_the_initial_state_of_their_type() {
     let mut state = fixture.state();
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "Sync feeds")));
     let decision = item_id(&fixture.apply(&mut state, 0, 2_001, create("decision", "Hash")));
-    assert_eq!(state_category(&state, task), Some(StateCategory::Open));
-    assert_eq!(
-        state_category(&state, decision),
-        Some(StateCategory::Review)
-    );
-    let policy = &state.policy().unwrap().policy;
-    let ItemView::Live(item) = state.item(task).unwrap() else {
-        panic!("live")
-    };
+    assert_eq!(state_of(&state, task), ItemState::Open);
+    assert_eq!(state_of(&state, decision), ItemState::Review);
+}
+
+#[test]
+fn a_draft_is_never_ready_until_it_is_opened() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let draft = create_in("task", "think first", ItemState::Draft);
+    assert_eq!(state.check_policy(&draft), Ok(()));
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, draft));
+    assert_eq!(state_of(&state, task), ItemState::Draft);
+    assert!(ready_ids(&state).is_empty());
+    fixture.apply(&mut state, 0, 2_001, moved(task, ItemState::Open));
+    assert_eq!(ready_ids(&state), vec![task]);
+}
+
+#[test]
+fn items_are_created_in_the_initial_state_of_their_type_or_as_drafts() {
+    use crate::validate::PolicyViolation;
+    let fixture = Fixture::new(1);
+    let state = fixture.state();
     assert!(matches!(
-        item.standing(policy),
-        Standing::Known { state, .. } if state.as_str() == "open"
+        state.check_policy(&create_in("task", "a", ItemState::Active)),
+        Err(PolicyViolation::CreatedInState { .. })
     ));
+    assert!(matches!(
+        state.check_policy(&create_in("decision", "b", ItemState::Draft)),
+        Err(PolicyViolation::CreatedInState { .. })
+    ));
+}
+
+/// A log as versions before the fixed states wrote it: items created without a state, and moves
+/// to the states of the built-in types by their old names.
+#[test]
+fn a_log_with_the_old_state_names_folds_to_the_same_items() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let mut clock = 2_000;
+    let mut apply = |state: &mut State, body| {
+        clock += 1;
+        item_id(&fixture.apply(state, 0, clock, body))
+    };
+    let expectations = [
+        ("task", None, ItemState::Open),
+        ("task", Some("backlog"), ItemState::Draft),
+        ("task", Some("in_progress"), ItemState::Active),
+        ("task", Some("in_review"), ItemState::Review),
+        ("task", Some("done"), ItemState::Done),
+        ("task", Some("dropped"), ItemState::Cancelled),
+        ("decision", None, ItemState::Review),
+        ("decision", Some("proposed"), ItemState::Review),
+        ("decision", Some("ratified"), ItemState::Done),
+        ("decision", Some("rejected"), ItemState::Cancelled),
+        ("decision", Some("superseded"), ItemState::Done),
+        ("distill", Some("in_progress"), ItemState::Active),
+    ];
+    let mut items = Vec::new();
+    for (item_type, moved_to, expected) in expectations {
+        let item = apply(&mut state, create_without_state(item_type, "old"));
+        if let Some(name) = moved_to {
+            apply(&mut state, moved_as_written(item, name));
+        }
+        items.push((item, expected));
+    }
+    for (item, expected) in &items {
+        assert_eq!(state_of(&state, *item), *expected);
+    }
+    let ready: Vec<ItemId> = vec![items[0].0];
+    assert_eq!(ready_ids(&state), ready);
+
+    // The old default policy, as it is in the log, reads as the current one.
+    let old_policy = include_str!("old_default_policy.toml");
+    apply(&mut state, fixture.policy_set(&fixture.founder, old_policy));
+    let current = crate::policy::Policy::default_policy();
+    for (name, config) in &state.policy().unwrap().policy.types {
+        let mut states = current.types[name].states.clone();
+        // `distill` gained `cancelled`.
+        if name.as_str() == "distill" {
+            states.remove(&ItemState::Cancelled);
+        }
+        assert_eq!(
+            (config.initial, &config.states),
+            (current.types[name].initial, &states)
+        );
+    }
+    for (item, expected) in &items {
+        assert_eq!(state_of(&state, *item), *expected);
+    }
 }
 
 #[test]
@@ -58,10 +134,10 @@ fn a_task_waits_for_the_task_it_depends_on() {
     let unfinished = state.unfinished_dependencies(&graph, task);
     assert_eq!(unfinished.len(), 1);
     assert_eq!(unfinished[0].item, first);
-    assert_eq!(unfinished[0].state_category, Some(StateCategory::Open));
+    assert_eq!(unfinished[0].state, Some(ItemState::Open));
     assert_eq!(graph.dependents(first).collect::<Vec<_>>(), vec![task]);
 
-    fixture.apply(&mut state, 0, 2_003, moved(first, "done"));
+    fixture.apply(&mut state, 0, 2_003, moved(first, ItemState::Done));
     assert_eq!(ready_ids(&state), vec![task]);
 }
 
@@ -70,21 +146,10 @@ fn only_open_items_are_ready() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "work")));
-    let expectations = [
-        ("backlog", StateCategory::Inactive, false),
-        ("open", StateCategory::Open, true),
-        ("in_progress", StateCategory::Active, false),
-        ("in_review", StateCategory::Review, false),
-        ("done", StateCategory::Done, false),
-        ("dropped", StateCategory::Cancelled, false),
-    ];
-    for (offset, (target, expected_state_category, ready)) in expectations.into_iter().enumerate() {
+    for (offset, target) in ItemState::ALL.into_iter().enumerate() {
         fixture.apply(&mut state, 0, 3_000 + offset as u64, moved(task, target));
-        assert_eq!(
-            state_category(&state, task),
-            Some(expected_state_category),
-            "{target}"
-        );
+        assert_eq!(state_of(&state, task), target);
+        let ready = target == ItemState::Open;
         assert_eq!(ready_ids(&state).contains(&task), ready, "{target}");
     }
 }
@@ -106,16 +171,16 @@ fn done_satisfies_dependents_but_cancelled_strands_them() {
     fixture.apply(&mut state, 0, 2_002, depends_on(whole, part));
     assert_eq!(readiness(&state, whole), Some(Readiness::Blocked));
 
-    fixture.apply(&mut state, 0, 2_003, moved(part, "dropped"));
+    fixture.apply(&mut state, 0, 2_003, moved(part, ItemState::Cancelled));
     let graph = state.dependency_graph();
     let unfinished = state.unfinished_dependencies(&graph, whole);
     assert_eq!(unfinished.len(), 1);
-    assert_eq!(unfinished[0].state_category, Some(StateCategory::Cancelled));
+    assert_eq!(unfinished[0].state, Some(ItemState::Cancelled));
     assert!(!ready_ids(&state).contains(&whole));
     assert_eq!(readiness(&state, whole), Some(Readiness::Stranded));
     assert_eq!(readiness(&state, part), None);
 
-    fixture.apply(&mut state, 0, 2_004, moved(part, "done"));
+    fixture.apply(&mut state, 0, 2_004, moved(part, ItemState::Done));
     assert!(ready_ids(&state).contains(&whole));
     assert_eq!(readiness(&state, whole), Some(Readiness::Ready));
 }
@@ -127,7 +192,7 @@ fn archiving_leaves_a_stub_and_keeps_dependencies_resolving() {
     let part = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "part")));
     let whole = item_id(&fixture.apply(&mut state, 0, 2_001, create("task", "whole")));
     fixture.apply(&mut state, 0, 2_002, depends_on(whole, part));
-    fixture.apply(&mut state, 0, 2_003, moved(part, "done"));
+    fixture.apply(&mut state, 0, 2_003, moved(part, ItemState::Done));
     fixture.apply(&mut state, 0, 2_004, archive(part));
 
     let ItemView::Archived(stub) = state.item(part).unwrap() else {
@@ -153,14 +218,14 @@ fn archive_rules_are_checked_by_the_author() {
     assert_eq!(
         state.check_policy(&archive(task)),
         Err(PolicyViolation::ArchiveRequiresTerminal {
-            state_category: Some(StateCategory::Open)
+            state: ItemState::Open
         })
     );
     assert_eq!(
         state.check_policy(&unarchive(task)),
         Err(PolicyViolation::NotArchived(task))
     );
-    fixture.apply(&mut state, 0, 2_001, moved(task, "dropped"));
+    fixture.apply(&mut state, 0, 2_001, moved(task, ItemState::Cancelled));
     assert_eq!(state.check_policy(&archive(task)), Ok(()));
     fixture.apply(&mut state, 0, 2_002, archive(task));
     assert_eq!(
@@ -170,22 +235,15 @@ fn archive_rules_are_checked_by_the_author() {
 }
 
 #[test]
-fn superseding_moves_the_target_decision_to_superseded() {
+fn a_superseded_decision_keeps_its_state() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let old = item_id(&fixture.apply(&mut state, 0, 2_000, create("decision", "use sha1")));
     let new = item_id(&fixture.apply(&mut state, 0, 2_001, create("decision", "use blake3")));
-    fixture.apply(&mut state, 0, 2_002, moved(old, "ratified"));
+    fixture.apply(&mut state, 0, 2_002, moved(old, ItemState::Done));
     assert_eq!(state.check_policy(&supersedes(new, old)), Ok(()));
     fixture.apply(&mut state, 0, 2_003, supersedes(new, old));
-    let policy = &state.policy().unwrap().policy;
-    let ItemView::Live(old_item) = state.item(old).unwrap() else {
-        panic!()
-    };
-    assert!(matches!(
-        old_item.standing(policy),
-        Standing::Known { state, state_category: StateCategory::Done } if state.as_str() == "superseded"
-    ));
+    assert_eq!(state_of(&state, old), ItemState::Done);
     let ItemView::Live(new_item) = state.item(new).unwrap() else {
         panic!()
     };
@@ -206,39 +264,46 @@ fn supersedes_is_for_decisions_only() {
 }
 
 #[test]
-fn removed_states_are_flagged_not_lost() {
+fn unknown_state_names_read_as_draft_and_are_flagged() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
-    let custom = format!(
-        "{DEFAULT_POLICY_TOML}\n[types.bug]\nlane = \"default\"\ninitial = \"new\"\n\
-         states = [{{ name = \"new\", category = \"open\" }}, {{ name = \"triaged\", category = \"open\" }}, {{ name = \"fixed\", category = \"done\" }}]\n"
-    );
-    fixture.apply(
-        &mut state,
-        0,
-        2_000,
-        fixture.policy_set(&fixture.founder, &custom),
-    );
-    let bug = item_id(&fixture.apply(&mut state, 0, 2_001, create("bug", "crash")));
-    fixture.apply(&mut state, 0, 2_002, moved(bug, "triaged"));
-    assert_eq!(state_category(&state, bug), Some(StateCategory::Open));
-
-    let shrunk = custom.replace(r#"{ name = "triaged", category = "open" }, "#, "");
-    fixture.apply(
-        &mut state,
-        0,
-        2_003,
-        fixture.policy_set(&fixture.founder, &shrunk),
-    );
-    let policy = &state.policy().unwrap().policy;
-    let ItemView::Live(item) = state.item(bug).unwrap() else {
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "crash")));
+    fixture.apply(&mut state, 0, 2_001, moved_as_written(task, "triaged"));
+    assert_eq!(state_of(&state, task), ItemState::Draft);
+    let ItemView::Live(item) = state.item(task).unwrap() else {
         panic!()
     };
+    assert_eq!(item.unknown_state(), Some("triaged"));
+    assert!(!ready_ids(&state).contains(&task));
+    fixture.apply(&mut state, 0, 2_002, moved(task, ItemState::Open));
+    let ItemView::Live(item) = state.item(task).unwrap() else {
+        panic!()
+    };
+    assert_eq!(item.unknown_state(), None);
+}
+
+#[test]
+fn an_item_keeps_a_state_its_type_stops_using() {
+    use crate::validate::PolicyViolation;
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
+    fixture.apply(&mut state, 0, 2_001, moved(task, ItemState::Draft));
+    let shrunk = DEFAULT_POLICY_TOML.replace(
+        r#"states = ["draft", "open", "active", "review", "done", "cancelled"]"#,
+        r#"states = ["open", "active", "review", "done", "cancelled"]"#,
+    );
+    fixture.apply(
+        &mut state,
+        0,
+        2_002,
+        fixture.policy_set(&fixture.founder, &shrunk),
+    );
+    assert_eq!(state_of(&state, task), ItemState::Draft);
     assert!(matches!(
-        item.standing(policy),
-        Standing::Unknown { state: Some(state) } if state.as_str() == "triaged"
+        state.check_policy(&moved(task, ItemState::Draft)),
+        Err(PolicyViolation::StateNotUsed { .. })
     ));
-    assert!(!ready_ids(&state).contains(&bug));
 }
 
 #[test]
@@ -254,8 +319,8 @@ fn author_checks_follow_the_policy() {
         Err(PolicyViolation::UnknownType { .. })
     ));
     assert!(matches!(
-        state.check_policy(&moved(task, "answered")),
-        Err(PolicyViolation::UnknownState { .. })
+        state.check_policy(&moved(decision, ItemState::Open)),
+        Err(PolicyViolation::StateNotUsed { .. })
     ));
     assert!(matches!(
         state.check_policy(&depends_on(decision, task)),
@@ -517,7 +582,6 @@ fn item_prefixes_resolve_like_git() {
         resolver.item("2222222"),
         Err(PrefixError::NotFound(_))
     ));
-    let _ = StateName::new("open");
 }
 
 #[test]

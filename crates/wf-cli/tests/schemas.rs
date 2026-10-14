@@ -54,7 +54,7 @@ fn scenario() -> Scenario {
             &format!("see #{}, @ada please check", dependency.short()),
         ),
     );
-    apply(&mut state, moved(done, "done"));
+    apply(&mut state, moved(done, ItemState::Done));
     apply(&mut state, archive(done));
     Scenario {
         state,

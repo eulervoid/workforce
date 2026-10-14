@@ -281,7 +281,7 @@ pub(crate) mod tests {
                 id: "k3f7".into(),
                 title: "t".into(),
                 item_type: "task".into(),
-                state: "in_progress".into(),
+                state: "active".into(),
             },
             session: "s".into(),
             agent: AgentContext {

@@ -1,16 +1,12 @@
 use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
+use crate::item::ItemState;
 use crate::lifecycle::{
     AfterEnd, Closing, Finish, Interruption, MergeFailure, SessionEnd, TurnOutcome,
 };
-use crate::name::StateName;
 use crate::session::{CommitId, EndReason};
 use crate::state::State;
 use crate::testing::*;
-
-fn state_name(name: &str) -> StateName {
-    StateName::new(name).unwrap()
-}
 
 fn commit() -> CommitId {
     CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap())
@@ -61,7 +57,7 @@ fn a_work_session_moves_an_item_to_the_active_state_of_its_type() {
     let decision_session = scene.start(decision);
     assert_eq!(
         scene.state.start_move(task_session),
-        Some((task, state_name("in_progress")))
+        Some((task, ItemState::Active))
     );
     assert_eq!(
         scene.state.start_move(decision_session),
@@ -82,26 +78,21 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     let after = |scene: &Scene, session, reason| scene.state.after_end(session, reason).unwrap();
 
     let session = scene.start(task);
-    scene.apply(moved(task, "in_progress"));
-    assert_eq!(
-        after(&scene, session, submitted),
-        AfterEnd::MergeThen {
-            done: state_name("done")
-        }
-    );
+    scene.apply(moved(task, ItemState::Active));
+    assert_eq!(after(&scene, session, submitted), AfterEnd::MergeThenDone);
     scene.end(session, submitted);
 
     let session = scene.start(reviewed);
     assert_eq!(
         after(&scene, session, submitted),
-        AfterEnd::MoveTo(state_name("in_review"))
+        AfterEnd::MoveTo(ItemState::Review)
     );
     scene.end(session, submitted);
 
     let session = scene.start(unreviewed);
     assert_eq!(
         after(&scene, session, EndReason::Submitted { commit: None }),
-        AfterEnd::MoveTo(state_name("done"))
+        AfterEnd::MoveTo(ItemState::Done)
     );
     scene.end(session, EndReason::Released);
 
@@ -109,7 +100,7 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     let session = scene.start(doubted);
     assert_eq!(
         after(&scene, session, EndReason::Submitted { commit: None }),
-        AfterEnd::MoveTo(state_name("in_review")),
+        AfterEnd::MoveTo(ItemState::Review),
         "work without commits under review is not done yet"
     );
     scene.end(session, EndReason::Released);
@@ -121,10 +112,10 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
         EndReason::Failed,
         EndReason::Cancelled,
     ] {
-        scene.apply(moved(task, "in_progress"));
+        scene.apply(moved(task, ItemState::Active));
         assert_eq!(
             after(&scene, blocked, reason),
-            AfterEnd::MoveTo(state_name("open")),
+            AfterEnd::MoveTo(ItemState::Open),
             "{reason:?}"
         );
     }
@@ -139,7 +130,7 @@ fn an_item_that_is_not_being_worked_on_stays_where_it_is() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.apply(moved(task, "done"));
+    scene.apply(moved(task, ItemState::Done));
     assert_eq!(
         scene.state.after_end(session, EndReason::Failed),
         Some(AfterEnd::Nothing),
@@ -151,7 +142,7 @@ fn an_item_that_is_not_being_worked_on_stays_where_it_is() {
 fn an_item_another_session_holds_is_not_reopened() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
-    scene.apply(moved(task, "in_progress"));
+    scene.apply(moved(task, ItemState::Active));
     let _first = scene.start(task);
     let second = scene.start(task);
     assert_eq!(
@@ -166,7 +157,7 @@ fn a_turn_continues_until_the_nudges_are_used_up() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.apply(moved(task, "in_progress"));
+    scene.apply(moved(task, ItemState::Active));
     let outcome = |scene: &Scene, used| scene.state.turn_outcome(session, used, 3);
     assert_eq!(outcome(&scene, 0), TurnOutcome::Continue);
     assert_eq!(outcome(&scene, 3), TurnOutcome::Continue);
@@ -178,7 +169,7 @@ fn a_turn_closes_when_the_session_ended_or_the_item_is_blocked() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    for moved_on in ["in_review", "dropped", "backlog"] {
+    for moved_on in [ItemState::Review, ItemState::Cancelled, ItemState::Draft] {
         scene.apply(moved(task, moved_on));
         assert_eq!(
             scene.state.turn_outcome(session, 0, 3),
@@ -187,7 +178,7 @@ fn a_turn_closes_when_the_session_ended_or_the_item_is_blocked() {
         );
     }
 
-    scene.apply(moved(task, "in_progress"));
+    scene.apply(moved(task, ItemState::Active));
     assert_eq!(
         scene.state.turn_outcome(session, 0, 3),
         TurnOutcome::Continue
@@ -201,12 +192,12 @@ fn a_turn_parks_while_the_item_waits_on_a_dependency() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
-    scene.apply(moved(task, "in_progress"));
+    scene.apply(moved(task, ItemState::Active));
     let first = scene.item(create("task", "pick a database"));
     scene.apply(depends_on(task, first));
     assert_eq!(scene.state.turn_outcome(session, 0, 3), TurnOutcome::Park);
 
-    scene.apply(moved(first, "done"));
+    scene.apply(moved(first, ItemState::Done));
     assert_eq!(
         scene.state.turn_outcome(session, 0, 3),
         TurnOutcome::Continue
@@ -291,12 +282,12 @@ fn work_that_conflicts_reopens_and_work_that_may_merge_later_waits_in_review() {
     let task = scene.item(create("task", "work"));
     assert_eq!(
         scene.state.after_failed_merge(task, MergeFailure::Conflict),
-        Some(state_name("open"))
+        Some(ItemState::Open)
     );
     assert_eq!(
         scene
             .state
             .after_failed_merge(task, MergeFailure::Transient),
-        Some(state_name("in_review"))
+        Some(ItemState::Review)
     );
 }

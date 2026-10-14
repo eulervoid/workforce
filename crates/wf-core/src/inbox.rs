@@ -3,8 +3,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::id::{CommentId, HashId, ItemId, SessionId};
-use crate::item::{ItemView, Standing};
-use crate::policy::{ReviewStep, StateCategory};
+use crate::item::{ItemState, ItemView};
+use crate::policy::ReviewStep;
 use crate::recovery::Recovery;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, SessionRole};
@@ -103,7 +103,7 @@ impl State {
         let finished = self.finished_reviews();
         let mut entries: Vec<_> = self
             .live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
+            .filter(|item| item.state(policy) == ItemState::Review)
             .filter_map(|item| {
                 let waiting = match self.review_status(item.id()) {
                     Some(ReviewStatus::Awaiting {
@@ -125,8 +125,8 @@ impl State {
                             Waiting::Merge {
                                 commit: pending.commit,
                             }
-                        } else if finished.iter().any(|(done, _)| *done == item.id()) {
-                            // The daemon moves it to its done state.
+                        } else if finished.contains(&item.id()) {
+                            // The daemon moves it to `done`.
                             return None;
                         } else {
                             Waiting::Proposal
@@ -143,16 +143,14 @@ impl State {
             })
             .collect();
         for item in self.live_items() {
-            let category = item.standing(policy).state_category();
-            let roles = match category {
-                Some(StateCategory::Open | StateCategory::Active) => {
+            let roles = match item.state(policy) {
+                ItemState::Open | ItemState::Active => {
                     vec![SessionRole::Work, SessionRole::Supervise]
                 }
-                Some(StateCategory::Review) => {
+                ItemState::Review => {
                     vec![SessionRole::Review { commit: None }, SessionRole::Supervise]
                 }
-                Some(StateCategory::Inactive | StateCategory::Done | StateCategory::Cancelled)
-                | None => Vec::new(),
+                ItemState::Draft | ItemState::Done | ItemState::Cancelled => Vec::new(),
             };
             for role in roles {
                 if let Recovery::WaitsForPrincipal { failures, last } =
@@ -214,17 +212,11 @@ impl State {
                 entry.item.short(),
                 comment.short()
             ),
-            Waiting::Proposal => {
-                let state_name = match self.item(entry.item) {
-                    Some(ItemView::Live(live)) => match live.standing(policy) {
-                        Standing::Known { state, .. } => state.to_string(),
-                        Standing::Unknown { state } => state
-                            .map_or_else(|| "an unknown state".to_string(), ToString::to_string),
-                    },
-                    Some(ItemView::Archived(_)) | None => "an unknown state".to_string(),
-                };
-                format!("{state_name}; `wf item move` it on")
-            }
+            Waiting::Proposal => format!(
+                "proposed: accept it with `wf item done {}`, reject it with `wf item cancel {}`",
+                entry.item.short(),
+                entry.item.short()
+            ),
             Waiting::PrincipalReview { commit } => match commit {
                 Some(commit) => format!(
                     "review of {}: `wf item diff`, then `wf review`",

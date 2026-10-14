@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use wf_core::id::{HashId, ItemId, WorkforceId};
+use wf_core::item::ItemState;
 use wf_core::name::AgentName;
 use wf_core::review::PendingMerge;
 use wf_core::session::SessionRole;
@@ -70,7 +71,7 @@ async fn dispatch_once(
     let Ok(mut state) = daemon.snapshot(loaded).await else {
         return waiting_merges;
     };
-    for PendingMerge { item, commit, done } in state.pending_merges() {
+    for PendingMerge { item, commit } in state.pending_merges() {
         match daemon
             .merge_item(
                 workforce,
@@ -78,7 +79,6 @@ async fn dispatch_once(
                 MergeRequest {
                     item,
                     commit,
-                    done,
                     because: None,
                     attempt: Attempt::Retry,
                 },
@@ -96,12 +96,12 @@ async fn dispatch_once(
             ),
         }
     }
-    for (item, done) in state.finished_reviews() {
+    for item in state.finished_reviews() {
         let Ok(principal) = daemon.principal_of_device(&state) else {
             continue;
         };
         if let Err(error) = daemon
-            .move_item(loaded, principal, item, done, None, None)
+            .move_item(loaded, principal, item, ItemState::Done, None, None)
             .await
         {
             tracing::warn!(

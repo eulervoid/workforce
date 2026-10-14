@@ -5,9 +5,8 @@ use std::path::PathBuf;
 use wf_core::event::{Comment, EventBody, Merged};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
-use wf_core::item::ItemView;
+use wf_core::item::{ItemState, ItemView};
 use wf_core::lifecycle::MergeFailure;
-use wf_core::name::StateName;
 use wf_core::session::CommitId;
 use wf_vcs::{CommitSigning, GitCli, MergeOutcome, VcsAdapter, item_branch, item_worktree};
 
@@ -41,8 +40,6 @@ pub(super) struct MergeRequest {
     pub(super) item: ItemId,
     /// The reviewed commit.
     pub(super) commit: CommitId,
-    /// Where the item goes once merged.
-    pub(super) done: StateName,
     /// The comment that says why, for that move.
     pub(super) because: Option<CommentId>,
     pub(super) attempt: Attempt,
@@ -69,7 +66,6 @@ impl Daemon {
         let MergeRequest {
             item,
             commit,
-            done,
             because,
             attempt,
         } = request;
@@ -100,11 +96,11 @@ impl Daemon {
             )
         };
 
-        // A merge that cannot be made leaves the item in its review state, where the dispatcher
-        // tries again, never in its active state without a session.
+        // A merge that cannot be made leaves the item in `review`, where the dispatcher tries
+        // again, never `active` without a session.
         let cannot_merge = |why: String| {
             let note = format!("Could not merge into {target}: {why}. The daemon tries again.");
-            let (comment, review) = (&comment, review.clone());
+            let (comment, review) = (&comment, review);
             async move {
                 if attempt != Attempt::Retry {
                     comment(note).await?;
@@ -186,8 +182,15 @@ impl Daemon {
                         wf_core::error_chain(&error)
                     );
                 }
-                self.move_item(loaded, principal, item, done, because, attempt.by_session())
-                    .await?;
+                self.move_item(
+                    loaded,
+                    principal,
+                    item,
+                    ItemState::Done,
+                    because,
+                    attempt.by_session(),
+                )
+                .await?;
             }
             MergeOutcome::Conflict { paths } => {
                 comment(format!(
@@ -209,7 +212,7 @@ impl Daemon {
                     dirty.files()
                 ))
                 .await?;
-                if let Some(review) = review.clone() {
+                if let Some(review) = review {
                     self.move_item(loaded, principal, item, review, None, attempt.by_session())
                         .await?;
                 }

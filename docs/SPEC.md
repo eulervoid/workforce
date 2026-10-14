@@ -462,12 +462,13 @@ exist; no item links to itself.
 * A second event with the same `(author, seq)` is admitted and the author flagged (see *Equivocation*).
 
 **Authoring checks** (`State::check_policy`, run by the author before signing; peers do not repeat
-them): type exists, target state exists, field allowed for the type (`priority`, `labels`, `requires`),
+them): type exists, the type uses the target state, an item is created in its type's initial state
+or as a draft, field allowed for the type (`priority`, `labels`, `requires`),
 lane exists, `depends_on` target type allowed, no dependency cycle, archive only from `done`/`cancelled`,
 `supersedes` only between decisions. Peers cannot re-check these deterministically: a concurrent policy
 change would make acceptance depend on arrival order. Instead the fold keeps the event and flags the
-outcome ("unknown state or type", visible in `wf item show` and `wf status`), and the item keeps its
-state until moved.
+outcome (an unknown type, or a state its type no longer uses, visible in `wf item show` and
+`wf status`), and the item keeps its state until moved.
 
 **Fold:**
 * Concurrent writes order by `(hlc, EventId)`. This extends causal order because authors stamp every
@@ -475,10 +476,13 @@ state until moved.
 * Last-writer-wins registers: `title`, `body`, `state`, `priority`, `lane`, `supersedes`, archived.
 * Add-wins sets (`labels`, `requires`, `depends_on`) are observed-remove: each add is tagged with its
   event id and a removal lists the tags its author saw, so a concurrent add survives.
-* An item's `state` is empty until its first move and means "the type's initial state under the
-  current policy", so item creation does not depend on concurrent policy changes.
-* `supersedes` also writes `superseded` into the target's `state` register with the link's stamp. It
-  is the only link whose event changes another item, which compaction has to account for.
+* An item's `state` is the one its `ItemCreated` names. An item created before `ItemCreated` carried a
+  state has none until its first move, which means "the type's initial state under the current
+  policy", so folding it does not depend on concurrent policy changes.
+* A request for changes moves the item back to `open` in the same `Reviewed` event.
+* `supersedes` writes only the superseding item; that the target is superseded is derived from the
+  link. Folds of older logs, where the link also wrote `superseded` into the target's state, keep the
+  target in its state instead (normally `done`).
 * `depends_on` cycles from concurrent links are resolved at query time, not stored: edges are taken in
   `(hlc, EventId)` order and an edge that would close a cycle is ignored and flagged.
 * Comment text stays in the log. The fold keeps who wrote each comment, its kind, what it resolves, its
@@ -592,28 +596,36 @@ wf fork list
 ## 8. Items
 
 The item is the **single universal document**: tasks, decisions, meta work, and later discussions are
-all items. Types differ only in configured states and behaviour, so comments, mentions, references,
+all items. Types differ only in configuration and behaviour, so comments, mentions, references,
 search and inbox work the same everywhere. A question is not an item: it is a blocking comment on the item
 it is about (section 10). `items` is a reference for the model, not a
 compatibility target.
 
-### States and categories
-Each type configures its own states. Each state has a free name and one of six fixed **categories**.
-Built-in behaviour keys on categories, never on state names.
+### States
+Every item is in one of six fixed **states**. Built-in behaviour keys on them, and a type lists the ones
+it uses (see *Type configuration*).
 
-| Category | Meaning | Built-in behaviour |
+| State | Meaning | Built-in behaviour |
 |---|---|---|
-| `inactive` | exists, not actionable (backlog, draft) | not claimable |
+| `draft` | exists, not actionable: held back while it is thought through | nothing starts it |
 | `open` | actionable | claimable once dependencies are done |
-| `active` | being worked on | has a session/claim; when the session ends without submitting (or its lease expires) the item returns to the type's `open` state |
+| `active` | a session works on it | has a session/claim; when the session ends without submitting (or its lease expires) the item returns to `open` |
 | `review` | the work is submitted and waits for its review steps | not claimable; entering it ends the session's claim |
 | `done` | finished successfully | terminal; satisfies dependents |
 | `cancelled` | finished without success | terminal; open dependents become **stranded** (flagged, not unblocked) |
 
+Every item shows as `(task:draft)`, `(decision:done)` and so on: the second half means the same whatever
+the type. The runner moves items into `active` and `review` (start, release, submit, merge); a principal
+moves them with verbs: `wf item open` releases a draft or reopens an item, `wf item draft` holds it back,
+`wf item done` finishes it without a session, `wf item cancel` cancels it. `wf item add --draft` creates an
+item as a draft in the one `ItemCreated` event, so the dispatcher never sees it open. There is no move by
+hand into `active` or `review`: nothing ends an `active` item without a session, and `review` reviews a
+submitted commit.
+
 Being blocked is **computed**, never stored as a state: from `depends_on`, and from **blockers**, the
 open blocking comments on the item (section 10).
 
-\[\text{ready}(i) \iff \text{cat}(i) = \texttt{open} \wedge \forall d \in \text{depends\_on}(i): \text{cat}(d) = \texttt{done} \wedge \text{no open blocker on } i \wedge \text{no live session on } i\]
+\[\text{ready}(i) \iff \text{state}(i) = \texttt{open} \wedge \forall d \in \text{depends\_on}(i): \text{state}(d) = \texttt{done} \wedge \text{no open blocker on } i \wedge \text{no live session on } i\]
 
 The live-session condition ignores a session parked on the item: it is the one that continues once the
 item is ready again.
@@ -624,11 +636,15 @@ dependency or cancel the item. `wf item list` filters with `--ready`, `--blocked
 (combined, they match any), and `wf status` flags stranded items.
 
 `wf item show` prints an effective status, e.g. `open · blocked by #x7k2 (task, open)` or
-`in_progress · 1 blocker → supervisor (c7f2)`.
+`active · 1 blocker → supervisor (c7f2)`.
 
-A type's **open, active, review and done state** is the first state in its list with that category.
-The runner moves items with these (start, release, submit, merge), so built-in behaviour still keys on
-categories, never on state names.
+**Older events.** Before the states were fixed, each type named its own states and mapped each to one of
+these six as its category. Events are signed and hashed, so those keep their names: a move names its state
+as written, and reading it maps the old names of the built-in types: `backlog` is `draft`, `in_progress`
+is `active`, `in_review` and `proposed` are `review`, `ratified` and `superseded` are `done`, `dropped`
+and `rejected` are `cancelled`. A name no version knew reads as `draft`, so nothing starts the item, and
+`wf status` and `wf item show` flag it. An `ItemCreated` written before it carried a state starts in the
+initial state of its type under the current policy. Writing an old name is refused.
 
 ### Archiving
 `archived` is a flag, orthogonal to state, so an archived item keeps its terminal outcome.
@@ -644,35 +660,34 @@ categories, never on state names.
 
 ### Type configuration (part of the signed policy)
 
+Types stay configurable, except for the names of their states: a type has a lane, fields, allowed
+dependencies, review and recovery level, and lists which of the six states it uses and which one its
+items start in.
+
 ```toml
 [types.task]
 lane = "default"
 fields = ["priority", "labels", "requires"]
 depends_on = ["task", "decision"]               # allowed target types
-initial = "open"
+initial = "open"                                 # "draft" holds every new task back
 review = "standard"                              # optional default review level (section 9)
-transitions = "any"                              # later: explicit lists, guards, on_enter hooks
-states = [
-  { name = "backlog",     category = "inactive" },
-  { name = "open",        category = "open" },
-  { name = "in_progress", category = "active" },
-  { name = "in_review",   category = "review" },
-  { name = "done",        category = "done" },
-  { name = "dropped",     category = "cancelled" },
-]
+states = ["draft", "open", "active", "review", "done", "cancelled"]
 ```
 
-If a policy change removes a state that items are still in, they keep it and are flagged as
-"unknown state" until moved.
+The list matters: it keeps a decision from being moved to `open`, where an agent would take it. The
+initial state must be one of them, a type that uses `active` must use `open` to return to, and one with
+a review level must use `review`. An item is created in its type's initial state, or as a `draft` when the
+type uses it. If a policy change drops a state that items are still in, they keep it, `wf status` flags
+them, and only moves into it are refused.
 
 ### Built-in types
-Types the code relies on. Shipped in the default policy, names reserved, states fixed in v1.
+Types the code relies on. Shipped in the default policy, names reserved.
 
-| Type | States (category) | Purpose |
-|---|---|---|
-| `task` | backlog (inactive), open, in_progress (active), in_review (review), done, dropped (cancelled) | default unit of work; what agent sessions are assigned |
-| `decision` | proposed (review), ratified (done), rejected (cancelled), superseded (done) | project decisions; ratifying is the approval of the review level (`manual` by default), objections are change requests; only `ratified` enters agent context |
-| `distill` | open, in_progress (active), done | system-created meta work in the `meta` lane |
+| Type | Initial | States | Purpose |
+|---|---|---|---|
+| `task` | `open` | draft, open, active, review, done, cancelled | default unit of work; what agent sessions are assigned |
+| `decision` | `review` | review, done, cancelled | project decisions; a proposed decision is accepted with `wf item done` and rejected with `wf item cancel`, objections are change requests; only decisions that are `done` and not superseded enter agent context |
+| `distill` | `open` | open, active, done, cancelled | system-created meta work in the `meta` lane |
 
 Custom types (`bug`, `doc`, `spike`, ...) are fully configurable.
 
@@ -705,7 +720,7 @@ Relations that change behaviour are explicit events. Informational ones are deri
 | Relation | Source | Cardinality | Semantics |
 |---|---|---|---|
 | `depends_on` | explicit `ItemLinked` | many, acyclic | readiness; allowed targets per type |
-| `supersedes` | explicit `ItemLinked` | one, decisions only | moves the target to `superseded` |
+| `supersedes` | explicit `ItemLinked` | one, decisions only | the target keeps its state and shows as superseded, derived like blocked |
 | `references` | derived from body and comments | many, cycles fine | backlinks only, to an item or a comment |
 | `mentions` | derived from body and comments | many | inbox entries |
 
@@ -743,11 +758,11 @@ its inbox after each commit.
 |---|---|
 | `type` | set at creation, immutable |
 | `title`, `body`, `priority`, `lane`, `review` | last writer wins per field; losing concurrent body edits stay visible in the activity of `item show` (section 10) |
-| `state` | last writer wins. Not validated by peers: the author checks it against the policy before signing, and a state the policy does not know is flagged, not rejected (see *Admission and fold*) |
+| `state` | set at creation, then last writer wins. Not validated by peers: the author checks it against the policy before signing, and a state the type no longer uses is flagged, not rejected (see *Admission and fold*) |
 | `labels`, `requires` | set with add/remove; add wins over concurrent remove |
 | `depends_on` | same set semantics; concurrent adds that form a cycle: the edge with the greatest `(hlc, EventId)` is ignored and flagged |
 
-Events: `ItemCreated` (id = short base32 prefix of the event hash), `ItemEdited{changes}`,
+Events: `ItemCreated{.., state}` (id = short base32 prefix of the event hash), `ItemEdited{changes}`,
 `ItemMoved{to, by_session, because}`, `ItemLinked{kind, target, add|remove}`, `ItemArchived`,
 `ItemUnarchived`, `Comment{item, text, kind, resolves, step}`.
 
@@ -755,7 +770,7 @@ Events: `ItemCreated` (id = short base32 prefix of the event hash), `ItemEdited{
 
 | Stored (events) | Computed in the fold | Computed at query time |
 |---|---|---|
-| type, title, body, state, priority, lane, review, labels, requires, depends_on, supersedes, archived, comments | category, author, created, updated, references, mentions, backlinks, `blocked_by`, open blockers and change requests, cycle and unknown-state flags, sessions per item, claim holder, checklist progress (`- [ ]` items in the body) | session liveness, `ready`, review status, overlap notifications |
+| type, title, body, state, priority, lane, review, labels, requires, depends_on, supersedes, archived, comments | author, created, updated, superseded by, references, mentions, backlinks, `blocked_by`, open blockers and change requests, cycle and unknown-state flags, sessions per item, claim holder, checklist progress (`- [ ]` items in the body) | session liveness, `ready`, review status, overlap notifications |
 
 The fold is a pure function of events and never reads the clock. Everything that depends on "now" is
 computed per query.
@@ -997,7 +1012,7 @@ activity · 2026-10-11
   06:59  @ada resolved a91d                                                     e04b
            Fix the formatting of the body, nothing else
   06:59  @ada/coder/pp74s3 resumed
-  07:04  @ada/coder/pp74s3 submitted 3e8a1c → in_review
+  07:04  @ada/coder/pp74s3 submitted 3e8a1c → review
   07:10  @ada/reviewer/m2p9 requested changes on 3e8a1c
            △ b2e4  parser.rs: the error path drops the span
            △ d81c  missing test for empty input
@@ -1007,14 +1022,14 @@ activity · 2026-10-11
 
 * **Comments** take a header line (time, actor, kind, what they resolve, id) and their wrapped text.
   Change requests written together with a verdict are listed under it.
-* **Events** take one line: moves (`moved to backlog`; with a `because`, the comment's text below),
+* **Events** take one line: moves (`moved to draft`; with a `because`, the comment's text below),
   edits (`set priority P1`, `labels +bug`, `review → principal`, `edited the body`, `checked step 2: …`),
   links (`now depends on #x7k2`, `no longer depends on #x7k2`), sessions (`started work`,
   `started review of 3e8a1c`, `released`, `timed out`), verdicts, merges and archiving.
 * **Moves carried out for a session** (`by_session`) are shown in the session's line, not on their own:
-  `started work`, `submitted 3e8a1c → in_review`, `released → open`.
+  `started work`, `submitted 3e8a1c → review`, `released → open`.
 * **Other items** appear where they change this one: a dependency done (`#x7k2 done`) or cancelled
-  (`#x7k2 dropped · stranded`), a new dependent (`#abc now depends on this`), a reference
+  (`#x7k2 cancelled · stranded`), a new dependent (`#abc now depends on this`), a reference
   (`referenced in #abc`).
 * A body edit that lost to a concurrent edit is shown with its text, so nothing silently disappears.
 * The date heads the section and is repeated when the day changes; lines show the time only.
@@ -1033,9 +1048,10 @@ activity · 2026-10-11
 
 * Distilling threads and comments into project decisions is **normal work**: a `distill` item in the
   `meta` lane, claimed like any other. This avoids duplicate scribes.
-* Decisions are items of the built-in `decision` type. Ratified decisions change only through a new
-  decision that `supersedes` them.
-* Only **ratified** decisions enter agent context. Unratified ones are searchable by humans.
+* Decisions are items of the built-in `decision` type. A ratified decision, one that is `done`, changes
+  only through a new decision that `supersedes` it.
+* Only **ratified** decisions, `done` and not superseded, enter agent context. The others are
+  searchable by humans.
 * Search is local per peer, not synced: a derived, rebuildable index (tantivy for keywords, a local vector
   index with a local embedding model), fused by reciprocal rank. `wf search "..." --kind decision,comment --since 30d`.
 
@@ -1242,6 +1258,21 @@ steps = [{ agent = { requires = ["review"] } }, "retry", "principal"]
 [lanes.meta]
 [lanes.supervision]      # holds no items: its agents supervise blockers
 
+[types.task]             # section 8; a type lists the fixed states it uses
+lane = "default"
+initial = "open"
+states = ["draft", "open", "active", "review", "done", "cancelled"]
+
+[types.decision]
+lane = "default"
+initial = "review"
+states = ["review", "done", "cancelled"]
+
+[types.distill]
+lane = "meta"
+initial = "open"
+states = ["open", "active", "done", "cancelled"]
+
 [transcripts]
 publish = "none"
 
@@ -1251,6 +1282,11 @@ after = "90d"
 [governance]
 mode = "advisory"
 ```
+
+Policies already in the log list states the old way, as `{ name, category }` tables with names such as
+`in_progress`, and say `transitions = "any"`. They are still read: the category is the state, and an old
+`initial` is the category of the state it names. `wf policy apply` and `wf policy edit` refuse the old form,
+so a policy written now names the states as above.
 
 ## 16. iroh usage
 
@@ -1280,8 +1316,10 @@ Missing and built by us: authorization, authenticated gossip membership, orderin
 wf init [-i] | status | log | export | import <file> | members
 wf policy show|edit|apply <file>          # apply and edit need an owner's principal key
 wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
-wf item add|list|show|edit|move|cancel|link|check|archive|unarchive   # all types: task, decision, ...
-wf item list [--type] [--state] [--label] [--lane] [--priority] [--ready [--for <agent>]] [--blocked] [--stranded] [--group-by]
+wf item add [--draft]|list|show|edit|link|check|archive|unarchive   # all types: task, decision, ...
+wf item open|draft|done <item>... | cancel <item>   # release or reopen, hold back, finish, cancel
+wf item list [--type] [--state <state>,...] [--label] [--lane] [--priority] [--ready [--for <agent>]] [--blocked] [--stranded] [--group-by]
+wf item archive <item> | --done | --cancelled
 wf item diff|checkout|path <item>         # the work through git; the main checkout on it; its worktree
 wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | --resolve-blockers | --resolve-change-requests] [--step <number> [--done]]
 wf mentions <@handle | @handle/agent>
@@ -1298,7 +1336,7 @@ wf sync [--serve] | invite device | join <code> | device list|edit
 ```
 *Later:* `wf invite member`, `wf owner add|transfer`, `wf policy diff|export`, `wf search <query>`.
 
-All commands support `--json`. Output is `{"schema": 4, "data": ...}`; the schema number is bumped on
+All commands support `--json`. Output is `{"schema": 5, "data": ...}`; the schema number is bumped on
 incompatible changes and the shapes are snapshot-tested. Item ids print as the first 6 characters of their
 base32 hash and any unique prefix of at least 4 characters is accepted, with or without `#`.
 Without `--json`, lists (`item list`, `agent list`, `session list`, `device list`, `log`, `mentions`)
@@ -1309,7 +1347,16 @@ Styling is emitted only when stdout is a terminal; piped output is plain.
 between `+++` fences (`title`, `priority`, `lane`, `labels`, `requires`, `review`, `recovery`), then the body as plain markdown,
 taken verbatim. TOML has no null, so unset fields appear as commented-out hints. Unknown keys, an
 invalid priority or label, and a missing or unclosed fence are rejected. Flags (`--title`, `--body`,
-`--add-label`, ...) edit single fields instead. The item type and state are not editable here.
+`--add-label`, ...) edit single fields instead. The item type and state are not editable here: the state
+changes with `wf item open`, `draft`, `done` and `cancel`. `wf item add` opens the same draft with `type`,
+and a `# state = "draft"` hint that holds the new item back when uncommented.
+
+`--state` takes the six states, which complete in the shell and show in `--help`; `--state draft,open`
+lists both. `wf item list --group-by state` lists the groups in the order of section 8. `wf item open`,
+`draft` and `done` take several items and check them all before writing, so a typo moves none; items
+already in the state are left alone and named. In the dashboard, `s` on a draft first offers "release:
+open it for the dispatcher", then the agents, and `m` offers the verbs the item's type uses, less the
+state it is in.
 
 Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the repository holds only
 `.workforce.toml` with the workforce id.
@@ -1318,7 +1365,7 @@ Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the 
 
 | M | Scope |
 |---|---|
-| **M0** | Event log with `actor`, `owner`/`member`, principal and device keys, agent definitions, item model (types, categories, built-in types, relations, derived refs and mentions, archiving), in-memory fold, redb event store with snapshots. Single peer. |
+| **M0** | Event log with `actor`, `owner`/`member`, principal and device keys, agent definitions, item model (types, states, built-in types, relations, derived refs and mentions, archiving), in-memory fold, redb event store with snapshots. Single peer. |
 | **M1** | iroh sync, equivocation handling, self-authorizing device invites and `wf join`, device profiles, daemon, gossip, `wf fork`. |
 | M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, blockers, change requests and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress, reports as comments, item activity |
 | M2.1 | Convenience at the CLI: machine config, permission chain (rules, hooks, decision models, agents), `wf item diff` through git, `wf item checkout\|path`, `wf watch` |

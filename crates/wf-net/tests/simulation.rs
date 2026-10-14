@@ -92,7 +92,7 @@ impl Cluster {
                     Priority::P3
                 })),
             ),
-            (3, Some(item)) => moved(item, "done"),
+            (3, Some(item)) => moved(item, ItemState::Done),
             _ => create("task", &format!("task {}", self.clock)),
         };
         self.clock += 1;

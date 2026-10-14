@@ -10,13 +10,12 @@ use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use wf_core::event::{Comment, CommentKind, EventBody, ItemEdited, ItemMoved, Review};
 use wf_core::id::{CommentId, HashId, ItemId};
-use wf_core::item::{ItemView, Standing};
-use wf_core::name::{AgentName, StateName};
-use wf_core::policy::StateCategory;
+use wf_core::item::{ItemState, ItemView};
+use wf_core::name::AgentName;
 use wf_core::session::Verdict;
 use wf_harness::Permission;
 
-use super::app::{Choice, Effect};
+use super::app::{Choice, Effect, Starter};
 use crate::commands::{edit_in_editor, repository, target, work_commit};
 use crate::draft::Draft;
 use crate::workspace::{self, Workspace};
@@ -39,17 +38,23 @@ pub fn carry_out(
     terminal: &mut DefaultTerminal,
 ) -> anyhow::Result<Outcome> {
     match effect {
-        Effect::ChooseAgent { item } => Ok(Outcome::Choose(agents(workspace, item)?)),
+        Effect::ChooseStart { item } => Ok(Outcome::Choose(starters(workspace, item)?)),
         Effect::ChooseState { item } => Ok(Outcome::Choose(states(workspace, item)?)),
         effect => done(effect, workspace, terminal).map(Outcome::Did),
     }
 }
 
-/// The agents of the principal of this machine, the policy's default agent first. An item that
-/// a live session holds is refused right away, before an agent is picked for nothing.
-fn agents(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
+/// The agents of the principal of this machine, the policy's default agent first. A draft can be
+/// released for the dispatcher too, which comes first. An item that a live session holds is
+/// refused right away, before a starter is picked for nothing.
+fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
     wf_daemon::ensure_unclaimed(state, item)?;
+    let policy = &state.policy().expect("a workforce has a policy").policy;
+    let draft = matches!(
+        state.item(item),
+        Some(ItemView::Live(live)) if live.state(policy) == ItemState::Draft
+    );
     let principal = state
         .principal_of(&workspace.device_key())
         .ok_or_else(|| anyhow!("this device is not bound to a member"))?;
@@ -62,17 +67,23 @@ fn agents(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
         .map(|(id, _)| id.name.clone())
         .collect();
     agents.sort_by_key(|agent| Some(agent) != default.as_ref());
-    if agents.is_empty() {
+    if agents.is_empty() && !draft {
         bail!("you have no agents; add one with `wf agent add`");
     }
-    Ok(Choice::Agent {
+    let starters = draft
+        .then_some(Starter::Dispatcher)
+        .into_iter()
+        .chain(agents.into_iter().map(Starter::Agent))
+        .collect();
+    Ok(Choice::Start {
         item,
-        agents,
+        starters,
         index: 0,
     })
 }
 
-/// The states of the item's type, its current state selected.
+/// The states a principal moves an item to, that its type uses, less the one it is in. `active`
+/// and `review` are the runner's.
 fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
     let policy = &state.policy().expect("a workforce has a policy").policy;
@@ -85,23 +96,23 @@ fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let config = policy
         .type_config(live.item_type())
         .ok_or_else(|| anyhow!("no item type `{}` in the policy", live.item_type()))?;
-    let states: Vec<(StateName, StateCategory)> = config
-        .states
-        .iter()
-        .map(|state| (state.name.clone(), state.state_category))
-        .collect();
-    let current = match live.standing(policy) {
-        Standing::Known { state, .. } => Some(state),
-        Standing::Unknown { .. } => None,
-    };
-    let index = states
-        .iter()
-        .position(|(name, _)| Some(name) == current)
-        .unwrap_or_default();
+    let current = live.state(policy);
+    let states: Vec<ItemState> = [
+        ItemState::Draft,
+        ItemState::Open,
+        ItemState::Done,
+        ItemState::Cancelled,
+    ]
+    .into_iter()
+    .filter(|state| config.uses(*state) && *state != current)
+    .collect();
+    if states.is_empty() {
+        bail!("a {} that is {current} cannot be moved", live.item_type());
+    }
     Ok(Choice::State {
         item,
         states,
-        index,
+        index: 0,
     })
 }
 
@@ -112,7 +123,7 @@ fn done(
     terminal: &mut DefaultTerminal,
 ) -> anyhow::Result<String> {
     match effect {
-        Effect::Quit | Effect::ChooseAgent { .. } | Effect::ChooseState { .. } => Ok(String::new()),
+        Effect::Quit | Effect::ChooseStart { .. } | Effect::ChooseState { .. } => Ok(String::new()),
         Effect::StartSession { item, agent } => {
             let (file, _) = workspace::find_workforce(&std::env::current_dir()?)?;
             let repository = file
@@ -133,11 +144,11 @@ fn done(
         Effect::Move { item, state } => {
             workspace.author(EventBody::ItemMoved(ItemMoved {
                 item,
-                to: state.clone(),
+                to: state.into(),
                 by_session: None,
                 because: None,
             }))?;
-            Ok(format!("moved #{} to {state}", item.short()))
+            Ok(format!("#{} is {state}", item.short()))
         }
         Effect::Comment { item, text } => {
             workspace.author(EventBody::Commented(Comment::plain(item, text)))?;
