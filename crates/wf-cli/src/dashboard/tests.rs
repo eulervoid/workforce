@@ -264,7 +264,7 @@ fn h_and_l_fold_the_list_or_the_detail_to_a_strip() {
     // Shift → gives the detail the window, with the list a strip at the left.
     app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
     assert!(!app.list_has_keys());
-    assert_eq!(app.detail_width(), 127);
+    assert_eq!(app.detail_width(), 126);
     insta::assert_snapshot!("detail_only", screen(&mut app, 130, 14));
     // Esc goes back to the list in the whole window, as in a narrow one.
     press(&mut app, KeyCode::Esc);
@@ -1981,6 +1981,29 @@ fn a_long_item_shows_how_far_down_it_is_scrolled_and_keeps_off_the_right_edge() 
     for line in at_top.iter().chain(&halfway).chain(&at_end) {
         assert!(line.ends_with(' '), "{line:?}");
     }
+}
+
+#[test]
+fn a_line_as_wide_as_the_laid_out_item_stays_one_line() {
+    let mut app = app();
+    let spans = ItemId::from_bytes([2; 32]);
+    app.open_item(spans);
+    screen(&mut app, 60, 10);
+    // Words filling exactly the width the item is laid out for.
+    let width = usize::from(app.detail_width());
+    let mut full = "word ".repeat(width / 5);
+    full.truncate(full.len() - 1);
+    full.push_str(&"x".repeat(width - full.len()));
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Item {
+        id: spans,
+        text: format!("{full}\nnext\n"),
+        session: None,
+    });
+    app.refresh(snapshot);
+    let body = screen_lines(&mut app, 60, 10)[4..=6].to_vec();
+    assert_eq!(body[0].trim(), full, "{body:#?}");
+    assert_eq!(body[1].trim(), "next", "{body:#?}");
 }
 
 #[test]

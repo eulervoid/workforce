@@ -1517,8 +1517,8 @@ fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
     ]
 }
 
-/// Draws `text` wrapped to `area` without its last column at `scroll`, kept to what the text allows; returns the scroll it was
-/// drawn at.
+/// Draws `text` wrapped to `area` without its last column at `scroll`, kept to what the text
+/// allows; returns the scroll it was drawn at.
 fn draw_scrolled(frame: &mut Frame, text: Text<'static>, scroll: Scroll, area: Rect) -> Scroll {
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let lines = paragraph.line_count(padded(area).width);
@@ -1530,9 +1530,9 @@ fn draw_scrolled(frame: &mut Frame, text: Text<'static>, scroll: Scroll, area: R
     scroll
 }
 
-/// Draws `lines` then `more`, wrapped already to `area` without its last column, at `scroll`, kept to what they allow; returns the
-/// scroll they were drawn at. Only the lines on screen are handed to ratatui, so a frame costs
-/// what is shown rather than all there is.
+/// Draws `lines` then `more`, wrapped already to `area` without its last column, at `scroll`,
+/// kept to what they allow; returns the scroll they were drawn at. Only the lines on screen are
+/// handed to ratatui, so a frame costs what is shown rather than all there is.
 fn draw_lines(
     frame: &mut Frame,
     lines: &[Line<'static>],
