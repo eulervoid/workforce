@@ -1,0 +1,71 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+assertion_line: 165
+expression: "Envelope::new(detail.unwrap())"
+---
+{
+  "schema": 7,
+  "data": {
+    "id": "@ada/coder",
+    "harness": "opencode",
+    "model": null,
+    "capabilities": [
+      "rust"
+    ],
+    "lanes": [],
+    "start": "manual",
+    "permissions": "allow",
+    "nudges": 3,
+    "park_timeout": "2h",
+    "max_duration": null,
+    "instructions": null,
+    "hosts": [],
+    "stats": {
+      "sessions": 1,
+      "live": 1,
+      "finished": 0,
+      "failed": 0,
+      "median_duration_ms": null
+    },
+    "sessions": [
+      {
+        "id": "any3ldioxnzymqkp7dnpflkg2e5bmytfzgeqrd2qnihfbigxse3q",
+        "agent": "@ada/coder",
+        "item": "4yzehflpuecu36cosf74tjpdnuemimv7ko4nco4upfno66vwsv2a",
+        "title": "Implement feed sync",
+        "role": "work",
+        "status": "live",
+        "started": "1970-01-01T00:00:05Z",
+        "ended": null,
+        "model": null,
+        "commit": null,
+        "steps": null
+      }
+    ],
+    "older_sessions": 0,
+    "activity": [
+      {
+        "at": "1970-01-01T00:00:02Z",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
+        "kind": "workforce",
+        "summary": "defined it",
+        "comment": null,
+        "text": null
+      },
+      {
+        "at": "1970-01-01T00:00:03Z",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
+        "kind": "workforce",
+        "summary": "set its capabilities to rust",
+        "comment": null,
+        "text": null
+      }
+    ]
+  }
+}
