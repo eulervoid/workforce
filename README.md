@@ -114,6 +114,21 @@ environment = { set = { RUST_LOG = "debug" } }
 sandbox = { allow_domains = ["docs.rs"] }
 ```
 
+## Storage
+A shared build cache mixes the builds of different branches; one in each worktree
+(`CARGO_TARGET_DIR = "target"`) does not, but each takes its own space, also while its item waits in
+review. With a budget, the daemon keeps the caches in the worktrees under it: when a session ends and
+when the daemon starts, it deletes the caches of the least recently built worktree that no session runs
+in, whole, until the rest fits. A cold build the next time is the only cost. Without `[storage]`,
+nothing is deleted. `wf status` shows what the caches take.
+```toml
+[storage]
+budget = "20GB"
+caches = ["target"]              # paths inside a worktree that can be rebuilt
+```
+The checkout of a review goes when the review ends, the worktree of an item when it is done or
+cancelled, and a daemon that starts removes whatever else is left in its worktrees directory.
+
 ## Commits and signatures
 Agents commit as themselves, `@you/coder`, and without signing, so that they never wait for a key you
 have to unlock or approve. When your git config signs commits (`commit.gpgsign`), the merge commit

@@ -158,6 +158,9 @@ pub trait VcsAdapter {
     /// Removes the worktree at `path` together with whatever is uncommitted in it.
     fn remove_worktree(&self, path: &Path) -> Result<(), VcsError>;
 
+    /// Forgets the worktrees whose directories are gone.
+    fn prune_worktrees(&self) -> Result<(), VcsError>;
+
     fn delete_branch(&self, branch: &str) -> Result<(), VcsError>;
 
     /// The commit a branch points at.
