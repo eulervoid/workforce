@@ -9,7 +9,6 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use wf_core::graph::Readiness;
 use wf_core::id::HashId;
-use wf_core::item::ItemState;
 
 use super::app::{
     AgentRow, App, Choice, Clickable, ClickableList, Drawn, Hovered, Opened, Prompt, Request, Row,
@@ -21,14 +20,14 @@ use super::snapshot::{Detail, ItemRow};
 use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;
 use crate::render::{self, duration};
+use crate::theme;
 use crate::transcript::{self, Format, Now, Transcript, Usage};
 use wf_core::stats::ProjectStats;
 
-/// Marine blue: marks the one place that has the keys.
-pub const ACCENT: Color = Color::Rgb(30, 80, 160);
-/// The accent, dimmed: marks a place that had the keys but has not now, or every place while the
-/// terminal pane is not focused.
-pub const ACCENT_DIMMED: Color = Color::Rgb(30, 45, 75);
+/// `text` in a style of the theme.
+fn themed<'a>(text: impl Into<std::borrow::Cow<'a, str>>, style: anstyle::Style) -> Span<'a> {
+    Span::styled(text, Style::from(style))
+}
 
 /// The place on screen the keys go to, which the accent marks.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -72,21 +71,21 @@ impl KeysAt {
 /// otherwise.
 fn accent(app: &App, place: KeysAt) -> Color {
     if app.terminal_focused && KeysAt::of(app) == place {
-        ACCENT
+        theme::ACCENT.into()
     } else {
-        ACCENT_DIMMED
+        theme::ACCENT_DIMMED.into()
     }
 }
 
 /// The bar left of a selection in `accent`, on the background of the selection: white while the
 /// accent is full, in the dimmed accent itself otherwise, so only the dimmed background shows.
 fn selection_bar(accent: Color) -> Span<'static> {
-    let color = if accent == ACCENT {
-        Color::White
+    let style = if accent == Color::from(theme::ACCENT) {
+        Style::from(theme::ON_ACCENT)
     } else {
-        accent
+        Style::new().fg(accent)
     };
-    Span::styled("▎", Style::new().fg(color).bg(accent))
+    Span::styled("▎", style.bg(accent))
 }
 
 /// The ends of a highlight inside a line, on `background`: a right half block before it and a left
@@ -284,7 +283,7 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
         .iter()
         .map(|(keys, what)| {
             Line::from(vec![
-                Span::raw(format!(" {keys:<12}")).fg(Color::Yellow),
+                themed(format!(" {keys:<12}"), theme::KEY),
                 Span::raw(*what),
             ])
         })
@@ -388,7 +387,7 @@ fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
             spans.push(Span::raw(SEPARATOR));
         }
         let (key, what) = hint.split_once(' ').unwrap_or((hint, ""));
-        spans.push(Span::styled(key, Style::new().bold().fg(Color::White)));
+        spans.push(themed(key, theme::ON_ACCENT.bold()));
         if !what.is_empty() {
             spans.push(Span::raw(format!(" {what}")));
         }
@@ -812,7 +811,7 @@ impl RowLines {
 
     /// The keys of a row, shown only while it is selected.
     fn keys(&self, keys: &'static str) -> Option<Span<'static>> {
-        self.selected.then(|| Span::raw(keys).fg(Color::Yellow))
+        self.selected.then(|| themed(keys, theme::KEY))
     }
 
     /// The lines of the row; `more` start right of the marker column, and are cut to fit.
@@ -896,7 +895,7 @@ fn cut_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Span<'static>> {
 
 fn item_spans(item: &ItemRef) -> Vec<Span<'static>> {
     vec![
-        Span::raw(format!("#{}", item.id.short())).fg(Color::Cyan),
+        themed(format!("#{}", item.id.short()), theme::ID),
         Span::raw(" "),
         Span::raw(item.title.clone()),
     ]
@@ -918,18 +917,21 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
         Waiting::Permission {
             agent, item, what, ..
         } => {
-            let mut first = vec![Span::raw("? ").fg(Color::Yellow), Span::raw(agent.clone())];
+            let mut first = vec![
+                themed("? ", theme::ATTENTION),
+                themed(agent.clone(), theme::AGENT),
+            ];
             if let Some(item) = item {
                 first.push(Span::raw(" on "));
-                first.push(Span::raw(format!("#{}", item.id.short())).fg(Color::Cyan));
+                first.push(themed(format!("#{}", item.id.short()), theme::ID));
             }
             first.push(Span::raw(" wants: "));
             first.push(Span::raw(what.clone()));
             row.lines(first, row.keys(ROW_ANSWERS).map(Line::from), Vec::new())
         }
         Waiting::Blocker { item, by, text, .. } => {
-            let mut first = vec![Span::raw("⧗ ").fg(Color::Yellow)];
-            first.push(Span::raw(format!("#{}", item.id.short())).fg(Color::Cyan));
+            let mut first = vec![themed("⧗ ", theme::ATTENTION)];
+            first.push(themed(format!("#{}", item.id.short()), theme::ID));
             first.push(Span::raw(format!(" blocker from {by}")));
             let quote = text
                 .lines()
@@ -948,8 +950,8 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             )
         }
         Waiting::Review { item, commit } => {
-            let mut first = vec![Span::raw("◎ ").fg(Color::Yellow)];
-            first.push(Span::raw(format!("#{}", item.id.short())).fg(Color::Cyan));
+            let mut first = vec![themed("◎ ", theme::ATTENTION)];
+            first.push(themed(format!("#{}", item.id.short()), theme::ID));
             first.push(Span::raw(" review"));
             if let Some(commit) = commit {
                 first.push(Span::raw(format!(" {}", &commit.to_string()[..8])).dim());
@@ -958,7 +960,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             row.lines(first, row.keys("v").map(Line::from), Vec::new())
         }
         Waiting::Notice { item, kind, what } => {
-            let mut first = vec![Span::raw("• ").fg(Color::Yellow)];
+            let mut first = vec![themed("• ", theme::ATTENTION)];
             first.extend(item_spans(item));
             let more = Line::from(format!("  {kind}: {what}")).dim();
             row.lines(first, None, vec![more])
@@ -995,11 +997,15 @@ fn activity(app: &App, session: &SessionInfo) -> Option<Line<'static>> {
 
 fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'static>> {
     let glyph = match session.status {
-        SessionStatus::Live => Span::raw("◆ ").fg(Color::Blue),
-        SessionStatus::Parked => Span::raw("◇ ").fg(Color::Blue),
+        SessionStatus::Live => themed("◆ ", theme::LIVE),
+        SessionStatus::Parked => themed("◇ ", theme::LIVE),
         SessionStatus::Ended { .. } => Span::raw("· ").dim(),
     };
-    let mut first = vec![glyph, Span::raw(format!("{:<9} ", session.agent))];
+    let mut first = vec![
+        glyph,
+        themed(format!("{:<9}", session.agent), theme::AGENT),
+        Span::raw(" "),
+    ];
     first.extend(item_spans(&session.item));
     let mut right = age(session.started_ms, app.snapshot.now_ms);
     if session.status == SessionStatus::Parked {
@@ -1057,7 +1063,7 @@ fn context_line(model: Option<&str>, usage: Option<&Usage>) -> Option<Line<'stat
 /// `text` about `usage`: yellow once the context is nearly full, dim before.
 fn context_span(usage: &Usage, text: String) -> Span<'static> {
     if context_percent(usage) >= 80 {
-        Span::raw(text).fg(Color::Yellow)
+        themed(text, theme::ATTENTION)
     } else {
         Span::raw(text).dim()
     }
@@ -1129,7 +1135,7 @@ fn now_lines(app: &App, width: u16) -> ListText {
         list.push(section("NEEDS ATTENTION"));
         for flag in &snapshot.flagged {
             let is_selected = selected == Some(&Row::Flag(flag.clone()));
-            let first = vec![Span::raw("! ").fg(Color::Red), Span::raw(flag.clone())];
+            let first = vec![themed("! ", theme::WARNING), Span::raw(flag.clone())];
             list.entry(
                 RowLines::new(app, is_selected, width).lines(first, None, Vec::new()),
                 is_selected,
@@ -1165,37 +1171,42 @@ fn items_heading(app: &App) -> Line<'static> {
 fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
     let icon = render::item_icon(item.state, item.readiness);
     let first = vec![
-        Span::raw(format!("{icon} ")).fg(state_color(item)),
-        Span::raw(format!("#{}", item.id.short())).fg(Color::Cyan),
+        themed(format!("{icon} "), icon_style(item)),
+        themed(format!("#{}", item.id.short()), theme::ID),
         Span::raw(" "),
         Span::raw(item.title.clone()),
     ];
-    let mut right = Vec::new();
+    let mut annotations = Vec::new();
     match item.readiness {
-        Some(Readiness::Blocked) => right.push("blocked".to_owned()),
-        Some(Readiness::Stranded) => right.push("stranded".to_owned()),
+        Some(Readiness::Blocked) => annotations.push("blocked".to_owned()),
+        Some(Readiness::Stranded) => annotations.push("stranded".to_owned()),
         Some(Readiness::Ready | Readiness::Claimed) | None => {}
     }
     if let Some((done, total)) = item.steps {
-        right.push(format!("{done}/{total}"));
+        annotations.push(format!("{done}/{total}"));
+    }
+    // The annotations dim, the priority in its own style, as `wf item list` shows it.
+    let mut right = Vec::new();
+    if !annotations.is_empty() {
+        right.push(Span::raw(annotations.join(" ")).dim());
     }
     if let Some(priority) = item.priority {
-        right.push(priority.to_string());
+        if !right.is_empty() {
+            right.push(Span::raw(" "));
+        }
+        right.push(themed(priority.to_string(), theme::priority(priority)));
     }
-    let right = (!right.is_empty()).then(|| Span::raw(right.join(" ")).dim());
-    row.lines(first, right.map(Line::from), Vec::new())
+    let right = (!right.is_empty()).then(|| Line::from(right));
+    row.lines(first, right, Vec::new())
 }
 
-fn state_color(item: &ItemRow) -> Color {
-    if item.readiness == Some(Readiness::Stranded) {
-        return Color::Red;
-    }
-    match item.state {
-        ItemState::Open => Color::Green,
-        ItemState::Active => Color::Blue,
-        ItemState::Review => Color::Yellow,
-        ItemState::Done => Color::Magenta,
-        ItemState::Cancelled | ItemState::Draft => Color::DarkGray,
+/// The style of an item's icon: its state's, or a warning while the item is stranded.
+fn icon_style(item: &ItemRow) -> anstyle::Style {
+    match item.readiness {
+        Some(Readiness::Stranded) => theme::readiness(Readiness::Stranded),
+        Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => {
+            theme::state(item.state)
+        }
     }
 }
 
@@ -1242,9 +1253,9 @@ fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
     let live = agent.stats.live;
     let load = match agent.capacity {
         Some(capacity) if live as u32 >= capacity => {
-            Span::raw(format!("{live}/{capacity} busy")).fg(Color::Blue)
+            themed(format!("{live}/{capacity} busy"), theme::LIVE)
         }
-        Some(capacity) if live > 0 => Span::raw(format!("{live}/{capacity} live")).fg(Color::Blue),
+        Some(capacity) if live > 0 => themed(format!("{live}/{capacity} live"), theme::LIVE),
         Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).dim(),
         None => Span::raw(format!("{live} live · not here")).dim(),
     };
@@ -1254,8 +1265,8 @@ fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
 /// A session under its agent: `◆ #k3j1 Parse config lazily  work 12m`.
 fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'static>> {
     let glyph = match session.status {
-        SessionStatus::Live => Span::raw("  ◆ ").fg(Color::Blue),
-        SessionStatus::Parked => Span::raw("  ◇ ").fg(Color::Blue),
+        SessionStatus::Live => themed("  ◆ ", theme::LIVE),
+        SessionStatus::Parked => themed("  ◇ ", theme::LIVE),
         SessionStatus::Ended { .. } => Span::raw("  · ").dim(),
     };
     let mut first = vec![glyph];
@@ -1454,12 +1465,12 @@ fn draw_session(
     let shown = draw_lines(frame, lines, &open, scroll, body);
     if let Some((what, request)) = asks.first() {
         let line = Line::from(vec![
-            Span::raw("? ").fg(Color::Yellow).bold(),
+            themed("? ", theme::ATTENTION.bold()),
             Span::raw(format!("wants: {what}")),
         ]);
         let keys = [ALLOW, DENY].join(SEPARATOR);
         let row = RowLines::new(app, false, bar.width);
-        let right = Line::from(Span::raw(keys.clone()).fg(Color::Yellow));
+        let right = Line::from(themed(keys.clone(), theme::KEY));
         let first = row.lines(line.spans, Some(right), Vec::new()).remove(0);
         let allow = right_start(&first, &keys);
         let width = textwrap::core::display_width;
@@ -1577,8 +1588,8 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
 /// `coder · work · 12m ◆`
 fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
     let status = match session.status {
-        SessionStatus::Live => Span::raw(" ◆").fg(Color::Blue),
-        SessionStatus::Parked => Span::raw(" ◇ parked").fg(Color::Blue),
+        SessionStatus::Live => themed(" ◆", theme::LIVE),
+        SessionStatus::Parked => themed(" ◇ parked", theme::LIVE),
         SessionStatus::Ended { reason, .. } => Span::raw(format!(" · {}", reason.name())),
     };
     vec![
@@ -1662,11 +1673,11 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect, spots: &mut Vec<Spot>) -> 
 fn latest_line(app: &App) -> Line<'static> {
     match &app.status {
         Some(Status::Done { what, .. }) => {
-            return Line::from(format!(" ✓ {what}")).fg(Color::Green);
+            return Line::from(format!(" ✓ {what}")).style(theme::SUCCESS);
         }
         Some(Status::ActionFailed { error, .. } | Status::RefreshFailed(error)) => {
             let first = error.lines().next().unwrap_or_default();
-            return Line::from(format!(" error: {first}")).fg(Color::Red);
+            return Line::from(format!(" error: {first}")).style(theme::ERROR);
         }
         None => {}
     }

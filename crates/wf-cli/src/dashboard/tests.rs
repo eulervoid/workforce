@@ -15,12 +15,13 @@ use super::app::{
     AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll,
     Split, Starter, Tab, Target, Wheel,
 };
-use super::draw::{self, ACCENT, ACCENT_DIMMED};
+use super::draw;
 use super::snapshot::{
     AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Links, Place, SessionInfo,
     SessionStatus, Snapshot, Waiting,
 };
-use ratatui::style::Color;
+use crate::theme;
+use ratatui::style::{Color, Modifier, Style};
 use wf_core::identity::AgentId;
 use wf_core::session::EndReason;
 use wf_core::stats::{AgentStats, ProjectStats};
@@ -51,6 +52,14 @@ fn session(seed: u8, agent: &str, item: ItemRef, minutes: u64) -> SessionInfo {
         started_ms: NOW_MS - minutes * 60_000,
         place: Place::Here,
     }
+}
+
+fn accent() -> Color {
+    theme::ACCENT.into()
+}
+
+fn accent_dimmed() -> Color {
+    theme::ACCENT_DIMMED.into()
 }
 
 fn snapshot() -> Snapshot {
@@ -613,6 +622,7 @@ fn with_items() -> Snapshot {
             name: "active".to_owned(),
             items: vec![ItemRow {
                 steps: Some((2, 5)),
+                priority: Some(Priority::P0),
                 ..item_row(1, "Parse config lazily", ItemState::Active)
             }],
         },
@@ -645,6 +655,27 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
     assert_eq!(titles, ["Parse config lazily"]);
     press(&mut app, KeyCode::Char('o'));
     assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::Lane));
+}
+
+#[test]
+fn an_item_row_shows_its_priority_in_the_style_of_wf_item_list() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    let text = screen(&mut app, 60, 14);
+    let (y, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("Parse config lazily"))
+        .unwrap();
+    let column = |text: &str| u16::try_from(line[1..line.find(text).unwrap()].chars().count());
+    let y = u16::try_from(y).unwrap();
+    let look = |style: Style| (style.fg, style.add_modifier);
+    let priority = style_at(&mut app, 60, 14, column("P0").unwrap(), y);
+    let p0 = Style::from(theme::priority(Priority::P0));
+    assert_eq!(look(priority), look(p0));
+    let steps = style_at(&mut app, 60, 14, column("2/5").unwrap(), y);
+    assert_eq!(look(steps), (Some(Color::Reset), Modifier::DIM));
 }
 
 #[test]
@@ -1230,17 +1261,17 @@ fn the_part_with_the_keys_has_the_accent_and_the_other_the_dimmed_accent() {
     let row = 9;
     let (crumb_x, crumb_y) = find(&mut app, 130, 14, "coder · work");
     assert_eq!(app.wanted().detail, Some(Detail::Session(blocked)));
-    assert_eq!(bg_at(&mut app, 130, 14, 30, row), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 130, 14, 30, row), Some(accent()));
     assert_eq!(
         bg_at(&mut app, 130, 14, crumb_x, crumb_y),
-        Some(ACCENT_DIMMED)
+        Some(accent_dimmed())
     );
     // In the detail, the list keeps the selection in the dimmed accent, and the breadcrumb has
     // the accent.
     press(&mut app, KeyCode::Char('l'));
     app.refresh(snapshot);
-    assert_eq!(bg_at(&mut app, 130, 14, 30, row), Some(ACCENT_DIMMED));
-    assert_eq!(bg_at(&mut app, 130, 14, crumb_x, crumb_y), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 130, 14, 30, row), Some(accent_dimmed()));
+    assert_eq!(bg_at(&mut app, 130, 14, crumb_x, crumb_y), Some(accent()));
 }
 
 /// The background of the cell at `x`, `y` once `app` is drawn.
@@ -1263,13 +1294,16 @@ fn the_bar_and_the_background_cover_every_line_of_the_selection() {
     for line in [row, row + 1] {
         assert_eq!(symbol_at(&mut app, 60, 22, 0, line), "▎");
         // The bar is white, on the background of the row, with no gap to the left edge.
-        assert_eq!(style_at(&mut app, 60, 22, 0, line).fg, Some(Color::White));
-        assert_eq!(bg_at(&mut app, 60, 22, 0, line), Some(ACCENT));
-        assert_eq!(bg_at(&mut app, 60, 22, 10, line), Some(ACCENT));
+        assert_eq!(
+            style_at(&mut app, 60, 22, 0, line).fg,
+            Style::from(theme::ON_ACCENT).fg
+        );
+        assert_eq!(bg_at(&mut app, 60, 22, 0, line), Some(accent()));
+        assert_eq!(bg_at(&mut app, 60, 22, 10, line), Some(accent()));
     }
     // The line after the entry is the next one's.
     assert_eq!(symbol_at(&mut app, 60, 22, 0, row + 2), " ");
-    assert_ne!(bg_at(&mut app, 60, 22, 10, row + 2), Some(ACCENT));
+    assert_ne!(bg_at(&mut app, 60, 22, 10, row + 2), Some(accent()));
 }
 
 #[test]
@@ -1277,15 +1311,15 @@ fn the_accent_goes_to_the_breadcrumb_on_enter_and_back_on_esc() {
     let mut app = app();
     let coder = app.snapshot.working[0].clone();
     let (_, row) = find(&mut app, 60, 16, "wants:");
-    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(accent()));
     press(&mut app, KeyCode::Enter);
     let mut snapshot = snapshot();
     snapshot.in_view = Some(InView::Session(coder));
     app.refresh(snapshot);
     let (column, crumb_y) = find(&mut app, 60, 16, "coder · work");
-    assert_eq!(bg_at(&mut app, 60, 16, column, crumb_y), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 16, column, crumb_y), Some(accent()));
     press(&mut app, KeyCode::Esc);
-    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(accent()));
 }
 
 /// Asserts that the highlight `text` on screen has half blocks around it in `background`, on the
@@ -1313,10 +1347,10 @@ fn the_last_part_of_the_breadcrumb_has_its_ends_in_its_accent() {
     app.refresh(snapshot.clone());
     let crumb = "coder · work · 40m ◇ parked";
     // The list has the keys: the ends are dimmed with the rest of the highlight.
-    assert_ends(&mut app, 130, 14, crumb, ACCENT_DIMMED);
+    assert_ends(&mut app, 130, 14, crumb, accent_dimmed());
     press(&mut app, KeyCode::Char('l'));
     app.refresh(snapshot);
-    assert_ends(&mut app, 130, 14, crumb, ACCENT);
+    assert_ends(&mut app, 130, 14, crumb, accent());
 }
 
 #[test]
@@ -1333,7 +1367,7 @@ fn a_breadcrumb_cut_short_leaves_out_the_end_of_its_highlight() {
     for (width, last) in [(fits + 1, "▌"), (fits, "◆"), (fits - 5, "…")] {
         assert_eq!(symbol_at(&mut app, width, 16, width - 1, row), last);
         assert_eq!(
-            bg_at(&mut app, width, 16, width - 1, row) == Some(ACCENT),
+            bg_at(&mut app, width, 16, width - 1, row) == Some(accent()),
             last != "▌"
         );
     }
@@ -1358,7 +1392,7 @@ fn the_active_tab_has_its_ends_in_the_colour_of_its_highlight() {
     assert_ends(&mut app, 60, 16, "2 Items", Color::Reset);
     // The log has the accent, as its list would.
     press(&mut app, KeyCode::Char('4'));
-    assert_ends(&mut app, 60, 16, "4 Log", ACCENT);
+    assert_ends(&mut app, 60, 16, "4 Log", accent());
     // Its ends are part of it.
     let (column, row) = find(&mut app, 60, 16, "▐4 Log▌");
     for end in [column, column + 6] {
@@ -1373,12 +1407,12 @@ fn the_log_tab_and_a_prompt_have_the_accent() {
     let mut app = app();
     press(&mut app, KeyCode::Char('4'));
     let (column, row) = find(&mut app, 60, 16, "4 Log");
-    assert_eq!(bg_at(&mut app, 60, 16, column, row), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 16, column, row), Some(accent()));
     // The filter takes the keys: its label has the accent, and the label of the log keeps the
     // dimmed accent.
     press(&mut app, KeyCode::Char('/'));
-    assert_eq!(bg_at(&mut app, 60, 16, 1, 15), Some(ACCENT));
-    assert_eq!(bg_at(&mut app, 60, 16, column, row), Some(ACCENT_DIMMED));
+    assert_eq!(bg_at(&mut app, 60, 16, 1, 15), Some(accent()));
+    assert_eq!(bg_at(&mut app, 60, 16, column, row), Some(accent_dimmed()));
 }
 
 #[test]
@@ -1392,10 +1426,10 @@ fn the_review_prompt_has_the_accent_on_the_whole_line() {
     assert_eq!(row, 23);
     // The key and its words, and the last column of the line.
     let key = style_at(&mut app, 60, 24, column, row);
-    assert_eq!(key.bg, Some(ACCENT));
+    assert_eq!(key.bg, Some(accent()));
     assert!(key.add_modifier.contains(ratatui::style::Modifier::BOLD));
-    assert_eq!(bg_at(&mut app, 60, 24, column + 3, row), Some(ACCENT));
-    assert_eq!(bg_at(&mut app, 60, 24, 59, row), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 24, column + 3, row), Some(accent()));
+    assert_eq!(bg_at(&mut app, 60, 24, 59, row), Some(accent()));
 }
 
 #[test]
@@ -1404,14 +1438,20 @@ fn while_the_terminal_pane_is_not_focused_the_accent_is_dimmed() {
     let (_, row) = find(&mut app, 60, 16, "wants:");
     assert!(app.terminal_focus(false));
     assert!(!app.terminal_focus(false));
-    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT_DIMMED));
+    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(accent_dimmed()));
     // The bar takes the colour of the dimmed background, so it does not show.
     let bar = style_at(&mut app, 60, 16, 0, row);
-    assert_eq!((bar.fg, bar.bg), (Some(ACCENT_DIMMED), Some(ACCENT_DIMMED)));
+    assert_eq!(
+        (bar.fg, bar.bg),
+        (Some(accent_dimmed()), Some(accent_dimmed()))
+    );
     assert!(app.terminal_focus(true));
-    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(accent()));
     let bar = style_at(&mut app, 60, 16, 0, row);
-    assert_eq!((bar.fg, bar.bg), (Some(Color::White), Some(ACCENT)));
+    assert_eq!(
+        (bar.fg, bar.bg),
+        (Style::from(theme::ON_ACCENT).fg, Some(accent()))
+    );
 }
 
 #[test]
@@ -1464,7 +1504,6 @@ fn with_usage(app: &mut App) {
 
 #[test]
 fn session_rows_show_how_full_their_context_is() {
-    use ratatui::style::Color;
     let mut app = app();
     with_usage(&mut app);
     let text = screen(&mut app, 60, 22);
@@ -1478,7 +1517,10 @@ fn session_rows_show_how_full_their_context_is() {
         .unwrap();
     let x = line[1..line.find("170k").unwrap()].chars().count();
     let (x, y) = (u16::try_from(x).unwrap(), u16::try_from(y).unwrap());
-    assert_eq!(style_at(&mut app, 60, 22, x, y).fg, Some(Color::Yellow));
+    assert_eq!(
+        style_at(&mut app, 60, 22, x, y).fg,
+        Style::from(theme::ATTENTION).fg
+    );
     press(&mut app, KeyCode::Char('3'));
     app.refresh(with_agents());
     insta::assert_snapshot!("agents_context", screen(&mut app, 60, 16));
@@ -1498,7 +1540,6 @@ fn a_session_detail_shows_its_context_above_the_transcript() {
 
 #[test]
 fn a_nearly_full_context_is_yellow_in_the_detail() {
-    use ratatui::style::Color;
     let mut app = app();
     app.resize(130, 24);
     with_usage(&mut app);
@@ -1515,7 +1556,10 @@ fn a_nearly_full_context_is_yellow_in_the_detail() {
         .unwrap();
     let x = app.list_width() + 3;
     let y = u16::try_from(line).unwrap();
-    assert_eq!(style_at(&mut app, 130, 14, x, y).fg, Some(Color::Yellow));
+    assert_eq!(
+        style_at(&mut app, 130, 14, x, y).fg,
+        Style::from(theme::ATTENTION).fg
+    );
 }
 
 #[test]
@@ -2185,7 +2229,7 @@ fn an_indicator_on_the_selection_has_its_background() {
     // Three rows of the list: the request, then both lines of the selected blocker.
     let lines = screen_lines(&mut app, 60, 9);
     assert!(lines[5].ends_with(" ↓ 5 "), "{lines:#?}");
-    assert_eq!(bg_at(&mut app, 60, 9, 57, 5), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 9, 57, 5), Some(accent()));
 }
 
 /// A session of `coder` as `wf agent show` lists it, `minutes` old, or ended `minutes` ago.

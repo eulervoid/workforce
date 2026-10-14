@@ -9,6 +9,7 @@ use comfy_table::{Attribute, Cell, ContentArrangement, Table};
 use crate::cli::ItemGrouping;
 use crate::devices::{DeviceView, MemberView};
 use crate::markdown;
+use crate::theme;
 use crate::transcript::Format;
 use crate::view::{
     ActivityKind, ActorKind, ActorView, AgentDetail, AgentView, BodyPartView, CommentKindView,
@@ -17,7 +18,6 @@ use crate::view::{
 };
 use wf_core::graph::Readiness;
 use wf_core::item::ItemState;
-use wf_core::item::Priority;
 
 fn short(id: &str) -> &str {
     &id[..id.len().min(wf_core::id::SHORT_ID_LEN)]
@@ -46,54 +46,12 @@ fn written_in(source: &SourceView) -> &'static str {
 }
 
 /// Colors are always written as ANSI escapes; `anstream` strips them when output is not a terminal.
-mod style {
-    use anstyle::{AnsiColor, Style};
-
-    use crate::view::{ActorKind, ActorView};
-
-    pub const BOLD: Style = Style::new().bold();
-    pub const DIM: Style = Style::new().dimmed();
-    pub const ID: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
-    pub const PRINCIPAL: Style =
-        Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Magenta)));
-    pub const AGENT: Style =
-        Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::BrightBlue)));
-    pub const DAEMON: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Green)));
-    pub const WARNING: Style = Style::new()
-        .bold()
-        .fg_color(Some(anstyle::Color::Ansi(AnsiColor::Red)));
-
-    pub fn color(color: AnsiColor) -> Style {
-        Style::new().fg_color(Some(anstyle::Color::Ansi(color)))
-    }
-
-    fn actor(kind: ActorKind) -> Style {
-        match kind {
-            ActorKind::Principal => PRINCIPAL,
-            ActorKind::Agent => AGENT,
-            ActorKind::Daemon => DAEMON,
-        }
-    }
-
-    pub fn paint(style: Style, text: impl std::fmt::Display) -> String {
-        format!("{style}{text}{style:#}")
-    }
-
-    pub fn paint_actor(actor: &ActorView) -> String {
-        paint(self::actor(actor.kind), &actor.label)
-    }
+fn paint(style: anstyle::Style, text: impl std::fmt::Display) -> String {
+    format!("{style}{text}{style:#}")
 }
 
-pub(crate) fn state_style(state: ItemState) -> anstyle::Style {
-    use anstyle::AnsiColor;
-    match state {
-        ItemState::Open => style::color(AnsiColor::Green),
-        ItemState::Active => style::color(AnsiColor::Blue),
-        ItemState::Review => style::color(AnsiColor::Yellow),
-        ItemState::Done => style::color(AnsiColor::Magenta),
-        ItemState::Cancelled => style::color(AnsiColor::BrightBlack),
-        ItemState::Draft => style::DIM,
-    }
+fn paint_actor(actor: &ActorView) -> String {
+    paint(theme::actor(actor.kind), &actor.label)
 }
 
 pub(crate) fn state_icon(state: ItemState) -> &'static str {
@@ -107,12 +65,12 @@ pub(crate) fn state_icon(state: ItemState) -> &'static str {
     }
 }
 
-fn priority_style(priority: Priority) -> anstyle::Style {
-    match priority {
-        Priority::P0 => style::WARNING,
-        Priority::P1 => style::color(anstyle::AnsiColor::Yellow),
-        Priority::P2 => anstyle::Style::new(),
-        Priority::P3 => style::DIM,
+fn readiness_icon(readiness: Readiness) -> &'static str {
+    match readiness {
+        Readiness::Ready => "○",
+        Readiness::Claimed => "◐",
+        Readiness::Blocked => "⊘",
+        Readiness::Stranded => "⚠",
     }
 }
 
@@ -168,24 +126,24 @@ fn item_label(
     readiness: Option<Readiness>,
     suffix: &str,
 ) -> String {
-    let state_style = state_style(state);
+    let state_style = theme::state(state);
     let icon_style = match readiness {
-        Some(Readiness::Stranded) => style::WARNING,
+        Some(Readiness::Stranded) => theme::WARNING,
         Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => state_style,
     };
     format!(
         "{} {} {}{}{}{}",
-        style::paint(icon_style, item_icon(state, readiness)),
+        paint(icon_style, item_icon(state, readiness)),
         id_label(id),
-        style::paint(style::DIM, format!("({item_type}:")),
-        style::paint(state_style, state.name()),
-        style::paint(style::DIM, suffix),
-        style::paint(style::DIM, ")"),
+        paint(theme::DIM, format!("({item_type}:")),
+        paint(state_style, state.name()),
+        paint(theme::DIM, suffix),
+        paint(theme::DIM, ")"),
     )
 }
 
 fn id_label(id: &str) -> String {
-    style::paint(style::ID, format!("#{}", short(id)))
+    paint(theme::ID, format!("#{}", short(id)))
 }
 
 const ITEM_COLUMNS: [&str; 5] = [
@@ -199,8 +157,8 @@ const ITEM_COLUMNS: [&str; 5] = [
 fn item_row(item: &ItemSummary) -> [String; 5] {
     let suffix = if item.archived { " · archived" } else { "" };
     let priority = item.priority.map_or_else(
-        || style::paint(style::DIM, "-"),
-        |priority| style::paint(priority_style(priority), priority),
+        || paint(theme::DIM, "-"),
+        |priority| paint(theme::priority(priority), priority),
     );
     let blocking = match item.blocking.split_first() {
         None => String::new(),
@@ -208,7 +166,7 @@ fn item_row(item: &ItemSummary) -> [String; 5] {
         Some((first, rest)) => format!(
             "{} {}",
             id_label(&first.id),
-            style::paint(style::DIM, format!("+{}", rest.len()))
+            paint(theme::DIM, format!("+{}", rest.len()))
         ),
     };
     [
@@ -250,22 +208,19 @@ fn group_heading(grouping: ItemGrouping, group: &ItemGroup) -> String {
         return group.group.clone();
     };
     let (icon, heading_style) = match grouping {
-        ItemGrouping::State => (state_icon(first.state), state_style(first.state)),
+        ItemGrouping::State => (state_icon(first.state), theme::state(first.state)),
         ItemGrouping::Readiness => match first.readiness {
-            Some(Readiness::Ready) => ("○", state_style(ItemState::Open)),
-            Some(Readiness::Claimed) => ("◐", state_style(ItemState::Active)),
-            Some(Readiness::Blocked) => ("⊘", style::color(anstyle::AnsiColor::Red)),
-            Some(Readiness::Stranded) => ("⚠", style::WARNING),
-            None => ("·", style::DIM),
+            Some(readiness) => (readiness_icon(readiness), theme::readiness(readiness)),
+            None => ("·", theme::DIM),
         },
         ItemGrouping::Label | ItemGrouping::Type | ItemGrouping::Lane | ItemGrouping::Priority => {
-            ("·", style::DIM)
+            ("·", theme::DIM)
         }
     };
     format!(
         "{} {}",
-        style::paint(heading_style, format!("{icon} {}", group.group)),
-        style::paint(style::DIM, format!("({})", group.items.len()))
+        paint(heading_style, format!("{icon} {}", group.group)),
+        paint(theme::DIM, format!("({})", group.items.len()))
     )
 }
 
@@ -358,7 +313,7 @@ pub fn item_detail(detail: &ItemDetail) -> String {
 
 /// [`item_detail`] with prose wrapped to `width`, or not at all, and its markdown in `format`.
 pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format) -> String {
-    use style::{BOLD, DIM, WARNING, paint};
+    use theme::{BOLD, DIM, WARNING};
 
     let summary = &detail.summary;
     let mut out = String::new();
@@ -382,7 +337,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
 
     let mut status = Vec::new();
     if let Some(priority) = summary.priority {
-        status.push(paint(priority_style(priority), priority));
+        status.push(paint(theme::priority(priority), priority));
     }
     if let Some(lane) = &detail.summary.lane {
         status.push(paint(DIM, format!("lane={lane}")));
@@ -409,7 +364,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         status.push(format!("steps {}", steps_label(Some(steps))));
     }
     if let Some(waits) = &detail.waits_after_failures {
-        status.push(paint(style::WARNING, format!("waits for you: {waits}")));
+        status.push(paint(theme::WARNING, format!("waits for you: {waits}")));
     }
     if let Some(review) = &detail.review_status {
         let short_commit = |commit: &str| commit[..commit.len().min(8)].to_string();
@@ -442,7 +397,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         format!(
             "  {}",
             [
-                style::paint_actor(&detail.author),
+                paint_actor(&detail.author),
                 paint(DIM, format!("created {}", short_time(&detail.created))),
                 paint(DIM, format!("updated {}", short_time(&detail.updated))),
             ]
@@ -463,7 +418,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
                     comment_marker(comment.kind),
                     comment.id,
                     comment_kind_label(comment.kind),
-                    style::paint_actor(&comment.by)
+                    paint_actor(&comment.by)
                 )
             })
             .collect();
@@ -528,7 +483,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         );
     }
     if !detail.mentions.is_empty() {
-        let mentions: Vec<String> = detail.mentions.iter().map(style::paint_actor).collect();
+        let mentions: Vec<String> = detail.mentions.iter().map(paint_actor).collect();
         line(format!("  ↳ mentions {}", mentions.join(" ")), LINK_INDENT);
     }
     if !detail.body.is_empty() {
@@ -566,7 +521,7 @@ pub fn agent_detail_for(
     format: Format,
     now: jiff::Timestamp,
 ) -> String {
-    use style::{BOLD, DIM, paint};
+    use theme::{BOLD, DIM};
 
     let agent = &detail.definition;
     let separator = format!(" {} ", paint(DIM, "·"));
@@ -575,7 +530,7 @@ pub fn agent_detail_for(
         let _ = writeln!(out, "{}", fill(&text, width, indent));
     };
 
-    let label = style::paint_actor(&ActorView {
+    let label = paint_actor(&ActorView {
         kind: ActorKind::Agent,
         label: agent.id.clone(),
     });
@@ -689,22 +644,18 @@ pub fn agent_detail_for(
 /// `◆ 1/2 busy`: how many sessions of the agent are live, of how many this machine runs at once,
 /// or that it does not run it.
 fn agent_load(detail: &AgentDetail) -> String {
-    use style::{DIM, paint};
+    use theme::DIM;
     let live = detail.stats.live;
     let icon = if live > 0 {
-        paint(style::color(anstyle::AnsiColor::Blue), "◆")
+        paint(theme::LIVE, "◆")
     } else {
         paint(DIM, "·")
     };
     let load = match detail.hosts.iter().find(|host| host.this_device) {
-        Some(host) if live >= host.sessions as usize => paint(
-            style::color(anstyle::AnsiColor::Blue),
-            format!("{live}/{} busy", host.sessions),
-        ),
-        Some(host) if live > 0 => paint(
-            style::color(anstyle::AnsiColor::Blue),
-            format!("{live}/{} live", host.sessions),
-        ),
+        Some(host) if live >= host.sessions as usize => {
+            paint(theme::LIVE, format!("{live}/{} busy", host.sessions))
+        }
+        Some(host) if live > 0 => paint(theme::LIVE, format!("{live}/{} live", host.sessions)),
         Some(host) => paint(DIM, format!("{live}/{} idle", host.sessions)),
         None => paint(DIM, format!("{live} live · not hosted here")),
     };
@@ -714,8 +665,7 @@ fn agent_load(detail: &AgentDetail) -> String {
 /// A session of an agent: `◆ #k3j1ab Parse config lazily · work 12m · @ada/coder/s4k2ab`, how
 /// long ago it started, or how it ended and how long ago, as of `now`.
 fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -> String {
-    use style::{DIM, paint};
-    let blue = style::color(anstyle::AnsiColor::Blue);
+    use theme::DIM;
     let age = |timestamp: &str| {
         timestamp.parse::<jiff::Timestamp>().map_or_else(
             |_| timestamp.to_string(),
@@ -727,11 +677,11 @@ fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -
     };
     let (icon, state) = match (session.status.as_str(), &session.ended) {
         ("live", None) => (
-            paint(blue, "◆"),
+            paint(theme::LIVE, "◆"),
             format!("{} {}", session.role, age(&session.started)),
         ),
         ("parked", None) => (
-            paint(blue, "◇"),
+            paint(theme::LIVE, "◇"),
             format!("{} parked {}", session.role, age(&session.started)),
         ),
         (reason, ended) => (
@@ -743,7 +693,7 @@ fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -
             ),
         ),
     };
-    let label = style::paint_actor(&ActorView {
+    let label = paint_actor(&ActorView {
         kind: ActorKind::Agent,
         label: format!("{}/{}", session.agent, short(&session.id)),
     });
@@ -758,7 +708,7 @@ fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -
 /// The activity of an item: one line per thing that happened, and the text that goes with it
 /// below. The date heads the section and is repeated when the day changes.
 fn activity(entries: &[crate::view::ActivityView], width: Option<usize>, format: Format) -> String {
-    use style::{BOLD, DIM, paint};
+    use theme::{BOLD, DIM};
     let mut out = String::new();
     let mut day = None;
     for entry in entries {
@@ -802,8 +752,8 @@ fn activity_entry(
     width: Option<usize>,
     format: Format,
 ) -> (String, Option<String>) {
-    use style::{BOLD, DIM, WARNING, paint};
-    let mut parts = vec![style::paint_actor(&entry.by)];
+    use theme::{BOLD, DIM, WARNING};
+    let mut parts = vec![paint_actor(&entry.by)];
     match &entry.comment {
         Some(comment) if entry.kind == ActivityKind::Comment => {
             match comment.kind {
@@ -863,7 +813,7 @@ pub fn event_line_for(
     width: Option<usize>,
     format: Format,
 ) -> String {
-    use style::{DIM, paint};
+    use theme::DIM;
     let (_, time) = local_date_and_time(&line.activity.at);
     let item = match &line.item {
         Some(item) => format!("{}  ", id_label(item)),
@@ -931,7 +881,7 @@ fn body(parts: &[BodyPartView], width: Option<usize>, format: Format) -> String 
             }
             BodyPartView::Step { number, done, text } => {
                 let checkbox = if *done { "[x]" } else { "[ ]" };
-                let number = style::paint(style::DIM, format!("{number}."));
+                let number = paint(theme::DIM, format!("{number}."));
                 let marker = format!("- {checkbox} {number} ");
                 let step = match format {
                     Format::Styled => markdown::render_after(&marker, text, width, "  ")
@@ -1427,8 +1377,8 @@ mod tests {
     #[test]
     fn a_body_is_rendered_when_styled() {
         let shown = item_detail_for(&detail_with_a_body(), Some(30), Format::Styled);
-        assert!(shown.contains(&style::paint(style::BOLD, "bold")));
-        assert!(shown.contains(&style::paint(style::DIM, "2.")));
+        assert!(shown.contains(&paint(theme::BOLD, "bold")));
+        assert!(shown.contains(&paint(theme::DIM, "2.")));
         assert_eq!(
             body_of(&shown),
             "  Plan\n\
