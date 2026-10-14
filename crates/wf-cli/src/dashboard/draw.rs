@@ -721,13 +721,7 @@ fn draw_position(frame: &mut Frame, area: Rect, top: usize, last_top: usize) {
     if last_top == 0 || area.height == 0 {
         return;
     }
-    let position = if top == 0 {
-        "Top".to_owned()
-    } else if top >= last_top {
-        "Bot".to_owned()
-    } else {
-        format!("{}%", top * 100 / last_top)
-    };
+    let position = format!("{}%", (top * 100 / last_top).clamp(0, 100));
     draw_indicator(frame, row(area, area.height - 1), &position);
 }
 
