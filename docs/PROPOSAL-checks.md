@@ -13,44 +13,48 @@ Review steps judge the submitted commit, and the target keeps moving after the r
 step can close this gap. What has to be tested is the merge result, right before the target moves.
 
 ## Proposal
-**Named checks, run on the merge result before the target moves. The policy names them; each
-machine's config says what a name runs.**
+**Named checks in the policy, run on the merge result before the target moves.**
 
 ```toml
-# policy (signed, synced): what must pass before work lands
 [merge]
 mode = "local"
 target = "main"
-checks = ["fmt", "clippy", "test"]   # optional; without it, merging works as now
-```
-```toml
-# machine config: what each name runs on this machine
-[commands.fmt]
+
+[[merge.check]]          # optional; without checks, merging works as now
+name = "fmt"
 run = ["cargo", "fmt", "--check"]    # argv, no shell
 
-[commands.clippy]
+[[merge.check]]
+name = "clippy"
 run = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
 
-[commands.test]
+[[merge.check]]
+name = "test"
 run = ["cargo", "test", "--workspace"]
-timeout = "20m"
+timeout = "20m"                      # the default is 30m
 ```
 
-* **Why names in the policy and commands in the machine config.** A signed, synced policy must not
-  make other machines run programs (SPEC §12, HOOKS.md): a member editing the policy on their device
-  must not be able to run anything on mine. The policy says what must pass; the machine that merges
-  decides how it checks that, so machines with different toolchains can still share a policy. A
-  machine that lacks a command for one of the checks cannot merge, and `wf status` says so, as it
-  does for review steps no agent can take.
-* **Why separate checks, not one script.** Each check is listed where the principal sees it, its
-  result is shown by name ("`clippy` failed"), and its result is kept on its own. And the work being
-  checked cannot weaken the checks: a script in the repository could be changed by the very branch
-  it checks (to `exit 0`), which work without a review level would merge unseen. The branch can still
-  change the tests themselves; that is unavoidable, and it shows in the diff.
+* **Why in the policy.** The checks are written once, signed by a principal and synced to every
+  machine; a new machine merges with the policy alone. Each check is listed where the principal sees
+  it and its result is shown by name ("`clippy` failed"). And the work being checked cannot weaken the
+  checks: a script in the repository could be changed by the very branch it checks (to `exit 0`),
+  which work without a review level would merge unseen. The branch can still change the tests
+  themselves; that is unavoidable, and it shows in the diff. Names are unique; a policy that repeats
+  one is refused.
+* **A check can do nothing an agent on the same machine cannot.** It runs in the agents' sandbox,
+  with the agents' environment and network, and gets no secrets. A machine that runs its agents
+  without a sandbox runs its checks the same way, as its principal chose. This is why a synced policy
+  may name programs here, although it must not make other machines run programs elsewhere (SPEC §12):
+  a check runs the branch's code, as agents on the machine already do all the time. See Security,
+  below.
 * **What is checked.** The tree that `merge-tree` makes from the target and the reviewed commit,
   checked out in the workforce's one **check worktree** (`<data>/<workforce>/check`), which is reset
   to each tree and cleaned before the run. The worktree persists, so build caches in it stay warm;
   merges are one at a time (below), so nothing else uses it meanwhile.
+* **Its build output is its own.** A shared cargo target directory mixed crates of different
+  worktrees on 2026-10-14, and a false pass is the worst outcome a check can have. The check worktree
+  keeps cargo's default `target/` inside it; when the machine's `[environment]` sets
+  `CARGO_TARGET_DIR` for agents, checks run without it.
 * **When.** Only at merge, in `local` mode, for work with commits: approved work, and work without a
   review level as its session ends. In `origin` mode the origin's CI decides, as it decides merging.
 * **How.** The checks run one after another, in the order the policy lists them, and **all of them
@@ -79,41 +83,25 @@ timeout = "20m"
   item since the principal last acted on it; after two, the next failure waits for the principal
   instead of reopening the item.
 
-**`wf check [<name>...]`** runs the policy's checks, or the named ones, in the current directory and
-prints ✓ or ✗ per name with the failures' output: for an agent before `wf work submit` (or
-`wf check clippy` while fixing one failure), a reviewer, or the principal. In a session it asks the
-daemon for the commands, since the sandbox keeps agents out of the machine config. The brief tells
-agents to run it. The daemon's run before the merge is the one that counts.
+**The machine config is optional.** It holds only what really differs per machine: the
+`[environment]` it already has, and a `[check] max_timeout` that caps the policy's timeouts.
+
+**`wf check [<name>...]`** runs the policy's checks, or the named ones, in the current directory, in
+the same sandbox, and prints ✓ or ✗ per name with the failures' output: for an agent before
+`wf work submit` (or `wf check clippy` while fixing one failure), a reviewer, or the principal. The
+brief tells agents to run it. The daemon's run before the merge is the one that counts.
 
 **What the principal sees.** A failure is a change request per failed check on the item, and a
 failure that is not the item's fault is an inbox entry. Nothing new is written to the log: a check's
 result is about one machine's toolchain, and other devices could not reproduce it anyway. A
 "checking" status with a result per name in the dashboard can come later.
 
-## Commands
-A **command** is a program the machine config names, for wf to run on code. Checks are its first
-use; the same entry serves the command review steps of HOOKS.md and the after-merge hook below.
+## One runner
+The daemon runs a command on code the same way for every use: check out a commit or tree in a
+worktree, run the command with its environment, sandbox and timeout, keep its output in a log per
+name, return passed, failed or timed out with the output's tail. What a result means is up to the
+use. Checks are the first; the runner is built so the others fit:
 
-```toml
-[commands.<name>]
-run = ["..."]              # argv, no shell
-timeout = "30m"            # the default
-environment.set = { ... }  # on top of the machine's [environment]
-sandbox = "agent"          # the default: the agents' sandbox
-```
-
-* **Runs on code in the agents' sandbox.** The daemon has never run branch code itself; a check
-  does, so it gets the sandbox agents get, with the machine's `[environment]`.
-* **Its build output is its own.** A shared cargo target directory mixed crates of different
-  worktrees on 2026-10-14, and a false pass is the worst outcome a check can have. The check worktree
-  keeps cargo's default `target/` inside it; a machine config that sets `CARGO_TARGET_DIR` for its
-  agents must not let it reach the commands (`wf status` warns when it does).
-* **One runner.** The daemon runs a command the same way for every use: check out a commit or tree
-  in a worktree, run the named command with its environment, sandbox and timeout, keep its output in
-  a log per name, return passed, failed or timed out with the output's tail. What a result means is
-  up to the use.
-
-### Three uses, one runner
 | | When | On what | What the result means |
 |---|---|---|---|
 | **Command review step** (HOOKS.md) | after a submission | the submitted commit | a verdict |
@@ -123,11 +111,14 @@ sandbox = "agent"          # the default: the agents' sandbox
 ### Later: after merge
 Building binaries, uploading them or deploying is not a check: it acts on what landed instead of
 deciding whether it lands. wf does not become a CI system for it (no jobs, artifacts, matrices or
-caches); in `origin` mode the origin's CI does it. For `local` mode one hook will do:
+caches); in `origin` mode the origin's CI does it. For `local` mode one hook will do, in the policy
+too:
 
 ```toml
-[merge]
-after = ["release"]        # names again; the machine config says what "release" runs
+[[merge.after]]
+name = "release"
+run = ["just", "release"]
+secrets = ["CRATES_TOKEN"]
 ```
 
 * Only the daemon that made the merge runs it, so it runs once however many devices there are.
@@ -135,11 +126,21 @@ after = ["release"]        # names again; the machine config says what "release"
   "commit": ..., "target": ...}`), so it can decide itself whether a merge is worth a release.
 * Its failure goes to the principal's inbox and never reopens the item: the work is already in the
   target.
-* It needs secrets and the network (an upload token), so its `[commands.release]` sets `sandbox` and
-  the secrets wf brokers for it (SPEC §13). That is the main reason commands live in the machine
-  config.
+* It needs secrets and the network, so it runs outside the agents' sandbox. The secrets' values come
+  from each machine's secret broker (SPEC §13).
 
-Nothing of it is built in this proposal; the runner is built so that it fits.
+Nothing of it is built in this proposal.
+
+## Security
+For now a workforce has one principal in practice, and whatever its policy says, that principal wrote.
+The rule to keep is the one above: **a command from the policy gets the agents' sandbox and nothing
+more**. Only commands that leave it, such as the after-merge hook with its secrets, need more.
+
+When several principals share a workforce, that needs revisiting. A sketch to start from: a machine
+runs a command that leaves the sandbox only after its own principal approved that exact definition
+(command and secrets), asked once in the inbox and kept as a hash in the machine's data dir; a policy
+change to the command asks again. That keeps commands in one place without letting one member run
+things on another's machine.
 
 ## Prerequisites
 The review of this proposal found three things that are wrong today and that checks would make
@@ -148,14 +149,14 @@ worse. They come first, as their own items.
 1. **The agent sandbox protects less than assumed.** Fence's `code` template, which
    crates/wf-daemon/src/sandbox.rs extends, allows writes to `~/.config/**` and `~/.local/share/**`,
    does not deny reading the wf data dir, and wf adds the whole `<repo>/.git`. So an agent can read
-   `principal.key` and sign as the principal, rewrite the machine config (`[sandbox] kind = "off"`, or
-   a command), or set `core.hooksPath` / `core.fsmonitor` so that git runs its code outside the
-   sandbox the next time the daemon runs `git status` or `git worktree add`. "Agents cannot write
-   policy" holds only for events written through a session. Fix: deny reading and writing the wf data
-   dir's keys and `~/.config/workforce`, deny writing `.git/config`, `.git/hooks` and `~/.config/git`,
-   and have wf-vcs run git with `-c core.hooksPath=/dev/null -c core.fsmonitor=false`. The same item
-   fixes why `wf init` cannot run in the sandbox: the template denies writing `**/*.key`, which the
-   test suites need in their temp directories.
+   `principal.key` and sign as the principal (writing policy, checks included), rewrite the machine
+   config (`[sandbox] kind = "off"`), or set `core.hooksPath` / `core.fsmonitor` so that git runs its
+   code outside the sandbox the next time the daemon runs `git status` or `git worktree add`. This is
+   about agents, not principals, so it holds with one principal too. Fix: deny reading and writing the
+   wf data dir's keys and `~/.config/workforce`, deny writing `.git/config`, `.git/hooks` and
+   `~/.config/git`, and have wf-vcs run git with `-c core.hooksPath=/dev/null -c core.fsmonitor=false`.
+   The same item fixes why `wf init` cannot run in the sandbox: the template denies writing `**/*.key`,
+   which the test suites need in their temp directories.
 2. **"The next session merges the target into the branch first" relies on a loophole.** The `code`
    template denies `git merge`; agents got through only because the deny did not catch a compound
    shell command. Fix: when a session starts on an item whose last merge failed, the daemon (through
@@ -173,10 +174,14 @@ worse. They come first, as their own items.
   rarely carries over to the merge, since the target moves in between. `wf check` before submitting
   gets most of that value, and HOOKS.md's command review step covers the rest when it is built, on
   the same runner.
-* **Several named checks, not one script,** so each is explicit in the policy, reported by name, and
-  out of reach of the branch it checks. Not an API for a script to report steps: that is a protocol
-  every script must follow, and it hides what runs again.
-* **Names in the policy, commands in the machine config,** as for every program wf runs.
+* **Several named checks, not one script,** so each is explicit, reported by name, and out of reach of
+  the branch it checks. Not an API for a script to report steps: that is a protocol every script must
+  follow, and it hides what runs again.
+* **Defined in the policy, not per machine.** Commands per machine would have to be kept in sync by
+  hand on every machine. Not a checks file in the repository either: read from the target's tree it
+  could not weaken its own merge, but agents' work could still change the checks for later ones.
+* **The sandbox is the boundary, not who wrote the command.** Revisited when several principals use
+  a workforce (Security, above).
 * **All checks run,** even after one failed. Dependencies between checks (`after = "build"`) only if
   the noise of a broken build hurts.
 * **No `Checked` event.** A local cache by tree and command and a change request per failed check
@@ -185,9 +190,8 @@ worse. They come first, as their own items.
   (crates/wf-core/src/review.rs counts only verdicts on the submitted commit). That is how review works
   for any new commit; the cost is a principal re-reviewing one-line fixes. Revisit if it hurts.
 * **Not a CI system.** Work after the merge is one hook, not jobs.
-* **Naming:** a *check* is one named thing that must pass before work lands (`[merge] checks`,
-  `wf check`); a *command* is what a name runs on a machine (`[commands.<name>]`). Not "step" (review
-  levels have steps), not "gate", not "CI", not "job".
+* **Naming:** a *check* is one named command that must pass before work lands (`[[merge.check]]`,
+  `wf check`). Not "step" (review levels have steps), not "gate", not "CI", not "job".
 
 ## Open questions
 1. **Merging without the checks.** When a check is flaky or the principal knows better, should there
@@ -202,10 +206,10 @@ worse. They come first, as their own items.
 2. wf-vcs and the daemon merge the target into the item branch when a session starts on an item whose
    merge failed; a conflict is left for the agent.
 3. One merge task per workforce, out of the dispatch loop.
-4. Commands and the runner: `[commands.<name>]` in the machine config, running a named command on a
-   tree in a worktree with its environment, sandbox and timeout, a log per name.
-5. Checks: `[merge] checks` in the policy, the check worktree, the result cache by tree and command,
-   a `@daemon` change request per failed check, the target's own tree when one fails, the timeout,
-   the limit on failures in `wf-core::lifecycle`, and the warning for machines missing a command.
-6. `wf check`, through the daemon in a session; the brief; SPEC §8 (merge), §15 (policy) and the
-   machine config docs; the commands for this repository in its README.
+4. The runner: a command on a tree in a worktree, in the agents' sandbox and environment, with a
+   timeout and a log per name.
+5. Checks: `[[merge.check]]` in the policy, the check worktree, the result cache by tree and command,
+   a `@daemon` change request per failed check, the target's own tree when one fails, the timeout and
+   `[check] max_timeout`, and the limit on failures in `wf-core::lifecycle`.
+6. `wf check`; the brief; SPEC §8 (merge), §15 (policy) and the machine config docs; this
+   repository's checks in its policy.
