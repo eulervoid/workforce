@@ -52,6 +52,9 @@ pub(super) async fn run_session(
             .is_some_and(|session| !session.is_live())
     });
     if ended {
+        daemon
+            .discard_session_directory(run.workforce, run.item, run.role)
+            .await;
         daemon.keep_caches_in_budget(run.workforce, &loaded).await;
     }
 }

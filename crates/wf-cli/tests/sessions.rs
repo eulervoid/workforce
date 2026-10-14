@@ -1357,8 +1357,13 @@ async fn work_approved_by_a_reviewer_agent_is_merged() {
 
     let repository = &world.wf.repository;
     assert!(repository.join("hello.txt").is_file());
-    assert_eq!(git(repository, &["worktree", "list"]).lines().count(), 1);
     assert!(git(repository, &["branch", "--list", "wf/*"]).is_empty());
+    // The reviewer's checkout goes once its harness has closed.
+    world
+        .wait("only the main checkout left", |_| {
+            git(repository, &["worktree", "list"]).lines().count() == 1
+        })
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

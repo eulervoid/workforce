@@ -1,16 +1,56 @@
-//! Tidying the worktrees of a workforce: their caches kept under the budget of the machine config.
+//! Tidying the worktrees of a workforce: the directories of ended sessions removed, and their
+//! caches kept under the budget of the machine config.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use wf_core::id::WorkforceId;
+use wf_core::id::{HashId, ItemId, WorkforceId};
+use wf_core::session::SessionRole;
 use wf_core::state::State;
-use wf_vcs::worktrees;
+use wf_vcs::{GitCli, VcsAdapter, worktrees};
 
 use super::blocking;
 use crate::{Daemon, Loaded, caches};
 
 impl Daemon {
+    /// Removes the directory an ended session ran in, unless it is the worktree of the item,
+    /// which later sessions continue.
+    pub(super) async fn discard_session_directory(
+        &self,
+        workforce: WorkforceId,
+        item: ItemId,
+        role: SessionRole,
+    ) {
+        let directory = self.session_directory(workforce, item, role);
+        let removed = match role {
+            SessionRole::Work => return,
+            SessionRole::Review { commit: Some(_) } => {
+                let Some(repository) = self.repository_of(workforce) else {
+                    return;
+                };
+                blocking(move || GitCli::open(&repository)?.remove_worktree(&directory))
+                    .await
+                    .map(|removed| removed.map_err(|error| wf_core::error_chain(&error)))
+            }
+            SessionRole::Review { commit: None }
+            | SessionRole::Supervise
+            | SessionRole::Diagnose => {
+                blocking(move || match std::fs::remove_dir_all(&directory) {
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+                    removed => removed,
+                })
+                .await
+                .map(|removed| removed.map_err(|error| error.to_string()))
+            }
+        };
+        if let Ok(Err(error)) = removed {
+            tracing::warn!(
+                "could not remove the directory of a session on #{}: {error}",
+                item.short()
+            );
+        }
+    }
+
     /// The directories the live sessions of this machine run in.
     fn busy_directories(&self, workforce: WorkforceId, state: &State) -> BTreeSet<PathBuf> {
         state

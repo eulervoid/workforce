@@ -7,7 +7,7 @@ use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::ItemState;
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
-use wf_core::session::{CommitId, EndReason, SessionRole};
+use wf_core::session::{CommitId, EndReason};
 use wf_core::state::State;
 use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_worktree};
 
@@ -143,49 +143,18 @@ impl Daemon {
             SessionEnd::Finish(_) => Stop::AfterTurn,
             SessionEnd::Interruption(_) => Stop::Now,
         };
+        // The task of a running session removes its directory once the harness has closed, so that
+        // nothing the agent still runs writes into it.
+        let running = self.runners.is_running(session);
         self.runners.stop(session, how);
-        match role {
-            SessionRole::Work => {}
-            SessionRole::Review { commit } => {
-                self.discard_review_worktree(workforce, item, commit).await;
-            }
-            SessionRole::Supervise => {
-                let _ = std::fs::remove_dir_all(self.empty_directory(workforce, item, "supervise"));
-            }
-            SessionRole::Diagnose => {
-                let _ = std::fs::remove_dir_all(self.empty_directory(workforce, item, "diagnose"));
-            }
+        if !running {
+            self.discard_session_directory(workforce, item, role).await;
         }
         if matches!(reason, EndReason::Submitted { commit: None }) {
             self.discard_branch(workforce, item).await;
         }
         effect?;
         Ok(())
-    }
-
-    /// Removes the checkout a review session looked at.
-    async fn discard_review_worktree(
-        &self,
-        workforce: WorkforceId,
-        item: ItemId,
-        commit: Option<CommitId>,
-    ) {
-        let Some(repository) = self.repository_of(workforce) else {
-            return;
-        };
-        let worktree = self.review_worktree(workforce, item, commit);
-        let removed = blocking(move || match commit {
-            Some(_) => GitCli::open(&repository)?.remove_worktree(&worktree),
-            None => Ok(std::fs::remove_dir_all(&worktree)?),
-        })
-        .await;
-        if let Ok(Err(error)) = removed {
-            tracing::warn!(
-                "could not remove the checkout of the review of #{}: {}",
-                item.short(),
-                wf_core::error_chain(&error)
-            );
-        }
     }
 
     /// Removes the worktree and the branch of an item whose work left nothing to keep.
