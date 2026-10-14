@@ -12,7 +12,6 @@ use wf_core::identity::{Actor, DeviceKey, InviteSigner, Signed};
 use wf_core::invite::InviteCode;
 use wf_core::name::AgentName;
 use wf_core::state::State;
-use wf_daemon::client::DaemonClient;
 use wf_daemon::{PeerOutcome, PeerSync, peers_of, sync_all};
 use wf_net::replica::{self, Joined};
 use wf_net::{NetError, Network, Node, StorageHandle};
@@ -347,7 +346,7 @@ pub fn join(
         }
     }
     // A daemon on this machine owns the device key, the stores and the endpoint: it joins.
-    if let Some(mut client) = DaemonClient::connect(&data.daemon_socket())? {
+    if let Some(mut client) = data.connect_daemon()? {
         client.join(code.workforce, &code, profile)?;
         let state = client.state(code.workforce)?;
         let device = data

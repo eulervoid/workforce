@@ -10,6 +10,8 @@ use anyhow::{Context, bail};
 use data_encoding::HEXLOWER;
 use wf_core::id::WorkforceId;
 use wf_core::identity::{DeviceSigner, PrincipalSigner};
+use wf_daemon::caller::{SESSION_TOKEN_VARIABLE, read_principal_token};
+use wf_daemon::client::DaemonClient;
 
 /// Where `wf` keeps everything outside the repository.
 #[derive(Clone, Debug)]
@@ -42,6 +44,20 @@ impl DataDir {
             .filter(|value| !value.is_empty())
             .map(PathBuf::from);
         wf_daemon::proto::socket_path(&self.root, runtime.as_deref())
+    }
+
+    /// The daemon of this machine, if one is listening, acting for the session this process
+    /// runs in when `WF_SESSION_TOKEN` is set, and for the principal otherwise.
+    pub fn connect_daemon(&self) -> anyhow::Result<Option<DaemonClient>> {
+        let token = match std::env::var(SESSION_TOKEN_VARIABLE) {
+            Ok(token) => Some(
+                token
+                    .parse()
+                    .with_context(|| format!("{SESSION_TOKEN_VARIABLE} is not a token"))?,
+            ),
+            Err(_) => read_principal_token(&self.root),
+        };
+        Ok(DaemonClient::connect(&self.daemon_socket(), token)?)
     }
 
     /// The process id of the daemon of this machine, while it runs.
