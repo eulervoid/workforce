@@ -1,7 +1,8 @@
 use crate::event::EventBody;
 use crate::id::{ItemId, SessionId};
 use crate::identity::AgentId;
-use crate::name::{AgentName, StateName};
+use crate::item::ItemState;
+use crate::name::AgentName;
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, Verdict};
@@ -62,7 +63,7 @@ impl Scene {
                 commit: Some(commit),
             },
         ));
-        self.apply(moved(item, "in_review"));
+        self.apply(moved(item, ItemState::Review));
     }
 
     fn status(&self, item: ItemId) -> Option<ReviewStatus> {
@@ -192,16 +193,13 @@ fn requested_changes_end_the_review_and_a_new_commit_starts_it_again() {
 fn requesting_changes_reopens_the_item_in_the_same_event() {
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
-    scene.apply(moved(item, "in_review"));
+    scene.apply(moved(item, ItemState::Review));
     scene.apply(verdict(item, commit(1), Verdict::RequestChanges));
     let policy = &scene.state.policy().unwrap().policy;
     let Some(crate::item::ItemView::Live(live)) = scene.state.item(item) else {
         panic!("the item is live")
     };
-    assert_eq!(
-        live.standing(policy).state_category(),
-        Some(crate::policy::StateCategory::Open)
-    );
+    assert_eq!(live.state(policy), ItemState::Open);
 }
 
 #[test]
@@ -546,7 +544,7 @@ fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
         .id()
         .into();
     let session: SessionId = scene.apply(start_session("coder", finding)).id().into();
-    scene.apply(moved(finding, "in_review"));
+    scene.apply(moved(finding, ItemState::Review));
     scene.apply(end_session(session, EndReason::Submitted { commit: None }));
     assert_eq!(scene.status(finding), Some(awaiting_human()));
     assert!(scene.state.finished_reviews().is_empty());
@@ -556,13 +554,10 @@ fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
         scene.status(finding),
         Some(ReviewStatus::Approved { commit: None })
     );
-    assert_eq!(
-        scene.state.finished_reviews(),
-        [(finding, StateName::new("done").unwrap())]
-    );
+    assert_eq!(scene.state.finished_reviews(), [finding]);
     assert!(scene.state.pending_merges().is_empty());
 
-    scene.apply(moved(finding, "done"));
+    scene.apply(moved(finding, ItemState::Done));
     assert!(scene.state.finished_reviews().is_empty());
 }
 
@@ -575,7 +570,7 @@ fn merged_work_is_finished_by_the_daemon_and_waits_on_nobody() {
         .into();
     // As the daemon writes a submission: the item moves to review, then the session ends.
     let session: SessionId = scene.apply(start_session("coder", item)).id().into();
-    scene.apply(moved(item, "in_review"));
+    scene.apply(moved(item, ItemState::Review));
     scene.apply(end_session(
         session,
         EndReason::Submitted {
@@ -589,17 +584,14 @@ fn merged_work_is_finished_by_the_daemon_and_waits_on_nobody() {
     );
 
     scene.apply(merged(item, commit(1), commit(9)));
-    assert_eq!(
-        scene.state.finished_reviews(),
-        [(item, StateName::new("done").unwrap())]
-    );
+    assert_eq!(scene.state.finished_reviews(), [item]);
     assert!(
         scene.state.inbox().is_empty(),
         "merged work waiting to be moved is no proposal"
     );
 
-    scene.apply(moved(item, "open"));
-    scene.apply(moved(item, "in_review"));
+    scene.apply(moved(item, ItemState::Open));
+    scene.apply(moved(item, ItemState::Review));
     assert!(scene.state.finished_reviews().is_empty());
     assert_eq!(
         scene.state.inbox(),
@@ -619,11 +611,11 @@ fn approved_work_without_commits_does_not_finish_an_item_that_was_moved_since() 
         .id()
         .into();
     let session: SessionId = scene.apply(start_session("coder", finding)).id().into();
-    scene.apply(moved(finding, "in_review"));
+    scene.apply(moved(finding, ItemState::Review));
     scene.apply(end_session(session, EndReason::Submitted { commit: None }));
     scene.apply(verdict(finding, None, Verdict::Approve));
-    scene.apply(moved(finding, "open"));
-    scene.apply(moved(finding, "in_review"));
+    scene.apply(moved(finding, ItemState::Open));
+    scene.apply(moved(finding, ItemState::Review));
     assert!(scene.state.finished_reviews().is_empty());
 }
 
@@ -646,7 +638,7 @@ fn change_requests_hold_up_approval_and_the_next_submission() {
         Err(PolicyViolation::OpenChangeRequests(item))
     );
     scene.apply(verdict(item, commit(1), Verdict::RequestChanges));
-    scene.apply(moved(item, "open"));
+    scene.apply(moved(item, ItemState::Open));
 
     let session: SessionId = scene.apply(start_session("coder", item)).id().into();
     let submit = end_session(

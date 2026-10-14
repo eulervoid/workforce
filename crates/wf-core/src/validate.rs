@@ -4,7 +4,7 @@
 //! feed continuity, authorship and authority. Rules that depend on the current policy or on the
 //! state of an item (`check_policy`) are applied by the author before signing. Peers do not
 //! re-check them, because a concurrent policy change would make acceptance depend on arrival
-//! order; the fold keeps such events and flags the result instead ("unknown state").
+//! order; the fold keeps such events, and an item can end up in a state its type no longer uses.
 
 use std::collections::VecDeque;
 
@@ -15,8 +15,9 @@ use crate::event::{
 };
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
-use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, StateName, TypeName};
-use crate::policy::{Field, StateCategory};
+use crate::item::ItemState;
+use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, TypeName};
+use crate::policy::Field;
 use crate::session::{SessionRole, Verdict};
 use crate::state::{
     Disposition, ForkState, MAX_PENDING, Origin, PendingOn, Received, State, Trust,
@@ -129,11 +130,18 @@ pub enum PolicyViolation {
     UnknownItem(ItemId),
     #[error("there is no item type `{name}`; {valid}")]
     UnknownType { name: TypeName, valid: OneOf },
-    #[error("type `{type_name}` has no state `{state}`; {valid}")]
-    UnknownState {
+    #[error("a `{type_name}` is never `{state}`; {valid}")]
+    StateNotUsed {
         type_name: TypeName,
-        state: StateName,
+        state: ItemState,
         valid: OneOf,
+    },
+    #[error("a `{type_name}` is created `{initial}`{or_draft}, not `{state}`")]
+    CreatedInState {
+        type_name: TypeName,
+        state: ItemState,
+        initial: ItemState,
+        or_draft: &'static str,
     },
     #[error("type `{type_name}` does not have the `{field:?}` field")]
     FieldNotAllowed { type_name: TypeName, field: Field },
@@ -148,10 +156,8 @@ pub enum PolicyViolation {
     LinkToSelf(ItemId),
     #[error("{from} cannot depend on {to}: that would make a cycle")]
     DependencyCycle { from: ItemId, to: ItemId },
-    #[error("only done or cancelled items can be archived")]
-    ArchiveRequiresTerminal {
-        state_category: Option<StateCategory>,
-    },
+    #[error("only done or cancelled items can be archived, not a `{state}` one")]
+    ArchiveRequiresTerminal { state: ItemState },
     #[error("{0} is already archived")]
     AlreadyArchived(ItemId),
     #[error("{0} is not archived")]
@@ -174,7 +180,7 @@ pub enum PolicyViolation {
     AgentCannotWrite(&'static str),
     #[error("a session cannot end another session")]
     SessionEndsAnother,
-    #[error("a session cannot move its own item to a done state; it submits the work instead")]
+    #[error("a session cannot move its own item to `done`; it submits the work instead")]
     SessionFinishesItsItem,
     #[error(
         "only a review session of the commit, by an agent that did not do the work, can review as an agent"
@@ -186,7 +192,7 @@ pub enum PolicyViolation {
     StaleReview(ItemId),
     #[error("there is no review level `{name}`; {valid}")]
     UnknownReviewLevel { name: ReviewLevelName, valid: OneOf },
-    #[error("a `{type_name}` has no review state to wait in during review")]
+    #[error("a `{type_name}` is never `review`, so it cannot wait for a review")]
     ReviewWithoutReviewState { type_name: TypeName },
     #[error("an agent that worked on {0} cannot lower its review level")]
     AgentLowersReview(ItemId),
@@ -750,13 +756,7 @@ impl State {
                 }
             }
             EventBody::ItemMoved(moved) => {
-                let policy = &workforce.policy.value().policy;
-                let item = workforce.items.get(&moved.item);
-                let finishes = item
-                    .and_then(|item| policy.type_config(item.item_type()))
-                    .and_then(|config| config.state_category_of(&moved.to))
-                    == Some(StateCategory::Done);
-                if finishes && moved.item == folded.item() {
+                if moved.to.state() == ItemState::Done && moved.item == folded.item() {
                     Err(PolicyViolation::SessionFinishesItsItem)
                 } else {
                     Ok(())
@@ -875,9 +875,7 @@ impl State {
                     valid: OneOf::new(policy.review.iter().map(|level| &level.name)),
                 });
             }
-            let reviewable = type_of(type_name)?
-                .first_state(StateCategory::Review)
-                .is_some();
+            let reviewable = type_of(type_name)?.uses(ItemState::Review);
             if reviewable {
                 Ok(())
             } else {
@@ -968,7 +966,18 @@ impl State {
             EventBody::AgentRemoved(_) => Ok(()),
             EventBody::ItemCreated(created) => {
                 let type_name = &created.item_type;
-                type_of(type_name)?;
+                let config = type_of(type_name)?;
+                if let Some(state) = created.state.as_ref().map(|written| written.state()) {
+                    let draft = config.uses(ItemState::Draft);
+                    if state != config.initial && !(draft && state == ItemState::Draft) {
+                        return Err(PolicyViolation::CreatedInState {
+                            type_name: type_name.clone(),
+                            state,
+                            initial: config.initial,
+                            or_draft: if draft { " or as a `draft`" } else { "" },
+                        });
+                    }
+                }
                 match created.priority {
                     Some(_) => require_field(type_name, Field::Priority)?,
                     None if type_of(type_name)?.allows_field(Field::Priority) => {
@@ -1031,13 +1040,15 @@ impl State {
                 let item = item_of(&moved.item)?;
                 because_on(item, moved.because)?;
                 let config = type_of(item.item_type())?;
-                match config.state_category_of(&moved.to) {
-                    Some(_) => Ok(()),
-                    None => Err(PolicyViolation::UnknownState {
+                let state = moved.to.state();
+                if config.uses(state) {
+                    Ok(())
+                } else {
+                    Err(PolicyViolation::StateNotUsed {
                         type_name: item.item_type().clone(),
-                        state: moved.to.clone(),
-                        valid: OneOf::new(config.states.iter().map(|state| &state.name)),
-                    }),
+                        state,
+                        valid: OneOf::new(&config.states),
+                    })
                 }
             }
             EventBody::ItemLinked(linked) => {
@@ -1085,10 +1096,11 @@ impl State {
                 if item.archived_at().is_some() {
                     return Err(PolicyViolation::AlreadyArchived(reference.item));
                 }
-                let state_category = item.standing(policy).state_category();
-                match state_category {
-                    Some(state_category) if state_category.is_terminal() => Ok(()),
-                    _ => Err(PolicyViolation::ArchiveRequiresTerminal { state_category }),
+                let state = item.state(policy);
+                if state.is_terminal() {
+                    Ok(())
+                } else {
+                    Err(PolicyViolation::ArchiveRequiresTerminal { state })
                 }
             }
             EventBody::ItemUnarchived(reference) => {

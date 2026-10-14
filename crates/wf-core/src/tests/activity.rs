@@ -1,7 +1,7 @@
 use crate::activity::Activity;
 use crate::event::{Event, EventBody, ItemMoved};
 use crate::id::{CommentId, HashId, ItemId, SessionId};
-use crate::name::StateName;
+use crate::item::ItemState;
 use crate::session::EndReason;
 use crate::state::State;
 use crate::testing::*;
@@ -43,10 +43,10 @@ impl Log {
     }
 }
 
-fn moved_for(item: ItemId, to: &str, session: SessionId) -> EventBody {
+fn moved_for(item: ItemId, to: ItemState, session: SessionId) -> EventBody {
     EventBody::ItemMoved(ItemMoved {
         item,
-        to: StateName::new(to).unwrap(),
+        to: to.into(),
         by_session: Some(session),
         because: None,
     })
@@ -57,10 +57,10 @@ fn a_session_shows_the_moves_it_caused_at_its_start_and_end() {
     let mut log = Log::new();
     let task: ItemId = log.apply(create("task", "work")).id().into();
     let session: SessionId = log.apply(start_session("coder", task)).id().into();
-    log.apply(moved_for(task, "in_progress", session));
-    log.apply(moved_for(task, "done", session));
+    log.apply(moved_for(task, ItemState::Active, session));
+    log.apply(moved_for(task, ItemState::Done, session));
     log.apply(end_session(session, EndReason::Submitted { commit: None }));
-    log.apply(moved(task, "open"));
+    log.apply(moved(task, ItemState::Open));
 
     assert_eq!(
         log.activity(task),
@@ -73,10 +73,10 @@ fn a_session_shows_the_moves_it_caused_at_its_start_and_end() {
             Activity::SessionEnded {
                 session,
                 reason: EndReason::Submitted { commit: None },
-                moved_to: Some(StateName::new("done").unwrap()),
+                moved_to: Some(ItemState::Done),
             },
             Activity::Moved {
-                to: StateName::new("open").unwrap(),
+                to: ItemState::Open,
                 because: None
             },
         ]
@@ -92,8 +92,8 @@ fn what_other_items_do_shows_where_it_changes_this_one() {
     log.apply(depends_on(task, first));
     log.apply(depends_on(later, task));
     log.apply(comment(later, &format!("after #{}", task.short())));
-    log.apply(moved(first, "in_progress"));
-    log.apply(moved(first, "done"));
+    log.apply(moved(first, ItemState::Active));
+    log.apply(moved(first, ItemState::Done));
 
     let activity = log.activity(task);
     assert_eq!(
@@ -107,8 +107,7 @@ fn what_other_items_do_shows_where_it_changes_this_one() {
             },
             Activity::DependencyFinished {
                 item: first,
-                to: StateName::new("done").unwrap(),
-                category: crate::policy::StateCategory::Done,
+                to: ItemState::Done,
             },
         ]
     );

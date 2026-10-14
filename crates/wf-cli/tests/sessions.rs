@@ -617,7 +617,7 @@ async fn stopping_a_session_cancels_the_turn_and_reopens_the_item() {
     let item = world.wf.add(&["--title", "Stuck"]);
     start_session(&world, &item);
     assert_eq!(world.sessions()[0]["status"], "live");
-    assert_eq!(world.item(&item)["state"], "in_progress");
+    assert_eq!(world.item(&item)["state"], "active");
 
     world.wf.run(&[
         "session",
@@ -654,7 +654,7 @@ wf work submit
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
     let shown = world.item(&item);
-    assert_eq!(shown["state"], "in_review", "{shown}");
+    assert_eq!(shown["state"], "review", "{shown}");
     assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
         note["text"].as_str().is_some_and(|text| {
             text.starts_with("Waiting to merge") && text.contains("changes to .workforce.toml.")
@@ -708,7 +708,7 @@ wf work submit
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
     let shown = world.item(&item);
-    assert_eq!(shown["state"], "in_review", "not left active: {shown}");
+    assert_eq!(shown["state"], "review", "not left active: {shown}");
     assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
         note["text"]
             .as_str()
@@ -752,7 +752,7 @@ async fn a_session_left_live_by_an_earlier_daemon_is_interrupted_when_the_next_o
             .author(wf_core::event::EventBody::ItemMoved(
                 wf_core::event::ItemMoved {
                     item: id,
-                    to: wf_core::name::StateName::new("in_progress").unwrap(),
+                    to: wf_core::item::ItemState::Active.into(),
                     by_session: None,
                     because: None,
                 },
@@ -886,7 +886,7 @@ wf work submit
             !world.item(&item)["open"].as_array().unwrap().is_empty()
         })
         .await;
-    assert_eq!(world.item(&item)["state"], "in_progress");
+    assert_eq!(world.item(&item)["state"], "active");
     tokio::time::sleep(Duration::from_millis(1_000)).await;
     assert_eq!(world.sessions()[0]["status"], "parked");
     let live = world.wf.json(&["session", "list", "--live"]);
@@ -968,7 +968,7 @@ async fn cancelling_an_item_stops_its_session() {
         .run(&["item", "cancel", short(&item), "--note", "done elsewhere"]);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "cancelled", "{session}");
-    assert_eq!(world.item(&item)["state"], "dropped");
+    assert_eq!(world.item(&item)["state"], "cancelled");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1389,7 +1389,7 @@ async fn a_critical_item_waits_for_a_person_after_the_agent_approves() {
         })
         .await;
     tokio::time::sleep(Duration::from_millis(500)).await;
-    assert_eq!(world.item(&item)["state"], "in_review");
+    assert_eq!(world.item(&item)["state"], "review");
     assert!(!world.wf.repository.join("hello.txt").exists());
 
     world

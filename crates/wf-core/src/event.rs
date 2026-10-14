@@ -14,10 +14,10 @@ use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
     Actor, DeviceKey, DeviceSigner, InviteKey, KeyError, MemberSeed, PrincipalKey, Signed,
 };
-use crate::item::Priority;
+use crate::item::{ItemState, Priority};
 use crate::name::{
     AgentName, HarnessName, Label, LaneName, NameError, RecoveryLevelName, Requirement,
-    ReviewLevelName, StateName, TypeName,
+    ReviewLevelName, TypeName,
 };
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 
@@ -138,6 +138,40 @@ pub struct ForkAnnounced {
     pub members: Vec<PrincipalKey>,
 }
 
+/// A state as an event names it. Events written before the states were fixed name them the way
+/// their type did, such as `in_progress` or `ratified`; the name is kept as written, so the event
+/// still encodes to the bytes that were signed.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct WrittenState(String);
+
+impl WrittenState {
+    /// A name as an older version wrote it, for tests that write such events.
+    #[cfg(any(test, feature = "testing"))]
+    pub fn as_written(name: &str) -> Self {
+        WrittenState(name.to_string())
+    }
+
+    /// A name no version knew reads as `draft`, so nothing starts the item.
+    pub fn state(&self) -> ItemState {
+        ItemState::from_written(&self.0).unwrap_or(ItemState::Draft)
+    }
+
+    /// The name, when it is not one this version reads.
+    pub fn unknown(&self) -> Option<&str> {
+        match ItemState::from_written(&self.0) {
+            Some(_) => None,
+            None => Some(&self.0),
+        }
+    }
+}
+
+impl From<ItemState> for WrittenState {
+    fn from(state: ItemState) -> Self {
+        WrittenState(state.name().to_string())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemCreated {
     pub item_type: TypeName,
@@ -149,6 +183,68 @@ pub struct ItemCreated {
     pub requires: Vec<Requirement>,
     /// The review level the item needs; `None` for none.
     pub review: Option<ReviewLevelName>,
+    /// `None` only in events written before items were created in a state: those start in the
+    /// initial state of their type.
+    pub state: Option<WrittenState>,
+}
+
+/// The wire form of `ItemCreated` before it carried a state.
+#[derive(Serialize, Deserialize)]
+struct ItemCreatedWithoutState {
+    item_type: TypeName,
+    title: String,
+    body: String,
+    priority: Option<Priority>,
+    lane: Option<LaneName>,
+    labels: Vec<Label>,
+    requires: Vec<Requirement>,
+    review: Option<ReviewLevelName>,
+}
+
+impl ItemCreated {
+    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        if self.state.is_some() {
+            return Ok((tag::ITEM_CREATED, encoding::encode(self)?));
+        }
+        let without_state = ItemCreatedWithoutState {
+            item_type: self.item_type.clone(),
+            title: self.title.clone(),
+            body: self.body.clone(),
+            priority: self.priority,
+            lane: self.lane.clone(),
+            labels: self.labels.clone(),
+            requires: self.requires.clone(),
+            review: self.review.clone(),
+        };
+        Ok((
+            tag::ITEM_CREATED_WITHOUT_STATE,
+            encoding::encode(&without_state)?,
+        ))
+    }
+
+    /// One without a state would encode to other bytes than were signed.
+    fn with_state(payload: &[u8]) -> Result<Self, EncodingError> {
+        let created: ItemCreated = encoding::decode(payload)?;
+        match created.state {
+            Some(_) => Ok(created),
+            None => Err(EncodingError::malformed()),
+        }
+    }
+
+    fn without_state(payload: &[u8]) -> Result<Self, EncodingError> {
+        let old: ItemCreatedWithoutState = encoding::decode(payload)?;
+        Ok(ItemCreated {
+            item_type: old.item_type,
+            title: old.title,
+            body: old.body,
+            priority: old.priority,
+            lane: old.lane,
+            labels: old.labels,
+            requires: old.requires,
+            review: old.review,
+            state: None,
+        })
+    }
 }
 
 /// One edit to an item field.
@@ -180,7 +276,7 @@ pub struct ItemEdited {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ItemMoved {
     pub item: ItemId,
-    pub to: StateName,
+    pub to: WrittenState,
     /// The session whose start or end this move carries out, when the daemon makes it for one.
     pub by_session: Option<SessionId>,
     /// The comment on the item that says why, written just before.
@@ -320,13 +416,15 @@ mod tag {
     pub const DEVICE_PROFILE: u16 = 6;
     pub const FORK_ANNOUNCED: u16 = 7;
     pub const AGENT_REMOVED: u16 = 8;
-    pub const ITEM_CREATED: u16 = 10;
+    /// `ItemCreated` as written before it carried a state.
+    pub const ITEM_CREATED_WITHOUT_STATE: u16 = 10;
     pub const ITEM_EDITED: u16 = 11;
     pub const ITEM_MOVED: u16 = 12;
     pub const ITEM_LINKED: u16 = 13;
     pub const ITEM_ARCHIVED: u16 = 14;
     pub const ITEM_UNARCHIVED: u16 = 15;
     pub const COMMENT: u16 = 16;
+    pub const ITEM_CREATED: u16 = 17;
     pub const SESSION_STARTED: u16 = 20;
     pub const SESSION_ENDED: u16 = 21;
     pub const REVIEW: u16 = 22;
@@ -408,7 +506,7 @@ impl EventBody {
             EventBody::DeviceBound(body) => (tag::DEVICE_BOUND, encoding::encode(body)?),
             EventBody::DeviceProfile(body) => (tag::DEVICE_PROFILE, encoding::encode(body)?),
             EventBody::ForkAnnounced(body) => (tag::FORK_ANNOUNCED, encoding::encode(body)?),
-            EventBody::ItemCreated(body) => (tag::ITEM_CREATED, encoding::encode(body)?),
+            EventBody::ItemCreated(body) => body.to_tagged()?,
             EventBody::ItemEdited(body) => (tag::ITEM_EDITED, encoding::encode(body)?),
             EventBody::ItemMoved(body) => (tag::ITEM_MOVED, encoding::encode(body)?),
             EventBody::ItemLinked(body) => (tag::ITEM_LINKED, encoding::encode(body)?),
@@ -435,7 +533,10 @@ impl EventBody {
             tag::DEVICE_BOUND => EventBody::DeviceBound(encoding::decode(payload)?),
             tag::DEVICE_PROFILE => EventBody::DeviceProfile(encoding::decode(payload)?),
             tag::FORK_ANNOUNCED => EventBody::ForkAnnounced(encoding::decode(payload)?),
-            tag::ITEM_CREATED => EventBody::ItemCreated(encoding::decode(payload)?),
+            tag::ITEM_CREATED_WITHOUT_STATE => {
+                EventBody::ItemCreated(ItemCreated::without_state(payload)?)
+            }
+            tag::ITEM_CREATED => EventBody::ItemCreated(ItemCreated::with_state(payload)?),
             tag::ITEM_EDITED => EventBody::ItemEdited(encoding::decode(payload)?),
             tag::ITEM_MOVED => EventBody::ItemMoved(encoding::decode(payload)?),
             tag::ITEM_LINKED => EventBody::ItemLinked(encoding::decode(payload)?),
@@ -683,6 +784,61 @@ mod tests {
         "165b20010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff0011223301012065e27c6eb2ae7ce97aceb1a372b6fb11fbc5bbffd95ee6fa17949cd148c6f730",
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
     ];
+
+    fn created_task(state: Option<WrittenState>) -> EventBody {
+        EventBody::ItemCreated(ItemCreated {
+            item_type: TypeName::new("task").unwrap(),
+            title: "t".into(),
+            body: String::new(),
+            priority: Some(Priority::P2),
+            lane: None,
+            labels: vec![],
+            requires: vec![],
+            review: None,
+            state,
+        })
+    }
+
+    /// Bodies written before the states were fixed keep their bytes, so their ids and signatures
+    /// hold.
+    #[test]
+    fn golden_bodies_from_before_the_fixed_states() {
+        let created = created_task(None);
+        let moved = EventBody::ItemMoved(ItemMoved {
+            item: ItemId::from_bytes([1; 32]),
+            to: WrittenState::as_written("in_progress"),
+            by_session: None,
+            because: None,
+        });
+        for (body, golden) in [created, moved].iter().zip(GOLDEN_OLD_ITEM_BODIES) {
+            assert_eq!(golden_body_bytes(body), golden);
+            let decoded: EventBody =
+                encoding::decode(&data_encoding::HEXLOWER.decode(golden.as_bytes()).unwrap())
+                    .unwrap();
+            assert_eq!(&decoded, body);
+        }
+    }
+
+    const GOLDEN_OLD_ITEM_BODIES: [&str; 2] = [
+        "0a0e047461736b017400010200000000",
+        "0c2f2001010101010101010101010101010101010101010101010101010101010101010b696e5f70726f67726573730000",
+    ];
+
+    #[test]
+    fn an_item_created_in_a_state_round_trips_under_its_own_tag() {
+        let created = created_task(Some(ItemState::Draft.into()));
+        let bytes = encoding::encode(&created).unwrap();
+        assert_eq!(bytes[0], tag::ITEM_CREATED as u8);
+        assert_eq!(encoding::decode::<EventBody>(&bytes).unwrap(), created);
+        let EventBody::ItemCreated(without) = created_task(None) else {
+            unreachable!()
+        };
+        let forged = TaggedBody {
+            tag: tag::ITEM_CREATED,
+            payload: encoding::encode(&without).unwrap(),
+        };
+        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
+    }
 
     const GOLDEN_LEN: usize = 343;
     const GOLDEN_ID: &str = "x47qrvvox2dqfkr2nzucimqflq2usnxuo3o65b5uagx7xge7ipxa";

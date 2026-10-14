@@ -13,8 +13,8 @@ use crate::view::{
     StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
+use wf_core::item::ItemState;
 use wf_core::item::Priority;
-use wf_core::policy::StateCategory;
 
 fn short(id: &str) -> &str {
     &id[..id.len().min(wf_core::id::SHORT_ID_LEN)]
@@ -81,34 +81,27 @@ mod style {
     }
 }
 
-fn state_style(state_category: Option<StateCategory>) -> anstyle::Style {
+pub(crate) fn state_style(state: ItemState) -> anstyle::Style {
     use anstyle::AnsiColor;
-    match state_category {
-        Some(StateCategory::Open) => style::color(AnsiColor::Green),
-        Some(StateCategory::Active) => style::color(AnsiColor::Blue),
-        Some(StateCategory::Review) => style::color(AnsiColor::Yellow),
-        Some(StateCategory::Done) => style::color(AnsiColor::Magenta),
-        Some(StateCategory::Cancelled) => style::color(AnsiColor::BrightBlack),
-        Some(StateCategory::Inactive) | None => style::DIM,
+    match state {
+        ItemState::Open => style::color(AnsiColor::Green),
+        ItemState::Active => style::color(AnsiColor::Blue),
+        ItemState::Review => style::color(AnsiColor::Yellow),
+        ItemState::Done => style::color(AnsiColor::Magenta),
+        ItemState::Cancelled => style::color(AnsiColor::BrightBlack),
+        ItemState::Draft => style::DIM,
     }
 }
 
-/// The icon of a state category; `?` when the state is unknown under the current policy.
-fn state_icon(state_category: Option<StateCategory>) -> &'static str {
-    match state_category {
-        Some(StateCategory::Inactive) => "◌",
-        Some(StateCategory::Open) => "○",
-        Some(StateCategory::Active) => "◐",
-        Some(StateCategory::Review) => "◎",
-        Some(StateCategory::Done) => "✓",
-        Some(StateCategory::Cancelled) => "✗",
-        None => "?",
+pub(crate) fn state_icon(state: ItemState) -> &'static str {
+    match state {
+        ItemState::Draft => "◌",
+        ItemState::Open => "○",
+        ItemState::Active => "◐",
+        ItemState::Review => "◎",
+        ItemState::Done => "✓",
+        ItemState::Cancelled => "✗",
     }
-}
-
-/// `◐ in_progress`. Pickers take plain text, so the icon is not colored.
-pub fn state_choice(name: &str, state_category: StateCategory) -> String {
-    format!("{} {name}", state_icon(Some(state_category)))
 }
 
 fn priority_style(priority: Priority) -> anstyle::Style {
@@ -138,14 +131,11 @@ fn local_time(timestamp: &str, format: &str) -> String {
 }
 
 /// The icon of an item: its state's icon, or a warning icon when the item is stranded.
-pub fn item_icon(
-    state_category: Option<StateCategory>,
-    readiness: Option<Readiness>,
-) -> &'static str {
+pub fn item_icon(state: ItemState, readiness: Option<Readiness>) -> &'static str {
     match readiness {
         Some(Readiness::Stranded) => "⚠",
         Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => {
-            state_icon(state_category)
+            state_icon(state)
         }
     }
 }
@@ -155,38 +145,37 @@ pub fn item_choice(summary: &ItemSummary) -> String {
     let state = if summary.archived {
         "archived"
     } else {
-        summary.state.as_deref().unwrap_or("unknown")
+        summary.state.name()
     };
     format!(
         "{} #{} ({}:{state})  {}",
-        item_icon(summary.state_category, summary.readiness),
+        item_icon(summary.state, summary.readiness),
         short(&summary.id),
         summary.item_type,
         summary.title,
     )
 }
 
-/// `○ #q7x2 (task:open) `, the icon and state colored by its state category. A stranded item gets a warning
+/// `○ #q7x2 (task:open) `, the icon and state colored by the state. A stranded item gets a warning
 /// icon instead. `suffix` follows the state.
 fn item_label(
     id: &str,
     item_type: &str,
-    state: Option<&str>,
-    state_category: Option<StateCategory>,
+    state: ItemState,
     readiness: Option<Readiness>,
     suffix: &str,
 ) -> String {
-    let state_style = state_style(state_category);
+    let state_style = state_style(state);
     let icon_style = match readiness {
         Some(Readiness::Stranded) => style::WARNING,
         Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => state_style,
     };
     format!(
         "{} {} {}{}{}{}",
-        style::paint(icon_style, item_icon(state_category, readiness)),
+        style::paint(icon_style, item_icon(state, readiness)),
         id_label(id),
         style::paint(style::DIM, format!("({item_type}:")),
-        style::paint(state_style, state.unwrap_or("unknown")),
+        style::paint(state_style, state.name()),
         style::paint(style::DIM, suffix),
         style::paint(style::DIM, ")"),
     )
@@ -223,8 +212,7 @@ fn item_row(item: &ItemSummary) -> [String; 5] {
         item_label(
             &item.id,
             &item.item_type,
-            item.state.as_deref(),
-            item.state_category,
+            item.state,
             item.readiness,
             suffix,
         ),
@@ -253,19 +241,16 @@ pub fn item_list(items: &[ItemSummary]) -> String {
     format!("{table}\n")
 }
 
-/// `◐ in_progress (3)`: the group's icon and name, with the number of items.
+/// `◐ active (3)`: the group's icon and name, with the number of items.
 fn group_heading(grouping: ItemGrouping, group: &ItemGroup) -> String {
     let Some(first) = group.items.first() else {
         return group.group.clone();
     };
     let (icon, heading_style) = match grouping {
-        ItemGrouping::State => (
-            state_icon(first.state_category),
-            state_style(first.state_category),
-        ),
+        ItemGrouping::State => (state_icon(first.state), state_style(first.state)),
         ItemGrouping::Readiness => match first.readiness {
-            Some(Readiness::Ready) => ("○", state_style(Some(StateCategory::Open))),
-            Some(Readiness::Claimed) => ("◐", state_style(Some(StateCategory::Active))),
+            Some(Readiness::Ready) => ("○", state_style(ItemState::Open)),
+            Some(Readiness::Claimed) => ("◐", state_style(ItemState::Active)),
             Some(Readiness::Blocked) => ("⊘", style::color(anstyle::AnsiColor::Red)),
             Some(Readiness::Stranded) => ("⚠", style::WARNING),
             None => ("·", style::DIM),
@@ -420,8 +405,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
     let label = item_label(
         &summary.id,
         &summary.item_type,
-        summary.state.as_deref(),
-        summary.state_category,
+        summary.state,
         summary.readiness,
         archived,
     );
@@ -537,14 +521,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
             line(
                 format!(
                     "  ↳ {label} {} \"{}\"{}",
-                    item_label(
-                        &link.id,
-                        &link.item_type,
-                        link.state.as_deref(),
-                        link.state_category,
-                        None,
-                        ""
-                    ),
+                    item_label(&link.id, &link.item_type, link.state, None, ""),
                     link.title,
                     if link.ignored {
                         " [ignored: cycle]"
@@ -565,14 +542,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>) -> String {
         line(
             format!(
                 "  ↳ references {what}{} \"{}\"",
-                item_label(
-                    &link.id,
-                    &link.item_type,
-                    link.state.as_deref(),
-                    link.state_category,
-                    None,
-                    ""
-                ),
+                item_label(&link.id, &link.item_type, link.state, None, ""),
                 link.title,
             ),
             LINK_INDENT,
@@ -1139,8 +1109,7 @@ mod tests {
                 id: "dm3q4jpcwtdq".to_string(),
                 item_type: "task".to_string(),
                 title: title.to_string(),
-                state: None,
-                state_category: None,
+                state: ItemState::Open,
                 priority: None,
                 readiness: None,
                 blocked_by: Vec::new(),
@@ -1167,8 +1136,7 @@ mod tests {
                     id: "kvb7vjaaaaaa".to_string(),
                     item_type: "task".to_string(),
                     title: referenced.to_string(),
-                    state: None,
-                    state_category: None,
+                    state: ItemState::Open,
                     ignored: false,
                 },
                 comment: None,
@@ -1190,22 +1158,21 @@ mod tests {
         let shown = anstream::adapter::strip_str(&item_detail_for(&detail, Some(40))).to_string();
         assert_eq!(
             shown,
-            "? #dm3q4j (task:unknown) Wrap the header\n\
-             \x20                        of wf item\n\
-             \x20                        show under its\n\
-             \x20                        indent\n\
+            "○ #dm3q4j (task:open) Wrap the header of\n\
+             \x20                     wf item show under\n\
+             \x20                     its indent\n\
              \x20 @ada/coder/bh2m · created not a\n\
              \x20 timestamp · updated not a timestamp\n\
-             \x20 ↳ references ? #kvb7vj (task:unknown)\n\
+             \x20 ↳ references ○ #kvb7vj (task:open)\n\
              \x20   \"Wrap long activity lines under\n\
              \x20   their indent\"\n"
         );
         let shown = anstream::adapter::strip_str(&item_detail_for(&detail, None)).to_string();
         assert_eq!(
             shown,
-            "? #dm3q4j (task:unknown) Wrap the header of wf item show under its indent\n\
+            "○ #dm3q4j (task:open) Wrap the header of wf item show under its indent\n\
              \x20 @ada/coder/bh2m · created not a timestamp · updated not a timestamp\n\
-             \x20 ↳ references ? #kvb7vj (task:unknown) \"Wrap long activity lines under their indent\"\n"
+             \x20 ↳ references ○ #kvb7vj (task:open) \"Wrap long activity lines under their indent\"\n"
         );
     }
 

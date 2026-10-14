@@ -18,9 +18,15 @@ export PATH="$PWD/target/debug:$PATH"
 cd ~/src/some-repo
 wf init --name demo              # or `wf init -i` to pick the harnesses, permissions and models
 wf item add --title "Implement feed sync" --priority P1
+wf item add --draft --title "Rework the dispatcher"   # held back: nothing starts a draft
 wf item list --ready
+wf item open <item>...           # release drafts; `draft`, `done` and `cancel` move items too
 wf log
 ```
+Every item is in one of six states: `draft`, `open`, `active`, `review`, `done` or `cancelled`. Types
+(`task`, `decision`, `distill`, and your own) list which ones they use; the agents move items into
+`active` and `review`, you move them with the verbs above.
+
 ## Agents at work
 ```sh
 wf agent add coder --harness opencode --capability rust --lane default --start auto
@@ -66,7 +72,7 @@ paragraph or event boundary; raw mode streams text chunks immediately.
 Its first tab lists what waits on you, the agents at work with what each is doing right now, and
 what is stuck; `a`/`d` answer a permission request, `r` a blocker, `v` a review, right where they
 are listed. `enter` opens an item, or a session on its live transcript. The other tabs are the
-items grouped as `wf item list --group-by` does, the agents with their sessions and how they are
+items grouped by state, drafts first (`s` on a draft releases it for the dispatcher), the agents with their sessions and how they are
 doing, and the event stream. `?` lists the keys. Piped or with `--json`, `wf watch` prints the
 events as they arrive instead.
 

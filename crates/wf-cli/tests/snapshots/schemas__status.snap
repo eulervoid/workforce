@@ -3,10 +3,10 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(view::status(&scenario.state, view::StatusContext\n{\n    own: None, last_seen: &Default::default(), daemon: false, waiting_on_you:\n    0, refolded: false,\n}))"
 ---
 {
-  "schema": 4,
+  "schema": 5,
   "data": {
     "name": "demo",
-    "id": "3iesfvprxzu3q6ysoc2o5goojgtewtbpvzn4fl7s5jvjonaw7hua",
+    "id": "nfnj57dtact7pkkcglpbebfpsjvcd3y4uybno3f2566m3nei565a",
     "members": [
       "@grace (member)",
       "@ada (owner)"

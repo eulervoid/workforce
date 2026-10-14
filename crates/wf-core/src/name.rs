@@ -126,10 +126,6 @@ name_type!(
     TypeName, "type name", SLUG, is_slug_char
 );
 name_type!(
-    /// A state name within an item type.
-    StateName, "state name", SLUG, is_slug_char
-);
-name_type!(
     /// A name from the policy `[lanes.*]` table.
     LaneName, "lane name", SLUG, is_slug_char
 );

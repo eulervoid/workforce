@@ -1,6 +1,7 @@
 use crate::event::Event;
 use crate::id::{ItemId, SessionId};
 use crate::identity::AgentId;
+use crate::item::ItemState;
 use crate::name::AgentName;
 use crate::session::EndReason;
 use crate::stats::RECENT_MS;
@@ -32,7 +33,7 @@ fn stats_count_what_was_done_lately_and_how_attempts_ended() {
         start + HOUR,
         end_session(first, EndReason::Released),
     );
-    fixture.apply(&mut state, 0, start + HOUR, moved(old, "done"));
+    fixture.apply(&mut state, 0, start + HOUR, moved(old, ItemState::Done));
     // `new` took a failed attempt and a cancelled one, then two hours of work to be done.
     let now = start + 2 * RECENT_MS;
     let failed =
@@ -59,7 +60,7 @@ fn stats_count_what_was_done_lately_and_how_attempts_ended() {
         now - HOUR,
         end_session(done, EndReason::Submitted { commit: None }),
     );
-    fixture.apply(&mut state, 0, now - HOUR, moved(new, "done"));
+    fixture.apply(&mut state, 0, now - HOUR, moved(new, ItemState::Done));
     let live = item_id(&fixture.apply(&mut state, 0, now, create("task", "live")));
     fixture.apply(&mut state, 0, now, start_session("coder", live));
 

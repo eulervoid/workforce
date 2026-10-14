@@ -29,7 +29,7 @@ async fn joining_a_workforce_with_100k_events_takes_seconds() {
             (0..=2, _) | (_, None) => create_with_body("task", &format!("task {index}"), "body"),
             (3..=5, Some(item)) => edit(item, Change::Title(format!("renamed {index}"))),
             (6..=7, Some(item)) => comment(item, "progress note"),
-            (_, Some(item)) => moved(item, "in_progress"),
+            (_, Some(item)) => moved(item, ItemState::Active),
         };
         let event = fixture.author(&state, 0, 2_000 + index as u64, body);
         state.receive(event.clone(), Trust::Stored).unwrap();

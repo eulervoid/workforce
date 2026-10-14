@@ -3,10 +3,10 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&events)"
 ---
 {
-  "schema": 4,
+  "schema": 5,
   "data": [
     {
-      "id": "3iesfvprxzu3q6ysoc2o5goojgtewtbpvzn4fl7s5jvjonaw7hua",
+      "id": "nfnj57dtact7pkkcglpbebfpsjvcd3y4uybno3f2566m3nei565a",
       "seq": 1,
       "device": "43a72e7144",
       "actor": "@ada",
@@ -16,7 +16,7 @@ expression: "Envelope::new(&events)"
       "verified": true
     },
     {
-      "id": "q667uoqwej4rp6nqpnnuoqoitjv6sk3ga4gb7bpyaytg4ch2iurq",
+      "id": "xhfw5gu5a5ibwyfugiayruylaibihyq2kzmx4ytacqn2wv5kmura",
       "seq": 2,
       "device": "43a72e7144",
       "actor": "@ada",
@@ -26,7 +26,7 @@ expression: "Envelope::new(&events)"
       "verified": true
     },
     {
-      "id": "c4idpbeqgbeliompco4f3euoet6ibmul672xn2xwezizh5jgmbna",
+      "id": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
       "seq": 3,
       "device": "43a72e7144",
       "actor": "@ada",
@@ -36,7 +36,7 @@ expression: "Envelope::new(&events)"
       "verified": true
     },
     {
-      "id": "rgrqrrkituoxhn5ct5kwybsbbrdx4irvxwsi72anpo6f23jdv5aq",
+      "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
       "seq": 4,
       "device": "43a72e7144",
       "actor": "@ada",
@@ -46,7 +46,7 @@ expression: "Envelope::new(&events)"
       "verified": true
     },
     {
-      "id": "im6jrrzjm3grn3wf7fdar5i4pog6mfgqzk3c4p22p6uqdsg6hxlq",
+      "id": "cb6sbemiktyi34wi5kjxlqmn74vwahoedqwy2qekdpadbjp62p7q",
       "seq": 5,
       "device": "43a72e7144",
       "actor": "@ada",
@@ -56,53 +56,53 @@ expression: "Envelope::new(&events)"
       "verified": true
     },
     {
-      "id": "dxx3kt26g5wawkszopxphjibnds6xorlvkta4mbmoo7jccfjlyya",
+      "id": "vktgr2hfl4djn3mlcm5g2dyifzgqitgx3pyh7lkvszazk3ftv4xa",
       "seq": 6,
       "device": "43a72e7144",
       "actor": "@ada",
       "at": "1970-01-01T00:00:07Z",
       "kind": "ItemEdited",
-      "summary": "#rgrqrr priority",
+      "summary": "#gzsd5d priority",
       "verified": true
     },
     {
-      "id": "cp76p63bcvqbryd4zqbim4254uz5jfbekubngv734vrnhxqxhkxq",
+      "id": "dnn3xhhaeyynzyvjpyl63bj2cczoe7ubvhrf7mxtp5tbcwi2mgpa",
       "seq": 7,
       "device": "43a72e7144",
       "actor": "@ada",
       "at": "1970-01-01T00:00:08Z",
       "kind": "ItemLinked",
-      "summary": "#rgrqrr depends on #c4idpb",
+      "summary": "#gzsd5d depends on #hnutwd",
       "verified": true
     },
     {
-      "id": "dwf44pbuftft5dx4r4mh3yxvhtdpi5my6hemh7idnr6m56uyzjlq",
+      "id": "bmnfwkl7deir3tbcsv6yzhpkhxrs7edtqbsq2d6nmlztsa66yvha",
       "seq": 8,
       "device": "43a72e7144",
       "actor": "@ada",
       "at": "1970-01-01T00:00:09Z",
       "kind": "Commented",
-      "summary": "#rgrqrr commented",
+      "summary": "#gzsd5d commented",
       "verified": true
     },
     {
-      "id": "r7mztcpoo2jetmygctaipbvcdia2sva33n46kzhfddsqs4ol5lkq",
+      "id": "ffskwmzyy437zmo4i6kwf5xn325dnoe6wftbzw5lt3gusglisjba",
       "seq": 9,
       "device": "43a72e7144",
       "actor": "@ada",
       "at": "1970-01-01T00:00:10Z",
       "kind": "ItemMoved",
-      "summary": "#im6jrr -> done",
+      "summary": "#cb6sbe -> done",
       "verified": true
     },
     {
-      "id": "5djcz3jcbojkadmsb2gsxirmjcjmdx2q6zs7iuugrnborvp7sfca",
+      "id": "r23nc626mhym7xd5cmscipk6ltzvh2p6tflooiiona5bg2tanxiq",
       "seq": 10,
       "device": "43a72e7144",
       "actor": "@ada",
       "at": "1970-01-01T00:00:11Z",
       "kind": "ItemArchived",
-      "summary": "#im6jrr archived",
+      "summary": "#cb6sbe archived",
       "verified": true
     }
   ]

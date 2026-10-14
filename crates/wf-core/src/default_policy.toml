@@ -43,6 +43,8 @@ steps = ["retry", "retry", "principal"]
 name = "diagnose"
 steps = [{ agent = { requires = ["review"] } }, "retry", "principal"]
 
+# A type lists the states it uses, from draft, open, active, review, done and cancelled, and the
+# one its items start in. `wf item add --draft` starts an item as a draft instead.
 [types.task]
 review = "manual"
 recovery = "standard"
@@ -50,28 +52,14 @@ lane = "default"
 fields = ["priority", "labels", "requires"]
 depends_on = ["task", "decision"]
 initial = "open"
-transitions = "any"
-states = [
-  { name = "backlog", category = "inactive" },
-  { name = "open", category = "open" },
-  { name = "in_progress", category = "active" },
-  { name = "in_review", category = "review" },
-  { name = "done", category = "done" },
-  { name = "dropped", category = "cancelled" },
-]
+states = ["draft", "open", "active", "review", "done", "cancelled"]
 
 [types.decision]
 lane = "default"
 fields = ["labels"]
 depends_on = []
-initial = "proposed"
-transitions = "any"
-states = [
-  { name = "proposed", category = "review" },
-  { name = "ratified", category = "done" },
-  { name = "rejected", category = "cancelled" },
-  { name = "superseded", category = "done" },
-]
+initial = "review"
+states = ["review", "done", "cancelled"]
 
 [types.distill]
 lane = "meta"
@@ -79,9 +67,4 @@ recovery = "standard"
 fields = ["labels"]
 depends_on = []
 initial = "open"
-transitions = "any"
-states = [
-  { name = "open", category = "open" },
-  { name = "in_progress", category = "active" },
-  { name = "done", category = "done" },
-]
+states = ["open", "active", "done", "cancelled"]

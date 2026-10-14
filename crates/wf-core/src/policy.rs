@@ -5,9 +5,8 @@ use std::sync::LazyLock;
 
 use serde::{Deserialize, Serialize};
 
-use crate::name::{
-    AgentName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, StateName, TypeName,
-};
+use crate::item::ItemState;
+use crate::name::{AgentName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, TypeName};
 
 pub const DEFAULT_POLICY_TOML: &str = include_str!("default_policy.toml");
 
@@ -17,21 +16,18 @@ pub enum PolicyError {
     Parse(String),
     #[error("built-in type `{0}` is missing")]
     BuiltinMissing(TypeName),
-    #[error("states of built-in type `{0}` cannot be changed")]
-    BuiltinStatesChanged(TypeName),
-    #[error("type `{0}` has no states")]
-    NoStates(TypeName),
-    #[error("type `{type_name}` lists state `{state}` twice")]
-    DuplicateState {
-        type_name: TypeName,
-        state: StateName,
-    },
     #[error("initial state `{state}` of type `{type_name}` is not one of its states")]
-    UnknownInitialState {
+    InitialNotInStates {
         type_name: TypeName,
-        state: StateName,
+        state: ItemState,
     },
-    #[error("type `{0}` has an active state but no open state to return to")]
+    #[error(
+        "type `{0}` names its states the old way; list the states it uses, such as \
+         `initial = \"open\"` and `states = [\"draft\", \"open\", \"done\"]`, \
+         from draft, open, active, review, done and cancelled"
+    )]
+    OldStates(TypeName),
+    #[error("type `{0}` uses `active` but not `open`, to return to")]
     ActiveWithoutOpen(TypeName),
     #[error("type `{type_name}` may depend on unknown type `{target}`")]
     UnknownDependencyTarget {
@@ -47,7 +43,7 @@ pub enum PolicyError {
         type_name: TypeName,
         level: ReviewLevelName,
     },
-    #[error("type `{0}` has a review level but no review state to wait in")]
+    #[error("type `{0}` has a review level but does not use `review`, to wait in")]
     ReviewWithoutReviewState(TypeName),
     #[error("recovery level `{0}` is defined twice")]
     DuplicateRecoveryLevel(RecoveryLevelName),
@@ -60,51 +56,6 @@ pub enum PolicyError {
     },
 }
 
-/// Fixed set of behavioural state categories. Built-in behaviour keys on these, never on state names.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum StateCategory {
-    Inactive,
-    Open,
-    Active,
-    /// The work is submitted and waits for its review steps.
-    Review,
-    Done,
-    Cancelled,
-}
-
-impl StateCategory {
-    pub fn is_terminal(self) -> bool {
-        match self {
-            StateCategory::Done | StateCategory::Cancelled => true,
-            StateCategory::Inactive
-            | StateCategory::Open
-            | StateCategory::Active
-            | StateCategory::Review => false,
-        }
-    }
-}
-
-impl std::fmt::Display for StateCategory {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(match self {
-            StateCategory::Inactive => "inactive",
-            StateCategory::Open => "open",
-            StateCategory::Active => "active",
-            StateCategory::Review => "review",
-            StateCategory::Done => "done",
-            StateCategory::Cancelled => "cancelled",
-        })
-    }
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct StateConfig {
-    pub name: StateName,
-    #[serde(rename = "category")]
-    pub state_category: StateCategory,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Field {
@@ -113,11 +64,10 @@ pub enum Field {
     Requires,
 }
 
-/// Which transitions between states are allowed. Explicit lists and guards come later.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// `transitions = "any"`, which policies already in the log say: it was the only value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum Transitions {
-    #[default]
+enum Transitions {
     Any,
 }
 
@@ -129,10 +79,14 @@ pub struct TypeConfig {
     pub fields: Vec<Field>,
     #[serde(default)]
     pub depends_on: Vec<TypeName>,
-    pub initial: StateName,
+    /// The state items of the type are created in, unless they are created as drafts.
+    #[serde(deserialize_with = "written_states::initial")]
+    pub initial: ItemState,
+    /// The states items of the type may be moved to.
+    #[serde(deserialize_with = "written_states::deserialize")]
+    pub states: BTreeSet<ItemState>,
     #[serde(default)]
-    pub transitions: Transitions,
-    pub states: Vec<StateConfig>,
+    transitions: Option<Transitions>,
     /// The review level of items of this type that do not name one.
     #[serde(default)]
     pub review: Option<ReviewLevelName>,
@@ -143,19 +97,8 @@ pub struct TypeConfig {
 }
 
 impl TypeConfig {
-    /// The first state with the category. The runner moves items to these states.
-    pub fn first_state(&self, state_category: StateCategory) -> Option<&StateName> {
-        self.states
-            .iter()
-            .find(|state| state.state_category == state_category)
-            .map(|state| &state.name)
-    }
-
-    pub fn state_category_of(&self, state: &StateName) -> Option<StateCategory> {
-        self.states
-            .iter()
-            .find(|candidate| &candidate.name == state)
-            .map(|candidate| candidate.state_category)
+    pub fn uses(&self, state: ItemState) -> bool {
+        self.states.contains(&state)
     }
 
     pub fn allows_field(&self, field: Field) -> bool {
@@ -275,11 +218,37 @@ impl Policy {
         &DEFAULT_POLICY
     }
 
-    /// Parses and validates policy text.
+    /// Parses and validates policy text. Policies already in the log may name states the old
+    /// way; [`Policy::parse_new`] refuses that for a policy about to be written.
     pub fn parse(source: &str) -> Result<Policy, PolicyError> {
-        let policy: Policy =
+        let mut policy: Policy =
             toml::from_str(source).map_err(|error| PolicyError::Parse(error.to_string()))?;
+        let written: written_states::WrittenTypes =
+            toml::from_str(source).map_err(|error| PolicyError::Parse(error.to_string()))?;
+        for (name, states) in &written.types {
+            if let (Some(config), Some(initial)) =
+                (policy.types.get_mut(name), states.old_initial())
+            {
+                config.initial = initial;
+            }
+        }
         policy.validate()?;
+        Ok(policy)
+    }
+
+    /// Parses policy text that is about to be written: like [`Policy::parse`], but the states
+    /// have to be named the current way.
+    pub fn parse_new(source: &str) -> Result<Policy, PolicyError> {
+        let policy = Policy::parse(source)?;
+        let written: written_states::WrittenTypes =
+            toml::from_str(source).map_err(|error| PolicyError::Parse(error.to_string()))?;
+        if let Some((name, _)) = written
+            .types
+            .iter()
+            .find(|(_, states)| !states.is_current())
+        {
+            return Err(PolicyError::OldStates(name.clone()));
+        }
         Ok(policy)
     }
 
@@ -319,41 +288,21 @@ impl Policy {
                 return Err(PolicyError::ReservedRecoveryLevel);
             }
         }
-        for (name, builtin) in &DEFAULT_POLICY.types {
-            let configured = self
-                .types
-                .get(name)
-                .ok_or_else(|| PolicyError::BuiltinMissing(name.clone()))?;
-            if configured.states != builtin.states {
-                return Err(PolicyError::BuiltinStatesChanged(name.clone()));
-            }
+        if let Some(name) = DEFAULT_POLICY
+            .types
+            .keys()
+            .find(|name| !self.types.contains_key(*name))
+        {
+            return Err(PolicyError::BuiltinMissing(name.clone()));
         }
         for (name, config) in &self.types {
-            if config.states.is_empty() {
-                return Err(PolicyError::NoStates(name.clone()));
-            }
-            let mut seen = BTreeSet::new();
-            for state in &config.states {
-                if !seen.insert(&state.name) {
-                    return Err(PolicyError::DuplicateState {
-                        type_name: name.clone(),
-                        state: state.name.clone(),
-                    });
-                }
-            }
-            if config.state_category_of(&config.initial).is_none() {
-                return Err(PolicyError::UnknownInitialState {
+            if !config.uses(config.initial) {
+                return Err(PolicyError::InitialNotInStates {
                     type_name: name.clone(),
-                    state: config.initial.clone(),
+                    state: config.initial,
                 });
             }
-            let has = |state_category| {
-                config
-                    .states
-                    .iter()
-                    .any(|state| state.state_category == state_category)
-            };
-            if has(StateCategory::Active) && !has(StateCategory::Open) {
+            if config.uses(ItemState::Active) && !config.uses(ItemState::Open) {
                 return Err(PolicyError::ActiveWithoutOpen(name.clone()));
             }
             if let Some(level) = &config.review {
@@ -366,7 +315,7 @@ impl Policy {
                 let reviews = self
                     .review_level(level)
                     .is_some_and(|level| !level.steps.is_empty());
-                if reviews && !has(StateCategory::Review) {
+                if reviews && !config.uses(ItemState::Review) {
                     return Err(PolicyError::ReviewWithoutReviewState(name.clone()));
                 }
             }
@@ -393,6 +342,114 @@ impl Policy {
     }
 }
 
+/// How a policy lists the states of a type. Policies already in the log list them the old way,
+/// as `{ name, category }` tables, where the category is the state; postcard, which carries the
+/// policy between the daemon and the CLI, always has the current form.
+mod written_states {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use serde::{Deserialize, Deserializer};
+
+    use crate::item::ItemState;
+    use crate::name::TypeName;
+
+    /// An old name the old list of states does not resolve reads as `draft`; see
+    /// [`TypeStates::old_initial`].
+    pub(super) fn initial<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<ItemState, D::Error> {
+        if !deserializer.is_human_readable() {
+            return ItemState::deserialize(deserializer);
+        }
+        let name = String::deserialize(deserializer)?;
+        Ok(ItemState::from_written(&name).unwrap_or(ItemState::Draft))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<BTreeSet<ItemState>, D::Error> {
+        if !deserializer.is_human_readable() {
+            return BTreeSet::deserialize(deserializer);
+        }
+        let listed = Vec::<Listed>::deserialize(deserializer)?;
+        listed
+            .into_iter()
+            .map(|listed| match listed {
+                Listed::State(name) => ItemState::from_written(&name)
+                    .ok_or_else(|| serde::de::Error::custom(crate::item::ItemStateError(name))),
+                Listed::Old { category, .. } => Ok(category.state()),
+            })
+            .collect()
+    }
+
+    /// A state by name, old names too, or an old `{ name, category }` table.
+    #[derive(Clone, Deserialize)]
+    #[serde(untagged)]
+    enum Listed {
+        State(String),
+        Old { name: String, category: Category },
+    }
+
+    #[derive(Clone, Copy, Deserialize)]
+    #[serde(rename_all = "snake_case")]
+    enum Category {
+        Inactive,
+        Open,
+        Active,
+        Review,
+        Done,
+        Cancelled,
+    }
+
+    impl Category {
+        fn state(self) -> ItemState {
+            match self {
+                Category::Inactive => ItemState::Draft,
+                Category::Open => ItemState::Open,
+                Category::Active => ItemState::Active,
+                Category::Review => ItemState::Review,
+                Category::Done => ItemState::Done,
+                Category::Cancelled => ItemState::Cancelled,
+            }
+        }
+    }
+
+    /// The names of the states of every type, as written.
+    #[derive(Deserialize)]
+    pub(super) struct WrittenTypes {
+        pub(super) types: BTreeMap<TypeName, TypeStates>,
+    }
+
+    #[derive(Deserialize)]
+    pub(super) struct TypeStates {
+        initial: String,
+        states: Vec<toml::Value>,
+        transitions: Option<toml::Value>,
+    }
+
+    impl TypeStates {
+        /// The initial state of an old list of states: the category of the state it names.
+        pub(super) fn old_initial(&self) -> Option<ItemState> {
+            self.states.iter().find_map(|state| {
+                let Listed::Old { name, category } = state.clone().try_into().ok()? else {
+                    return None;
+                };
+                (name == self.initial).then(|| category.state())
+            })
+        }
+
+        pub(super) fn is_current(&self) -> bool {
+            let current = |name: &str| name.parse::<ItemState>().is_ok();
+            self.transitions.is_none()
+                && current(&self.initial)
+                && self
+                    .states
+                    .iter()
+                    .all(|state| state.as_str().is_some_and(current))
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -410,14 +467,54 @@ mod tests {
     }
 
     #[test]
-    fn state_categories_of_default_task_states() {
+    fn the_built_in_types_use_the_states_of_the_proposal() {
         let policy = Policy::default_policy();
-        let task = policy.type_config(&type_name("task")).unwrap();
-        let state_category = |state: &str| task.state_category_of(&StateName::new(state).unwrap());
-        assert_eq!(state_category("backlog"), Some(StateCategory::Inactive));
-        assert_eq!(state_category("in_review"), Some(StateCategory::Review));
-        assert_eq!(state_category("dropped"), Some(StateCategory::Cancelled));
-        assert_eq!(state_category("nope"), None);
+        let states = |name: &str| {
+            let config = policy.type_config(&type_name(name)).unwrap();
+            (
+                config.initial,
+                config.states.iter().copied().collect::<Vec<_>>(),
+            )
+        };
+        assert_eq!(states("task"), (ItemState::Open, ItemState::ALL.to_vec()));
+        assert_eq!(
+            states("decision"),
+            (
+                ItemState::Review,
+                vec![ItemState::Review, ItemState::Done, ItemState::Cancelled]
+            )
+        );
+        assert_eq!(
+            states("distill"),
+            (
+                ItemState::Open,
+                vec![
+                    ItemState::Open,
+                    ItemState::Active,
+                    ItemState::Done,
+                    ItemState::Cancelled
+                ]
+            )
+        );
+    }
+
+    const OLD_DEFAULT_POLICY: &str = include_str!("tests/old_default_policy.toml");
+
+    #[test]
+    fn policies_with_the_old_states_still_parse_but_are_not_written() {
+        let old = Policy::parse(OLD_DEFAULT_POLICY).unwrap();
+        let decision = old.type_config(&type_name("decision")).unwrap();
+        assert_eq!(decision.initial, ItemState::Review);
+        let distill = old.type_config(&type_name("distill")).unwrap();
+        assert!(!distill.uses(ItemState::Cancelled));
+        assert_eq!(
+            Policy::parse_new(OLD_DEFAULT_POLICY),
+            Err(PolicyError::OldStates(type_name("decision")))
+        );
+        assert_eq!(
+            &Policy::parse_new(DEFAULT_POLICY_TOML).unwrap(),
+            Policy::default_policy()
+        );
     }
 
     #[test]
@@ -436,7 +533,18 @@ mod tests {
              states = [{{ name = \"new\", category = \"open\" }}, {{ name = \"fixed\", category = \"done\" }}]\n"
         );
         let policy = Policy::parse(&source).unwrap();
-        assert!(policy.type_config(&type_name("bug")).is_some());
+        let bug = policy.type_config(&type_name("bug")).unwrap();
+        // The initial state is the category of the old state it names.
+        assert_eq!(bug.initial, ItemState::Open);
+        assert_eq!(
+            bug.states,
+            BTreeSet::from([ItemState::Open, ItemState::Done])
+        );
+        let current = format!(
+            "{DEFAULT_POLICY_TOML}\n[types.bug]\nlane = \"default\"\ninitial = \"open\"\n\
+             states = [\"open\", \"done\"]\n"
+        );
+        assert!(Policy::parse_new(&current).is_ok());
     }
 
     #[test]
@@ -456,42 +564,39 @@ mod tests {
         );
     }
 
-    #[test]
-    fn rejects_changed_builtin_states() {
-        let source = DEFAULT_POLICY_TOML.replace(
-            r#"{ name = "ratified", category = "done" }"#,
-            r#"{ name = "ratified", category = "review" }"#,
-        );
-        assert_eq!(
-            Policy::parse(&source),
-            Err(PolicyError::BuiltinStatesChanged(type_name("decision")))
-        );
-    }
-
     fn with_custom(custom: &str) -> String {
         format!("{DEFAULT_POLICY_TOML}\n{custom}")
     }
 
     #[test]
-    fn rejects_unknown_initial_state() {
+    fn rejects_an_initial_state_the_type_does_not_use() {
         let source = with_custom(
-            "[types.bug]\nlane = \"default\"\ninitial = \"ghost\"\n\
-             states = [{ name = \"new\", category = \"open\" }]\n",
+            "[types.bug]\nlane = \"default\"\ninitial = \"draft\"\nstates = [\"open\"]\n",
         );
         assert_eq!(
             Policy::parse(&source),
-            Err(PolicyError::UnknownInitialState {
+            Err(PolicyError::InitialNotInStates {
                 type_name: type_name("bug"),
-                state: StateName::new("ghost").unwrap()
+                state: ItemState::Draft
             })
+        );
+        let unknown = with_custom(
+            "[types.bug]\nlane = \"default\"\ninitial = \"ghost\"\nstates = [\"open\"]\n",
+        );
+        assert!(matches!(
+            Policy::parse(&unknown),
+            Err(PolicyError::InitialNotInStates { .. })
+        ));
+        assert_eq!(
+            Policy::parse_new(&unknown.replace("\"open\"]", "\"draft\"]")),
+            Err(PolicyError::OldStates(type_name("bug")))
         );
     }
 
     #[test]
     fn rejects_active_without_open() {
         let source = with_custom(
-            "[types.bug]\nlane = \"default\"\ninitial = \"wip\"\n\
-             states = [{ name = \"wip\", category = \"active\" }]\n",
+            "[types.bug]\nlane = \"default\"\ninitial = \"active\"\nstates = [\"active\"]\n",
         );
         assert_eq!(
             Policy::parse(&source),
@@ -500,18 +605,10 @@ mod tests {
     }
 
     #[test]
-    fn rejects_duplicate_states_and_unknown_targets() {
-        let duplicate = with_custom(
-            "[types.bug]\nlane = \"default\"\ninitial = \"new\"\n\
-             states = [{ name = \"new\", category = \"open\" }, { name = \"new\", category = \"done\" }]\n",
-        );
-        assert!(matches!(
-            Policy::parse(&duplicate),
-            Err(PolicyError::DuplicateState { .. })
-        ));
+    fn rejects_unknown_targets() {
         let unknown_target = with_custom(
-            "[types.bug]\nlane = \"default\"\ninitial = \"new\"\ndepends_on = [\"ghost\"]\n\
-             states = [{ name = \"new\", category = \"open\" }]\n",
+            "[types.bug]\nlane = \"default\"\ninitial = \"open\"\ndepends_on = [\"ghost\"]\n\
+             states = [\"open\"]\n",
         );
         assert!(matches!(
             Policy::parse(&unknown_target),
@@ -649,8 +746,8 @@ mod tests {
             })
         );
         let unreviewable = with_custom(
-            "[types.bug]\nlane = \"default\"\ninitial = \"new\"\nreview = \"light\"\n\
-             states = [{ name = \"new\", category = \"open\" }, { name = \"fixed\", category = \"done\" }]\n",
+            "[types.bug]\nlane = \"default\"\ninitial = \"open\"\nreview = \"light\"\n\
+             states = [\"open\", \"done\"]\n",
         );
         assert_eq!(
             Policy::parse(&unreviewable),
@@ -662,18 +759,6 @@ mod tests {
     fn the_old_review_table_is_gone() {
         let old = with_custom("[review]\napprovals = 2\n");
         assert!(matches!(Policy::parse(&old), Err(PolicyError::Parse(_))));
-    }
-
-    #[test]
-    fn the_first_state_of_a_category_is_the_one_the_runner_uses() {
-        let task = Policy::default_policy()
-            .type_config(&type_name("task"))
-            .unwrap();
-        let first = |category| task.first_state(category).map(StateName::as_str);
-        assert_eq!(first(StateCategory::Open), Some("open"));
-        assert_eq!(first(StateCategory::Active), Some("in_progress"));
-        assert_eq!(first(StateCategory::Review), Some("in_review"));
-        assert_eq!(first(StateCategory::Done), Some("done"));
     }
 
     #[test]

@@ -9,6 +9,13 @@ use serde::{Serialize, de::DeserializeOwned};
 #[error("canonical encoding failed")]
 pub struct EncodingError(#[from] postcard::Error);
 
+impl EncodingError {
+    /// Bytes that decode but are not the canonical encoding of what they decode to.
+    pub(crate) fn malformed() -> Self {
+        EncodingError(postcard::Error::SerdeDeCustom)
+    }
+}
+
 pub fn encode<T: Serialize>(value: &T) -> Result<Vec<u8>, EncodingError> {
     Ok(postcard::to_stdvec(value)?)
 }
@@ -19,7 +26,7 @@ pub fn decode<T: DeserializeOwned>(bytes: &[u8]) -> Result<T, EncodingError> {
     if rest.is_empty() {
         Ok(value)
     } else {
-        Err(EncodingError(postcard::Error::SerdeDeCustom))
+        Err(EncodingError::malformed())
     }
 }
 

@@ -1,6 +1,6 @@
 use crate::event::EventBody;
 use crate::id::{CommentId, ItemId, SessionId};
-use crate::item::{Item, ItemView};
+use crate::item::{Item, ItemState, ItemView};
 use crate::state::{State, Trust};
 use crate::testing::*;
 use crate::validate::PolicyViolation;
@@ -147,7 +147,7 @@ fn a_move_names_a_comment_of_its_item_as_its_reason() {
         comment(other.id().into(), "not about this one"),
     ));
     let why = comment_id(&fixture.apply(&mut state, 0, 2_003, comment(task, "not needed")));
-    let move_because = |because| match moved(task, "dropped") {
+    let move_because = |because| match moved(task, ItemState::Cancelled) {
         EventBody::ItemMoved(moved) => EventBody::ItemMoved(crate::event::ItemMoved {
             because: Some(because),
             ..moved
@@ -186,7 +186,7 @@ fn an_open_blocker_holds_up_the_work_until_it_is_resolved() {
         3_002,
         end_session(session, crate::session::EndReason::TimedOut),
     );
-    fixture.apply(&mut state, 0, 3_003, moved(task, "open"));
+    fixture.apply(&mut state, 0, 3_003, moved(task, ItemState::Open));
     assert!(
         !ready(&state),
         "an open blocker keeps the item from being ready"

@@ -5,9 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::ItemView;
-use crate::name::StateName;
-use crate::policy::StateCategory;
+use crate::item::{ItemState, ItemView};
 use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::State;
 
@@ -76,18 +74,16 @@ const LAST_MESSAGE_LIMIT: usize = 600;
 pub enum AfterEnd {
     /// The item stays where it is.
     Nothing,
-    MoveTo(StateName),
+    MoveTo(ItemState),
     /// The work needs no review: merge it, then move the item to `done`.
-    MergeThen {
-        done: StateName,
-    },
+    MergeThenDone,
 }
 
 /// What to do when a turn of a session has ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnOutcome {
-    /// The session already ended, or its item was moved on: to review, done, cancelled or the
-    /// backlog, or archived.
+    /// The session already ended, or its item was moved on: to review, done, cancelled or back to
+    /// draft, or archived.
     Close,
     /// The item waits on a dependency or an open blocker, such as the session's own question.
     Park,
@@ -171,24 +167,24 @@ impl State {
         })
     }
 
-    /// Where `item` goes when its reviewed work cannot be merged: back to its open state for a
-    /// conflict, which the next session resolves, and otherwise to its review state, where the
-    /// dispatcher tries again. `None` when its type has no such state.
-    pub fn after_failed_merge(&self, item: ItemId, failure: MergeFailure) -> Option<StateName> {
+    /// Where `item` goes when its reviewed work cannot be merged: back to `open` for a conflict,
+    /// which the next session resolves, and otherwise to `review`, where the dispatcher tries
+    /// again. `None` when its type does not use the state.
+    pub fn after_failed_merge(&self, item: ItemId, failure: MergeFailure) -> Option<ItemState> {
         match failure {
-            MergeFailure::Conflict => self.first_state_of(item, StateCategory::Open),
-            MergeFailure::Transient => self.first_state_of(item, StateCategory::Review),
+            MergeFailure::Conflict => self.state_if_used(item, ItemState::Open),
+            MergeFailure::Transient => self.state_if_used(item, ItemState::Review),
         }
     }
 
-    /// The state the daemon moves the item of a work session to when the session starts: the
-    /// type's active state, if it has one.
-    pub fn start_move(&self, session: SessionId) -> Option<(ItemId, StateName)> {
+    /// The state the daemon moves the item of a work session to when the session starts:
+    /// `active`, if its type uses it.
+    pub fn start_move(&self, session: SessionId) -> Option<(ItemId, ItemState)> {
         let session = self.session(session)?;
         if session.role() != SessionRole::Work {
             return None;
         }
-        let active = self.first_state_of(session.item(), StateCategory::Active)?;
+        let active = self.state_if_used(session.item(), ItemState::Active)?;
         Some((session.item(), active))
     }
 
@@ -201,16 +197,16 @@ impl State {
             return Some(AfterEnd::Nothing);
         }
         let item = session.item();
-        let first = |category| self.first_state_of(item, category);
-        let move_to = |state: Option<StateName>| state.map_or(AfterEnd::Nothing, AfterEnd::MoveTo);
+        let used = |state| self.state_if_used(item, state);
+        let move_to = |state: Option<ItemState>| state.map_or(AfterEnd::Nothing, AfterEnd::MoveTo);
         Some(match reason {
             EndReason::Submitted { commit } => match (self.needs_review(item), commit) {
-                (true, _) => move_to(first(StateCategory::Review)),
-                (false, Some(_)) => match first(StateCategory::Done) {
-                    Some(done) => AfterEnd::MergeThen { done },
+                (true, _) => move_to(used(ItemState::Review)),
+                (false, Some(_)) => match used(ItemState::Done) {
+                    Some(_) => AfterEnd::MergeThenDone,
                     None => AfterEnd::Nothing,
                 },
-                (false, None) => move_to(first(StateCategory::Done)),
+                (false, None) => move_to(used(ItemState::Done)),
             },
             EndReason::Reviewed | EndReason::Supervised | EndReason::Diagnosed => AfterEnd::Nothing,
             EndReason::Released
@@ -223,10 +219,10 @@ impl State {
                     .is_some_and(|holder| holder.id() != session.id());
                 // Only an item that is being worked on goes back: one that was moved on, to done
                 // or to review, stays where it is.
-                if held_by_another || self.category_of(item) != Some(StateCategory::Active) {
+                if held_by_another || self.live_state(item) != Some(ItemState::Active) {
                     AfterEnd::Nothing
                 } else {
-                    move_to(first(StateCategory::Open))
+                    move_to(used(ItemState::Open))
                 }
             }
         })
@@ -249,14 +245,9 @@ impl State {
             SessionRole::Work => true,
             SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => false,
         };
-        let moved_on = match self.category_of(item) {
-            Some(StateCategory::Open | StateCategory::Active) => false,
-            Some(
-                StateCategory::Review
-                | StateCategory::Done
-                | StateCategory::Cancelled
-                | StateCategory::Inactive,
-            )
+        let moved_on = match self.live_state(item) {
+            Some(ItemState::Open | ItemState::Active) => false,
+            Some(ItemState::Review | ItemState::Done | ItemState::Cancelled | ItemState::Draft)
             | None => true,
         };
         if working && moved_on {
@@ -279,27 +270,25 @@ impl State {
         }
     }
 
-    fn category_of(&self, item: ItemId) -> Option<StateCategory> {
+    /// The state of a live item; `None` for an archived one.
+    fn live_state(&self, item: ItemId) -> Option<ItemState> {
         let policy = &self.policy()?.policy;
         match self.item(item)? {
-            ItemView::Live(item) => item.standing(policy).state_category(),
+            ItemView::Live(item) => Some(item.state(policy)),
             ItemView::Archived(_) => None,
         }
     }
 
-    pub(crate) fn first_state_of(
-        &self,
-        item: ItemId,
-        category: StateCategory,
-    ) -> Option<StateName> {
+    /// `state`, when the type of the live `item` uses it.
+    pub(crate) fn state_if_used(&self, item: ItemId, state: ItemState) -> Option<ItemState> {
         let policy = &self.policy()?.policy;
         let ItemView::Live(item) = self.item(item)? else {
             return None;
         };
         policy
             .type_config(item.item_type())?
-            .first_state(category)
-            .cloned()
+            .uses(state)
+            .then_some(state)
     }
 
     fn needs_review(&self, item: ItemId) -> bool {
