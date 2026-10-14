@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(view::agent_views(&scenario.state))"
 ---
 {
-  "schema": 5,
+  "schema": 6,
   "data": [
     {
       "id": "@ada/coder",
