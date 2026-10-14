@@ -1,7 +1,7 @@
 //! The dispatcher: queues what is ready to merge and starts agents on what they may take.
 
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use wf_core::id::{HashId, ItemId, WorkforceId};
 use wf_core::item::ItemState;
@@ -16,6 +16,13 @@ use crate::{Daemon, Loaded};
 /// How often the dispatcher looks for work even when nothing changed.
 const DISPATCH_TICK: Duration = Duration::from_secs(30);
 
+/// How long an agent is not started again on an item it could not be started on. A cause such as
+/// a full disk passes, so the item is tried again after it.
+const RETRY_FAILED_START: Duration = Duration::from_secs(10 * 60);
+
+/// When each agent last failed to start on an item.
+type FailedStarts = std::collections::BTreeMap<(ItemId, AgentName), Instant>;
+
 /// Starts agents on the ready items of a workforce for as long as the daemon runs and the
 /// storage of the workforce does: whenever the log changes, and on a tick. After each turn, tells
 /// the principal of what now waits on them.
@@ -25,7 +32,7 @@ pub(crate) async fn run_dispatcher(
     loaded: Arc<Loaded>,
 ) {
     let mut heads = loaded.storage.watch_heads();
-    let mut failed: std::collections::BTreeSet<(ItemId, AgentName)> = Default::default();
+    let mut failed = FailedStarts::new();
     let mut notifier = match daemon.upgrade() {
         Some(strong) => Notifier::load(&strong.workforce_directory(workforce)),
         None => return,
@@ -57,13 +64,15 @@ pub(crate) async fn run_dispatcher(
 
 /// Queues what is ready to merge for the merge task, then gives every hosted auto agent with a
 /// free slot a review first, then a blocker to supervise, then work to diagnose, and otherwise the
-/// first item it may take. Whatever could not be started is not tried again by this daemon.
+/// first item it may take. Whatever could not be started is tried again after
+/// [`RETRY_FAILED_START`].
 async fn dispatch_once(
     daemon: &Arc<Daemon>,
     workforce: WorkforceId,
     loaded: &Arc<Loaded>,
-    failed: &mut std::collections::BTreeSet<(ItemId, AgentName)>,
+    failed: &mut FailedStarts,
 ) {
+    failed.retain(|_, at| at.elapsed() < RETRY_FAILED_START);
     let Some(repository) = daemon.repository_of(workforce) else {
         return;
     };
@@ -109,15 +118,15 @@ async fn dispatch_once(
             let review = state
                 .reviewable(device, &agent)
                 .into_iter()
-                .find(|(item, _)| !failed.contains(&(*item, agent.name.clone())));
+                .find(|(item, _)| !failed.contains_key(&(*item, agent.name.clone())));
             let supervision = state
                 .supervisable(&agent)
                 .into_iter()
-                .find(|item| !failed.contains(&(*item, agent.name.clone())));
+                .find(|item| !failed.contains_key(&(*item, agent.name.clone())));
             let diagnosis = state
                 .diagnosable(device, &agent)
                 .into_iter()
-                .find(|item| !failed.contains(&(*item, agent.name.clone())));
+                .find(|item| !failed.contains_key(&(*item, agent.name.clone())));
             let (item, role) = match (review, supervision, diagnosis) {
                 (Some((item, commit)), _, _) => (item, SessionRole::Review { commit }),
                 (None, Some(item), _) => (item, SessionRole::Supervise),
@@ -127,7 +136,7 @@ async fn dispatch_once(
                         .dispatchable(device, &agent)
                         .into_iter()
                         .map(|item| item.id())
-                        .find(|item| !failed.contains(&(*item, agent.name.clone())))
+                        .find(|item| !failed.contains_key(&(*item, agent.name.clone())))
                     else {
                         break;
                     };
@@ -145,7 +154,7 @@ async fn dispatch_once(
                 )
                 .await;
             if let Err(error) = started {
-                failed.insert((item, agent.name.clone()));
+                failed.insert((item, agent.name.clone()), Instant::now());
                 tracing::warn!(
                     "could not start {} on #{}: {}",
                     agent.name,
