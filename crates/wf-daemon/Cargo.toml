@@ -17,6 +17,8 @@ tokio = { workspace = true, features = ["process"] }
 toml.workspace = true
 tracing.workspace = true
 humantime.workspace = true
+jiff.workspace = true
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 url = { version = "2", features = ["serde"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }

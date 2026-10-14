@@ -5995,6 +5995,8 @@ version = "0.0.0"
 dependencies = [
  "globset",
  "humantime",
+ "jiff",
+ "nix 0.31.3",
  "reqwest",
  "rustls",
  "serde",

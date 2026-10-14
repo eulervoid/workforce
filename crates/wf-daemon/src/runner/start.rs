@@ -46,12 +46,6 @@ pub(super) fn sandboxed(
     crate::sandbox::wrap(config, &access, &agent, &settings).map_err(|error| error.to_string())
 }
 
-/// Whether `program` is a file in one of the directories of `PATH`.
-fn on_path(program: &str) -> bool {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .any(|directory| directory.join(program).is_file())
-}
-
 impl Daemon {
     /// The empty directory a supervise or diagnose session runs in. One session of each runs per
     /// item.
@@ -106,7 +100,9 @@ impl Daemon {
         let sandbox = machine_config.sandbox_of(&agent);
         let environment = machine_config.environment_of(&agent);
         match &sandbox {
-            SandboxConfig::Fence(_) if !on_path("fence") => return Err(SessionError::NoFence),
+            SandboxConfig::Fence(_) if !crate::sandbox::fence_installed() => {
+                return Err(SessionError::NoFence);
+            }
             SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
         }
         let policy = &state.policy().expect("a workforce has a policy").policy;

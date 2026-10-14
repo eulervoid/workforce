@@ -3,6 +3,8 @@
 //! with them, and serves the replica to the CLI over a unix socket.
 
 pub mod client;
+#[allow(dead_code, reason = "checks before merging use it next")]
+mod command;
 pub mod decide;
 mod environment;
 mod judges;

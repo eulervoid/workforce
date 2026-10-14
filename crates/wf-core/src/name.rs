@@ -149,6 +149,11 @@ name_type!(
     /// A capability or hardware requirement of an item, such as `gpu` or `os:linux`.
     Requirement, "requirement", TAG, is_tag_char
 );
+name_type!(
+    /// The name of a command the daemon runs on code, such as the check `clippy`. Its logs are
+    /// kept in a directory of that name.
+    CommandName, "command name", SLUG, is_slug_char
+);
 
 #[cfg(test)]
 mod tests {
