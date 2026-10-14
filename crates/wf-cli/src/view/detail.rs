@@ -93,7 +93,6 @@ pub struct CommentView {
     pub kind: CommentKindView,
     pub by: ActorView,
     pub at: String,
-    pub text: Option<String>,
     /// The session that wrote it, such as `coder work 7c2k`, when an agent did.
     pub session: Option<String>,
     /// The step it is about.
@@ -162,7 +161,8 @@ pub struct ActivityView {
     pub summary: String,
     /// The comment, for a comment, or the comment that says why for a move or a verdict.
     pub comment: Option<CommentView>,
-    /// What an overwritten body edit said, so it is not lost silently.
+    /// The text that goes with what happened, shown below it: what a comment says, the step that
+    /// was checked or unchecked, or what an overwritten body edit said, so it is not lost silently.
     pub text: Option<String>,
 }
 
@@ -310,7 +310,6 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     kind: CommentKindView::from(*kind),
                     by: by.clone(),
                     at: at.clone(),
-                    text: Some(text.clone()),
                     session: item
                         .comments()
                         .get(comment)
@@ -331,7 +330,7 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     kind: ActivityKind::Comment,
                     summary: kind.name().replace('_', " "),
                     comment: Some(view),
-                    text: None,
+                    text: Some(text.clone()),
                 });
                 continue;
             }
@@ -373,7 +372,18 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                 views.push(view);
                 continue;
             }
-            Activity::Edited(change) => (ActivityKind::Edited, edit_summary(&body, change)),
+            Activity::Edited(change) => {
+                let (summary, text) = edit_summary(&body, change);
+                views.push(ActivityView {
+                    at,
+                    by,
+                    kind: ActivityKind::Edited,
+                    summary,
+                    comment: None,
+                    text,
+                });
+                continue;
+            }
             Activity::BodyOverwritten { body: lost } => {
                 views.push(ActivityView {
                     at,
@@ -506,13 +516,16 @@ fn attach_reason(
         .is_some_and(|comment| {
             comment.short == because.short() && comment.kind == CommentKindView::Comment
         });
-    if names_it {
-        view.comment = views.pop().and_then(|last| last.comment);
+    if names_it && let Some(reason) = views.pop() {
+        view.comment = reason.comment;
+        view.text = reason.text;
     }
 }
 
-fn edit_summary(body: &Body, change: &Change) -> String {
-    match change {
+/// What an edit did, in a few words, and the text that goes with it: the step, for a step that was
+/// checked or unchecked.
+fn edit_summary(body: &Body, change: &Change) -> (String, Option<String>) {
+    let summary = match change {
         Change::Title(title) => format!("renamed it to \"{title}\""),
         Change::Body(_) => "edited the body".to_string(),
         Change::Priority(Some(priority)) => format!("set priority {priority}"),
@@ -527,18 +540,16 @@ fn edit_summary(body: &Body, change: &Change) -> String {
         Change::RecoveryLevel(None) => "recovery → its type's level".to_string(),
         Change::StepDone { step, done } => {
             let verb = if *done { "checked" } else { "unchecked" };
-            match step_ref(body, *step) {
+            return match step_ref(body, *step) {
                 StepRefView {
                     number: Some(number),
-                    text: Some(text),
-                } => format!(
-                    "{verb} step {number}: {}",
-                    text.lines().next().unwrap_or_default()
-                ),
-                StepRefView { .. } => format!("{verb} a step since edited"),
-            }
+                    text,
+                } => (format!("{verb} step {number}"), text),
+                StepRefView { .. } => (format!("{verb} a step since edited"), None),
+            };
         }
-    }
+    };
+    (summary, None)
 }
 
 fn step_ref(body: &Body, step: StepId) -> StepRefView {
