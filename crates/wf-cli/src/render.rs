@@ -644,11 +644,15 @@ fn activity(entries: &[crate::view::ActivityView], width: Option<usize>) -> Stri
     out
 }
 
-/// Where the text of an activity entry starts: under what happened, past the time.
+/// Where a wrapped line of an activity entry continues: under what happened, past the time.
 const ACTIVITY_INDENT: &str = "         ";
 
+/// Where the text of a comment starts: two columns further in than what happened, to set it apart.
+const COMMENT_INDENT: &str = "           ";
+
 /// One entry of an item's activity: `lead` (its time), who did what, and the text of a comment,
-/// if it has one. Both are wrapped to `width`, continuing under [`ACTIVITY_INDENT`].
+/// if it has one. Both are wrapped to `width`, the line continuing under [`ACTIVITY_INDENT`] and
+/// the text under [`COMMENT_INDENT`].
 fn activity_entry(
     entry: &crate::view::ActivityView,
     lead: &str,
@@ -699,7 +703,7 @@ fn activity_entry(
         .or(entry.text.as_deref())
         .filter(|text| !text.trim().is_empty())
         .map(|text| {
-            let text = wrap_markdown(text, width, ACTIVITY_INDENT);
+            let text = wrap_markdown(text, width, COMMENT_INDENT);
             text.trim_end_matches('\n').to_string()
         });
     (line, text)
