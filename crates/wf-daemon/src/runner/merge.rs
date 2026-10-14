@@ -39,6 +39,7 @@ impl Attempt {
 }
 
 /// Reviewed work to merge into the target branch, and what to do with its item afterwards.
+#[derive(Clone)]
 pub(super) struct MergeRequest {
     pub(super) item: ItemId,
     /// The reviewed commit.
@@ -72,13 +73,53 @@ struct Queued {
     requests: VecDeque<MergeRequest>,
     /// The items whose last merge found the target checked out with changes.
     waiting: BTreeSet<ItemId>,
+    /// The items whose session is ending and will queue the first attempt: no retry of them is
+    /// queued meanwhile.
+    reserved: BTreeSet<ItemId>,
+}
+
+/// The first attempt at merging the work of a session that is ending, kept from the queue until
+/// the session has ended. Until then no retry of the item is queued; dropped, it lets them in.
+#[must_use]
+pub(super) struct Reservation<'queue> {
+    queue: &'queue MergeQueue,
+    request: MergeRequest,
+}
+
+impl Reservation<'_> {
+    pub(super) fn queue(self) {
+        self.queue.push(self.request.clone());
+    }
+}
+
+impl Drop for Reservation<'_> {
+    fn drop(&mut self) {
+        self.queue.lock().reserved.remove(&self.request.item);
+    }
 }
 
 impl MergeQueue {
-    /// Queues a merge, unless one of the item is queued already. A first attempt takes the place
-    /// of a queued retry, so that the session that did the work still hears of it.
+    /// Holds the first attempt of a session that is ending until [`Reservation::queue`], and
+    /// keeps retries of its item out until then, so that the move to `done` is the session's.
+    pub(super) fn reserve(&self, request: MergeRequest) -> Reservation<'_> {
+        let mut queued = self.lock();
+        queued.reserved.insert(request.item);
+        queued.requests.retain(|queued| queued.item != request.item);
+        drop(queued);
+        Reservation {
+            queue: self,
+            request,
+        }
+    }
+
+    /// Queues a merge, unless one of the item is queued already or reserved for a first attempt.
+    /// A first attempt takes the place of a queued retry, so that the session that did the work
+    /// still hears of it.
     pub(super) fn push(&self, request: MergeRequest) {
         let mut queued = self.lock();
+        if request.attempt == Attempt::Retry && queued.reserved.contains(&request.item) {
+            return;
+        }
         match queued
             .requests
             .iter_mut()
@@ -201,17 +242,20 @@ impl Daemon {
             attempt,
         } = request;
         let state = self.snapshot(loaded).await?;
-        if matches!(
-            state.review_status(item),
-            Some(wf_core::review::ReviewStatus::Merged { .. })
-        ) {
-            return Ok(MergeEnd::Handled);
-        }
-        let principal = self.principal_of_device(&state)?;
         let ItemView::Live(live) = state.item(item).ok_or(SessionError::UnknownItem(item))? else {
             return Err(SessionError::Archived(item));
         };
         let policy = &state.policy().expect("a workforce has a policy").policy;
+        // Another request made this merge already, or the item was finished otherwise.
+        if live
+            .merges()
+            .values()
+            .any(|merged| merged.reviewed == commit)
+            || live.state(policy) == ItemState::Done
+        {
+            return Ok(MergeEnd::Handled);
+        }
+        let principal = self.principal_of_device(&state)?;
         let target = policy.merge.target.clone();
         let message = format!("Merge #{}: {}", HashId::short(&item), live.title());
         let open = state.after_failed_merge(item, MergeFailure::Conflict);
@@ -482,6 +526,29 @@ mod tests {
         let requests = &queue.lock().requests;
         assert_eq!(requests.len(), 1);
         assert_eq!(requests[0].attempt, Attempt::First { session });
+    }
+
+    #[test]
+    fn no_retry_is_queued_while_a_session_holds_its_first_attempt() {
+        let queue = MergeQueue::default();
+        let session = SessionId::from_bytes([9; 32]);
+        let first_attempt = queue.reserve(request(1, Attempt::First { session }));
+        queue.push(request(1, Attempt::Retry));
+        assert!(queue.lock().requests.is_empty(), "the retry waits");
+        first_attempt.queue();
+        queue.push(request(1, Attempt::Retry));
+        let requests = &queue.lock().requests;
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].attempt, Attempt::First { session });
+    }
+
+    #[test]
+    fn a_dropped_reservation_lets_retries_in() {
+        let queue = MergeQueue::default();
+        let session = SessionId::from_bytes([9; 32]);
+        drop(queue.reserve(request(1, Attempt::First { session })));
+        queue.push(request(1, Attempt::Retry));
+        assert_eq!(queue.lock().requests.len(), 1);
     }
 
     #[test]
