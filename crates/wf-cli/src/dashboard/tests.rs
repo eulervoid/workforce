@@ -1014,6 +1014,83 @@ fn the_part_with_the_keys_stands_out() {
     );
 }
 
+/// What the agent last said of its context: `used` of `size` tokens, and the cost so far.
+fn usage(seconds: i64, used: u64, size: u64, cost: Option<f64>) -> TranscriptEntry {
+    let mut usage = json!({"sessionUpdate": "usage_update", "used": used, "size": size});
+    if let Some(amount) = cost {
+        usage["cost"] = json!({"amount": amount, "currency": "USD"});
+    }
+    update(seconds, usage)
+}
+
+/// The coder at 7% of its context, the parked coder at 85%; the reviewer runs elsewhere.
+fn with_usage(app: &mut App) {
+    let mut coder = coder_transcript();
+    coder.push(usage(5, 1000, 1_000_000, None));
+    coder.push(usage(6, 68_620, 1_000_000, Some(0.4213)));
+    app.transcribed(app.snapshot.working[0].id, &coder);
+    app.transcribed(
+        app.snapshot.working[1].id,
+        &[usage(0, 170_000, 200_000, None)],
+    );
+}
+
+#[test]
+fn session_rows_show_how_full_their_context_is() {
+    use ratatui::style::Color;
+    let mut app = app();
+    with_usage(&mut app);
+    let text = screen(&mut app, 60, 22);
+    insta::assert_snapshot!("now_context", text);
+    // From 80% of the window on, the context is yellow. The backend quotes each line, which the
+    // column leaves out.
+    let (y, line) = text
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("170k/200k"))
+        .unwrap();
+    let x = line[1..line.find("170k").unwrap()].chars().count();
+    let (x, y) = (u16::try_from(x).unwrap(), u16::try_from(y).unwrap());
+    assert_eq!(style_at(&mut app, 60, 22, x, y).fg, Some(Color::Yellow));
+    press(&mut app, KeyCode::Char('3'));
+    app.refresh(with_agents());
+    insta::assert_snapshot!("agents_context", screen(&mut app, 60, 16));
+}
+
+#[test]
+fn a_session_detail_shows_its_context_above_the_transcript() {
+    let mut app = app();
+    with_usage(&mut app);
+    let coder = app.snapshot.working[0].clone();
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(coder));
+    app.refresh(snapshot);
+    insta::assert_snapshot!("detail_context", screen(&mut app, 60, 16));
+}
+
+#[test]
+fn a_nearly_full_context_is_yellow_in_the_detail() {
+    use ratatui::style::Color;
+    let mut app = app();
+    app.resize(130, 24);
+    with_usage(&mut app);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    app.refresh(snapshot);
+    insta::assert_snapshot!("detail_context_full", screen(&mut app, 130, 14));
+    let line = screen(&mut app, 130, 14)
+        .lines()
+        .position(|line| line.contains("context 170k of 200k (85%)"))
+        .unwrap();
+    let x = app.list_width() + 3;
+    let y = u16::try_from(line).unwrap();
+    assert_eq!(style_at(&mut app, 130, 14, x, y).fg, Some(Color::Yellow));
+}
+
 #[test]
 fn a_list_moves_only_as_far_as_keeps_the_selection_on_screen() {
     use super::draw::list_top;
