@@ -110,6 +110,21 @@ pub enum MergeOutcome {
     TargetMoved,
 }
 
+/// What happened when the target branch was merged into an item's branch, in its worktree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TargetMerge {
+    /// The branch had everything of the target already.
+    UpToDate,
+    /// The branch now has the target merged in.
+    Merged,
+    /// The merge conflicts in these files, relative to the worktree. The merge is left in the
+    /// worktree, for whoever works there to resolve the conflicts and commit it.
+    Conflict { paths: Vec<String> },
+    /// A merge from earlier is still in the worktree with every conflict resolved; it only needs
+    /// committing.
+    Uncommitted,
+}
+
 /// A worktree with uncommitted changes to tracked files.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirtyCheckout {
@@ -143,6 +158,9 @@ pub trait VcsAdapter {
     /// Removes the worktree at `path` together with whatever is uncommitted in it.
     fn remove_worktree(&self, path: &Path) -> Result<(), VcsError>;
 
+    /// Forgets the worktrees whose directories are gone.
+    fn prune_worktrees(&self) -> Result<(), VcsError>;
+
     fn delete_branch(&self, branch: &str) -> Result<(), VcsError>;
 
     /// The commit a branch points at.
@@ -174,4 +192,14 @@ pub trait VcsAdapter {
         message: &str,
         signing: &CommitSigning,
     ) -> Result<MergeOutcome, VcsError>;
+
+    /// Merges `target` into the branch checked out in `worktree`, with a commit signed as
+    /// `signing` says. A merge left unfinished there is not made again: its conflicts are named.
+    fn merge_target(
+        &self,
+        worktree: &Path,
+        target: &str,
+        message: &str,
+        signing: &CommitSigning,
+    ) -> Result<TargetMerge, VcsError>;
 }

@@ -102,6 +102,24 @@ allow_write = ["~/.cache/workforce/target"]
 
 The same works for other build tools with a cache directory set by a variable.
 
+## Storage
+
+A shared build cache mixes the builds of different branches; one in each worktree (cargo's default
+`target`, without `CARGO_TARGET_DIR`) does not, but each takes its own space, also while its item
+waits in review. With a budget, the daemon keeps the caches in the worktrees under it: when a session
+ends and when the daemon starts, it deletes the caches of the least recently built worktree that no
+session runs in, whole, until the rest fits. A cold build the next time is the only cost. Without
+`[storage]`, nothing is deleted. `wf status` shows what the caches take.
+
+```toml
+[storage]
+budget = "20GB"
+caches = ["target"]              # paths inside a worktree that can be rebuilt
+```
+
+The checkout of a review goes when the review ends, the worktree of an item when it is done or
+cancelled, and a daemon that starts removes whatever else is left in its worktrees directory.
+
 ## One agent
 
 `[agent.<name>]` gives one of your agents more, on top of what every agent gets. Where both set the

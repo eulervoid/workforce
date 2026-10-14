@@ -125,6 +125,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 daemon: workspace.follows_daemon(),
                 waiting_on_you,
                 refolded: refold,
+                caches: cache_usage(&workspace),
             };
             emit(
                 json,
@@ -179,6 +180,21 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             }
         }
     }
+}
+
+/// What the caches in the worktrees of the workforce take on this machine, when the machine
+/// config sets a budget for them.
+fn cache_usage(workspace: &Workspace) -> Option<view::CacheUsage> {
+    let path = wf_daemon::machine_config::MachineConfig::path_from_env()?;
+    let storage = wf_daemon::machine_config::MachineConfig::load(&path)
+        .ok()?
+        .storage?;
+    let worktrees = wf_vcs::worktrees(&workspace.data.workforce(&workspace.workforce()));
+    let measured = wf_daemon::caches::measure(&worktrees, &storage.caches);
+    Some(view::CacheUsage {
+        used_bytes: wf_daemon::caches::total(&measured),
+        budget_bytes: storage.budget.as_u64(),
+    })
 }
 
 /// Plain `wf`: the dashboard at a terminal. Anywhere else nobody could use it, so the help.

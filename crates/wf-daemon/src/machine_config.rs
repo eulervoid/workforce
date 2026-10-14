@@ -3,9 +3,10 @@
 //! because policy that syncs must not make other machines run programs or call paid APIs.
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
+use bytesize::ByteSize;
 use serde::{Deserialize, Deserializer};
 use url::Url;
 use wf_core::autonomy::PermissionMode;
@@ -48,6 +49,38 @@ pub struct MachineConfig {
     pub agents: BTreeMap<AgentName, AgentConfig>,
     #[serde(default)]
     pub notify: NotifyConfig,
+    /// Without it, the daemon deletes no cache.
+    pub storage: Option<StorageConfig>,
+}
+
+/// How much disk the caches in the worktrees of each workforce may take on this machine.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StorageConfig {
+    /// Over it, the daemon deletes the caches of the least recently used worktrees, such as
+    /// `"20GB"`.
+    pub budget: ByteSize,
+    /// The paths inside a worktree that can be rebuilt, such as `["target"]`.
+    pub caches: Vec<PathBuf>,
+}
+
+impl StorageConfig {
+    /// A cache must stay inside its worktree, so that deleting it never deletes anything else.
+    fn check(&self) -> Result<(), String> {
+        for cache in &self.caches {
+            let inside = cache.components().next().is_some()
+                && cache
+                    .components()
+                    .all(|component| matches!(component, Component::Normal(_)));
+            if !inside {
+                return Err(format!(
+                    "`{}` under `[storage]` is not a path inside a worktree",
+                    cache.display()
+                ));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// The variables an agent gets besides the ones wf sets: a few that every program expects, such
@@ -376,6 +409,9 @@ impl MachineConfig {
                 "`command` under `[notify]` needs a program".to_string(),
             ));
         }
+        if let Some(storage) = &config.storage {
+            storage.check().map_err(ParseError::Invalid)?;
+        }
         config
             .environment
             .check()
@@ -608,6 +644,29 @@ mod tests {
         );
         assert!(MachineConfig::parse("[notify]\ncommand = []\n").is_err());
         assert!(MachineConfig::parse("[notify]\nshell = \"x\"\n").is_err());
+    }
+
+    #[test]
+    fn storage_has_a_budget_for_caches_inside_the_worktrees() {
+        assert_eq!(MachineConfig::parse("").ok().unwrap().storage, None);
+        let text = "[storage]\nbudget = \"20GB\"\ncaches = [\"target\", \"web/node_modules\"]\n";
+        assert_eq!(
+            MachineConfig::parse(text).ok().unwrap().storage,
+            Some(StorageConfig {
+                budget: ByteSize::gb(20),
+                caches: vec!["target".into(), "web/node_modules".into()],
+            })
+        );
+        for text in [
+            "[storage]\nbudget = \"20GB\"\ncaches = [\"/tmp/target\"]",
+            "[storage]\nbudget = \"20GB\"\ncaches = [\"../target\"]",
+            "[storage]\nbudget = \"20GB\"\ncaches = [\"target/../..\"]",
+            "[storage]\nbudget = \"20GB\"\ncaches = [\"\"]",
+            "[storage]\nbudget = \"twenty\"\ncaches = [\"target\"]",
+            "[storage]\ncaches = [\"target\"]",
+        ] {
+            assert!(MachineConfig::parse(text).is_err(), "{text}");
+        }
     }
 
     #[test]

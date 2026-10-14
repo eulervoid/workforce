@@ -40,6 +40,16 @@ pub struct StatusView {
     /// What to do next, if anything stands out.
     pub next: Option<String>,
     pub refolded: bool,
+    /// What the caches in the worktrees take, when the machine config sets a budget.
+    pub caches: Option<CacheUsage>,
+}
+
+/// The disk the caches in the worktrees of the workforce take on this machine, and the budget
+/// the daemon keeps them under.
+#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheUsage {
+    pub used_bytes: u64,
+    pub budget_bytes: u64,
 }
 
 /// What `wf status` knows besides the state.
@@ -49,6 +59,7 @@ pub struct StatusContext<'a> {
     pub daemon: bool,
     pub waiting_on_you: usize,
     pub refolded: bool,
+    pub caches: Option<CacheUsage>,
 }
 
 #[derive(Serialize)]
@@ -66,6 +77,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         daemon,
         waiting_on_you,
         refolded,
+        caches,
     } = context;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let graph = state.dependency_graph();
@@ -267,6 +279,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         flagged: flagged.into_iter().collect(),
         next,
         refolded,
+        caches,
     }
 }
 
@@ -314,6 +327,7 @@ mod tests {
                 daemon: true,
                 waiting_on_you: 0,
                 refolded: false,
+                caches: None,
             },
         )
         .next

@@ -294,6 +294,8 @@ impl Snapshot {
             daemon: true,
             waiting_on_you: waiting.len(),
             refolded: false,
+            // Measuring them walks the caches, too slow for every frame.
+            caches: None,
         };
         let graph = state.dependency_graph();
         let mut live: Vec<&Session> = state.live_sessions().collect();

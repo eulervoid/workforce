@@ -121,6 +121,7 @@ fn events_and_status() {
                 daemon: false,
                 waiting_on_you: 0,
                 refolded: false,
+                caches: None,
             }
         ))
     );
