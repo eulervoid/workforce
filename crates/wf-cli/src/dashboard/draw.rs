@@ -12,8 +12,9 @@ use wf_core::item::ItemState;
 
 use super::app::{
     AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, STRIP, Scroll,
-    Starter, Status, Tab,
+    Spot, Starter, Status, Tab,
 };
+use super::links;
 use super::snapshot::{
     AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
 };
@@ -54,6 +55,15 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     shown.clickable.tabs = tabs;
     draw_rule(frame, rule_below);
     frame.render_widget(Paragraph::new(latest_line(app)), latest);
+    if app.status.is_none() {
+        shown.clickable.spots.extend(links::find(
+            frame.buffer_mut(),
+            latest,
+            None,
+            None,
+            &app.snapshot.links,
+        ));
+    }
     match &app.prompt {
         Some(Prompt::Choose(choice)) => {
             draw_choice(frame, choice, body);
@@ -291,10 +301,21 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
     match app.tab {
         Tab::Now => draw_split(frame, app, area, now_lines),
         Tab::Items => draw_split(frame, app, area, items_lines),
-        Tab::Log => Drawn {
-            text: draw_log(frame, app, area),
-            ..Drawn::default()
-        },
+        Tab::Log => {
+            let mut spots = Vec::new();
+            let text = match app.in_view() {
+                Some(opened) => draw_detail(frame, app, opened, area, &mut spots),
+                None => draw_log(frame, app, area, &mut spots),
+            };
+            Drawn {
+                text,
+                clickable: Clickable {
+                    spots,
+                    ..Clickable::default()
+                },
+                ..Drawn::default()
+            }
+        }
         Tab::Agents => draw_split(frame, app, area, agents_lines),
     }
 }
@@ -311,10 +332,17 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
             (area, None)
         };
         let mut drawn = match in_view {
-            Some(opened) => Drawn {
-                text: draw_detail(frame, app, opened, area),
-                ..Drawn::default()
-            },
+            Some(opened) => {
+                let mut spots = Vec::new();
+                Drawn {
+                    text: draw_detail(frame, app, opened, area, &mut spots),
+                    clickable: Clickable {
+                        spots,
+                        ..Clickable::default()
+                    },
+                    ..Drawn::default()
+                }
+            }
             None => {
                 let (list_top, list) = draw_list(frame, app, list_lines, area);
                 Drawn {
@@ -339,12 +367,14 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
     let (list_top, list) = draw_list(frame, app, list_lines, list);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).dim(), rule);
+    let mut spots = Vec::new();
     Drawn {
-        text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail)),
+        text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail, &mut spots)),
         list_top: Some(list_top),
         clickable: Clickable {
             list: Some(list),
             detail: Some(detail),
+            spots,
             ..Clickable::default()
         },
     }
@@ -962,7 +992,15 @@ fn items_lines(app: &App, width: u16) -> ListText {
     list
 }
 
-fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Option<Scroll> {
+/// Draws a detail under its breadcrumb; returns the scroll it was drawn at, and adds its links to
+/// `spots`.
+fn draw_detail(
+    frame: &mut Frame,
+    app: &App,
+    opened: Opened,
+    area: Rect,
+    spots: &mut Vec<Spot>,
+) -> Option<Scroll> {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     // The same margin as the lists.
     let body = Rect {
@@ -973,7 +1011,7 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
     frame.render_widget(Paragraph::new(breadcrumb(app, title.width)), title);
     let in_view = app.snapshot.in_view.as_ref();
     // Until the snapshot has caught up with what was opened, the detail stays empty.
-    match &opened.detail {
+    let (scroll, item) = match &opened.detail {
         Detail::Item(id) => {
             let Some(InView::Item { text, .. }) = in_view
                 .filter(|shown| matches!(shown, InView::Item { id: shown, .. } if shown == id))
@@ -981,7 +1019,7 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
                 return None;
             };
             let text: Text = text.into_text().unwrap_or_default();
-            Some(draw_scrolled(frame, text, opened.scroll, body))
+            (draw_scrolled(frame, text, opened.scroll, body), Some(*id))
         }
         Detail::Agent(id) => {
             let Some(InView::Agent { text, .. }) = in_view
@@ -989,12 +1027,8 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
             else {
                 return None;
             };
-            Some(draw_scrolled(
-                frame,
-                Text::from(text.clone()),
-                opened.scroll,
-                body,
-            ))
+            let text = Text::from(text.clone());
+            (draw_scrolled(frame, text, opened.scroll, body), None)
         }
         Detail::Session(id) => {
             let Some(InView::Session(session)) =
@@ -1002,9 +1036,18 @@ fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Opti
             else {
                 return None;
             };
-            Some(draw_session(frame, app, session, opened.scroll, body))
+            let scroll = draw_session(frame, app, session, opened.scroll, body);
+            (scroll, Some(session.item.id))
         }
-    }
+    };
+    spots.extend(links::find(
+        frame.buffer_mut(),
+        body,
+        item,
+        Some(&opened.detail),
+        &app.snapshot.links,
+    ));
+    Some(scroll)
 }
 
 fn draw_session(
@@ -1187,7 +1230,7 @@ fn draw_lines(
     scroll
 }
 
-fn draw_log(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
+fn draw_log(frame: &mut Frame, app: &App, area: Rect, spots: &mut Vec<Spot>) -> Option<Scroll> {
     let area = Rect {
         x: area.x + 1,
         width: area.width.saturating_sub(1),
@@ -1204,7 +1247,15 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect) -> Option<Scroll> {
         return None;
     }
     let text: Text = text.into_text().unwrap_or_default();
-    Some(draw_scrolled(frame, text, app.log.scroll, area))
+    let scroll = draw_scrolled(frame, text, app.log.scroll, area);
+    spots.extend(links::find(
+        frame.buffer_mut(),
+        area,
+        None,
+        None,
+        &app.snapshot.links,
+    ));
+    Some(scroll)
 }
 
 /// The latest event, or why the last refresh failed.
@@ -1260,7 +1311,7 @@ fn keys_line(app: &App) -> Line<'static> {
             ..
         })
     );
-    let opened = app.stack().and_then(|stack| stack.last());
+    let opened = app.stack().last();
     let navigation = match (app.tab, opened.map(|opened| &opened.detail)) {
         (_, Some(Detail::Session(_))) => "esc back · j/k scroll · i item · f full",
         (_, Some(Detail::Item(_))) if item_session => "esc back · j/k scroll · enter session",

@@ -4,6 +4,7 @@
 mod act;
 mod app;
 mod draw;
+mod links;
 mod snapshot;
 mod transcript_lines;
 
@@ -128,33 +129,24 @@ fn handle(
     workspace: &mut Workspace,
     terminal: &mut DefaultTerminal,
 ) -> Handled {
-    match event {
-        TerminalEvent::Key(key) if key.kind == KeyEventKind::Press => match app.key(key) {
-            Some(Effect::Quit) => return Handled::Quit,
-            Some(effect) => {
-                match act::carry_out(effect, workspace, terminal) {
-                    Ok(act::Outcome::Did(what)) => app.did(what, workspace::now_ms()),
-                    Ok(act::Outcome::Choose(choice)) => app.choose(choice),
-                    Err(error) => app.action_failed(&error, workspace::now_ms()),
-                }
-                // Show what the action changed right away.
-                if let Err(error) = feed.refresh(workspace, app) {
-                    app.refresh_failed(&error);
-                }
-                return Handled::Changed;
-            }
-            None => {}
-        },
+    let effect = match event {
+        TerminalEvent::Key(key) if key.kind == KeyEventKind::Press => app.key(key),
         TerminalEvent::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollUp,
             column,
             ..
-        }) => app.wheel(column, Wheel::Up),
+        }) => {
+            app.wheel(column, Wheel::Up);
+            None
+        }
         TerminalEvent::Mouse(MouseEvent {
             kind: MouseEventKind::ScrollDown,
             column,
             ..
-        }) => app.wheel(column, Wheel::Down),
+        }) => {
+            app.wheel(column, Wheel::Down);
+            None
+        }
         TerminalEvent::Mouse(MouseEvent {
             kind: MouseEventKind::Down(MouseButton::Left),
             column,
@@ -166,8 +158,23 @@ fn handle(
             return Handled::Changed;
         }
         _ => return Handled::Ignored,
+    };
+    match effect {
+        Some(Effect::Quit) => Handled::Quit,
+        Some(effect) => {
+            match act::carry_out(effect, workspace, terminal) {
+                Ok(act::Outcome::Did(what)) => app.did(what, workspace::now_ms()),
+                Ok(act::Outcome::Choose(choice)) => app.choose(choice),
+                Err(error) => app.action_failed(&error, workspace::now_ms()),
+            }
+            // Show what the action changed right away.
+            if let Err(error) = feed.refresh(workspace, app) {
+                app.refresh_failed(&error);
+            }
+            Handled::Changed
+        }
+        None => Handled::Moved,
     }
-    Handled::Moved
 }
 
 /// What the dashboard has read from the workforce so far.
