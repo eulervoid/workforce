@@ -278,10 +278,14 @@ fn verdict(workspace: &mut Workspace, item: ItemId, verdict: Verdict) -> anyhow:
 /// The text of a blocker, quoted, for reading it while answering.
 fn blocker_text(workspace: &Workspace, blocker: CommentId) -> String {
     let text = match workspace.event(&blocker.into()) {
-        Ok(Some(event)) => match event.content.body {
-            EventBody::Commented(comment) => comment.text,
-            _ => String::new(),
-        },
+        Ok(Some(event)) => {
+            // A blocker is a comment; anything else has no text to quote.
+            if let EventBody::Commented(comment) = event.content.body {
+                comment.text
+            } else {
+                String::new()
+            }
+        }
         Ok(None) | Err(_) => String::new(),
     };
     text.lines()

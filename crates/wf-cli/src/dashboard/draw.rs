@@ -157,7 +157,7 @@ fn draw_keys(frame: &mut Frame, body: Rect) {
 fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     let question = |text: String| Line::from(text).bold();
     let (label, input) = match prompt {
-        Prompt::Filter(input) => (" / ".to_owned(), input),
+        Prompt::Filter { input, .. } => (" / ".to_owned(), input),
         Prompt::Comment { item, input } => (format!(" comment on #{}: ", item.short()), input),
         Prompt::Stop { session } => {
             let agent = app
@@ -619,14 +619,10 @@ fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
         Span::raw(item.title.clone()),
     ];
     let mut right = Vec::new();
-    if let Some(readiness @ (Readiness::Blocked | Readiness::Stranded)) = item.readiness {
-        right.push(
-            match readiness {
-                Readiness::Blocked => "blocked",
-                _ => "stranded",
-            }
-            .to_owned(),
-        );
+    match item.readiness {
+        Some(Readiness::Blocked) => right.push("blocked".to_owned()),
+        Some(Readiness::Stranded) => right.push("stranded".to_owned()),
+        Some(Readiness::Ready | Readiness::Claimed) | None => {}
     }
     if let Some((done, total)) = item.steps {
         right.push(format!("{done}/{total}"));

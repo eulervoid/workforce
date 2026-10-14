@@ -471,8 +471,11 @@ impl Choice {
 /// What the footer asks for.
 #[derive(Clone, Debug)]
 pub enum Prompt {
-    /// Text the lines of the tab on screen must have; it applies while it is typed.
-    Filter(Input),
+    /// Text the lines of a list must have; it applies while it is typed.
+    Filter {
+        list: Filtered,
+        input: Input,
+    },
     /// The answer to a blocker.
     Answer {
         item: ItemId,
@@ -494,6 +497,13 @@ pub enum Prompt {
     },
     /// The keys, until any key is pressed.
     Keys,
+}
+
+/// A list that can be filtered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filtered {
+    Items,
+    Log,
 }
 
 /// What the footer says instead of the latest event.
@@ -1028,8 +1038,25 @@ impl App {
     /// The mouse wheel turned over `column`. It moves what is under the pointer: in a wide window
     /// the list or the detail beside it, which takes the keys; otherwise what is on screen.
     pub fn wheel(&mut self, column: u16, wheel: Wheel) {
-        if self.prompt.is_some() {
-            return;
+        // While the log is filtered, the wheel goes through what matches.
+        match &self.prompt {
+            None
+            | Some(Prompt::Filter {
+                list: Filtered::Log,
+                ..
+            }) => {}
+            Some(
+                Prompt::Filter {
+                    list: Filtered::Items,
+                    ..
+                }
+                | Prompt::Answer { .. }
+                | Prompt::Verdict { .. }
+                | Prompt::Comment { .. }
+                | Prompt::Choose(_)
+                | Prompt::Stop { .. }
+                | Prompt::Keys,
+            ) => return,
         }
         if self.tab == Tab::Log {
             self.log.scroll = wheel.scroll(self.log.scroll);
@@ -1141,10 +1168,10 @@ impl App {
     /// the workforce.
     fn prompt_key(&mut self, prompt: Prompt, key: KeyEvent) -> (Option<Prompt>, Option<Effect>) {
         match prompt {
-            Prompt::Filter(mut input) => {
-                let filter = match self.tab {
-                    Tab::Items => &mut self.items.filter,
-                    Tab::Now | Tab::Agents | Tab::Log => {
+            Prompt::Filter { list, mut input } => {
+                let filter = match list {
+                    Filtered::Items => &mut self.items.filter,
+                    Filtered::Log => {
                         // A line of the lines that matched is no place in those that match now.
                         self.log.scroll = Scroll::END;
                         &mut self.log.filter
@@ -1159,7 +1186,7 @@ impl App {
                     _ => {
                         input.handle_event(&TerminalEvent::Key(key));
                         *filter = input.value().to_owned();
-                        (Some(Prompt::Filter(input)), None)
+                        (Some(Prompt::Filter { list, input }), None)
                     }
                 }
             }
@@ -1326,7 +1353,10 @@ impl App {
             }
             (Tab::Items, KeyCode::Char('F')) => self.items.readiness = self.items.readiness.next(),
             (Tab::Items, KeyCode::Char('/')) => {
-                self.prompt = Some(Prompt::Filter(Input::new(self.items.filter.clone())));
+                self.prompt = Some(Prompt::Filter {
+                    list: Filtered::Items,
+                    input: Input::new(self.items.filter.clone()),
+                });
             }
             (Tab::Items, KeyCode::Esc) => self.items.filter.clear(),
             (Tab::Now | Tab::Items | Tab::Agents | Tab::Log, _) => {}
@@ -1340,7 +1370,10 @@ impl App {
         }
         match key.code {
             KeyCode::Char('/') => {
-                self.prompt = Some(Prompt::Filter(Input::new(self.log.filter.clone())));
+                self.prompt = Some(Prompt::Filter {
+                    list: Filtered::Log,
+                    input: Input::new(self.log.filter.clone()),
+                });
             }
             KeyCode::Esc => {
                 self.log.filter.clear();

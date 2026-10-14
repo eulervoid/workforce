@@ -344,11 +344,14 @@ fn waiting(state: &State, events: &[Event], held: &[HeldPermission]) -> Vec<Wait
                     .iter()
                     .rev()
                     .find(|event| event.id() == id)
-                    .map(|event| match &event.content.body {
-                        EventBody::Commented(blocker) => {
-                            (who(state, &event.content.actor), blocker.text.clone())
-                        }
-                        _ => (who(state, &event.content.actor), String::new()),
+                    .map(|event| {
+                        // A blocker is a comment; anything else has no text to quote.
+                        let text = if let EventBody::Commented(blocker) = &event.content.body {
+                            blocker.text.clone()
+                        } else {
+                            String::new()
+                        };
+                        (who(state, &event.content.actor), text)
                     })
                     .unwrap_or_default();
                 Waiting::Blocker {
