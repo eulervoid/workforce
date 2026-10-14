@@ -2,7 +2,8 @@
 //! permission request, and reports the permission outcome in its last message. Its sessions
 //! offer two models. `FAKE_AGENT_REOPENS` set to `resume` or `load` offers that way back into a
 //! session; a load first replays an earlier message. `FAKE_AGENT_DESCRIPTORS` names a file it
-//! writes the descriptors it holds to when it starts, one per line.
+//! writes the descriptors it holds to when it starts, one per line. `FAKE_AGENT_SILENT` set makes
+//! it never answer a prompt, nor say anything while it does not.
 
 use std::io::{BufRead, Write};
 
@@ -61,6 +62,7 @@ fn main() {
         std::fs::write(path, descriptors().join("\n")).unwrap();
     }
     let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
+    let silent = std::env::var_os("FAKE_AGENT_SILENT").is_some();
     let mut lines = std::io::stdin().lock().lines();
     while let Some(Ok(line)) = lines.next() {
         let request: Value = serde_json::from_str(&line).unwrap();
@@ -86,6 +88,7 @@ fn main() {
                 "jsonrpc": "2.0", "id": id,
                 "result": {"configOptions": config_options(request["params"]["value"].as_str().unwrap())},
             })),
+            Some("session/prompt") if silent => {}
             Some("session/prompt") => {
                 eprintln!("fake agent got a prompt");
                 chunk("Working on it. ");

@@ -742,6 +742,32 @@ async fn a_harness_that_crashes_fails_the_session() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_session_whose_record_cannot_be_written_fails() {
+    // The first turn takes the write permission of the directory the records of sessions are
+    // kept in, beside the transcripts, as a full disk would; the next prompt cannot be recorded.
+    let world = World::new("sh chmod a-w ../../transcripts\nturn\n").await;
+    let item = world.wf.add(&["--title", "Full disk"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    let _ = Command::new("chmod")
+        .args(["-R", "u+w"])
+        .arg(world.wf.root.path())
+        .status();
+    assert_eq!(session["status"], "failed");
+    assert_eq!(world.item(&item)["state"], "open");
+    let failed = comments(&world.item(&item))
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|note| {
+            note["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("cannot be written"))
+        });
+    assert!(failed, "{}", world.item(&item));
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn work_waits_while_the_target_is_checked_out_with_changes() {
     let script = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello

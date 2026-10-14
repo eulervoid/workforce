@@ -147,6 +147,7 @@ impl WorkforceJudges {
             // A judge only reads what it is given; whatever it asks to do is refused.
             permissions: Arc::new(Permission::Deny),
             transcript,
+            silence_limit: crate::runner::SILENCE_LIMIT,
         })
         .await
         .map_err(|error| format!("its session does not start: {error}"))?;

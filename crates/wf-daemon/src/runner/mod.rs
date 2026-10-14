@@ -127,6 +127,11 @@ const GRACE: Duration = Duration::from_secs(20);
 /// download the agent.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
 
+/// How long a turn of an agent may go without a word from it, while no permission request of it
+/// waits, before the session ends: the harness has stopped answering. Longer than any quiet tool
+/// call, such as a build, should take.
+pub(crate) const SILENCE_LIMIT: Duration = Duration::from_secs(20 * 60);
+
 /// How long a cancelled turn may take to end before the harness is closed anyway.
 const CANCEL_GRACE: Duration = Duration::from_secs(20);
 
