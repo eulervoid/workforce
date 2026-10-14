@@ -6,7 +6,7 @@ use std::fmt::Write;
 use crate::event::CommentKind;
 use crate::id::{CommentId, HashId, ItemId, SessionId};
 use crate::identity::{Actor, PrincipalKey};
-use crate::item::{Item, ItemView, Standing};
+use crate::item::{Item, ItemView};
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, SessionRole};
@@ -211,12 +211,7 @@ fn dependencies(state: &State, item: &Item, sources: &impl Sources) -> Vec<Depen
         .map(|dependency| Dependency {
             item: HashId::short(&dependency.id()),
             title: dependency.title().to_string(),
-            state: match dependency.standing(policy) {
-                Standing::Known { state, .. } => state.to_string(),
-                Standing::Unknown { state } => {
-                    state.map_or_else(|| "unknown".to_string(), ToString::to_string)
-                }
-            },
+            state: dependency.state(policy).to_string(),
             note: last_comment(dependency, sources),
         })
         .collect()

@@ -46,7 +46,20 @@ fn items_are_listed_by_label_lane_and_priority() {
     let error = wf.fail(&["item", "list", "--lane", "nowhere"]);
     assert!(error.contains("valid: `default`, `meta`"), "{error}");
     let error = wf.fail(&["item", "list", "--state", "nowhere"]);
-    assert!(error.contains("`in_progress`"), "{error}");
+    assert!(error.contains("draft, open, active"), "{error}");
+    let draft = wf.add(&["--title", "Think first", "--draft"]);
+    assert_eq!(
+        titles(&wf.json(&["item", "list", "--state", "draft"])),
+        ["Think first"]
+    );
+    assert!(!titles(&wf.json(&["item", "list", "--ready"])).contains(&"Think first".to_string()));
+    assert_eq!(
+        titles(&wf.json(&["item", "list", "--state", "draft,open", "--priority", "P3"])),
+        ["Later"]
+    );
+    let opened = wf.run(&["item", "open", short(&draft)]);
+    assert!(opened.contains("opened #"), "{opened}");
+    assert!(titles(&wf.json(&["item", "list", "--state", "draft"])).is_empty());
 }
 
 #[test]
@@ -128,7 +141,7 @@ fn the_demo_script_works_end_to_end() {
         2
     );
 
-    wf.run(&["item", "move", short(&first), "dropped"]);
+    wf.run(&["item", "cancel", short(&first)]);
     assert_eq!(
         titles(&wf.json(&["item", "list", "--stranded"])),
         ["Implement feed sync"]
@@ -146,12 +159,12 @@ fn the_demo_script_works_end_to_end() {
     assert_eq!(titles(&by_readiness[0]["items"]), ["Implement feed sync"]);
     let by_state = wf.run(&["item", "list", "--group-by", "state"]);
     assert!(
-        by_state.contains("open (1)") && by_state.contains("dropped (1)"),
+        by_state.contains("open (1)") && by_state.contains("cancelled (1)"),
         "{by_state}"
     );
-    wf.run(&["item", "move", short(&first), "open"]);
+    wf.run(&["item", "open", short(&first)]);
 
-    wf.run(&["item", "move", short(&first), "done"]);
+    wf.run(&["item", "done", short(&first)]);
     assert_eq!(
         titles(&wf.json(&["item", "list", "--ready"])),
         ["Implement feed sync"]
@@ -176,7 +189,7 @@ fn the_demo_script_works_end_to_end() {
     let mentions = wf.run(&["mentions", "@coder"]);
     assert!(mentions.contains("Implement feed sync"), "{mentions}");
 
-    wf.run(&["item", "move", short(&task), "done"]);
+    wf.run(&["item", "done", short(&task)]);
     wf.run(&["item", "archive", short(&task)]);
     assert_eq!(
         titles(&wf.json(&["item", "list"])),
@@ -215,8 +228,14 @@ fn invalid_requests_fail_with_the_specific_reason() {
     let decision = wf.add(&["--title", "a decision", "--type", "decision"]);
 
     assert!(
-        wf.fail(&["item", "move", short(&task), "answered"])
-            .contains("no state `answered`")
+        wf.fail(&["item", "open", short(&decision)])
+            .contains("a `decision` is never `open`")
+    );
+    assert!(
+        wf.fail(&[
+            "item", "add", "--title", "x", "--type", "decision", "--draft"
+        ])
+        .contains("is created `review`")
     );
     assert!(
         wf.fail(&["item", "archive", short(&task)])
@@ -390,17 +409,20 @@ fn agents_and_policy() {
     let policy = wf.run(&["policy", "show"]);
     assert!(policy.contains("[types.task]"));
     let custom = format!(
-        "{policy}\n[types.bug]\nlane = \"default\"\ninitial = \"new\"\nstates = [{{ name = \"new\", category = \"open\" }}, {{ name = \"fixed\", category = \"done\" }}]\n"
+        "{policy}\n[types.bug]\nlane = \"default\"\ninitial = \"open\"\nstates = [\"open\", \"done\"]\n"
     );
     let file = wf.repository.join("policy.toml");
     std::fs::write(&file, &custom).unwrap();
     wf.run(&["policy", "apply", file.to_str().unwrap()]);
     wf.add(&["--title", "crash", "--type", "bug"]);
 
-    std::fs::write(&file, policy.replace("\"ratified\"", "\"accepted\"")).unwrap();
+    let old = format!(
+        "{policy}\n[types.bug]\nlane = \"default\"\ninitial = \"new\"\nstates = [{{ name = \"new\", category = \"open\" }}]\n"
+    );
+    std::fs::write(&file, old).unwrap();
     assert!(
         wf.fail(&["policy", "apply", file.to_str().unwrap()])
-            .contains("cannot be changed")
+            .contains("names its states the old way")
     );
 }
 
@@ -540,7 +562,8 @@ fn missing_items_and_states_are_errors_without_a_terminal() {
     for args in [
         &["item", "show"][..],
         &["item", "edit"],
-        &["item", "move"],
+        &["item", "open"],
+        &["item", "done"],
         &["item", "archive"],
         &["item", "unarchive"],
         &["item", "link", "--depends-on", short(&task)],
@@ -551,10 +574,6 @@ fn missing_items_and_states_are_errors_without_a_terminal() {
             "{args:?}"
         );
     }
-    assert!(
-        wf.fail(&["item", "move", short(&task)])
-            .contains("missing state")
-    );
     assert!(
         wf.fail(&["item", "link", short(&task)])
             .contains("missing link")
@@ -1377,12 +1396,12 @@ fn an_agent_that_starts_automatically_is_hosted_here_and_status_flags_one_that_i
 }
 
 #[test]
-fn archive_by_state_category_takes_every_finished_item_whatever_its_state_is_called() {
+fn archive_by_state_takes_every_finished_item_of_every_type() {
     let wf = Sandbox::new();
     wf.run(&["init", "--name", "demo"]);
     let policy = wf.run(&["policy", "show"]);
     let custom = format!(
-        "{policy}\n[types.bug]\nlane = \"default\"\ninitial = \"new\"\nstates = [{{ name = \"new\", category = \"open\" }}, {{ name = \"fixed\", category = \"done\" }}, {{ name = \"wontfix\", category = \"cancelled\" }}]\n"
+        "{policy}\n[types.bug]\nlane = \"default\"\ninitial = \"open\"\nstates = [\"open\", \"done\", \"cancelled\"]\n"
     );
     let file = wf.repository.join("policy.toml");
     std::fs::write(&file, &custom).unwrap();
@@ -1390,13 +1409,12 @@ fn archive_by_state_category_takes_every_finished_item_whatever_its_state_is_cal
 
     let open = wf.add(&["--title", "still open"]);
     let done_task = wf.add(&["--title", "done task"]);
-    wf.run(&["item", "move", short(&done_task), "done"]);
     let fixed_bug = wf.add(&["--title", "fixed bug", "--type", "bug"]);
-    wf.run(&["item", "move", short(&fixed_bug), "fixed"]);
+    wf.run(&["item", "done", short(&done_task), short(&fixed_bug)]);
     let dropped_task = wf.add(&["--title", "dropped task"]);
     wf.run(&["item", "cancel", short(&dropped_task)]);
     let wontfix_bug = wf.add(&["--title", "wontfix bug", "--type", "bug"]);
-    wf.run(&["item", "move", short(&wontfix_bug), "wontfix"]);
+    wf.run(&["item", "cancel", short(&wontfix_bug)]);
 
     assert!(
         wf.fail(&["item", "archive", short(&open), "--done"])

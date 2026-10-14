@@ -10,8 +10,7 @@ use serde::Serialize;
 
 use crate::crdt::Stamp;
 use crate::id::ItemId;
-use crate::item::Item;
-use crate::policy::StateCategory;
+use crate::item::{Item, ItemState};
 use crate::state::State;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,8 +30,8 @@ pub struct DependencyGraph {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct UnfinishedDependency {
     pub item: ItemId,
-    /// `None` when the dependency's state is unknown under the current policy.
-    pub state_category: Option<StateCategory>,
+    /// `None` when the dependency has not arrived yet.
+    pub state: Option<ItemState>,
 }
 
 /// What an open item is waiting for.
@@ -133,12 +132,10 @@ impl State {
         graph
             .depends_on(item)
             .filter_map(|dependency| {
-                let state_category = self
-                    .item(dependency)
-                    .and_then(|view| view.standing(&policy.policy).state_category());
-                (state_category != Some(StateCategory::Done)).then_some(UnfinishedDependency {
+                let state = self.item(dependency).map(|view| view.state(&policy.policy));
+                (state != Some(ItemState::Done)).then_some(UnfinishedDependency {
                     item: dependency,
-                    state_category,
+                    state,
                 })
             })
             .collect()
@@ -147,16 +144,14 @@ impl State {
     /// Where an open item stands with its dependencies; `None` for items that are not open.
     pub fn readiness(&self, graph: &DependencyGraph, item: &Item) -> Option<Readiness> {
         let policy = self.policy()?;
-        if item.archived_at().is_some()
-            || item.standing(&policy.policy).state_category() != Some(StateCategory::Open)
-        {
+        if item.archived_at().is_some() || item.state(&policy.policy) != ItemState::Open {
             return None;
         }
         let unfinished = self.unfinished_dependencies(graph, item.id());
         Some(
             if unfinished
                 .iter()
-                .any(|dependency| dependency.state_category == Some(StateCategory::Cancelled))
+                .any(|dependency| dependency.state == Some(ItemState::Cancelled))
             {
                 Readiness::Stranded
             } else if !unfinished.is_empty() || item.has_open_blocker() {

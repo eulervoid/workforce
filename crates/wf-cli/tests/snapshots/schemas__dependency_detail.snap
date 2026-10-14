@@ -3,9 +3,9 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&detail)"
 ---
 {
-  "schema": 4,
+  "schema": 5,
   "data": {
-    "id": "c4idpbeqgbeliompco4f3euoet6ibmul672xn2xwezizh5jgmbna",
+    "id": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
     "type": "task",
     "title": "Pick a hash for event ids",
     "state": "open",
@@ -14,7 +14,7 @@ expression: "Envelope::new(&detail)"
     "blocked_by": [],
     "blocking": [
       {
-        "id": "rgrqrrkituoxhn5ct5kwybsbbrdx4irvxwsi72anpo6f23jdv5aq",
+        "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
@@ -40,7 +40,7 @@ expression: "Envelope::new(&detail)"
     "depends_on": [],
     "required_by": [
       {
-        "id": "rgrqrrkituoxhn5ct5kwybsbbrdx4irvxwsi72anpo6f23jdv5aq",
+        "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
         "type": "task",
         "title": "Implement feed sync",
         "state": "open",
@@ -51,15 +51,15 @@ expression: "Envelope::new(&detail)"
     "references": [],
     "referenced_by": [
       {
-        "item": "rgrqrrkituoxhn5ct5kwybsbbrdx4irvxwsi72anpo6f23jdv5aq",
+        "item": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
         "title": "Implement feed sync",
         "in_comment": null,
         "comment": null
       },
       {
-        "item": "rgrqrrkituoxhn5ct5kwybsbbrdx4irvxwsi72anpo6f23jdv5aq",
+        "item": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
         "title": "Implement feed sync",
-        "in_comment": "dwf44pbuftft5dx4r4mh3yxvhtdpi5my6hemh7idnr6m56uyzjlq",
+        "in_comment": "bmnfwkl7deir3tbcsv6yzhpkhxrs7edtqbsq2d6nmlztsa66yvha",
         "comment": null
       }
     ],
@@ -83,7 +83,7 @@ expression: "Envelope::new(&detail)"
           "label": "@ada"
         },
         "kind": "referenced_in",
-        "summary": "referenced in #rgrqrr",
+        "summary": "referenced in #gzsd5d",
         "comment": null,
         "text": null
       },
@@ -94,7 +94,7 @@ expression: "Envelope::new(&detail)"
           "label": "@ada"
         },
         "kind": "dependent",
-        "summary": "#rgrqrr now depends on this",
+        "summary": "#gzsd5d now depends on this",
         "comment": null,
         "text": null
       },
@@ -105,7 +105,7 @@ expression: "Envelope::new(&detail)"
           "label": "@ada"
         },
         "kind": "referenced_in",
-        "summary": "referenced in #rgrqrr",
+        "summary": "referenced in #gzsd5d",
         "comment": null,
         "text": null
       }

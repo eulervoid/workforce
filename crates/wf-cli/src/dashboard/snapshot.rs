@@ -6,8 +6,7 @@ use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::inbox::{InboxKind, Waiting as InboxWaiting};
-use wf_core::item::{ItemView, Priority};
-use wf_core::policy::StateCategory;
+use wf_core::item::{ItemState, ItemView, Priority};
 use wf_core::session::{CommitId, EndReason, Session, SessionRole};
 use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
@@ -67,8 +66,7 @@ pub struct ItemGroup {
 pub struct ItemRow {
     pub id: ItemId,
     pub title: String,
-    pub state: String,
-    pub state_category: Option<StateCategory>,
+    pub state: ItemState,
     pub priority: Option<Priority>,
     /// `None` unless the item is open.
     pub readiness: Option<Readiness>,
@@ -293,7 +291,7 @@ fn counts(state: &State) -> Counts {
         ..Counts::default()
     };
     for item in state.live_items() {
-        if item.standing(policy).state_category() == Some(StateCategory::Open) {
+        if item.state(policy) == ItemState::Open {
             counts.open_items += 1;
         }
         if state.readiness(&graph, item) == Some(Readiness::Blocked) {
@@ -568,7 +566,7 @@ fn item_groups(
         .into_iter()
         .map(|view| (view, view::summary(state, graph, view)))
         .collect();
-    view::group_items(state, grouping, entries)
+    view::group_items(grouping, entries)
         .into_iter()
         .map(|group| ItemGroup {
             name: group.group,
@@ -579,8 +577,7 @@ fn item_groups(
                     Some(ItemRow {
                         id: summary.id.parse().ok()?,
                         title: summary.title,
-                        state: summary.state.unwrap_or_else(|| "unknown".to_owned()),
-                        state_category: summary.state_category,
+                        state: summary.state,
                         priority: summary.priority,
                         readiness: summary.readiness,
                         steps: summary.steps.map(|steps| (steps.done, steps.total)),

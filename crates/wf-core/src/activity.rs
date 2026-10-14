@@ -10,9 +10,7 @@ use crate::event::{Change, CommentKind, Event, EventBody, Link};
 use crate::hlc::Hlc;
 use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::ItemView;
-use crate::name::StateName;
-use crate::policy::StateCategory;
+use crate::item::{ItemState, ItemView};
 use crate::refs;
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::State;
@@ -39,7 +37,7 @@ pub enum Activity {
     },
     /// A move someone made; moves carried out for a session are part of its start or end.
     Moved {
-        to: StateName,
+        to: ItemState,
         because: Option<CommentId>,
     },
     Edited(Change),
@@ -59,7 +57,7 @@ pub enum Activity {
         session: SessionId,
         reason: EndReason,
         /// Where the end moved the item, unless it stayed where it was.
-        moved_to: Option<StateName>,
+        moved_to: Option<ItemState>,
     },
     Reviewed {
         commit: Option<CommitId>,
@@ -69,11 +67,10 @@ pub enum Activity {
     Merged {
         commit: CommitId,
     },
-    /// A dependency reached its done or cancelled state.
+    /// A dependency was moved to `done` or `cancelled`.
     DependencyFinished {
         item: ItemId,
-        to: StateName,
-        category: StateCategory,
+        to: ItemState,
     },
     /// Another item started or stopped depending on this one.
     Dependent(SetChange<ItemId>),
@@ -92,15 +89,6 @@ impl State {
     pub fn activity(&self, item: ItemId, events: &[Event]) -> Vec<Entry> {
         let mut events: Vec<&Event> = events.iter().collect();
         events.sort_by_key(|event| (event.content.hlc, event.id()));
-        let policy = self.policy().map(|document| &document.policy);
-        let category = |of: ItemId, state: &StateName| {
-            let ItemView::Live(live) = self.item(of)? else {
-                return None;
-            };
-            policy?
-                .type_config(live.item_type())?
-                .state_category_of(state)
-        };
         let depends_on: Vec<ItemId> = match self.item(item) {
             Some(ItemView::Live(live)) => live.depends_on().values().copied().collect(),
             Some(ItemView::Archived(_)) | None => Vec::new(),
@@ -116,13 +104,13 @@ impl State {
                 .collect()
         };
         // The last move each session made: its end's, when it is not the start's.
-        let mut session_moves: BTreeMap<SessionId, StateName> = BTreeMap::new();
+        let mut session_moves: BTreeMap<SessionId, ItemState> = BTreeMap::new();
         for event in &events {
             if let EventBody::ItemMoved(moved) = &event.content.body
                 && moved.item == item
                 && let Some(session) = moved.by_session
             {
-                session_moves.insert(session, moved.to.clone());
+                session_moves.insert(session, moved.to.state());
             }
         }
 
@@ -170,26 +158,22 @@ impl State {
                 EventBody::ItemMoved(moved) if moved.item == item => match moved.by_session {
                     Some(_) => continue,
                     None => Activity::Moved {
-                        to: moved.to.clone(),
+                        to: moved.to.state(),
                         because: moved.because,
                     },
                 },
                 EventBody::ItemMoved(moved) if depends_on.contains(&moved.item) => {
-                    match category(moved.item, &moved.to) {
-                        Some(finished @ (StateCategory::Done | StateCategory::Cancelled)) => {
+                    match moved.to.state() {
+                        finished @ (ItemState::Done | ItemState::Cancelled) => {
                             Activity::DependencyFinished {
                                 item: moved.item,
-                                to: moved.to.clone(),
-                                category: finished,
+                                to: finished,
                             }
                         }
-                        Some(
-                            StateCategory::Inactive
-                            | StateCategory::Open
-                            | StateCategory::Active
-                            | StateCategory::Review,
-                        )
-                        | None => continue,
+                        ItemState::Draft
+                        | ItemState::Open
+                        | ItemState::Active
+                        | ItemState::Review => continue,
                     }
                 }
                 EventBody::ItemEdited(edited) if edited.item == item => {
@@ -267,8 +251,8 @@ impl State {
                     by = session_actor(ended.session);
                     let moved_to = session_moves
                         .get(&ended.session)
-                        .filter(|to| category(item, to) != Some(StateCategory::Active))
-                        .cloned();
+                        .filter(|to| **to != ItemState::Active)
+                        .copied();
                     Activity::SessionEnded {
                         session: ended.session,
                         reason: ended.reason,

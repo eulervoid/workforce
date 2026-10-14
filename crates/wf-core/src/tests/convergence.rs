@@ -18,8 +18,8 @@ const DEVICES: usize = 3;
 
 const CUSTOM_POLICY: &str = concat!(
     include_str!("../default_policy.toml"),
-    "\n[types.bug]\nlane = \"default\"\nfields = [\"labels\"]\ndepends_on = [\"task\"]\ninitial = \"new\"\n\
-     states = [{ name = \"new\", category = \"open\" }, { name = \"fixed\", category = \"done\" }]\n"
+    "\n[types.bug]\nlane = \"default\"\nfields = [\"labels\"]\ndepends_on = [\"task\"]\ninitial = \"open\"\n\
+     states = [\"open\", \"done\"]\n"
 );
 
 struct Simulation {
@@ -94,8 +94,10 @@ impl Simulation {
             "answered",
             "proposed",
             "ratified",
-            "new",
-            "fixed",
+            "draft",
+            "active",
+            "review",
+            "cancelled",
         ];
         let label = Label::new(format!("l{}", second % 3)).unwrap();
         match (operation % 15, item) {
@@ -153,7 +155,7 @@ impl Simulation {
                         config
                             .states
                             .iter()
-                            .map(|state| state.name.to_string())
+                            .map(|state| state.name().to_string())
                             .collect()
                     })
                     .unwrap_or_default();
@@ -162,7 +164,8 @@ impl Simulation {
                 } else {
                     own_states[usize::from(second) % own_states.len()].clone()
                 };
-                self.submit(device, moved(item, &state));
+                // Old names as well, as older peers write them.
+                self.submit(device, moved_as_written(item, &state));
             }
             (10, Some(item)) => {
                 if let Some(target) = other {
@@ -209,10 +212,7 @@ impl Simulation {
                 let eligible: Vec<ItemId> = self.replicas[device]
                     .items()
                     .filter(|view| match view {
-                        ItemView::Live(item) if second % 2 == 0 => item
-                            .standing(policy)
-                            .state_category()
-                            .is_some_and(|state_category| state_category.is_terminal()),
+                        ItemView::Live(item) if second % 2 == 0 => item.state(policy).is_terminal(),
                         ItemView::Archived(_) => second % 2 == 1,
                         ItemView::Live(_) => false,
                     })

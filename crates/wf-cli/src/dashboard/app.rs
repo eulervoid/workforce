@@ -11,8 +11,8 @@ use tui_input::backend::crossterm::EventHandler;
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, ItemId, SessionId};
 use wf_core::identity::AgentId;
-use wf_core::name::{AgentName, StateName};
-use wf_core::policy::StateCategory;
+use wf_core::item::ItemState;
+use wf_core::name::AgentName;
 use wf_harness::{Permission, TranscriptEntry};
 
 use super::snapshot::{
@@ -121,8 +121,8 @@ pub enum Effect {
     ShowDiff {
         item: ItemId,
     },
-    /// Asks which agent to start on an item.
-    ChooseAgent {
+    /// Asks who starts work on an item: an agent, or the dispatcher for a draft.
+    ChooseStart {
         item: ItemId,
     },
     /// Asks which state to move an item to.
@@ -138,7 +138,7 @@ pub enum Effect {
     },
     Move {
         item: ItemId,
-        state: StateName,
+        state: ItemState,
     },
     Comment {
         item: ItemId,
@@ -450,19 +450,27 @@ pub struct LogTab {
     pub filter: String,
 }
 
+/// Who starts work on an item.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Starter {
+    /// Release a draft: open it, and the dispatcher starts whoever is free.
+    Dispatcher,
+    Agent(AgentName),
+}
+
 /// One of a list of things to pick.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Choice {
-    /// The agent to start on an item.
-    Agent {
+    /// Who starts work on an item.
+    Start {
         item: ItemId,
-        agents: Vec<AgentName>,
+        starters: Vec<Starter>,
         index: usize,
     },
     /// The state to move an item to.
     State {
         item: ItemId,
-        states: Vec<(StateName, StateCategory)>,
+        states: Vec<ItemState>,
         index: usize,
     },
 }
@@ -470,33 +478,36 @@ pub enum Choice {
 impl Choice {
     pub fn len(&self) -> usize {
         match self {
-            Choice::Agent { agents, .. } => agents.len(),
+            Choice::Start { starters, .. } => starters.len(),
             Choice::State { states, .. } => states.len(),
         }
     }
 
     pub fn index(&self) -> usize {
         match self {
-            Choice::Agent { index, .. } | Choice::State { index, .. } => *index,
+            Choice::Start { index, .. } | Choice::State { index, .. } => *index,
         }
     }
 
     fn index_mut(&mut self) -> &mut usize {
         match self {
-            Choice::Agent { index, .. } | Choice::State { index, .. } => index,
+            Choice::Start { index, .. } | Choice::State { index, .. } => index,
         }
     }
 
     /// What picking the selected option asks of the workforce.
     fn picked(self) -> Option<Effect> {
         match self {
-            Choice::Agent {
+            Choice::Start {
                 item,
-                agents,
+                starters,
                 index,
-            } => Some(Effect::StartSession {
-                item,
-                agent: agents.into_iter().nth(index)?,
+            } => Some(match starters.into_iter().nth(index)? {
+                Starter::Dispatcher => Effect::Move {
+                    item,
+                    state: ItemState::Open,
+                },
+                Starter::Agent(agent) => Effect::StartSession { item, agent },
             }),
             Choice::State {
                 item,
@@ -504,7 +515,7 @@ impl Choice {
                 index,
             } => Some(Effect::Move {
                 item,
-                state: states.into_iter().nth(index)?.0,
+                state: states.into_iter().nth(index)?,
             }),
         }
     }
@@ -1277,7 +1288,7 @@ impl App {
                 None
             }
             KeyCode::Char('D') => self.item_with_work().map(|item| Effect::ShowDiff { item }),
-            KeyCode::Char('s') => self.item_subject().map(|item| Effect::ChooseAgent { item }),
+            KeyCode::Char('s') => self.item_subject().map(|item| Effect::ChooseStart { item }),
             KeyCode::Char('m') => self.item_subject().map(|item| Effect::ChooseState { item }),
             KeyCode::Char('e') => self.item_subject().map(|item| Effect::Edit { item }),
             KeyCode::Char('c') => {

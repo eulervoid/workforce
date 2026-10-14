@@ -6,9 +6,9 @@ use std::collections::BTreeSet;
 use crate::crdt::Stamp;
 use crate::id::ItemId;
 use crate::identity::{AgentId, DeviceKey};
-use crate::item::{Item, ItemView};
-use crate::name::{Requirement, StateName};
-use crate::policy::{ReviewStep, StateCategory};
+use crate::item::{Item, ItemState, ItemView};
+use crate::name::Requirement;
+use crate::policy::ReviewStep;
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::State;
 
@@ -17,7 +17,6 @@ use crate::state::State;
 pub struct PendingMerge {
     pub item: ItemId,
     pub commit: CommitId,
-    pub done: StateName,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -105,13 +104,13 @@ impl State {
     }
 
     /// Items whose work is ready to merge and not merged yet: approved, or needing no review,
-    /// and waiting in a review state of a type that has a done state.
+    /// and waiting in `review`, of a type that uses `done`.
     pub fn pending_merges(&self) -> Vec<PendingMerge> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
         self.live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
+            .filter(|item| item.state(policy) == ItemState::Review)
             .filter_map(|item| {
                 let (Some(commit), _) = self.submission(item.id())? else {
                     return None;
@@ -128,25 +127,25 @@ impl State {
                 if !ready {
                     return None;
                 }
+                self.state_if_used(item.id(), ItemState::Done)?;
                 Some(PendingMerge {
                     item: item.id(),
                     commit,
-                    done: self.first_state_of(item.id(), StateCategory::Done)?,
                 })
             })
             .collect()
     }
 
-    /// Items whose review is over and that wait in a review state only to be moved to a done
-    /// state: approved work submitted without commits, so there is nothing to merge, and merged
-    /// work. An item that moved on after the submission was moved by someone, and is left where it
-    /// is. Each comes with the done state to move it to.
-    pub fn finished_reviews(&self) -> Vec<(ItemId, StateName)> {
+    /// Items whose review is over and that wait in `review` only to be moved to `done`: approved
+    /// work submitted without commits, so there is nothing to merge, and merged work. An item that
+    /// moved on after the submission was moved by someone, and is left where it is. Only items of
+    /// types that use `done`.
+    pub fn finished_reviews(&self) -> Vec<ItemId> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
         self.live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
+            .filter(|item| item.state(policy) == ItemState::Review)
             .filter(|item| {
                 matches!(
                     self.submission(item.id()),
@@ -157,10 +156,8 @@ impl State {
                 )
             })
             .filter_map(|item| {
-                Some((
-                    item.id(),
-                    self.first_state_of(item.id(), StateCategory::Done)?,
-                ))
+                self.state_if_used(item.id(), ItemState::Done)
+                    .map(|_| item.id())
             })
             .collect()
     }
@@ -187,7 +184,7 @@ impl State {
             })
             .collect();
         self.live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
+            .filter(|item| item.state(policy) == ItemState::Review)
             .filter(|item| {
                 let Some(ReviewStatus::Awaiting {
                     step: ReviewStep::Agent { requires },
@@ -220,7 +217,7 @@ impl State {
         };
         let mut found: Vec<(&Item, Option<CommitId>)> = self
             .live_items()
-            .filter(|item| item.standing(policy).state_category() == Some(StateCategory::Review))
+            .filter(|item| item.state(policy) == ItemState::Review)
             .filter_map(|item| {
                 let (commit, _) = self.submission(item.id())?;
                 let Some(ReviewStatus::Awaiting {

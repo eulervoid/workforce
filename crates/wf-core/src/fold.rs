@@ -7,9 +7,7 @@ use crate::crdt::{Lww, Stamp};
 use crate::event::{Change, CommentKind, Event, EventBody, ItemLinked, Link};
 use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::{AgentId, Role};
-use crate::item::{Comment, Item, Merge, Resolved, Review};
-use crate::name::StateName;
-use crate::policy::StateCategory;
+use crate::item::{Comment, Item, ItemState, Merge, Resolved, Review};
 use crate::refs;
 use crate::session::{Ended, Session, Verdict};
 use crate::state::{
@@ -336,14 +334,14 @@ impl State {
                     // Requesting changes sends the work back: the item is open for the next
                     // session, in the same event.
                     if review.verdict == Verdict::RequestChanges
-                        && let Some(open) = workforce
+                        && workforce
                             .policy
                             .value()
                             .policy
                             .type_config(item.item_type())
-                            .and_then(|config| config.first_state(StateCategory::Open))
+                            .is_some_and(|config| config.uses(ItemState::Open))
                     {
-                        item.state.set(Some(open.clone()), stamp);
+                        item.state.set(Some(ItemState::Open.into()), stamp);
                     }
                     item.verdicts.insert(
                         id,
@@ -396,6 +394,7 @@ impl State {
                         item.depends_on.apply(change, stamp);
                     }
                 }
+                // The target keeps its state: being superseded is derived from the link.
                 Link::Supersedes(target) => {
                     if let Some(item) = workforce.items.get_mut(item) {
                         item.touch(stamp, &content.actor);
@@ -403,7 +402,6 @@ impl State {
                     }
                     if let Some(target) = workforce.items.get_mut(target) {
                         target.touch(stamp, &content.actor);
-                        target.state.set(Some(superseded_state()), stamp);
                     }
                 }
             },
@@ -449,10 +447,6 @@ impl State {
             }
         }
     }
-}
-
-fn superseded_state() -> StateName {
-    StateName::new("superseded").expect("a valid built-in state name")
 }
 
 fn apply_change(item: &mut Item, change: &Change, stamp: Stamp) {

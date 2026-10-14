@@ -115,10 +115,10 @@ pub fn describe(state: &State, body: &EventBody) -> String {
             Some(session) => format!(
                 "{} -> {} for session {}",
                 item(&moved.item),
-                moved.to,
+                moved.to.state(),
                 session.short()
             ),
-            None => format!("{} -> {}", item(&moved.item), moved.to),
+            None => format!("{} -> {}", item(&moved.item), moved.to.state()),
         },
         EventBody::ItemLinked(linked) => match &linked.link {
             Link::DependsOn(wf_core::crdt::SetChange::Add(target)) => {

@@ -2,6 +2,7 @@ use crate::event::{Event, EventBody, EventBuilder, Genesis, ItemRef};
 use crate::hlc::Hlc;
 use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceSigner, PrincipalSigner, Signed};
+use crate::item::ItemState;
 use crate::name::{AgentName, Handle};
 use crate::policy::PolicyError;
 use crate::state::{Disposition, State, Trust};
@@ -487,7 +488,7 @@ fn items_must_exist() {
             .id(),
     );
     for body in [
-        moved(ghost, "done"),
+        moved(ghost, ItemState::Done),
         comment(ghost, "hello"),
         archive(ghost),
         EventBody::ItemUnarchived(ItemRef { item: ghost }),

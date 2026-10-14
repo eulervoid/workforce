@@ -44,7 +44,7 @@ pub(super) fn policy(
 }
 
 fn apply_policy(json: bool, workspace: &mut Workspace, source: String) -> anyhow::Result<()> {
-    Policy::parse(&source)?;
+    Policy::parse_new(&source)?;
     let principal = workspace.principal_signer()?;
     let workforce = workspace
         .state()

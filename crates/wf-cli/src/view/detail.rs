@@ -8,13 +8,13 @@ use wf_core::event::{Change, CommentKind, Event};
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::inbox::Waiting;
-use wf_core::item::{Item, ItemView, Standing, WrittenIn};
-use wf_core::policy::{Field, ReviewStep, StateCategory};
+use wf_core::item::{Item, ItemState, ItemView, WrittenIn};
+use wf_core::policy::{Field, ReviewStep};
 use wf_core::review::ReviewStatus;
 use wf_core::session::{CommitId, EndReason, SessionRole, Verdict};
 use wf_core::state::State;
 
-use super::item::{ItemSummary, standing_parts, summary};
+use super::item::{ItemSummary, summary};
 use super::session::session_label;
 use super::{ActorView, actor_view, mention_view, set_change, timestamp};
 
@@ -24,9 +24,7 @@ pub struct LinkView {
     #[serde(rename = "type")]
     pub item_type: String,
     pub title: String,
-    pub state: Option<String>,
-    #[serde(skip)]
-    pub state_category: Option<StateCategory>,
+    pub state: ItemState,
     /// A concurrent link formed a cycle and this edge was dropped.
     pub ignored: bool,
 }
@@ -34,13 +32,11 @@ pub struct LinkView {
 fn link_view(state: &State, id: ItemId, ignored: bool) -> LinkView {
     let view = state.item(id).expect("linked items exist");
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let (state_name, state_category) = standing_parts(view.standing(policy));
     LinkView {
         id: id.to_base32(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
-        state: state_name,
-        state_category,
+        state: view.state(policy),
         ignored,
     }
 }
@@ -452,17 +448,17 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                 ActivityKind::Merged,
                 format!("merged as {}", short_commit(commit)),
             ),
-            Activity::DependencyFinished { item, to, category } => (
+            Activity::DependencyFinished { item, to } => (
                 ActivityKind::DependencyFinished,
-                match category {
-                    StateCategory::Cancelled => {
+                match to {
+                    ItemState::Cancelled => {
                         format!("{} {to} · this item is stranded", label(item))
                     }
-                    StateCategory::Inactive
-                    | StateCategory::Open
-                    | StateCategory::Active
-                    | StateCategory::Review
-                    | StateCategory::Done => format!("{} {to}", label(item)),
+                    ItemState::Draft
+                    | ItemState::Open
+                    | ItemState::Active
+                    | ItemState::Review
+                    | ItemState::Done => format!("{} {to}", label(item)),
                 },
             ),
             Activity::Dependent(SetChange::Add(dependent)) => (
@@ -570,15 +566,22 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
     let graph = state.dependency_graph();
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut flags = Vec::new();
-    match item.standing(policy) {
-        Standing::Known { .. } => {}
-        Standing::Unknown { state: Some(name) } => flags.push(format!(
-            "unknown state `{name}` under the current policy; move it to a known state"
-        )),
-        Standing::Unknown { state: None } => flags.push(format!(
+    if let Some(name) = item.unknown_state() {
+        flags.push(format!(
+            "unknown state `{name}`, so it counts as a draft; `wf item open` or `wf item cancel` it"
+        ));
+    }
+    match policy.type_config(item.item_type()) {
+        None => flags.push(format!(
             "unknown type `{}` under the current policy",
             item.item_type()
         )),
+        Some(config) if !config.uses(item.state(policy)) => flags.push(format!(
+            "a {} is no longer `{}` under the current policy; move it on",
+            item.item_type(),
+            item.state(policy)
+        )),
+        Some(_) => {}
     }
     if item.priority().is_none()
         && policy

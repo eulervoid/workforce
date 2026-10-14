@@ -2,14 +2,13 @@
 
 use std::collections::BTreeSet;
 
-use anyhow::{Context, anyhow, bail};
+use anyhow::{Context, bail};
 use serde::Serialize;
 use wf_core::crdt::SetChange;
 use wf_core::event::{Change, EventBody, ItemCreated, ItemLinked, ItemMoved, ItemRef, Link};
 use wf_core::id::{HashId, ItemId};
-use wf_core::item::{ItemView, Priority};
-use wf_core::name::StateName;
-use wf_core::policy::{Field, StateCategory};
+use wf_core::item::{ItemState, ItemView, Priority};
+use wf_core::policy::Field;
 use wf_core::state::State;
 use wf_core::validate::OneOf;
 
@@ -99,35 +98,6 @@ pub(crate) fn choose_item(
     }
 }
 
-fn choose_state(
-    workspace: &Workspace,
-    mode: Mode,
-    id: ItemId,
-    given: Option<StateName>,
-) -> anyhow::Result<StateName> {
-    if let Some(state) = given {
-        return Ok(state);
-    }
-    if mode == Mode::Scripted {
-        bail!("missing state; pass one, or run at a terminal to pick one");
-    }
-    let state = workspace.state();
-    let item_type = state.item(id).expect("resolved ids exist").item_type();
-    let policy = &state.policy().expect("a workforce has a policy").policy;
-    let config = policy
-        .type_config(item_type)
-        .ok_or_else(|| anyhow!("no item type `{item_type}` in the policy"))?;
-    let choices = config
-        .states
-        .iter()
-        .map(|state| Choice {
-            value: state.name.to_string(),
-            label: render::state_choice(&state.name.to_string(), state.state_category),
-        })
-        .collect();
-    Ok(StateName::new(interactive::pick("state", choices)?)?)
-}
-
 pub(super) fn item(
     json: bool,
     mode: Mode,
@@ -142,6 +112,7 @@ pub(super) fn item(
             }
             let mut new_item = NewItemDraft {
                 item_type: args.item_type,
+                state: args.draft.then_some(ItemState::Draft),
                 draft: Draft {
                     title: args.title.unwrap_or_default(),
                     body: args.body.unwrap_or_default(),
@@ -166,6 +137,15 @@ pub(super) fn item(
                     NewItemDraft::from_markdown(&edit_in_editor(&new_item.to_markdown()?, ".md")?)?;
             }
             let draft = new_item.draft;
+            let initial = workspace
+                .state()
+                .policy()
+                .and_then(|document| document.policy.type_config(&new_item.item_type))
+                .map(|config| config.initial);
+            let state = new_item
+                .state
+                .or(initial)
+                .with_context(|| format!("there is no item type `{}`", new_item.item_type))?;
             if draft.title.trim().is_empty() {
                 bail!("the title is empty; nothing was created");
             }
@@ -191,6 +171,7 @@ pub(super) fn item(
                 labels: draft.labels.into_iter().collect(),
                 requires: draft.requires.into_iter().collect(),
                 review: draft.review,
+                state: Some(state.into()),
             }))?;
             let id = ItemId::from(event.id());
             // The recovery level is no field of a new item, so that events keep their layout.
@@ -247,11 +228,7 @@ pub(super) fn item(
                         .as_ref()
                         .is_none_or(|wanted| summary.item_type == wanted.as_str())
                 })
-                .filter(|(_, summary)| {
-                    args.state
-                        .as_ref()
-                        .is_none_or(|wanted| summary.state.as_deref() == Some(wanted.as_str()))
-                })
+                .filter(|(_, summary)| args.state.is_empty() || args.state.contains(&summary.state))
                 .filter(|(_, summary)| args.accepts(summary.readiness))
                 .filter(|(_, summary)| {
                     args.label
@@ -280,7 +257,7 @@ pub(super) fn item(
                     emit(json, &items, |items| render::item_list(items))
                 }
                 Some(grouping) => {
-                    let groups = view::group_items(state, grouping, entries);
+                    let groups = view::group_items(grouping, entries);
                     emit(json, &groups, |groups| {
                         render::item_groups(grouping, groups)
                     })
@@ -293,58 +270,15 @@ pub(super) fn item(
         }
         ItemCommand::Edit(args) => edit(json, mode, workspace, args),
         ItemCommand::Check(args) => check(json, workspace, args),
-        ItemCommand::Move { item, state, note } => {
-            let id = choose_item(workspace, mode, item, Scope::Live)?;
-            let state = choose_state(workspace, mode, id, state)?;
-            let because = comment_why(workspace, id, note)?;
-            let event = workspace.author(EventBody::ItemMoved(ItemMoved {
-                item: id,
-                to: state.clone(),
-                by_session: None,
-                because,
-            }))?;
-            done(
-                json,
-                format!("moved #{} to {state}", id.short()),
-                &event,
-                Some(id),
-            )
-        }
+        ItemCommand::Open(args) => move_items(json, mode, workspace, args, ItemState::Open),
+        ItemCommand::Draft(args) => move_items(json, mode, workspace, args, ItemState::Draft),
+        ItemCommand::Done(args) => move_items(json, mode, workspace, args, ItemState::Done),
         ItemCommand::Cancel { item, note } => {
-            let id = choose_item(workspace, mode, item, Scope::Live)?;
-            let cancelled = {
-                let state = workspace.state();
-                let policy = &state.policy().expect("a workforce has a policy").policy;
-                let ItemView::Live(live) = state.item(id).expect("resolved ids exist") else {
-                    bail!("#{} is archived", id.short());
-                };
-                let config = policy
-                    .type_config(live.item_type())
-                    .with_context(|| format!("the policy has no type `{}`", live.item_type()))?;
-                config
-                    .first_state(wf_core::policy::StateCategory::Cancelled)
-                    .cloned()
-                    .with_context(|| {
-                        format!(
-                            "type `{}` has no cancelled state; move the item with `wf item move`, {}",
-                            live.item_type(),
-                            OneOf::new(config.states.iter().map(|state| &state.name))
-                        )
-                    })?
+            let args = ItemMoveArgs {
+                items: item.into_iter().collect(),
+                note,
             };
-            let because = comment_why(workspace, id, note)?;
-            let event = workspace.author(EventBody::ItemMoved(ItemMoved {
-                item: id,
-                to: cancelled.clone(),
-                by_session: None,
-                because,
-            }))?;
-            done(
-                json,
-                format!("cancelled #{}: {cancelled}", id.short()),
-                &event,
-                Some(id),
-            )
+            move_items(json, mode, workspace, args, ItemState::Cancelled)
         }
         ItemCommand::Link(args) => link(json, mode, workspace, args),
         ItemCommand::Diff { item, git_args } => {
@@ -363,14 +297,14 @@ pub(super) fn item(
             cancelled,
             ..
         } if archive_done || cancelled => {
-            let categories: Vec<StateCategory> = [
-                (archive_done, StateCategory::Done),
-                (cancelled, StateCategory::Cancelled),
+            let states: Vec<ItemState> = [
+                (archive_done, ItemState::Done),
+                (cancelled, ItemState::Cancelled),
             ]
             .into_iter()
-            .filter_map(|(wanted, category)| wanted.then_some(category))
+            .filter_map(|(wanted, state)| wanted.then_some(state))
             .collect();
-            archive_finished(json, workspace, &categories)
+            archive_finished(json, workspace, &states)
         }
         ItemCommand::Archive { item, .. } => {
             let id = choose_item(workspace, mode, item, Scope::Live)?;
@@ -391,6 +325,113 @@ pub(super) fn item(
 }
 
 #[derive(Serialize)]
+struct Moved {
+    message: String,
+    /// One `ItemMoved` event per item moved, in the order of `items`.
+    events: Vec<String>,
+    items: Vec<String>,
+    /// Items that were in the state already, so nothing was written for them.
+    unchanged: Vec<String>,
+}
+
+/// What the verb for moving an item to `state` says it did.
+fn moved_verb(state: ItemState) -> &'static str {
+    match state {
+        ItemState::Draft => "held back as a draft",
+        ItemState::Open => "opened",
+        ItemState::Active => "made active",
+        ItemState::Review => "put in review",
+        ItemState::Done => "done",
+        ItemState::Cancelled => "cancelled",
+    }
+}
+
+/// Moves each of `args.items`, or one picked at a terminal, to `to`. Every item is checked before
+/// anything is written, so a typo moves none of them.
+fn move_items(
+    json: bool,
+    mode: Mode,
+    workspace: &mut Workspace,
+    args: ItemMoveArgs,
+    to: ItemState,
+) -> anyhow::Result<()> {
+    let ids: Vec<ItemId> = if args.items.is_empty() {
+        vec![choose_item(workspace, mode, None, Scope::Live)?]
+    } else {
+        let mut ids = Vec::new();
+        for item in &args.items {
+            let id = workspace.resolve_item(item)?;
+            if !ids.contains(&id) {
+                ids.push(id);
+            }
+        }
+        ids
+    };
+    let mut moving = Vec::new();
+    let mut unchanged = Vec::new();
+    {
+        let state = workspace.state();
+        let policy = &state.policy().expect("a workforce has a policy").policy;
+        for id in &ids {
+            let ItemView::Live(live) = state.item(*id).expect("resolved ids exist") else {
+                bail!("#{} is archived; unarchive it first", id.short());
+            };
+            if live.state(policy) == to && live.unknown_state().is_none() {
+                unchanged.push(*id);
+                continue;
+            }
+            let probe = EventBody::ItemMoved(ItemMoved {
+                item: *id,
+                to: to.into(),
+                by_session: None,
+                because: None,
+            });
+            state
+                .check_policy(&probe)
+                .with_context(|| format!("#{} cannot be moved, so nothing was", id.short()))?;
+            moving.push(*id);
+        }
+    }
+    let mut events = Vec::with_capacity(moving.len());
+    for id in &moving {
+        let because = comment_why(workspace, *id, args.note.clone())?;
+        let event = workspace.author(EventBody::ItemMoved(ItemMoved {
+            item: *id,
+            to: to.into(),
+            by_session: None,
+            because,
+        }))?;
+        events.push(event.id().to_string());
+    }
+    let list = |ids: &[ItemId]| {
+        ids.iter()
+            .map(|id| format!("#{}", id.short()))
+            .collect::<Vec<_>>()
+            .join(" ")
+    };
+    let mut message = match moving.as_slice() {
+        [] => String::new(),
+        moved => format!("{} {}", moved_verb(to), list(moved)),
+    };
+    if !unchanged.is_empty() {
+        if !message.is_empty() {
+            message.push_str("; ");
+        }
+        message.push_str(&format!("{} already {to}", list(&unchanged)));
+    }
+    emit(
+        json,
+        &Moved {
+            message,
+            events,
+            items: moving.iter().map(|id| id.to_base32()).collect(),
+            unchanged: unchanged.iter().map(|id| id.to_base32()).collect(),
+        },
+        |moved| format!("{}\n", moved.message),
+    )
+}
+
+#[derive(Serialize)]
 struct ArchivedFinished {
     message: String,
     /// One `ItemArchived` event per item, in the order of `items`.
@@ -398,22 +439,18 @@ struct ArchivedFinished {
     items: Vec<String>,
 }
 
-/// Archives every live item whose state is in one of `categories`.
+/// Archives every live item whose state is one of `states`.
 fn archive_finished(
     json: bool,
     workspace: &mut Workspace,
-    categories: &[StateCategory],
+    states: &[ItemState],
 ) -> anyhow::Result<()> {
     let ids: Vec<ItemId> = {
         let state = workspace.state();
         let policy = &state.policy().expect("a workforce has a policy").policy;
         sorted_views(state, false)
             .into_iter()
-            .filter(|view| {
-                view.standing(policy)
-                    .state_category()
-                    .is_some_and(|category| categories.contains(&category))
-            })
+            .filter(|view| states.contains(&view.state(policy)))
             .map(|view| view.id())
             .collect()
     };
@@ -422,7 +459,7 @@ fn archive_finished(
         let event = workspace.author(EventBody::ItemArchived(ItemRef { item: *id }))?;
         events.push(event.id().to_string());
     }
-    let which = categories
+    let which = states
         .iter()
         .map(ToString::to_string)
         .collect::<Vec<_>>()
@@ -637,27 +674,16 @@ fn check(json: bool, workspace: &mut Workspace, args: ItemCheckArgs) -> anyhow::
     done(json, message, &event, Some(id))
 }
 
-/// Refuses a `--type`, `--state` or `--lane` that no item can have, instead of listing nothing.
+/// Refuses a `--type` or `--lane` that no item can have, instead of listing nothing.
 fn check_list_filters(state: &State, args: &ItemListArgs) -> anyhow::Result<()> {
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let types: Vec<_> = match &args.item_type {
-        Some(name) => match policy.type_config(name) {
-            Some(config) => vec![config],
-            None => bail!(
-                "there is no item type `{name}`; {}",
-                OneOf::new(policy.types.keys())
-            ),
-        },
-        None => policy.types.values().collect(),
-    };
-    if let Some(wanted) = &args.state {
-        let states: BTreeSet<&StateName> = types
-            .iter()
-            .flat_map(|config| config.states.iter().map(|state| &state.name))
-            .collect();
-        if !states.contains(wanted) {
-            bail!("no item can be in state `{wanted}`; {}", OneOf::new(states));
-        }
+    if let Some(name) = &args.item_type
+        && policy.type_config(name).is_none()
+    {
+        bail!(
+            "there is no item type `{name}`; {}",
+            OneOf::new(policy.types.keys())
+        );
     }
     if let Some(lane) = &args.lane
         && !policy.lanes.contains_key(lane)

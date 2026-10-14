@@ -83,7 +83,7 @@ fn request_for(command: &str, cwd: &Path) -> DeciderRequest {
             id: String::new(),
             title: "a test of the permission chain".to_string(),
             item_type: "task".to_string(),
-            state: "in_progress".to_string(),
+            state: "active".to_string(),
         },
         session: String::new(),
         agent: AgentContext {

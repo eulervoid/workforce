@@ -8,11 +8,11 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use wf_core::graph::Readiness;
 use wf_core::id::HashId;
-use wf_core::policy::StateCategory;
+use wf_core::item::ItemState;
 
 use super::app::{
-    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, Scroll, Status,
-    Tab,
+    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, Scroll, Starter,
+    Status, Tab,
 };
 use super::snapshot::{
     AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
@@ -74,15 +74,21 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
 /// A list to pick from, at the bottom of the body.
 fn draw_choice(frame: &mut Frame, choice: &Choice, body: Rect) {
     let (title, options): (String, Vec<String>) = match choice {
-        Choice::Agent { item, agents, .. } => (
-            format!(" start on #{} ", item.short()),
-            agents.iter().map(ToString::to_string).collect(),
+        Choice::Start { item, starters, .. } => (
+            format!(" start #{} ", item.short()),
+            starters
+                .iter()
+                .map(|starter| match starter {
+                    Starter::Dispatcher => "release: open it for the dispatcher".to_string(),
+                    Starter::Agent(agent) => agent.to_string(),
+                })
+                .collect(),
         ),
         Choice::State { item, states, .. } => (
             format!(" move #{} to ", item.short()),
             states
                 .iter()
-                .map(|(name, category)| render::state_choice(&name.to_string(), *category))
+                .map(|state| format!("{} {state}", render::state_icon(*state)))
                 .collect(),
         ),
     };
@@ -740,7 +746,7 @@ fn now_lines(app: &App, width: u16) -> ListText {
     list
 }
 
-/// `in_progress · ready · "parse"`: how the items are grouped and filtered.
+/// `active · ready · "parse"`: how the items are grouped and filtered.
 fn items_heading(app: &App) -> Line<'static> {
     let grouping = match app.items.grouping {
         ItemGrouping::State => "state",
@@ -761,7 +767,7 @@ fn items_heading(app: &App) -> Line<'static> {
 }
 
 fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
-    let icon = render::item_icon(item.state_category, item.readiness);
+    let icon = render::item_icon(item.state, item.readiness);
     let first = vec![
         Span::raw(format!("{icon} ")).fg(state_color(item)),
         Span::raw(format!("#{}", item.id.short())).fg(Color::Cyan),
@@ -788,12 +794,12 @@ fn state_color(item: &ItemRow) -> Color {
     if item.readiness == Some(Readiness::Stranded) {
         return Color::Red;
     }
-    match item.state_category {
-        Some(StateCategory::Open) => Color::Green,
-        Some(StateCategory::Active) => Color::Blue,
-        Some(StateCategory::Review) => Color::Yellow,
-        Some(StateCategory::Done) => Color::Magenta,
-        Some(StateCategory::Cancelled | StateCategory::Inactive) | None => Color::DarkGray,
+    match item.state {
+        ItemState::Open => Color::Green,
+        ItemState::Active => Color::Blue,
+        ItemState::Review => Color::Yellow,
+        ItemState::Done => Color::Magenta,
+        ItemState::Cancelled | ItemState::Draft => Color::DarkGray,
     }
 }
 

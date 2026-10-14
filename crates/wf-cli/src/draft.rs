@@ -9,7 +9,7 @@ use anyhow::{Context, bail};
 use serde::{Deserialize, Serialize};
 use wf_core::crdt::SetChange;
 use wf_core::event::Change;
-use wf_core::item::{Item, Priority};
+use wf_core::item::{Item, ItemState, Priority};
 use wf_core::name::{Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, TypeName};
 
 const FENCE: &str = "+++";
@@ -35,6 +35,10 @@ struct FrontMatter {
     title: String,
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
     item_type: Option<TypeName>,
+    /// Only for a new item; an existing one is moved with `wf item open`, `draft`, `done` and
+    /// `cancel`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    state: Option<ItemState>,
     #[serde(default)]
     priority: Option<Priority>,
     #[serde(default)]
@@ -68,17 +72,23 @@ impl Draft {
     }
 
     pub fn from_markdown(text: &str) -> anyhow::Result<Self> {
-        let (item_type, draft) = Self::parse(text)?;
-        if item_type.is_some() {
+        let (new, draft) = Self::parse(text)?;
+        if new.item_type.is_some() {
             bail!("the type of an existing item cannot be changed");
+        }
+        if new.state.is_some() {
+            bail!(
+                "the state of an existing item is not edited; move it with `wf item open`, `wf item draft`, `wf item done` or `wf item cancel`"
+            );
         }
         Ok(draft)
     }
 
     /// TOML has no null, so unset fields appear as commented-out hints.
-    fn render(&self, item_type: Option<&TypeName>) -> anyhow::Result<String> {
+    fn render(&self, new: Option<&NewItemDraft>) -> anyhow::Result<String> {
         let mut front_matter = toml::to_string(&FrontMatter {
-            item_type: item_type.cloned(),
+            item_type: new.map(|new| new.item_type.clone()),
+            state: new.and_then(|new| new.state),
             title: self.title.clone(),
             priority: self.priority,
             lane: self.lane.clone(),
@@ -99,13 +109,17 @@ impl Draft {
         if self.recovery.is_none() {
             front_matter.push_str("# recovery = \"standard\"\n");
         }
+        if new.is_some_and(|new| new.state.is_none()) {
+            front_matter
+                .push_str("# state = \"draft\"  # nothing starts a draft until `wf item open`\n");
+        }
         Ok(format!(
             "{FENCE}\n{front_matter}{FENCE}\n\n{}\n",
             self.body.trim_end()
         ))
     }
 
-    fn parse(text: &str) -> anyhow::Result<(Option<TypeName>, Self)> {
+    fn parse(text: &str) -> anyhow::Result<(Created, Self)> {
         let mut lines = text.split_inclusive('\n');
         if lines.next().map(str::trim_end) != Some(FENCE) {
             bail!("the draft must start with a `{FENCE}` line before the TOML front matter");
@@ -137,7 +151,11 @@ impl Draft {
             review: front_matter.review,
             recovery: front_matter.recovery,
         };
-        Ok((front_matter.item_type, draft))
+        let created = Created {
+            item_type: front_matter.item_type,
+            state: front_matter.state,
+        };
+        Ok((created, draft))
     }
 
     /// The edits that turn `item` into this draft. Removals name the adds the item currently has.
@@ -178,22 +196,48 @@ impl Draft {
     }
 }
 
-/// A draft of an item that does not exist yet, so it also says what type to create.
+/// What only the front matter of a new item says.
+struct Created {
+    item_type: Option<TypeName>,
+    state: Option<ItemState>,
+}
+
+/// A draft of an item that does not exist yet, so it also says what type to create, and in what
+/// state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct NewItemDraft {
     pub item_type: TypeName,
+    /// `None` for the initial state of the type.
+    pub state: Option<ItemState>,
     pub draft: Draft,
 }
 
 impl NewItemDraft {
     pub fn to_markdown(&self) -> anyhow::Result<String> {
-        self.draft.render(Some(&self.item_type))
+        self.draft.render(Some(self))
     }
 
     pub fn from_markdown(text: &str) -> anyhow::Result<Self> {
         match Draft::parse(text)? {
-            (Some(item_type), draft) => Ok(Self { item_type, draft }),
-            (None, _) => bail!("the front matter needs a `type`, for example `type = \"task\"`"),
+            (
+                Created {
+                    item_type: Some(item_type),
+                    state,
+                },
+                draft,
+            ) => Ok(Self {
+                item_type,
+                state,
+                draft,
+            }),
+            (
+                Created {
+                    item_type: None, ..
+                },
+                _,
+            ) => {
+                bail!("the front matter needs a `type`, for example `type = \"task\"`")
+            }
         }
     }
 }
@@ -271,6 +315,7 @@ mod tests {
     fn new_item_drafts_carry_the_type() {
         let new = NewItemDraft {
             item_type: TypeName::new("decision").unwrap(),
+            state: None,
             draft: Draft {
                 title: String::new(),
                 body: String::new(),
@@ -287,5 +332,32 @@ mod tests {
         assert_eq!(NewItemDraft::from_markdown(&text).unwrap(), new);
         assert!(Draft::from_markdown(&text).is_err());
         assert!(NewItemDraft::from_markdown("+++\ntitle = \"x\"\n+++\n").is_err());
+    }
+
+    #[test]
+    fn a_new_item_draft_can_hold_the_item_back() {
+        let new = NewItemDraft {
+            item_type: TypeName::new("task").unwrap(),
+            state: None,
+            draft: Draft::from_markdown("+++\ntitle = \"x\"\n+++\n").unwrap(),
+        };
+        let text = new.to_markdown().unwrap();
+        assert!(text.contains("\n# state = \"draft\""));
+        let held = text.replace("# state = \"draft\"", "state = \"draft\"");
+        let parsed = NewItemDraft::from_markdown(&held).unwrap();
+        assert_eq!(parsed.state, Some(ItemState::Draft));
+        assert!(
+            parsed
+                .to_markdown()
+                .unwrap()
+                .contains("\nstate = \"draft\"\n")
+        );
+        assert!(Draft::from_markdown("+++\ntitle = \"x\"\nstate = \"done\"\n+++\n").is_err());
+        assert!(
+            NewItemDraft::from_markdown(
+                "+++\ntitle = \"x\"\ntype = \"task\"\nstate = \"backlog\"\n+++\n"
+            )
+            .is_err()
+        );
     }
 }

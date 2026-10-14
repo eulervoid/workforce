@@ -74,24 +74,36 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
     for view in state.items() {
         match view {
             ItemView::Archived(_) => archived_items += 1,
-            ItemView::Live(item) => match item.standing(policy).state_category() {
-                Some(_) => {
-                    if state.readiness(&graph, item) == Some(Readiness::Stranded) {
-                        flagged.insert(format!(
-                            "#{} \"{}\" is stranded: a dependency was cancelled",
-                            item.id().short(),
-                            item.title()
-                        ));
-                    }
-                }
-                None => {
+            ItemView::Live(item) => {
+                let config = policy.type_config(item.item_type());
+                if let Some(name) = item.unknown_state() {
                     flagged.insert(format!(
-                        "#{} \"{}\" has an unknown state or type",
+                        "#{} \"{}\" is in the unknown state `{name}`, so it counts as a draft",
+                        item.id().short(),
+                        item.title()
+                    ));
+                } else if config.is_none() {
+                    flagged.insert(format!(
+                        "#{} \"{}\" has the unknown type `{}`",
+                        item.id().short(),
+                        item.title(),
+                        item.item_type()
+                    ));
+                } else if config.is_some_and(|config| !config.uses(item.state(policy))) {
+                    flagged.insert(format!(
+                        "#{} \"{}\" is `{}`, a state its type no longer uses",
+                        item.id().short(),
+                        item.title(),
+                        item.state(policy)
+                    ));
+                } else if state.readiness(&graph, item) == Some(Readiness::Stranded) {
+                    flagged.insert(format!(
+                        "#{} \"{}\" is stranded: a dependency was cancelled",
                         item.id().short(),
                         item.title()
                     ));
                 }
-            },
+            }
         }
     }
     for item in state.unstaffed_reviews() {

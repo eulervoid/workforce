@@ -6,8 +6,7 @@ use serde::Serialize;
 use wf_core::body::Body;
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::HashId;
-use wf_core::item::{Item, ItemView, Priority, Standing};
-use wf_core::policy::StateCategory;
+use wf_core::item::{Item, ItemState, ItemView, Priority};
 use wf_core::state::State;
 
 use crate::cli::ItemGrouping;
@@ -18,9 +17,7 @@ pub struct ItemRefView {
     #[serde(rename = "type")]
     pub item_type: String,
     pub title: String,
-    pub state: Option<String>,
-    #[serde(skip)]
-    pub state_category: Option<StateCategory>,
+    pub state: ItemState,
     pub priority: Option<Priority>,
 }
 
@@ -30,11 +27,7 @@ pub struct ItemSummary {
     #[serde(rename = "type")]
     pub item_type: String,
     pub title: String,
-    /// `None` when the item's type was removed from the policy.
-    pub state: Option<String>,
-    /// `None` when the state is unknown under the current policy.
-    #[serde(skip)]
-    pub state_category: Option<StateCategory>,
+    pub state: ItemState,
     pub priority: Option<Priority>,
     /// `None` unless the item is open.
     pub readiness: Option<Readiness>,
@@ -62,19 +55,8 @@ pub(super) fn steps_view(body: &Body) -> Option<StepsView> {
     (total > 0).then_some(StepsView { done, total })
 }
 
-pub(super) fn standing_parts(standing: Standing<'_>) -> (Option<String>, Option<StateCategory>) {
-    match standing {
-        Standing::Known {
-            state,
-            state_category,
-        } => (Some(state.to_string()), Some(state_category)),
-        Standing::Unknown { state } => (state.map(ToString::to_string), None),
-    }
-}
-
 fn item_ref_view(state: &State, view: ItemView<'_>) -> ItemRefView {
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let (state_name, state_category) = standing_parts(view.standing(policy));
     let priority = match view {
         ItemView::Live(item) => item.priority(),
         ItemView::Archived(_) => None,
@@ -83,8 +65,7 @@ fn item_ref_view(state: &State, view: ItemView<'_>) -> ItemRefView {
         id: view.id().to_base32(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
-        state: state_name,
-        state_category,
+        state: view.state(policy),
         priority,
     }
 }
@@ -113,7 +94,6 @@ fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<It
 
 pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> ItemSummary {
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let (state_name, state_category) = standing_parts(view.standing(policy));
     let steps = match view {
         ItemView::Live(item) => steps_view(&item.body()),
         ItemView::Archived(_) => None,
@@ -143,8 +123,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
         id: view.id().to_base32(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
-        state: state_name,
-        state_category,
+        state: view.state(policy),
         priority,
         readiness,
         blocked_by,
@@ -161,18 +140,6 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
 pub struct ItemGroup {
     pub group: String,
     pub items: Vec<ItemSummary>,
-}
-
-/// Which state an item sits in, ordered by state category; items with an unknown state come last.
-#[derive(PartialEq, Eq, PartialOrd, Ord)]
-enum StateGroup {
-    Known {
-        state_category: StateCategory,
-        state: String,
-    },
-    Unknown {
-        state: Option<String>,
-    },
 }
 
 /// Open items by readiness; everything else together.
@@ -250,11 +217,9 @@ fn group_by_label(entries: Vec<(ItemView<'_>, ItemSummary)>) -> Vec<ItemGroup> {
 
 /// Groups `entries`, keeping their order inside each group.
 pub fn group_items(
-    state: &State,
     grouping: ItemGrouping,
     entries: Vec<(ItemView<'_>, ItemSummary)>,
 ) -> Vec<ItemGroup> {
-    let policy = &state.policy().expect("a workforce has a policy").policy;
     match grouping {
         ItemGrouping::Label => group_by_label(entries),
         ItemGrouping::Type => collect_groups(
@@ -274,24 +239,8 @@ pub fn group_items(
         ),
         ItemGrouping::State => collect_groups(
             entries,
-            |view, _| match view.standing(policy) {
-                Standing::Known {
-                    state,
-                    state_category,
-                } => StateGroup::Known {
-                    state_category,
-                    state: state.to_string(),
-                },
-                Standing::Unknown { state } => StateGroup::Unknown {
-                    state: state.map(ToString::to_string),
-                },
-            },
-            |group| match group {
-                StateGroup::Known { state, .. } => state.clone(),
-                StateGroup::Unknown { state } => {
-                    state.clone().unwrap_or_else(|| "unknown".to_string())
-                }
-            },
+            |_, summary| summary.state,
+            |state| state.to_string(),
         ),
         ItemGrouping::Readiness => collect_groups(
             entries,

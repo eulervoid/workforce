@@ -3,32 +3,10 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&all)"
 ---
 {
-  "schema": 4,
+  "schema": 5,
   "data": [
     {
-      "id": "c4idpbeqgbeliompco4f3euoet6ibmul672xn2xwezizh5jgmbna",
-      "type": "task",
-      "title": "Pick a hash for event ids",
-      "state": "open",
-      "priority": "P2",
-      "readiness": "ready",
-      "blocked_by": [],
-      "blocking": [
-        {
-          "id": "rgrqrrkituoxhn5ct5kwybsbbrdx4irvxwsi72anpo6f23jdv5aq",
-          "type": "task",
-          "title": "Implement feed sync",
-          "state": "open",
-          "priority": "P1"
-        }
-      ],
-      "labels": [],
-      "lane": "default",
-      "steps": null,
-      "archived": false
-    },
-    {
-      "id": "im6jrrzjm3grn3wf7fdar5i4pog6mfgqzk3c4p22p6uqdsg6hxlq",
+      "id": "cb6sbemiktyi34wi5kjxlqmn74vwahoedqwy2qekdpadbjp62p7q",
       "type": "task",
       "title": "Write spec",
       "state": "done",
@@ -42,7 +20,7 @@ expression: "Envelope::new(&all)"
       "archived": true
     },
     {
-      "id": "rgrqrrkituoxhn5ct5kwybsbbrdx4irvxwsi72anpo6f23jdv5aq",
+      "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",
@@ -50,7 +28,7 @@ expression: "Envelope::new(&all)"
       "readiness": "blocked",
       "blocked_by": [
         {
-          "id": "c4idpbeqgbeliompco4f3euoet6ibmul672xn2xwezizh5jgmbna",
+          "id": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
           "type": "task",
           "title": "Pick a hash for event ids",
           "state": "open",
@@ -58,6 +36,28 @@ expression: "Envelope::new(&all)"
         }
       ],
       "blocking": [],
+      "labels": [],
+      "lane": "default",
+      "steps": null,
+      "archived": false
+    },
+    {
+      "id": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
+      "type": "task",
+      "title": "Pick a hash for event ids",
+      "state": "open",
+      "priority": "P2",
+      "readiness": "ready",
+      "blocked_by": [],
+      "blocking": [
+        {
+          "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+          "type": "task",
+          "title": "Implement feed sync",
+          "state": "open",
+          "priority": "P1"
+        }
+      ],
       "labels": [],
       "lane": "default",
       "steps": null,

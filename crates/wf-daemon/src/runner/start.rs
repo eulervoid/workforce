@@ -109,20 +109,12 @@ impl Daemon {
         }
         let policy = &state.policy().expect("a workforce has a policy").policy;
         let item_context = match state.item(item).ok_or(SessionError::UnknownItem(item))? {
-            ItemView::Live(live) => {
-                let state_name = match live.standing(policy) {
-                    wf_core::item::Standing::Known { state, .. } => state.to_string(),
-                    wf_core::item::Standing::Unknown { state } => {
-                        state.map(ToString::to_string).unwrap_or_default()
-                    }
-                };
-                ItemContext {
-                    id: item.to_base32(),
-                    title: live.title().to_string(),
-                    item_type: live.item_type().to_string(),
-                    state: state_name,
-                }
-            }
+            ItemView::Live(live) => ItemContext {
+                id: item.to_base32(),
+                title: live.title().to_string(),
+                item_type: live.item_type().to_string(),
+                state: live.state(policy).to_string(),
+            },
             ItemView::Archived(_) => return Err(SessionError::Archived(item)),
         };
         let transcripts = self.workforce_directory(workforce).join("transcripts");
@@ -160,7 +152,7 @@ impl Daemon {
     }
 
     /// Starts a session of `agent` on `item`, and a task that runs the harness. A work session
-    /// runs in the item's worktree on its branch, and moves the item to its active state; a
+    /// runs in the item's worktree on its branch, and moves the item to `active`; a
     /// review session in a detached checkout of the commit under review, or an empty directory
     /// when it was submitted without commits; a supervise or diagnose session in an empty
     /// directory.
