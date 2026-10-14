@@ -9,6 +9,7 @@ pub mod client;
 mod command;
 pub mod decide;
 mod environment;
+mod inherit;
 mod judges;
 pub mod machine_config;
 mod notify;

@@ -21,14 +21,15 @@ pub(super) async fn ask(
         Ok(input) => input,
         Err(error) => return passed(format!("the request does not encode: {error}")),
     };
-    let child = Command::new(program)
-        .args(arguments)
+    let mut hook = Command::new(program);
+    hook.args(arguments)
         .current_dir(&request.directory)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
-        .kill_on_drop(true)
-        .spawn();
+        .kill_on_drop(true);
+    crate::inherit::only_stdio(&mut hook);
+    let child = hook.spawn();
     let mut child = match child {
         Ok(child) => child,
         Err(error) => return passed(format!("`{program}` does not start: {error}")),

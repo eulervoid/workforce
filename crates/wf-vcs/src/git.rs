@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -24,7 +25,22 @@ fn git() -> Command {
         "-c",
         "core.fsmonitor=false",
     ]);
+    inherit_only_stdio(&mut command);
     command
+}
+
+/// Has `command` inherit no descriptor beyond stdin, stdout and stderr. On macOS std creates
+/// pipes and sockets close-on-exec in two steps, as there is no `pipe2`; git spawned on one
+/// thread in between inherits what another thread opened, and holds a pipe some other process
+/// reads from open until it exits.
+fn inherit_only_stdio(command: &mut Command) {
+    // SAFETY: setting close-on-exec only calls functions that are async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            close_fds::set_fds_cloexec(3, &[]);
+            Ok(())
+        });
+    }
 }
 
 /// What `git` said, for commands whose failure is an answer and not an error.
@@ -661,6 +677,50 @@ mod tests {
     struct TestRepo {
         root: tempfile::TempDir,
         git: GitCli,
+    }
+
+    /// While other threads run short commands with piped output, which on macOS create pipes
+    /// that are not close-on-exec for a moment, a command git is run like holds only stdin,
+    /// stdout and stderr.
+    #[test]
+    fn git_inherits_no_descriptor_while_other_threads_create_pipes() {
+        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let commands: Vec<_> = (0..4)
+            .map(|_| {
+                let stop = std::sync::Arc::clone(&stop);
+                std::thread::spawn(move || {
+                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        Command::new("true").output().unwrap();
+                    }
+                })
+            })
+            .collect();
+        // The listing holds the directory open as the lowest free descriptor, 3.
+        let probe = || {
+            let mut command = Command::new("sh");
+            command.args([
+                "-c",
+                r#"for path in /dev/fd/*; do echo "${path##*/}"; done"#,
+            ]);
+            inherit_only_stdio(&mut command);
+            String::from_utf8(command.output().unwrap().stdout).unwrap()
+        };
+        let held: Vec<String> = std::thread::scope(|scope| {
+            let probes: Vec<_> = (0..4)
+                .map(|_| scope.spawn(|| (0..400).map(|_| probe()).collect::<Vec<_>>()))
+                .collect();
+            probes
+                .into_iter()
+                .flat_map(|probes| probes.join().unwrap())
+                .collect()
+        });
+        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+        for command in commands {
+            command.join().unwrap();
+        }
+        for descriptors in held {
+            assert_eq!(descriptors, "0\n1\n2\n3\n");
+        }
     }
 
     fn git_in(directory: &Path, args: &[&str]) -> String {
