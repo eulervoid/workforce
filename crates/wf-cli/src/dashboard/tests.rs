@@ -12,8 +12,8 @@ use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
-    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Row,
-    STATUS_LASTS_MS, Scroll, Split, Starter, Tab, Target, Wheel,
+    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll,
+    Split, Starter, Tab, Target, Wheel,
 };
 use super::draw::{self, ACCENT, ACCENT_DIMMED};
 use super::snapshot::{
@@ -1764,7 +1764,6 @@ fn a_move_draws_again_only_onto_or_off_a_link_or_a_button() {
 fn a_link_under_the_pointer_is_underlined_and_its_tip_shows() {
     use ratatui::style::Modifier;
     let mut app = app_with_links();
-    let latest = find(&mut app, 60, 24, "submitted 3e8a1c").1;
     let tips = [
         ("#aeaqca,", "open #aeaqca"),
         ("@ada/coder.", "open @ada/coder"),
@@ -1774,22 +1773,22 @@ fn a_link_under_the_pointer_is_underlined_and_its_tip_shows() {
         ("Now ›", "back to Now"),
     ];
     for (text, tip) in tips {
-        let (column, row) = find(&mut app, 60, 24, text);
+        let (column, row) = find(&mut app, ROOMY, 24, text);
         app.hover(column + 1, row);
         assert!(
-            style_at(&mut app, 60, 24, column + 1, row)
+            style_at(&mut app, ROOMY, 24, column + 1, row)
                 .add_modifier
                 .contains(Modifier::UNDERLINED),
             "{text}"
         );
-        assert_eq!(find(&mut app, 60, 24, tip), (1, latest), "{text}");
+        assert_tip(&mut app, tip);
     }
-    // Back on plain text, the latest event shows again.
-    let (column, row) = find(&mut app, 60, 24, "After");
+    // Back on plain text, the tip goes.
+    let (column, row) = find(&mut app, ROOMY, 24, "After");
     app.hover(column, row);
-    assert_eq!(find(&mut app, 60, 24, "submitted 3e8a1c").1, latest);
+    assert!(!screen(&mut app, ROOMY, 24).contains("back to Now"));
     assert!(
-        !style_at(&mut app, 60, 24, column, row)
+        !style_at(&mut app, ROOMY, 24, column, row)
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
@@ -1805,29 +1804,49 @@ fn permit(answer: Permission) -> Option<Effect> {
 /// The row of the latest event, where a tip shows.
 const LATEST: u16 = 22;
 
+/// A width that leaves room for the latest event and a tip beside it, short of a wide window.
+const ROOMY: u16 = 110;
+
+/// Asserts that `tip` shows at the right of the latest-event line, a column off the edge.
+fn assert_tip(app: &mut App, tip: &str) {
+    let column = ROOMY - 1 - u16::try_from(tip.chars().count()).unwrap();
+    assert_eq!(find(app, ROOMY, 24, tip), (column, LATEST), "{tip}");
+}
+
+#[test]
+fn a_tip_shows_beside_the_latest_event_or_not_at_all() {
+    let mut app = app();
+    let event = "07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c";
+    let (deny, row) = find(&mut app, ROOMY, 24, "a / d");
+    app.hover(deny + 4, row);
+    assert_tip(&mut app, "deny the request");
+    assert_eq!(find(&mut app, ROOMY, 24, event), (1, LATEST));
+    // Where the latest event leaves no room for it, the tip is left out, not cut.
+    let (deny, row) = find(&mut app, 60, 24, "a / d");
+    app.hover(deny + 4, row);
+    let narrow = screen(&mut app, 60, 24);
+    let latest = narrow.lines().nth(usize::from(LATEST)).unwrap();
+    assert!(!latest.contains("deny"), "{narrow}");
+    assert_eq!(find(&mut app, 60, 24, event), (1, LATEST));
+}
+
 #[test]
 fn one_click_on_allow_allows_nothing_and_a_second_allows() {
     let mut app = app();
-    let (allow, row) = find(&mut app, 60, 24, "a / d");
+    let (allow, row) = find(&mut app, ROOMY, 24, "a / d");
     app.hover(allow, row);
-    assert_eq!(
-        find(&mut app, 60, 24, "allow the request: click twice"),
-        (1, LATEST)
-    );
+    assert_tip(&mut app, "allow the request: click twice");
     assert_eq!(app.click(allow, row), None);
-    assert_eq!(
-        find(&mut app, 60, 24, "allow: click again to confirm"),
-        (1, LATEST)
-    );
+    assert_tip(&mut app, "allow: click again to confirm");
     assert_eq!(app.click(allow, row), permit(Permission::Allow));
 }
 
 #[test]
 fn a_click_on_deny_denies_at_once() {
     let mut app = app();
-    let (allow, row) = find(&mut app, 60, 24, "a / d");
+    let (allow, row) = find(&mut app, ROOMY, 24, "a / d");
     app.hover(allow + 4, row);
-    assert_eq!(find(&mut app, 60, 24, "deny the request"), (1, LATEST));
+    assert_tip(&mut app, "deny the request");
     assert_eq!(app.click(allow + 4, row), permit(Permission::Deny));
 }
 

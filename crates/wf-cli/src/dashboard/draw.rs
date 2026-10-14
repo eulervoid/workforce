@@ -12,8 +12,8 @@ use wf_core::id::HashId;
 use wf_core::item::ItemState;
 
 use super::app::{
-    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Request, Row,
-    STRIP, Scroll, Spot, Starter, Status, Tab, Target,
+    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Request, Row, STRIP,
+    Scroll, Spot, Starter, Status, Tab, Target,
 };
 use super::links;
 use super::snapshot::{
@@ -106,7 +106,9 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     let mut shown = draw_body(frame, app, body);
     shown.clickable.tabs = tabs;
     draw_rule(frame, rule_below);
-    frame.render_widget(Paragraph::new(latest_line(app)), latest);
+    let latest_line = latest_line(app);
+    let latest_width = latest_line.width();
+    frame.render_widget(Paragraph::new(latest_line), latest);
     if app.status.is_none() {
         shown.clickable.spots.extend(links::find(
             frame.buffer_mut(),
@@ -140,14 +142,21 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         frame
             .buffer_mut()
             .set_style(spot.area, Style::new().underlined());
-        // A link in the latest event says itself where it is.
-        if !spot.area.intersects(latest) {
-            frame.render_widget(Clear, latest);
-            let tip = Line::from(format!(" {}", app.tip(&spot.target)));
-            frame.render_widget(Paragraph::new(tip), latest);
-        }
+        draw_tip(frame, &app.tip(&spot.target), latest_width, latest);
     }
     shown
+}
+
+/// Draws `tip` at the right of the latest-event line, `taken` columns of which the latest event
+/// fills. A line too narrow for both leaves the tip out: it never covers the event, nor is cut.
+fn draw_tip(frame: &mut Frame, tip: &str, taken: usize, latest: Rect) {
+    // A column off the right edge, as the event keeps one off the left.
+    let tip = Line::from(format!("{tip} "));
+    // Two columns apart, so the tip does not read as part of the event.
+    if taken + 2 + tip.width() > usize::from(latest.width) {
+        return;
+    }
+    frame.render_widget(Paragraph::new(tip).right_aligned(), latest);
 }
 
 /// A list to pick from, at the bottom of the body, with the option picked in `accent`.

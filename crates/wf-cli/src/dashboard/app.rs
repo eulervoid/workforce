@@ -719,8 +719,8 @@ pub struct App {
     pub clickable: Clickable,
     /// Where the pointer was last reported.
     pub pointer: Option<Position>,
-    /// The link or button under the pointer, as last drawn: underlined, with its tip in place of
-    /// the latest event.
+    /// The link or button under the pointer, as last drawn: underlined, with its tip at the
+    /// right of the latest event.
     pub hovered: Option<Spot>,
     pub unconfirmed_allow: Option<UnconfirmedAllow>,
     /// Whether the terminal pane the dashboard runs in is focused, as far as the terminal reports
