@@ -655,7 +655,7 @@ fn activity_entry(
     lead: &str,
     width: Option<usize>,
 ) -> (String, Option<String>) {
-    use style::{DIM, WARNING, paint};
+    use style::{BOLD, DIM, WARNING, paint};
     let mut parts = vec![style::paint_actor(&entry.by)];
     match &entry.comment {
         Some(comment) if entry.kind == ActivityKind::Comment => {
@@ -669,12 +669,15 @@ fn activity_entry(
                     ),
                 )),
                 CommentKindView::Comment if comment.resolves.is_empty() => {
-                    parts.push(paint(DIM, "commented"))
+                    parts.push(paint(BOLD, "commented"))
                 }
                 CommentKindView::Comment => {}
             }
             if !comment.resolves.is_empty() {
-                parts.push(format!("resolved {}", comment.resolves.join(", ")));
+                parts.push(paint(
+                    BOLD,
+                    format!("resolved {}", comment.resolves.join(", ")),
+                ));
             }
             if let Some(by) = &comment.resolved_by {
                 parts.push(paint(DIM, format!("resolved by {by}")));
@@ -689,7 +692,7 @@ fn activity_entry(
             }
             parts.push(paint(DIM, &comment.short));
         }
-        Some(_) | None => parts.push(entry.summary.clone()),
+        Some(_) | None => parts.push(paint(BOLD, &entry.summary)),
     }
     let line = format!("{lead}{}", parts.join(&format!(" {} ", paint(DIM, "·"))));
     let line = fill(&line, width, ACTIVITY_TEXT_INDENT);
