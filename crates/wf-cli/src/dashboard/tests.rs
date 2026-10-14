@@ -627,6 +627,117 @@ fn an_item_opens_on_its_detail_and_enter_goes_on_to_its_session() {
     assert_eq!(app.wanted().detail, None);
 }
 
+/// The Items tab with its last item, scrolled two lines down from where it opened.
+fn scrolled_item(width: u16) -> (App, Opened) {
+    let mut app = app();
+    app.resize(width, 24);
+    press(&mut app, KeyCode::Char('2'));
+    let parse = ItemId::from_bytes([1; 32]);
+    let mut snapshot = with_items();
+    snapshot.in_view = Some(InView::Item {
+        id: parse,
+        text: (1..=40).map(|line| format!("line {line}\n")).collect(),
+        session: None,
+    });
+    app.refresh(snapshot);
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    let scrolled = Opened {
+        detail: Detail::Item(parse),
+        scroll: Scroll::At(2),
+    };
+    assert_eq!(app.in_view(), Some(scrolled.clone()));
+    (app, scrolled)
+}
+
+#[test]
+fn going_back_to_the_list_keeps_the_item_where_it_was_scrolled_to() {
+    let (mut app, scrolled) = scrolled_item(130);
+    press(&mut app, KeyCode::Char('h'));
+    assert!(app.list_has_keys());
+    assert_eq!(app.in_view(), Some(scrolled.clone()));
+    press(&mut app, KeyCode::Char('l'));
+    assert!(!app.list_has_keys());
+    assert_eq!(app.in_view(), Some(scrolled.clone()));
+    // Away from the item and back, it starts at its top.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::Char('j'));
+    let at_top = Opened {
+        scroll: Scroll::At(0),
+        ..scrolled
+    };
+    assert_eq!(app.in_view(), Some(at_top.clone()));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.in_view(), Some(at_top));
+}
+
+#[test]
+fn in_a_narrow_window_the_list_comes_back_to_the_item_where_it_was() {
+    let (mut app, scrolled) = scrolled_item(60);
+    press(&mut app, KeyCode::Left);
+    assert!(app.list_has_keys());
+    assert_eq!(app.in_view(), None);
+    assert_eq!(app.path(), Vec::new());
+    press(&mut app, KeyCode::Right);
+    assert_eq!(app.in_view(), Some(scrolled.clone()));
+    // Away from the item and back, it starts at its top.
+    press(&mut app, KeyCode::Char('h'));
+    press(&mut app, KeyCode::Char('k'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('l'));
+    assert_eq!(
+        app.in_view(),
+        Some(Opened {
+            scroll: Scroll::At(0),
+            ..scrolled
+        })
+    );
+}
+
+#[test]
+fn with_one_pane_the_list_comes_back_to_the_item_where_it_was() {
+    let (mut app, scrolled) = scrolled_item(130);
+    press(&mut app, KeyCode::Char('L'));
+    assert_eq!(app.split, Split::One);
+    press(&mut app, KeyCode::Char('h'));
+    assert!(app.list_has_keys());
+    assert_eq!(app.in_view(), None);
+    press(&mut app, KeyCode::Char('l'));
+    assert_eq!(app.in_view(), Some(scrolled));
+}
+
+#[test]
+fn going_back_from_a_session_opened_on_an_item_leaves_the_item_as_it_was() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    let parse = ItemId::from_bytes([1; 32]);
+    let coder = SessionId::from_bytes([11; 32]);
+    let mut snapshot = with_items();
+    snapshot.in_view = Some(InView::Item {
+        id: parse,
+        text: (1..=40).map(|line| format!("line {line}\n")).collect(),
+        session: Some(coder),
+    });
+    app.refresh(snapshot);
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.path(), [Detail::Item(parse), Detail::Session(coder)]);
+    press(&mut app, KeyCode::Esc);
+    assert!(!app.list_has_keys());
+    assert_eq!(
+        app.in_view(),
+        Some(Opened {
+            detail: Detail::Item(parse),
+            scroll: Scroll::At(1),
+        })
+    );
+}
+
 #[test]
 fn item_keys_act_on_the_selected_item() {
     let mut app = app();
