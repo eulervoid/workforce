@@ -2,11 +2,14 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 
 use crate::item::ItemState;
-use crate::name::{AgentName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, TypeName};
+use crate::name::{
+    AgentName, CommandName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, TypeName,
+};
 
 pub const DEFAULT_POLICY_TOML: &str = include_str!("default_policy.toml");
 
@@ -54,6 +57,10 @@ pub enum PolicyError {
         type_name: TypeName,
         level: RecoveryLevelName,
     },
+    #[error("the check `{0}` is defined twice")]
+    DuplicateCheck(CommandName),
+    #[error("the check `{0}` runs nothing: `run` names the program and its arguments")]
+    EmptyCheck(CommandName),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +137,9 @@ pub struct MergeConfig {
     /// The branch approved work is merged into.
     #[serde(default = "MergeConfig::default_target")]
     pub target: String,
+    /// What has to pass on the merge result before the target moves, in this order.
+    #[serde(rename = "check", default)]
+    pub checks: Vec<CheckConfig>,
 }
 
 impl MergeConfig {
@@ -143,7 +153,48 @@ impl Default for MergeConfig {
         Self {
             mode: MergeMode::default(),
             target: Self::default_target(),
+            checks: Vec::new(),
         }
+    }
+}
+
+/// A command that must pass on the merge result before work lands: `[[merge.check]]`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckConfig {
+    /// What the check is called where its result is shown, such as `clippy`. Unique.
+    pub name: CommandName,
+    /// The program and its arguments, run without a shell.
+    pub run: Vec<String>,
+    /// How long it may run before it is stopped, such as `"20m"`. A machine may allow less.
+    #[serde(default = "CheckConfig::default_timeout", with = "written_duration")]
+    pub timeout: Duration,
+}
+
+impl CheckConfig {
+    fn default_timeout() -> Duration {
+        Duration::from_secs(30 * 60)
+    }
+}
+
+/// A duration written as people do, such as `"30m"`, in TOML and postcard alike.
+mod written_duration {
+    use std::time::Duration;
+
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub(super) fn serialize<S: Serializer>(
+        duration: &Duration,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(&humantime::format_duration(*duration))
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Duration, D::Error> {
+        let text = String::deserialize(deserializer)?;
+        humantime::parse_duration(&text).map_err(serde::de::Error::custom)
     }
 }
 
@@ -286,6 +337,15 @@ impl Policy {
             }
             if level.name.as_str() == "default" {
                 return Err(PolicyError::ReservedRecoveryLevel);
+            }
+        }
+        let mut checks = BTreeSet::new();
+        for check in &self.merge.checks {
+            if !checks.insert(&check.name) {
+                return Err(PolicyError::DuplicateCheck(check.name.clone()));
+            }
+            if check.run.is_empty() {
+                return Err(PolicyError::EmptyCheck(check.name.clone()));
             }
         }
         if let Some(name) = DEFAULT_POLICY
@@ -766,5 +826,57 @@ mod tests {
         let policy = Policy::default_policy();
         let bytes = postcard::to_stdvec(policy).unwrap();
         assert_eq!(&postcard::from_bytes::<Policy>(&bytes).unwrap(), policy);
+    }
+
+    const CHECKS: &str = "\
+[[merge.check]]
+name = \"fmt\"
+run = [\"cargo\", \"fmt\", \"--check\"]
+
+[[merge.check]]
+name = \"test\"
+run = [\"cargo\", \"test\"]
+timeout = \"20m\"
+";
+
+    #[test]
+    fn checks_are_listed_in_order_with_a_timeout_of_30_minutes_unless_given() {
+        let policy = Policy::parse(&with_custom(CHECKS)).unwrap();
+        let checks: Vec<_> = policy
+            .merge
+            .checks
+            .iter()
+            .map(|check| (check.name.as_str(), check.run.len(), check.timeout))
+            .collect();
+        assert_eq!(
+            checks,
+            [
+                ("fmt", 3, Duration::from_secs(30 * 60)),
+                ("test", 2, Duration::from_secs(20 * 60))
+            ]
+        );
+        assert_eq!(policy.merge.target, "main");
+        let bytes = postcard::to_stdvec(&policy).unwrap();
+        assert_eq!(postcard::from_bytes::<Policy>(&bytes).unwrap(), policy);
+    }
+
+    #[test]
+    fn a_policy_that_repeats_the_name_of_a_check_is_refused() {
+        let repeated = with_custom(&format!(
+            "{CHECKS}\n[[merge.check]]\nname = \"fmt\"\nrun = [\"true\"]\n"
+        ));
+        assert_eq!(
+            Policy::parse(&repeated),
+            Err(PolicyError::DuplicateCheck(CommandName::new("fmt").unwrap()))
+        );
+    }
+
+    #[test]
+    fn a_check_that_runs_nothing_is_refused() {
+        let empty = with_custom("[[merge.check]]\nname = \"nothing\"\nrun = []\n");
+        assert_eq!(
+            Policy::parse(&empty),
+            Err(PolicyError::EmptyCheck(CommandName::new("nothing").unwrap()))
+        );
     }
 }
