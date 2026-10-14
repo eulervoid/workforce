@@ -308,12 +308,9 @@ impl Snapshot {
                 .map(|session| session_info(state, &graph, own, session))
                 .collect(),
             flagged: view::status(state, context).flagged,
-            in_view: wanted
-                .detail
-                .clone()
-                .and_then(|wanted| {
-                    in_view(state, events, &graph, own, now_ms, wanted, detail_width)
-                }),
+            in_view: wanted.detail.clone().and_then(|wanted| {
+                in_view(state, events, &graph, own, now_ms, wanted, detail_width)
+            }),
             agents: if wanted.agents {
                 agents(state, &graph, own)
             } else {

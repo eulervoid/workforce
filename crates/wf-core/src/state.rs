@@ -514,8 +514,7 @@ impl State {
         let mut history: Vec<(&Event, AgentChange)> = events
             .iter()
             .filter_map(|event| {
-                let (name, change) = if let EventBody::AgentDefined(defined) = &event.content.body
-                {
+                let (name, change) = if let EventBody::AgentDefined(defined) = &event.content.body {
                     (&defined.name, AgentChange::Defined(defined))
                 } else if let EventBody::AgentRemoved(removed) = &event.content.body {
                     (&removed.name, AgentChange::Removed)

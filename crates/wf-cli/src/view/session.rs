@@ -2,10 +2,10 @@
 
 use serde::Serialize;
 use wf_core::id::{HashId, SessionId};
+use wf_core::identity::AgentId;
 use wf_core::item::ItemView;
 use wf_core::resolve::MentionTarget;
 use wf_core::session::{EndReason, Session, SessionRole};
-use wf_core::identity::AgentId;
 use wf_core::state::{AgentDefinition, State};
 
 use super::item::{StepsView, steps_view};

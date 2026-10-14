@@ -16,9 +16,7 @@ use super::app::{
     STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
 use super::links;
-use super::snapshot::{
-    AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting,
-};
+use super::snapshot::{AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting};
 use super::snapshot::{Detail, ItemRow};
 use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;

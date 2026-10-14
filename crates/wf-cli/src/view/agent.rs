@@ -144,7 +144,10 @@ fn changes(before: &AgentDefined, after: &AgentDefined) -> String {
         changes.push(format!("set the lanes to {}", list(&after.lanes)));
     }
     if before.capabilities != after.capabilities {
-        changes.push(format!("set what it can to {}", list(&after.capabilities)));
+        changes.push(format!(
+            "set its capabilities to {}",
+            list(&after.capabilities)
+        ));
     }
     let (was, is) = (&before.autonomy, &after.autonomy);
     if was.start != is.start {

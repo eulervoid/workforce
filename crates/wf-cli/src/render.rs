@@ -11,9 +11,9 @@ use crate::devices::{DeviceView, MemberView};
 use crate::markdown;
 use crate::transcript::Format;
 use crate::view::{
-    ActivityKind, ActorKind, ActorView, AgentDetail, AgentView, BodyPartView, CommentKindView, InboxEntryView, ItemDetail, ItemGroup,
-    ItemSummary, LogView, MentionsView, ReviewStatusView, SessionView, SourceView, StatusView,
-    StepRefView, StepsView,
+    ActivityKind, ActorKind, ActorView, AgentDetail, AgentView, BodyPartView, CommentKindView,
+    InboxEntryView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, ReviewStatusView,
+    SessionView, SourceView, StatusView, StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
 use wf_core::item::ItemState;
@@ -583,14 +583,17 @@ pub fn agent_detail_for(
         Some(model) => format!("{} · {model}", agent.harness),
         None => agent.harness.clone(),
     };
-    line(
-        format!(
-            "{label}  {}  {}",
-            paint(DIM, runs_on),
-            agent_load(detail)
-        ),
-        "  ",
-    );
+    let header = format!("{label}  {}", paint(DIM, runs_on));
+    let load = agent_load(detail);
+    let fits = |text: &str| width.is_none_or(|width| textwrap::core::display_width(text) <= width);
+    // The load stays whole: on the header's line if it fits there, else on its own.
+    let header_and_load = format!("{header}  {load}");
+    if fits(&anstream::adapter::strip_str(&header_and_load).to_string()) {
+        line(header_and_load, "  ");
+    } else {
+        line(header, "  ");
+        line(format!("  {load}"), "  ");
+    }
 
     let field = |name: &str, value: &str| format!("{} {value}", paint(DIM, name));
     let mut fields = Vec::new();
@@ -624,7 +627,10 @@ pub fn agent_detail_for(
         })
         .collect();
     if hosts.is_empty() {
-        line(format!("  ↳ {}", paint(DIM, "hosted by no device")), LINK_INDENT);
+        line(
+            format!("  ↳ {}", paint(DIM, "hosted by no device")),
+            LINK_INDENT,
+        );
     } else {
         line(
             format!("  ↳ hosted by {}", hosts.join(&separator)),
@@ -657,7 +663,10 @@ pub fn agent_detail_for(
         }
         if detail.older_sessions > 0 {
             line(
-                format!("  {}", paint(DIM, format!("… {} earlier", detail.older_sessions))),
+                format!(
+                    "  {}",
+                    paint(DIM, format!("… {} earlier", detail.older_sessions))
+                ),
                 "  ",
             );
         }
