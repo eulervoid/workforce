@@ -1,6 +1,6 @@
 # Proposal: fixed item states
 
-Status: every question decided; not built.
+Status: built (#y5whs6). SPEC §8, §15 and §17 describe it as built; this stays for the reasoning.
 
 ## Why
 Each item type names its own states and maps each to one of six fixed categories (SPEC §8). Built-in
@@ -143,3 +143,17 @@ name is refused. These are breaking changes, which rapid development allows (AGE
 3. Dashboard: grouping in state order, "release" first in the `s` chooser of a draft, `m` from the
    type's states.
 4. SPEC §8 (items), §15 (policy) and §17 (CLI), README, the default policy.
+
+## As built
+* Events keep their bytes. A move names its state as `WrittenState`, the name as written, and decodes
+  it through the table above. `ItemCreated` with a state has a new tag (17); one without, as written
+  before, keeps tag 10 and its layout, and starts in the type's initial state under the current policy.
+* An unknown name reads as `draft`; the item remembers the name, and `wf status` and `wf item show` flag
+  it. They also flag an item in a state its type no longer uses.
+* The policy reads old `{ name, category }` lists, an old `initial` through the old list it names, and
+  `transitions = "any"`. `wf policy apply` and `edit` refuse that form.
+* New: an item is created in its type's initial state, or as a `draft` if the type uses it.
+* A decision that was superseded while still proposed used to become `superseded` (done); folded now, it
+  stays in `review`.
+* `wf item open`, `draft` and `done` check every item before writing, and leave alone those already in
+  the state. `--json` gives `{message, events, items, unchanged}`. JSON schema 5.
