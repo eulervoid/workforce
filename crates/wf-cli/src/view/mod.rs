@@ -23,7 +23,7 @@ use wf_core::resolve::MentionTarget;
 use wf_core::state::State;
 
 /// Bump when a view changes shape incompatibly. Snapshot tests pin the current shapes.
-pub const SCHEMA_VERSION: u32 = 6;
+pub const SCHEMA_VERSION: u32 = 7;
 
 #[derive(Serialize)]
 pub struct Envelope<T> {
