@@ -1308,7 +1308,7 @@ fn items_name_a_review_level_from_the_policy() {
     let message = wf.fail(&[
         "item", "add", "--type", "distill", "--title", "x", "--review", "light",
     ]);
-    assert!(message.contains("no review state"), "{message}");
+    assert!(message.contains("cannot wait for a review"), "{message}");
 }
 
 #[test]
