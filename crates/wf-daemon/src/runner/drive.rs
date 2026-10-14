@@ -27,11 +27,13 @@ pub(super) async fn run_session(
     mut stopped: mpsc::UnboundedReceiver<Stop>,
 ) {
     let end = drive(&daemon, &loaded, &run, &mut stopped).await;
-    daemon.runners.stop(run.session, Stop::Now);
+    // The session stays among the runners until its end is written, so that it is not resumed
+    // while its end is tried again.
     let loaded = match end {
         End::Interrupt(interruption) => interrupt(&daemon, loaded, &run, interruption).await,
         End::Over => loaded,
     };
+    daemon.runners.stop(run.session, Stop::Now);
     daemon.held.forget(run.session);
     daemon.callers.revoke(run.session);
     // A session that is still live was only stopped, as when the daemon halts.
