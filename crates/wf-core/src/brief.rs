@@ -567,6 +567,19 @@ pub fn nudge(item: ItemId, role: SessionRole) -> String {
     }
 }
 
+/// The prompt that goes out when a turn of a work session on `item` ended with the rebase of its
+/// branch onto `target` stopped at a commit that conflicts in `paths`, as a refused submission
+/// left it.
+pub fn rebase_nudge(item: ItemId, target: &str, paths: &[String]) -> String {
+    format!(
+        "Your submission rebases the branch onto {target}, and the rebase is stopped at a commit \
+         that conflicts in {}. Resolve the conflicts in these files, then submit again: the daemon \
+         stages them and goes on with the rebase, which may stop at a later commit.\n\n{}",
+        paths.join(", "),
+        nudge(item, SessionRole::Work)
+    )
+}
+
 /// The last rule of every brief.
 const AGAIN: &str = "- Lost track: `wf work brief` prints this brief again.";
 
