@@ -98,7 +98,8 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::StopSession(_)
         | Call::Permissions
         | Call::AnswerPermission { .. }
-        | Call::LastSeen => daemon.workforce(request.workforce),
+        | Call::LastSeen
+        | Call::OutOfSpace => daemon.workforce(request.workforce),
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
@@ -133,6 +134,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         | Call::Author { .. }
         | Call::SyncNow
         | Call::LastSeen
+        | Call::OutOfSpace
         | Call::Permissions
         | Call::EndSession { .. } => Ok(()),
         Call::Fork(_) => principals("found a fork"),
@@ -268,6 +270,7 @@ async fn call(
             reply(results)
         }
         Call::LastSeen => reply(daemon.presence().snapshot()),
+        Call::OutOfSpace => reply(daemon.space.current()),
         Call::StartSession {
             agent,
             item,

@@ -211,7 +211,7 @@ async fn drive(
     // Without the record, a restart could not resume the session.
     if let Err(error) = record.write(&run.agent_session) {
         let _ = conversation.close().await;
-        return not_kept(run, &error);
+        return not_kept(daemon, run, &error);
     }
     let end = turns(daemon, loaded, run, stopped, &mut conversation, &mut record).await;
     let _ = conversation.close().await;
@@ -238,7 +238,7 @@ async fn turns(
     loop {
         record.prompted_ms = Some(crate::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
-            return not_kept(run, &error);
+            return not_kept(daemon, run, &error);
         }
         let turn = conversation.reply(prompt);
         tokio::pin!(turn);
@@ -263,6 +263,7 @@ async fn turns(
         let (_stop_reason, last_message) = match result {
             Ok(reply) => reply,
             Err(wf_harness::Error::Transcript(error)) => {
+                daemon.space.note("a transcript", &error);
                 return failed(format!(
                     "the transcript {} cannot be written: {error}",
                     run.transcript.display()
@@ -373,7 +374,8 @@ fn failed(because: String) -> End {
 }
 
 /// The session's record cannot be written, so a restart would not resume it as it is.
-fn not_kept(run: &Run, error: &std::io::Error) -> End {
+fn not_kept(daemon: &Daemon, run: &Run, error: &std::io::Error) -> End {
+    daemon.space.note("the record of a session", error);
     failed(format!(
         "the record of the session {} cannot be written: {error}",
         run.agent_session.display()

@@ -20,6 +20,7 @@ pub mod proto;
 mod runner;
 mod sandbox;
 mod server;
+mod space;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -38,6 +39,7 @@ use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, ensure_unclaimed, session_model};
+pub use space::OutOfSpace;
 pub use wf_net::{StorageClosed, StorageHandle};
 
 pub const STORE_FILE: &str = "store.redb";
@@ -250,6 +252,8 @@ pub struct Daemon {
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
     /// Turns true when the daemon halts; its background tasks then return.
     halted: tokio::sync::watch::Sender<bool>,
+    /// Whether the disk is full, as the last failed write said.
+    space: space::Space,
 }
 
 impl Daemon {
@@ -271,6 +275,7 @@ impl Daemon {
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
             halted: tokio::sync::watch::Sender::new(false),
+            space: space::Space::default(),
         });
         daemon.load_stored_workforces();
         tokio::spawn(rescan(Arc::downgrade(&daemon)));

@@ -44,6 +44,7 @@ pub(crate) async fn run_dispatcher(
         if *strong.halted.borrow() {
             return;
         }
+        strong.space.check(&strong.config.data_dir);
         dispatch_once(&strong, workforce, &loaded, &mut failed).await;
         notifier
             .announce(&strong, &loaded, &loaded.merges.waiting())
@@ -154,6 +155,10 @@ async fn dispatch_once(
                 )
                 .await;
             if let Err(error) = started {
+                daemon.space.note(
+                    &format!("the start of {} on #{}", agent.name, item.short()),
+                    &error,
+                );
                 failed.insert((item, agent.name.clone()), Instant::now());
                 tracing::warn!(
                     "could not start {} on #{}: {}",
