@@ -159,6 +159,7 @@ const KEYS: &[(&str, &str)] = &[
     ("pgup/pgdn", "a page up, down; also space"),
     ("wheel", "move what is under the pointer"),
     ("click", "pick a tab or an entry, again to open"),
+    ("", "follow a link, a key hint, a crumb"),
     ("shift-drag", "select text, as without the dashboard"),
     ("enter esc", "open, go back"),
     ("H L", "one pane or both, also shift ←/→"),
