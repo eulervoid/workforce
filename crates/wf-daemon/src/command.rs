@@ -118,12 +118,10 @@ impl CommandRunner<'_> {
             .process_group(0)
             .kill_on_drop(true);
         crate::inherit::only_stdio(&mut process);
-        let mut child = process
-            .spawn()
-            .map_err(|source| CommandError::Io {
-                path: command.command().to_path_buf(),
-                source,
-            })?;
+        let mut child = process.spawn().map_err(|source| CommandError::Io {
+            path: command.command().to_path_buf(),
+            source,
+        })?;
         // The group keeps the leader's id while any member lives, even once the leader is reaped.
         let group = child.id().map(|id| nix::unistd::Pid::from_raw(id as i32));
         let outcome = match tokio::time::timeout(timeout, child.wait()).await {
