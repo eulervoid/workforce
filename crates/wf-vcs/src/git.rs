@@ -371,6 +371,34 @@ impl VcsAdapter for GitCli {
         Ok(())
     }
 
+    fn check_out_tree(&self, path: &Path, tree: GitOid) -> Result<(), VcsError> {
+        let exists = self
+            .worktrees()?
+            .iter()
+            .any(|worktree| same_path(&worktree.path, path));
+        if !exists {
+            self.succeed(["worktree", "prune"])?;
+            if let Some(parent) = path.parent() {
+                std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
+            }
+            // A tree is no commit to check out, so the files come from `read-tree` below.
+            self.succeed_in(
+                &self.repository,
+                [
+                    OsStr::new("worktree"),
+                    OsStr::new("add"),
+                    OsStr::new("--detach"),
+                    OsStr::new("--no-checkout"),
+                    path.as_os_str(),
+                ],
+            )?;
+        }
+        let tree = tree.to_string();
+        self.succeed_in(path, ["read-tree", "-u", "--reset", &tree].map(OsStr::new))?;
+        self.succeed_in(path, ["clean", "-ffd", "--quiet"].map(OsStr::new))?;
+        Ok(())
+    }
+
     fn remove_worktree(&self, path: &Path) -> Result<(), VcsError> {
         self.succeed_in(
             &self.repository,
@@ -1060,5 +1088,48 @@ mod tests {
         let outcome = repo.git.advance("main", &old, &work).unwrap();
         assert!(matches!(outcome, Advance::Moved));
         assert_eq!(repo.main(), moved_to);
+    }
+
+    #[test]
+    fn a_tree_is_checked_out_clean_and_build_output_stays() {
+        let repo = TestRepo::new();
+        let main = repo.directory();
+        repo.write(&main, ".gitignore", "target/\n");
+        let first = repo.commit(&main, "ignore build output");
+        repo.write(&main, "file.txt", "changed\n");
+        repo.write(&main, "added.txt", "added\n");
+        repo.commit(&main, "second");
+        let tree: GitOid = git_in(&main, &["rev-parse", "HEAD^{tree}"])
+            .parse()
+            .unwrap();
+        let CommitId::Git(first) = first;
+
+        let path = repo.worktree_path("check");
+        repo.git.check_out_tree(&path, first).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path.join("file.txt")).unwrap(),
+            "one\ntwo\nthree\n"
+        );
+        assert!(!path.join("added.txt").exists());
+
+        repo.write(&path, "file.txt", "edited\n");
+        repo.write(&path, "stray.txt", "left behind\n");
+        std::fs::create_dir(path.join("target")).unwrap();
+        repo.write(&path, "target/build.o", "cached\n");
+        repo.git.check_out_tree(&path, tree).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(path.join("file.txt")).unwrap(),
+            "changed\n"
+        );
+        assert_eq!(
+            std::fs::read_to_string(path.join("added.txt")).unwrap(),
+            "added\n"
+        );
+        assert!(!path.join("stray.txt").exists());
+        assert!(path.join("target/build.o").exists());
+
+        repo.git.check_out_tree(&path, first).unwrap();
+        assert!(!path.join("added.txt").exists());
     }
 }
