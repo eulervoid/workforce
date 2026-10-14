@@ -1,0 +1,158 @@
+# The policy
+
+The policy says how the workforce works: the item types and their states, the lanes, the review and
+recovery levels, and where approved work is merged. It is part of the log, signed with your principal
+key, so every machine follows the same policy. It is not a file in the repository.
+
+```sh
+wf policy show                   # the policy in effect
+wf policy edit                   # edit it in $VISUAL or $EDITOR, then apply it
+wf policy apply policy.toml      # replace it with a file
+```
+
+Changing it needs the principal key of an owner. What only one machine should do, such as running
+programs or calling paid APIs, goes in the [machine config](machine-config.md) instead.
+
+## The default policy
+
+`wf init` starts with this policy. Each part is explained below.
+
+```toml
+[lanes.default]
+
+[lanes.meta]
+
+# Holds no items: its agents answer and escalate blockers.
+[lanes.supervision]
+
+[merge]
+mode = "local"
+target = "main"
+
+[[review]]
+name = "none"
+steps = []
+
+[[review]]
+name = "light"
+steps = [{ agent = { requires = ["review"] } }]
+
+[[review]]
+name = "standard"
+steps = [{ agent = { requires = ["review", "strong-model"] } }]
+
+[[review]]
+name = "critical"
+steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
+
+[[review]]
+name = "manual"
+steps = ["principal"]
+
+# What happens when a session ends without finishing: one step per unsuccessful attempt.
+[[recovery]]
+name = "none"
+steps = ["principal"]
+
+[[recovery]]
+name = "standard"
+steps = ["retry", "retry", "principal"]
+
+# A reviewer says what went wrong before the one retry.
+[[recovery]]
+name = "diagnose"
+steps = [{ agent = { requires = ["review"] } }, "retry", "principal"]
+
+[types.task]
+review = "manual"
+recovery = "standard"
+lane = "default"
+fields = ["priority", "labels", "requires"]
+depends_on = ["task", "decision"]
+initial = "open"
+states = ["draft", "open", "active", "review", "done", "cancelled"]
+
+[types.decision]
+lane = "default"
+fields = ["labels"]
+depends_on = []
+initial = "review"
+states = ["review", "done", "cancelled"]
+
+[types.distill]
+lane = "meta"
+recovery = "standard"
+fields = ["labels"]
+depends_on = []
+initial = "open"
+states = ["open", "active", "done", "cancelled"]
+```
+
+## `default_agent`
+
+The agent `wf session start` uses when you give no `--agent`; the default policy has none. Add it at
+the top, before any `[table]`, with `wf policy edit`:
+
+```toml
+default_agent = "ada"
+```
+
+`wf session start <item> -a <name>` overrides it.
+
+## Types
+
+Every item has a type. A type says:
+
+* `lane`: the lane its items go to, unless an item names another;
+* `fields`: which of `priority`, `labels` and `requires` its items may have;
+* `depends_on`: the types its items may depend on;
+* `states`: which of the six states `draft`, `open`, `active`, `review`, `done` and `cancelled` it
+  uses, and `initial`, the one items start in (`wf item add --draft` starts one as a draft instead);
+* `review` and `recovery`: the levels its items get when they name none.
+
+The built-in types are `task` (work an agent does), `decision` (a proposal you accept with
+`wf item done` or reject with `wf item cancel`), and `distill` (meta work in its own lane). You can add
+types of your own; the built-in ones cannot be removed.
+
+## Lanes
+
+A lane is a queue that agents take items from. An item is in one lane, its type's or its own
+(`--lane`); an agent takes items from the lanes in its definition (`wf agent add --lane`). The
+`supervision` lane holds no items: agents in it answer the blockers of other agents, or escalate them
+to you.
+
+## Review levels
+
+A review level is a list of steps the submitted work goes through, in order. A step is an agent that
+has the capabilities it `requires`, or `"principal"`: you. A level without steps is not reviewed: the
+work is merged as soon as the session submits. Levels are listed from least to most strict; an agent
+may raise the level of the item it works on, never lower it.
+
+| Level | Steps |
+|---|---|
+| `none` | merged as submitted |
+| `light` | an agent with the capability `review` |
+| `standard` | an agent with `review` and `strong-model` |
+| `critical` | an agent with `review` and `strong-model`, then you |
+| `manual` | you alone; the default for tasks |
+
+See [review-and-merge.md](review-and-merge.md) for how a review goes.
+
+## Recovery levels
+
+A recovery level says what happens when a session ends without finishing (it released the item, ran
+out of time or nudges, or failed): one step per unsuccessful attempt, and after the last one the item
+waits for you.
+
+| Step | Does |
+|---|---|
+| `"retry"` | the item may be started again, by any agent that can take it |
+| `{ agent = { requires = [...] } }` | an agent with these capabilities says what went wrong, in a diagnose session, before the next step |
+| `"principal"` | the item waits for you in `wf inbox` |
+
+`standard`, the default for tasks, tries twice more and then asks you.
+
+## Merge
+
+`[merge] target` is the branch approved work is merged into, `main` by default. `mode = "local"`
+merges in this repository; see [review-and-merge.md](review-and-merge.md#the-merge).
