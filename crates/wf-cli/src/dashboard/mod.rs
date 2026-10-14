@@ -31,6 +31,12 @@ const BACKLOG: usize = 200;
 
 pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
+    // A panic restores the terminal through ratatui's hook, which leaves the mouse reported.
+    let restore = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = execute!(std::io::stdout(), DisableMouseCapture);
+        restore(info);
+    }));
     let result = report_mouse()
         .map_err(anyhow::Error::from)
         .and_then(|()| event_loop(&mut terminal, workspace, only));
@@ -192,18 +198,24 @@ impl Feed {
     }
 
     /// Hands the app what was written to the transcripts of this machine's live sessions, and
-    /// of the session on screen.
+    /// of the session on screen if it ran here; those of other sessions are let go.
     fn read_transcripts(&mut self, workspace: &Workspace, app: &mut App) {
         let own = workspace.device_key();
-        let mut sessions: Vec<SessionId> = workspace
-            .state()
+        let state = workspace.state();
+        let mut sessions: Vec<SessionId> = state
             .live_sessions()
             .filter(|session| session.device() == own)
             .map(|session| session.id())
             .collect();
-        if let Some(Detail::Session(session)) = app.wanted().detail {
+        if let Some(Detail::Session(session)) = app.wanted().detail
+            && state
+                .session(session)
+                .is_some_and(|session| session.device() == own)
+        {
             sessions.push(session);
         }
+        self.readers.retain(|session, _| sessions.contains(session));
+        app.keep_transcripts(&sessions);
         for session in sessions {
             let reader = match self.readers.entry(session) {
                 std::collections::hash_map::Entry::Occupied(reader) => reader.into_mut(),
@@ -217,7 +229,12 @@ impl Feed {
                 }
             };
             match reader.read() {
-                Ok(entries) => app.transcribed(session, &entries),
+                Ok(written) => {
+                    app.transcribed(session, &written.entries);
+                    if let Some(error) = written.malformed {
+                        app.refresh_failed(&error);
+                    }
+                }
                 Err(error) => app.refresh_failed(&error),
             }
         }

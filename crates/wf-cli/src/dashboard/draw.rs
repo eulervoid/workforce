@@ -464,7 +464,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
                 .unwrap_or_default();
             let quote = cut_spans(
                 vec![Span::raw(format!("\"{quote}\""))],
-                usize::from(row.width) - 4,
+                usize::from(row.width).saturating_sub(4),
             );
             let mut more = vec![Span::raw("   ")];
             more.extend(quote);

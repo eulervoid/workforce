@@ -640,6 +640,12 @@ impl App {
         }
     }
 
+    /// Lets go of the transcripts of sessions other than `sessions`.
+    pub fn keep_transcripts(&mut self, sessions: &[SessionId]) {
+        self.transcripts
+            .retain(|session, _| sessions.contains(session));
+    }
+
     /// Takes in the lines of new events.
     pub fn logged(&mut self, lines: impl IntoIterator<Item = String>) {
         self.log.lines.extend(lines);

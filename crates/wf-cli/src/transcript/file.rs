@@ -34,7 +34,7 @@ impl Reader {
     }
 
     /// The whole entries written since the last read; none when the agent wrote nothing new.
-    pub fn read(&mut self) -> anyhow::Result<Vec<TranscriptEntry>> {
+    pub fn read(&mut self) -> anyhow::Result<Written> {
         let mut buffer = [0u8; 8192];
         loop {
             let read = self.file.read(&mut buffer)?;
@@ -50,15 +50,30 @@ impl Reader {
                 .push_str(std::str::from_utf8(&self.unfinished_bytes[..valid])?);
             self.unfinished_bytes.drain(..valid);
         }
-        let mut entries = Vec::new();
+        let mut written = Written::default();
         while let Some(newline) = self.pending.find('\n') {
             let line: String = self.pending.drain(..=newline).collect();
-            let entry: TranscriptEntry = serde_json::from_str(line.trim_end())
-                .with_context(|| format!("reading {}", self.path.display()))?;
-            entries.push(entry);
+            match serde_json::from_str(line.trim_end()) {
+                Ok(entry) => written.entries.push(entry),
+                // One line that is no entry does not cost those around it.
+                Err(error) => {
+                    written.malformed.get_or_insert_with(|| {
+                        anyhow::Error::new(error)
+                            .context(format!("skipped a line of {}", self.path.display()))
+                    });
+                }
+            }
         }
-        Ok(entries)
+        Ok(written)
     }
+}
+
+/// What a read found written since the last one.
+#[derive(Debug, Default)]
+pub struct Written {
+    pub entries: Vec<TranscriptEntry>,
+    /// Why the first line that is no entry was skipped, if one was.
+    pub malformed: Option<anyhow::Error>,
 }
 
 #[cfg(test)]
@@ -73,18 +88,31 @@ mod tests {
         let path = directory.path().join("session.jsonl");
         let mut file = File::create(&path).unwrap();
         let mut reader = Reader::open(&path).unwrap();
-        assert!(reader.read().unwrap().is_empty());
+        assert!(reader.read().unwrap().entries.is_empty());
         let line = r#"{"at":"2026-10-14T00:00:00Z","direction":"agent_log","message":"ü"}"#;
         let bytes = line.as_bytes();
         // Cut inside the two bytes of `ü`.
         let cut = line.find('ü').unwrap() + 1;
         file.write_all(&bytes[..cut]).unwrap();
-        assert!(reader.read().unwrap().is_empty());
+        assert!(reader.read().unwrap().entries.is_empty());
         file.write_all(&bytes[cut..]).unwrap();
         file.write_all(b"\n").unwrap();
-        let entries = reader.read().unwrap();
+        let entries = reader.read().unwrap().entries;
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].message, "ü");
-        assert!(reader.read().unwrap().is_empty());
+        assert!(reader.read().unwrap().entries.is_empty());
+    }
+
+    #[test]
+    fn a_line_that_is_no_entry_is_skipped() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("session.jsonl");
+        let mut file = File::create(&path).unwrap();
+        let mut reader = Reader::open(&path).unwrap();
+        let line = r#"{"at":"2026-10-14T00:00:00Z","direction":"agent_log","message":"ok"}"#;
+        writeln!(file, "{line}\nnot json\n{line}").unwrap();
+        let written = reader.read().unwrap();
+        assert_eq!(written.entries.len(), 2);
+        assert!(written.malformed.is_some());
     }
 }

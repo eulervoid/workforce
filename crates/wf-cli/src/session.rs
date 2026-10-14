@@ -278,7 +278,11 @@ fn watch(
     let mut ended = false;
     let mut last_refresh = std::time::Instant::now();
     loop {
-        let entries = reader.read()?;
+        let written = reader.read()?;
+        if let Some(error) = written.malformed {
+            anstream::eprintln!("wf: {error:#}");
+        }
+        let entries = written.entries;
         if entries.is_empty() {
             if no_follow || ended {
                 let ended = ended
