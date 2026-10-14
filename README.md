@@ -37,7 +37,8 @@ wf item add --title "Parse durations in policy" --review standard
 wf daemon start                  # starts the agents on what is ready, and merges what is approved
 wf session list                  # live and finished sessions
 wf session watch <item>          # follow the transcript of the latest session on an item
-wf watch                         # the dashboard: what waits on you, who works on what, and more
+wf                               # the dashboard: what waits on you, who works on what, and more
+wf log --follow [--item <item>]  # the events as they arrive
 wf inbox                         # what waits on you: blockers, reviews, merges, permission requests
 wf session allow <session>       # or `deny`, for a permission request an agent is waiting on
 wf review <item> --approve       # your step of a review level that has one
@@ -68,14 +69,14 @@ layout. Both options also work with `session start --watch`. Markdown is buffere
 paragraph or event boundary; raw mode streams text chunks immediately.
 
 ## The dashboard
-`wf watch` at a terminal is a dashboard to keep open, for example in a pane next to your editor.
+Plain `wf` at a terminal opens the dashboard, to keep open, for example in a pane next to your editor.
 Its first tab lists what waits on you, the agents at work with what each is doing right now, and
 what is stuck; `a`/`d` answer a permission request, `r` a blocker, `v` a review, right where they
 are listed. `enter` opens an item, or a session on its live transcript. The other tabs are the
 items grouped by state, drafts first (`s` on a draft releases it for the dispatcher), the agents with their sessions and how they are
 doing, and the event stream. `?` lists the keys. Where the keys go is marked in blue, dimmed
-while the terminal pane is not focused; in tmux that needs `set -g focus-events on`. Piped or with `--json`, `wf watch` prints the
-events as they arrive instead.
+while the terminal pane is not focused; in tmux that needs `set -g focus-events on`. `wf --item <item>` opens it on an item. Piped,
+`wf` prints the help; `wf log --follow` prints the event stream there, the whole log first.
 
 ## Sandbox
 The daemon runs every agent in [Fence](https://github.com/fencesandbox/fence), which has to be
@@ -130,7 +131,7 @@ merge_signing = "as_configured"  # default; "unsigned" never signs, "device" sig
 An agent with `--permissions ask`, or any agent on a machine without a sandbox, asks before its
 harness runs a tool. The request goes through the
 deciders of this machine's config, `~/.config/workforce/config.toml` (or `$XDG_CONFIG_HOME`), in
-their order; what all of them pass on waits for you in `wf watch` and `wf inbox`. Without a config,
+their order; what all of them pass on waits for you in the dashboard and `wf inbox`. Without a config,
 the built-in rules decide alone: a session may run its own `wf` commands.
 ```toml
 [permissions]

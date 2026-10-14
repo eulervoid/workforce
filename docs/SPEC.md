@@ -1119,7 +1119,7 @@ machine config lists them, until one answers. Each one allows, denies or passes 
 * **`agent`**: an agent that the daemon keeps one live session of, prompted with the request, the
   item and the guidance. It answers like a hook.
 
-What every decider passes on goes to a person, through `wf inbox`, `wf watch` or
+What every decider passes on goes to a person, through `wf inbox`, the dashboard (`wf`) or
 `wf session allow|deny`. Without a config the chain is `rules`, then the person. Deciders are set in the
 machine config (`$XDG_CONFIG_HOME/workforce/config.toml`), never in the signed policy: policy that syncs
 must not make other machines run programs or call paid APIs. Each decision, its decider and its reason
@@ -1313,7 +1313,9 @@ Missing and built by us: authorization, authenticated gossip membership, orderin
 ## 17. CLI (v1 surface)
 
 ```
-wf init [-i] | status | log | export | import <file> | members
+wf [--item <item>]                        # the dashboard at a terminal; piped, the help
+wf init [-i] | status | export | import <file> | members
+wf log [--item <item>] [--follow]         # verified; --follow: the whole log, then events as they arrive
 wf policy show|edit|apply <file>          # apply and edit need an owner's principal key
 wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
 wf item add [--draft]|list|show|edit|link|check|archive|unarchive   # all types: task, decision, ...
@@ -1325,7 +1327,6 @@ wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | 
 wf mentions <@handle | @handle/agent>
 wf review <item> --approve|--request-changes|--escalate [--note]
 wf inbox                                  # blockers, reviews, merges, recovery, permission requests
-wf watch [--item <item>]                  # the dashboard; piped, the events as they arrive
 wf agent add|list|edit|remove             # harness, model, capabilities, lanes, instructions, autonomy
 wf harness models <harness>               # the models a harness offers
 wf session start|list [--live]|show|stop|watch|allow|deny
