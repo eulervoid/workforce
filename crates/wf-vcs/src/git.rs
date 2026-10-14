@@ -381,7 +381,7 @@ impl VcsAdapter for GitCli {
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
             }
-            // A tree is no commit to check out, so the files come from `read-tree` below.
+            // The files come from the checkout below, which knows whether `tree` is a commit.
             self.succeed_in(
                 &self.repository,
                 [
@@ -394,7 +394,17 @@ impl VcsAdapter for GitCli {
             )?;
         }
         let tree = tree.to_string();
-        self.succeed_in(path, ["read-tree", "-u", "--reset", &tree].map(OsStr::new))?;
+        let kind = self.succeed(["cat-file", "-t", &tree])?;
+        if kind.trim() == "commit" {
+            // HEAD names the commit, so `git describe` and `git status` see it too.
+            self.succeed_in(
+                path,
+                ["checkout", "--quiet", "--detach", "--force", &tree].map(OsStr::new),
+            )?;
+        } else {
+            // A bare tree has no commit for HEAD to name; only the index and files change.
+            self.succeed_in(path, ["read-tree", "-u", "--reset", &tree].map(OsStr::new))?;
+        }
         self.succeed_in(path, ["clean", "-ffd", "--quiet"].map(OsStr::new))?;
         Ok(())
     }
@@ -1111,6 +1121,8 @@ mod tests {
             "one\ntwo\nthree\n"
         );
         assert!(!path.join("added.txt").exists());
+        assert_eq!(git_in(&path, &["rev-parse", "HEAD"]), first.to_string());
+        assert_eq!(git_in(&path, &["status", "--porcelain"]), "");
 
         repo.write(&path, "file.txt", "edited\n");
         repo.write(&path, "stray.txt", "left behind\n");
@@ -1131,5 +1143,7 @@ mod tests {
 
         repo.git.check_out_tree(&path, first).unwrap();
         assert!(!path.join("added.txt").exists());
+        assert_eq!(git_in(&path, &["rev-parse", "HEAD"]), first.to_string());
+        assert_eq!(git_in(&path, &["status", "--porcelain"]), "");
     }
 }
