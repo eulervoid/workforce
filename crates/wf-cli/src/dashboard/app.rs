@@ -578,10 +578,10 @@ const GROUPINGS: [ItemGrouping; 4] = [
 /// How many lines of the event stream are kept.
 const LOG_LINES: usize = 1000;
 
-/// The event stream of `wf watch`.
+/// The event stream, as `wf log --follow` prints it.
 #[derive(Clone, Debug)]
 pub struct LogTab {
-    /// One entry for each thing an event did, as `wf watch` prints it, the oldest first.
+    /// One entry for each thing an event did, as `wf log --follow` prints it, the oldest first.
     pub lines: Vec<String>,
     pub scroll: Scroll,
     /// Only lines with this text are shown.

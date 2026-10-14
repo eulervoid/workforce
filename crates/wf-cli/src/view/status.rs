@@ -230,7 +230,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
     } else if waiting_on_you > 0 {
         Some(format!("{waiting_on_you} waiting on you: `wf inbox`"))
     } else if !live.is_empty() {
-        Some("follow the agents: `wf watch`".to_string())
+        Some("follow the agents: `wf`".to_string())
     } else if ready_items == 0 {
         Some("add an item: `wf item add`".to_string())
     } else if !an_agent_starts_here {

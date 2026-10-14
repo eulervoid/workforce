@@ -675,14 +675,14 @@ fn activity_entry(
     (line, text)
 }
 
-/// One line of `wf watch`: `14:02  #k3f7ab  @ada/coder · moved to done`, and the text that goes
+/// One line of `wf log --follow`: `14:02  #k3f7ab  @ada/coder · moved to done`, and the text that goes
 /// with it below.
-pub fn watch_line(line: &crate::view::WatchLineView) -> String {
-    watch_line_for(line, text_width())
+pub fn event_line(line: &crate::view::EventLineView) -> String {
+    event_line_for(line, text_width())
 }
 
-/// [`watch_line`] wrapped to `width`, or not at all.
-pub fn watch_line_for(line: &crate::view::WatchLineView, width: Option<usize>) -> String {
+/// [`event_line`] wrapped to `width`, or not at all.
+pub fn event_line_for(line: &crate::view::EventLineView, width: Option<usize>) -> String {
     use style::{DIM, paint};
     let (_, time) = local_date_and_time(&line.activity.at);
     let item = match &line.item {

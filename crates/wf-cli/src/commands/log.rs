@@ -100,8 +100,8 @@ fn concerns(state: &State, event: &Event, only: Option<ItemId>) -> bool {
 }
 
 fn show(json: bool, workspace: &Workspace, events: &[Event], new: &[Event]) -> anyhow::Result<()> {
-    for line in view::watch_lines(workspace.state(), events, new) {
-        emit_line(json, &line, render::watch_line)?;
+    for line in view::event_lines(workspace.state(), events, new) {
+        emit_line(json, &line, render::event_line)?;
     }
     Ok(())
 }

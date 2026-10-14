@@ -1,4 +1,4 @@
-//! The dashboard: `wf watch` at a terminal. It shows what waits on the principal, what runs and
+//! The dashboard: plain `wf` at a terminal. It shows what waits on the principal, what runs and
 //! what is stuck, and answers what waits.
 
 mod act;
@@ -299,7 +299,7 @@ impl Feed {
     }
 }
 
-/// What the `new` events did, as `wf watch` prints it, read against all `events`, for a window
+/// What the `new` events did, as `wf log --follow` prints it, read against all `events`, for a window
 /// `width` wide.
 fn log_lines(
     state: &wf_core::state::State,
@@ -309,9 +309,9 @@ fn log_lines(
 ) -> Vec<String> {
     // Within the margin of the Log tab.
     let width = Some(usize::from(width.saturating_sub(1)).min(100));
-    view::watch_lines(state, events, new)
+    view::event_lines(state, events, new)
         .iter()
-        .map(|line| render::watch_line_for(line, width))
+        .map(|line| render::event_line_for(line, width))
         .collect()
 }
 
