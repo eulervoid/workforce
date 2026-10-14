@@ -12,8 +12,8 @@ use wf_core::id::HashId;
 use wf_core::item::ItemState;
 
 use super::app::{
-    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Request, Row, STRIP,
-    Scroll, Spot, Starter, Status, Tab, Target,
+    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Hovered, Opened, Prompt, Request, Row,
+    STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
 use super::links;
 use super::snapshot::{
@@ -136,13 +136,23 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     shown.hovered = app
         .pointer
         .filter(|_| app.mouse_passes())
-        .and_then(|pointer| shown.clickable.spot(pointer))
-        .cloned();
-    if let Some(spot) = &shown.hovered {
-        frame
-            .buffer_mut()
-            .set_style(spot.area, Style::new().underlined());
-        draw_tip(frame, &app.tip(&spot.target), latest_width, latest);
+        .and_then(|pointer| shown.clickable.hovered(pointer));
+    match &shown.hovered {
+        Some(Hovered::Spot(spot)) => {
+            frame
+                .buffer_mut()
+                .set_style(spot.area, Style::new().underlined());
+            draw_tip(frame, &app.tip(&spot.target), latest_width, latest);
+        }
+        // An inactive tab under the pointer is no longer dim: stronger than the other inactive
+        // tabs, weaker than the active one.
+        Some(Hovered::Tab(tab)) if *tab != app.tab => {
+            let label = shown.clickable.tabs.iter().find(|(each, _)| each == tab);
+            if let Some((_, label)) = label {
+                frame.buffer_mut().set_style(*label, Style::new().not_dim());
+            }
+        }
+        Some(Hovered::Tab(_)) | None => {}
     }
     shown
 }

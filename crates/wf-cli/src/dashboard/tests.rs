@@ -1912,3 +1912,23 @@ fn a_click_on_a_count_in_the_header_does_nothing() {
         assert_eq!(screen(&mut app, 60, 24), before, "{count}");
     }
 }
+
+#[test]
+fn an_inactive_tab_under_the_pointer_is_drawn_stronger_than_the_others() {
+    use ratatui::style::Modifier;
+    let mut app = app();
+    let (items, row) = find(&mut app, 60, 24, "2 Items");
+    let (agents, _) = find(&mut app, 60, 24, "3 Agents");
+    let (now, _) = find(&mut app, 60, 24, "1 Now");
+    let modifiers = |app: &mut App, column| style_at(app, 60, 24, column, row).add_modifier;
+    assert!(modifiers(&mut app, items).contains(Modifier::DIM));
+    assert!(app.hover(items, row));
+    assert!(!modifiers(&mut app, items).contains(Modifier::DIM));
+    assert!(!modifiers(&mut app, items).contains(Modifier::REVERSED));
+    assert!(modifiers(&mut app, agents).contains(Modifier::DIM));
+    assert!(modifiers(&mut app, now).contains(Modifier::REVERSED));
+    // Along the same tab nothing is drawn again; off it, it is dim again.
+    assert!(!app.hover(items + 3, row));
+    assert!(app.hover(items, row + 3));
+    assert!(modifiers(&mut app, items).contains(Modifier::DIM));
+}

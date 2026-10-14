@@ -373,8 +373,17 @@ pub struct Drawn {
     pub text: Option<Scroll>,
     pub list_top: Option<usize>,
     pub clickable: Clickable,
-    /// The link or button under the pointer.
-    pub hovered: Option<Spot>,
+    /// What is under the pointer.
+    pub hovered: Option<Hovered>,
+}
+
+/// What a click can land on that shows the pointer is over it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Hovered {
+    /// A link or a button: underlined, with its tip.
+    Spot(Spot),
+    /// The label of a tab: stronger than the other inactive tabs.
+    Tab(Tab),
 }
 
 /// Where drawing put what a click can land on.
@@ -395,6 +404,17 @@ impl Clickable {
     /// The link or button at `position`.
     pub fn spot(&self, position: Position) -> Option<&Spot> {
         self.spots.iter().find(|spot| spot.area.contains(position))
+    }
+
+    /// The link, button or tab at `position`.
+    pub fn hovered(&self, position: Position) -> Option<Hovered> {
+        if let Some(spot) = self.spot(position) {
+            return Some(Hovered::Spot(spot.clone()));
+        }
+        self.tabs
+            .iter()
+            .find(|(_, label)| label.contains(position))
+            .map(|(tab, _)| Hovered::Tab(*tab))
     }
 }
 
@@ -719,9 +739,8 @@ pub struct App {
     pub clickable: Clickable,
     /// Where the pointer was last reported.
     pub pointer: Option<Position>,
-    /// The link or button under the pointer, as last drawn: underlined, with its tip at the
-    /// right of the latest event.
-    pub hovered: Option<Spot>,
+    /// The link, button or tab under the pointer, as last drawn.
+    pub hovered: Option<Hovered>,
     pub unconfirmed_allow: Option<UnconfirmedAllow>,
     /// Whether the terminal pane the dashboard runs in is focused, as far as the terminal reports
     /// it; a terminal that does not report it counts as focused.
@@ -1495,8 +1514,8 @@ impl App {
         }
     }
 
-    /// The pointer moved to `column`, `row`. Returns whether that took it onto or off a link or
-    /// button, which is drawn again only then.
+    /// The pointer moved to `column`, `row`. Returns whether that took it onto or off a link, a
+    /// button or a tab, which is drawn again only then.
     pub fn hover(&mut self, column: u16, row: u16) -> bool {
         let position = Position::new(column, row);
         self.pointer = Some(position);
@@ -1507,7 +1526,7 @@ impl App {
     }
 
     /// The terminal pane was focused, or left. Returns whether that changed anything, which is
-    /// drawn again only then. Leaving it lets go of the link or button under the pointer.
+    /// drawn again only then. Leaving it lets go of what is under the pointer.
     pub fn terminal_focus(&mut self, focused: bool) -> bool {
         if self.terminal_focused == focused {
             return false;
@@ -1520,12 +1539,12 @@ impl App {
         true
     }
 
-    /// The link or button at `position` as last drawn, while the mouse acts.
-    fn hovered_at(&self, position: Position) -> Option<Spot> {
+    /// The link, button or tab at `position` as last drawn, while the mouse acts.
+    fn hovered_at(&self, position: Position) -> Option<Hovered> {
         if !self.mouse_passes() {
             return None;
         }
-        self.clickable.spot(position).cloned()
+        self.clickable.hovered(position)
     }
 
     /// Selects the entry at `index` of the list on screen and gives the list the keys; opens it
