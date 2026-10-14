@@ -105,7 +105,7 @@ fn end(
         .session(session)
         .expect("the session was resolved when the workspace was opened")
         .item();
-    workspace.end_session(session, finish)?;
+    workspace.end_session(finish)?;
     emit(
         json,
         &Done {

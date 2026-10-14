@@ -69,7 +69,8 @@ fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
     .chain(config.allow_write.iter().cloned())
     .collect();
 
-    // With these an agent signs as the device or the principal, or turns its sandbox off.
+    // With these an agent signs as the device or the principal, has the daemon act for the
+    // principal, or turns its sandbox off.
     let mut secrets = vec![
         access.data_dir.join("keys"),
         access.data_dir.join("*").join("principal.key"),
@@ -390,6 +391,7 @@ mod tests {
         for path in [
             "/home/ada/.local/share/workforce/keys/device.key",
             "/home/ada/.local/share/workforce/keys/device-ssh",
+            "/home/ada/.local/share/workforce/keys/principal.token",
             "/home/ada/.local/share/workforce/w1/principal.key",
             "/home/ada/.config/workforce/config.toml",
         ] {

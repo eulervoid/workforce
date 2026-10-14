@@ -3,7 +3,9 @@
 //! The daemon serves the replica, not commands: the CLI asks for the state and for events, and
 //! has the daemon author events, so rendering, drafts and prompts stay in the CLI. Frames are
 //! length-prefixed postcard. The first message in each direction carries the protocol version,
-//! so a CLI and a daemon from different builds refuse each other cleanly.
+//! so a CLI and a daemon from different builds refuse each other cleanly. The client's second
+//! message is the token it presents, from which the daemon decides whom the connection acts for
+//! ([`crate::caller`]); no request names an actor.
 
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -13,13 +15,15 @@ use serde::{Deserialize, Serialize};
 use wf_core::encoding;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, DeviceKey};
+use wf_core::identity::DeviceKey;
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_harness::Permission;
 use wf_net::frame::MAX_FRAME_LEN;
 
-pub const PROTOCOL_VERSION: u32 = 11;
+use crate::caller::{Caller, Token};
+
+pub const PROTOCOL_VERSION: u32 = 12;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -41,17 +45,26 @@ pub struct Hello {
     pub version: u32,
 }
 
+/// Sent after [`Hello`]: the token of the session the client runs in, or the principal token,
+/// or nothing when it can read neither.
+#[derive(Serialize, Deserialize)]
+pub struct Credential {
+    pub token: Option<Token>,
+}
+
 #[derive(Serialize, Deserialize)]
 pub enum HelloReply {
     /// `device` is the device the daemon signs as, so that a client knows it without reading
-    /// the device key, which agents are not let to.
+    /// the device key, which agents are not let to. `caller` is whom the connection acts for.
     Ready {
         version: u32,
         device: DeviceKey,
+        caller: Caller,
     },
-    Refused {
-        version: u32,
-    },
+    /// Answered to [`Hello`] of another protocol version, without waiting for the [`Credential`].
+    Refused { version: u32 },
+    /// The token is none the daemon handed out, or there was none.
+    Unrecognized,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -60,9 +73,12 @@ pub struct Request {
     pub call: Call,
 }
 
-#[derive(Serialize, Deserialize)]
-///
 /// Each call is answered with a [`Reply`] of the type its documentation names.
+///
+/// A connection that acts for a session makes calls in the session's workforce only: the reads
+/// (`State`, `Event`, `Events`, `LastSeen`, `Permissions`), `Author`, `SyncNow` and `EndSession`. `EndSession` is for sessions only; the other calls are
+/// for the principal only.
+#[derive(Serialize, Deserialize)]
 pub enum Call {
     /// The encoded [`wf_core::state::State`], as `Vec<u8>`.
     State,
@@ -71,9 +87,9 @@ pub enum Call {
     /// A page of the log: up to [`EVENTS_PER_PAGE`] events in the order the daemon applied them,
     /// starting at position `from`, as `Vec<Event>`. An empty page is the end.
     Events { from: u64 },
-    /// Checks the policy, signs with the device key of the daemon and stores the event; answered
-    /// with the `Event`.
-    Author { actor: Actor, body: Box<EventBody> },
+    /// Checks the policy, signs with the device key of the daemon and stores the event, written
+    /// by whom the connection acts for; answered with the `Event`.
+    Author { body: Box<EventBody> },
     /// Syncs with every other bound device now; answered with a `Vec<PeerSync>`.
     SyncNow,
     /// Founds the workforce of this genesis as a fork of the one the request names, from what the
@@ -100,9 +116,9 @@ pub enum Call {
         item: ItemId,
         repository: PathBuf,
     },
-    /// Ends a live session of this machine after the agent's turn, as the agent says, and
+    /// Ends the session the connection acts for after the agent's turn, as the agent says, and
     /// applies what follows from it to its item; answered with `()`.
-    EndSession { session: SessionId, finish: Finish },
+    EndSession { finish: Finish },
     /// Stops a live session of this machine now, for the principal; answered with `()`.
     StopSession(SessionId),
     /// The permission requests that sessions of this machine wait to have answered, as

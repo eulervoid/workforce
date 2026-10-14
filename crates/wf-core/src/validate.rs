@@ -664,7 +664,8 @@ impl State {
 
     /// Checks what the acting agent may do, if the actor is one. Run by the author before signing,
     /// together with [`State::check_policy`]. These are guards against mistakes and shortcuts,
-    /// not against attacks: members are trusted and their keys are on disk.
+    /// not against members, who are trusted and whose keys are on disk. The daemon decides the
+    /// actor from the connection, so for an agent in its sandbox they are the last word.
     pub fn check_actor(
         &self,
         author: DeviceKey,

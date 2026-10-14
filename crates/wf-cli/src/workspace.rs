@@ -10,6 +10,7 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey, DeviceSigner, PrincipalSigner};
 use wf_core::lifecycle::Finish;
 use wf_core::state::State;
+use wf_daemon::caller::Caller;
 use wf_daemon::client::DaemonClient;
 use wf_daemon::proto::HeldPermission;
 use wf_harness::Permission;
@@ -26,19 +27,21 @@ pub struct WorkforceFile {
 }
 
 /// Set by the runner for the processes of an agent session: what they write is the session's.
+/// With a daemon, the daemon says whom a process acts for, from the token it presents.
 pub const SESSION_VARIABLE: &str = "WF_SESSION";
 
 fn agent_actor(state: &State, session: &str) -> anyhow::Result<Actor> {
     let id: SessionId = session
         .parse()
         .with_context(|| format!("{SESSION_VARIABLE} is not a session id"))?;
+    session_actor(state, id)
+}
+
+fn session_actor(state: &State, id: SessionId) -> anyhow::Result<Actor> {
     let folded = state
         .session(id)
-        .ok_or_else(|| anyhow!("{SESSION_VARIABLE} names no session of this workforce"))?;
-    Ok(Actor::Agent {
-        agent: folded.agent().clone(),
-        session: id,
-    })
+        .ok_or_else(|| anyhow!("session {id} is not one of this workforce"))?;
+    Ok(folded.actor())
 }
 
 pub fn now_ms() -> u64 {
@@ -130,7 +133,7 @@ impl Workspace {
             data.remember_repository(&id, repository);
         }
         // With a daemon, only the daemon reads the device key: agents are not let to.
-        if !refold && let Some(mut client) = DaemonClient::connect(&data.daemon_socket())? {
+        if !refold && let Some(mut client) = data.connect_daemon()? {
             let device = client.device();
             let state = client.state(id).with_context(|| {
                 format!("the daemon cannot serve workforce {id}, named by {named_by}")
@@ -176,9 +179,15 @@ impl Workspace {
         let principal = state.principal_of(&device).ok_or_else(|| {
             anyhow!("this machine's device key is not bound to a member of the workforce")
         })?;
-        let actor = match std::env::var(SESSION_VARIABLE) {
-            Ok(session) => agent_actor(state, &session)?,
-            Err(_) => Actor::Principal(principal),
+        let actor = match &source {
+            Source::Daemon { client, .. } => match client.borrow().caller() {
+                Caller::Principal => Actor::Principal(principal),
+                Caller::Session { session, .. } => session_actor(state, session)?,
+            },
+            Source::Local(..) => match std::env::var(SESSION_VARIABLE) {
+                Ok(session) => agent_actor(state, &session)?,
+                Err(_) => Actor::Principal(principal),
+            },
         };
         Ok(Self {
             source,
@@ -198,7 +207,7 @@ impl Workspace {
         (replicated, self.workforce)
     }
 
-    /// The session this process works in, when `WF_SESSION` names one.
+    /// The session this process works in: the daemon's say, or `WF_SESSION` without a daemon.
     pub fn session(&self) -> Option<SessionId> {
         match &self.actor {
             Actor::Agent { session, .. } => Some(*session),
@@ -282,7 +291,7 @@ impl Workspace {
             }
             Source::Daemon { client, state } => {
                 let mut client = client.borrow_mut();
-                let event = client.author(self.workforce, self.actor.clone(), body)?;
+                let event = client.author(self.workforce, body)?;
                 *state = client.state(self.workforce)?;
                 Ok(event)
             }
@@ -328,11 +337,11 @@ impl Workspace {
         Ok(client.answer_permission(workforce, session, answer)?)
     }
 
-    /// Ends a session that runs in the daemon.
-    pub fn end_session(&mut self, session: SessionId, finish: Finish) -> anyhow::Result<()> {
+    /// Ends the session this process works in, which runs in the daemon.
+    pub fn end_session(&mut self, finish: Finish) -> anyhow::Result<()> {
         let workforce = self.workforce;
         let (client, state) = self.daemon("end sessions")?;
-        client.end_session(workforce, session, finish)?;
+        client.end_session(workforce, finish)?;
         *state = client.state(workforce)?;
         Ok(())
     }

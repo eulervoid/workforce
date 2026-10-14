@@ -5993,8 +5993,10 @@ dependencies = [
 name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
+ "data-encoding",
  "globset",
  "humantime",
+ "rand 0.10.3",
  "reqwest",
  "rustls",
  "serde",

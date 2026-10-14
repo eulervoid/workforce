@@ -3,6 +3,7 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 use wf_core::testing::*;
+use wf_daemon::caller::read_principal_token;
 use wf_daemon::client::{ClientError, DaemonClient};
 use wf_daemon::proto::{
     Hello, HelloReply, PROTOCOL_VERSION, ProtoError, read_message, write_message,
@@ -79,8 +80,12 @@ async fn blocking<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -
     tokio::task::spawn_blocking(job).await.unwrap()
 }
 
+/// Connects as the principal, as the CLI does: the tests keep the socket in the data directory.
 fn connect(socket: &Path) -> DaemonClient {
-    DaemonClient::connect(socket).unwrap().expect("a daemon")
+    let token = read_principal_token(socket.parent().unwrap());
+    DaemonClient::connect(socket, token)
+        .unwrap()
+        .expect("a daemon")
 }
 
 #[tokio::test]
@@ -88,7 +93,7 @@ async fn the_daemon_serves_the_state_events_and_authoring() {
     let running = start().await;
     let socket = running.socket.clone();
     let workforce = running.fixture.workforce();
-    let actor = running.fixture.founder_actor();
+    let principal = running.fixture.founder_actor();
 
     let device = running.fixture.devices[0].key();
     let (state, events, authored, after) = blocking(move || {
@@ -101,7 +106,7 @@ async fn the_daemon_serves_the_state_events_and_authoring() {
         let state = client.state(workforce).unwrap();
         let events = client.events(workforce).unwrap();
         let authored = client
-            .author(workforce, actor, create("task", "through the socket"))
+            .author(workforce, create("task", "through the socket"))
             .unwrap();
         let fetched = client.event(workforce, authored.id()).unwrap();
         assert_eq!(fetched.as_ref(), Some(&authored));
@@ -113,6 +118,10 @@ async fn the_daemon_serves_the_state_events_and_authoring() {
     assert_eq!(events.len(), 2);
     assert_eq!(after.event_count(), 3);
     assert!(after.contains(&authored.id()));
+    assert_eq!(
+        authored.content.actor, principal,
+        "the principal token acts for the principal"
+    );
 
     running.shutdown.send(()).unwrap();
     running.task.await.unwrap().unwrap();
@@ -124,9 +133,8 @@ async fn policy_violations_come_back_as_errors() {
     let running = start().await;
     let socket = running.socket.clone();
     let workforce = running.fixture.workforce();
-    let actor = running.fixture.founder_actor();
     let result =
-        blocking(move || connect(&socket).author(workforce, actor, create("nonsense", "x"))).await;
+        blocking(move || connect(&socket).author(workforce, create("nonsense", "x"))).await;
     assert!(matches!(result, Err(ClientError::Failed(message)) if message.contains("nonsense")));
 
     let unknown = wf_core::id::WorkforceId::from(wf_core::id::EventId::of(b"unknown"));
@@ -166,8 +174,23 @@ async fn a_client_of_another_build_is_refused() {
 }
 
 #[tokio::test]
+async fn a_connection_without_a_token_of_the_daemon_acts_for_nobody() {
+    let running = start().await;
+    for token in [None, Some("ab".repeat(32).parse().unwrap())] {
+        let socket = running.socket.clone();
+        let result = blocking(move || DaemonClient::connect(&socket, token)).await;
+        assert!(
+            matches!(result, Err(ClientError::Unrecognized)),
+            "{:?}",
+            result.map(|_| ())
+        );
+    }
+}
+
+#[tokio::test]
 async fn a_second_daemon_on_the_same_socket_is_refused() {
     let running = start().await;
+    let workforce = running.fixture.workforce();
     let second = Daemon::start(
         Config {
             data_dir: running._directory.path().to_path_buf(),
@@ -183,6 +206,8 @@ async fn a_second_daemon_on_the_same_socket_is_refused() {
     .unwrap();
     let result = second.serve(std::future::pending()).await;
     assert!(matches!(result, Err(DaemonError::AlreadyRunning(_))));
+    let socket = running.socket.clone();
+    blocking(move || connect(&socket).state(workforce).unwrap()).await;
 }
 
 async fn start_peer(
@@ -245,13 +270,12 @@ async fn daemons_of_two_devices_converge_on_their_own() {
         .unwrap()
         .remember(laptop.node().await.unwrap().local_addr());
     let workforce = fixture.workforce();
-    let actor = fixture.founder_actor();
 
     let written = {
         let socket = laptop_socket.clone();
         blocking(move || {
             connect(&socket)
-                .author(workforce, actor, create("task", "written on the laptop"))
+                .author(workforce, create("task", "written on the laptop"))
                 .unwrap()
         })
         .await
@@ -347,18 +371,13 @@ async fn a_daemon_follows_a_fork_with_the_history_it_already_has() {
         .unwrap()
         .remember(laptop.node().await.unwrap().local_addr());
     let parent = fixture.workforce();
-    let actor = fixture.founder_actor();
 
     let socket = laptop_socket.clone();
     blocking(move || {
         let mut client = connect(&socket);
         for index in 0..5 {
             client
-                .author(
-                    parent,
-                    actor.clone(),
-                    create("task", &format!("task {index}")),
-                )
+                .author(parent, create("task", &format!("task {index}")))
                 .unwrap();
         }
     })
@@ -460,12 +479,11 @@ async fn a_running_daemon_joins_a_workforce_with_its_own_key() {
         invite: secret.key(),
         expires_ms: u64::MAX / 2,
     };
-    let actor = fixture.founder_actor();
     let body = EventBody::InviteCreated(
         Signed::sign(&fixture.founder, Some(workforce), statement).unwrap(),
     );
     let socket = laptop_socket.clone();
-    let invite = blocking(move || connect(&socket).author(workforce, actor, body).unwrap()).await;
+    let invite = blocking(move || connect(&socket).author(workforce, body).unwrap()).await;
     let code = InviteCode::new(workforce, invite.id(), &secret, vec![laptop.device()]);
 
     let socket = vm_socket.clone();

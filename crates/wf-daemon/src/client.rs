@@ -7,17 +7,18 @@ use std::path::Path;
 use serde::de::DeserializeOwned;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, DeviceKey};
+use wf_core::identity::DeviceKey;
 use wf_core::invite::InviteCode;
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_core::state::State;
 use wf_harness::Permission;
 
+use crate::caller::{Caller, Token};
 use crate::peers::PeerSync;
 use crate::proto::{
-    Call, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Reply, Request,
-    read_message, write_message,
+    Call, Credential, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Reply,
+    Request, read_message, write_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -26,16 +27,23 @@ pub enum ClientError {
     Proto(#[from] ProtoError),
     #[error("the daemon refused: {0}")]
     Failed(String),
+    #[error(
+        "the daemon does not know whom this connection acts for: a session presents its token, \
+         the principal the daemon's principal token"
+    )]
+    Unrecognized,
 }
 
 pub struct DaemonClient {
     stream: UnixStream,
     device: DeviceKey,
+    caller: Caller,
 }
 
 impl DaemonClient {
-    /// `Ok(None)` when no daemon is listening.
-    pub fn connect(socket: &Path) -> Result<Option<Self>, ClientError> {
+    /// Connects as whom `token` makes the connection act for. `Ok(None)` when no daemon is
+    /// listening.
+    pub fn connect(socket: &Path, token: Option<Token>) -> Result<Option<Self>, ClientError> {
         let mut stream = match UnixStream::connect(socket) {
             Ok(stream) => stream,
             // A path longer than a socket address holds cannot be listened on either.
@@ -55,8 +63,14 @@ impl DaemonClient {
                 version: PROTOCOL_VERSION,
             },
         )?;
+        write_message(&mut stream, &Credential { token })?;
         match read_message(&mut stream)? {
-            HelloReply::Ready { device, .. } => Ok(Some(Self { stream, device })),
+            HelloReply::Ready { device, caller, .. } => Ok(Some(Self {
+                stream,
+                device,
+                caller,
+            })),
+            HelloReply::Unrecognized => Err(ClientError::Unrecognized),
             HelloReply::Refused { version } => Err(ProtoError::VersionMismatch {
                 daemon: version,
                 client: PROTOCOL_VERSION,
@@ -68,6 +82,11 @@ impl DaemonClient {
     /// The device the daemon signs as: this machine's.
     pub fn device(&self) -> DeviceKey {
         self.device
+    }
+
+    /// Whom the daemon acts for on this connection.
+    pub fn caller(&self) -> Caller {
+        self.caller
     }
 
     /// Makes `call` and reads its [`Reply`] as the type the call is answered with.
@@ -116,19 +135,14 @@ impl DaemonClient {
         }
     }
 
+    /// Has the daemon author `body` as whom the connection acts for.
     pub fn author(
         &mut self,
         workforce: WorkforceId,
-        actor: Actor,
         body: EventBody,
     ) -> Result<Event, ClientError> {
-        self.call(
-            workforce,
-            Call::Author {
-                actor,
-                body: Box::new(body),
-            },
-        )
+        let body = Box::new(body);
+        self.call(workforce, Call::Author { body })
     }
 
     pub fn sync_now(&mut self, workforce: WorkforceId) -> Result<Vec<PeerSync>, ClientError> {
@@ -179,14 +193,13 @@ impl DaemonClient {
         self.call(workforce, call)
     }
 
-    /// Has the daemon end a session of this machine.
+    /// Has the daemon end the session the connection acts for.
     pub fn end_session(
         &mut self,
         workforce: WorkforceId,
-        session: SessionId,
         finish: Finish,
     ) -> Result<(), ClientError> {
-        self.call(workforce, Call::EndSession { session, finish })
+        self.call(workforce, Call::EndSession { finish })
     }
 
     /// Has the daemon stop a session of this machine now.
@@ -232,6 +245,6 @@ mod tests {
     fn no_daemon_listens_on_a_socket_path_too_long_for_one() {
         let directory = tempfile::tempdir().unwrap();
         let socket = directory.path().join("d".repeat(200)).join("daemon.sock");
-        assert!(matches!(DaemonClient::connect(&socket), Ok(None)));
+        assert!(matches!(DaemonClient::connect(&socket, None), Ok(None)));
     }
 }
