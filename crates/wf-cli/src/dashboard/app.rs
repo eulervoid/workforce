@@ -26,6 +26,9 @@ use crate::transcript::{Transcript, Verbosity};
 /// From this width the detail sits right of the list, instead of in its place.
 pub const WIDE: u16 = 120;
 
+/// How many columns a pane folded away keeps at its edge, in a wide window.
+pub const STRIP: u16 = 2;
+
 /// How many lines a text moves for a notch of the mouse wheel.
 const WHEEL_LINES: usize = 3;
 
@@ -310,11 +313,20 @@ impl<Key: Clone + PartialEq> Selection<Key> {
     }
 }
 
-/// Which of the list and the detail beside it has the keys, in a wide window.
+/// One of the two panes of a tab: its list, and the detail opened from it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Focus {
+pub enum Pane {
     List,
     Detail,
+}
+
+/// Whether a wide window shows both panes side by side.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Split {
+    Both,
+    /// Only the pane with the keys, across the window as in a narrow one; the other is folded
+    /// away to a strip at its edge.
+    One,
 }
 
 /// What a tab of a list shows besides its selection.
@@ -323,7 +335,7 @@ pub struct Panes {
     /// The details opened from the list, the latest on top.
     pub stack: Vec<Opened>,
     /// In a wide window, which of the list and the detail opened beside it has the keys.
-    pub focus: Focus,
+    pub focus: Pane,
     /// The first line of the list on screen, kept while the selection moves within it.
     pub list_top: usize,
 }
@@ -341,7 +353,7 @@ impl<Key> Default for ListTab<Key> {
             selection: Selection::default(),
             panes: Panes {
                 stack: Vec::new(),
-                focus: Focus::Detail,
+                focus: Pane::Detail,
                 list_top: 0,
             },
         }
@@ -365,6 +377,8 @@ pub struct Clickable {
     pub list: Option<ClickableList>,
     /// The detail beside the list, in a wide window.
     pub detail: Option<Rect>,
+    /// The strip of the pane folded away, in a wide window that shows one.
+    pub strip: Option<Rect>,
 }
 
 /// A list as it is on screen.
@@ -577,6 +591,8 @@ pub struct App {
     /// How much of a transcript is shown: everything, as `wf session watch --full` shows it, or
     /// cut short.
     pub verbosity: Verbosity,
+    /// For every tab with a list, alike.
+    pub split: Split,
     pub width: u16,
     pub height: u16,
     pub time_zone: TimeZone,
@@ -607,6 +623,7 @@ impl App {
             },
             prompt: None,
             verbosity: Verbosity::Abridged,
+            split: Split::Both,
             width: 80,
             height: 24,
             time_zone,
@@ -678,18 +695,24 @@ impl App {
         self.width >= WIDE
     }
 
-    /// How many columns the list takes in a wide window.
+    /// Whether the list and the detail are side by side: in a wide window, unless one is folded
+    /// away.
+    pub fn shows_both(&self) -> bool {
+        self.is_wide() && self.split == Split::Both
+    }
+
+    /// How many columns the list takes beside the detail.
     pub fn list_width(&self) -> u16 {
         (self.width * 2 / 5).min(64)
     }
 
-    /// How many columns the text of a detail has: the window's, or what the list leaves of it,
-    /// less the margin.
+    /// How many columns the text of a detail has: what the list or the strip leave of the
+    /// window, less the margin.
     pub fn detail_width(&self) -> u16 {
-        let pane = if self.is_wide() {
-            self.width.saturating_sub(self.list_width() + 1)
-        } else {
-            self.width
+        let pane = match (self.is_wide(), self.split) {
+            (false, _) => self.width,
+            (true, Split::Both) => self.width.saturating_sub(self.list_width() + 1),
+            (true, Split::One) => self.width.saturating_sub(STRIP),
         };
         pane.saturating_sub(1)
     }
@@ -860,11 +883,10 @@ impl App {
     }
 
     /// Whether the keys go to the list of the tab on screen, rather than to a detail opened from
-    /// it: when none is, or in a wide window when the list has taken them back.
+    /// it: when none is, or when the list has taken them back.
     pub fn list_has_keys(&self) -> bool {
-        self.panes().is_none_or(|panes| {
-            panes.stack.is_empty() || (self.is_wide() && panes.focus == Focus::List)
-        })
+        self.panes()
+            .is_none_or(|panes| panes.stack.is_empty() || panes.focus == Pane::List)
     }
 
     /// The details on the way from the list to what is on screen: those opened, or in a wide
@@ -936,13 +958,14 @@ impl App {
         }
     }
 
-    /// The detail on screen: the one opened last, or in a wide window the selection's.
+    /// The detail on screen: the one opened last, or beside the list the selection's. With one
+    /// pane on screen, none while the list has the keys.
     pub fn in_view(&self) -> Option<Opened> {
+        if !self.shows_both() && self.list_has_keys() {
+            return None;
+        }
         if let Some(opened) = self.stack().and_then(|stack| stack.last()) {
             return Some(opened.clone());
-        }
-        if !self.is_wide() {
-            return None;
         }
         let detail = self.selected_detail()?;
         Some(Opened {
@@ -1048,7 +1071,7 @@ impl App {
         if from_list {
             panes.stack.clear();
         }
-        panes.focus = Focus::Detail;
+        panes.focus = Pane::Detail;
         panes.stack.push(Opened {
             scroll: detail.start(),
             detail,
@@ -1082,6 +1105,14 @@ impl App {
             KeyCode::Char('4') => self.tab = Tab::Log,
             KeyCode::Tab => self.tab = self.tab.next(),
             KeyCode::BackTab => self.tab = self.tab.previous(),
+            KeyCode::Char('H') => self.step_split(Pane::List),
+            KeyCode::Char('L') => self.step_split(Pane::Detail),
+            KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.step_split(Pane::List);
+            }
+            KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                self.step_split(Pane::Detail);
+            }
             // A detail covers the list behind it, so the list takes no keys while one is open.
             _ if !self.list_has_keys() => self.detail_key(key),
             _ if self.tab == Tab::Log => self.log_key(key),
@@ -1091,8 +1122,38 @@ impl App {
         None
     }
 
-    /// The mouse wheel turned over `column`. It moves what is under the pointer: in a wide window
-    /// the list or the detail beside it, which takes the keys; otherwise what is on screen.
+    /// `H` or `L`: one step of a wide window from the split towards the whole window for
+    /// `towards`, or back. `list only ←H— split —L→ detail only`
+    fn step_split(&mut self, towards: Pane) {
+        if !self.is_wide() || self.panes().is_none() {
+            return;
+        }
+        match self.split {
+            Split::Both => {
+                match towards {
+                    Pane::List => self.focus_list(),
+                    Pane::Detail => self.focus_detail(),
+                }
+                // Without a detail to give the keys to, both stay.
+                if self.pane_with_keys() == towards {
+                    self.split = Split::One;
+                }
+            }
+            Split::One if self.pane_with_keys() != towards => self.split = Split::Both,
+            Split::One => {}
+        }
+    }
+
+    fn pane_with_keys(&self) -> Pane {
+        if self.list_has_keys() {
+            Pane::List
+        } else {
+            Pane::Detail
+        }
+    }
+
+    /// The mouse wheel turned over `column`. It moves what is under the pointer: the list or the
+    /// detail beside it, which takes the keys; with one pane on screen, that one.
     pub fn wheel(&mut self, column: u16, wheel: Wheel) {
         if !self.mouse_passes() {
             return;
@@ -1101,7 +1162,7 @@ impl App {
             self.log.scroll = wheel.scroll(self.log.scroll);
             return;
         }
-        let over_list = if self.is_wide() {
+        let over_list = if self.shows_both() {
             column < self.list_width()
         } else {
             self.list_has_keys()
@@ -1109,9 +1170,7 @@ impl App {
         if over_list {
             if !self.list_has_keys() {
                 // The first notch only takes the keys from the detail, which stays as it is.
-                if let Some(panes) = self.panes_mut() {
-                    panes.focus = Focus::List;
-                }
+                self.focus_list();
                 return;
             }
             let code = match wheel {
@@ -1130,7 +1189,8 @@ impl App {
 
     /// The left button pressed at `column`, `row`. On a tab it switches to it; on an entry of a
     /// list it selects it and gives the list the keys, and opens it when it was selected already;
-    /// on the detail beside a list it gives the detail the keys.
+    /// on the detail beside a list it gives the detail the keys; on the strip of a pane folded
+    /// away it brings both back.
     pub fn click(&mut self, column: u16, row: u16) {
         if !self.mouse_passes() {
             return;
@@ -1145,6 +1205,10 @@ impl App {
             self.tab = *tab;
             // The filter of the log, the only prompt a click goes through, is taken as typed.
             self.prompt = None;
+            return;
+        }
+        if clickable.strip.is_some_and(|strip| strip.contains(position)) {
+            self.split = Split::Both;
             return;
         }
         if let Some(list) = &clickable.list
@@ -1194,9 +1258,16 @@ impl App {
                 }
             }
             // As the wheel does, a click on the selection only takes the keys from the detail.
-            Some(Picked::Again) => panes.focus = Focus::List,
+            Some(Picked::Again) => panes.focus = Pane::List,
             // The details opened before give way to the selection's.
             Some(Picked::Moved) => panes.stack.clear(),
+        }
+    }
+
+    /// Gives the keys to the list, leaving the details opened from it as they are.
+    fn focus_list(&mut self) {
+        if let Some(panes) = self.panes_mut() {
+            panes.focus = Pane::List;
         }
     }
 
@@ -1210,7 +1281,7 @@ impl App {
             return;
         };
         if !panes.stack.is_empty() {
-            panes.focus = Focus::Detail;
+            panes.focus = Pane::Detail;
             return;
         }
         // The detail of the selection is on screen beside the list already: opening it only
