@@ -12,7 +12,7 @@ use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
-    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, ReadinessFilter, Row,
+    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Row,
     STATUS_LASTS_MS, Scroll, Split, Starter, Tab, Target, Wheel,
 };
 use super::draw::{self, ACCENT, ACCENT_DIMMED};
@@ -1882,32 +1882,14 @@ fn the_answers_under_a_session_and_in_the_footer_are_buttons_too() {
 }
 
 #[test]
-fn a_click_on_a_count_opens_the_items_tab_filtered_to_it() {
+fn a_click_on_a_count_in_the_header_does_nothing() {
     let mut app = app();
-    app.items.filter = "parse".to_owned();
-    app.items.grouping = crate::cli::ItemGrouping::Lane;
-    let (blocked, row) = find(&mut app, 60, 24, "1 blocked");
-    app.hover(blocked, row);
-    assert_eq!(
-        find(&mut app, 60, 24, "show only the blocked items"),
-        (1, LATEST)
-    );
-    assert_eq!(app.click(blocked, row), None);
-    assert_eq!(app.tab, Tab::Items);
-    assert_eq!(app.items.readiness, ReadinessFilter::Blocked);
-    assert_eq!(app.items.filter, "");
-    let (open, row) = find(&mut app, 60, 24, "14 open");
-    app.hover(open, row);
-    assert_eq!(
-        find(&mut app, 60, 24, "show the items by state"),
-        (1, LATEST)
-    );
-    app.click(open, row);
-    assert_eq!(app.items.readiness, ReadinessFilter::All);
-    assert_eq!(app.items.grouping, crate::cli::ItemGrouping::State);
-    // What is no count of items is no button.
-    let (live, row) = find(&mut app, 60, 24, "3 live");
-    app.click(live, row);
-    assert_eq!(app.items.grouping, crate::cli::ItemGrouping::State);
-    assert!(app.hover(live, row));
+    let before = screen(&mut app, 60, 24);
+    for count in ["3 live", "14 open", "1 blocked"] {
+        let (column, row) = find(&mut app, 60, 24, count);
+        assert!(!app.hover(column, row), "{count}");
+        assert_eq!(app.click(column, row), None, "{count}");
+        assert_eq!(app.tab, Tab::Now, "{count}");
+        assert_eq!(screen(&mut app, 60, 24), before, "{count}");
+    }
 }

@@ -425,8 +425,6 @@ pub enum Target {
     Allow(Request),
     /// Denies a permission request at once.
     Deny(Request),
-    /// A count in the header: the Items tab, filtered to what it counts.
-    Count(Counted),
 }
 
 /// A permission request, as a click answers it.
@@ -449,13 +447,6 @@ impl Waiting {
             Waiting::Blocker { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
         }
     }
-}
-
-/// What a count in the header counts.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Counted {
-    Open,
-    Blocked,
 }
 
 /// How long a first click on allow waits for the second that confirms it.
@@ -488,8 +479,6 @@ impl Target {
             Target::Back { name, .. } => format!("back to {name}"),
             Target::Allow(_) => "allow the request: click twice".to_owned(),
             Target::Deny(_) => "deny the request".to_owned(),
-            Target::Count(Counted::Open) => "show the items by state".to_owned(),
-            Target::Count(Counted::Blocked) => "show only the blocked items".to_owned(),
         }
     }
 }
@@ -1472,20 +1461,6 @@ impl App {
                 session: request.session,
                 answer: Permission::Deny,
             }),
-            Target::Count(counted) => {
-                self.tab = Tab::Items;
-                let items = &mut self.items;
-                items.list.panes.stack.clear();
-                items.filter.clear();
-                match counted {
-                    Counted::Open => {
-                        items.grouping = ItemGrouping::State;
-                        items.readiness = ReadinessFilter::All;
-                    }
-                    Counted::Blocked => items.readiness = ReadinessFilter::Blocked,
-                }
-                None
-            }
         }
     }
 
@@ -1516,8 +1491,7 @@ impl App {
             | Target::Key { .. }
             | Target::Back { .. }
             | Target::Allow(_)
-            | Target::Deny(_)
-            | Target::Count(_) => target.tip(),
+            | Target::Deny(_) => target.tip(),
         }
     }
 
