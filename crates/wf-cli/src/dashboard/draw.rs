@@ -177,7 +177,7 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
         .enumerate()
         .map(|(index, option)| {
             if index == choice.index() {
-                let bar = Span::styled("▌", Style::new().fg(accent).bg(Color::Reset));
+                let bar = Span::styled("▎", Style::new().fg(accent).bg(Color::Reset));
                 Line::from(vec![bar, Span::raw(format!("{option} "))])
                     .bold()
                     .bg(accent)
@@ -714,7 +714,7 @@ impl RowLines {
     /// background.
     fn marker(&self) -> Span<'static> {
         if self.selected {
-            Span::styled("▌", Style::new().fg(self.accent).bg(Color::Reset))
+            Span::styled("▎", Style::new().fg(self.accent).bg(Color::Reset))
         } else {
             Span::raw(" ")
         }

@@ -1260,7 +1260,7 @@ fn the_bar_and_the_background_cover_every_line_of_the_selection() {
     press(&mut app, KeyCode::Char('j'));
     let (_, row) = find(&mut app, 60, 22, "blocker from");
     for line in [row, row + 1] {
-        assert_eq!(symbol_at(&mut app, 60, 22, 0, line), "▌");
+        assert_eq!(symbol_at(&mut app, 60, 22, 0, line), "▎");
         assert_eq!(style_at(&mut app, 60, 22, 0, line).fg, Some(ACCENT));
         assert_eq!(bg_at(&mut app, 60, 22, 10, line), Some(ACCENT));
     }
