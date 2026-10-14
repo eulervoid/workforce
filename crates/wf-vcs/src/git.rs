@@ -372,12 +372,13 @@ impl VcsAdapter for GitCli {
     }
 
     fn check_out_tree(&self, path: &Path, tree: GitOid) -> Result<(), VcsError> {
+        // Prune first, so a worktree whose directory was deleted is made again.
+        self.succeed(["worktree", "prune"])?;
         let exists = self
             .worktrees()?
             .iter()
             .any(|worktree| same_path(&worktree.path, path));
         if !exists {
-            self.succeed(["worktree", "prune"])?;
             if let Some(parent) = path.parent() {
                 std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
             }
@@ -1144,6 +1145,14 @@ mod tests {
         repo.git.check_out_tree(&path, first).unwrap();
         assert!(!path.join("added.txt").exists());
         assert_eq!(git_in(&path, &["rev-parse", "HEAD"]), first.to_string());
+        assert_eq!(git_in(&path, &["status", "--porcelain"]), "");
+
+        std::fs::remove_dir_all(&path).unwrap();
+        repo.git.check_out_tree(&path, tree).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(path.join("added.txt")).unwrap(),
+            "added\n"
+        );
         assert_eq!(git_in(&path, &["status", "--porcelain"]), "");
     }
 }
