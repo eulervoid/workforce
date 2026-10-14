@@ -1176,7 +1176,7 @@ mod tests {
         );
     }
 
-    const BODY: &str = "## Plan\n\nKeep **bold** and `#k3f9` as links.\n\n- one\n- two\n\n```\nlet value = 1;\n```";
+    const BODY: &str = "## Plan\n\nKeep **bold** and `#k3f9` as links.\n\n- one\n- two\n\n```\nlet value = 1;\n```\n\n| who | what it does to the item |\n|-----|--------------------------|\n| ada | renders it               |";
 
     fn detail_with_a_body() -> ItemDetail {
         let mut detail = detail_with_a_reference("Render", "Other");
@@ -1221,6 +1221,10 @@ mod tests {
              \x20 • two\n\
              \n\
              \x20     let value = 1;\n\
+             \n\
+             \x20 | who | what it does to the item |\n\
+             \x20 |-----|--------------------------|\n\
+             \x20 | ada | renders it               |\n\
              \n\
              \x20 - [x] 1. render the body\n\
              \x20 - [ ] 2. render the comments\n\

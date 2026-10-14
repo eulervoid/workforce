@@ -2,7 +2,7 @@
 //! code and fenced code, as text with escape codes for its styles.
 
 use anstyle::{AnsiColor, Style};
-use pulldown_cmark::{Event, LinkType, Parser, Tag, TagEnd};
+use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
 const DIM: Style = Style::new().dimmed();
 const CODE: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
@@ -26,8 +26,17 @@ fn write(text: &str, width: Option<usize>, indent: &str, marker: Option<String>)
         marker,
         ..MarkdownWriter::default()
     };
-    for event in Parser::new(text) {
-        writer.event(event);
+    let mut in_table = false;
+    for (event, range) in Parser::new_ext(text, Options::ENABLE_TABLES).into_offset_iter() {
+        match event {
+            Event::Start(Tag::Table(_)) => {
+                in_table = true;
+                writer.table(&text[range]);
+            }
+            Event::End(TagEnd::Table) => in_table = false,
+            _ if in_table => {}
+            event => writer.event(event),
+        }
     }
     writer.out
 }
@@ -125,6 +134,22 @@ impl MarkdownWriter {
         for style in &self.styles {
             self.line.push_str(&style.to_string());
         }
+    }
+
+    /// A table's rows as written, not wrapped, so its columns still line up.
+    fn table(&mut self, source: &str) {
+        self.flush();
+        let indent = self.indent();
+        for row in source.lines() {
+            let mut row = row.trim_start();
+            for _ in 0..self.quotes {
+                row = row.strip_prefix('>').unwrap_or(row).trim_start();
+            }
+            if !row.is_empty() {
+                self.out.push_str(&format!("{indent}{row}\n"));
+            }
+        }
+        self.blank();
     }
 
     fn event(&mut self, event: Event<'_>) {
@@ -296,6 +321,18 @@ mod tests {
                 "  "
             )),
             "      let value = one + two + three;\n\n"
+        );
+    }
+
+    #[test]
+    fn tables_keep_their_rows_as_written() {
+        assert_eq!(
+            plain(&render(
+                "Before.\n\n| step | who |\n|------|-----|\n| one  | ada **now** |\n\n> | a | b |\n> |---|---|\n> | 1 | 2 |",
+                Some(12),
+                "  "
+            )),
+            "  Before.\n\n  | step | who |\n  |------|-----|\n  | one  | ada **now** |\n\n  │ | a | b |\n  │ |---|---|\n  │ | 1 | 2 |\n\n\n"
         );
     }
 
