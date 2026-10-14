@@ -81,13 +81,7 @@ impl Links {
                 .collect(),
             sessions: state
                 .sessions()
-                .map(|session| {
-                    let actor = Actor::Agent {
-                        agent: session.agent().clone(),
-                        session: session.id(),
-                    };
-                    (state.actor_label(&actor), session.id())
-                })
+                .map(|session| (state.actor_label(&session.actor()), session.id()))
                 .collect(),
         }
     }

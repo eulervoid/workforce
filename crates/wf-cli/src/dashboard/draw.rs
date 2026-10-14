@@ -1370,8 +1370,13 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     }
     let last_style = Style::new().bold().bg(accent(app, KeysAt::Detail));
     let last = crumbs.len() - 1;
-    // Only what was opened, below the detail on top, is there to go back to.
-    let opened = app.stack().len();
+    // Only what was opened, below the detail on top, is there to go back to; nothing while the
+    // list has the keys, even with a detail kept beside it.
+    let opened = if app.list_has_keys() {
+        0
+    } else {
+        app.stack().len()
+    };
     let mut spots = Vec::new();
     let mut spans = vec![Span::raw(" ")];
     for (index, (crumb, depth)) in crumbs.into_iter().enumerate() {

@@ -13,7 +13,7 @@ use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
     AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, ReadinessFilter, Row,
-    STATUS_LASTS_MS, Scroll, Split, Starter, Tab, Wheel,
+    STATUS_LASTS_MS, Scroll, Split, Starter, Tab, Target, Wheel,
 };
 use super::draw::{self, ACCENT, ACCENT_DIMMED};
 use super::snapshot::{
@@ -1663,6 +1663,21 @@ fn a_link_in_the_log_opens_in_its_place_and_esc_goes_back_to_the_log() {
 }
 
 #[test]
+fn h_on_a_detail_opened_from_the_log_closes_it_as_the_log_has_no_pane_to_keep_it_beside() {
+    let mut app = app_with_links();
+    press(&mut app, KeyCode::Char('4'));
+    app.logged(["07:05  #aibaea  @ada · claimed\n".to_owned()]);
+    let (column, row) = find(&mut app, 60, 24, "#aibaea");
+    app.click(column, row);
+    assert_eq!(app.stack().len(), 1);
+    press(&mut app, KeyCode::Char('h'));
+    assert!(app.stack().is_empty());
+    assert!(app.list_has_keys());
+    assert_eq!(app.wanted().detail, None);
+    assert!(screen(&mut app, 60, 24).contains("/ filter"));
+}
+
+#[test]
 fn a_click_on_a_key_hint_does_what_its_key_does() {
     let mut app = app();
     let archive = ItemId::from_bytes([3; 32]);
@@ -1711,6 +1726,22 @@ fn a_click_on_a_part_of_the_breadcrumb_goes_back_to_it() {
     app.click(column, row);
     assert!(app.stack().is_empty());
     assert!(app.list_has_keys());
+}
+
+#[test]
+fn a_detail_kept_beside_the_list_has_no_crumbs_or_hints_to_click() {
+    let (mut app, scrolled) = scrolled_item(130);
+    press(&mut app, KeyCode::Char('h'));
+    let screen = screen(&mut app, 130, 24);
+    assert!(screen.contains("enter open"), "{screen}");
+    assert!(!screen.contains("esc back"), "{screen}");
+    assert!(
+        !app.clickable
+            .spots
+            .iter()
+            .any(|spot| matches!(spot.target, Target::Back { .. }))
+    );
+    assert_eq!(app.in_view(), Some(scrolled));
 }
 
 #[test]
