@@ -382,7 +382,7 @@ fn failed_checks_send_work_back_twice_before_the_principal_decides() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
     let back_to_work = AfterFailedChecks::BackToWork {
-        to: Some(ItemState::Open),
+        to: ItemState::Open,
     };
     assert_eq!(scene.state.failed_check_runs(task), 0);
     assert_eq!(scene.state.after_failed_checks(task), back_to_work);

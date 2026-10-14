@@ -73,9 +73,8 @@ pub enum MergeFailure {
 /// What follows when checks fail on the merge result of an item's work, by its own fault.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AfterFailedChecks {
-    /// Each failed check becomes a change request and the item goes back to work: to `open`, or
-    /// nowhere when its type does not use it.
-    BackToWork { to: Option<ItemState> },
+    /// Each failed check becomes a change request and the item goes back to work, to `to`.
+    BackToWork { to: ItemState },
     /// The checks failed `runs` times already since the principal last acted on the item: the
     /// principal decides instead.
     WaitsForPrincipal { runs: usize },
@@ -199,15 +198,15 @@ impl State {
     }
 
     /// What follows when checks fail on the merge result of `item` by its own fault: back to work,
-    /// unless [`State::failed_check_runs`] reached the limit.
+    /// unless [`State::failed_check_runs`] reached the limit or its type has no `open` to go back
+    /// to.
     pub fn after_failed_checks(&self, item: ItemId) -> AfterFailedChecks {
-        match self.failed_check_runs(item) {
-            runs if runs >= FAILED_CHECK_RUNS_LIMIT => {
-                AfterFailedChecks::WaitsForPrincipal { runs }
+        let runs = self.failed_check_runs(item);
+        match self.state_if_used(item, ItemState::Open) {
+            Some(open) if runs < FAILED_CHECK_RUNS_LIMIT => {
+                AfterFailedChecks::BackToWork { to: open }
             }
-            _ => AfterFailedChecks::BackToWork {
-                to: self.state_if_used(item, ItemState::Open),
-            },
+            Some(_) | None => AfterFailedChecks::WaitsForPrincipal { runs },
         }
     }
 
