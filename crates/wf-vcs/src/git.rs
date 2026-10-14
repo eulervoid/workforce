@@ -305,7 +305,7 @@ fn describe(args: &[&OsStr]) -> String {
 
 impl VcsAdapter for GitCli {
     fn prepare_worktree(&self, branch: &str, path: &Path, target: &str) -> Result<(), VcsError> {
-        self.succeed(["worktree", "prune"])?;
+        self.prune_worktrees()?;
         let reference = format!("refs/heads/{branch}");
         let existing = self.worktrees()?;
         if let Some(worktree) = existing
@@ -354,7 +354,7 @@ impl VcsAdapter for GitCli {
     }
 
     fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError> {
-        self.succeed(["worktree", "prune"])?;
+        self.prune_worktrees()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
         }
@@ -381,6 +381,11 @@ impl VcsAdapter for GitCli {
                 path.as_os_str(),
             ],
         )?;
+        Ok(())
+    }
+
+    fn prune_worktrees(&self) -> Result<(), VcsError> {
+        self.succeed(["worktree", "prune"])?;
         Ok(())
     }
 
@@ -729,6 +734,25 @@ mod tests {
         std::fs::remove_dir_all(&path).unwrap();
         repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
         assert!(path.join("file.txt").is_file());
+    }
+
+    #[test]
+    fn pruning_forgets_the_worktrees_whose_directories_are_gone() {
+        let repo = TestRepo::new();
+        let (gone, kept) = (repo.worktree_path("gone"), repo.worktree_path("kept"));
+        repo.git.prepare_worktree("wf/gone", &gone, "main").unwrap();
+        repo.git.prepare_worktree("wf/kept", &kept, "main").unwrap();
+        std::fs::remove_dir_all(&gone).unwrap();
+        repo.git.prune_worktrees().unwrap();
+        let listed: Vec<PathBuf> = repo
+            .git
+            .worktrees()
+            .unwrap()
+            .into_iter()
+            .map(|worktree| worktree.path)
+            .collect();
+        assert_eq!(listed.len(), 2, "{listed:?}");
+        assert!(listed.iter().any(|path| same_path(path, &kept)));
     }
 
     #[test]

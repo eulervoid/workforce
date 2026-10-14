@@ -607,6 +607,49 @@ wf work release --note \"I cannot do this\"
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_starting_daemon_removes_stray_worktrees_and_caches_over_the_budget() {
+    let script = "\
+sh echo wip > wip.txt && git add wip.txt && git commit -q -m wip && mkdir target && echo built > target/app
+wf work release --note \"later\"
+";
+    let mut world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Open with a worktree"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+    let worktree = PathBuf::from(world.wf.run(&["item", "path", short(&item)]).trim());
+    let worktrees = worktree.parent().unwrap().to_path_buf();
+    let stray_checkout = worktrees.join("stray-12345678");
+    git(
+        &world.wf.repository,
+        &[
+            "worktree",
+            "add",
+            "--quiet",
+            "--detach",
+            stray_checkout.to_str().unwrap(),
+        ],
+    );
+    let stray_directory = worktrees.join("stray-supervise");
+    std::fs::create_dir_all(&stray_directory).unwrap();
+    world.machine_config("[storage]\nbudget = \"0B\"\ncaches = [\"target\"]\n");
+
+    world.restart().await;
+    world
+        .wait("the strays and the cache gone", |_| {
+            !stray_checkout.exists()
+                && !stray_directory.exists()
+                && !worktree.join("target").exists()
+        })
+        .await;
+    assert!(
+        worktree.join("wip.txt").is_file(),
+        "an open item keeps its worktree"
+    );
+    let listed = git(&world.wf.repository, &["worktree", "list"]);
+    assert!(!listed.contains("stray"), "{listed}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn an_agent_that_never_commits_or_submits_is_released_after_its_nudges() {
     let world = World::new("").await;
     let item = world.wf.add(&["--title", "Idle"]);

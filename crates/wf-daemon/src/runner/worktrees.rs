@@ -1,13 +1,14 @@
-//! Tidying the worktrees of a workforce: the directories of ended sessions removed, and their
-//! caches kept under the budget of the machine config.
+//! Tidying the worktrees of a workforce: the directories of ended sessions and of items that are
+//! finished removed, and the caches of the rest kept under the budget of the machine config.
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 use wf_core::id::{HashId, ItemId, WorkforceId};
+use wf_core::item::ItemView;
 use wf_core::session::SessionRole;
 use wf_core::state::State;
-use wf_vcs::{GitCli, VcsAdapter, worktrees};
+use wf_vcs::{GitCli, VcsAdapter, item_worktree, worktrees};
 
 use super::blocking;
 use crate::{Daemon, Loaded, caches};
@@ -58,6 +59,56 @@ impl Daemon {
             .filter(|session| session.device() == self.device())
             .map(|session| self.session_directory(workforce, session.item(), session.role()))
             .collect()
+    }
+
+    /// Removes the directories in the worktrees of `workforce` that belong to no unfinished item
+    /// and no live session of this machine, such as those an earlier daemon left behind, and
+    /// makes git forget them.
+    pub(crate) async fn remove_stray_worktrees(&self, workforce: WorkforceId, loaded: &Loaded) {
+        let Ok(state) = self.snapshot(loaded).await else {
+            return;
+        };
+        let policy = &state.policy().expect("a workforce has a policy").policy;
+        let workforce_directory = self.workforce_directory(workforce);
+        let mut kept = self.busy_directories(workforce, &state);
+        for view in state.items() {
+            match view {
+                ItemView::Live(item) if !item.state(policy).is_terminal() => {
+                    kept.insert(item_worktree(&workforce_directory, item.id()));
+                }
+                ItemView::Live(_) | ItemView::Archived(_) => {}
+            }
+        }
+        let directory = worktrees(&workforce_directory);
+        let repository = self.repository_of(workforce);
+        let _ = blocking(move || {
+            let Ok(entries) = std::fs::read_dir(&directory) else {
+                return;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if kept.contains(&path) || !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
+                    continue;
+                }
+                match std::fs::remove_dir_all(&path) {
+                    Ok(()) => tracing::info!("removed the stray worktree {}", path.display()),
+                    Err(error) => tracing::warn!(
+                        "could not remove the stray worktree {}: {error}",
+                        path.display()
+                    ),
+                }
+            }
+            if let Some(repository) = repository
+                && let Err(error) = GitCli::open(&repository).and_then(|git| git.prune_worktrees())
+            {
+                tracing::warn!(
+                    "could not prune the worktrees of {}: {}",
+                    repository.display(),
+                    wf_core::error_chain(&error)
+                );
+            }
+        })
+        .await;
     }
 
     /// While the caches in the worktrees of `workforce` take more than the budget, deletes those
