@@ -134,6 +134,28 @@ impl State {
             .collect()
     }
 
+    /// The commit of the latest submission of the live `item`, when it is ready to merge and not
+    /// merged yet: approved, or needing no review.
+    pub(crate) fn unmerged_work(&self, item: ItemId) -> Option<CommitId> {
+        let policy = &self.policy()?.policy;
+        let ItemView::Live(live) = self.item(item)? else {
+            return None;
+        };
+        let (Some(commit), _) = self.submission(item)? else {
+            return None;
+        };
+        let ready = match self.review_status(item) {
+            Some(ReviewStatus::Approved { .. }) => true,
+            Some(
+                ReviewStatus::Awaiting { .. }
+                | ReviewStatus::ChangesRequested
+                | ReviewStatus::Merged { .. },
+            ) => false,
+            None => !live.needs_review(policy),
+        };
+        ready.then_some(commit)
+    }
+
     /// Items whose review is over and that wait in `review` only to be moved to `done`: approved
     /// work submitted without commits, so there is nothing to merge. Merged work is moved by its
     /// merge, see [`State::pending_merges`]. An item that moved on after the submission was moved

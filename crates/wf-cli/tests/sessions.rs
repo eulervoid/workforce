@@ -1498,7 +1498,7 @@ async fn an_escalated_review_goes_to_a_person() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn work_that_conflicts_with_the_target_goes_back_to_open() {
+async fn work_that_conflicts_goes_back_to_open_and_the_next_session_resolves_the_conflict() {
     let script = "\
 sh while [ ! -f \"$XDG_DATA_HOME/go\" ]; do sleep 0.1; done
 sh echo branch > file.txt && git add file.txt && git commit -q -m branch
@@ -1529,6 +1529,34 @@ wf work submit
     assert_eq!(
         std::fs::read_to_string(repository.join("file.txt")).unwrap(),
         "main\n"
+    );
+
+    // The next session finds main merged into its branch, the conflict left in the worktree; the
+    // agent resolves it with the same script, commits the merge and submits, and the work merges.
+    start_session(&world, &item);
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    let shown = world.item(&item);
+    assert!(
+        comments(&shown).as_array().unwrap().iter().any(|note| {
+            note["text"].as_str().is_some_and(|text| {
+                text.starts_with("Merged main into the branch")
+                    && text.contains("it conflicts in file.txt")
+            })
+        }),
+        "{shown}"
+    );
+    let merged = git(repository, &["rev-parse", "main"]);
+    assert_eq!(
+        git(repository, &["merge-base", "--is-ancestor", &main, &merged]),
+        ""
+    );
+    assert_eq!(
+        std::fs::read_to_string(repository.join("file.txt")).unwrap(),
+        "branch\n"
     );
 }
 

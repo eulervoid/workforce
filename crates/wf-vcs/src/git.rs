@@ -4,7 +4,7 @@ use std::process::{Command, Output};
 
 use wf_core::session::{CommitId, GitOid};
 
-use crate::{CommitSigning, DirtyCheckout, MergeOutcome, VcsAdapter, VcsError};
+use crate::{CommitSigning, DirtyCheckout, MergeOutcome, TargetMerge, VcsAdapter, VcsError};
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
 
@@ -540,6 +540,74 @@ impl VcsAdapter for GitCli {
             Advance::Moved => MergeOutcome::TargetMoved,
         })
     }
+
+    fn merge_target(
+        &self,
+        worktree: &Path,
+        target: &str,
+        message: &str,
+        signing: &CommitSigning,
+    ) -> Result<TargetMerge, VcsError> {
+        let in_progress =
+            Self::run_in(worktree, ["rev-parse", "--verify", "--quiet", "MERGE_HEAD"])?;
+        if in_progress.success {
+            let paths = self.unmerged_paths(worktree)?;
+            if paths.is_empty() {
+                return Ok(TargetMerge::Uncommitted);
+            }
+            return Ok(TargetMerge::Conflict { paths });
+        }
+        let reference = format!("refs/heads/{target}");
+        if !self.branch_exists(target)? {
+            return Err(VcsError::NoBranch(target.into()));
+        }
+        let contained = Self::run_in(
+            worktree,
+            ["merge-base", "--is-ancestor", reference.as_str(), "HEAD"],
+        )?;
+        if contained.success {
+            return Ok(TargetMerge::UpToDate);
+        }
+        let mut args: Vec<String> = Vec::new();
+        for (key, value) in signing.config() {
+            args.extend(["-c".to_string(), format!("{key}={value}")]);
+        }
+        args.extend(["merge", "--no-edit", "-m", message, &reference].map(str::to_string));
+        let merged = Self::run_in(worktree, &args)?;
+        if merged.success {
+            return Ok(TargetMerge::Merged);
+        }
+        let paths = self.unmerged_paths(worktree)?;
+        if paths.is_empty() {
+            // Git refused before it began, such as for uncommitted changes the merge would
+            // overwrite, and left the worktree as it was.
+            return Err(VcsError::Git {
+                command: "merge".into(),
+                stderr: merged.stderr.trim().to_string(),
+            });
+        }
+        Ok(TargetMerge::Conflict { paths })
+    }
+}
+
+impl GitCli {
+    /// The files in conflict in `worktree`, relative to it.
+    fn unmerged_paths(&self, worktree: &Path) -> Result<Vec<String>, VcsError> {
+        let listing = self.succeed_in(
+            worktree,
+            [
+                OsStr::new("diff"),
+                OsStr::new("--name-only"),
+                OsStr::new("--diff-filter=U"),
+                OsStr::new("-z"),
+            ],
+        )?;
+        Ok(listing
+            .split('\0')
+            .filter(|path| !path.is_empty())
+            .map(str::to_string)
+            .collect())
+    }
 }
 
 #[cfg(test)]
@@ -972,6 +1040,104 @@ mod tests {
             }
         );
         assert_eq!(repo.main(), before);
+    }
+
+    #[test]
+    fn the_target_merges_cleanly_into_the_branch_once() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "a.txt", "a\n");
+        let main = repo.directory();
+        repo.write(&main, "b.txt", "b\n");
+        let target = repo.commit(&main, "add b");
+        let worktree = repo.worktree_path("wf/k3f9");
+        let merge = |message| {
+            repo.git
+                .merge_target(&worktree, "main", message, &CommitSigning::Unsigned)
+                .unwrap()
+        };
+
+        assert_eq!(merge("Merge main into #k3f9"), TargetMerge::Merged);
+        let head = repo.git.branch_head("wf/k3f9").unwrap();
+        assert_eq!(repo.parents(head), [work.to_string(), target.to_string()]);
+        assert_eq!(
+            git_in(&worktree, &["log", "-1", "--format=%s"]),
+            "Merge main into #k3f9"
+        );
+        assert!(worktree.join("b.txt").is_file());
+        assert_eq!(merge("again"), TargetMerge::UpToDate);
+        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), head);
+    }
+
+    #[test]
+    fn a_conflict_of_the_target_with_the_branch_is_left_in_the_worktree() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "file.txt", "one\nTWO\nthree\n");
+        let main = repo.directory();
+        repo.write(&main, "file.txt", "one\n2\nthree\n");
+        repo.write(&main, "b.txt", "b\n");
+        repo.commit(&main, "conflicting change");
+        let worktree = repo.worktree_path("wf/k3f9");
+        let merge = || {
+            repo.git
+                .merge_target(&worktree, "main", "Merge main", &CommitSigning::Unsigned)
+                .unwrap()
+        };
+        let conflict = TargetMerge::Conflict {
+            paths: vec!["file.txt".into()],
+        };
+
+        assert_eq!(merge(), conflict);
+        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
+        let text = std::fs::read_to_string(worktree.join("file.txt")).unwrap();
+        assert!(text.contains("<<<<<<<"), "{text}");
+        assert!(worktree.join("b.txt").is_file());
+        // The next session finds the same merge, unfinished, and is told of it again.
+        assert_eq!(merge(), conflict);
+
+        repo.write(&worktree, "file.txt", "one\nTWO\nthree\n");
+        repo.commit(&worktree, "resolve");
+        assert_eq!(merge(), TargetMerge::UpToDate);
+    }
+
+    #[test]
+    fn a_resolved_merge_into_the_branch_only_needs_committing() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "file.txt", "one\nTWO\nthree\n");
+        let main = repo.directory();
+        repo.write(&main, "file.txt", "one\n2\nthree\n");
+        repo.commit(&main, "conflicting change");
+        let worktree = repo.worktree_path("wf/k3f9");
+        let merge = || {
+            repo.git
+                .merge_target(&worktree, "main", "Merge main", &CommitSigning::Unsigned)
+                .unwrap()
+        };
+        assert!(matches!(merge(), TargetMerge::Conflict { .. }));
+
+        // Resolved and staged, but the session ended before the commit.
+        repo.write(&worktree, "file.txt", "one\nTWO\nthree\n");
+        git_in(&worktree, &["add", "file.txt"]);
+        assert_eq!(merge(), TargetMerge::Uncommitted);
+        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
+    }
+
+    #[test]
+    fn a_merge_into_the_branch_that_would_overwrite_changes_is_refused() {
+        let repo = TestRepo::new();
+        repo.work("wf/k3f9", "a.txt", "a\n");
+        let main = repo.directory();
+        repo.write(&main, "file.txt", "one\n2\nthree\n");
+        repo.commit(&main, "change file");
+        let worktree = repo.worktree_path("wf/k3f9");
+        repo.write(&worktree, "file.txt", "uncommitted\n");
+        let refused =
+            repo.git
+                .merge_target(&worktree, "main", "Merge main", &CommitSigning::Unsigned);
+        assert!(matches!(refused, Err(VcsError::Git { .. })), "{refused:?}");
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("file.txt")).unwrap(),
+            "uncommitted\n"
+        );
     }
 
     #[test]

@@ -236,6 +236,17 @@ impl Daemon {
         // the item and a slot until the next daemon starts.
         let prepared = async {
             let state = self.snapshot(loaded).await?;
+            if state.merges_target_first(session) {
+                self.merge_target_first(
+                    loaded,
+                    setup.principal,
+                    item,
+                    worktree.clone(),
+                    repository.clone(),
+                    setup.target.clone(),
+                )
+                .await?;
+            }
             if let Some((item, to)) = state.start_move(session) {
                 self.move_item(loaded, setup.principal, item, to, None, Some(session))
                     .await?;
