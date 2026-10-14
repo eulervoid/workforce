@@ -172,8 +172,8 @@ impl State {
     }
 
     /// Where `item` goes when its reviewed work cannot be merged: back to `open` for a conflict,
-    /// which the next session resolves as it submits, and otherwise to `review`, where the dispatcher tries
-    /// again. `None` when its type does not use the state.
+    /// which the next session resolves as it submits, and otherwise to `review`, where the
+    /// dispatcher tries again. `None` when its type does not use the state.
     pub fn after_failed_merge(&self, item: ItemId, failure: MergeFailure) -> Option<ItemState> {
         match failure {
             MergeFailure::Conflict => self.state_if_used(item, ItemState::Open),
