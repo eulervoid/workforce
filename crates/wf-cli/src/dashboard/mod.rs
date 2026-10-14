@@ -12,7 +12,8 @@ use std::time::{Duration, Instant};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, Event as TerminalEvent, KeyEventKind, MouseEvent, MouseEventKind,
+    self, DisableMouseCapture, Event as TerminalEvent, KeyEventKind, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use wf_core::event::Event;
@@ -45,8 +46,8 @@ pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()
     result
 }
 
-/// Asks the terminal to report presses of the mouse and its wheel, so the wheel scrolls what is
-/// under the pointer rather than sending arrow keys. Unlike crossterm's `EnableMouseCapture`, it
+/// Asks the terminal to report presses of the mouse and its wheel, so a click picks and the wheel
+/// scrolls what is under the pointer, rather than the wheel sending arrow keys. Unlike crossterm's `EnableMouseCapture`, it
 /// asks for no report on every move of the pointer.
 pub(super) fn report_mouse() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
@@ -153,6 +154,12 @@ fn handle(
             column,
             ..
         }) => app.wheel(column, Wheel::Down),
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            ..
+        }) => app.click(column, row),
         TerminalEvent::Resize(width, height) => {
             app.resize(width, height);
             return Handled::Changed;

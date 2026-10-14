@@ -10,7 +10,10 @@ use wf_core::graph::Readiness;
 use wf_core::id::HashId;
 use wf_core::policy::StateCategory;
 
-use super::app::{AgentRow, App, Choice, Drawn, Opened, Prompt, Row, Scroll, Status, Tab};
+use super::app::{
+    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, Scroll, Status,
+    Tab,
+};
 use super::snapshot::{
     AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
 };
@@ -43,10 +46,11 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         Constraint::Length(1),
     ])
     .areas(frame.area());
-    draw_header(frame, app, header);
+    let tabs = draw_header(frame, app, header);
     frame.render_widget(Paragraph::new(counts_line(app)), counts);
     draw_rule(frame, rule);
-    let shown = draw_body(frame, app, body);
+    let mut shown = draw_body(frame, app, body);
+    shown.clickable.tabs = tabs;
     draw_rule(frame, rule_below);
     frame.render_widget(Paragraph::new(latest_line(app)), latest);
     match &app.prompt {
@@ -120,6 +124,7 @@ const KEYS: &[(&str, &str)] = &[
     ("j/k g/G", "move, top, end (and follow)"),
     ("pgup/pgdn", "a page up, down; also space"),
     ("wheel", "move what is under the pointer"),
+    ("click", "pick a tab or an entry, again to open"),
     ("shift-drag", "select text, as without the dashboard"),
     ("enter esc", "open, go back"),
     ("a d", "allow, deny a permission request"),
@@ -200,8 +205,11 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     frame.set_cursor_position((area.x + label_width as u16 + cursor, area.y));
 }
 
-fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
+/// Draws the name of the project and the tabs; returns where the label of each tab went.
+fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
     let mut tabs = Vec::new();
+    // Each tab with the column its label starts on and its width, from the left of the tabs.
+    let mut labels = Vec::new();
     for tab in Tab::ALL {
         if !tabs.is_empty() {
             tabs.push(Span::raw(" "));
@@ -217,7 +225,10 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
             label.push_str(&format!("·{}", app.snapshot.waiting.len()));
         }
         label.push(' ');
-        tabs.push(Span::styled(label, style));
+        let label = Span::styled(label, style);
+        let start: usize = tabs.iter().map(Span::width).sum();
+        labels.push((tab, start, label.width()));
+        tabs.push(label);
     }
     let tabs = Line::from(tabs);
     let [name, tabs_area] = Layout::horizontal([
@@ -233,6 +244,18 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) {
         name,
     );
     frame.render_widget(Paragraph::new(tabs), tabs_area);
+    labels
+        .into_iter()
+        .map(|(tab, start, width)| {
+            let label = Rect {
+                x: tabs_area.x.saturating_add(start as u16),
+                width: width as u16,
+                ..tabs_area
+            };
+            // What a narrow window cuts off cannot be clicked.
+            (tab, label.intersection(tabs_area))
+        })
+        .collect()
 }
 
 /// `3 live · 14 open · 1 blocked · 2 devices`, leaving out what is none.
@@ -262,7 +285,7 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
         Tab::Items => draw_split(frame, app, area, items_lines),
         Tab::Log => Drawn {
             text: draw_log(frame, app, area),
-            list_top: None,
+            ..Drawn::default()
         },
         Tab::Agents => draw_split(frame, app, area, agents_lines),
     }
@@ -275,12 +298,19 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
         return match in_view {
             Some(opened) => Drawn {
                 text: draw_detail(frame, app, opened, area),
-                list_top: None,
+                ..Drawn::default()
             },
-            None => Drawn {
-                text: None,
-                list_top: Some(draw_list(frame, app, list_lines, area)),
-            },
+            None => {
+                let (list_top, list) = draw_list(frame, app, list_lines, area);
+                Drawn {
+                    text: None,
+                    list_top: Some(list_top),
+                    clickable: Clickable {
+                        list: Some(list),
+                        ..Clickable::default()
+                    },
+                }
+            }
         };
     }
     let [list, rule, detail] = Layout::horizontal([
@@ -289,32 +319,80 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
         Constraint::Fill(1),
     ])
     .areas(area);
-    let list_top = draw_list(frame, app, list_lines, list);
+    let (list_top, list) = draw_list(frame, app, list_lines, list);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).dim(), rule);
     Drawn {
         text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail)),
         list_top: Some(list_top),
+        clickable: Clickable {
+            list: Some(list),
+            detail: Some(detail),
+            ..Clickable::default()
+        },
     }
 }
 
-/// The lines of a list `width` wide, and the line its selection starts on.
-type ListLines = fn(&App, u16) -> (Vec<Line<'static>>, Option<usize>);
+/// The lines of a list `width` wide.
+type ListLines = fn(&App, u16) -> ListText;
+
+/// The lines of a list, with the entry each shows.
+#[derive(Default)]
+struct ListText {
+    lines: Vec<Line<'static>>,
+    /// For each line, the entry it shows by its place among the entries; `None` for a line that
+    /// is no entry.
+    entries: Vec<Option<usize>>,
+    /// The line the selection starts on.
+    selected_line: Option<usize>,
+    /// How many entries there are so far.
+    count: usize,
+}
+
+impl ListText {
+    /// A line that is no entry: a heading, a blank line or a note.
+    fn push(&mut self, line: Line<'static>) {
+        self.lines.push(line);
+        self.entries.push(None);
+    }
+
+    /// The lines of the next entry.
+    fn entry(&mut self, lines: Vec<Line<'static>>, selected: bool) {
+        if selected {
+            self.selected_line = Some(self.lines.len());
+        }
+        self.entries
+            .extend(std::iter::repeat_n(Some(self.count), lines.len()));
+        self.lines.extend(lines);
+        self.count += 1;
+    }
+}
 
 /// Draws a list from where it was, moved only as far as keeps the selection on screen; returns
-/// the first line drawn.
-fn draw_list(frame: &mut Frame, app: &App, list_lines: ListLines, area: Rect) -> usize {
-    let (lines, selected_line) = list_lines(app, area.width);
+/// the first line drawn, and what of the list is on screen.
+fn draw_list(
+    frame: &mut Frame,
+    app: &App,
+    list_lines: ListLines,
+    area: Rect,
+) -> (usize, ClickableList) {
+    let list = list_lines(app, area.width);
     let previous = app.panes().map_or(0, |panes| panes.list_top);
     let top = list_top(
         previous,
-        selected_line,
-        lines.len(),
+        list.selected_line,
+        list.lines.len(),
         usize::from(area.height),
     );
     let scroll = u16::try_from(top).unwrap_or(u16::MAX);
-    frame.render_widget(Paragraph::new(lines).scroll((scroll, 0)), area);
-    top
+    frame.render_widget(Paragraph::new(list.lines).scroll((scroll, 0)), area);
+    let entries = list
+        .entries
+        .into_iter()
+        .skip(top)
+        .take(usize::from(area.height))
+        .collect();
+    (top, ClickableList { area, entries })
 }
 
 /// The first line of a list of `lines` drawn `height` high: `previous`, moved only as far as
@@ -543,54 +621,48 @@ fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'s
     )
 }
 
-/// The rows of the Now tab under their sections, and the line the selection starts on.
-fn now_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
+/// The rows of the Now tab under their sections.
+fn now_lines(app: &App, width: u16) -> ListText {
     let snapshot = &app.snapshot;
     let selected = app.now.selection.get();
-    let mut lines = Vec::new();
-    let mut selected_line = None;
-    let mut add = |lines: &mut Vec<Line<'static>>, row: Row, rows: Vec<Line<'static>>| {
-        if selected == Some(&row) {
-            selected_line = Some(lines.len());
-        }
-        lines.extend(rows);
-    };
+    let mut list = ListText::default();
     if !snapshot.waiting.is_empty() {
-        lines.push(section("WAITING ON YOU"));
+        list.push(section("WAITING ON YOU"));
         for entry in &snapshot.waiting {
-            let row = Row::Waiting(entry.key());
-            let rows = waiting_lines(entry, RowLines::new(app, selected == Some(&row), width));
-            add(&mut lines, row, rows);
+            let is_selected = selected == Some(&Row::Waiting(entry.key()));
+            list.entry(
+                waiting_lines(entry, RowLines::new(app, is_selected, width)),
+                is_selected,
+            );
         }
-        lines.push(Line::default());
+        list.push(Line::default());
     }
     if !snapshot.working.is_empty() {
-        lines.push(section("WORKING"));
+        list.push(section("WORKING"));
         for session in &snapshot.working {
-            let row = Row::Session(session.id);
-            let rows = session_lines(
-                app,
-                session,
-                RowLines::new(app, selected == Some(&row), width),
+            let is_selected = selected == Some(&Row::Session(session.id));
+            list.entry(
+                session_lines(app, session, RowLines::new(app, is_selected, width)),
+                is_selected,
             );
-            add(&mut lines, row, rows);
         }
-        lines.push(Line::default());
+        list.push(Line::default());
     }
     if !snapshot.flagged.is_empty() {
-        lines.push(section("NEEDS ATTENTION"));
+        list.push(section("NEEDS ATTENTION"));
         for flag in &snapshot.flagged {
-            let row = Row::Flag(flag.clone());
+            let is_selected = selected == Some(&Row::Flag(flag.clone()));
             let first = vec![Span::raw("! ").fg(Color::Red), Span::raw(flag.clone())];
-            let rows =
-                RowLines::new(app, selected == Some(&row), width).lines(first, None, Vec::new());
-            add(&mut lines, row, rows);
+            list.entry(
+                RowLines::new(app, is_selected, width).lines(first, None, Vec::new()),
+                is_selected,
+            );
         }
     }
-    if lines.is_empty() {
-        lines.push(Line::from(" Nothing waits on you, and no agent is working.").dim());
+    if list.lines.is_empty() {
+        list.push(Line::from(" Nothing waits on you, and no agent is working.").dim());
     }
-    (lines, selected_line)
+    list
 }
 
 /// `in_progress · ready · "parse"`: how the items are grouped and filtered.
@@ -729,60 +801,54 @@ fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<L
     row.lines(first, Some(Span::raw(right).dim()), Vec::new())
 }
 
-/// The agents with their sessions under the stats of the project, and the line the selection
-/// starts on.
-fn agents_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
+/// The agents with their sessions under the stats of the project.
+fn agents_lines(app: &App, width: u16) -> ListText {
     let selected = app.agents.selection.get();
-    let mut lines = stats_lines(&app.snapshot.stats, width);
-    let mut selected_line = None;
+    let mut list = ListText::default();
+    for line in stats_lines(&app.snapshot.stats, width) {
+        list.push(line);
+    }
     for agent in &app.snapshot.agents {
-        lines.push(Line::default());
-        let row = AgentRow::Agent(agent.id.clone());
-        if selected == Some(&row) {
-            selected_line = Some(lines.len());
-        }
-        lines.extend(agent_lines(
-            agent,
-            RowLines::new(app, selected == Some(&row), width),
-        ));
+        list.push(Line::default());
+        let is_selected = selected == Some(&AgentRow::Agent(agent.id.clone()));
+        list.entry(
+            agent_lines(agent, RowLines::new(app, is_selected, width)),
+            is_selected,
+        );
         for session in &agent.sessions {
-            let row = AgentRow::Session(session.id);
-            if selected == Some(&row) {
-                selected_line = Some(lines.len());
-            }
-            lines.extend(agent_session_lines(
-                app,
-                session,
-                RowLines::new(app, selected == Some(&row), width),
-            ));
+            let is_selected = selected == Some(&AgentRow::Session(session.id));
+            list.entry(
+                agent_session_lines(app, session, RowLines::new(app, is_selected, width)),
+                is_selected,
+            );
         }
     }
     if app.snapshot.agents.is_empty() {
-        lines.push(Line::from(" no agents yet; `wf agent add` defines one").dim());
+        list.push(Line::from(" no agents yet; `wf agent add` defines one").dim());
     }
-    (lines, selected_line)
+    list
 }
 
-/// The items in their groups under how they are grouped, and the line the selection starts on.
-fn items_lines(app: &App, width: u16) -> (Vec<Line<'static>>, Option<usize>) {
+/// The items in their groups under how they are grouped.
+fn items_lines(app: &App, width: u16) -> ListText {
     let selected = app.items.list.selection.get();
-    let mut lines = vec![items_heading(app)];
-    let mut selected_line = None;
+    let mut list = ListText::default();
+    list.push(items_heading(app));
     for (name, items) in app.item_groups() {
-        lines.push(Line::default());
-        lines.push(section(&format!("{name} ({})", items.len())));
+        list.push(Line::default());
+        list.push(section(&format!("{name} ({})", items.len())));
         for item in items {
-            if selected == Some(&item.id) {
-                selected_line = Some(lines.len());
-            }
-            let row = RowLines::new(app, selected == Some(&item.id), width);
-            lines.extend(item_row_lines(item, row));
+            let is_selected = selected == Some(&item.id);
+            list.entry(
+                item_row_lines(item, RowLines::new(app, is_selected, width)),
+                is_selected,
+            );
         }
     }
-    if lines.len() == 1 {
-        lines.push(Line::from(" no items match").dim());
+    if list.lines.len() == 1 {
+        list.push(Line::from(" no items match").dim());
     }
-    (lines, selected_line)
+    list
 }
 
 fn draw_detail(frame: &mut Frame, app: &App, opened: Opened, area: Rect) -> Option<Scroll> {

@@ -839,6 +839,127 @@ fn the_list_behind_an_open_detail_takes_no_keys() {
     assert_eq!(press(&mut app, KeyCode::Char('q')), Some(Effect::Quit));
 }
 
+/// The column and the row `text` starts at once `app` is drawn.
+fn find(app: &mut App, width: u16, height: u16, text: &str) -> (u16, u16) {
+    let screen = screen(app, width, height);
+    screen
+        .lines()
+        .enumerate()
+        .find_map(|(row, line)| {
+            // The backend quotes each line, which the column leaves out.
+            let before = &line[1..line.find(text)?];
+            let column = u16::try_from(before.chars().count()).unwrap();
+            Some((column, u16::try_from(row).unwrap()))
+        })
+        .unwrap_or_else(|| panic!("{text:?} is not on screen:\n{screen}"))
+}
+
+#[test]
+fn a_click_on_a_tab_switches_to_it() {
+    let mut app = app();
+    let (column, row) = find(&mut app, 60, 24, "3 Agents");
+    app.click(column, row);
+    assert_eq!(app.tab, Tab::Agents);
+    // Its padding is part of it; the space between two tabs is not.
+    let (column, row) = find(&mut app, 60, 24, "2 Items");
+    app.click(column - 1, row);
+    assert_eq!(app.tab, Tab::Items);
+    let (column, row) = find(&mut app, 60, 24, "1 Now");
+    app.click(column - 2, row);
+    assert_eq!(app.tab, Tab::Items);
+    // While a prompt is open, a click does nothing.
+    press(&mut app, KeyCode::Char('?'));
+    app.click(column, row);
+    assert_eq!(app.tab, Tab::Items);
+    assert!(matches!(app.prompt, Some(Prompt::Keys)));
+    // The filter of the log lets the mouse through, and is taken as typed.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('4'));
+    press(&mut app, KeyCode::Char('/'));
+    press(&mut app, KeyCode::Char('x'));
+    app.click(column, row);
+    assert_eq!(app.tab, Tab::Now);
+    assert!(app.prompt.is_none());
+    assert_eq!(app.log.filter, "x");
+}
+
+#[test]
+fn a_click_on_an_entry_selects_it_and_a_second_opens_it() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    let dashboard = ItemId::from_bytes([4; 32]);
+    let blocked = ItemId::from_bytes([5; 32]);
+    let parse = ItemId::from_bytes([1; 32]);
+    // Four lines of the list are on screen, scrolled down to its last item.
+    press(&mut app, KeyCode::Char('G'));
+    let (_, row) = find(&mut app, 60, 11, "Session subscription");
+    assert!(!screen(&mut app, 60, 11).contains("Dashboard"));
+    app.click(20, row);
+    assert_eq!(app.items.list.selection.get(), Some(&blocked));
+    assert_eq!(app.wanted().detail, None);
+    // A heading or a blank line is no entry.
+    let (_, heading) = find(&mut app, 60, 11, "in_progress (1)");
+    app.click(20, heading);
+    app.click(20, heading - 1);
+    assert_eq!(app.items.list.selection.get(), Some(&blocked));
+    // The keys move on from the entry clicked.
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.items.list.selection.get(), Some(&parse));
+    // A click on the selection opens it, as enter would.
+    let (_, row) = find(&mut app, 60, 11, "Parse config lazily");
+    app.click(20, row);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(parse)));
+    // With the detail in place of the list, the click lands in the detail.
+    screen(&mut app, 60, 11);
+    app.click(20, row);
+    assert_eq!(app.path(), vec![Detail::Item(parse)]);
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('g'));
+    assert_eq!(app.items.list.selection.get(), Some(&dashboard));
+}
+
+#[test]
+fn a_click_below_the_last_entry_does_nothing() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    let (_, row) = find(&mut app, 60, 24, "Parse config lazily");
+    app.click(20, row + 1);
+    app.click(20, row + 5);
+    let dashboard = ItemId::from_bytes([4; 32]);
+    assert_eq!(app.items.list.selection.get(), Some(&dashboard));
+    assert_eq!(app.wanted().detail, None);
+}
+
+#[test]
+fn a_click_beside_the_list_gives_the_detail_the_keys() {
+    let mut app = app();
+    app.resize(130, 24);
+    press(&mut app, KeyCode::Char('3'));
+    app.refresh(with_agents());
+    let coder = SessionId::from_bytes([11; 32]);
+    screen(&mut app, 130, 24);
+    app.click(100, 10);
+    assert!(!app.list_has_keys());
+    // A click on the selection only takes the keys back to the list; the next opens it.
+    let (column, row) = find(&mut app, 130, 24, "claude-code · opus");
+    app.click(column, row);
+    assert!(app.list_has_keys());
+    assert_eq!(app.stack().map(Vec::len), Some(1));
+    app.click(column, row);
+    assert!(!app.list_has_keys());
+    // A click on another entry selects it, and its detail takes the place of the one opened.
+    let (column, row) = find(&mut app, 130, 24, "#aeaqca Parse");
+    app.click(column, row);
+    assert_eq!(app.agents.selection.get(), Some(&AgentRow::Session(coder)));
+    assert!(app.list_has_keys());
+    assert_eq!(app.wanted().detail, Some(Detail::Session(coder)));
+    // Not on the footer below the detail.
+    app.click(100, 23);
+    assert!(app.list_has_keys());
+}
+
 /// The style of the cell at `x`, `y` once `app` is drawn.
 fn style_at(app: &mut App, width: u16, height: u16, x: u16, y: u16) -> ratatui::style::Style {
     let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();

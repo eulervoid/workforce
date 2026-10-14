@@ -5,6 +5,7 @@ use std::collections::HashMap;
 
 use jiff::tz::TimeZone;
 use ratatui::crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
+use ratatui::layout::{Position, Rect};
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 use wf_core::graph::Readiness;
@@ -292,6 +293,19 @@ impl<Key: Clone + PartialEq> Selection<Key> {
         self.selected = rows.get(self.index).cloned();
         true
     }
+
+    /// Selects the row at `index` of `rows`; `None` when there is none.
+    fn pick(&mut self, rows: &[Key], index: usize) -> Option<Picked> {
+        let row = rows.get(index)?;
+        let picked = if self.selected.as_ref() == Some(row) {
+            Picked::Again
+        } else {
+            Picked::Moved
+        };
+        self.selected = Some(row.clone());
+        self.index = index;
+        Some(picked)
+    }
 }
 
 /// Which of the list and the detail beside it has the keys, in a wide window.
@@ -332,11 +346,39 @@ impl<Key> Default for ListTab<Key> {
     }
 }
 
-/// What drawing showed: where the text with the keys and the list ended up.
-#[derive(Clone, Copy, Debug, Default)]
+/// What drawing showed: where the text with the keys and the list ended up, and what a click can
+/// land on.
+#[derive(Clone, Debug, Default)]
 pub struct Drawn {
     pub text: Option<Scroll>,
     pub list_top: Option<usize>,
+    pub clickable: Clickable,
+}
+
+/// Where drawing put what a click can land on.
+#[derive(Clone, Debug, Default)]
+pub struct Clickable {
+    /// The label of each tab in the header.
+    pub tabs: Vec<(Tab, Rect)>,
+    pub list: Option<ClickableList>,
+    /// The detail beside the list, in a wide window.
+    pub detail: Option<Rect>,
+}
+
+/// A list as it is on screen.
+#[derive(Clone, Debug)]
+pub struct ClickableList {
+    pub area: Rect,
+    /// For each line on screen, from the top, the entry it shows by its place among the entries
+    /// of the list; `None` for a line that is no entry, such as a heading.
+    pub entries: Vec<Option<usize>>,
+}
+
+/// What a click on an entry of a list did to its selection.
+enum Picked {
+    /// The entry was selected already.
+    Again,
+    Moved,
 }
 
 /// Which items the Items tab lists, by their readiness.
@@ -534,6 +576,8 @@ pub struct App {
     pub height: u16,
     pub time_zone: TimeZone,
     pub status: Option<Status>,
+    /// What a click can land on, as last drawn.
+    pub clickable: Clickable,
 }
 
 impl App {
@@ -561,6 +605,7 @@ impl App {
             height: 24,
             time_zone,
             status: None,
+            clickable: Clickable::default(),
         };
         app.refresh(snapshot);
         app
@@ -783,8 +828,10 @@ impl App {
     }
 
     /// Keeps the scroll of the text on screen and the top of the list to what drawing showed of
-    /// them, so that the next key moves them from there rather than from past their end.
+    /// them, so that the next key moves them from there rather than from past their end; and
+    /// where a click lands.
     pub fn shown(&mut self, drawn: Drawn) {
+        self.clickable = drawn.clickable;
         if let Some(list_top) = drawn.list_top
             && let Some(panes) = self.panes_mut()
         {
@@ -1038,25 +1085,8 @@ impl App {
     /// The mouse wheel turned over `column`. It moves what is under the pointer: in a wide window
     /// the list or the detail beside it, which takes the keys; otherwise what is on screen.
     pub fn wheel(&mut self, column: u16, wheel: Wheel) {
-        // While the log is filtered, the wheel goes through what matches.
-        match &self.prompt {
-            None
-            | Some(Prompt::Filter {
-                list: Filtered::Log,
-                ..
-            }) => {}
-            Some(
-                Prompt::Filter {
-                    list: Filtered::Items,
-                    ..
-                }
-                | Prompt::Answer { .. }
-                | Prompt::Verdict { .. }
-                | Prompt::Comment { .. }
-                | Prompt::Choose(_)
-                | Prompt::Stop { .. }
-                | Prompt::Keys,
-            ) => return,
+        if !self.mouse_passes() {
+            return;
         }
         if self.tab == Tab::Log {
             self.log.scroll = wheel.scroll(self.log.scroll);
@@ -1082,23 +1112,126 @@ impl App {
             self.move_selection(KeyEvent::new(code, KeyModifiers::NONE));
             return;
         }
-        if self.list_has_keys() {
-            let Some(panes) = self.panes_mut() else {
-                return;
-            };
-            if panes.stack.is_empty() {
-                // The detail of the selection is on screen beside the list already: opening it
-                // only gives it the keys. Without one, there is nothing to scroll.
-                let Some(detail) = self.selected_detail() else {
-                    return;
-                };
-                self.open(detail);
-            } else {
-                panes.focus = Focus::Detail;
-            }
-        }
+        self.focus_detail();
+        // Without a detail to give the keys to, there is nothing to scroll.
         if let Some(opened) = self.stack_mut().and_then(|stack| stack.last_mut()) {
             opened.scroll = wheel.scroll(opened.scroll);
+        }
+    }
+
+    /// The left button pressed at `column`, `row`. On a tab it switches to it; on an entry of a
+    /// list it selects it and gives the list the keys, and opens it when it was selected already;
+    /// on the detail beside a list it gives the detail the keys.
+    pub fn click(&mut self, column: u16, row: u16) {
+        if !self.mouse_passes() {
+            return;
+        }
+        let position = Position::new(column, row);
+        let clickable = &self.clickable;
+        if let Some((tab, _)) = clickable
+            .tabs
+            .iter()
+            .find(|(_, label)| label.contains(position))
+        {
+            self.tab = *tab;
+            // The filter of the log, the only prompt a click goes through, is taken as typed.
+            self.prompt = None;
+            return;
+        }
+        if let Some(list) = &clickable.list
+            && list.area.contains(position)
+        {
+            let line = usize::from(row - list.area.y);
+            if let Some(Some(entry)) = list.entries.get(line).copied() {
+                self.click_entry(entry);
+            }
+            return;
+        }
+        if clickable
+            .detail
+            .is_some_and(|detail| detail.contains(position))
+        {
+            self.focus_detail();
+        }
+    }
+
+    /// Selects the entry at `index` of the list on screen and gives the list the keys; opens it
+    /// when it was selected already and the list had the keys, as enter would.
+    fn click_entry(&mut self, index: usize) {
+        let picked = match self.tab {
+            Tab::Now => {
+                let rows = self.now_rows();
+                self.now.selection.pick(&rows, index)
+            }
+            Tab::Items => {
+                let rows = self.item_rows();
+                self.items.list.selection.pick(&rows, index)
+            }
+            Tab::Agents => {
+                let rows = self.agent_rows();
+                self.agents.selection.pick(&rows, index)
+            }
+            Tab::Log => None,
+        };
+        let had_keys = self.list_has_keys();
+        let Some(panes) = self.panes_mut() else {
+            return;
+        };
+        match picked {
+            None => {}
+            Some(Picked::Again) if had_keys => {
+                if let Some(detail) = self.selected_detail() {
+                    self.open(detail);
+                }
+            }
+            // As the wheel does, a click on the selection only takes the keys from the detail.
+            Some(Picked::Again) => panes.focus = Focus::List,
+            // The details opened before give way to the selection's.
+            Some(Picked::Moved) => panes.stack.clear(),
+        }
+    }
+
+    /// Gives the keys to the detail on screen beside the list: the one opened, else the
+    /// selection's, if it has one.
+    fn focus_detail(&mut self) {
+        if !self.list_has_keys() {
+            return;
+        }
+        let Some(panes) = self.panes_mut() else {
+            return;
+        };
+        if !panes.stack.is_empty() {
+            panes.focus = Focus::Detail;
+            return;
+        }
+        // The detail of the selection is on screen beside the list already: opening it only
+        // gives it the keys.
+        if let Some(detail) = self.selected_detail() {
+            self.open(detail);
+        }
+    }
+
+    /// Whether the mouse acts while the footer asks for something: only while the log is
+    /// filtered, so the wheel goes through what matches.
+    fn mouse_passes(&self) -> bool {
+        match &self.prompt {
+            None
+            | Some(Prompt::Filter {
+                list: Filtered::Log,
+                ..
+            }) => true,
+            Some(
+                Prompt::Filter {
+                    list: Filtered::Items,
+                    ..
+                }
+                | Prompt::Answer { .. }
+                | Prompt::Verdict { .. }
+                | Prompt::Comment { .. }
+                | Prompt::Choose(_)
+                | Prompt::Stop { .. }
+                | Prompt::Keys,
+            ) => false,
         }
     }
 
