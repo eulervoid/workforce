@@ -337,7 +337,7 @@ struct Moved {
 /// What the verb for moving an item to `state` says it did.
 fn moved_verb(state: ItemState) -> &'static str {
     match state {
-        ItemState::Draft => "held back as a draft",
+        ItemState::Draft => "held back",
         ItemState::Open => "opened",
         ItemState::Active => "made active",
         ItemState::Review => "put in review",
