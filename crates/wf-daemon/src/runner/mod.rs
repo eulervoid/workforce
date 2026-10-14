@@ -29,7 +29,7 @@ use wf_core::session::SessionRole;
 use wf_core::state::State;
 use wf_harness::{AcpAgentConfig, Permissions};
 use wf_store::AuthorError;
-use wf_vcs::VcsError;
+use wf_vcs::{DirtyCheckout, VcsError};
 
 use crate::machine_config::{MachineConfig, MachineConfigError, SandboxConfig};
 use crate::{Daemon, Loaded, StorageClosed};
@@ -62,6 +62,22 @@ pub enum SessionError {
     NotWork,
     #[error("{0}")]
     Vcs(#[from] VcsError),
+    #[error(
+        "the submission rebases the branch onto `{target}`, and the rebase stopped at a commit \
+         that conflicts in {}. Resolve the conflicts in these files, then submit again: the \
+         daemon stages them and goes on with the rebase, which may stop at a later commit",
+        .paths.join(", ")
+    )]
+    RebaseConflict { target: String, paths: Vec<String> },
+    #[error(
+        "the submission rebases the branch onto `{target}`, but the worktree has uncommitted \
+         changes to {}; commit or discard them, then submit again",
+        .dirty.files()
+    )]
+    RebaseDirty {
+        target: String,
+        dirty: DirtyCheckout,
+    },
     #[error(transparent)]
     Authoring(#[from] AuthorError),
     #[error(transparent)]

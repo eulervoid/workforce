@@ -110,19 +110,20 @@ pub enum MergeOutcome {
     TargetMoved,
 }
 
-/// What happened when the target branch was merged into an item's branch, in its worktree.
+/// What happened when an item's branch was rebased onto the target branch, in its worktree.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TargetMerge {
-    /// The branch had everything of the target already.
+pub enum Rebase {
+    /// The branch had everything of the target already, and nothing was rewritten.
     UpToDate,
-    /// The branch now has the target merged in.
-    Merged,
-    /// The merge conflicts in these files, relative to the worktree. The merge is left in the
-    /// worktree, for whoever works there to resolve the conflicts and commit it.
+    /// The branch's own commits are now on top of the target.
+    Rebased,
+    /// The rebase stopped at a commit that conflicts in these files, relative to the worktree.
+    /// It is left in the worktree for whoever works there to resolve the files; the next rebase
+    /// stages them and goes on.
     Conflict { paths: Vec<String> },
-    /// A merge from earlier is still in the worktree with every conflict resolved; it only needs
-    /// committing.
-    Uncommitted,
+    /// The worktree has uncommitted changes, which a rebase would have to carry along. Nothing
+    /// was rewritten.
+    DirtyCheckout(DirtyCheckout),
 }
 
 /// A worktree with uncommitted changes to tracked files.
@@ -199,13 +200,22 @@ pub trait VcsAdapter {
         signing: &CommitSigning,
     ) -> Result<MergeOutcome, VcsError>;
 
-    /// Merges `target` into the branch checked out in `worktree`, with a commit signed as
-    /// `signing` says. A merge left unfinished there is not made again: its conflicts are named.
-    fn merge_target(
+    /// Rebases the branch checked out in `worktree` onto `target`, the rewritten commits signed as
+    /// `signing` says and committed by `committer`. A rebase stopped there earlier is not begun
+    /// again: the conflicting files are staged once they have no conflict markers left, and the
+    /// rebase goes on.
+    fn rebase(
         &self,
         worktree: &Path,
         target: &str,
-        message: &str,
         signing: &CommitSigning,
-    ) -> Result<TargetMerge, VcsError>;
+        committer: &str,
+    ) -> Result<Rebase, VcsError>;
+
+    /// The files in conflict when a rebase is stopped in `worktree`; `None` when none is.
+    fn stopped_rebase(&self, worktree: &Path) -> Result<Option<Vec<String>>, VcsError>;
+
+    /// Gives up the rebase stopped in `worktree`, if one is, which checks the branch out again
+    /// as it was before the rebase.
+    fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError>;
 }

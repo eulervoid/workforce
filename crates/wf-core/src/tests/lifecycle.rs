@@ -298,64 +298,45 @@ fn work_that_conflicts_reopens_and_work_that_may_merge_later_waits_in_review() {
 }
 
 #[test]
-fn a_session_after_a_conflicting_merge_begins_with_the_target_merged_in() {
+fn work_rebases_at_submit_until_it_is_approved() {
     let mut scene = Scene::new();
-    let task = scene.item(create("task", "work"));
+    let task = scene.item(create_reviewed("task", "careful", "standard"));
     let first = scene.start(task);
-    assert!(
-        !scene.state.merges_target_first(first),
-        "nothing was submitted yet"
-    );
-    scene.apply(moved(task, ItemState::Review));
-    scene.end(
-        first,
-        EndReason::Submitted {
-            commit: Some(commit()),
-        },
-    );
-    assert!(scene.state.unmerged_work(task).is_some());
-
-    scene.apply(moved(task, ItemState::Open));
-    let after_conflict = scene.start(task);
-    assert!(scene.state.merges_target_first(after_conflict));
+    assert!(scene.state.rebases_at_submit(first));
     let review = scene
         .apply(start_review("coder", task, commit()))
         .id()
         .into();
     assert!(
-        !scene.state.merges_target_first(review),
-        "only work merges the target in"
+        !scene.state.rebases_at_submit(review),
+        "only work is rebased"
     );
-}
-
-#[test]
-fn work_sent_back_by_its_review_does_not_merge_the_target_in() {
-    let mut scene = Scene::new();
-    let task = scene.item(create_reviewed("task", "careful", "standard"));
-    let first = scene.start(task);
     scene.apply(moved(task, ItemState::Review));
+    assert!(
+        !scene.state.rebases_at_submit(first),
+        "work that was moved on to review is not rewritten"
+    );
     let submitted = EndReason::Submitted {
         commit: Some(commit()),
     };
     scene.end(first, submitted);
+
+    // Sent back by its review.
     scene.apply(verdict(task, commit(), Verdict::RequestChanges));
     scene.apply(moved(task, ItemState::Open));
     let again = scene.start(task);
-    assert!(!scene.state.merges_target_first(again));
-    scene.end(again, EndReason::Released);
-
-    // Approved, then sent back by the merge's conflict.
-    let second = scene.start(task);
+    assert!(scene.state.rebases_at_submit(again));
     scene.apply(moved(task, ItemState::Review));
-    scene.end(second, submitted);
+    scene.end(again, submitted);
+
+    // Approved, it waits in review for its merge and is never rewritten.
     scene.apply(verdict(task, commit(), Verdict::Approve));
     let waiting = scene.start(task);
-    assert!(
-        !scene.state.merges_target_first(waiting),
-        "approved work in review waits for its merge"
-    );
+    assert!(!scene.state.rebases_at_submit(waiting));
     scene.end(waiting, EndReason::Released);
+
+    // Sent back by the merge's conflict, it is rebased at the next submit.
     scene.apply(moved(task, ItemState::Open));
     let after_conflict = scene.start(task);
-    assert!(scene.state.merges_target_first(after_conflict));
+    assert!(scene.state.rebases_at_submit(after_conflict));
 }
