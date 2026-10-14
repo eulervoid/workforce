@@ -45,9 +45,11 @@ pub fn carry_out(
     }
 }
 
-/// The agents of the principal of this machine, the policy's default agent first.
+/// The agents of the principal of this machine, the policy's default agent first. An item that
+/// a live session holds is refused right away, before an agent is picked for nothing.
 fn agents(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
+    wf_daemon::ensure_unclaimed(state, item)?;
     let principal = state
         .principal_of(&workspace.device_key())
         .ok_or_else(|| anyhow!("this device is not bound to a member"))?;

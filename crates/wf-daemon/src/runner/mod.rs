@@ -81,6 +81,17 @@ pub enum SessionError {
     },
 }
 
+/// Refuses a work session on `item` while a live one holds it.
+pub fn ensure_unclaimed(state: &State, item: ItemId) -> Result<(), SessionError> {
+    match state.claim(item) {
+        Some(holder) => Err(SessionError::Claimed {
+            item,
+            holder: state.actor_label(&holder.actor()),
+        }),
+        None => Ok(()),
+    }
+}
+
 /// Tells the task of a running session that it has ended and its harness is to be stopped.
 #[derive(Clone, Copy)]
 enum Stop {
@@ -345,21 +356,33 @@ impl Daemon {
 
 #[cfg(test)]
 mod tests {
-    use wf_core::id::EventId;
+    use wf_core::id::SessionId;
+    use wf_core::testing::{Fixture, create, define_agent, start_session};
 
     use super::*;
 
     #[test]
     fn a_refusal_names_the_item_short_and_the_session_that_holds_it() {
-        let item = ItemId::from(EventId::of(b"item"));
-        let refusal = SessionError::Claimed {
-            item,
-            holder: "@ada/coder/3cegls".to_string(),
-        };
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        fixture.apply(&mut state, 0, 2_000, define_agent("coder"));
+        let item = ItemId::from(
+            fixture
+                .apply(&mut state, 0, 2_001, create("task", "Busy"))
+                .id(),
+        );
+        assert!(ensure_unclaimed(&state, item).is_ok());
+        let started = fixture.apply(&mut state, 0, 3_000, start_session("coder", item));
+        let session = SessionId::from(started.id());
+        let holder = state.actor_label(&fixture.agent_actor("coder", session));
+        assert!(
+            holder.ends_with(&format!("/coder/{}", session.short())),
+            "{holder}"
+        );
         assert_eq!(
-            refusal.to_string(),
+            ensure_unclaimed(&state, item).unwrap_err().to_string(),
             format!(
-                "#{} already has a live session, @ada/coder/3cegls; stop it first",
+                "#{} already has a live session, {holder}; stop it first",
                 item.short()
             )
         );

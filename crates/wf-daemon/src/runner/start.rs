@@ -16,7 +16,7 @@ use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
 use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree, worktrees};
 
 use super::drive::run_session;
-use super::{Begin, Run, SessionError, blocking};
+use super::{Begin, Run, SessionError, blocking, ensure_unclaimed};
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
 use crate::machine_config::{EnvironmentConfig, SandboxConfig};
 use crate::{Daemon, Loaded};
@@ -185,13 +185,8 @@ impl Daemon {
         };
         let state = self.snapshot(loaded).await?;
         let setup = self.setup(&state, workforce, agent, item, role)?;
-        if role == SessionRole::Work
-            && let Some(holder) = state.claim(item)
-        {
-            return Err(SessionError::Claimed {
-                item,
-                holder: state.actor_label(&holder.actor()),
-            });
+        if role == SessionRole::Work {
+            ensure_unclaimed(&state, item)?;
         }
         let worktree = self.session_directory(workforce, item, role);
         let path = worktree.clone();
