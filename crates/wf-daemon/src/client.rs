@@ -30,12 +30,13 @@ pub enum ClientError {
 
 pub struct DaemonClient {
     stream: UnixStream,
+    device: DeviceKey,
 }
 
 impl DaemonClient {
     /// `Ok(None)` when no daemon is listening.
     pub fn connect(socket: &Path) -> Result<Option<Self>, ClientError> {
-        let stream = match UnixStream::connect(socket) {
+        let mut stream = match UnixStream::connect(socket) {
             Ok(stream) => stream,
             // A path longer than a socket address holds cannot be listened on either.
             Err(error)
@@ -48,21 +49,25 @@ impl DaemonClient {
             }
             Err(error) => return Err(ProtoError::from(error).into()),
         };
-        let mut client = Self { stream };
         write_message(
-            &mut client.stream,
+            &mut stream,
             &Hello {
                 version: PROTOCOL_VERSION,
             },
         )?;
-        match read_message(&mut client.stream)? {
-            HelloReply::Ready { .. } => Ok(Some(client)),
+        match read_message(&mut stream)? {
+            HelloReply::Ready { device, .. } => Ok(Some(Self { stream, device })),
             HelloReply::Refused { version } => Err(ProtoError::VersionMismatch {
                 daemon: version,
                 client: PROTOCOL_VERSION,
             }
             .into()),
         }
+    }
+
+    /// The device the daemon signs as: this machine's.
+    pub fn device(&self) -> DeviceKey {
+        self.device
     }
 
     /// Makes `call` and reads its [`Reply`] as the type the call is answered with.

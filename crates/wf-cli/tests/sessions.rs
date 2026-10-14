@@ -434,6 +434,10 @@ wf work submit --note \"all done\"
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
     assert!(session["commit"].is_string());
+    // The merge task merges after the session has ended.
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
     let moves: Vec<String> = world.wf(&["log"])["events"]
         .as_array()
         .unwrap()
@@ -442,14 +446,22 @@ wf work submit --note \"all done\"
         .map(|event| event["summary"].as_str().unwrap().to_string())
         .collect();
     let for_session = format!("for session {}", short(session["id"].as_str().unwrap()));
-    assert_eq!(moves.len(), 2, "{moves:?}");
-    assert!(
-        moves.iter().all(|summary| summary.ends_with(&for_session)),
-        "the start and the end move the item for the session: {moves:?}"
+    let states: Vec<&str> = moves
+        .iter()
+        .map(|summary| {
+            let state = summary
+                .strip_suffix(&format!(" {for_session}"))
+                .unwrap_or_else(|| panic!("each move is for the session: {moves:?}"));
+            state.rsplit(" -> ").next().unwrap()
+        })
+        .collect();
+    assert_eq!(
+        states,
+        ["active", "review", "done"],
+        "the start, the end and the merge move the item: {moves:?}"
     );
 
     let shown = world.item(&item);
-    assert_eq!(shown["state"], "done", "{shown}");
     let notes = comments(&shown);
     let notes = notes.as_array().unwrap();
     assert!(
@@ -653,13 +665,23 @@ wf work submit
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
+    // The merge task tries after the session has ended.
+    world
+        .wait("the waiting merge", |world| {
+            comments(&world.item(&item))
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| {
+                    note["text"].as_str().is_some_and(|text| {
+                        text.starts_with("Waiting to merge")
+                            && text.contains("changes to .workforce.toml.")
+                    })
+                })
+        })
+        .await;
     let shown = world.item(&item);
     assert_eq!(shown["state"], "review", "{shown}");
-    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
-        note["text"].as_str().is_some_and(|text| {
-            text.starts_with("Waiting to merge") && text.contains("changes to .workforce.toml.")
-        })
-    }));
     assert!(
         std::fs::read_to_string(&file)
             .unwrap()
@@ -707,13 +729,22 @@ wf work submit
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
+    // The merge task tries after the session has ended.
+    world
+        .wait("the refused merge", |world| {
+            comments(&world.item(&item))
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| {
+                    note["text"]
+                        .as_str()
+                        .is_some_and(|text| text.starts_with("Could not merge into main"))
+                })
+        })
+        .await;
     let shown = world.item(&item);
     assert_eq!(shown["state"], "review", "not left active: {shown}");
-    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
-        note["text"]
-            .as_str()
-            .is_some_and(|text| text.starts_with("Could not merge into main"))
-    }));
 
     std::fs::remove_file(&lock).unwrap();
     world.wf.run(&["comment", short(&item), "the lock is gone"]);
@@ -908,7 +939,10 @@ wf work submit
     let session = world.ended_session().await;
     assert_eq!(world.sessions().len(), 1, "the same session continued");
     assert_eq!(session["status"], "submitted", "{session}");
-    assert_eq!(world.item(&item)["state"], "done");
+    // The merge task merges after the session has ended.
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
     let transcript = world
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
@@ -1481,8 +1515,11 @@ wf work submit
 
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
+    // The merge task merges after the session has ended.
+    world
+        .wait("the conflict", |world| world.item(&item)["state"] == "open")
+        .await;
     let shown = world.item(&item);
-    assert_eq!(shown["state"], "open", "{shown}");
     assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
         note["text"]
             .as_str()
@@ -1535,7 +1572,10 @@ wf work submit
         .wf
         .run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(transcript.contains("permission: yes"), "{transcript}");
-    assert!(inbox(&world).is_empty());
+    // The merge task merges after the session has ended.
+    world
+        .wait("an empty inbox", |world| inbox(world).is_empty())
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1847,6 +1887,10 @@ wf work submit
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
+    // The merge task merges after the session has ended.
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
     let brief = git(&world.wf.repository, &["show", "main:brief.md"]);
     assert!(
         brief.contains("## Instructions\n\nPrefer the standard library.\n"),

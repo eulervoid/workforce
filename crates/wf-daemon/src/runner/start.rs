@@ -36,6 +36,8 @@ pub(super) fn sandboxed(
         worktree: &run.worktree,
         repository: &run.repository,
         socket: &daemon.config.socket,
+        data_dir: &daemon.config.data_dir,
+        machine_config: daemon.config.machine_config.as_deref(),
     };
     let settings = daemon
         .workforce_directory(run.workforce)

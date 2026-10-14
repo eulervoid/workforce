@@ -5,7 +5,8 @@ use anstyle::{AnsiColor, Style};
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
 const DIM: Style = Style::new().dimmed();
-const CODE: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Cyan)));
+/// Inline code: blue, as Claude Code shows it, so it looks familiar.
+const CODE: Style = Style::new().fg_color(Some(anstyle::Color::Ansi(AnsiColor::Blue)));
 
 /// `text` rendered with every line indented by `indent` and wrapped to `width` columns, indent
 /// included, or not at all. Words longer than the width, such as URLs, are left whole.

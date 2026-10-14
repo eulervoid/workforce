@@ -7,7 +7,7 @@ use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use wf_core::event::{Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, DeviceSigner, PrincipalSigner};
+use wf_core::identity::{Actor, DeviceKey, DeviceSigner, PrincipalSigner};
 use wf_core::lifecycle::Finish;
 use wf_core::state::State;
 use wf_daemon::client::DaemonClient;
@@ -80,7 +80,8 @@ pub fn store_path(data: &DataDir, id: &WorkforceId) -> anyhow::Result<PathBuf> {
 /// Where a command reads and writes the workforce: a running daemon, which owns the store, or
 /// the store itself, opened by this process.
 enum Source {
-    Local(Replica<RedbStore>),
+    /// The store, and the device key this process signs with.
+    Local(Replica<RedbStore>, Box<DeviceSigner>),
     Daemon {
         client: RefCell<DaemonClient>,
         state: State,
@@ -91,13 +92,13 @@ pub struct Workspace {
     source: Source,
     pub data: DataDir,
     workforce: WorkforceId,
-    device: DeviceSigner,
+    device: DeviceKey,
     actor: Actor,
 }
 
 /// The replica of a command that talks to the network itself, or the daemon that does.
 pub enum Replicated {
-    Local(Box<Replica<RedbStore>>),
+    Local(Box<Replica<RedbStore>>, Box<DeviceSigner>),
     Daemon(Box<DaemonClient>),
 }
 
@@ -128,10 +129,9 @@ impl Workspace {
         {
             data.remember_repository(&id, repository);
         }
-        let device = data
-            .device(false)?
-            .ok_or_else(|| anyhow!("no device key; this machine has not joined the workforce"))?;
+        // With a daemon, only the daemon reads the device key: agents are not let to.
         if !refold && let Some(mut client) = DaemonClient::connect(&data.daemon_socket())? {
+            let device = client.device();
             let state = client.state(id).with_context(|| {
                 format!("the daemon cannot serve workforce {id}, named by {named_by}")
             })?;
@@ -145,6 +145,9 @@ impl Workspace {
                 device,
             );
         }
+        let signer = data
+            .device(false)?
+            .ok_or_else(|| anyhow!("no device key; this machine has not joined the workforce"))?;
         let store = RedbStore::open(store_path(&data, &id)?)?;
         let replica = if refold {
             Replica::refold(store, id)?
@@ -156,20 +159,21 @@ impl Workspace {
                 "the local log for workforce {id} is missing or does not match; is this machine part of it?"
             );
         }
-        Self::bound(Source::Local(replica), data, id, device)
+        let device = signer.key();
+        Self::bound(Source::Local(replica, Box::new(signer)), data, id, device)
     }
 
     fn bound(
         source: Source,
         data: DataDir,
         workforce: WorkforceId,
-        device: DeviceSigner,
+        device: DeviceKey,
     ) -> anyhow::Result<Self> {
         let state = match &source {
-            Source::Local(replica) => replica.state(),
+            Source::Local(replica, _) => replica.state(),
             Source::Daemon { state, .. } => state,
         };
-        let principal = state.principal_of(&device.key()).ok_or_else(|| {
+        let principal = state.principal_of(&device).ok_or_else(|| {
             anyhow!("this machine's device key is not bound to a member of the workforce")
         })?;
         let actor = match std::env::var(SESSION_VARIABLE) {
@@ -186,12 +190,12 @@ impl Workspace {
     }
 
     /// Hands over the replica, for commands that share it with the network.
-    pub fn into_replicated(self) -> (Replicated, DeviceSigner, WorkforceId) {
+    pub fn into_replicated(self) -> (Replicated, WorkforceId) {
         let replicated = match self.source {
-            Source::Local(replica) => Replicated::Local(Box::new(replica)),
+            Source::Local(replica, signer) => Replicated::Local(Box::new(replica), signer),
             Source::Daemon { client, .. } => Replicated::Daemon(Box::new(client.into_inner())),
         };
-        (replicated, self.device, self.workforce)
+        (replicated, self.workforce)
     }
 
     /// The session this process works in, when `WF_SESSION` names one.
@@ -202,14 +206,14 @@ impl Workspace {
         }
     }
 
-    pub fn device_key(&self) -> wf_core::identity::DeviceKey {
-        self.device.key()
+    pub fn device_key(&self) -> DeviceKey {
+        self.device
     }
 
     /// When devices were last heard from. Only a running daemon knows.
     pub fn last_seen(&self) -> crate::devices::LastSeen {
         match &self.source {
-            Source::Local(_) => crate::devices::LastSeen::new(),
+            Source::Local(..) => crate::devices::LastSeen::new(),
             Source::Daemon { client, .. } => client
                 .borrow_mut()
                 .last_seen(self.workforce)
@@ -220,7 +224,7 @@ impl Workspace {
 
     pub fn state(&self) -> &State {
         match &self.source {
-            Source::Local(replica) => replica.state(),
+            Source::Local(replica, _) => replica.state(),
             Source::Daemon { state, .. } => state,
         }
     }
@@ -231,14 +235,14 @@ impl Workspace {
             Source::Daemon { client, state } => {
                 *state = client.get_mut().state(self.workforce)?;
             }
-            Source::Local(_) => {}
+            Source::Local(..) => {}
         }
         Ok(())
     }
 
     pub fn event(&self, id: &EventId) -> anyhow::Result<Option<Event>> {
         match &self.source {
-            Source::Local(replica) => Ok(replica.store().event(id)?),
+            Source::Local(replica, _) => Ok(replica.store().event(id)?),
             Source::Daemon { client, .. } => Ok(client.borrow_mut().event(self.workforce, *id)?),
         }
     }
@@ -246,7 +250,7 @@ impl Workspace {
     /// The events from position `from` of the log on, in the order this machine applied them.
     pub fn events_since(&self, from: u64) -> anyhow::Result<Vec<Event>> {
         match &self.source {
-            Source::Local(replica) => Ok(replica.store().log_since(from)?),
+            Source::Local(replica, _) => Ok(replica.store().log_since(from)?),
             Source::Daemon { client, .. } => {
                 Ok(client.borrow_mut().events_since(self.workforce, from)?)
             }
@@ -257,7 +261,7 @@ impl Workspace {
     pub fn follows_daemon(&self) -> bool {
         match &self.source {
             Source::Daemon { .. } => true,
-            Source::Local(_) => false,
+            Source::Local(..) => false,
         }
     }
 
@@ -265,7 +269,7 @@ impl Workspace {
     /// a fork has the history it was made from newest event first.
     pub fn events(&self) -> anyhow::Result<Vec<Event>> {
         match &self.source {
-            Source::Local(replica) => Ok(replica.store().log_since(0)?),
+            Source::Local(replica, _) => Ok(replica.store().log_since(0)?),
             Source::Daemon { client, .. } => Ok(client.borrow_mut().events(self.workforce)?),
         }
     }
@@ -273,8 +277,8 @@ impl Workspace {
     /// Checks the policy rules, signs with this machine's device key and stores the event.
     pub fn author(&mut self, body: EventBody) -> anyhow::Result<Event> {
         match &mut self.source {
-            Source::Local(replica) => {
-                Ok(replica.author(&self.device, self.actor.clone(), now_ms(), body)?)
+            Source::Local(replica, signer) => {
+                Ok(replica.author(signer, self.actor.clone(), now_ms(), body)?)
             }
             Source::Daemon { client, state } => {
                 let mut client = client.borrow_mut();
@@ -306,7 +310,7 @@ impl Workspace {
     /// The permission requests that wait for the principal. Only a running daemon holds any.
     pub fn held_permissions(&self) -> Vec<HeldPermission> {
         match &self.source {
-            Source::Local(_) => Vec::new(),
+            Source::Local(..) => Vec::new(),
             Source::Daemon { client, .. } => client
                 .borrow_mut()
                 .permissions(self.workforce)
@@ -345,7 +349,7 @@ impl Workspace {
     fn daemon(&mut self, what: &str) -> anyhow::Result<(&mut DaemonClient, &mut State)> {
         match &mut self.source {
             Source::Daemon { client, state } => Ok((client.get_mut(), state)),
-            Source::Local(_) => {
+            Source::Local(..) => {
                 bail!("only the daemon can {what}; start it with `wf daemon start`")
             }
         }
@@ -355,7 +359,7 @@ impl Workspace {
     /// of whoever owns the stores of this machine.
     pub fn create_fork(&mut self, genesis: Event) -> anyhow::Result<()> {
         match &mut self.source {
-            Source::Local(replica) => {
+            Source::Local(replica, _) => {
                 let child = genesis.id().into();
                 let store = RedbStore::open(store_path(&self.data, &child)?)?;
                 Replica::create_fork(store, genesis, &*replica)?;

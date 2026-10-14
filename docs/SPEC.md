@@ -1156,6 +1156,20 @@ stopped; nothing waits for it.
 * An agent's environment is only what wf sets, a few variables every program expects (`HOME`, `PATH`,
   ...), and what the machine config inherits or sets for every agent or for one (M2.2). Nothing else
   of the daemon's environment reaches it; a variable set allows nothing in the sandbox by itself.
+* **The agent sandbox.** The daemon runs agents in Fence, with a profile it writes for each session
+  from Fence's `code` template. An agent may write its worktree, the repository's `.git` where its
+  commits go, the daemon's socket, temporary files, the caches and state of agent tools, and what the
+  machine config adds; nowhere else in `~/.config` or `~/.local/share`, so not wf's stores nor the
+  worktrees of other items. Whatever the machine config adds, the sandbox denies:
+  * reading or writing the device key, the principal keys and the machine config, with which an
+    agent would sign as the device or the principal, or turn its sandbox off;
+  * writing the repository's `.git/config` and `.git/hooks`, the worktree's `.git` file and the
+    `commondir` it leads to, and git's own config (`~/.gitconfig`, `~/.config/git`), with which git
+    would run the agent's code outside the sandbox. wf also runs every git command with
+    `core.hooksPath=/dev/null` and `core.fsmonitor=false`;
+  * reading SSH and GPG keys and the credentials of clouds and package registries.
+
+  `wf` in a session reads no key: the daemon signs what it writes and tells it the device's key.
 * wf keeps the injected values in memory only and uses them to scrub: exact match plus base64, URL and hex
   encodings, then pattern scanning (gitleaks-style) as a second layer.
 * Comments written by agent sessions always pass redaction before signing.

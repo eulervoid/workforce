@@ -80,6 +80,29 @@ fn an_agent_is_removed_and_added_again() {
 
     wf.run(&["agent", "add", "coder", "--harness", "opencode"]);
     assert_eq!(wf.json(&["agent", "list"]).as_array().unwrap().len(), 2);
+
+    // Its activity tells what was done to it, and by whom.
+    wf.run(&["agent", "edit", "coder", "--model", "deep"]);
+    let shown = wf.json(&["agent", "show", "@ada/coder"]);
+    let activity: Vec<&str> = shown["activity"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| entry["summary"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        activity,
+        [
+            "defined it",
+            "removed it",
+            "defined it again",
+            "set the model to deep"
+        ]
+    );
+    let shown = wf.run(&["agent", "show", "coder"]);
+    assert!(shown.contains("@ada/coder  opencode · deep"), "{shown}");
+    assert!(shown.contains("@ada · set the model to deep"), "{shown}");
+    assert!(wf.fail(&["agent", "show", "nobody"]).contains("@ada/coder"));
 }
 
 #[test]

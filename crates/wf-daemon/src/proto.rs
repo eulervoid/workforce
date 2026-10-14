@@ -19,7 +19,7 @@ use wf_core::name::AgentName;
 use wf_harness::Permission;
 use wf_net::frame::MAX_FRAME_LEN;
 
-pub const PROTOCOL_VERSION: u32 = 10;
+pub const PROTOCOL_VERSION: u32 = 11;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -43,8 +43,15 @@ pub struct Hello {
 
 #[derive(Serialize, Deserialize)]
 pub enum HelloReply {
-    Ready { version: u32 },
-    Refused { version: u32 },
+    /// `device` is the device the daemon signs as, so that a client knows it without reading
+    /// the device key, which agents are not let to.
+    Ready {
+        version: u32,
+        device: DeviceKey,
+    },
+    Refused {
+        version: u32,
+    },
 }
 
 #[derive(Serialize, Deserialize)]

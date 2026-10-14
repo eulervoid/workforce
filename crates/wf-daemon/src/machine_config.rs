@@ -214,7 +214,8 @@ impl SandboxConfig {
 /// Runs agents in [Fence](https://github.com/fencesandbox/fence), which has to be installed. An
 /// agent may write in its worktree and where it needs to commit and talk to the daemon, and
 /// reach the model APIs and package registries of Fence's `code` template; everything else is
-/// denied. What this adds is on top of that.
+/// denied. What this adds is on top of that, except for wf's keys and config and git's config and
+/// hooks, which the sandbox always denies.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FenceConfig {

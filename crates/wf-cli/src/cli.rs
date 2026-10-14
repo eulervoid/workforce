@@ -486,6 +486,11 @@ pub enum AgentCommand {
     Add(AgentAddArgs),
     /// List your agents and those of the other members.
     List,
+    /// Show an agent: its definition, the devices that host it, its sessions and its activity.
+    Show {
+        /// The agent: its name for one of yours, `@ada/grace` for one of another member.
+        agent: String,
+    },
     /// Change an agent of yours. Fields that are given replace the current value.
     Edit(AgentEditArgs),
     /// Remove an agent of yours. Its sessions stay in the log; `wf agent add` brings it back.

@@ -16,13 +16,11 @@ use super::app::{
     STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
 use super::links;
-use super::snapshot::{
-    AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting, duration,
-};
+use super::snapshot::{AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting};
 use super::snapshot::{Detail, ItemRow};
 use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;
-use crate::render;
+use crate::render::{self, duration};
 use crate::transcript::{self, Format, Now, Transcript, Usage};
 use wf_core::stats::ProjectStats;
 
@@ -593,9 +591,10 @@ fn draw_strip(frame: &mut Frame, app: &App, area: Rect) -> (Rect, Rect) {
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(STRIP)]).areas(area);
         (pane, strip, " ›")
     } else {
+        // The detail keeps its own margin, which stands in for the strip's second column.
         let [strip, pane] =
-            Layout::horizontal([Constraint::Length(STRIP), Constraint::Fill(1)]).areas(area);
-        (pane, strip, "‹ ")
+            Layout::horizontal([Constraint::Length(STRIP - 1), Constraint::Fill(1)]).areas(area);
+        (pane, strip, "‹")
     };
     let mut lines = vec![Line::default(); usize::from(strip.height / 2)];
     lines.push(Line::from(chevron));
@@ -1234,7 +1233,7 @@ fn stats_lines(stats: &ProjectStats, width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
-/// `coder  claude-code · opus  2/2 busy`
+/// `coder  claude-code · opus  2/2 busy`, `1/2 live` while there is room, `0/2 idle`
 fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
     let first = vec![
         Span::raw(agent.id.name.to_string()).bold(),
@@ -1245,6 +1244,7 @@ fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
         Some(capacity) if live as u32 >= capacity => {
             Span::raw(format!("{live}/{capacity} busy")).fg(Color::Blue)
         }
+        Some(capacity) if live > 0 => Span::raw(format!("{live}/{capacity} live")).fg(Color::Blue),
         Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).dim(),
         None => Span::raw(format!("{live} live · not here")).dim(),
     };
@@ -1364,7 +1364,7 @@ fn draw_detail(
             else {
                 return None;
             };
-            let text = Text::from(text.clone());
+            let text: Text = text.into_text().unwrap_or_default();
             (draw_scrolled(frame, text, opened.scroll, body), None)
         }
         Detail::Session(id) => {

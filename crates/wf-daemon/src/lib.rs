@@ -110,6 +110,7 @@ pub struct Config {
 
 pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
+    pub(crate) merges: runner::MergeQueue,
 }
 
 /// Serves the workforce to its other devices and keeps in sync with them, from when it first has
@@ -229,7 +230,6 @@ pub struct Daemon {
     node: tokio::sync::OnceCell<Arc<Node<StorageHandle>>>,
     presence: Presence,
     runners: runner::Runners,
-    merging: runner::ItemLocks,
     starting: runner::ItemLocks,
     /// Taken while a session ends, so that two ends of one session, such as the agent's submit
     /// and a timeout, do not both act.
@@ -254,7 +254,6 @@ impl Daemon {
             node: tokio::sync::OnceCell::new(),
             presence: Presence::default(),
             runners: runner::Runners::default(),
-            merging: runner::ItemLocks::default(),
             starting: runner::ItemLocks::default(),
             ending: tokio::sync::Mutex::new(()),
             held: Arc::default(),
@@ -384,8 +383,16 @@ impl Daemon {
             id,
             storage.clone(),
         ));
-        let entry = Arc::new(Loaded { storage });
+        let entry = Arc::new(Loaded {
+            storage,
+            merges: runner::MergeQueue::default(),
+        });
         loaded.insert(id, Arc::clone(&entry));
+        tokio::spawn(runner::run_merger(
+            Arc::downgrade(self),
+            id,
+            Arc::clone(&entry),
+        ));
         let daemon = Arc::clone(self);
         let started = Arc::clone(&entry);
         tokio::spawn(async move {

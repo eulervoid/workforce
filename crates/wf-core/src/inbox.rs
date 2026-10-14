@@ -115,6 +115,12 @@ impl State {
                     Some(ReviewStatus::Awaiting {
                         step: ReviewStep::Agent { .. },
                     }) => return None,
+                    // The merge task moves it to `done`.
+                    Some(ReviewStatus::Merged { .. })
+                        if merges.iter().any(|pending| pending.item == item.id()) =>
+                    {
+                        return None;
+                    }
                     Some(ReviewStatus::Approved { .. })
                     | Some(ReviewStatus::ChangesRequested)
                     | Some(ReviewStatus::Merged { .. })
