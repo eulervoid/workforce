@@ -2,10 +2,10 @@
 source: crates/wf-cli/src/dashboard/tests.rs
 expression: "screen(&mut app, 80, 30)"
 ---
-" workforce                                1 Now·3   2 Items   3 Agents   4 Log  "
+" workforce                                1 Now·3   2 Items  ▐3 Agents▌  4 Log  "
 " 3 live · 14 open · 1 blocked · 2 devices                                       "
 "────────────────────────────────────────────────────────────────────────────────"
-" Agents › coder                                                                 "
+" Agents ›▐coder▌                                                                "
 " @ada/coder  claude-code · opus  ◆ 1/2 live                                     "
 "   lanes default · can rust, review · starts auto · permissions allow           "
 "   nudges 3 · parks for 2h · at most 1h                                         "
