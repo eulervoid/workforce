@@ -6016,6 +6016,7 @@ dependencies = [
 name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "bytesize",
  "close_fds",
  "data-encoding",
