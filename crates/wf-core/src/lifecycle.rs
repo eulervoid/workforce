@@ -191,6 +191,25 @@ impl State {
         Some((session.item(), active))
     }
 
+    /// Whether the daemon merges the target into the item's branch as `session` starts, before
+    /// the agent works: when the last merge of the item's work failed, so that its work was ready
+    /// to merge and is not merged, yet the item is back at work, as a conflict sends it.
+    pub fn merges_target_first(&self, session: SessionId) -> bool {
+        let Some(session) = self.session(session) else {
+            return false;
+        };
+        let working = match session.role() {
+            SessionRole::Work => true,
+            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => false,
+        };
+        let back_at_work = match self.live_state(session.item()) {
+            Some(ItemState::Open | ItemState::Active) => true,
+            Some(ItemState::Review | ItemState::Done | ItemState::Cancelled | ItemState::Draft)
+            | None => false,
+        };
+        working && back_at_work && self.unmerged_work(session.item()).is_some()
+    }
+
     /// What happens to the item of `session` when it ends for `reason`. The daemon does it before
     /// it writes the end, while the session still holds the item, so the item is never ready in
     /// between. `None` for a session that does not exist.
