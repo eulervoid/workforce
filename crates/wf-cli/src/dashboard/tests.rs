@@ -1262,7 +1262,9 @@ fn the_bar_and_the_background_cover_every_line_of_the_selection() {
     let (_, row) = find(&mut app, 60, 22, "blocker from");
     for line in [row, row + 1] {
         assert_eq!(symbol_at(&mut app, 60, 22, 0, line), "▎");
-        assert_eq!(style_at(&mut app, 60, 22, 0, line).fg, Some(ACCENT));
+        // The bar is white, on the background of the row, with no gap to the left edge.
+        assert_eq!(style_at(&mut app, 60, 22, 0, line).fg, Some(Color::White));
+        assert_eq!(bg_at(&mut app, 60, 22, 0, line), Some(ACCENT));
         assert_eq!(bg_at(&mut app, 60, 22, 10, line), Some(ACCENT));
     }
     // The line after the entry is the next one's.
@@ -1300,14 +1302,36 @@ fn the_log_tab_and_a_prompt_have_the_accent() {
 }
 
 #[test]
+fn the_review_prompt_has_the_accent_on_the_whole_line() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('v'));
+    assert!(matches!(app.prompt, Some(Prompt::Verdict { .. })));
+    let (column, row) = find(&mut app, 60, 24, "r changes");
+    assert_eq!(row, 23);
+    // The key and its words, and the last column of the line.
+    let key = style_at(&mut app, 60, 24, column, row);
+    assert_eq!(key.bg, Some(ACCENT));
+    assert!(key.add_modifier.contains(ratatui::style::Modifier::BOLD));
+    assert_eq!(bg_at(&mut app, 60, 24, column + 3, row), Some(ACCENT));
+    assert_eq!(bg_at(&mut app, 60, 24, 59, row), Some(ACCENT));
+}
+
+#[test]
 fn while_the_terminal_pane_is_not_focused_the_accent_is_dimmed() {
     let mut app = app();
     let (_, row) = find(&mut app, 60, 16, "wants:");
     assert!(app.terminal_focus(false));
     assert!(!app.terminal_focus(false));
     assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT_DIMMED));
+    // The bar takes the colour of the dimmed background, so it does not show.
+    let bar = style_at(&mut app, 60, 16, 0, row);
+    assert_eq!((bar.fg, bar.bg), (Some(ACCENT_DIMMED), Some(ACCENT_DIMMED)));
     assert!(app.terminal_focus(true));
     assert_eq!(bg_at(&mut app, 60, 16, 10, row), Some(ACCENT));
+    let bar = style_at(&mut app, 60, 16, 0, row);
+    assert_eq!((bar.fg, bar.bg), (Some(Color::White), Some(ACCENT)));
 }
 
 #[test]
