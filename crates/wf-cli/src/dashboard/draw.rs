@@ -12,8 +12,8 @@ use wf_core::id::HashId;
 use wf_core::item::ItemState;
 
 use super::app::{
-    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Opened, Prompt, Row, STRIP, Scroll,
-    Spot, Starter, Status, Tab, Target,
+    AgentRow, App, Choice, Clickable, ClickableList, Counted, Drawn, Opened, Prompt, Request, Row,
+    STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
 use super::links;
 use super::snapshot::{
@@ -50,10 +50,11 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     ])
     .areas(frame.area());
     let tabs = draw_header(frame, app, header);
-    frame.render_widget(Paragraph::new(counts_line(app)), counts);
+    let counts = draw_counts(frame, app, counts);
     draw_rule(frame, rule);
     let mut shown = draw_body(frame, app, body);
     shown.clickable.tabs = tabs;
+    shown.clickable.spots.extend(counts);
     draw_rule(frame, rule_below);
     frame.render_widget(Paragraph::new(latest_line(app)), latest);
     if app.status.is_none() {
@@ -92,7 +93,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         // A link in the latest event says itself where it is.
         if !spot.area.intersects(latest) {
             frame.render_widget(Clear, latest);
-            let tip = Line::from(format!(" {}", spot.target.tip()));
+            let tip = Line::from(format!(" {}", app.tip(&spot.target)));
             frame.render_widget(Paragraph::new(tip), latest);
         }
     }
@@ -159,11 +160,12 @@ const KEYS: &[(&str, &str)] = &[
     ("pgup/pgdn", "a page up, down; also space"),
     ("wheel", "move what is under the pointer"),
     ("click", "pick a tab or an entry, again to open"),
-    ("", "follow a link, a key hint, a crumb"),
+    ("", "follow a link, hint, crumb or count"),
     ("shift-drag", "select text, as without the dashboard"),
     ("enter esc", "open, go back"),
     ("H L", "one pane or both, also shift ←/→"),
     ("a d", "allow, deny a permission request"),
+    ("", "a click on allow asks for a second"),
     ("r R", "answer a blocker here, in $EDITOR"),
     ("ctrl+g", "carry a comment or answer to $EDITOR"),
     ("v D", "review, show the diff"),
@@ -311,20 +313,51 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
         .collect()
 }
 
-/// `3 live · 14 open · 1 blocked · 2 devices`, leaving out what is none.
-fn counts_line(app: &App) -> Line<'static> {
+/// Draws `3 live · 14 open · 1 blocked · 2 devices`, leaving out what is none; returns the counts
+/// that open the Items tab filtered to them.
+fn draw_counts(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let counts = app.snapshot.counts;
     let mut parts = vec![
-        format!("{} live", counts.live_sessions),
-        format!("{} open", counts.open_items),
+        (format!("{} live", counts.live_sessions), None),
+        (format!("{} open", counts.open_items), Some(Counted::Open)),
     ];
     if counts.blocked_items > 0 {
-        parts.push(format!("{} blocked", counts.blocked_items));
+        parts.push((
+            format!("{} blocked", counts.blocked_items),
+            Some(Counted::Blocked),
+        ));
     }
     if counts.devices > 1 {
-        parts.push(format!("{} devices", counts.devices));
+        parts.push((format!("{} devices", counts.devices), None));
     }
-    Line::from(format!(" {}", parts.join(" · "))).dim()
+    let mut spots = Vec::new();
+    let mut start = 1;
+    for (part, counted) in &parts {
+        let width = textwrap::core::display_width(part);
+        if let Some(counted) = counted {
+            spots.push(button(area, start, width, Target::Count(*counted)));
+        }
+        start += width + textwrap::core::display_width(SEPARATOR);
+    }
+    let parts: Vec<&str> = parts.iter().map(|(part, _)| part.as_str()).collect();
+    let line = Line::from(format!(" {}", parts.join(SEPARATOR))).dim();
+    frame.render_widget(Paragraph::new(line), area);
+    spots.retain(|spot| !spot.area.is_empty());
+    spots
+}
+
+/// A button `width` columns wide, `start` columns into the line `area`; what a narrow window cuts
+/// off cannot be clicked.
+fn button(area: Rect, start: usize, width: usize, target: Target) -> Spot {
+    let button = Rect {
+        x: area.x.saturating_add(start as u16),
+        width: width as u16,
+        ..area
+    };
+    Spot {
+        target,
+        area: button.intersection(area),
+    }
 }
 
 fn draw_rule(frame: &mut Frame, area: Rect) {
@@ -379,12 +412,14 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
                 }
             }
             None => {
-                let (list_top, list) = draw_list(frame, app, list_lines, area);
+                let mut spots = Vec::new();
+                let (list_top, list) = draw_list(frame, app, list_lines, area, &mut spots);
                 Drawn {
                     text: None,
                     list_top: Some(list_top),
                     clickable: Clickable {
                         list: Some(list),
+                        spots,
                         ..Clickable::default()
                     },
                     ..Drawn::default()
@@ -400,10 +435,10 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
         Constraint::Fill(1),
     ])
     .areas(area);
-    let (list_top, list) = draw_list(frame, app, list_lines, list);
+    let mut spots = Vec::new();
+    let (list_top, list) = draw_list(frame, app, list_lines, list, &mut spots);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).dim(), rule);
-    let mut spots = Vec::new();
     Drawn {
         text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail, &mut spots)),
         list_top: Some(list_top),
@@ -450,6 +485,15 @@ struct ListText {
     selected_line: Option<usize>,
     /// How many entries there are so far.
     count: usize,
+    buttons: Vec<ListButton>,
+}
+
+/// A button on a line of a list, `start` columns into it.
+struct ListButton {
+    line: usize,
+    start: usize,
+    width: usize,
+    target: Target,
 }
 
 impl ListText {
@@ -478,6 +522,7 @@ fn draw_list(
     app: &App,
     list_lines: ListLines,
     area: Rect,
+    spots: &mut Vec<Spot>,
 ) -> (usize, ClickableList) {
     let list = list_lines(app, area.width);
     let previous = app.panes().map_or(0, |panes| panes.list_top);
@@ -489,6 +534,23 @@ fn draw_list(
     );
     let scroll = u16::try_from(top).unwrap_or(u16::MAX);
     frame.render_widget(Paragraph::new(list.lines).scroll((scroll, 0)), area);
+    let height = usize::from(area.height);
+    for ListButton {
+        line,
+        start,
+        width,
+        target,
+    } in list.buttons
+    {
+        if (top..top + height).contains(&line) {
+            let line = Rect {
+                y: area.y + (line - top) as u16,
+                height: 1,
+                ..area
+            };
+            spots.push(button(line, start, width, target));
+        }
+    }
     let entries = list
         .entries
         .into_iter()
@@ -624,6 +686,17 @@ fn item_spans(item: &ItemRef) -> Vec<Span<'static>> {
     ]
 }
 
+/// The keys that answer a permission request, on its row: allow first, deny last.
+const ROW_ANSWERS: &str = "a / d";
+
+/// Where `right` starts on the first line of a row drawn with it: flush against the right edge,
+/// before the margin.
+fn right_start(first: &Line, right: &str) -> usize {
+    first
+        .width()
+        .saturating_sub(textwrap::core::display_width(right) + 1)
+}
+
 fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
     match entry {
         Waiting::Permission {
@@ -636,7 +709,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             }
             first.push(Span::raw(" wants: "));
             first.push(Span::raw(what.clone()));
-            row.lines(first, row.keys("a / d").map(Line::from), Vec::new())
+            row.lines(first, row.keys(ROW_ANSWERS).map(Line::from), Vec::new())
         }
         Waiting::Blocker { item, by, text, .. } => {
             let mut first = vec![Span::raw("⧗ ").fg(Color::Yellow)];
@@ -808,10 +881,25 @@ fn now_lines(app: &App, width: u16) -> ListText {
         list.push(section("WAITING ON YOU"));
         for entry in &snapshot.waiting {
             let is_selected = selected == Some(&Row::Waiting(entry.key()));
-            list.entry(
-                waiting_lines(entry, RowLines::new(app, is_selected, width)),
-                is_selected,
-            );
+            let lines = waiting_lines(entry, RowLines::new(app, is_selected, width));
+            // The keys of the selected request answer it on a click.
+            if is_selected && let Some(request) = entry.request() {
+                let start = right_start(&lines[0], ROW_ANSWERS);
+                let line = list.lines.len();
+                list.buttons.push(ListButton {
+                    line,
+                    start,
+                    width: 1,
+                    target: Target::Allow(request),
+                });
+                list.buttons.push(ListButton {
+                    line,
+                    start: start + ROW_ANSWERS.len() - 1,
+                    width: 1,
+                    target: Target::Deny(request),
+                });
+            }
+            list.entry(lines, is_selected);
         }
         list.push(Line::default());
     }
@@ -1073,7 +1161,7 @@ fn draw_detail(
             else {
                 return None;
             };
-            let scroll = draw_session(frame, app, session, opened.scroll, body);
+            let scroll = draw_session(frame, app, session, opened.scroll, body, spots);
             (scroll, Some(session.item.id))
         }
     };
@@ -1087,12 +1175,15 @@ fn draw_detail(
     Some(scroll)
 }
 
+/// Draws a session's transcript, with its permission request under it; returns the scroll it was
+/// drawn at, and adds the answers to the request to `spots`.
 fn draw_session(
     frame: &mut Frame,
     app: &App,
     session: &SessionInfo,
     scroll: Scroll,
     body: Rect,
+    spots: &mut Vec<Spot>,
 ) -> Scroll {
     let mut transcript_lines = app.transcript_lines.borrow_mut();
     let (lines, open): (&[Line<'static>], Vec<Line<'static>>) =
@@ -1118,7 +1209,7 @@ fn draw_session(
                 (laid_out.lines(), open)
             }
         };
-    let asks: Vec<&str> = app
+    let asks: Vec<(&str, Request)> = app
         .snapshot
         .waiting
         .iter()
@@ -1127,7 +1218,7 @@ fn draw_session(
                 session: asking,
                 what,
                 ..
-            } if *asking == session.id => Some(what.as_str()),
+            } if *asking == session.id => Some((what.as_str(), entry.request()?)),
             Waiting::Permission { .. }
             | Waiting::Blocker { .. }
             | Waiting::Review { .. }
@@ -1149,15 +1240,21 @@ fn draw_session(
         frame.render_widget(Paragraph::new(line), context);
     }
     let shown = draw_lines(frame, lines, &open, scroll, body);
-    if let Some(what) = asks.first() {
+    if let Some((what, request)) = asks.first() {
         let line = Line::from(vec![
             Span::raw("? ").fg(Color::Yellow).bold(),
             Span::raw(format!("wants: {what}")),
         ]);
-        let keys = Span::raw("a allow · d deny").fg(Color::Yellow);
+        let keys = [ALLOW, DENY].join(SEPARATOR);
         let row = RowLines::new(app, false, bar.width);
-        let mut lines = row.lines(line.spans, Some(Line::from(keys)), Vec::new());
-        frame.render_widget(Paragraph::new(lines.remove(0)), bar);
+        let right = Line::from(Span::raw(keys.clone()).fg(Color::Yellow));
+        let first = row.lines(line.spans, Some(right), Vec::new()).remove(0);
+        let allow = right_start(&first, &keys);
+        let width = textwrap::core::display_width;
+        let deny = allow + width(ALLOW) + width(SEPARATOR);
+        spots.push(button(bar, allow, width(ALLOW), Target::Allow(*request)));
+        spots.push(button(bar, deny, width(DENY), Target::Deny(*request)));
+        frame.render_widget(Paragraph::new(first), bar);
     }
     shown
 }
@@ -1358,26 +1455,18 @@ fn latest_line(app: &App) -> Line<'static> {
     }
 }
 
-/// Draws the keys that work on what is on screen; returns them as buttons, but for `j/k` and the
-/// answers to a permission request, which a click is not to give by accident.
+/// Draws the keys that work on what is on screen; returns them as buttons, but for `j/k`.
 fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let hints = hints(app);
+    let request = app.subjects().into_iter().find_map(Waiting::request);
     let mut spots = Vec::new();
     let mut start = 1;
     for hint in &hints {
         let width = textwrap::core::display_width(hint);
         if let Some((key, what)) = hint.split_once(' ')
-            && let Some(code) = hint_key(key)
+            && let Some(target) = hint_target(key, what, request)
         {
-            let button = Rect {
-                x: area.x.saturating_add(start as u16),
-                width: width as u16,
-                ..area
-            };
-            spots.push(Spot {
-                target: Target::Key { code, key, what },
-                area: button.intersection(area),
-            });
+            spots.push(button(area, start, width, target));
         }
         start += width + textwrap::core::display_width(SEPARATOR);
     }
@@ -1390,20 +1479,29 @@ fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
 /// Between two hints.
 const SEPARATOR: &str = " · ";
 
-/// The key a hint names, if a click on it does what the key does.
-fn hint_key(key: &str) -> Option<KeyCode> {
-    match key {
-        "enter" => Some(KeyCode::Enter),
-        "esc" => Some(KeyCode::Esc),
-        "j/k" | "a" | "d" => None,
+/// The hints that answer a permission request.
+const ALLOW: &str = "a allow";
+const DENY: &str = "d deny";
+
+/// What a click on the hint for `key` does: what the key does, but for allow, which asks for a
+/// second click; `None` for a hint that is no button. `request` is the permission request the
+/// keys answer.
+fn hint_target(key: &'static str, what: &'static str, request: Option<Request>) -> Option<Target> {
+    let code = match key {
+        "a" => return request.map(Target::Allow),
+        "d" => return request.map(Target::Deny),
+        "enter" => KeyCode::Enter,
+        "esc" => KeyCode::Esc,
+        "j/k" => return None,
         _ => {
             let mut characters = key.chars();
             match (characters.next(), characters.next()) {
-                (Some(character), None) => Some(KeyCode::Char(character)),
-                _ => None,
+                (Some(character), None) => KeyCode::Char(character),
+                _ => return None,
             }
         }
-    }
+    };
+    Some(Target::Key { code, key, what })
 }
 
 /// The keys that work on what is on screen: `esc back`, `v review`.
@@ -1411,7 +1509,7 @@ fn hints(app: &App) -> Vec<&'static str> {
     let mut acts: Vec<&str> = Vec::new();
     for entry in app.subjects() {
         let keys: &[&str] = match entry {
-            Waiting::Permission { .. } => &["a allow", "d deny"],
+            Waiting::Permission { .. } => &[ALLOW, DENY],
             Waiting::Blocker { .. } => &["r answer", "R in editor"],
             Waiting::Review { .. } => &["v review", "D diff"],
             Waiting::Notice { .. } => &[],

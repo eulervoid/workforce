@@ -420,6 +420,52 @@ pub enum Target {
     },
     /// A part of the breadcrumb: goes back to the first `depth` details opened.
     Back { depth: usize, name: String },
+    /// Allows a permission request on a second click, so that a click that slipped allows
+    /// nothing.
+    Allow(Request),
+    /// Denies a permission request at once.
+    Deny(Request),
+    /// A count in the header: the Items tab, filtered to what it counts.
+    Count(Counted),
+}
+
+/// A permission request, as a click answers it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Request {
+    pub session: SessionId,
+    pub since_ms: u64,
+}
+
+impl Waiting {
+    /// The permission request this is, if it is one.
+    pub fn request(&self) -> Option<Request> {
+        match self {
+            Waiting::Permission {
+                session, since_ms, ..
+            } => Some(Request {
+                session: *session,
+                since_ms: *since_ms,
+            }),
+            Waiting::Blocker { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
+        }
+    }
+}
+
+/// What a count in the header counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Counted {
+    Open,
+    Blocked,
+}
+
+/// How long a first click on allow waits for the second that confirms it.
+pub const CONFIRM_LASTS_MS: u64 = 3_000;
+
+/// A first click on allow, at `at_ms`, until a second confirms it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UnconfirmedAllow {
+    pub request: Request,
+    pub at_ms: u64,
 }
 
 impl Target {
@@ -440,6 +486,10 @@ impl Target {
             }
             Target::Key { key, what, .. } => format!("{what} ({key})"),
             Target::Back { name, .. } => format!("back to {name}"),
+            Target::Allow(_) => "allow the request: click twice".to_owned(),
+            Target::Deny(_) => "deny the request".to_owned(),
+            Target::Count(Counted::Open) => "show the items by state".to_owned(),
+            Target::Count(Counted::Blocked) => "show only the blocked items".to_owned(),
         }
     }
 }
@@ -683,6 +733,7 @@ pub struct App {
     /// The link or button under the pointer, as last drawn: underlined, with its tip in place of
     /// the latest event.
     pub hovered: Option<Spot>,
+    pub unconfirmed_allow: Option<UnconfirmedAllow>,
 }
 
 impl App {
@@ -716,6 +767,7 @@ impl App {
             clickable: Clickable::default(),
             pointer: None,
             hovered: None,
+            unconfirmed_allow: None,
         };
         app.refresh(snapshot);
         app
@@ -737,6 +789,12 @@ impl App {
                 self.status = None;
             }
             Some(Status::Done { .. } | Status::ActionFailed { .. }) | None => {}
+        }
+        // A first click on allow lapses after its time, or with its request.
+        if let Some(unconfirmed) = self.unconfirmed_allow
+            && !self.confirms(unconfirmed, unconfirmed.request)
+        {
+            self.unconfirmed_allow = None;
         }
         let rows = self.now_rows();
         self.now.selection.update(&rows);
@@ -1199,6 +1257,7 @@ impl App {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Some(Effect::Quit);
         }
+        self.unconfirmed_allow = None;
         if matches!(
             self.status,
             Some(Status::Done { .. } | Status::ActionFailed { .. })
@@ -1319,6 +1378,10 @@ impl App {
             return None;
         }
         let position = Position::new(column, row);
+        // The pointer is where it clicked, even without a report of its moves.
+        self.pointer = Some(position);
+        // Only the very next click confirms an allow.
+        let unconfirmed = self.unconfirmed_allow.take();
         let clickable = &self.clickable;
         let in_detail = clickable
             .detail
@@ -1327,7 +1390,7 @@ impl App {
             let target = spot.target.clone();
             // The filter of the log, the only prompt a click goes through, is taken as typed.
             self.prompt = None;
-            return self.follow(target, in_detail);
+            return self.follow(target, in_detail, unconfirmed);
         }
         if let Some((tab, _)) = clickable
             .tabs
@@ -1361,8 +1424,13 @@ impl App {
     }
 
     /// Does what a click on a link or a button does; `in_detail` when it is in the detail beside
-    /// the list.
-    fn follow(&mut self, target: Target, in_detail: bool) -> Option<Effect> {
+    /// the list, `unconfirmed` the click on allow before it.
+    fn follow(
+        &mut self,
+        target: Target,
+        in_detail: bool,
+        unconfirmed: Option<UnconfirmedAllow>,
+    ) -> Option<Effect> {
         match target {
             Target::Open { detail, .. } => {
                 // On top of the detail it is in, so esc goes back to it.
@@ -1383,6 +1451,69 @@ impl App {
                 }
                 None
             }
+            Target::Allow(request) => {
+                if unconfirmed.is_some_and(|unconfirmed| self.confirms(unconfirmed, request)) {
+                    return Some(Effect::Permit {
+                        session: request.session,
+                        answer: Permission::Allow,
+                    });
+                }
+                self.unconfirmed_allow = Some(UnconfirmedAllow {
+                    request,
+                    at_ms: self.snapshot.now_ms,
+                });
+                None
+            }
+            Target::Deny(request) => Some(Effect::Permit {
+                session: request.session,
+                answer: Permission::Deny,
+            }),
+            Target::Count(counted) => {
+                self.tab = Tab::Items;
+                let items = &mut self.items;
+                items.list.panes.stack.clear();
+                items.filter.clear();
+                match counted {
+                    Counted::Open => {
+                        items.grouping = ItemGrouping::State;
+                        items.readiness = ReadinessFilter::All;
+                    }
+                    Counted::Blocked => items.readiness = ReadinessFilter::Blocked,
+                }
+                None
+            }
+        }
+    }
+
+    /// Whether a click on allow for `request` confirms `unconfirmed`: the first click was on
+    /// the same request, which still waits, not longer than [`CONFIRM_LASTS_MS`] ago.
+    fn confirms(&self, unconfirmed: UnconfirmedAllow, request: Request) -> bool {
+        unconfirmed.request == request
+            && self.snapshot.now_ms < unconfirmed.at_ms + CONFIRM_LASTS_MS
+            && self
+                .snapshot
+                .waiting
+                .iter()
+                .any(|entry| entry.request() == Some(request))
+    }
+
+    /// What a click on `target` does, for the latest-event line while the pointer is over it.
+    pub fn tip(&self, target: &Target) -> String {
+        match target {
+            Target::Allow(request)
+                if self
+                    .unconfirmed_allow
+                    .is_some_and(|unconfirmed| unconfirmed.request == *request) =>
+            {
+                "allow: click again to confirm".to_owned()
+            }
+            Target::Open { .. }
+            | Target::Diff { .. }
+            | Target::Key { .. }
+            | Target::Back { .. }
+            | Target::Allow(_)
+            | Target::Deny(_)
+            | Target::Count(_) => target.tip(),
         }
     }
 
@@ -1681,11 +1812,17 @@ impl App {
         };
         let item_of_session = self.item_subject();
         let page = self.page();
-        // On a tab with panes, the detail opened from the list stays as it is, to come back to
-        // with `l`; the log has no pane to give the keys to, so it is closed.
-        let kept = self.panes().is_some() && self.stack().len() == 1;
-        let stack = self.stack_mut();
-        let Some(opened) = stack.last_mut() else {
+        if matches!(key.code, KeyCode::Esc | KeyCode::Left | KeyCode::Char('h')) {
+            match self.panes_mut() {
+                // The detail opened from the list stays as it is, to come back to with `l`.
+                Some(panes) if panes.stack.len() == 1 => panes.focus = Pane::List,
+                Some(_) | None => {
+                    self.stack_mut().pop();
+                }
+            }
+            return;
+        }
+        let Some(opened) = self.stack_mut().last_mut() else {
             return;
         };
         if let Some(scroll) = opened.scroll.key(key, page) {
@@ -1693,14 +1830,6 @@ impl App {
             return;
         }
         match (key.code, &opened.detail) {
-            (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) if kept => {
-                if let Some(panes) = self.panes_mut() {
-                    panes.focus = Pane::List;
-                }
-            }
-            (KeyCode::Esc | KeyCode::Left | KeyCode::Char('h'), _) => {
-                stack.pop();
-            }
             (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'), Detail::Item(_)) => {
                 if let Some(session) = item_session {
                     self.open(Detail::Session(session));

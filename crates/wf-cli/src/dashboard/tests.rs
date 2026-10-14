@@ -12,8 +12,8 @@ use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
-    AgentRow, App, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll, Split, Starter,
-    Tab, Target, Wheel,
+    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, ReadinessFilter, Row,
+    STATUS_LASTS_MS, Scroll, Split, Starter, Tab, Target, Wheel,
 };
 use super::draw;
 use super::snapshot::{
@@ -1733,4 +1733,121 @@ fn a_link_under_the_pointer_is_underlined_and_its_tip_shows() {
             .add_modifier
             .contains(Modifier::UNDERLINED)
     );
+}
+
+fn permit(answer: Permission) -> Option<Effect> {
+    Some(Effect::Permit {
+        session: SessionId::from_bytes([11; 32]),
+        answer,
+    })
+}
+
+/// The row of the latest event, where a tip shows.
+const LATEST: u16 = 22;
+
+#[test]
+fn one_click_on_allow_allows_nothing_and_a_second_allows() {
+    let mut app = app();
+    let (allow, row) = find(&mut app, 60, 24, "a / d");
+    app.hover(allow, row);
+    assert_eq!(
+        find(&mut app, 60, 24, "allow the request: click twice"),
+        (1, LATEST)
+    );
+    assert_eq!(app.click(allow, row), None);
+    assert_eq!(
+        find(&mut app, 60, 24, "allow: click again to confirm"),
+        (1, LATEST)
+    );
+    assert_eq!(app.click(allow, row), permit(Permission::Allow));
+}
+
+#[test]
+fn a_click_on_deny_denies_at_once() {
+    let mut app = app();
+    let (allow, row) = find(&mut app, 60, 24, "a / d");
+    app.hover(allow + 4, row);
+    assert_eq!(find(&mut app, 60, 24, "deny the request"), (1, LATEST));
+    assert_eq!(app.click(allow + 4, row), permit(Permission::Deny));
+}
+
+#[test]
+fn a_first_click_on_allow_lapses_after_its_time_or_on_anything_else() {
+    let mut app = app();
+    let (allow, row) = find(&mut app, 60, 24, "a / d");
+    // Another click in between.
+    app.click(allow, row);
+    let (live, counts) = find(&mut app, 60, 24, "3 live");
+    app.click(live, counts);
+    assert_eq!(app.click(allow, row), None);
+    // A key in between.
+    press(&mut app, KeyCode::Char('?'));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.click(allow, row), None);
+    // Too long in between.
+    let mut later = snapshot();
+    later.now_ms = NOW_MS + CONFIRM_LASTS_MS;
+    app.refresh(later.clone());
+    assert!(!screen(&mut app, 60, 24).contains("allow: click again to confirm"));
+    assert_eq!(app.click(allow, row), None);
+    // Its request answered in between, by another.
+    let mut answered = later;
+    answered.waiting.remove(0);
+    app.refresh(answered);
+    assert_eq!(app.unconfirmed_allow, None);
+}
+
+#[test]
+fn the_answers_under_a_session_and_in_the_footer_are_buttons_too() {
+    let mut app = app();
+    // In the footer of the Now tab.
+    let (allow, row) = find(&mut app, 60, 24, "a allow");
+    assert_eq!(app.click(allow, row), None);
+    assert_eq!(app.click(allow, row), permit(Permission::Allow));
+    let (deny, row) = find(&mut app, 60, 24, "d deny");
+    assert_eq!(app.click(deny, row), permit(Permission::Deny));
+    // Under the transcript, above the footer.
+    let coder = app.snapshot.working[0].clone();
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(coder));
+    app.refresh(snapshot);
+    let (allow, row) = find(&mut app, 60, 24, "a allow");
+    assert!(row < LATEST);
+    assert_eq!(app.click(allow, row), None);
+    assert_eq!(app.click(allow, row), permit(Permission::Allow));
+    let (deny, row) = find(&mut app, 60, 24, "d deny");
+    assert!(row < LATEST);
+    assert_eq!(app.click(deny, row), permit(Permission::Deny));
+}
+
+#[test]
+fn a_click_on_a_count_opens_the_items_tab_filtered_to_it() {
+    let mut app = app();
+    app.items.filter = "parse".to_owned();
+    app.items.grouping = crate::cli::ItemGrouping::Lane;
+    let (blocked, row) = find(&mut app, 60, 24, "1 blocked");
+    app.hover(blocked, row);
+    assert_eq!(
+        find(&mut app, 60, 24, "show only the blocked items"),
+        (1, LATEST)
+    );
+    assert_eq!(app.click(blocked, row), None);
+    assert_eq!(app.tab, Tab::Items);
+    assert_eq!(app.items.readiness, ReadinessFilter::Blocked);
+    assert_eq!(app.items.filter, "");
+    let (open, row) = find(&mut app, 60, 24, "14 open");
+    app.hover(open, row);
+    assert_eq!(
+        find(&mut app, 60, 24, "show the items by state"),
+        (1, LATEST)
+    );
+    app.click(open, row);
+    assert_eq!(app.items.readiness, ReadinessFilter::All);
+    assert_eq!(app.items.grouping, crate::cli::ItemGrouping::State);
+    // What is no count of items is no button.
+    let (live, row) = find(&mut app, 60, 24, "3 live");
+    app.click(live, row);
+    assert_eq!(app.items.grouping, crate::cli::ItemGrouping::State);
+    assert!(app.hover(live, row));
 }
