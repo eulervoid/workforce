@@ -12,7 +12,9 @@ use wf_core::name::{AgentName, StateName};
 use wf_core::policy::StateCategory;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
-use super::app::{AgentRow, App, Choice, Effect, Opened, Prompt, Row, Scroll, Tab, Wheel};
+use super::app::{
+    AgentRow, App, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll, Tab, Wheel,
+};
 use super::draw;
 use super::snapshot::{
     AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Place, SessionInfo,
@@ -438,7 +440,7 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
 #[test]
 fn what_an_action_did_shows_until_the_next_key() {
     let mut app = app();
-    app.did("allowed: rm -rf target".to_owned());
+    app.did("allowed: rm -rf target".to_owned(), NOW_MS);
     assert!(screen(&mut app, 60, 8).contains("✓ allowed: rm -rf target"));
     app.refresh(snapshot());
     assert!(
@@ -446,6 +448,24 @@ fn what_an_action_did_shows_until_the_next_key() {
         "a refresh keeps it"
     );
     press(&mut app, KeyCode::Char('j'));
+    assert!(!screen(&mut app, 60, 8).contains("✓ allowed"));
+}
+
+#[test]
+fn an_action_error_goes_away_after_its_time() {
+    let mut app = app();
+    app.action_failed(&anyhow::anyhow!("the daemon refused"), NOW_MS);
+    let later = |ms| Snapshot {
+        now_ms: NOW_MS + ms,
+        ..snapshot()
+    };
+    app.refresh(later(STATUS_LASTS_MS - 1));
+    assert!(screen(&mut app, 60, 8).contains("error: the daemon refused"));
+    app.refresh(later(STATUS_LASTS_MS));
+    assert!(!screen(&mut app, 60, 8).contains("error"));
+
+    app.did("allowed: rm -rf target".to_owned(), NOW_MS);
+    app.refresh(later(STATUS_LASTS_MS));
     assert!(!screen(&mut app, 60, 8).contains("✓ allowed"));
 }
 
