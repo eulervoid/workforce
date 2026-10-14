@@ -12,7 +12,7 @@ use wf_core::id::HashId;
 use wf_core::item::ItemState;
 
 use super::app::{
-    AgentRow, App, Choice, Clickable, ClickableList, Counted, Drawn, Opened, Prompt, Request, Row,
+    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Hovered, Opened, Prompt, Request, Row,
     STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
 use super::links;
@@ -101,13 +101,14 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     ])
     .areas(frame.area());
     let tabs = draw_header(frame, app, header);
-    let counts = draw_counts(frame, app, counts);
+    frame.render_widget(Paragraph::new(counts_line(app)), counts);
     draw_rule(frame, rule);
     let mut shown = draw_body(frame, app, body);
     shown.clickable.tabs = tabs;
-    shown.clickable.spots.extend(counts);
     draw_rule(frame, rule_below);
-    frame.render_widget(Paragraph::new(latest_line(app)), latest);
+    let latest_line = latest_line(app);
+    let latest_width = latest_line.width();
+    frame.render_widget(Paragraph::new(latest_line), latest);
     if app.status.is_none() {
         shown.clickable.spots.extend(links::find(
             frame.buffer_mut(),
@@ -135,20 +136,37 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     shown.hovered = app
         .pointer
         .filter(|_| app.mouse_passes())
-        .and_then(|pointer| shown.clickable.spot(pointer))
-        .cloned();
-    if let Some(spot) = &shown.hovered {
-        frame
-            .buffer_mut()
-            .set_style(spot.area, Style::new().underlined());
-        // A link in the latest event says itself where it is.
-        if !spot.area.intersects(latest) {
-            frame.render_widget(Clear, latest);
-            let tip = Line::from(format!(" {}", app.tip(&spot.target)));
-            frame.render_widget(Paragraph::new(tip), latest);
+        .and_then(|pointer| shown.clickable.hovered(pointer));
+    match &shown.hovered {
+        Some(Hovered::Spot(spot)) => {
+            frame
+                .buffer_mut()
+                .set_style(spot.area, Style::new().underlined());
+            draw_tip(frame, &app.tip(&spot.target), latest_width, latest);
         }
+        // An inactive tab under the pointer is no longer dim: stronger than the other inactive
+        // tabs, weaker than the active one.
+        Some(Hovered::Tab(tab)) if *tab != app.tab => {
+            let label = shown.clickable.tabs.iter().find(|(each, _)| each == tab);
+            if let Some((_, label)) = label {
+                frame.buffer_mut().set_style(*label, Style::new().not_dim());
+            }
+        }
+        Some(Hovered::Tab(_)) | None => {}
     }
     shown
+}
+
+/// Draws `tip` at the right of the latest-event line, `taken` columns of which the latest event
+/// fills. A line too narrow for both leaves the tip out: it never covers the event, nor is cut.
+fn draw_tip(frame: &mut Frame, tip: &str, taken: usize, latest: Rect) {
+    // A column off the right edge, as the event keeps one off the left.
+    let tip = Line::from(format!("{tip} "));
+    // Two columns apart, so the tip does not read as part of the event.
+    if taken + 2 + tip.width() > usize::from(latest.width) {
+        return;
+    }
+    frame.render_widget(Paragraph::new(tip).right_aligned(), latest);
 }
 
 /// A list to pick from, at the bottom of the body, with the option picked in `accent`.
@@ -214,7 +232,7 @@ const KEYS: &[(&str, &str)] = &[
     ("pgup/pgdn", "a page up, down; also space"),
     ("wheel", "move what is under the pointer"),
     ("click", "pick a tab or an entry, again to open"),
-    ("", "follow a link, hint, crumb or count"),
+    ("", "follow a link, a key hint, a crumb"),
     ("shift-drag", "select text, as without the dashboard"),
     ("enter esc", "open, go back"),
     ("H L", "one pane or both, also shift ←/→"),
@@ -375,37 +393,20 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
         .collect()
 }
 
-/// Draws `3 live · 14 open · 1 blocked · 2 devices`, leaving out what is none; returns the counts
-/// that open the Items tab filtered to them.
-fn draw_counts(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
+/// `3 live · 14 open · 1 blocked · 2 devices`, leaving out what is none.
+fn counts_line(app: &App) -> Line<'static> {
     let counts = app.snapshot.counts;
     let mut parts = vec![
-        (format!("{} live", counts.live_sessions), None),
-        (format!("{} open", counts.open_items), Some(Counted::Open)),
+        format!("{} live", counts.live_sessions),
+        format!("{} open", counts.open_items),
     ];
     if counts.blocked_items > 0 {
-        parts.push((
-            format!("{} blocked", counts.blocked_items),
-            Some(Counted::Blocked),
-        ));
+        parts.push(format!("{} blocked", counts.blocked_items));
     }
     if counts.devices > 1 {
-        parts.push((format!("{} devices", counts.devices), None));
+        parts.push(format!("{} devices", counts.devices));
     }
-    let mut spots = Vec::new();
-    let mut start = 1;
-    for (part, counted) in &parts {
-        let width = textwrap::core::display_width(part);
-        if let Some(counted) = counted {
-            spots.push(button(area, start, width, Target::Count(*counted)));
-        }
-        start += width + textwrap::core::display_width(SEPARATOR);
-    }
-    let parts: Vec<&str> = parts.iter().map(|(part, _)| part.as_str()).collect();
-    let line = Line::from(format!(" {}", parts.join(SEPARATOR))).dim();
-    frame.render_widget(Paragraph::new(line), area);
-    spots.retain(|spot| !spot.area.is_empty());
-    spots
+    Line::from(format!(" {}", parts.join(SEPARATOR))).dim()
 }
 
 /// A button `width` columns wide, `start` columns into the line `area`; what a narrow window cuts
