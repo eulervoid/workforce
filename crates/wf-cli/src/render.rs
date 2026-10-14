@@ -1017,6 +1017,73 @@ mod tests {
     use super::*;
 
     #[test]
+    fn an_item_that_references_this_one_several_times_is_listed_once_with_a_count() {
+        use std::collections::BTreeSet;
+        use wf_core::id::{CommentId, HashId, ItemId};
+        use wf_core::item::ItemView;
+        use wf_core::testing::*;
+
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let mut now = 2_000;
+        let mut apply = |state: &mut wf_core::state::State, body| {
+            now += 1_000;
+            fixture.apply(state, 0, now, body)
+        };
+        let target: ItemId = apply(&mut state, create("task", "Target")).id().into();
+        let note = apply(&mut state, comment(target, "a note to point at"));
+        let note = CommentId::from(note.id()).short();
+        let mention = format!("see #{}", target.short());
+        let mut referencing = |title: &str, body: Option<&str>, comments: &[&str]| -> ItemId {
+            let created = match body {
+                Some(body) => create_with_body("task", title, body),
+                None => create("task", title),
+            };
+            let item: ItemId = apply(&mut state, created).id().into();
+            for text in comments {
+                apply(&mut state, comment(item, text));
+            }
+            item
+        };
+        let body_only = referencing("Body only", Some(&mention), &[]);
+        let everywhere = referencing("Everywhere", Some(&mention), &[&mention, &mention]);
+        let one_comment = referencing("One comment", None, &[&mention]);
+        let comments_only = referencing("Comments only", None, &[&mention, &mention]);
+        let note_and_item = referencing(
+            "Note and item",
+            Some(&mention),
+            &[&format!("see #{}/{note}", target.short())],
+        );
+
+        let ItemView::Live(item) = state.item(target).unwrap() else {
+            panic!()
+        };
+        let detail = crate::view::item_detail(&state, item, &[]);
+        let shown = anstream::adapter::strip_str(&item_detail_for(&detail, None)).to_string();
+        let backlinks: BTreeSet<&str> = shown
+            .lines()
+            .filter(|line| line.contains("referenced by"))
+            .map(str::trim)
+            .collect();
+        let line = |item: ItemId, rest: &str| format!("↳ referenced by #{}{rest}", item.short());
+        let expected = [
+            line(body_only, " \"Body only\""),
+            line(everywhere, " \"Everywhere\" (3x, 2 in comments)"),
+            line(one_comment, " \"One comment\" (in a comment)"),
+            line(comments_only, " \"Comments only\" (2x, 2 in comments)"),
+            line(note_and_item, " \"Note and item\""),
+            format!(
+                "↳ {note} referenced by #{} \"Note and item\" (in a comment)",
+                note_and_item.short()
+            ),
+        ];
+        assert_eq!(
+            backlinks,
+            expected.iter().map(String::as_str).collect::<BTreeSet<_>>()
+        );
+    }
+
+    #[test]
     fn wrapped_lines_keep_the_indent() {
         let text = "one two three four five\nsix seven eight nine ten";
         assert_eq!(
