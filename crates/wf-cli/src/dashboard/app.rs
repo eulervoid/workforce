@@ -18,7 +18,7 @@ use super::snapshot::{
     Detail, InView, ItemRow, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey, Wanted,
 };
 use crate::cli::ItemGrouping;
-use crate::transcript::Transcript;
+use crate::transcript::{Transcript, Verbosity};
 
 /// From this width the detail sits right of the list, instead of in its place.
 pub const WIDE: u16 = 120;
@@ -517,8 +517,9 @@ pub struct App {
     pub agents: ListTab<AgentRow>,
     pub log: LogTab,
     pub prompt: Option<Prompt>,
-    /// Whether transcripts show everything, as `wf session watch --full` does.
-    pub full_transcripts: bool,
+    /// How much of a transcript is shown: everything, as `wf session watch --full` shows it, or
+    /// cut short.
+    pub verbosity: Verbosity,
     pub width: u16,
     pub height: u16,
     pub time_zone: TimeZone,
@@ -545,7 +546,7 @@ impl App {
                 filter: String::new(),
             },
             prompt: None,
-            full_transcripts: false,
+            verbosity: Verbosity::Abridged,
             width: 80,
             height: 24,
             time_zone,
@@ -1271,7 +1272,10 @@ impl App {
             (KeyCode::Char('f'), Detail::Session(_)) => {
                 // A line of one transcript is no place in the other: start again at the end.
                 opened.scroll = Scroll::END;
-                self.full_transcripts = !self.full_transcripts;
+                self.verbosity = match self.verbosity {
+                    Verbosity::Abridged => Verbosity::Full,
+                    Verbosity::Full => Verbosity::Abridged,
+                };
             }
             _ => {}
         }

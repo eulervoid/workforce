@@ -957,13 +957,13 @@ fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
 
 /// The whole transcript laid out for `width`: its blocks, then what is still open.
 fn transcript_text(app: &App, agent: &str, transcript: &Transcript, width: usize) -> Text<'static> {
-    let detail = if app.full_transcripts {
-        transcript::Detail::Full
-    } else {
-        transcript::Detail::Abridged
-    };
-    let layout =
-        transcript::Layout::new(agent, width, Format::Styled, detail, app.time_zone.clone());
+    let layout = transcript::Layout::new(
+        agent,
+        width,
+        Format::Styled,
+        app.verbosity,
+        app.time_zone.clone(),
+    );
     let mut out = String::new();
     let mut last = transcript::Spacing::Nothing;
     let mut add = |out: &mut String, opens: transcript::Spacing, leaves, text: String| {

@@ -12,7 +12,7 @@ use jiff::{SignedDuration, Timestamp};
 use wf_harness::TranscriptEntry;
 
 use super::layout::Spacing;
-use super::{Asked, Block, Detail, Format, Layout, Transcript};
+use super::{Asked, Block, Format, Layout, Transcript, Verbosity};
 
 /// How long agent text may wait for the rest of its paragraph before it is printed anyway.
 const STALL: SignedDuration = SignedDuration::from_secs(1);
@@ -48,12 +48,12 @@ impl Printer {
         agent: &str,
         width: usize,
         format: Format,
-        detail: Detail,
+        verbosity: Verbosity,
         time_zone: TimeZone,
     ) -> Self {
         Self {
             transcript: Transcript::new(),
-            layout: Layout::new(agent, width, format, detail, time_zone),
+            layout: Layout::new(agent, width, format, verbosity, time_zone),
             printed: 0,
             last: Spacing::Nothing,
             printed_prose: None,
@@ -193,8 +193,8 @@ mod tests {
         anstream::adapter::strip_str(text).to_string()
     }
 
-    fn renderer(format: Format, detail: Detail, width: usize) -> Printer {
-        Printer::new("coder", width, format, detail, TimeZone::UTC)
+    fn renderer(format: Format, verbosity: Verbosity, width: usize) -> Printer {
+        Printer::new("coder", width, format, verbosity, TimeZone::UTC)
     }
 
     fn at(seconds: i64) -> Timestamp {
@@ -228,7 +228,7 @@ mod tests {
 
     #[test]
     fn chunk_boundaries_do_not_break_markdown_or_fences() {
-        let mut renderer = renderer(Format::Styled, Detail::Abridged, 80);
+        let mut renderer = renderer(Format::Styled, Verbosity::Abridged, 80);
         let output: String = [
             "**Hel",
             "lo**\n\n```",
@@ -279,7 +279,7 @@ mod tests {
             ),
         ];
         let output = render_all(
-            &mut renderer(Format::Styled, Detail::Abridged, 60),
+            &mut renderer(Format::Styled, Verbosity::Abridged, 60),
             &entries,
         );
         assert_eq!(output.matches("Bash").count(), 1, "{output}");
@@ -298,7 +298,7 @@ mod tests {
 
     #[test]
     fn an_open_call_shows_as_running_once_caught_up() {
-        let mut renderer = renderer(Format::Raw, Detail::Abridged, 60);
+        let mut renderer = renderer(Format::Raw, Verbosity::Abridged, 60);
         let start = update(
             0,
             serde_json::json!({"sessionUpdate": "tool_call", "toolCallId": "1", "name": "Bash", "title": "sleep 9"}),
@@ -351,7 +351,7 @@ mod tests {
             ]
         };
         let quiet = render_all(
-            &mut renderer(Format::Raw, Detail::Abridged, 80),
+            &mut renderer(Format::Raw, Verbosity::Abridged, 80),
             &entries(Decider::FixedPermissions),
         );
         assert!(
@@ -360,7 +360,7 @@ mod tests {
         );
         assert!(quiet.contains("✓ Read  a.rs"), "{quiet}");
         let full = render_all(
-            &mut renderer(Format::Raw, Detail::Full, 80),
+            &mut renderer(Format::Raw, Verbosity::Full, 80),
             &entries(Decider::FixedPermissions),
         );
         assert!(
@@ -369,7 +369,7 @@ mod tests {
             "{full}"
         );
         let rules = render_all(
-            &mut renderer(Format::Raw, Detail::Abridged, 80),
+            &mut renderer(Format::Raw, Verbosity::Abridged, 80),
             &entries(Decider::Rules),
         );
         assert!(rules.contains("allowed by rules"), "{rules}");
@@ -383,7 +383,10 @@ mod tests {
             serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "1", "status": "failed",
             "content": [{"type": "content", "content": {"type": "text", "text": text}}]}),
         )];
-        let abridged = render_all(&mut renderer(Format::Raw, Detail::Abridged, 80), &entries);
+        let abridged = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 80),
+            &entries,
+        );
         assert!(
             abridged.contains("| line 4\n    | … 20 lines hidden\n    | line 25\n"),
             "{abridged}"
@@ -392,7 +395,7 @@ mod tests {
             abridged.contains("✗") && abridged.contains("failed  0.0s"),
             "{abridged}"
         );
-        let full = render_all(&mut renderer(Format::Raw, Detail::Full, 80), &entries);
+        let full = render_all(&mut renderer(Format::Raw, Verbosity::Full, 80), &entries);
         assert!(
             full.contains("line 12") && !full.contains("hidden"),
             "{full}"
@@ -401,7 +404,7 @@ mod tests {
 
     #[test]
     fn raw_keeps_markdown_and_has_no_escape_codes() {
-        let mut renderer = renderer(Format::Raw, Detail::Abridged, 80);
+        let mut renderer = renderer(Format::Raw, Verbosity::Abridged, 80);
         let output = renderer.render(&said(0, "a", "**kept**"));
         let output = output + &renderer.finish(Session::Live);
         assert!(output.contains("  **kept**") && !output.contains('\x1b'));
@@ -416,7 +419,10 @@ mod tests {
                 "content": [{"type": "diff", "path": "src/main.rs", "oldText": "before\n", "newText": "after\n"}]
             }),
         )];
-        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 80), &entries);
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 80),
+            &entries,
+        );
         assert!(output.contains("✓ Edit  src/main.rs  +1 -1"), "{output}");
         assert!(
             output.contains("      -before") && output.contains("      +after"),
@@ -443,7 +449,10 @@ mod tests {
                 serde_json::json!({"id": "p", "result": {"stopReason": "end_turn"}}),
             ),
         ];
-        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 40), &entries);
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 40),
+            &entries,
+        );
         assert_eq!(
             output,
             "brief  00:00                    13 lines\n  Do it\n\ncoder  00:00\n  Done.\n\nfinished                           1m05s\n"
@@ -509,7 +518,10 @@ mod tests {
             said(61, "b", "Done."),
             end_turn(62),
         ];
-        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 60),
+            &entries,
+        );
         assert!(
             output.contains("  Brief\n") && !output.contains("line\n"),
             "{output}"
@@ -524,13 +536,16 @@ mod tests {
     #[test]
     fn separate_messages_do_not_run_together() {
         let entries = [said(0, "a", "permission: no"), said(0, "b", "done")];
-        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 60),
+            &entries,
+        );
         assert!(output.contains("  permission: no\n\n  done\n"), "{output}");
     }
 
     #[test]
     fn text_that_waits_for_the_rest_of_its_paragraph_shows_after_a_while() {
-        let mut renderer = renderer(Format::Raw, Detail::Abridged, 60);
+        let mut renderer = renderer(Format::Raw, Verbosity::Abridged, 60);
         renderer.render(&said(0, "a", "watching"));
         assert!(!renderer.caught_up(at(0)).contains("watching"));
         assert!(renderer.caught_up(at(1)).contains("  watching\n"));
@@ -539,7 +554,7 @@ mod tests {
 
     #[test]
     fn a_paragraph_shown_in_part_is_not_shown_again_when_it_ends() {
-        let mut renderer = renderer(Format::Raw, Detail::Abridged, 60);
+        let mut renderer = renderer(Format::Raw, Verbosity::Abridged, 60);
         renderer.render(&said(0, "a", "first half"));
         assert!(renderer.caught_up(at(1)).contains("  first half\n"));
         let rest = renderer.render(&said(2, "a", " and the rest\n\n"));
@@ -578,7 +593,10 @@ mod tests {
             said(1, "a", "permission: no"),
             end_turn(2),
         ];
-        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 60),
+            &entries,
+        );
         assert!(
             output.contains("  ✗ Tool  Edit file\n    denied by hook sh: no edits today\n"),
             "{output}"
@@ -610,7 +628,10 @@ mod tests {
             ),
             end_turn(2),
         ];
-        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 60),
+            &entries,
+        );
         assert!(output.contains("· Tool  Edit file"), "{output}");
         assert!(output.contains("unfinished"), "{output}");
         assert!(
@@ -640,7 +661,10 @@ mod tests {
                 serde_json::json!({"sessionUpdate": "tool_call_update", "toolCallId": "call-b", "status": "completed"}),
             ),
         ];
-        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 60),
+            &entries,
+        );
         assert!(
             output.contains("✗ Tool  Edit a\n    denied by hook sh: no edits today\n"),
             "{output}"
@@ -665,7 +689,10 @@ mod tests {
             said(11, "a", "Done."),
             end_turn(12),
         ];
-        let output = render_all(&mut renderer(Format::Raw, Detail::Abridged, 60), &entries);
+        let output = render_all(
+            &mut renderer(Format::Raw, Verbosity::Abridged, 60),
+            &entries,
+        );
         assert!(output.contains("· Tool  Edit file"), "{output}");
         assert!(output.contains("✗ Internal error"), "{output}");
         assert_eq!(output.matches("Edit file").count(), 1, "{output}");
@@ -674,7 +701,7 @@ mod tests {
     #[test]
     fn calls_open_when_the_session_ended_are_unfinished() {
         let entries = [prompt(0, "Do it"), asked(1, 100, "call-1", "Edit file")];
-        let mut ended = renderer(Format::Raw, Detail::Abridged, 60);
+        let mut ended = renderer(Format::Raw, Verbosity::Abridged, 60);
         for entry in &entries {
             ended.render(entry);
         }
@@ -689,7 +716,7 @@ mod tests {
     #[test]
     fn prompts_keep_their_lines_when_styled() {
         let output = plain(&render_all(
-            &mut renderer(Format::Styled, Detail::Abridged, 60),
+            &mut renderer(Format::Styled, Verbosity::Abridged, 60),
             &[prompt(0, "Resolved.\n- @ada: Use humantime\nContinue.")],
         ));
         assert!(

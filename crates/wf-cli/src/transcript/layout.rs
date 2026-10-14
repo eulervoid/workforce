@@ -53,7 +53,7 @@ pub enum Format {
 
 /// How much of the transcript is shown.
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub enum Detail {
+pub enum Verbosity {
     /// Briefs, commands and output cut short, and the harness's own lines left out.
     Abridged,
     Full,
@@ -114,7 +114,7 @@ pub struct Layout {
     agent: String,
     width: usize,
     format: Format,
-    detail: Detail,
+    verbosity: Verbosity,
     time_zone: TimeZone,
 }
 
@@ -123,14 +123,14 @@ impl Layout {
         agent: &str,
         width: usize,
         format: Format,
-        detail: Detail,
+        verbosity: Verbosity,
         time_zone: TimeZone,
     ) -> Self {
         Self {
             agent: agent.to_owned(),
             width,
             format,
-            detail,
+            verbosity,
             time_zone,
         }
     }
@@ -139,8 +139,8 @@ impl Layout {
         self.width
     }
 
-    pub fn detail(&self) -> Detail {
-        self.detail
+    pub fn verbosity(&self) -> Verbosity {
+        self.verbosity
     }
 
     /// The lines of `block`, each ending in a newline; empty when it shows nothing.
@@ -233,7 +233,7 @@ impl Layout {
 
     /// The first and last lines when there are many, unless `--full`.
     fn abridged(&self, lines: Vec<String>) -> Vec<Line> {
-        if self.detail == Detail::Full || lines.len() <= HEAD + TAIL + 1 {
+        if self.verbosity == Verbosity::Full || lines.len() <= HEAD + TAIL + 1 {
             return lines.into_iter().map(Line::Text).collect();
         }
         let hidden = lines.len() - HEAD - TAIL;
@@ -325,9 +325,9 @@ impl Layout {
 
     /// The harness's own lines, only with `--full`.
     fn log(&self, text: &str) -> String {
-        match self.detail {
-            Detail::Abridged => String::new(),
-            Detail::Full => {
+        match self.verbosity {
+            Verbosity::Abridged => String::new(),
+            Verbosity::Full => {
                 let mut out = String::new();
                 for line in self.fit(text, MARGIN + 4, true) {
                     let label = self.styled("log", DIM);
@@ -351,8 +351,8 @@ impl Layout {
         let style = color(AnsiColor::Cyan).bold();
         let lines = text.trim_end().lines().count();
         let mut out = String::new();
-        match self.detail {
-            Detail::Abridged if lines > PROMPT_LINES => {
+        match self.verbosity {
+            Verbosity::Abridged if lines > PROMPT_LINES => {
                 let count = format!("{lines} lines");
                 out.push_str(&self.turn_header(speaker, style, at, &count));
                 let summary = text
@@ -366,7 +366,7 @@ impl Layout {
                     cut(summary, self.width - MARGIN)
                 ));
             }
-            Detail::Abridged | Detail::Full => {
+            Verbosity::Abridged | Verbosity::Full => {
                 out.push_str(&self.turn_header(speaker, style, at, ""));
                 // Line by line as written: a prompt is wf's text, and markdown would join lines.
                 let margin = " ".repeat(MARGIN);
@@ -464,15 +464,15 @@ impl Layout {
             .map(|text| width_of(text) + 2)
             .sum::<usize>();
         let room = self.width.saturating_sub(indent + reserved).max(10);
-        let mut lines = match self.detail {
-            Detail::Abridged => {
+        let mut lines = match self.verbosity {
+            Verbosity::Abridged => {
                 let first = match summary.lines().nth(1) {
                     Some(_) => format!("{} …", first_line(&summary)),
                     None => summary.clone(),
                 };
                 vec![cut(&first, room)]
             }
-            Detail::Full => self.wrap_under(&summary, indent, reserved),
+            Verbosity::Full => self.wrap_under(&summary, indent, reserved),
         }
         .into_iter();
         let first = lines.next().unwrap_or_default();
@@ -531,7 +531,7 @@ impl Layout {
         let unweighed = decision.by == Decider::FixedPermissions
             && decision.permission == Permission::Allow
             && decision.reason.is_none();
-        if unweighed && self.detail == Detail::Abridged {
+        if unweighed && self.verbosity == Verbosity::Abridged {
             return None;
         }
         let by = match &decision.by {
@@ -610,7 +610,7 @@ impl Layout {
         let lines = self.fit(
             text.trim_end(),
             NESTED + GUTTER,
-            self.detail == Detail::Full,
+            self.verbosity == Verbosity::Full,
         );
         let (gutter, style) = if failed {
             (Gutter::Failed, Style::new())

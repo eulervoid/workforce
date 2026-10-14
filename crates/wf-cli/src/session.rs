@@ -2,7 +2,7 @@ use std::io::Write;
 use std::path::Path;
 use std::time::Duration;
 
-use crate::transcript::{self, Detail, Format, Printer};
+use crate::transcript::{self, Format, Printer, Verbosity};
 use anyhow::{anyhow, bail};
 use wf_core::id::{HashId, SessionId};
 use wf_harness::Permission;
@@ -267,12 +267,16 @@ fn watch(
         |session| session.agent().name.to_string(),
     );
     let format = if raw { Format::Raw } else { Format::Styled };
-    let detail = if full { Detail::Full } else { Detail::Abridged };
+    let verbosity = if full {
+        Verbosity::Full
+    } else {
+        Verbosity::Abridged
+    };
     let mut printer = Printer::new(
         &agent,
         transcript::terminal_width(),
         format,
-        detail,
+        verbosity,
         jiff::tz::TimeZone::system(),
     );
     let mut ended = false;
