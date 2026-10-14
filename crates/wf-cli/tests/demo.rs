@@ -70,6 +70,18 @@ fn an_agent_is_removed_and_added_again() {
 }
 
 #[test]
+fn an_agent_without_a_name_gets_a_free_one() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo"]);
+    let first = wf.run(&["agent", "add", "--harness", "claude-code"]);
+    let second = wf.run(&["agent", "add", "--harness", "claude-code"]);
+    let first = first.trim().strip_prefix("defined agent ").unwrap();
+    let second = second.trim().strip_prefix("defined agent ").unwrap();
+    assert_ne!(first, second);
+    assert!(wf.run(&["agent", "list"]).contains(first));
+}
+
+#[test]
 fn the_demo_script_works_end_to_end() {
     let wf = Sandbox::new();
 
