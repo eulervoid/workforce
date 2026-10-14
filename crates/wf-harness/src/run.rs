@@ -111,7 +111,7 @@ fn choose_model(
 pub async fn models(agent: AcpAgentConfig, directory: PathBuf) -> Result<Vec<Model>, Error> {
     let models = Client
         .connect_with(
-            AcpAgent::new(agent),
+            spawned(agent),
             async move |connection: ConnectionTo<Agent>| {
                 connection
                     .send_request(InitializeRequest::new(ProtocolVersion::V1))
@@ -135,6 +135,39 @@ pub async fn models(agent: AcpAgentConfig, directory: PathBuf) -> Result<Vec<Mod
         .await?;
     Ok(models)
 }
+
+/// `agent`, started so that it inherits no descriptor of wf beyond stdin, stdout and stderr.
+///
+/// On macOS std creates a pipe and sets close-on-exec on it in two steps, as there is no
+/// `pipe2`, and sockets the same way. A process spawned on another thread in between inherits
+/// that end: an agent that holds the write end of the pipe a `git` call reads keeps the call
+/// waiting until the agent exits. `AcpAgent` builds its `Command` itself, so neither a `pre_exec`
+/// nor `POSIX_SPAWN_CLOEXEC_DEFAULT` can be set on it, and a lock around spawns would not cover
+/// pipes and sockets opened by other code. So the agent starts through `sh`, which closes every
+/// descriptor above stderr and then becomes the agent. Elsewhere std creates them close-on-exec
+/// at once and the agent starts as it is.
+fn spawned(agent: AcpAgentConfig) -> AcpAgent {
+    if cfg!(target_os = "macos") {
+        AcpAgent::new(
+            AcpAgentConfig::new("/bin/sh")
+                .arg("-c")
+                .arg(CLOSE_INHERITED)
+                .arg("sh")
+                .arg(agent.command().to_string_lossy())
+                .args(agent.arguments())
+                .envs(agent.environment()),
+        )
+    } else {
+        AcpAgent::new(agent)
+    }
+}
+
+/// Closes every descriptor above stderr, then runs its arguments in its place.
+const CLOSE_INHERITED: &str = r#"for path in /dev/fd/*; do
+    descriptor=${path##*/}
+    [ "$descriptor" -gt 2 ] && eval "exec $descriptor>&-"
+done
+exec "$@""#;
 
 /// The command that starts a known harness in ACP mode.
 pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
@@ -217,7 +250,7 @@ impl Conversation {
         // While a loaded session replays its history, the updates are neither recorded nor heard.
         let replaying = Arc::new(AtomicBool::new(false));
         let muted = Arc::clone(&replaying);
-        let agent = AcpAgent::new(launch.agent).with_debug(move |line, direction| {
+        let agent = spawned(launch.agent).with_debug(move |line, direction| {
             let entry =
                 TranscriptEntry::from_line(Timestamp::now(), Direction::from(direction), line);
             if muted.load(Ordering::SeqCst) && entry.message["method"] == "session/update" {

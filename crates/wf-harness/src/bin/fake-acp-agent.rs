@@ -1,7 +1,8 @@
 //! A scripted ACP agent for tests: answers one prompt with a message, a tool call and a
 //! permission request, and reports the permission outcome in its last message. Its sessions
 //! offer two models. `FAKE_AGENT_REOPENS` set to `resume` or `load` offers that way back into a
-//! session; a load first replays an earlier message.
+//! session; a load first replays an earlier message. `FAKE_AGENT_DESCRIPTORS` names a file it
+//! writes the descriptors it holds to when it starts, one per line.
 
 use std::io::{BufRead, Write};
 
@@ -40,7 +41,19 @@ fn config_options(model: &str) -> Value {
     }])
 }
 
+/// The descriptors this process holds. They are looked up one by one, as reading `/dev/fd`
+/// would hold one more.
+fn descriptors() -> Vec<String> {
+    (0..4096)
+        .map(|descriptor| descriptor.to_string())
+        .filter(|descriptor| std::fs::metadata(format!("/dev/fd/{descriptor}")).is_ok())
+        .collect()
+}
+
 fn main() {
+    if let Ok(path) = std::env::var("FAKE_AGENT_DESCRIPTORS") {
+        std::fs::write(path, descriptors().join("\n")).unwrap();
+    }
     let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
     let mut lines = std::io::stdin().lock().lines();
     while let Some(Ok(line)) = lines.next() {

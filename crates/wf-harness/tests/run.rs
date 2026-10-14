@@ -268,3 +268,41 @@ async fn a_loaded_session_does_not_record_or_hear_its_history_again() {
 async fn an_agent_that_cannot_reopen_sessions_says_so() {
     assert!(matches!(reopen("").await, Err(Error::CannotResume)));
 }
+
+/// While other threads run short commands with piped output, which on macOS create pipes that
+/// are not close-on-exec for a moment, every agent started holds only stdin, stdout and stderr.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_inherits_no_descriptor_while_other_threads_create_pipes() {
+    let directory = tempfile::tempdir().unwrap();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let commands: Vec<_> = (0..4)
+        .map(|_| {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::process::Command::new("true").output().unwrap();
+                }
+            })
+        })
+        .collect();
+    let mut agents = tokio::task::JoinSet::new();
+    for number in 0..40 {
+        let held = directory.path().join(format!("agent-{number}"));
+        let agent =
+            agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
+                .env("FAKE_AGENT_DESCRIPTORS", held.to_string_lossy());
+        let directory = directory.path().to_path_buf();
+        agents.spawn(async move {
+            wf_harness::models(agent, directory).await.unwrap();
+            std::fs::read_to_string(held).unwrap()
+        });
+    }
+    let held = agents.join_all().await;
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for command in commands {
+        command.join().unwrap();
+    }
+    for descriptors in held {
+        assert_eq!(descriptors, "0\n1\n2");
+    }
+}
