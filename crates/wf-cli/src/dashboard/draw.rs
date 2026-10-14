@@ -116,8 +116,11 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, body: Rect) {
 
 /// Every key, by where it works.
 const KEYS: &[(&str, &str)] = &[
-    ("1-4 tab", "switch tabs"),
+    ("1-4 tab", "switch tabs, also shift-tab"),
     ("j/k g/G", "move, top, end (and follow)"),
+    ("pgup/pgdn", "a page up, down; also space"),
+    ("wheel", "move what is under the pointer"),
+    ("shift-drag", "select text, as without the dashboard"),
     ("enter esc", "open, go back"),
     ("a d", "allow, deny a permission request"),
     ("r R", "answer a blocker here, in $EDITOR"),
@@ -134,7 +137,7 @@ fn draw_keys(frame: &mut Frame, body: Rect) {
         .iter()
         .map(|(keys, what)| {
             Line::from(vec![
-                Span::raw(format!(" {keys:<10}")).fg(Color::Yellow),
+                Span::raw(format!(" {keys:<12}")).fg(Color::Yellow),
                 Span::raw(*what),
             ])
         })
