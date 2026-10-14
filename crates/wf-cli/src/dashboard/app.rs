@@ -1207,7 +1207,10 @@ impl App {
             self.prompt = None;
             return;
         }
-        if clickable.strip.is_some_and(|strip| strip.contains(position)) {
+        if clickable
+            .strip
+            .is_some_and(|strip| strip.contains(position))
+        {
             self.split = Split::Both;
             return;
         }

@@ -12,7 +12,7 @@ use wf_core::name::{AgentName, StateName};
 use wf_core::policy::StateCategory;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
-use super::app::{AgentRow, App, Choice, Effect, Opened, Prompt, Row, Scroll, Tab, Wheel};
+use super::app::{AgentRow, App, Choice, Effect, Opened, Prompt, Row, Scroll, Split, Tab, Wheel};
 use super::draw;
 use super::snapshot::{
     AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Place, SessionInfo,
@@ -230,6 +230,69 @@ fn a_wide_window_shows_the_selection_beside_the_list() {
     snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&mut app, 130, 14));
+}
+
+#[test]
+fn h_and_l_fold_the_list_or_the_detail_to_a_strip() {
+    use ratatui::crossterm::event::KeyModifiers;
+    let mut app = app();
+    app.resize(130, 24);
+    for _ in 0..4 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    app.refresh(snapshot);
+    // The list takes the window; the detail is a strip at the right.
+    press(&mut app, KeyCode::Char('H'));
+    assert!(app.list_has_keys());
+    assert_eq!(app.wanted().detail, None);
+    insta::assert_snapshot!("list_only", screen(&mut app, 130, 14));
+    // H again goes no further; L brings both back, the list keeping the keys.
+    press(&mut app, KeyCode::Char('H'));
+    insta::assert_snapshot!("list_only", screen(&mut app, 130, 14));
+    press(&mut app, KeyCode::Char('L'));
+    assert!(app.list_has_keys());
+    insta::assert_snapshot!(
+        "a_wide_window_shows_the_selection_beside_the_list",
+        screen(&mut app, 130, 14)
+    );
+    // Shift → gives the detail the window, with the list a strip at the left.
+    app.key(KeyEvent::new(KeyCode::Right, KeyModifiers::SHIFT));
+    assert!(!app.list_has_keys());
+    assert_eq!(app.detail_width(), 127);
+    insta::assert_snapshot!("detail_only", screen(&mut app, 130, 14));
+    // Esc goes back to the list in the whole window, as in a narrow one.
+    press(&mut app, KeyCode::Esc);
+    assert!(app.list_has_keys());
+    insta::assert_snapshot!("list_only", screen(&mut app, 130, 14));
+    // Enter opens the detail in the whole window again; shift ← brings both back.
+    press(&mut app, KeyCode::Enter);
+    app.key(KeyEvent::new(KeyCode::Left, KeyModifiers::SHIFT));
+    assert!(!app.list_has_keys());
+    insta::assert_snapshot!("both_with_the_detail_keys", screen(&mut app, 130, 14));
+}
+
+#[test]
+fn a_click_on_the_strip_brings_both_panes_back() {
+    let mut app = app();
+    app.resize(130, 24);
+    press(&mut app, KeyCode::Char('L'));
+    screen(&mut app, 130, 14);
+    // The list folded away to the left: a click in the detail does nothing to the panes.
+    app.click(60, 8);
+    assert_eq!(app.split, Split::One);
+    app.click(0, 8);
+    assert_eq!(app.split, Split::Both);
+    assert!(!app.list_has_keys());
+    // Neither H nor L does anything on the Log tab, or in a narrow window.
+    press(&mut app, KeyCode::Char('4'));
+    press(&mut app, KeyCode::Char('H'));
+    assert_eq!(app.split, Split::Both);
+    press(&mut app, KeyCode::Char('1'));
+    app.resize(60, 24);
+    press(&mut app, KeyCode::Char('H'));
+    assert_eq!(app.split, Split::Both);
 }
 
 #[test]
