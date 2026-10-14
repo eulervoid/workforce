@@ -179,14 +179,19 @@ impl Daemon {
             SessionRole::Work => Some(
                 self.starting
                     .take(item)
-                    .ok_or(SessionError::Claimed(item))?,
+                    .ok_or(SessionError::Starting(item))?,
             ),
             SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
         };
         let state = self.snapshot(loaded).await?;
         let setup = self.setup(&state, workforce, agent, item, role)?;
-        if role == SessionRole::Work && state.claim(item).is_some() {
-            return Err(SessionError::Claimed(item));
+        if role == SessionRole::Work
+            && let Some(holder) = state.claim(item)
+        {
+            return Err(SessionError::Claimed {
+                item,
+                holder: state.actor_label(&holder.actor()),
+            });
         }
         let worktree = self.session_directory(workforce, item, role);
         let path = worktree.clone();

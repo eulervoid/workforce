@@ -19,7 +19,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use wf_core::event::{Event, EventBody};
-use wf_core::id::{ItemId, SessionId, WorkforceId};
+use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::lifecycle::Interruption;
 use wf_core::name::{AgentName, HarnessName};
@@ -40,13 +40,19 @@ pub enum SessionError {
     UnknownAgent(AgentName),
     #[error("harness `{0}` is not one wf knows how to start; see `wf agent list`")]
     UnknownHarness(HarnessName),
-    #[error("there is no item {0}")]
+    #[error("there is no item #{}", .0.short())]
     UnknownItem(ItemId),
-    #[error("{0} is archived")]
+    #[error("#{} is archived", .0.short())]
     Archived(ItemId),
-    #[error("{0} already has a live session; stop it first")]
-    Claimed(ItemId),
-    #[error("there is no session {0}")]
+    #[error("#{} already has a live session, {holder}; stop it first", .item.short())]
+    Claimed {
+        item: ItemId,
+        /// The session that holds the item, as [`State::actor_label`] names it.
+        holder: String,
+    },
+    #[error("a session is already starting on #{}", .0.short())]
+    Starting(ItemId),
+    #[error("there is no session {}", .0.short())]
     UnknownSession(SessionId),
     #[error("the session runs on another machine")]
     NotOurs(SessionId),
@@ -334,5 +340,28 @@ impl Daemon {
             path: directory,
             source,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use wf_core::id::EventId;
+
+    use super::*;
+
+    #[test]
+    fn a_refusal_names_the_item_short_and_the_session_that_holds_it() {
+        let item = ItemId::from(EventId::of(b"item"));
+        let refusal = SessionError::Claimed {
+            item,
+            holder: "@ada/coder/3cegls".to_string(),
+        };
+        assert_eq!(
+            refusal.to_string(),
+            format!(
+                "#{} already has a live session, @ada/coder/3cegls; stop it first",
+                item.short()
+            )
+        );
     }
 }
