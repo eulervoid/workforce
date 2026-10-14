@@ -1,3 +1,4 @@
+pub mod agent_names;
 pub mod cli;
 pub mod commands;
 pub mod daemon;
