@@ -20,7 +20,7 @@ pub(super) fn agent(
 ) -> anyhow::Result<()> {
     let principal = workspace
         .state()
-        .principal_of(&workspace_device(workspace)?)
+        .principal_of(&workspace.device_key())
         .context("device is not bound")?;
     match command {
         AgentCommand::List => {
@@ -143,12 +143,4 @@ fn hosting_note(
         )),
         StartMode::Auto | StartMode::Manual => Ok(message),
     }
-}
-
-fn workspace_device(workspace: &Workspace) -> anyhow::Result<wf_core::identity::DeviceKey> {
-    Ok(workspace
-        .data
-        .device(false)?
-        .context("no device key")?
-        .key())
 }
