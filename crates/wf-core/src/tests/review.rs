@@ -55,15 +55,16 @@ impl Scene {
         item
     }
 
+    /// As the daemon writes a submission: the item moves to review, then the session ends.
     fn submit(&mut self, item: ItemId, commit: CommitId) {
         let session: SessionId = self.apply(start_session("coder", item)).id().into();
+        self.apply(moved(item, ItemState::Review));
         self.apply(end_session(
             session,
             EndReason::Submitted {
                 commit: Some(commit),
             },
         ));
-        self.apply(moved(item, ItemState::Review));
     }
 
     fn status(&self, item: ItemId) -> Option<ReviewStatus> {
@@ -237,6 +238,12 @@ fn approved_work_and_work_without_review_wait_for_the_merge() {
     assert_eq!(pending_now, expected);
 
     scene.apply(merged(reviewed, commit(1), commit(9)));
+    assert_eq!(
+        pending(&scene.state),
+        expected,
+        "merged work waits for its merge to move it"
+    );
+    scene.apply(moved(reviewed, ItemState::Done));
     assert_eq!(pending(&scene.state), [(unreviewed, commit(3))]);
 }
 
@@ -584,7 +591,11 @@ fn merged_work_is_finished_by_the_daemon_and_waits_on_nobody() {
     );
 
     scene.apply(merged(item, commit(1), commit(9)));
-    assert_eq!(scene.state.finished_reviews(), [item]);
+    assert!(
+        scene.state.finished_reviews().is_empty(),
+        "the merge moves it, not the dispatcher"
+    );
+    assert_eq!(scene.state.pending_merges().len(), 1);
     assert!(
         scene.state.inbox().is_empty(),
         "merged work waiting to be moved is no proposal"
@@ -592,7 +603,7 @@ fn merged_work_is_finished_by_the_daemon_and_waits_on_nobody() {
 
     scene.apply(moved(item, ItemState::Open));
     scene.apply(moved(item, ItemState::Review));
-    assert!(scene.state.finished_reviews().is_empty());
+    assert!(scene.state.pending_merges().is_empty());
     assert_eq!(
         scene.state.inbox(),
         [crate::inbox::InboxEntry {

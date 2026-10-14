@@ -246,16 +246,28 @@ impl Daemon {
             return Err(SessionError::Archived(item));
         };
         let policy = &state.policy().expect("a workforce has a policy").policy;
-        // Another request made this merge already, or the item was finished otherwise.
+        // Another request finished this merge already, or the item was finished otherwise.
+        if live.state(policy) == ItemState::Done {
+            return Ok(MergeEnd::Handled);
+        }
+        let principal = self.principal_of_device(&state)?;
+        // Merged by a request that did not get to move the item, as when the daemon stopped.
         if live
             .merges()
             .values()
             .any(|merged| merged.reviewed == commit)
-            || live.state(policy) == ItemState::Done
         {
+            self.move_item(
+                loaded,
+                principal,
+                item,
+                ItemState::Done,
+                because,
+                attempt.by_session(),
+            )
+            .await?;
             return Ok(MergeEnd::Handled);
         }
-        let principal = self.principal_of_device(&state)?;
         let target = policy.merge.target.clone();
         let message = format!("Merge #{}: {}", HashId::short(&item), live.title());
         let open = state.after_failed_merge(item, MergeFailure::Conflict);
