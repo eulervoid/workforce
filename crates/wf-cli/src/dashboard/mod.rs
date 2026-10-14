@@ -7,12 +7,12 @@ mod draw;
 mod snapshot;
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::time::{Duration, Instant};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as TerminalEvent, KeyEventKind,
-    MouseEvent, MouseEventKind,
+    self, DisableMouseCapture, Event as TerminalEvent, KeyEventKind, MouseEvent, MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use wf_core::event::Event;
@@ -31,12 +31,32 @@ const BACKLOG: usize = 200;
 
 pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
     let mut terminal = ratatui::init();
-    // The wheel scrolls what is under the pointer, rather than sending arrow keys.
-    execute!(std::io::stdout(), EnableMouseCapture)?;
-    let result = event_loop(&mut terminal, workspace, only);
+    let result = report_mouse()
+        .map_err(anyhow::Error::from)
+        .and_then(|()| event_loop(&mut terminal, workspace, only));
     let _ = execute!(std::io::stdout(), DisableMouseCapture);
     ratatui::restore();
     result
+}
+
+/// Asks the terminal to report presses of the mouse and its wheel, so the wheel scrolls what is
+/// under the pointer rather than sending arrow keys. Unlike crossterm's `EnableMouseCapture`, it
+/// asks for no report on every move of the pointer.
+pub(super) fn report_mouse() -> std::io::Result<()> {
+    let mut stdout = std::io::stdout();
+    // Press and release reports (1000), in the SGR encoding (1006).
+    stdout.write_all(b"\x1b[?1000h\x1b[?1006h")?;
+    stdout.flush()
+}
+
+/// What an event from the terminal came to.
+enum Handled {
+    Quit,
+    /// Something moved on screen: draw it again, and ask the workspace about what came into view.
+    Moved,
+    /// The workforce or the window changed: ask the workspace again, and draw.
+    Changed,
+    Ignored,
 }
 
 fn event_loop(
@@ -54,55 +74,85 @@ fn event_loop(
     let snapshot = feed.snapshot(workspace, &app);
     app.refresh(snapshot);
     let mut refreshed = Instant::now();
+    let mut draw = true;
     loop {
-        terminal.draw(|frame| draw::draw(frame, &mut app))?;
-        let wait = REFRESH_EVERY.saturating_sub(refreshed.elapsed());
-        if event::poll(wait)? {
-            match event::read()? {
-                TerminalEvent::Key(key) if key.kind == KeyEventKind::Press => match app.key(key) {
-                    Some(Effect::Quit) => return Ok(()),
-                    Some(effect) => {
-                        match act::carry_out(effect, workspace, terminal) {
-                            Ok(act::Outcome::Did(what)) => app.did(what),
-                            Ok(act::Outcome::Choose(choice)) => app.choose(choice),
-                            Err(error) => app.action_failed(&error),
-                        }
-                        // Show what the action changed right away.
-                        if let Err(error) = feed.refresh(workspace, &mut app) {
-                            app.refresh_failed(&error);
-                        }
-                    }
-                    None => {}
-                },
-                TerminalEvent::Mouse(MouseEvent {
-                    kind: MouseEventKind::ScrollUp,
-                    column,
-                    ..
-                }) => app.wheel(column, Wheel::Up),
-                TerminalEvent::Mouse(MouseEvent {
-                    kind: MouseEventKind::ScrollDown,
-                    column,
-                    ..
-                }) => app.wheel(column, Wheel::Down),
-                TerminalEvent::Resize(width, _) => app.resize(width),
-                _ => continue,
+        if draw {
+            terminal.draw(|frame| draw::draw(frame, &mut app))?;
+            draw = false;
+        }
+        // Wait for the terminal until the next refresh, then take in all it has queued before
+        // drawing again, so a fast wheel does not queue up draws.
+        let wanted = app.wanted();
+        let mut changed = false;
+        let mut wait = REFRESH_EVERY.saturating_sub(refreshed.elapsed());
+        while event::poll(wait)? {
+            wait = Duration::ZERO;
+            match handle(event::read()?, &mut app, &mut feed, workspace, terminal) {
+                Handled::Quit => return Ok(()),
+                Handled::Moved => draw = true,
+                Handled::Changed => changed = true,
+                Handled::Ignored => {}
             }
-            // What is on screen may have changed: show it without waiting for the daemon.
-            feed.read_transcripts(workspace, &mut app);
-            let snapshot = feed.snapshot(workspace, &app);
-            app.refresh(snapshot);
+        }
+        if refreshed.elapsed() >= REFRESH_EVERY {
+            refreshed = Instant::now();
+            if let Err(error) = feed.refresh(workspace, &mut app) {
+                app.refresh_failed(&error);
+                draw = true;
+                continue;
+            }
+        } else if !changed && app.wanted() == wanted {
+            // Scrolling within what is on screen needs nothing new from the workspace.
             continue;
         }
-        refreshed = Instant::now();
-        match feed.refresh(workspace, &mut app) {
-            Ok(()) => {
-                feed.read_transcripts(workspace, &mut app);
-                let snapshot = feed.snapshot(workspace, &app);
-                app.refresh(snapshot);
-            }
-            Err(error) => app.refresh_failed(&error),
-        }
+        draw = true;
+        feed.read_transcripts(workspace, &mut app);
+        let snapshot = feed.snapshot(workspace, &app);
+        app.refresh(snapshot);
     }
+}
+
+fn handle(
+    event: TerminalEvent,
+    app: &mut App,
+    feed: &mut Feed,
+    workspace: &mut Workspace,
+    terminal: &mut DefaultTerminal,
+) -> Handled {
+    match event {
+        TerminalEvent::Key(key) if key.kind == KeyEventKind::Press => match app.key(key) {
+            Some(Effect::Quit) => return Handled::Quit,
+            Some(effect) => {
+                match act::carry_out(effect, workspace, terminal) {
+                    Ok(act::Outcome::Did(what)) => app.did(what),
+                    Ok(act::Outcome::Choose(choice)) => app.choose(choice),
+                    Err(error) => app.action_failed(&error),
+                }
+                // Show what the action changed right away.
+                if let Err(error) = feed.refresh(workspace, app) {
+                    app.refresh_failed(&error);
+                }
+                return Handled::Changed;
+            }
+            None => {}
+        },
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollUp,
+            column,
+            ..
+        }) => app.wheel(column, Wheel::Up),
+        TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::ScrollDown,
+            column,
+            ..
+        }) => app.wheel(column, Wheel::Down),
+        TerminalEvent::Resize(width, _) => {
+            app.resize(width);
+            return Handled::Changed;
+        }
+        _ => return Handled::Ignored,
+    }
+    Handled::Moved
 }
 
 /// What the dashboard has read from the workforce so far.

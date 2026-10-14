@@ -5,9 +5,7 @@ use std::io::Write;
 
 use anyhow::{anyhow, bail};
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{
-    self, DisableMouseCapture, EnableMouseCapture, Event as TerminalEvent, KeyEventKind,
-};
+use ratatui::crossterm::event::{self, DisableMouseCapture, Event as TerminalEvent, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use wf_core::event::{Comment, CommentKind, EventBody, ItemEdited, ItemMoved, Review};
@@ -307,7 +305,8 @@ fn suspended<T>(terminal: &mut DefaultTerminal, run: impl FnOnce() -> T) -> anyh
     ratatui::restore();
     let result = run();
     enable_raw_mode()?;
-    execute!(std::io::stdout(), EnterAlternateScreen, EnableMouseCapture)?;
+    execute!(std::io::stdout(), EnterAlternateScreen)?;
+    super::report_mouse()?;
     terminal.clear()?;
     Ok(result)
 }
