@@ -199,7 +199,9 @@ impl ItemLocks {
             .items
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        items.insert(item).then_some(ItemLock { locks: self, item })
+        // Built only when taken: a lock built and dropped here would release the holder's, and
+        // deadlock on `items` besides.
+        items.insert(item).then(|| ItemLock { locks: self, item })
     }
 }
 
