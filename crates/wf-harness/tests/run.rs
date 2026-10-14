@@ -286,7 +286,7 @@ async fn an_agent_inherits_no_descriptor_while_other_threads_create_pipes() {
         })
         .collect();
     let mut agents = tokio::task::JoinSet::new();
-    for number in 0..40 {
+    for number in 0..100 {
         let held = directory.path().join(format!("agent-{number}"));
         let agent =
             agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
@@ -303,6 +303,10 @@ async fn an_agent_inherits_no_descriptor_while_other_threads_create_pipes() {
         command.join().unwrap();
     }
     for descriptors in held {
-        assert_eq!(descriptors, "0\n1\n2");
+        let foreign: Vec<_> = descriptors
+            .lines()
+            .filter(|descriptor| descriptor.parse::<u32>().unwrap() > 2)
+            .collect();
+        assert!(foreign.is_empty(), "an agent holds {foreign:?}");
     }
 }

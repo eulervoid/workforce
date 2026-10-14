@@ -42,11 +42,17 @@ fn config_options(model: &str) -> Value {
 }
 
 /// The descriptors this process holds. They are looked up one by one, as reading `/dev/fd`
-/// would hold one more.
+/// would hold one more, and by duplicating each: on macOS `stat` on `/dev/fd/N` now and then
+/// fails with EBADF for a pipe that is open.
 fn descriptors() -> Vec<String> {
     (0..4096)
+        .filter(|&descriptor| {
+            // SAFETY: the descriptor is only duplicated, and the duplicate closed right away.
+            unsafe { std::os::fd::BorrowedFd::borrow_raw(descriptor) }
+                .try_clone_to_owned()
+                .is_ok()
+        })
         .map(|descriptor| descriptor.to_string())
-        .filter(|descriptor| std::fs::metadata(format!("/dev/fd/{descriptor}")).is_ok())
         .collect()
 }
 
