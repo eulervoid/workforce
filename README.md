@@ -73,7 +73,8 @@ Its first tab lists what waits on you, the agents at work with what each is doin
 what is stuck; `a`/`d` answer a permission request, `r` a blocker, `v` a review, right where they
 are listed. `enter` opens an item, or a session on its live transcript. The other tabs are the
 items grouped by state, drafts first (`s` on a draft releases it for the dispatcher), the agents with their sessions and how they are
-doing, and the event stream. `?` lists the keys. Piped or with `--json`, `wf watch` prints the
+doing, and the event stream. `?` lists the keys. Where the keys go is marked in blue, dimmed
+while the terminal pane is not focused; in tmux that needs `set -g focus-events on`. Piped or with `--json`, `wf watch` prints the
 events as they arrive instead.
 
 ## Sandbox
