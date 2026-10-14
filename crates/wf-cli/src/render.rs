@@ -11,9 +11,9 @@ use crate::devices::{DeviceView, MemberView};
 use crate::markdown;
 use crate::transcript::Format;
 use crate::view::{
-    ActivityKind, AgentView, BodyPartView, CommentKindView, InboxEntryView, ItemDetail, ItemGroup,
-    ItemSummary, LogView, MentionsView, ReviewStatusView, SessionView, SourceView, StatusView,
-    StepRefView, StepsView,
+    ActivityKind, ActorKind, ActorView, AgentDetail, AgentView, BodyPartView, CommentKindView,
+    InboxEntryView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, ReviewStatusView,
+    SessionView, SourceView, StatusView, StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
 use wf_core::item::ItemState;
@@ -543,6 +543,217 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
 
 /// Where a wrapped `↳` line of an item's header continues: under the text after `↳ `.
 const LINK_INDENT: &str = "    ";
+
+/// `14m`, `3h05m`, `2d`.
+pub fn duration(millis: u64) -> String {
+    let minutes = millis / 60_000;
+    match minutes {
+        0..60 => format!("{minutes}m"),
+        60..1440 => format!("{}h{:02}m", minutes / 60, minutes % 60),
+        _ => format!("{}d", minutes / 1440),
+    }
+}
+
+pub fn agent_detail(detail: &AgentDetail) -> String {
+    agent_detail_for(detail, text_width(), text_format(), jiff::Timestamp::now())
+}
+
+/// [`agent_detail`] with prose wrapped to `width`, or not at all, its markdown in `format`, and
+/// the ages of its sessions as of `now`.
+pub fn agent_detail_for(
+    detail: &AgentDetail,
+    width: Option<usize>,
+    format: Format,
+    now: jiff::Timestamp,
+) -> String {
+    use style::{BOLD, DIM, paint};
+
+    let agent = &detail.definition;
+    let separator = format!(" {} ", paint(DIM, "·"));
+    let mut out = String::new();
+    let mut line = |text: String, indent: &str| {
+        let _ = writeln!(out, "{}", fill(&text, width, indent));
+    };
+
+    let label = style::paint_actor(&ActorView {
+        kind: ActorKind::Agent,
+        label: agent.id.clone(),
+    });
+    let runs_on = match &agent.model {
+        Some(model) => format!("{} · {model}", agent.harness),
+        None => agent.harness.clone(),
+    };
+    let header = format!("{label}  {}", paint(DIM, runs_on));
+    let load = agent_load(detail);
+    let fits = |text: &str| width.is_none_or(|width| textwrap::core::display_width(text) <= width);
+    // The load stays whole: on the header's line if it fits there, else on its own.
+    let header_and_load = format!("{header}  {load}");
+    if fits(&anstream::adapter::strip_str(&header_and_load).to_string()) {
+        line(header_and_load, "  ");
+    } else {
+        line(header, "  ");
+        line(format!("  {load}"), "  ");
+    }
+
+    let field = |name: &str, value: &str| format!("{} {value}", paint(DIM, name));
+    let mut fields = Vec::new();
+    if !agent.lanes.is_empty() {
+        fields.push(field("lanes", &agent.lanes.join(", ")));
+    }
+    if !agent.capabilities.is_empty() {
+        fields.push(field("can", &agent.capabilities.join(", ")));
+    }
+    fields.push(field("starts", &agent.start));
+    fields.push(field("permissions", &agent.permissions));
+    line(format!("  {}", fields.join(&separator)), "  ");
+    let mut limits = vec![
+        field("nudges", &agent.nudges.to_string()),
+        field("parks for", &agent.park_timeout),
+    ];
+    if let Some(max) = &agent.max_duration {
+        limits.push(field("at most", max));
+    }
+    line(format!("  {}", limits.join(&separator)), "  ");
+    let hosts: Vec<String> = detail
+        .hosts
+        .iter()
+        .map(|host| {
+            let this = if host.this_device { " (this)" } else { "" };
+            format!(
+                "{}{this} {}",
+                host.device,
+                paint(DIM, format!("up to {}", host.sessions))
+            )
+        })
+        .collect();
+    if hosts.is_empty() {
+        line(
+            format!("  ↳ {}", paint(DIM, "hosted by no device")),
+            LINK_INDENT,
+        );
+    } else {
+        line(
+            format!("  ↳ hosted by {}", hosts.join(&separator)),
+            LINK_INDENT,
+        );
+    }
+
+    if !detail.sessions.is_empty() {
+        let stats = &detail.stats;
+        let mut counts = vec![
+            stats.sessions.to_string(),
+            format!("{} live", stats.live),
+            format!("{} finished", stats.finished),
+            format!("{} failed", stats.failed),
+        ];
+        if let Some(median) = stats.median_duration_ms {
+            counts.push(format!("median {}", duration(median)));
+        }
+        line(String::new(), "");
+        line(
+            format!(
+                "{} {}",
+                paint(BOLD, "sessions"),
+                paint(DIM, format!("· {}", counts.join(" · ")))
+            ),
+            "  ",
+        );
+        for session in &detail.sessions {
+            line(agent_session(session, now, &separator), LINK_INDENT);
+        }
+        if detail.older_sessions > 0 {
+            line(
+                format!(
+                    "  {}",
+                    paint(DIM, format!("… {} earlier", detail.older_sessions))
+                ),
+                "  ",
+            );
+        }
+    }
+
+    if let Some(instructions) = &agent.instructions {
+        let _ = writeln!(
+            out,
+            "\n{}\n{}",
+            paint(BOLD, "instructions"),
+            markdown_text(instructions, width, "  ", format)
+        );
+    }
+    if !detail.activity.is_empty() {
+        out.push_str(&activity(&detail.activity, width, format));
+    }
+    out
+}
+
+/// `◆ 1/2 busy`: how many sessions of the agent are live, of how many this machine runs at once,
+/// or that it does not run it.
+fn agent_load(detail: &AgentDetail) -> String {
+    use style::{DIM, paint};
+    let live = detail.stats.live;
+    let icon = if live > 0 {
+        paint(style::color(anstyle::AnsiColor::Blue), "◆")
+    } else {
+        paint(DIM, "·")
+    };
+    let load = match detail.hosts.iter().find(|host| host.this_device) {
+        Some(host) if live >= host.sessions as usize => paint(
+            style::color(anstyle::AnsiColor::Blue),
+            format!("{live}/{} busy", host.sessions),
+        ),
+        Some(host) if live > 0 => paint(
+            style::color(anstyle::AnsiColor::Blue),
+            format!("{live}/{} live", host.sessions),
+        ),
+        Some(host) => paint(DIM, format!("{live}/{} idle", host.sessions)),
+        None => paint(DIM, format!("{live} live · not hosted here")),
+    };
+    format!("{icon} {load}")
+}
+
+/// A session of an agent: `◆ #k3j1ab Parse config lazily · work 12m · @ada/coder/s4k2ab`, how
+/// long ago it started, or how it ended and how long ago, as of `now`.
+fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -> String {
+    use style::{DIM, paint};
+    let blue = style::color(anstyle::AnsiColor::Blue);
+    let age = |timestamp: &str| {
+        timestamp.parse::<jiff::Timestamp>().map_or_else(
+            |_| timestamp.to_string(),
+            |time| {
+                let millis = now.as_millisecond().saturating_sub(time.as_millisecond());
+                duration(u64::try_from(millis).unwrap_or(0))
+            },
+        )
+    };
+    let (icon, state) = match (session.status.as_str(), &session.ended) {
+        ("live", None) => (
+            paint(blue, "◆"),
+            format!("{} {}", session.role, age(&session.started)),
+        ),
+        ("parked", None) => (
+            paint(blue, "◇"),
+            format!("{} parked {}", session.role, age(&session.started)),
+        ),
+        (reason, ended) => (
+            paint(DIM, "·"),
+            format!(
+                "{} {} ago",
+                reason.replace('_', " "),
+                age(ended.as_deref().unwrap_or(&session.started))
+            ),
+        ),
+    };
+    let label = style::paint_actor(&ActorView {
+        kind: ActorKind::Agent,
+        label: format!("{}/{}", session.agent, short(&session.id)),
+    });
+    format!(
+        "  {icon} {} {}{separator}{}{separator}{label}",
+        id_label(&session.item),
+        session.title,
+        paint(DIM, state),
+    )
+}
 
 /// The activity of an item: one line per thing that happened, and the text that goes with it
 /// below. The date heads the section and is repeated when the day changes.
