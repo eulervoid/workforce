@@ -1,0 +1,68 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+assertion_line: 77
+expression: "Envelope::new(&all)"
+---
+{
+  "schema": 6,
+  "data": [
+    {
+      "id": "cb6sbemiktyi34wi5kjxlqmn74vwahoedqwy2qekdpadbjp62p7q",
+      "type": "task",
+      "title": "Write spec",
+      "state": "done",
+      "priority": null,
+      "readiness": null,
+      "blocked_by": [],
+      "blocking": [],
+      "labels": [],
+      "lane": null,
+      "steps": null,
+      "archived": true
+    },
+    {
+      "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+      "type": "task",
+      "title": "Implement feed sync",
+      "state": "open",
+      "priority": "P1",
+      "readiness": "blocked",
+      "blocked_by": [
+        {
+          "id": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
+          "type": "task",
+          "title": "Pick a hash for event ids",
+          "state": "open",
+          "priority": "P2"
+        }
+      ],
+      "blocking": [],
+      "labels": [],
+      "lane": "default",
+      "steps": null,
+      "archived": false
+    },
+    {
+      "id": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
+      "type": "task",
+      "title": "Pick a hash for event ids",
+      "state": "open",
+      "priority": "P2",
+      "readiness": "ready",
+      "blocked_by": [],
+      "blocking": [
+        {
+          "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+          "type": "task",
+          "title": "Implement feed sync",
+          "state": "open",
+          "priority": "P1"
+        }
+      ],
+      "labels": [],
+      "lane": "default",
+      "steps": null,
+      "archived": false
+    }
+  ]
+}

@@ -1,0 +1,114 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+assertion_line: 101
+expression: "Envelope::new(&detail)"
+---
+{
+  "schema": 6,
+  "data": {
+    "id": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
+    "type": "task",
+    "title": "Pick a hash for event ids",
+    "state": "open",
+    "priority": "P2",
+    "readiness": "ready",
+    "blocked_by": [],
+    "blocking": [
+      {
+        "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+        "type": "task",
+        "title": "Implement feed sync",
+        "state": "open",
+        "priority": "P1"
+      }
+    ],
+    "labels": [],
+    "lane": "default",
+    "steps": null,
+    "archived": false,
+    "body": [],
+    "author": {
+      "kind": "principal",
+      "label": "@ada"
+    },
+    "created": "1970-01-01T00:00:04Z",
+    "updated": "1970-01-01T00:00:04Z",
+    "review": null,
+    "review_status": null,
+    "recovery": "standard",
+    "waits_after_failures": null,
+    "requires": [],
+    "depends_on": [],
+    "required_by": [
+      {
+        "id": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+        "type": "task",
+        "title": "Implement feed sync",
+        "state": "open",
+        "ignored": false
+      }
+    ],
+    "supersedes": null,
+    "references": [],
+    "referenced_by": [
+      {
+        "item": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+        "title": "Implement feed sync",
+        "comment": null,
+        "in_body": true,
+        "in_comments": [
+          "bmnfwkl7deir3tbcsv6yzhpkhxrs7edtqbsq2d6nmlztsa66yvha"
+        ]
+      }
+    ],
+    "mentions": [],
+    "activity": [
+      {
+        "at": "1970-01-01T00:00:04Z",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
+        "kind": "created",
+        "summary": "created the task",
+        "comment": null,
+        "text": null
+      },
+      {
+        "at": "1970-01-01T00:00:05Z",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
+        "kind": "referenced_in",
+        "summary": "referenced in #gzsd5d",
+        "comment": null,
+        "text": null
+      },
+      {
+        "at": "1970-01-01T00:00:08Z",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
+        "kind": "dependent",
+        "summary": "#gzsd5d now depends on this",
+        "comment": null,
+        "text": null
+      },
+      {
+        "at": "1970-01-01T00:00:09Z",
+        "by": {
+          "kind": "principal",
+          "label": "@ada"
+        },
+        "kind": "referenced_in",
+        "summary": "referenced in #gzsd5d",
+        "comment": null,
+        "text": null
+      }
+    ],
+    "open": [],
+    "flags": []
+  }
+}

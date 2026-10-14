@@ -1,5 +1,7 @@
 //! One item in full, as `wf item show` shows it: its body, links, comments and activity.
 
+use std::collections::BTreeMap;
+
 use serde::Serialize;
 use wf_core::activity::{Activity, Entry};
 use wf_core::body::{Body, BodyPart, StepId};
@@ -50,13 +52,48 @@ pub struct ReferenceView {
     pub comment: Option<String>,
 }
 
-/// Where this item, or a comment on it, is referenced.
+/// An item that references this one, or a comment on it, with every place it does so.
 #[derive(Serialize)]
 pub struct BacklinkView {
-    #[serde(flatten)]
-    pub from: SourceView,
+    pub item: String,
+    pub title: String,
     /// The short id of the comment of this item referenced, when it is one.
     pub comment: Option<String>,
+    /// The reference is in the body of the referencing item.
+    pub in_body: bool,
+    /// The comments and move notes of the referencing item the reference is in, by id.
+    pub in_comments: Vec<String>,
+}
+
+impl BacklinkView {
+    /// How many places the reference is written in.
+    pub fn places(&self) -> usize {
+        usize::from(self.in_body) + self.in_comments.len()
+    }
+}
+
+/// One [`BacklinkView`] per referencing item and comment of this item referenced.
+fn backlink_views(state: &State, target: ItemId) -> Vec<BacklinkView> {
+    let mut views = BTreeMap::new();
+    for backlink in state.backlinks(target) {
+        let view = views
+            .entry((backlink.from.item, backlink.comment))
+            .or_insert_with(|| BacklinkView {
+                item: backlink.from.item.to_base32(),
+                title: state
+                    .item(backlink.from.item)
+                    .map(|view| view.title().to_string())
+                    .unwrap_or_default(),
+                comment: backlink.comment.map(|comment| comment.short()),
+                in_body: false,
+                in_comments: Vec::new(),
+            });
+        match backlink.from.written_in {
+            WrittenIn::Body => view.in_body = true,
+            WrittenIn::Comment(id) => view.in_comments.push(id.to_string()),
+        }
+    }
+    views.into_values().collect()
 }
 
 #[derive(Serialize)]
@@ -664,14 +701,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
                 comment: reference.comment().map(|comment| comment.short()),
             })
             .collect(),
-        referenced_by: state
-            .backlinks(item.id())
-            .iter()
-            .map(|backlink| BacklinkView {
-                from: source_view(state, &backlink.from),
-                comment: backlink.comment.map(|comment| comment.short()),
-            })
-            .collect(),
+        referenced_by: backlink_views(state, item.id()),
         mentions: state
             .mentions_in(item)
             .iter()
