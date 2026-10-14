@@ -638,22 +638,33 @@ fn with_context(app: &App, session: &SessionInfo, right: String) -> Line<'static
     line
 }
 
-/// `context 69k of 1M (7%) · $0.42`, the cost only when the agent reports it.
-fn context_line(usage: &Usage) -> Line<'static> {
-    let mut text = format!(
-        "context {} of {} ({}%)",
-        tokens(usage.used),
-        tokens(usage.size),
-        context_percent(usage)
-    );
-    if let Some(cost) = &usage.cost {
-        let amount = match cost.currency.as_str() {
-            "USD" => format!("${:.2}", cost.amount),
-            currency => format!("{:.2} {currency}", cost.amount),
-        };
-        text = format!("{text} · {amount}");
+/// `Opus 5.5 · 69k of 1M (7%) · $0.42`: the model and the usage when the agent reports them, the
+/// cost only when it reports that.
+fn context_line(model: Option<&str>, usage: Option<&Usage>) -> Option<Line<'static>> {
+    let mut spans = Vec::new();
+    if let Some(model) = model {
+        spans.push(Span::raw(model.to_owned()).dim());
     }
-    Line::from(context_span(usage, text))
+    if let Some(usage) = usage {
+        if !spans.is_empty() {
+            spans.push(Span::raw(" · ").dim());
+        }
+        let mut text = format!(
+            "{} of {} ({}%)",
+            tokens(usage.used),
+            tokens(usage.size),
+            context_percent(usage)
+        );
+        if let Some(cost) = &usage.cost {
+            let amount = match cost.currency.as_str() {
+                "USD" => format!("${:.2}", cost.amount),
+                currency => format!("{:.2} {currency}", cost.amount),
+            };
+            text = format!("{text} · {amount}");
+        }
+        spans.push(context_span(usage, text));
+    }
+    (!spans.is_empty()).then(|| Line::from(spans))
 }
 
 /// `text` about `usage`: yellow once the context is nearly full, dim before.
@@ -994,15 +1005,19 @@ fn draw_session(
             | Waiting::Notice { .. } => None,
         })
         .collect();
-    let usage = app.transcripts.get(&session.id).and_then(Transcript::usage);
+    let transcript = app.transcripts.get(&session.id);
+    let bottom = context_line(
+        transcript.and_then(Transcript::model),
+        transcript.and_then(Transcript::usage),
+    );
     let [body, bar, context] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(u16::from(!asks.is_empty())),
-        Constraint::Length(u16::from(usage.is_some())),
+        Constraint::Length(u16::from(bottom.is_some())),
     ])
     .areas(body);
-    if let Some(usage) = usage {
-        frame.render_widget(Paragraph::new(context_line(usage)), context);
+    if let Some(line) = bottom {
+        frame.render_widget(Paragraph::new(line), context);
     }
     let shown = draw_scrolled(frame, text, scroll, body, false);
     if let Some(what) = asks.first() {
