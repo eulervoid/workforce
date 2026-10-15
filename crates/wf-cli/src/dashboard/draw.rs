@@ -739,7 +739,7 @@ fn draw_list(
     let mut indicators = Vec::new();
     let above = entries_among(&list.entries[..top.min(bottom)]);
     if above > 0 {
-        indicators.push(draw_indicator(frame, row(area, 0), &format!("↑ {above}")));
+        indicators.push(draw_indicator(frame, row(area, 0), &format!("  ↑ {above}")));
     }
     let below = entries_among(&list.entries[bottom..]);
     if below > 0 {
@@ -747,7 +747,7 @@ fn draw_list(
         indicators.push(draw_indicator(
             frame,
             row(area, last),
-            &format!("↓ {below}"),
+            &format!("  ↓ {below}"),
         ));
     }
     for ListButton {
