@@ -93,6 +93,15 @@ impl GitCli {
         &self.repository
     }
 
+    /// The top of the checkout that contains `directory`: the main checkout or a worktree.
+    pub fn checkout_root(directory: &Path) -> Result<PathBuf, VcsError> {
+        let top = Self::run_in(directory, ["rev-parse", "--show-toplevel"])?;
+        if !top.success {
+            return Err(VcsError::NotARepository(directory.to_path_buf()));
+        }
+        Ok(PathBuf::from(top.stdout.trim()))
+    }
+
     fn run_in<I, S>(directory: &Path, args: I) -> Result<Finished, VcsError>
     where
         I: IntoIterator<Item = S>,

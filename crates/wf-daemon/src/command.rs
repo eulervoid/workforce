@@ -1,6 +1,7 @@
 //! Runs a command on code: a tree is checked out in a worktree, and the command runs there with
 //! the environment of agents, in a sandbox, with a timeout, its output kept in a log. What the
-//! outcome means is up to whoever asked, such as a check before a merge.
+//! outcome means is up to whoever asked, such as a check before a merge. `wf check` runs commands
+//! the same way in a directory as it is.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -13,7 +14,7 @@ use wf_harness::AcpAgentConfig;
 use wf_vcs::{GitCli, VcsAdapter, VcsError};
 
 use crate::machine_config::{EnvironmentConfig, SandboxConfig};
-use crate::sandbox::Access;
+pub use crate::sandbox::Access;
 
 /// How many lines of the end of the output a run returns.
 const TAIL_LINES: usize = 40;
@@ -24,24 +25,37 @@ const TAIL_BYTES: u64 = 16 * 1024;
 /// other worktrees mix into it.
 const CARGO_TARGET_DIR: &str = "CARGO_TARGET_DIR";
 
-/// Where and how commands run: in one worktree, with the environment of agents, in a sandbox.
+/// Where and how the daemon runs commands on code: in one worktree it checks trees out in,
+/// confined as an agent working there would be.
 pub(crate) struct CommandRunner<'a> {
     pub git: &'a GitCli,
-    /// The worktree, which [`Access::worktree`] names, and what else the sandbox allows.
-    pub access: Access<'a>,
-    pub sandbox: &'a SandboxConfig,
-    pub environment: &'a EnvironmentConfig,
-    /// Where Fence's settings for the command are written.
-    pub settings: &'a Path,
-    /// Where the git config the command runs with is written: see [`git_config`].
-    pub git_config: &'a Path,
+    pub confinement: Confinement<'a>,
     /// Where the logs are kept: a directory per name and a file per run.
     pub logs: &'a Path,
 }
 
+/// Where a command runs, and how it is confined there: as an agent on this machine is.
+pub enum Confinement<'a> {
+    /// In the sandbox and environment the machine config gives agents.
+    Agents {
+        /// The directory it runs in, which [`Access::worktree`] names, and what else the sandbox
+        /// allows.
+        access: Access<'a>,
+        sandbox: &'a SandboxConfig,
+        environment: &'a EnvironmentConfig,
+        /// Where Fence's settings for the command are written.
+        settings: &'a Path,
+        /// Where the git config the command runs with is written: see [`git_config`].
+        git_config: &'a Path,
+    },
+    /// As this process is, which runs in a session and so in the sandbox and environment of its
+    /// agent already.
+    Session { directory: &'a Path },
+}
+
 /// What came of a command.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum Outcome {
+pub enum Outcome {
     Passed,
     Failed(ExitStatus),
     /// It was stopped after the timeout, together with everything it started.
@@ -50,14 +64,12 @@ pub(crate) enum Outcome {
 
 /// One run of a command.
 #[derive(Debug, Clone)]
-pub(crate) struct CommandRun {
+pub struct CommandRun {
     pub outcome: Outcome,
     /// The last lines of the output, stdout and stderr as they came.
     pub tail: String,
     /// The whole output.
     pub log: PathBuf,
-    /// The sandbox it ran in.
-    pub sandbox: SandboxConfig,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -86,35 +98,67 @@ impl CommandRunner<'_> {
         argv: &[String],
         timeout: Duration,
     ) -> Result<CommandRun, CommandError> {
-        let Some((program, arguments)) = argv.split_first() else {
-            return Err(CommandError::Empty(name.clone()));
-        };
         let git = self.git.clone();
-        let worktree = self.access.worktree.to_path_buf();
+        let worktree = self.confinement.directory().to_path_buf();
         tokio::task::spawn_blocking(move || git.check_out_tree(&worktree, tree))
             .await
             .map_err(|error| CommandError::Io {
-                path: self.access.worktree.to_path_buf(),
+                path: self.confinement.directory().to_path_buf(),
                 source: std::io::Error::other(error),
             })??;
+        self.confinement
+            .run(name, argv, timeout, &self.log_path(name, tree))
+            .await
+    }
 
+    /// The log of a run of `name` on `tree` that starts now.
+    fn log_path(&self, name: &CommandName, tree: GitOid) -> PathBuf {
+        let started = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%S%.3fZ");
+        let tree = tree.to_string();
+        self.logs
+            .join(name.as_str())
+            .join(format!("{started}-{}.log", &tree[..8]))
+    }
+}
+
+impl Confinement<'_> {
+    /// The directory commands run in.
+    pub fn directory(&self) -> &Path {
+        match self {
+            Confinement::Agents { access, .. } => access.worktree,
+            Confinement::Session { directory } => directory,
+        }
+    }
+
+    /// Runs `argv` in the directory as it is, without a shell, for `timeout` at most, and
+    /// writes its output to `log`.
+    pub async fn run(
+        &self,
+        name: &CommandName,
+        argv: &[String],
+        timeout: Duration,
+        log: &Path,
+    ) -> Result<CommandRun, CommandError> {
+        let Some((program, arguments)) = argv.split_first() else {
+            return Err(CommandError::Empty(name.clone()));
+        };
         let command =
             self.confined(AcpAgentConfig::new(program).args(arguments.iter().cloned()))?;
-        let log = self.log_path(name, tree);
         let io_error = |source| CommandError::Io {
-            path: log.clone(),
+            path: log.to_path_buf(),
             source,
         };
         if let Some(parent) = log.parent() {
             std::fs::create_dir_all(parent).map_err(io_error)?;
         }
-        let output = std::fs::File::create(&log).map_err(io_error)?;
+        let output = std::fs::File::create(log).map_err(io_error)?;
         let errors = output.try_clone().map_err(io_error)?;
         let mut process = tokio::process::Command::new(command.command());
         process
             .args(command.arguments())
             .envs(command.environment())
-            .current_dir(self.access.worktree)
+            .env_remove(CARGO_TARGET_DIR)
+            .current_dir(self.directory())
             .stdin(Stdio::null())
             .stdout(output)
             .stderr(errors)
@@ -139,7 +183,7 @@ impl CommandRunner<'_> {
             }
             Err(_) => Outcome::TimedOut,
         };
-        // Nothing it left running may write to the worktree after the run, or into the next one.
+        // Nothing it left running may write to the directory after the run, or into the next one.
         if let Some(group) = group {
             // The group may be gone already; then there is nothing left to stop.
             let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
@@ -147,61 +191,61 @@ impl CommandRunner<'_> {
         if matches!(outcome, Outcome::TimedOut) {
             child.wait().await.map_err(io_error)?;
         }
-        let tail = tail(&log).map_err(io_error)?;
+        let tail = tail(log).map_err(io_error)?;
         Ok(CommandRun {
             outcome,
             tail,
-            log,
-            sandbox: self.sandbox.clone(),
+            log: log.to_path_buf(),
         })
     }
 
     /// `command` in the sandbox, with the environment of agents but without the cargo target
     /// directory of the machine's, and with the git config of [`git_config`].
     fn confined(&self, command: AcpAgentConfig) -> Result<AcpAgentConfig, CommandError> {
+        let Confinement::Agents {
+            access,
+            sandbox,
+            environment,
+            settings,
+            git_config: git_config_path,
+        } = self
+        else {
+            return Ok(command);
+        };
         let io_error = |source| CommandError::Io {
-            path: self.git_config.to_path_buf(),
+            path: git_config_path.to_path_buf(),
             source,
         };
-        if let Some(parent) = self.git_config.parent() {
+        if let Some(parent) = git_config_path.parent() {
             std::fs::create_dir_all(parent).map_err(io_error)?;
         }
-        std::fs::write(self.git_config, git_config(&global_git_configs())).map_err(io_error)?;
-        let command = match self.sandbox {
+        std::fs::write(git_config_path, git_config(&global_git_configs())).map_err(io_error)?;
+        let command = match sandbox {
             SandboxConfig::Fence(_) if !crate::sandbox::fence_installed() => {
                 return Err(CommandError::NoFence);
             }
             SandboxConfig::Fence(config) => {
-                crate::sandbox::wrap(config, &self.access, &command, self.settings).map_err(
-                    |source| CommandError::Io {
-                        path: self.settings.to_path_buf(),
+                crate::sandbox::wrap(config, access, &command, settings).map_err(|source| {
+                    CommandError::Io {
+                        path: settings.to_path_buf(),
                         source,
-                    },
-                )?
+                    }
+                })?
             }
             SandboxConfig::Off {} => command,
         };
-        let mut environment = self.environment.clone();
+        let mut environment = (*environment).clone();
         environment.set.remove(CARGO_TARGET_DIR);
         environment.inherit.retain(|name| name != CARGO_TARGET_DIR);
         environment.set.insert(
             GIT_CONFIG_GLOBAL.to_string(),
-            self.git_config.to_string_lossy().into_owned(),
+            git_config_path.to_string_lossy().into_owned(),
         );
         Ok(crate::environment::confine(
             command,
             &environment,
             crate::environment::daemon_variables(),
         ))
-    }
-
-    /// The log of a run of `name` on `tree` that starts now.
-    fn log_path(&self, name: &CommandName, tree: GitOid) -> PathBuf {
-        let started = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%S%.3fZ");
-        let tree = tree.to_string();
-        self.logs
-            .join(name.as_str())
-            .join(format!("{started}-{}.log", &tree[..8]))
     }
 }
 
@@ -327,17 +371,19 @@ mod tests {
             );
             let runner = CommandRunner {
                 git: &self.git,
-                access: Access {
-                    worktree: &worktree,
-                    repository: self.git.repository(),
-                    socket: Path::new("/nonexistent/daemon.sock"),
-                    data_dir: self.root.path(),
-                    machine_config: None,
+                confinement: Confinement::Agents {
+                    access: Access {
+                        worktree: &worktree,
+                        repository: self.git.repository(),
+                        socket: Path::new("/nonexistent/daemon.sock"),
+                        data_dir: self.root.path(),
+                        machine_config: None,
+                    },
+                    sandbox,
+                    environment,
+                    settings: &settings,
+                    git_config: &self.path("check.gitconfig"),
                 },
-                sandbox,
-                environment,
-                settings: &settings,
-                git_config: &self.path("check.gitconfig"),
                 logs: &logs,
             };
             let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
@@ -553,7 +599,6 @@ git cat-file commit HEAD | grep -q gpgsig"#;
         let timeout = Duration::from_secs(30);
         let run = setup.run(&argv).await;
         assert_eq!(run.outcome, Outcome::Passed, "{}", run.tail);
-        assert_eq!(run.sandbox, SandboxConfig::Off {});
 
         if !crate::sandbox::fence_installed() {
             eprintln!("skipped in Fence: it is not installed");
@@ -563,6 +608,33 @@ git cat-file commit HEAD | grep -q gpgsig"#;
         let run = setup.run_in(&fence, &environment, &argv, timeout).await;
         assert!(matches!(run.outcome, Outcome::Failed(_)), "{}", run.tail);
         assert!(run.tail.contains("Operation not permitted"), "{}", run.tail);
-        assert_eq!(run.sandbox, fence);
+    }
+
+    #[tokio::test]
+    async fn in_a_session_a_command_runs_in_the_directory_as_it_is_without_the_cargo_target_directory()
+     {
+        let directory = tempfile::tempdir().unwrap();
+        std::fs::write(directory.path().join("file.txt"), "uncommitted\n").unwrap();
+        let log = directory.path().join("logs").join("test.log");
+        let argv: Vec<String> = ["sh", "-c", "cat file.txt; echo ${CARGO_TARGET_DIR-unset}"]
+            .map(String::from)
+            .to_vec();
+        // SAFETY: no other test of this crate depends on this variable; the test of the agents'
+        // environment removes it either way.
+        unsafe { std::env::set_var(CARGO_TARGET_DIR, "/shared/target") };
+        let run = Confinement::Session {
+            directory: directory.path(),
+        }
+        .run(
+            &CommandName::new("test").unwrap(),
+            &argv,
+            Duration::from_secs(30),
+            &log,
+        )
+        .await
+        .unwrap();
+        assert_eq!(run.outcome, Outcome::Passed);
+        assert_eq!(run.tail, "uncommitted\nunset");
+        assert_eq!(run.log, log);
     }
 }

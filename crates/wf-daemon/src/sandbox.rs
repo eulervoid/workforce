@@ -16,7 +16,7 @@ use wf_harness::AcpAgentConfig;
 use crate::machine_config::FenceConfig;
 
 /// What the agent is let to touch besides its worktree, and what of wf it must not.
-pub(crate) struct Access<'a> {
+pub struct Access<'a> {
     pub worktree: &'a Path,
     /// The repository of the worktree: commits write their objects and refs there.
     pub repository: &'a Path,
