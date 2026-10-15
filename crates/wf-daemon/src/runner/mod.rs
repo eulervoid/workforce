@@ -32,6 +32,7 @@ use wf_harness::{AcpAgentConfig, Permissions};
 use wf_store::{AuthorError, ReceiveError};
 use wf_vcs::{DirtyCheckout, VcsError};
 
+use crate::command::CommandError;
 use crate::machine_config::{MachineConfig, MachineConfigError, SandboxConfig};
 use crate::{Daemon, Loaded, StorageClosed};
 
@@ -88,7 +89,7 @@ pub enum SessionError {
     #[error(transparent)]
     SigningKey(#[from] wf_vcs::signing::SigningKeyError),
     #[error("cannot run a check: {0}")]
-    Check(#[from] crate::command::CommandError),
+    Check(#[from] CommandError),
     #[error(
         "agents run in Fence on this machine, but `fence` is not on PATH; install it, or set \
          `kind = \"off\"` under `[sandbox]` in the machine config to run them without a sandbox"
@@ -109,6 +110,7 @@ impl SessionError {
         match self {
             Self::Authoring(AuthorError::Receive(ReceiveError::Store(_)))
             | Self::Storage(_)
+            | Self::Check(CommandError::Io { .. })
             | Self::Io { .. } => true,
             Self::Authoring(
                 AuthorError::Receive(ReceiveError::Invalid(_))
@@ -133,6 +135,7 @@ impl SessionError {
             | Self::RebaseDirty { .. }
             | Self::MachineConfig(_)
             | Self::SigningKey(_)
+            | Self::Check(CommandError::Empty(_) | CommandError::Vcs(_) | CommandError::NoFence)
             | Self::NoFence => false,
         }
     }
