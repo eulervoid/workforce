@@ -5,7 +5,6 @@
 pub mod caches;
 pub mod caller;
 pub mod client;
-#[allow(dead_code, reason = "checks before merging use it next")]
 pub mod command;
 pub mod decide;
 mod environment;
