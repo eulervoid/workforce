@@ -8,7 +8,7 @@ use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::event::{Change, CommentKind, Event, EventBody, Link};
 use crate::hlc::Hlc;
-use crate::id::{CommentId, EventId, ItemId, SessionId};
+use crate::id::{CommentId, EventId, HashId, ItemId, MIN_PREFIX_LEN, SessionId};
 use crate::identity::Actor;
 use crate::item::{ItemState, ItemView};
 use crate::refs;
@@ -89,14 +89,27 @@ impl State {
     /// hand. A comment whose event is missing is left out.
     pub fn activity(&self, item: ItemId, events: &[Event]) -> Vec<Entry> {
         let mut events: Vec<&Event> = events.iter().collect();
-        events.sort_by_key(|event| (event.content.hlc, event.id()));
-        let depends_on: Vec<ItemId> = match self.item(item) {
-            Some(ItemView::Live(live)) => live.depends_on().values().copied().collect(),
-            Some(ItemView::Archived(_)) | None => Vec::new(),
+        // An id is a hash of the event: compare them only where the clocks tie.
+        events.sort_by(|one, other| {
+            (one.content.hlc.cmp(&other.content.hlc)).then_with(|| one.id().cmp(&other.id()))
+        });
+        // When the item was created, where it is known, to tell its creation apart without
+        // hashing every other.
+        let (depends_on, created_at): (Vec<ItemId>, Option<Hlc>) = match self.item(item) {
+            Some(ItemView::Live(live)) => (
+                live.depends_on().values().copied().collect(),
+                Some(live.created()),
+            ),
+            Some(ItemView::Archived(_)) | None => (Vec::new(), None),
         };
         let resolver = self.resolver();
+        // Every reference to this item has the start of its id: text without it is not parsed.
+        let id_start = item.to_base32()[..MIN_PREFIX_LEN].to_owned();
         // What of this item `text` refers to: the item itself (`None`) or its comments.
         let referenced_here = |text: &str| -> BTreeSet<Option<CommentId>> {
+            if !text.contains(&id_start) {
+                return BTreeSet::new();
+            }
             refs::parse(text)
                 .iter()
                 .filter_map(|token| resolver.reference(token))
@@ -140,7 +153,12 @@ impl State {
                 }));
             };
             let activity = match &content.body {
-                EventBody::ItemCreated(_) if ItemId::from(event.id()) == item => Activity::Created,
+                EventBody::ItemCreated(_)
+                    if created_at.is_none_or(|at| at == content.hlc)
+                        && ItemId::from(event.id()) == item =>
+                {
+                    Activity::Created
+                }
                 EventBody::ItemCreated(created) => {
                     referenced_in(event.id().into(), referenced_here(&created.body));
                     continue;
@@ -347,7 +365,8 @@ fn overwritten_body_edits(item: ItemId, events: &[&Event]) -> BTreeSet<EventId> 
         .filter(edits_body)
         .map(|event| event.id())
         .collect();
-    let Some(winner) = body_edits.last().copied() else {
+    // With one edit or none, none lost; this spares hashing every event for `by_id`.
+    let [.., _, winner] = body_edits[..] else {
         return BTreeSet::new();
     };
     let by_id: BTreeMap<EventId, &Event> =
