@@ -374,7 +374,11 @@ pub fn start_session_as(agent: &str, item: ItemId, role: SessionRole) -> EventBo
 }
 
 pub fn end_session(session: SessionId, reason: EndReason) -> EventBody {
-    EventBody::SessionEnded(SessionEnded { session, reason })
+    EventBody::SessionEnded(SessionEnded {
+        session,
+        reason,
+        because: None,
+    })
 }
 
 /// A comment about a step of the item's body: a report, when a session writes it.
