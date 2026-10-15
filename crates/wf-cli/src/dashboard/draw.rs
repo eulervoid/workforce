@@ -11,8 +11,8 @@ use wf_core::graph::Readiness;
 use wf_core::id::HashId;
 
 use super::app::{
-    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Hovered, Opened, Prompt, Request, Row,
-    STRIP, Scroll, Spot, Starter, Status, Tab, Target,
+    AgentRow, App, Choice, Clickable, ClickableList, Drawn, Hovered, ListTop, Opened, Prompt,
+    Request, Row, STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
 use super::links;
 use super::snapshot::{
@@ -714,8 +714,8 @@ impl ListText {
     }
 }
 
-/// Draws a list from where it was, moved only as far as keeps the selection on screen; returns
-/// the first line drawn, and what of the list is on screen.
+/// Draws a list from where it was, moved only as far as keeps the selection on screen unless the
+/// wheel scrolled it away; returns the first line drawn, and what of the list is on screen.
 fn draw_list(
     frame: &mut Frame,
     app: &App,
@@ -724,13 +724,20 @@ fn draw_list(
     spots: &mut Vec<Spot>,
 ) -> (usize, ClickableList) {
     let list = list_lines(app, area.width);
-    let previous = app.panes().map_or(0, |panes| panes.list_top);
-    let top = list_top(
-        previous,
-        list.selected_line,
-        list.lines.len(),
-        usize::from(area.height),
-    );
+    let previous = app
+        .panes()
+        .map_or(ListTop::FollowsSelection(0), |panes| panes.list_top);
+    let top = match previous {
+        ListTop::FollowsSelection(previous) => list_top(
+            previous,
+            list.selected_line,
+            list.lines.len(),
+            usize::from(area.height),
+        ),
+        ListTop::Scrolled(top) => {
+            top.min(list.lines.len().saturating_sub(usize::from(area.height)))
+        }
+    };
     let scroll = u16::try_from(top).unwrap_or(u16::MAX);
     frame.render_widget(Paragraph::new(list.lines).scroll((scroll, 0)), area);
     let height = usize::from(area.height);

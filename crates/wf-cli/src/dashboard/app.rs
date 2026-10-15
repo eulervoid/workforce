@@ -343,8 +343,45 @@ pub struct Panes {
     pub stack: Vec<Opened>,
     /// In a wide window, which of the list and the detail opened beside it has the keys.
     pub focus: Pane,
-    /// The first line of the list on screen, kept while the selection moves within it.
-    pub list_top: usize,
+    pub list_top: ListTop,
+}
+
+/// The first line of a list on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListTop {
+    /// Kept while the selection moves within the list, moved only as far as keeps it on screen.
+    FollowsSelection(usize),
+    /// Where the wheel scrolled the list, wherever the selection is.
+    Scrolled(usize),
+}
+
+impl ListTop {
+    fn line(self) -> usize {
+        match self {
+            ListTop::FollowsSelection(line) | ListTop::Scrolled(line) => line,
+        }
+    }
+
+    /// The same way of keeping the list, from `line`.
+    fn at(self, line: usize) -> Self {
+        match self {
+            ListTop::FollowsSelection(_) => ListTop::FollowsSelection(line),
+            ListTop::Scrolled(_) => ListTop::Scrolled(line),
+        }
+    }
+
+    /// The list from where it is on screen, kept to the selection again.
+    fn follow_selection(self) -> Self {
+        ListTop::FollowsSelection(self.line())
+    }
+
+    fn scroll(self, wheel: Wheel) -> Self {
+        let line = self.line();
+        ListTop::Scrolled(match wheel {
+            Wheel::Up => line.saturating_sub(WHEEL_LINES),
+            Wheel::Down => line + WHEEL_LINES,
+        })
+    }
 }
 
 /// A tab of a list and the details opened from it.
@@ -361,7 +398,7 @@ impl<Key> Default for ListTab<Key> {
             panes: Panes {
                 stack: Vec::new(),
                 focus: Pane::Detail,
-                list_top: 0,
+                list_top: ListTop::FollowsSelection(0),
             },
         }
     }
@@ -1068,7 +1105,7 @@ impl App {
         if let Some(list_top) = drawn.list_top
             && let Some(panes) = self.panes_mut()
         {
-            panes.list_top = list_top;
+            panes.list_top = panes.list_top.at(list_top);
         }
         let Some(scroll) = drawn.text else {
             return;
@@ -1367,8 +1404,9 @@ impl App {
         }
     }
 
-    /// The mouse wheel turned over `column`. It moves what is under the pointer: the list or the
-    /// detail beside it, which takes the keys; with one pane on screen, that one.
+    /// The mouse wheel turned over `column`. It scrolls what is under the pointer: the list,
+    /// leaving its selection and the keys where they are, or the detail beside it, which takes
+    /// the keys; with one pane on screen, that one.
     pub fn wheel(&mut self, column: u16, wheel: Wheel) {
         if !self.mouse_passes() {
             return;
@@ -1386,16 +1424,10 @@ impl App {
             self.list_has_keys()
         };
         if over_list {
-            if !self.list_has_keys() {
-                // The first notch only takes the keys from the detail, which stays as it is.
-                self.focus_list();
-                return;
+            // Drawing keeps the list short of its end.
+            if let Some(panes) = self.panes_mut() {
+                panes.list_top = panes.list_top.scroll(wheel);
             }
-            let code = match wheel {
-                Wheel::Up => KeyCode::Up,
-                Wheel::Down => KeyCode::Down,
-            };
-            self.move_selection(KeyEvent::new(code, KeyModifiers::NONE));
             return;
         }
         self.focus_detail();
@@ -1600,10 +1632,14 @@ impl App {
                     self.open(detail);
                 }
             }
-            // As the wheel does, a click on the selection only takes the keys from the detail.
+            // A click on the selection only takes the keys from the detail.
             Some(Picked::Again) => panes.focus = Pane::List,
-            // The details opened before give way to the selection's.
-            Some(Picked::Moved) => panes.stack.clear(),
+            // The details opened before give way to the selection's, which the list keeps on
+            // screen from now on.
+            Some(Picked::Moved) => {
+                panes.stack.clear();
+                panes.list_top = panes.list_top.follow_selection();
+            }
         }
     }
 
@@ -1908,6 +1944,10 @@ impl App {
         };
         if moved {
             self.stack_mut().clear();
+            // A list scrolled away from the selection comes back to show it.
+            if let Some(panes) = self.panes_mut() {
+                panes.list_top = panes.list_top.follow_selection();
+            }
         }
         moved
     }
