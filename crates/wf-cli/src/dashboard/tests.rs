@@ -1137,7 +1137,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     app.resize(130, 24);
     let item = Detail::Item(ItemId::from_bytes([4; 32]));
     let blocked = Detail::Item(ItemId::from_bytes([5; 32]));
-    // Over the detail beside the list, the wheel gives the detail the keys and scrolls it.
+    // Over the detail beside the list, the wheel scrolls it and leaves the keys with the list.
     app.wheel(100, Wheel::Down);
     assert_eq!(
         app.stack(),
@@ -1146,8 +1146,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
             scroll: Scroll::END,
         }]
     );
-    assert!(!app.list_has_keys());
-    press(&mut app, KeyCode::Esc);
+    assert!(app.list_has_keys());
     press(&mut app, KeyCode::Char('2'));
     app.refresh(with_items());
     app.wheel(100, Wheel::Down);
@@ -1159,16 +1158,17 @@ fn the_wheel_moves_what_is_under_the_pointer() {
             scroll: Scroll::At(6),
         }]
     );
-    // Over the list, the first notch only gives the list the keys back; the detail stays.
+    assert!(app.list_has_keys());
+    // Over the list, the wheel scrolls it; the keys, the selection and the detail stay.
     app.wheel(10, Wheel::Down);
     assert!(app.list_has_keys());
     assert_eq!(app.stack().len(), 1);
     assert_eq!(app.wanted().detail, Some(item.clone()));
-    // The next ones move the selection, whose detail takes the place of the one opened.
-    app.wheel(10, Wheel::Down);
+    // The keys move the selection, whose detail takes the place of the one opened.
+    press(&mut app, KeyCode::Char('j'));
     assert_eq!(app.stack().len(), 0);
     assert_eq!(app.wanted().detail, Some(blocked));
-    app.wheel(10, Wheel::Up);
+    press(&mut app, KeyCode::Char('k'));
     assert_eq!(app.wanted().detail, Some(item.clone()));
     // Over the detail of a flag, the wheel scrolls the detail it opens.
     press(&mut app, KeyCode::Char('1'));
@@ -1192,6 +1192,111 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     assert_eq!(
         app.stack().last().map(|opened| opened.scroll),
         Some(Scroll::At(3))
+    );
+}
+
+/// The Items tab in a wide window too short for its thirty items, the first selected.
+fn long_item_list() -> App {
+    let mut app = app();
+    app.resize(130, 14);
+    press(&mut app, KeyCode::Char('2'));
+    let mut snapshot = snapshot();
+    snapshot.items = vec![ItemGroup {
+        name: "open".to_owned(),
+        items: (1..=30)
+            .map(|seed| item_row(seed, &format!("Item {seed}"), ItemState::Open))
+            .collect(),
+    }];
+    app.refresh(snapshot);
+    app
+}
+
+fn selected_item(app: &App) -> Option<ItemId> {
+    app.items.list.selection.get().copied()
+}
+
+#[test]
+fn the_wheel_scrolls_the_list_and_leaves_the_selection() {
+    let mut app = long_item_list();
+    let first = Some(ItemId::from_bytes([1; 32]));
+    let detail = app.wanted().detail;
+    screen(&mut app, 130, 14);
+    for _ in 0..4 {
+        app.wheel(10, Wheel::Down);
+        screen(&mut app, 130, 14);
+    }
+    // Drawing keeps the list where the wheel left it, with the selection off screen.
+    let shown = screen(&mut app, 130, 14);
+    assert!(!shown.contains("Item 1 "));
+    assert!(shown.contains("Item 14"));
+    assert_eq!(selected_item(&app), first);
+    assert_eq!(app.wanted().detail, detail);
+    assert!(app.list_has_keys());
+    // Past the end of the list, the wheel stops; one notch back moves it up again.
+    for _ in 0..20 {
+        app.wheel(10, Wheel::Down);
+        screen(&mut app, 130, 14);
+    }
+    assert!(screen(&mut app, 130, 14).contains("Item 30"));
+    app.wheel(10, Wheel::Up);
+    assert!(!screen(&mut app, 130, 14).contains("Item 30"));
+    // A refresh keeps the list where it was scrolled to.
+    let shown = screen(&mut app, 130, 14);
+    app.refresh(app.snapshot.clone());
+    assert_eq!(screen(&mut app, 130, 14), shown);
+}
+
+#[test]
+fn a_key_after_scrolling_moves_the_selection_and_shows_it() {
+    let mut app = long_item_list();
+    screen(&mut app, 130, 14);
+    for _ in 0..4 {
+        app.wheel(10, Wheel::Down);
+        screen(&mut app, 130, 14);
+    }
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(selected_item(&app), Some(ItemId::from_bytes([2; 32])));
+    let shown = screen(&mut app, 130, 14);
+    assert!(shown.contains("Item 1 "));
+    assert!(shown.contains("Item 2 "));
+}
+
+#[test]
+fn a_refresh_that_moves_the_selection_shows_it() {
+    let mut app = long_item_list();
+    screen(&mut app, 130, 14);
+    for _ in 0..4 {
+        app.wheel(10, Wheel::Down);
+        screen(&mut app, 130, 14);
+    }
+    // The selected item is gone, so the selection moves to the next one, which the list shows.
+    let mut snapshot = app.snapshot.clone();
+    snapshot.items[0].items.remove(0);
+    app.refresh(snapshot);
+    assert_eq!(selected_item(&app), Some(ItemId::from_bytes([2; 32])));
+    assert!(screen(&mut app, 130, 14).contains("Item 2 "));
+}
+
+#[test]
+fn a_click_on_a_scrolled_list_selects_the_row_under_it() {
+    let mut app = long_item_list();
+    screen(&mut app, 130, 14);
+    for _ in 0..4 {
+        app.wheel(10, Wheel::Down);
+        screen(&mut app, 130, 14);
+    }
+    let row = screen(&mut app, 130, 14)
+        .lines()
+        .position(|line| line.contains("Item 15 "))
+        .unwrap();
+    app.click(10, u16::try_from(row).unwrap());
+    assert_eq!(selected_item(&app), Some(ItemId::from_bytes([15; 32])));
+    // The list stays where it was, the new selection on screen.
+    assert_eq!(
+        screen(&mut app, 130, 14)
+            .lines()
+            .position(|line| line.contains("Item 15 ")),
+        Some(row)
     );
 }
 
