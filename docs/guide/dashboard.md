@@ -14,8 +14,8 @@ wf --item k3f7       # the dashboard, opened on an item
 Piped, plain `wf` prints the help instead; `wf log --follow` prints the event stream there.
 
 ```
- workforce          1 Now·3  2 Items  3 Agents  4 Log
- 3 live · 14 open · 1 blocked · 2 devices
+ workforce            1 Now  2 Items  3 Agents  4 Log
+ 3 live · 14 open · 3 waiting · 1 blocked · 2 devices
 ──────────────────────────────────────────────────────
  WAITING ON YOU
 ▸? coder on #k3j1 wants: rm -rf target        a / d
