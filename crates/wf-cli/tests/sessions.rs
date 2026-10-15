@@ -1630,15 +1630,21 @@ wf review --approve
     git(repository, &["commit", "--quiet", "-am", "main moves on"]);
     let main = git(repository, &["rev-parse", "main"]);
     std::fs::write(world.wf.data.join("go"), "").unwrap();
+    // The item is open only until the next session starts on it, so the note is waited for.
     world
-        .wait("the conflict", |world| world.item(&item)["state"] == "open")
+        .wait("the conflict", |world| {
+            comments(&world.item(&item))
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| {
+                    note["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("conflicts in file.txt"))
+                })
+        })
         .await;
-    let shown = world.item(&item);
-    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
-        note["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("conflicts in file.txt"))
-    }));
+    assert_ne!(world.item(&item)["state"], "review");
     assert_eq!(git(repository, &["rev-parse", "main"]), main);
     let branch = format!("wf/{}", &item[..12]);
     assert_eq!(
