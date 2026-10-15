@@ -1,14 +1,15 @@
 //! `wf status`: whether the workforce is working, and what is next.
 
-use std::collections::BTreeSet;
+use std::fmt;
 
 use serde::Serialize;
 use wf_core::autonomy::StartMode;
 use wf_core::graph::Readiness;
-use wf_core::id::HashId;
+use wf_core::id::{HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
 use wf_core::item::ItemView;
+use wf_core::name::AgentName;
 use wf_core::state::State;
 
 use super::session::is_parked;
@@ -36,12 +37,207 @@ pub struct StatusView {
     pub after_failures: Vec<String>,
     /// What waits on the principal, as `wf inbox` lists it.
     pub waiting_on_you: usize,
-    pub flagged: Vec<String>,
+    pub flagged: Vec<Flag>,
     /// What to do next, if anything stands out.
     pub next: Option<String>,
     pub refolded: bool,
     /// What the caches in the worktrees take, when the machine config sets a budget.
     pub caches: Option<CacheUsage>,
+}
+
+/// Something wrong with the workforce that needs the principal. `wf status` prints it as one line,
+/// and its JSON has that line; the dashboard shows its parts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Flag {
+    UnknownState {
+        item: ItemId,
+        title: String,
+        state: String,
+    },
+    UnknownType {
+        item: ItemId,
+        title: String,
+        item_type: String,
+    },
+    /// The item is in a state its type no longer uses.
+    UnusedState {
+        item: ItemId,
+        title: String,
+        state: String,
+    },
+    Stranded {
+        item: ItemId,
+        title: String,
+    },
+    /// The review of the item waits for a step no agent that starts by itself can take.
+    UnstaffedReview {
+        item: ItemId,
+    },
+    AgentWithoutLane {
+        agent: AgentName,
+    },
+    AgentWithoutDevice {
+        agent: AgentName,
+    },
+    UnreadablePolicy {
+        error: String,
+    },
+    /// A dependency of `from` on `to` that would close a cycle.
+    IgnoredDependency {
+        from: ItemId,
+        to: ItemId,
+    },
+    /// A device wrote two different events with one sequence number.
+    Equivocation {
+        device: String,
+        seq: u64,
+    },
+    InviteUsedTwice {
+        device: String,
+    },
+    Fork {
+        by: String,
+        to: String,
+    },
+}
+
+impl Flag {
+    /// What kind of trouble it is, in a few words.
+    pub fn heading(&self) -> &'static str {
+        match self {
+            Flag::UnknownState { .. } => "unknown state",
+            Flag::UnknownType { .. } => "unknown type",
+            Flag::UnusedState { .. } => "state no longer used",
+            Flag::Stranded { .. } => "stranded",
+            Flag::UnstaffedReview { .. } => "review no agent can take",
+            Flag::AgentWithoutLane { .. } => "agent without a lane",
+            Flag::AgentWithoutDevice { .. } => "agent no device hosts",
+            Flag::UnreadablePolicy { .. } => "unreadable policy",
+            Flag::IgnoredDependency { .. } => "dependency cycle",
+            Flag::Equivocation { .. } => "equivocation",
+            Flag::InviteUsedTwice { .. } => "invite used twice",
+            Flag::Fork { .. } => "fork announced",
+        }
+    }
+
+    /// What is wrong, without the command that fixes it.
+    pub fn what(&self) -> String {
+        match self {
+            Flag::UnknownState { item, title, state } => format!(
+                "#{} \"{title}\" is in the unknown state `{state}`, so it counts as a draft",
+                item.short()
+            ),
+            Flag::UnknownType {
+                item,
+                title,
+                item_type,
+            } => format!(
+                "#{} \"{title}\" has the unknown type `{item_type}`",
+                item.short()
+            ),
+            Flag::UnusedState { item, title, state } => format!(
+                "#{} \"{title}\" is `{state}`, a state its type no longer uses",
+                item.short()
+            ),
+            Flag::Stranded { item, title } => format!(
+                "#{} \"{title}\" is stranded: a dependency was cancelled",
+                item.short()
+            ),
+            Flag::UnstaffedReview { item } => format!(
+                "the review of #{} waits for an agent step that no agent started on this workforce can take",
+                item.short()
+            ),
+            Flag::AgentWithoutLane { agent } => format!(
+                "agent {agent} starts automatically but has no lane, so it never takes an item"
+            ),
+            Flag::AgentWithoutDevice { agent } => {
+                format!("agent {agent} starts automatically but no device hosts it")
+            }
+            Flag::UnreadablePolicy { error } => format!(
+                "this version of wf cannot read the policy set last ({error}), so it runs on the last one it could read; update wf, or replace the policy"
+            ),
+            Flag::IgnoredDependency { from, to } => format!(
+                "dependency #{} -> #{} ignored: concurrent links formed a cycle",
+                from.short(),
+                to.short()
+            ),
+            Flag::Equivocation { device, seq } => format!(
+                "device {device} wrote two different events with seq {seq}; it was cloned or restored from a snapshot"
+            ),
+            Flag::InviteUsedTwice { device } => {
+                format!("device {device} was bound with an invite that two devices used")
+            }
+            Flag::Fork { by, to } => format!("{by} forked this workforce to {to}"),
+        }
+    }
+
+    /// The command that fixes it, where there is one.
+    pub fn command(&self) -> Option<String> {
+        match self {
+            Flag::AgentWithoutLane { agent } => {
+                Some(format!("wf agent edit {agent} --lane default"))
+            }
+            Flag::AgentWithoutDevice { agent } => Some(format!("wf device edit --agent {agent}=1")),
+            Flag::UnreadablePolicy { .. } => Some("wf policy edit".to_string()),
+            Flag::InviteUsedTwice { .. } => Some("wf fork --exclude".to_string()),
+            Flag::Fork { to, .. } => Some(format!("wf fork accept {to}")),
+            Flag::UnknownState { .. }
+            | Flag::UnknownType { .. }
+            | Flag::UnusedState { .. }
+            | Flag::Stranded { .. }
+            | Flag::UnstaffedReview { .. }
+            | Flag::IgnoredDependency { .. }
+            | Flag::Equivocation { .. } => None,
+        }
+    }
+
+    /// The item it is about, where it is about one.
+    pub fn item(&self) -> Option<ItemId> {
+        match self {
+            Flag::UnknownState { item, .. }
+            | Flag::UnknownType { item, .. }
+            | Flag::UnusedState { item, .. }
+            | Flag::Stranded { item, .. }
+            | Flag::UnstaffedReview { item }
+            | Flag::IgnoredDependency { from: item, .. } => Some(*item),
+            Flag::AgentWithoutLane { .. }
+            | Flag::AgentWithoutDevice { .. }
+            | Flag::UnreadablePolicy { .. }
+            | Flag::Equivocation { .. }
+            | Flag::InviteUsedTwice { .. }
+            | Flag::Fork { .. } => None,
+        }
+    }
+}
+
+/// The line `wf status` prints: what is wrong, then how the command fixes it.
+impl fmt::Display for Flag {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let what = self.what();
+        let Some(command) = self.command() else {
+            return write!(formatter, "{what}");
+        };
+        match self {
+            Flag::UnreadablePolicy { .. } => write!(formatter, "{what} with `{command}`"),
+            Flag::InviteUsedTwice { .. } => write!(formatter, "{what}; `{command}` removes one"),
+            Flag::Fork { .. } => write!(formatter, "{what}; `{command}` follows it"),
+            Flag::AgentWithoutLane { .. }
+            | Flag::AgentWithoutDevice { .. }
+            | Flag::UnknownState { .. }
+            | Flag::UnknownType { .. }
+            | Flag::UnusedState { .. }
+            | Flag::Stranded { .. }
+            | Flag::UnstaffedReview { .. }
+            | Flag::IgnoredDependency { .. }
+            | Flag::Equivocation { .. } => write!(formatter, "{what}; `{command}`"),
+        }
+    }
+}
+
+impl Serialize for Flag {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
 }
 
 /// The disk the caches in the worktrees of the workforce take on this machine, and the budget
@@ -81,58 +277,50 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
     } = context;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let graph = state.dependency_graph();
-    let mut flagged = BTreeSet::new();
+    let mut flagged = Vec::new();
     let mut archived_items = 0;
     for view in state.items() {
         match view {
             ItemView::Archived(_) => archived_items += 1,
             ItemView::Live(item) => {
                 let config = policy.type_config(item.item_type());
+                let id = item.id();
+                let title = item.title().to_string();
                 if let Some(name) = item.unknown_state() {
-                    flagged.insert(format!(
-                        "#{} \"{}\" is in the unknown state `{name}`, so it counts as a draft",
-                        item.id().short(),
-                        item.title()
-                    ));
+                    flagged.push(Flag::UnknownState {
+                        item: id,
+                        title,
+                        state: name.to_string(),
+                    });
                 } else if config.is_none() {
-                    flagged.insert(format!(
-                        "#{} \"{}\" has the unknown type `{}`",
-                        item.id().short(),
-                        item.title(),
-                        item.item_type()
-                    ));
+                    flagged.push(Flag::UnknownType {
+                        item: id,
+                        title,
+                        item_type: item.item_type().to_string(),
+                    });
                 } else if config.is_some_and(|config| !config.uses(item.state(policy))) {
-                    flagged.insert(format!(
-                        "#{} \"{}\" is `{}`, a state its type no longer uses",
-                        item.id().short(),
-                        item.title(),
-                        item.state(policy)
-                    ));
+                    flagged.push(Flag::UnusedState {
+                        item: id,
+                        title,
+                        state: item.state(policy).to_string(),
+                    });
                 } else if state.readiness(&graph, item) == Some(Readiness::Stranded) {
-                    flagged.insert(format!(
-                        "#{} \"{}\" is stranded: a dependency was cancelled",
-                        item.id().short(),
-                        item.title()
-                    ));
+                    flagged.push(Flag::Stranded { item: id, title });
                 }
             }
         }
     }
     for item in state.unstaffed_reviews() {
-        flagged.insert(format!(
-            "the review of #{} waits for an agent step that no agent started on this workforce can take",
-            item.short()
-        ));
+        flagged.push(Flag::UnstaffedReview { item });
     }
     for (id, definition) in state.agents() {
         if definition.autonomy.start != StartMode::Auto {
             continue;
         }
         if definition.lanes.is_empty() {
-            flagged.insert(format!(
-                "agent {0} starts automatically but has no lane, so it never takes an item; `wf agent edit {0} --lane default`",
-                id.name
-            ));
+            flagged.push(Flag::AgentWithoutLane {
+                agent: id.name.clone(),
+            });
         }
         let hosted = state.devices().any(|device| {
             device.principal == id.principal
@@ -141,36 +329,32 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
                     .is_some_and(|profile| profile.agents.contains_key(&id.name))
         });
         if !hosted {
-            flagged.insert(format!(
-                "agent {0} starts automatically but no device hosts it; `wf device edit --agent {0}=1`",
-                id.name
-            ));
+            flagged.push(Flag::AgentWithoutDevice {
+                agent: id.name.clone(),
+            });
         }
     }
     if let Some(error) = state.unreadable_policy() {
-        flagged.insert(format!(
-            "this version of wf cannot read the policy set last ({}), so it runs on the last one it could read; update wf, or replace the policy with `wf policy edit`",
-            wf_core::error_chain(&error)
-        ));
+        flagged.push(Flag::UnreadablePolicy {
+            error: wf_core::error_chain(&error),
+        });
     }
     for edge in graph.ignored() {
-        flagged.insert(format!(
-            "dependency #{} -> #{} ignored: concurrent links formed a cycle",
-            edge.from.short(),
-            edge.to.short()
-        ));
+        flagged.push(Flag::IgnoredDependency {
+            from: edge.from,
+            to: edge.to,
+        });
     }
     for (device, seq) in state.equivocations() {
-        flagged.insert(format!(
-            "device {} wrote two different events with seq {seq}; it was cloned or restored from a snapshot",
-            device.fmt_short()
-        ));
+        flagged.push(Flag::Equivocation {
+            device: device.fmt_short(),
+            seq,
+        });
     }
     for info in state.devices().filter(|info| info.invite_redeemed_twice) {
-        flagged.insert(format!(
-            "device {} was bound with an invite that two devices used; `wf fork --exclude` removes one",
-            device_label(state, info.device)
-        ));
+        flagged.push(Flag::InviteUsedTwice {
+            device: device_label(state, info.device),
+        });
     }
     let devices = state
         .devices()
@@ -185,13 +369,14 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         })
         .collect();
     for announcement in state.announcements() {
-        flagged.insert(format!(
-            "{} forked this workforce to {}; `wf fork accept {}` follows it",
-            state.actor_label(&Actor::Principal(announcement.by)),
-            announcement.to,
-            announcement.to
-        ));
+        flagged.push(Flag::Fork {
+            by: state.actor_label(&Actor::Principal(announcement.by)),
+            to: announcement.to.to_string(),
+        });
     }
+    // In the order of their text, as `wf status` lists them.
+    flagged.sort_by_cached_key(ToString::to_string);
+    flagged.dedup();
     let live: Vec<_> = state
         .sessions()
         .filter(|session| session.is_live())
@@ -276,7 +461,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         parked_sessions,
         after_failures,
         waiting_on_you,
-        flagged: flagged.into_iter().collect(),
+        flagged,
         next,
         refolded,
         caches,
@@ -331,6 +516,24 @@ mod tests {
             },
         )
         .next
+    }
+
+    #[test]
+    fn a_flag_prints_and_serializes_as_one_line_with_its_command() {
+        let flag = Flag::AgentWithoutDevice {
+            agent: AgentName::new("barbara").unwrap(),
+        };
+        let line = "agent barbara starts automatically but no device hosts it; `wf device edit --agent barbara=1`";
+        assert_eq!(flag.to_string(), line);
+        assert_eq!(serde_json::to_value(&flag).unwrap(), line);
+        let fork = Flag::Fork {
+            by: "@ada".to_string(),
+            to: "w2".to_string(),
+        };
+        assert_eq!(
+            fork.to_string(),
+            "@ada forked this workforce to w2; `wf fork accept w2` follows it"
+        );
     }
 
     #[test]

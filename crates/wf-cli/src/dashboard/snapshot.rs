@@ -33,7 +33,7 @@ pub struct Snapshot {
     /// The live sessions, the newest first.
     pub working: Vec<SessionInfo>,
     /// What `wf status` flags.
-    pub flagged: Vec<String>,
+    pub flagged: Vec<view::Flag>,
     /// What the detail on screen shows.
     pub in_view: Option<InView>,
     /// The live items in groups, when the Items tab is on screen.

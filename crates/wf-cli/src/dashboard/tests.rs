@@ -21,6 +21,7 @@ use super::snapshot::{
     SessionInfo, SessionStatus, Snapshot, Waiting, moves_back,
 };
 use crate::theme;
+use crate::view::Flag;
 use ratatui::style::{Color, Modifier, Style};
 use wf_core::identity::AgentId;
 use wf_core::session::EndReason;
@@ -104,7 +105,10 @@ fn snapshot() -> Snapshot {
             },
         ],
         working: vec![coder, parked, reviewer],
-        flagged: vec!["#q9r1aa \"Watch\" is stranded: a dependency was cancelled".to_owned()],
+        flagged: vec![Flag::Stranded {
+            item: item(4, "Watch").id,
+            title: "Watch".to_owned(),
+        }],
         in_view: None,
         items: Vec::new(),
         agents: Vec::new(),

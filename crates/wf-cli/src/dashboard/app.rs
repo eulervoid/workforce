@@ -248,7 +248,7 @@ pub enum AgentRow {
 pub enum Row {
     Waiting(WaitingKey),
     Session(SessionId),
-    Flag(String),
+    Flag(crate::view::Flag),
 }
 
 /// A list whose selection holds what is selected, not where it is, so a refresh that adds or

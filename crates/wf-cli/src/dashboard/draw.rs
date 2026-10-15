@@ -1204,7 +1204,7 @@ fn now_lines(app: &App, width: u16) -> ListText {
         list.push(section("NEEDS ATTENTION"));
         for flag in &snapshot.flagged {
             let is_selected = selected == Some(&Row::Flag(flag.clone()));
-            let first = vec![themed("! ", theme::WARNING), Span::raw(flag.clone())];
+            let first = vec![themed("! ", theme::WARNING), Span::raw(flag.to_string())];
             list.entry(
                 RowLines::new(app, is_selected, width).lines(first, None, Vec::new()),
                 is_selected,
