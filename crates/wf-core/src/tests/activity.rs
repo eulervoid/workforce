@@ -171,3 +171,44 @@ fn a_body_edit_that_lost_to_a_concurrent_one_is_kept() {
         ]
     );
 }
+
+#[test]
+fn the_items_created_around_one_are_not_its_creation_but_may_refer_to_it() {
+    let mut log = Log::new();
+    let before: ItemId = log.apply(create("task", "before")).id().into();
+    let task: ItemId = log.apply(create("task", "work")).id().into();
+    let mentioning = format!("after #{}", task.short());
+    let after: ItemId = log
+        .apply(create_with_body("task", "after", &mentioning))
+        .id()
+        .into();
+    log.apply(comment(before, &format!("not #{}", after.short())));
+    log.apply(comment(before, &mentioning));
+    log.apply(edit(task, crate::event::Change::Body("- [ ] one".into())));
+
+    assert_eq!(
+        log.activity(task),
+        [
+            Activity::Created,
+            Activity::ReferencedIn {
+                item: after,
+                comment: None
+            },
+            Activity::ReferencedIn {
+                item: before,
+                comment: None
+            },
+            Activity::Edited(crate::event::Change::Body("- [ ] one".into())),
+        ]
+    );
+}
+
+#[test]
+fn an_archived_item_still_shows_its_creation() {
+    let mut log = Log::new();
+    log.apply(create("task", "other"));
+    let task: ItemId = log.apply(create("task", "work")).id().into();
+    log.apply(archive(task));
+
+    assert_eq!(log.activity(task)[0], Activity::Created);
+}
