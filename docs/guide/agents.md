@@ -123,7 +123,9 @@ The worktree lives outside your repository, under `~/.local/share/workforce/<wor
 picks up where the last one stopped.
 
 The agent gets a **brief**: the item, its steps, open change requests, what was said before, and how to
-report. It works, commits, and reports with `wf comment`, ticking steps as it goes. It asks a question
+report. It works, commits, and reports with `wf comment`, ticking steps as it goes. When the policy has
+checks, the brief tells it, and a reviewer too, that tests its sandbox cannot run are run by the
+checks before the merge, not by you. It asks a question
 with a blocker (`wf comment <item> "..." --block`) and parks until it is answered. It ends with:
 
 * `wf work submit --note "..."`: the work is done. It goes to review, or is merged right away if the

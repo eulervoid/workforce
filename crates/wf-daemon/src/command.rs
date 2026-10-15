@@ -1,6 +1,6 @@
 //! Runs a command on code: a tree is checked out in a worktree, and the command runs there with
-//! the sandbox and environment of agents and a timeout, its output kept in a log. What the outcome
-//! means is up to whoever asked, such as a check before a merge.
+//! the environment of agents, in a sandbox, with a timeout, its output kept in a log. What the
+//! outcome means is up to whoever asked, such as a check before a merge.
 
 use std::io::{Read, Seek, SeekFrom};
 use std::path::{Path, PathBuf};
@@ -24,7 +24,7 @@ const TAIL_BYTES: u64 = 16 * 1024;
 /// other worktrees mix into it.
 const CARGO_TARGET_DIR: &str = "CARGO_TARGET_DIR";
 
-/// Where and how commands run: in one worktree, confined as an agent working there would be.
+/// Where and how commands run: in one worktree, with the environment of agents, in a sandbox.
 pub(crate) struct CommandRunner<'a> {
     pub git: &'a GitCli,
     /// The worktree, which [`Access::worktree`] names, and what else the sandbox allows.
@@ -33,6 +33,8 @@ pub(crate) struct CommandRunner<'a> {
     pub environment: &'a EnvironmentConfig,
     /// Where Fence's settings for the command are written.
     pub settings: &'a Path,
+    /// Where the git config the command runs with is written: see [`git_config`].
+    pub git_config: &'a Path,
     /// Where the logs are kept: a directory per name and a file per run.
     pub logs: &'a Path,
 }
@@ -54,6 +56,8 @@ pub(crate) struct CommandRun {
     pub tail: String,
     /// The whole output.
     pub log: PathBuf,
+    /// The sandbox it ran in.
+    pub sandbox: SandboxConfig,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -144,12 +148,25 @@ impl CommandRunner<'_> {
             child.wait().await.map_err(io_error)?;
         }
         let tail = tail(&log).map_err(io_error)?;
-        Ok(CommandRun { outcome, tail, log })
+        Ok(CommandRun {
+            outcome,
+            tail,
+            log,
+            sandbox: self.sandbox.clone(),
+        })
     }
 
-    /// `command` in the sandbox and environment of agents, without the cargo target directory
-    /// of the machine's environment.
+    /// `command` in the sandbox, with the environment of agents but without the cargo target
+    /// directory of the machine's, and with the git config of [`git_config`].
     fn confined(&self, command: AcpAgentConfig) -> Result<AcpAgentConfig, CommandError> {
+        let io_error = |source| CommandError::Io {
+            path: self.git_config.to_path_buf(),
+            source,
+        };
+        if let Some(parent) = self.git_config.parent() {
+            std::fs::create_dir_all(parent).map_err(io_error)?;
+        }
+        std::fs::write(self.git_config, git_config(&global_git_configs())).map_err(io_error)?;
         let command = match self.sandbox {
             SandboxConfig::Fence(_) if !crate::sandbox::fence_installed() => {
                 return Err(CommandError::NoFence);
@@ -167,6 +184,10 @@ impl CommandRunner<'_> {
         let mut environment = self.environment.clone();
         environment.set.remove(CARGO_TARGET_DIR);
         environment.inherit.retain(|name| name != CARGO_TARGET_DIR);
+        environment.set.insert(
+            GIT_CONFIG_GLOBAL.to_string(),
+            self.git_config.to_string_lossy().into_owned(),
+        );
         Ok(crate::environment::confine(
             command,
             &environment,
@@ -182,6 +203,43 @@ impl CommandRunner<'_> {
             .join(name.as_str())
             .join(format!("{started}-{}.log", &tree[..8]))
     }
+}
+
+/// The variable that names the file git reads as its global config.
+const GIT_CONFIG_GLOBAL: &str = "GIT_CONFIG_GLOBAL";
+
+/// The global git config a command runs with: the machine's, with signing off. A command must
+/// not sign with the principal's key, and could not reach it in the sandbox anyway; a repository
+/// that turns signing on in its own config, as tests of signing do, still signs.
+fn git_config(global: &[PathBuf]) -> String {
+    let mut config = String::new();
+    for path in global {
+        let path = path
+            .to_string_lossy()
+            .replace('\\', "\\\\")
+            .replace('"', "\\\"");
+        config.push_str(&format!("[include]\n\tpath = \"{path}\"\n"));
+    }
+    config.push_str("[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n");
+    config
+}
+
+/// The files git reads as the global config of the daemon's environment, in its order.
+fn global_git_configs() -> Vec<PathBuf> {
+    if let Some(path) = std::env::var_os(GIT_CONFIG_GLOBAL) {
+        return vec![PathBuf::from(path)];
+    }
+    let home = std::env::var_os("HOME").map(PathBuf::from);
+    let xdg = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| home.as_ref().map(|home| home.join(".config")));
+    [
+        xdg.map(|config| config.join("git").join("config")),
+        home.map(|home| home.join(".gitconfig")),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
 }
 
 /// The last [`TAIL_LINES`] lines of the log.
@@ -251,6 +309,17 @@ mod tests {
             argv: &[&str],
             timeout: Duration,
         ) -> CommandRun {
+            self.run_in(&SandboxConfig::Off {}, environment, argv, timeout)
+                .await
+        }
+
+        async fn run_in(
+            &self,
+            sandbox: &SandboxConfig,
+            environment: &EnvironmentConfig,
+            argv: &[&str],
+            timeout: Duration,
+        ) -> CommandRun {
             let (worktree, logs, settings) = (
                 self.path("check"),
                 self.path("logs"),
@@ -265,9 +334,10 @@ mod tests {
                     data_dir: self.root.path(),
                     machine_config: None,
                 },
-                sandbox: &SandboxConfig::Off {},
+                sandbox,
                 environment,
                 settings: &settings,
+                git_config: &self.path("check.gitconfig"),
                 logs: &logs,
             };
             let argv: Vec<String> = argv.iter().map(|arg| arg.to_string()).collect();
@@ -393,5 +463,106 @@ mod tests {
         let run = setup.run(&["sh", "-c", "cat file.txt; ls"]).await;
         assert_eq!(run.tail, "from the tree\nfile.txt");
         assert!(!worktree.join("stray.txt").exists());
+    }
+
+    /// Commits in a new repository whose config signs with a stand-in for ssh-keygen, and fails
+    /// unless the commit is signed: what the tests of signing do.
+    const SIGNED_COMMIT: &str = r#"set -e
+printf '#!/bin/sh\nfor last; do :; done\necho signature > "$last.sig"\n' > sign
+chmod +x sign
+git init --quiet signed
+cd signed
+git config user.name Test
+git config user.email test@example.com
+git config commit.gpgsign true
+git config gpg.format ssh
+git config user.signingkey "key::ssh-ed25519 AAAAfake"
+git config gpg.ssh.program "$PWD/../sign"
+git commit --quiet --allow-empty -m signed
+git cat-file commit HEAD | grep -q gpgsig"#;
+
+    #[tokio::test]
+    async fn a_repository_that_signs_signs_in_a_command_and_not_in_a_session() {
+        let setup = Setup::new();
+        let run = setup.run(&["sh", "-c", SIGNED_COMMIT]).await;
+        assert_eq!(run.outcome, Outcome::Passed, "{}", run.tail);
+
+        // A session turns signing off for every repository, its tests' included.
+        let session = EnvironmentConfig {
+            inherit: Vec::new(),
+            set: wf_vcs::CommitSigning::Unsigned
+                .environment()
+                .into_iter()
+                .collect(),
+        };
+        let run = setup
+            .run_with(
+                &session,
+                &["sh", "-c", SIGNED_COMMIT],
+                Duration::from_secs(30),
+            )
+            .await;
+        assert!(matches!(run.outcome, Outcome::Failed(_)), "{}", run.tail);
+    }
+
+    #[test]
+    fn the_git_config_of_a_command_is_the_global_one_without_signing() {
+        let directory = tempfile::tempdir().unwrap();
+        let global = directory.path().join("my \"git\" config");
+        std::fs::write(
+            &global,
+            "[user]\n\tname = Ada\n[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n",
+        )
+        .unwrap();
+        let missing = directory.path().join("missing");
+        let config = directory.path().join("command.gitconfig");
+        std::fs::write(&config, git_config(&[missing, global])).unwrap();
+        let get = |key: &str| {
+            let output = std::process::Command::new("git")
+                .args(["config", "--get", key])
+                .current_dir(directory.path())
+                .env("GIT_CONFIG_GLOBAL", &config)
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env_remove("GIT_CONFIG_COUNT")
+                .output()
+                .unwrap();
+            String::from_utf8(output.stdout).unwrap().trim().to_string()
+        };
+        assert_eq!(get("user.name"), "Ada");
+        assert_eq!(get("commit.gpgsign"), "false");
+        assert_eq!(get("tag.gpgsign"), "false");
+    }
+
+    /// iroh watches the routes through an `AF_ROUTE` socket, which Fence denies on macOS whatever
+    /// its settings, so tests of the network need a check sandbox that is off. Once this fails,
+    /// Fence allows the socket, and checks can run those tests in it.
+    #[cfg(target_os = "macos")]
+    #[tokio::test]
+    async fn a_route_socket_opens_without_a_sandbox_and_not_in_fence() {
+        const ROUTE_SOCKET: &str =
+            "import socket; socket.socket(socket.AF_ROUTE, socket.SOCK_RAW).close()";
+        // Inside a sandbox already, such as a session's, the socket is denied, and Fence cannot
+        // start.
+        if std::env::var_os("FENCE_SANDBOX").is_some() {
+            eprintln!("skipped: this runs in Fence already");
+            return;
+        }
+        let setup = Setup::new();
+        let argv = ["python3", "-c", ROUTE_SOCKET];
+        let environment = EnvironmentConfig::default();
+        let timeout = Duration::from_secs(30);
+        let run = setup.run(&argv).await;
+        assert_eq!(run.outcome, Outcome::Passed, "{}", run.tail);
+        assert_eq!(run.sandbox, SandboxConfig::Off {});
+
+        if !crate::sandbox::fence_installed() {
+            eprintln!("skipped in Fence: it is not installed");
+            return;
+        }
+        let fence = SandboxConfig::Fence(Default::default());
+        let run = setup.run_in(&fence, &environment, &argv, timeout).await;
+        assert!(matches!(run.outcome, Outcome::Failed(_)), "{}", run.tail);
+        assert!(run.tail.contains("Operation not permitted"), "{}", run.tail);
+        assert_eq!(run.sandbox, fence);
     }
 }

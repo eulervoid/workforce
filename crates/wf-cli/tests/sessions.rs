@@ -2494,6 +2494,7 @@ wf work submit
     for part in [
         "Command: `sh -c ",
         "Tree: ",
+        "Sandbox: none",
         "Log: ",
         "check-logs/unbroken/",
     ] {

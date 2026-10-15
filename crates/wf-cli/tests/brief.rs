@@ -28,6 +28,7 @@ fn briefs() -> Vec<String> {
         body: "- [ ] 1. parse the arguments".into(),
         branch: "wf/k3f9ab".into(),
         target: "main".into(),
+        checks: vec!["test".into()],
         dependencies: vec![Dependency {
             item: "q7x2cd".into(),
             title: "Parser".into(),
@@ -45,6 +46,7 @@ fn briefs() -> Vec<String> {
         body: String::new(),
         commit: commit.map(Into::into),
         target: "main".into(),
+        checks: vec!["test".into()],
         step: "a review".into(),
         earlier: earlier(),
         diff: "+added".into(),

@@ -131,6 +131,30 @@ environment = { inherit = ["SSH_AUTH_SOCK"], set = { RUST_LOG = "debug" } }
 sandbox = { allow_domains = ["docs.rs"], allow_write = ["~/.cache/coder"] }
 ```
 
+## Checks
+
+The checks of the policy (`[[merge.check]]`) run on the merge result before the target moves, in
+the workforce's check worktree. They get the environment of every agent, without
+`CARGO_TARGET_DIR`, so their build output stays their own. Commits they make, such as those of
+tests, are not signed: they read your global git config with signing turned off, so they never sign
+with your key. A repository that turns signing on in its own config, as tests of signing do, still
+signs.
+
+By default they run in the sandbox of every agent, `[sandbox]`, without what `[agent.<name>]` adds.
+Some tests need what Fence cannot allow: on macOS, iroh watches the routes through a socket that
+Fence denies whatever its settings, so wf's own network tests fail in it. Then let the checks run
+without a sandbox, with your privileges, on this machine only:
+
+```toml
+[check]
+max_timeout = "20m"              # the longest a check runs here, whatever the policy says
+sandbox = { kind = "off" }       # or a sandbox of their own, as under [sandbox]; default: [sandbox]
+```
+
+Checks run the code of the work they check, so without a sandbox an agent's code runs with your
+privileges at merge, also for work that no one reviewed. A check that fails says the sandbox it ran
+in.
+
 ## Commits and signatures
 
 Agents commit as themselves, `@you/coder`, with the email of your git config. They commit unsigned,
