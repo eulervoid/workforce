@@ -6,7 +6,7 @@ use crate::id::ItemId;
 use crate::identity::AgentId;
 use crate::name::{AgentName, HarnessName, LaneName, Requirement};
 use crate::recovery::Recovery;
-use crate::session::{EndReason, MachineFault, SessionRole};
+use crate::session::{EndReason, MachineFault, SessionRole, Verdict};
 use crate::state::State;
 use crate::testing::*;
 
@@ -319,4 +319,124 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
         scene.state.recovery(item, SessionRole::Work),
         Recovery::WaitsForPrincipal { failures: 2, .. }
     ));
+}
+
+fn with_priority(body: EventBody, priority: crate::item::Priority) -> EventBody {
+    let EventBody::ItemCreated(created) = body else {
+        unreachable!()
+    };
+    EventBody::ItemCreated(ItemCreated {
+        priority: Some(priority),
+        ..created
+    })
+}
+
+impl Scene {
+    /// Works on the item in a session that ends as `reason`.
+    fn work(&mut self, item: ItemId, reason: EndReason) {
+        let session = self.apply(start_session("coder", item)).id().into();
+        self.apply(end_session(session, reason));
+    }
+
+    /// Submits the item and has its review send it back with an open change request.
+    fn send_back(&mut self, item: ItemId) {
+        self.work(item, EndReason::Submitted { commit: None });
+        self.apply(change_request(item, "add a test"));
+        self.apply(verdict(item, None, Verdict::RequestChanges));
+    }
+}
+
+#[test]
+fn work_sent_back_by_review_goes_before_older_untouched_work() {
+    let mut scene = Scene::new();
+    scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
+    scene.apply(create_reviewed("task", "untouched", "standard"));
+    let sent_back: ItemId = scene
+        .apply(create_reviewed("task", "sent back", "standard"))
+        .id()
+        .into();
+    scene.send_back(sent_back);
+    assert_eq!(scene.offered(), ["sent back", "untouched"]);
+}
+
+#[test]
+fn started_work_goes_before_older_untouched_work_and_after_work_sent_back() {
+    let mut scene = Scene::new();
+    scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
+    scene.apply(create_reviewed("task", "untouched", "standard"));
+    let started: ItemId = scene
+        .apply(create_reviewed("task", "released", "standard"))
+        .id()
+        .into();
+    let sent_back: ItemId = scene
+        .apply(create_reviewed("task", "sent back", "standard"))
+        .id()
+        .into();
+    scene.work(started, EndReason::Released);
+    scene.send_back(sent_back);
+    assert_eq!(scene.offered(), ["sent back", "released", "untouched"]);
+}
+
+#[test]
+fn within_a_group_fewer_unchecked_steps_go_first_then_more_checked_ones() {
+    let mut scene = Scene::new();
+    scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
+    scene.apply(create_with_body(
+        "task",
+        "three to do",
+        "- [ ] a\n- [ ] b\n- [ ] c\n",
+    ));
+    scene.apply(create_with_body("task", "one to do", "- [ ] a\n"));
+    let barely: ItemId = scene
+        .apply(create_with_body("task", "started, one to do", "- [ ] a\n"))
+        .id()
+        .into();
+    let mostly: ItemId = scene
+        .apply(create_with_body(
+            "task",
+            "started, one to do of three",
+            "- [x] a\n- [x] b\n- [ ] c\n",
+        ))
+        .id()
+        .into();
+    let long: ItemId = scene
+        .apply(create_with_body(
+            "task",
+            "started, two to do",
+            "- [ ] a\n- [ ] b\n",
+        ))
+        .id()
+        .into();
+    for item in [barely, mostly, long] {
+        scene.work(item, EndReason::Released);
+    }
+    assert_eq!(
+        scene.offered(),
+        [
+            "started, one to do of three",
+            "started, one to do",
+            "started, two to do",
+            "one to do",
+            "three to do",
+        ]
+    );
+}
+
+#[test]
+fn priority_goes_before_how_far_the_work_got() {
+    let mut scene = Scene::new();
+    scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
+    let sent_back: ItemId = scene
+        .apply(with_priority(
+            create_reviewed("task", "sent back", "standard"),
+            crate::item::Priority::P3,
+        ))
+        .id()
+        .into();
+    scene.send_back(sent_back);
+    scene.apply(with_priority(
+        create("task", "urgent"),
+        crate::item::Priority::P0,
+    ));
+    assert_eq!(scene.offered(), ["urgent", "sent back"]);
 }

@@ -826,7 +826,20 @@ per-agent `max_sessions`, parked sessions included) it starts, in this order:
 2. a supervise session for an item with an open blocker routed to supervisors, if the agent is in the
    `supervision` lane and never worked on the item (section 10);
 3. a work session for the first ready item in the agent's lanes that its capabilities and the device's
-   hardware meet, in `wf item list --ready` order.
+   hardware meet, in dispatch order.
+
+**Dispatch order** finishes started work before it starts new work, so branches do not pile up and go stale
+against the target. Priority always comes first (`P0` first, items without one last). Among ready items of
+one priority:
+
+1. work sent back by review: its latest review requested changes and change requests are still open;
+2. other started work: it had work sessions, e.g. it was released or moved back to open after a merge
+   conflict;
+3. work never started.
+
+Within each group fewer unchecked steps go first, and among started work more checked steps go first
+when the unchecked ones are equal, so what finishes soonest goes first; then oldest first, then id. It is a
+plain sort key, no weights or score. `wf item list --ready` keeps its own order (priority, age, id).
 
 Agents with `start = "manual"` run only through `wf session start <item> --agent <name>`.
 
