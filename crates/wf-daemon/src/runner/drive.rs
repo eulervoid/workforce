@@ -55,7 +55,7 @@ const RETRY_END: Duration = Duration::from_secs(30);
 
 /// Ends the session with `interruption`. An end that cannot be written, as on a full disk, is
 /// tried again until it is or the daemon halts, so the session does not stay live without a
-/// harness. Returns the workforce as it was loaded last, since a store that failed a write may
+/// harness; one refused for any other reason is not. Returns the workforce as it was loaded last, since a store that failed a write may
 /// have been opened again.
 async fn interrupt(
     daemon: &Arc<Daemon>,
@@ -76,6 +76,14 @@ async fn interrupt(
         let Err(error) = ended else {
             return loaded;
         };
+        if !error.is_failed_write() {
+            tracing::warn!(
+                "could not end session {}: {}",
+                run.session,
+                wf_core::error_chain(&error)
+            );
+            return loaded;
+        }
         if !reported {
             tracing::warn!(
                 "could not end session {}, trying again every {}: {}",
