@@ -820,3 +820,67 @@ pub struct MentionsView {
     pub target: String,
     pub sources: Vec<SourceView>,
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+
+    use wf_core::autonomy::StartMode;
+    use wf_core::event::{DeviceProfile, EventBody};
+    use wf_core::id::SessionId;
+    use wf_core::name::AgentName;
+    use wf_core::testing::*;
+
+    use super::*;
+
+    const UNSTAFFED: &str =
+        "the review waits for an agent step that no agent started on this workforce can take";
+
+    fn flags(state: &State, item: ItemId) -> Vec<String> {
+        let ItemView::Live(item) = state.item(item).unwrap() else {
+            unreachable!("the item is live")
+        };
+        item_detail(state, item, &[]).flags
+    }
+
+    #[test]
+    fn a_review_no_hosted_agent_can_take_is_flagged_on_the_item() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let mut now = 2_000;
+        let mut apply = |state: &mut State, body| {
+            now += 1;
+            fixture.apply(state, 0, now, body)
+        };
+        apply(&mut state, define_agent_with("coder", &[]));
+        let EventBody::AgentDefined(mut reviewer) =
+            define_agent_with("reviewer", &["review", "strong-model"])
+        else {
+            unreachable!("`define_agent_with` makes an `AgentDefined`")
+        };
+        reviewer.autonomy.start = StartMode::Auto;
+        apply(&mut state, EventBody::AgentDefined(reviewer));
+        let item: ItemId = apply(&mut state, create_reviewed("task", "work", "standard"))
+            .id()
+            .into();
+        let session: SessionId = apply(&mut state, start_session("coder", item)).id().into();
+        apply(&mut state, moved(item, ItemState::Review));
+        apply(
+            &mut state,
+            end_session(session, EndReason::Submitted { commit: None }),
+        );
+        assert_eq!(state.unstaffed_reviews(), [item]);
+        assert!(flags(&state, item).contains(&UNSTAFFED.to_string()));
+
+        apply(
+            &mut state,
+            EventBody::DeviceProfile(DeviceProfile {
+                name: "laptop".into(),
+                hardware: String::new(),
+                agents: BTreeMap::from([(AgentName::new("reviewer").unwrap(), 1)]),
+                max_sessions: 1,
+            }),
+        );
+        assert!(!flags(&state, item).contains(&UNSTAFFED.to_string()));
+    }
+}
