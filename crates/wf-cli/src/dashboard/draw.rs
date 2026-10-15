@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use wf_core::graph::Readiness;
 use wf_core::id::HashId;
+use wf_daemon::machine_config::Background;
 
 use super::app::{
     AgentRow, App, Choice, Clickable, ClickableList, Drawn, Hovered, ListTop, Opened, Prompt,
@@ -40,6 +41,37 @@ trait Themed: Styled<Item = Self> + Sized {
 }
 
 impl<T: Styled<Item = T>> Themed for T {}
+
+/// What every cell has under what is drawn on it: the theme's text, on its background. Without
+/// either, nothing: the terminal's own colours show.
+fn base() -> Style {
+    let text = Style::from(theme::text());
+    match theme::background() {
+        Background::Terminal => text,
+        Background::Color(color) => text.bg(color.into()),
+    }
+}
+
+/// Clears `area` for a popup, down to the base.
+fn clear(frame: &mut Frame, area: Rect) {
+    frame.render_widget(Clear, area);
+    frame.buffer_mut().set_style(area, base());
+}
+
+/// Text with escape codes, such as a rendered transcript, as ratatui text. A reset in it goes
+/// back to the base rather than to the terminal's colours.
+pub(super) fn ansi_text(text: &str) -> Text<'static> {
+    let mut text = text.into_text().unwrap_or_default();
+    for span in text.lines.iter_mut().flat_map(|line| line.spans.iter_mut()) {
+        if span.style.fg == Some(Color::Reset) {
+            span.style.fg = None;
+        }
+        if span.style.bg == Some(Color::Reset) {
+            span.style.bg = None;
+        }
+    }
+    text
+}
 
 /// The place on screen the keys go to, which the accent marks.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -129,6 +161,8 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
 /// Draws the dashboard; where the text and the list on screen ended up.
 fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
+    let area = frame.area();
+    frame.buffer_mut().set_style(area, base());
     let [header, counts, rule, body, rule_below, latest, keys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -213,7 +247,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
                     width: latest.right() - event_area.right(),
                     ..latest
                 };
-                frame.render_widget(Clear, cleared);
+                clear(frame, cleared);
             }
             draw_tip(frame, &app.tip(&spot.target), latest_width, latest);
         }
@@ -222,7 +256,10 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         Some(Hovered::Tab(tab)) if *tab != app.tab => {
             let label = shown.clickable.tabs.iter().find(|(each, _)| each == tab);
             if let Some((_, label)) = label {
-                frame.buffer_mut().set_style(*label, Style::new().not_dim());
+                let text = base().fg.unwrap_or(Color::Reset);
+                frame
+                    .buffer_mut()
+                    .set_style(*label, Style::new().not_dim().fg(text));
             }
         }
         Some(Hovered::Tab(_)) | None => {}
@@ -329,7 +366,7 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
         width: width.min(body.width.saturating_sub(1)),
         height,
     };
-    frame.render_widget(Clear, area);
+    clear(frame, area);
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::bordered()
@@ -382,7 +419,7 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
         width: body.width.saturating_sub(2).min(52),
         height,
     };
-    frame.render_widget(Clear, area);
+    clear(frame, area);
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::bordered()
@@ -503,7 +540,7 @@ fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
 fn active_tab(label: String) -> Vec<Span<'static>> {
     let style = Style::from(theme::tab_active());
     let behind = if style.add_modifier.contains(Modifier::REVERSED) {
-        Some(style.fg.unwrap_or(Color::Reset))
+        Some(style.fg.or(base().fg).unwrap_or(Color::Reset))
     } else {
         style.bg
     };
@@ -867,7 +904,7 @@ fn draw_indicator(frame: &mut Frame, row: Rect, text: &str) -> Rect {
     for x in area.left()..area.right() {
         buffer[(x, row.y)].reset();
     }
-    let style = Style::from(theme::text_dimmed()).bg(background);
+    let style = base().patch(theme::text_dimmed()).bg(background);
     buffer.set_stringn(area.x, area.y, text, usize::from(width), style);
     area
 }
@@ -1499,7 +1536,7 @@ fn draw_detail(
             else {
                 return None;
             };
-            let text: Text = text.into_text().unwrap_or_default();
+            let text = ansi_text(text);
             (draw_scrolled(frame, text, opened.scroll, body), Some(*id))
         }
         Detail::Agent(id) => {
@@ -1508,7 +1545,7 @@ fn draw_detail(
             else {
                 return None;
             };
-            let text: Text = text.into_text().unwrap_or_default();
+            let text = ansi_text(text);
             (draw_scrolled(frame, text, opened.scroll, body), None)
         }
         Detail::Flag(flag) => {
@@ -1517,7 +1554,7 @@ fn draw_detail(
             else {
                 return None;
             };
-            let text: Text = text.into_text().unwrap_or_default();
+            let text = ansi_text(text);
             (draw_scrolled(frame, text, opened.scroll, body), None)
         }
         Detail::Session(id) => {
@@ -1803,7 +1840,7 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect, spots: &mut Vec<Spot>) -> 
         frame.render_widget(Paragraph::new(empty).themed(theme::text_dimmed()), area);
         return None;
     }
-    let text: Text = text.into_text().unwrap_or_default();
+    let text = ansi_text(&text);
     let scroll = draw_scrolled(frame, text, app.log.scroll, area);
     spots.extend(links::find(
         frame.buffer_mut(),
@@ -1830,7 +1867,7 @@ fn latest_line(app: &App) -> Line<'static> {
     match app.log.lines.last() {
         Some(line) => {
             let first = line.lines().next().unwrap_or_default();
-            let text: Text = first.into_text().unwrap_or_default();
+            let text = ansi_text(first);
             let mut spans = vec![Span::raw(" ")];
             spans.extend(
                 text.lines

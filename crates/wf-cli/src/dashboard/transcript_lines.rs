@@ -6,7 +6,6 @@
 //! build: laying it all out took about 12 ms a frame, before ratatui went through all of it;
 //! with the lines kept, a frame takes about 25 µs.
 
-use ansi_to_tui::IntoText;
 use ratatui::text::Line;
 
 use crate::transcript::{Layout, Spacing, Transcript};
@@ -80,8 +79,7 @@ impl TranscriptLines {
         if !self.last.before(opens).is_empty() {
             self.lines.push(Line::default());
         }
-        self.lines
-            .extend(text.into_text().unwrap_or_default().lines);
+        self.lines.extend(super::draw::ansi_text(text).lines);
         self.last = leaves;
     }
 }

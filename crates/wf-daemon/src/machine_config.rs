@@ -406,17 +406,8 @@ impl MachineConfig {
 
     /// Reads the config at `path`; a missing file is the default config.
     pub fn load(path: &Path) -> Result<Self, MachineConfigError> {
-        let text = match std::fs::read_to_string(path) {
-            Ok(text) => text,
-            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
-                return Ok(Self::default());
-            }
-            Err(source) => {
-                return Err(MachineConfigError::Read {
-                    path: path.to_path_buf(),
-                    source,
-                });
-            }
+        let Some(text) = read(path)? else {
+            return Ok(Self::default());
         };
         Self::parse(&text).map_err(|error| match error {
             ParseError::Toml(source) => MachineConfigError::Parse {
@@ -572,6 +563,40 @@ impl FenceConfig {
             }
         }
         Ok(())
+    }
+}
+
+/// The text of the config at `path`, or `None` when there is no file.
+fn read(path: &Path) -> Result<Option<String>, MachineConfigError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(source) => Err(MachineConfigError::Read {
+            path: path.to_path_buf(),
+            source,
+        }),
+    }
+}
+
+impl ThemeConfig {
+    /// Reads only `[theme]` of the config at `path`, so a mistake elsewhere leaves the colours
+    /// alone; a missing file sets nothing.
+    pub fn load(path: &Path) -> Result<Self, MachineConfigError> {
+        /// The machine config, seen only for its theme.
+        #[derive(Deserialize)]
+        struct OnlyTheme {
+            #[serde(default)]
+            theme: ThemeConfig,
+        }
+        let Some(text) = read(path)? else {
+            return Ok(Self::default());
+        };
+        toml::from_str::<OnlyTheme>(&text)
+            .map(|config| config.theme)
+            .map_err(|source| MachineConfigError::Parse {
+                path: path.to_path_buf(),
+                source: Box::new(source),
+            })
     }
 }
 
@@ -882,5 +907,18 @@ mod tests {
         ] {
             assert!(MachineConfig::parse(text).is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn the_theme_is_read_whatever_is_wrong_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[notify]\ncommand = []\n\n[theme]\nid = \"red\"\n").unwrap();
+        assert!(MachineConfig::load(&path).is_err());
+        assert!(ThemeConfig::load(&path).unwrap().id.is_some());
+        assert_eq!(
+            ThemeConfig::load(&dir.path().join("missing.toml")).unwrap(),
+            ThemeConfig::default()
+        );
     }
 }

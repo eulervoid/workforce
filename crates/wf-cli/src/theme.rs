@@ -10,11 +10,15 @@ use anstyle::{AnsiColor, Color, RgbColor, Style};
 use wf_core::graph::Readiness;
 use wf_core::item::{ItemState, Priority};
 
+use wf_daemon::machine_config::{Background, MachineConfig, ThemeConfig};
+
 use crate::view::ActorKind;
 
 /// Every style wf draws with.
 #[derive(Debug, Clone, PartialEq)]
 pub struct Theme {
+    background: Background,
+    text: Style,
     text_dimmed: Style,
     text_bold: Style,
     divider: Style,
@@ -58,6 +62,8 @@ impl Default for Theme {
     fn default() -> Self {
         let warning = fg(AnsiColor::Red).bold();
         Self {
+            background: Background::Terminal,
+            text: Style::new(),
             text_dimmed: Style::new().dimmed(),
             text_bold: Style::new().bold(),
             divider: Style::new().dimmed(),
@@ -95,7 +101,69 @@ impl Default for Theme {
     }
 }
 
+impl Theme {
+    /// The built-in theme, with what `config` sets in place of its styles.
+    pub fn new(config: &ThemeConfig) -> Self {
+        let default = Self::default();
+        Self {
+            background: config.background,
+            text: config.text.unwrap_or(default.text),
+            text_dimmed: config.text_dimmed.unwrap_or(default.text_dimmed),
+            text_bold: config.text_bold.unwrap_or(default.text_bold),
+            divider: config.divider.unwrap_or(default.divider),
+            link: config.link.unwrap_or(default.link),
+            accent: config.accent.unwrap_or(default.accent),
+            accent_dimmed: config.accent_dimmed.unwrap_or(default.accent_dimmed),
+            on_accent: config.on_accent.unwrap_or(default.on_accent),
+            tab_active: config.tab_active.unwrap_or(default.tab_active),
+            key: config.key.unwrap_or(default.key),
+            id: config.id.unwrap_or(default.id),
+            principal: config.principal.unwrap_or(default.principal),
+            agent: config.agent.unwrap_or(default.agent),
+            daemon: config.daemon.unwrap_or(default.daemon),
+            success: config.success.unwrap_or(default.success),
+            error: config.error.unwrap_or(default.error),
+            warning: config.warning.unwrap_or(default.warning),
+            attention: config.attention.unwrap_or(default.attention),
+            live: config.live.unwrap_or(default.live),
+            code: config.code.unwrap_or(default.code),
+            diff_added: config.diff_added.unwrap_or(default.diff_added),
+            diff_removed: config.diff_removed.unwrap_or(default.diff_removed),
+            state_draft: config.state.draft.unwrap_or(default.state_draft),
+            state_open: config.state.open.unwrap_or(default.state_open),
+            state_active: config.state.active.unwrap_or(default.state_active),
+            state_review: config.state.review.unwrap_or(default.state_review),
+            state_done: config.state.done.unwrap_or(default.state_done),
+            state_cancelled: config.state.cancelled.unwrap_or(default.state_cancelled),
+            readiness_blocked: config
+                .readiness
+                .blocked
+                .unwrap_or(default.readiness_blocked),
+            readiness_stranded: config
+                .readiness
+                .stranded
+                .unwrap_or(default.readiness_stranded),
+            priority_p0: config.priority.p0.unwrap_or(default.priority_p0),
+            priority_p1: config.priority.p1.unwrap_or(default.priority_p1),
+            priority_p2: config.priority.p2.unwrap_or(default.priority_p2),
+            priority_p3: config.priority.p3.unwrap_or(default.priority_p3),
+        }
+    }
+}
+
 static THEME: OnceLock<Theme> = OnceLock::new();
+
+/// Sets the theme from `[theme]` of the machine config. A broken one must not keep wf from
+/// running: it warns and leaves the built-in theme.
+pub fn load() {
+    let Some(path) = MachineConfig::path_from_env() else {
+        return;
+    };
+    match ThemeConfig::load(&path) {
+        Ok(config) => set(Theme::new(&config)),
+        Err(error) => eprintln!("warning: {error}\nwarning: using the built-in theme"),
+    }
+}
 
 /// Sets the theme for the rest of the run; only the first call counts.
 pub fn set(theme: Theme) {
@@ -104,6 +172,16 @@ pub fn set(theme: Theme) {
 
 fn get() -> &'static Theme {
     THEME.get_or_init(Theme::default)
+}
+
+/// Behind every cell of the dashboard.
+pub fn background() -> Background {
+    get().background
+}
+
+/// Text with no other style, in the dashboard.
+pub fn text() -> Style {
+    get().text
 }
 
 /// Secondary text: types, counts, hints, timestamps.
