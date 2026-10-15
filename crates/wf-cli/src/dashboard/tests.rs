@@ -787,6 +787,37 @@ fn an_item_opens_on_its_detail_and_enter_goes_on_to_its_session() {
     assert_eq!(app.wanted().detail, None);
 }
 
+#[test]
+fn a_move_of_the_selection_takes_in_only_the_new_detail() {
+    let mut app = app();
+    app.resize(130, 24);
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    press(&mut app, KeyCode::Char('j'));
+    let subscription = ItemId::from_bytes([5; 32]);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(subscription)));
+    let in_view = InView::Item {
+        id: subscription,
+        text: "#aukcuq Session subscription\n".to_owned(),
+        session: None,
+    };
+    app.refresh_detail(Some(in_view.clone()));
+    assert_eq!(app.snapshot.in_view, Some(in_view));
+    let titles: Vec<&str> = app
+        .item_groups()
+        .into_iter()
+        .flat_map(|(_, items)| items.into_iter().map(|item| item.title.as_str()))
+        .collect();
+    assert_eq!(
+        titles,
+        ["Dashboard", "Session subscription", "Parse config lazily"]
+    );
+    assert_eq!(app.snapshot.flagged, snapshot().flagged);
+    assert_eq!(app.snapshot.waiting, snapshot().waiting);
+    assert_eq!(app.snapshot.working, snapshot().working);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(subscription)));
+}
+
 /// The Items tab with its last item, scrolled two lines down from where it opened.
 fn scrolled_item(width: u16) -> (App, Opened) {
     let mut app = app();
