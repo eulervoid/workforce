@@ -155,10 +155,10 @@ pub(crate) fn run_command(config: &NotifyConfig, notice: &Notice) {
         let Some((program, arguments)) = command.split_first() else {
             return;
         };
-        let output = tokio::process::Command::new(program)
-            .args(arguments)
-            .kill_on_drop(true)
-            .output();
+        let mut command = tokio::process::Command::new(program);
+        command.args(arguments).kill_on_drop(true);
+        crate::inherit::only_stdio(&mut command);
+        let output = command.output();
         match tokio::time::timeout(COMMAND_TIMEOUT, output).await {
             Ok(Ok(output)) if output.status.success() => {}
             Ok(Ok(output)) => tracing::warn!(

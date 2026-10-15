@@ -10,6 +10,7 @@ wf-store.workspace = true
 wf-net.workspace = true
 wf-vcs.workspace = true
 wf-harness.workspace = true
+close_fds.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
