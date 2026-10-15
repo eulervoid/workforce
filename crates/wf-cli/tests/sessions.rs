@@ -460,7 +460,8 @@ wf work submit --note \"all done\"
     world
         .wait("the merge", |world| world.item(&item)["state"] == "done")
         .await;
-    let moves: Vec<String> = world.wf(&["log"])
+    let moves: Vec<String> = world
+        .wf(&["log"])
         .as_array()
         .unwrap()
         .iter()

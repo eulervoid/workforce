@@ -5,9 +5,9 @@ use std::collections::HashMap;
 
 use wf_cli::view::{self, Envelope};
 use wf_core::event::{Change, Event, EventBody, Review, SessionEnded};
-use wf_core::session::{CommitId, EndReason, Verdict};
 use wf_core::id::{EventId, HashId, ItemId};
 use wf_core::item::{ItemView, Priority};
+use wf_core::session::{CommitId, EndReason, Verdict};
 use wf_core::state::State;
 use wf_core::testing::*;
 
@@ -148,7 +148,9 @@ fn outcomes_in_the_log() {
         .id()
         .into();
     let session = apply(&mut state, start_session("coder", item)).id().into();
-    let note = apply(&mut state, comment(item, "the relay is down")).id().into();
+    let note = apply(&mut state, comment(item, "the relay is down"))
+        .id()
+        .into();
     apply(
         &mut state,
         EventBody::SessionEnded(SessionEnded {

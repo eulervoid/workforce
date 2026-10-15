@@ -6,8 +6,8 @@ use serde::Serialize;
 use wf_core::activity::Entry;
 use wf_core::event::{Change, Event, EventBody, Link};
 use wf_core::id::{CommentId, HashId, ItemId};
-use wf_core::session::{EndReason, Verdict};
 use wf_core::item::ItemView;
+use wf_core::session::{EndReason, Verdict};
 use wf_core::state::State;
 
 use super::detail::{ActivityKind, ActivityView, activity_views};
