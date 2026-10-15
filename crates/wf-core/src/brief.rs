@@ -37,7 +37,13 @@ impl Brief {
         let Some(ItemView::Live(item)) = state.item(session.item()) else {
             return None;
         };
-        let target = state.policy()?.policy.merge.target.clone();
+        let merge = &state.policy()?.policy.merge;
+        let target = merge.target.clone();
+        let checks: Vec<String> = merge
+            .checks
+            .iter()
+            .map(|check| check.name.to_string())
+            .collect();
         let agent = session.agent();
         let instructions = state
             .agent(&agent.name, agent.principal)
@@ -51,6 +57,7 @@ impl Brief {
                 body: item.body().render_numbered(),
                 branch: sources.branch(item.id()),
                 target,
+                checks,
                 dependencies: dependencies(state, item, sources),
                 change_requests: open_change_requests(state, item, sources),
                 earlier: earlier(state, item, sources),
@@ -64,6 +71,7 @@ impl Brief {
                 commit: commit.map(|commit| commit.to_string()),
                 diff: commit.map_or_else(String::new, |commit| sources.diff(&target, commit)),
                 target,
+                checks,
                 step: review_step(state, item.id()),
                 earlier: earlier(state, item, sources),
             }),
@@ -279,6 +287,8 @@ pub struct WorkBrief {
     pub body: String,
     pub branch: String,
     pub target: String,
+    /// The names of the checks that run on the merge before the target moves.
+    pub checks: Vec<String>,
     pub dependencies: Vec<Dependency>,
     /// The change requests the work has to resolve before it is submitted.
     pub change_requests: Vec<OpenComment>,
@@ -337,6 +347,14 @@ impl WorkBrief {
                  `wf comment {item} \"<what you did>\" --resolve <id>`"
             );
         }
+        if let Some(checks) = checks(&self.checks) {
+            let _ = writeln!(
+                text,
+                "- Tests that cannot run in your sandbox are run by the checks of the merge \
+                 ({checks}), not by the principal. Run what you can, and say in your note what \
+                 you could not run here."
+            );
+        }
         let _ = writeln!(
             text,
             "- Need an answer from someone: `wf comment {item} \"<question>\" --block`, then end \
@@ -366,6 +384,8 @@ pub struct ReviewBrief {
     /// The submitted commit, `None` when the work was submitted without commits.
     pub commit: Option<String>,
     pub target: String,
+    /// The names of the checks that run on the merge before the target moves.
+    pub checks: Vec<String>,
     /// Which step of the review level this is, in words.
     pub step: String,
     pub earlier: Vec<Earlier>,
@@ -417,6 +437,7 @@ impl ReviewBrief {
             text,
             "## How to review\n\n\
              - Read the change or the answer, and run the tests if there are any.\n\
+             {checks}\
              - Do not change anything.\n\
              - Request changes for anything that is wrong, also when it is small. Approve only \
              what you would merge as it is.\n\
@@ -427,10 +448,26 @@ impl ReviewBrief {
              `wf review --request-changes`. The next session has to resolve every change request \
              before it submits again.\n  \
              - Your principal has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
-             {AGAIN}"
+             {AGAIN}",
+            checks = checks(&self.checks).map_or_else(String::new, |checks| format!(
+                "- Tests that cannot run in your sandbox are run by the checks of the merge \
+                 ({checks}) before the work lands, not by your principal: do not escalate for \
+                 them. Say in your note what you could not run here.\n"
+            )),
         );
         text
     }
+}
+
+/// The names of `checks`, as code, or `None` when there are none.
+fn checks(checks: &[String]) -> Option<String> {
+    (!checks.is_empty()).then(|| {
+        checks
+            .iter()
+            .map(|check| format!("`{check}`"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    })
 }
 
 /// The brief of a supervise session.
@@ -675,6 +712,7 @@ mod tests {
             body: "- [ ] 1. write parser".into(),
             branch: "wf/k3f9ab".into(),
             target: "main".into(),
+            checks: vec![],
             dependencies: vec![Dependency {
                 item: "q7x2cd".into(),
                 title: "Which crate?".into(),
@@ -717,6 +755,7 @@ mod tests {
             body: String::new(),
             branch: "wf/k3f9ab".into(),
             target: "main".into(),
+            checks: vec![],
             dependencies: vec![],
             change_requests: vec![OpenComment {
                 comment: "c4d2e1".into(),
@@ -742,6 +781,7 @@ mod tests {
             body: "- [ ] 1. write parser".into(),
             commit: None,
             target: "main".into(),
+            checks: vec![],
             step: "a review".into(),
             earlier: vec![],
             diff: String::new(),
@@ -763,6 +803,7 @@ mod tests {
             body: String::new(),
             commit: Some("abc123".into()),
             target: "main".into(),
+            checks: vec![],
             step: "step 1 of 2".into(),
             earlier: vec![],
             diff: "+added".into(),
@@ -782,6 +823,60 @@ mod tests {
     }
 
     #[test]
+    fn the_checks_run_what_a_session_cannot_and_not_the_principal() {
+        let work = WorkBrief {
+            agent: "coder".into(),
+            instructions: None,
+            item: "k3f9ab".into(),
+            title: "Small".into(),
+            body: String::new(),
+            branch: "wf/k3f9ab".into(),
+            target: "main".into(),
+            checks: vec!["fmt".into(), "test".into()],
+            dependencies: vec![],
+            change_requests: vec![],
+            earlier: vec![],
+        };
+        let review = ReviewBrief {
+            agent: "reviewer".into(),
+            instructions: None,
+            item: "k3f9ab".into(),
+            title: "Small".into(),
+            body: String::new(),
+            commit: Some("abc123".into()),
+            target: "main".into(),
+            checks: vec!["fmt".into(), "test".into()],
+            step: "a review".into(),
+            earlier: vec![],
+            diff: "+added".into(),
+        };
+        for text in [work.render(), review.render()] {
+            assert!(
+                text.contains("Tests that cannot run in your sandbox are run by the checks of the merge (`fmt`, `test`)"),
+                "{text}"
+            );
+            assert!(text.contains("not by"), "{text}");
+        }
+
+        // Without checks, nobody runs them, and the brief does not say otherwise.
+        let unchecked = [
+            WorkBrief {
+                checks: vec![],
+                ..work
+            }
+            .render(),
+            ReviewBrief {
+                checks: vec![],
+                ..review
+            }
+            .render(),
+        ];
+        for text in unchecked {
+            assert!(!text.contains("checks of the merge"), "{text}");
+        }
+    }
+
+    #[test]
     fn empty_sections_are_left_out() {
         let brief = WorkBrief {
             agent: "coder".into(),
@@ -791,6 +886,7 @@ mod tests {
             body: String::new(),
             branch: "wf/k3f9ab".into(),
             target: "main".into(),
+            checks: vec![],
             dependencies: vec![],
             change_requests: vec![],
             earlier: vec![],
