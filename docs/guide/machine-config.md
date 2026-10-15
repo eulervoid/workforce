@@ -2,7 +2,7 @@
 
 The policy says how the workforce works, and it syncs to every machine. What only makes sense on
 one machine lives in its **machine config**: the sandbox agents and checks run in, the environment
-they get, how commits are signed, how you are notified, and who decides permission requests (see
+they get, how commits are signed, how you are notified, the colours of `wf`, and who decides permission requests (see
 [permissions.md](permissions.md)). It is never synced, so another machine can never make yours run
 a program or call a paid API.
 
@@ -39,6 +39,10 @@ max_timeout = "15m"
 
 [permissions]
 guidance = "Allow reading anything and writing in the worktree. Ask about the network."
+
+[theme]
+accent = "#1e50a0"
+state.review = "bold yellow"
 ```
 
 ## The sandbox
@@ -201,6 +205,59 @@ The command runs without a shell. In its arguments, `{kind}`, `{item}`, `{title}
 replaced as `wf inbox` shows them; `{kind}` is one of `blocker`, `proposal`, `principal_review`,
 `merge`, `recovery` and `permission`. What it already told you of is not told again after a
 restart. A command that fails is logged in the daemon's log.
+
+## Colours
+
+`[theme]` sets the colours of the CLI and the dashboard on this machine. Every key is optional;
+what you leave out keeps the built-in style. Values use git's color syntax, as in `.gitconfig`: a
+foreground, then a background, then attributes, such as `"bold red"`, `"#1e50a0"`,
+`"brightblue dim"`, `"black yellow"` or `"normal"`. A colour is a name (`red`, `brightred`, …), a
+number of the terminal's palette (`0` to `255`) or `#rrggbb`. The names follow your terminal's
+palette; `#rrggbb` does not.
+
+```toml
+[theme]
+background = "#1b1d23"           # "none", the default, keeps the terminal's own
+text = "#d0d0d0"
+text_dimmed = "#6c7080"          # a colour in place of the dim attribute
+divider = "#3a3d46"
+accent = "#1e50a0"
+state.review = "yellow"
+priority.p1 = "bold yellow"
+```
+
+| Key | Built in | What it colours |
+|---|---|---|
+| `background` | `"none"` | behind every cell of the dashboard, popups included; one colour |
+| `text` | the terminal's | text with no other style, in the dashboard |
+| `text_dimmed` | `dim` | secondary text: types, counts, hints, timestamps |
+| `text_bold` | `bold` | names, titles, headings, markdown bold |
+| `divider` | `dim` | rules, pane separators, the frames of popups |
+| `link` | `ul` | what the pointer is over, in the dashboard |
+| `accent` | `#1e50a0` | the selection, or the log tab, that has the keys; one colour |
+| `accent_dimmed` | `#1e2d4b` | a selection without the keys, or in an unfocused pane; one colour |
+| `on_accent` | `brightwhite` | text on the full accent |
+| `tab_active` | `bold reverse` | the label of the tab on screen |
+| `key` | `yellow` | keys to press, in hints |
+| `id` | `cyan` | item ids |
+| `principal`, `agent`, `daemon` | `magenta`, `brightblue`, `green` | who did something; in transcripts, the headers of answers (`agent`) and of prompts from wf or the brief (`daemon`) |
+| `success`, `error` | `green`, `red` | what went through or failed; in transcripts, ✓ and ✗ |
+| `warning` | `bold red` | what went wrong and needs you |
+| `attention` | `yellow` | what waits on you |
+| `live` | `blue` | live sessions |
+| `code` | `blue` | inline code |
+| `diff_added`, `diff_removed` | `green`, `red` | lines of diffs in transcripts |
+| `state.draft` … `state.cancelled` | `dim`, `green`, `blue`, `yellow`, `magenta`, `brightblack` | items in each state |
+| `readiness.blocked`, `readiness.stranded` | `red`, `bold red` | ready and claimed items look like `state.open` and `state.active` |
+| `priority.p0` … `priority.p3` | `bold red`, `yellow`, `normal`, `dim` | priorities |
+
+`background` and `text` apply to the dashboard only: printed output stays in the terminal's own
+colours, where a background would break as soon as it scrolls. Without a terminal, wf prints no
+colours at all, whatever the theme. `wf item diff` uses git's own colours.
+
+`wf` reads `[theme]` when it starts, so a change shows in the next command or dashboard. Unlike the
+rest of the file, a mistake in it does not stop `wf`: it warns, naming the key, and uses the
+built-in colours. Likewise, a mistake elsewhere in the file leaves the colours alone.
 
 ## Permission requests
 
