@@ -8,17 +8,7 @@ into your main branch.
 Everything that happens is an event in a signed log that every machine of yours keeps a copy of and
 syncs peer to peer. There is no server and no account: wf runs from your terminal.
 
-```
- wf item add          the daemon starts       the agent submits      you approve
-     │                an agent on it          its commits            (or a reviewer agent)
-     ▼                     ▼                       ▼                      ▼
-   open  ───────────▶   active  ─────────────▶  review  ─────────────▶  done
-                     worktree + branch                              merged into main
-                     wf/<item>
-                          │  ▲
-       question (blocker) ▼  │ answer
-                        you, in the dashboard
-```
+<p align="center"><img src="docs/img/lifecycle.svg" alt="An item goes open → active → review → done: an agent starts on it in its own worktree, submits its commits, and the work is merged into main once approved; a review can send it back to open, and the agent asks the principal when it has a question" width="100%"></p>
 
 ## Install
 

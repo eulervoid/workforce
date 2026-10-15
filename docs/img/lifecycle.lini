@@ -1,0 +1,27 @@
+{
+  layout: grid;
+  columns: repeat(4);
+  gap: 64 150;
+  padding: 24;
+  font-family: "Google Sans Code";
+  font-size: 13;
+  font-weight: normal;
+  |rect| { padding: 12 18; stroke: --stroke; stroke-width: 1; fill: none; }
+  |-| { stroke: --muted; stroke-width: 1; color: --muted; }
+  .sub { font-size: 11; color: --muted; }
+  .end { stroke-width: 2; }
+  .person { stroke-style: dashed; }
+}
+
+|rect#open| [ "open"; |block| "wf item add" .sub ]
+|rect#active| [ "active"; |block| "worktree wf/<item>" .sub ]
+|rect#review| [ "review"; |block| "commits submitted" .sub ]
+|rect#done| .end [ "done"; |block| "merged into main" .sub ]
+""
+|rect#principal| .person [ "principal"; |block| "dashboard · inbox" .sub ]
+
+open -> active "agent starts"
+active -> review "submit"
+review -> done "approve"
+review:top --> open:top "request changes"
+active:bottom <-> principal:top "question · answer"
