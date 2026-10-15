@@ -124,7 +124,7 @@ pub enum Command {
     Work(WorkCommand),
     /// Give a verdict on the submitted work of an item.
     Review(ReviewArgs),
-    /// Run the policy's checks on this checkout as it is, in the agents' sandbox, as they run
+    /// Run the policy's checks on this checkout as it is, in the sandbox of checks, as they run
     /// before a merge: `wf check` before `wf work submit`, `wf check clippy` for one.
     Check {
         /// The checks to run, by their names in the policy. Defaults to all of them.

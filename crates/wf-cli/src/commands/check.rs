@@ -165,7 +165,8 @@ enum Machine<'a> {
     /// In a session, in the sandbox and environment of its agent already. The machine config is
     /// out of its reach, so the policy's timeouts apply as they are.
     Session { directory: &'a Path },
-    /// Outside a session: confined as the machine config confines agents.
+    /// Outside a session: in the sandbox the machine config gives checks, with the environment
+    /// of agents, as the daemon runs them before a merge.
     Agents {
         directory: &'a Path,
         repository: PathBuf,
@@ -175,6 +176,8 @@ enum Machine<'a> {
         config: Box<MachineConfig>,
         /// Where Fence's settings are written.
         settings: PathBuf,
+        /// Where the git config the checks run with is written.
+        git_config: PathBuf,
     },
 }
 
@@ -193,6 +196,7 @@ impl<'a> Machine<'a> {
             config_path,
             config,
             settings: scratch.join("fence.json"),
+            git_config: scratch.join("check.gitconfig"),
         })
     }
 
@@ -207,6 +211,7 @@ impl<'a> Machine<'a> {
                 config_path,
                 config,
                 settings,
+                git_config,
             } => Confinement::Agents {
                 access: Access {
                     worktree: directory,
@@ -215,9 +220,10 @@ impl<'a> Machine<'a> {
                     data_dir,
                     machine_config: Some(config_path),
                 },
-                sandbox: &config.sandbox,
+                sandbox: config.check_sandbox(),
                 environment: &config.environment,
                 settings,
+                git_config,
             },
         }
     }
