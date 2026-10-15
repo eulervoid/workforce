@@ -586,3 +586,72 @@ fn item_groups(
         })
         .collect()
 }
+
+/// Work the daemon moved from `review` back to `open`, as when approved work conflicts with the
+/// target: the principal did not make the move, and may miss it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MovedBack {
+    pub item: ItemId,
+    /// The first sentence of the comment the move names as its reason.
+    pub reason: String,
+}
+
+/// The moves back among `events[known..]`, read against the events before them: those the daemon
+/// made from `review` to `open` naming a comment that says why.
+pub fn moves_back(events: &[Event], known: usize) -> Vec<MovedBack> {
+    let mut moves = Vec::new();
+    for (index, event) in events.iter().enumerate().skip(known) {
+        let EventBody::ItemMoved(moved) = &event.content.body else {
+            continue;
+        };
+        let (Actor::Daemon(_), ItemState::Open, Some(because)) =
+            (&event.content.actor, moved.to.state(), moved.because)
+        else {
+            continue;
+        };
+        let before = &events[..index];
+        let from = before.iter().rev().find_map(|earlier| {
+            if let EventBody::ItemMoved(earlier) = &earlier.content.body
+                && earlier.item == moved.item
+            {
+                Some(earlier.to.state())
+            } else {
+                None
+            }
+        });
+        let reason = before.iter().rev().find_map(|earlier| {
+            if let EventBody::Commented(comment) = &earlier.content.body
+                && CommentId::from(earlier.id()) == because
+            {
+                Some(first_sentence(&comment.text))
+            } else {
+                None
+            }
+        });
+        if from == Some(ItemState::Review)
+            && let Some(reason) = reason
+        {
+            moves.push(MovedBack {
+                item: moved.item,
+                reason,
+            });
+        }
+    }
+    moves
+}
+
+/// The first sentence of `text`, without its full stop, to go after a colon: `Merging into main
+/// conflicts in a.rs. The next session…` is `merging into main conflicts in a.rs`.
+fn first_sentence(text: &str) -> String {
+    let line = text.lines().next().unwrap_or_default();
+    let sentence = line.split_once(". ").map_or(line, |(first, _)| first);
+    let sentence = sentence.trim().trim_end_matches('.');
+    // A capital starts the sentence, unless the word is all capitals: `README`.
+    let mut characters = sentence.chars();
+    match (characters.next(), characters.next()) {
+        (Some(first), Some(second)) if second.is_lowercase() => {
+            format!("{}{}", first.to_lowercase(), &sentence[first.len_utf8()..])
+        }
+        _ => sentence.to_owned(),
+    }
+}

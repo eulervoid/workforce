@@ -225,7 +225,8 @@ impl Feed {
         })
     }
 
-    /// Asks the daemon for the state and the new events, and hands the app their lines.
+    /// Asks the daemon for the state and the new events, and hands the app their lines and the
+    /// moves back to `open` among them to warn of.
     fn refresh(&mut self, workspace: &mut Workspace, app: &mut App) -> anyhow::Result<()> {
         workspace.refresh()?;
         let new = workspace.events_since(self.events.len() as u64)?;
@@ -238,6 +239,7 @@ impl Feed {
             app.width,
         );
         app.logged(lines);
+        app.warn(snapshot::moves_back(&self.events, known));
         Ok(())
     }
 
