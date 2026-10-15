@@ -16,6 +16,8 @@
 //! - `crash`: exits with an error.
 //! - `login`: answers the prompt `Authentication required`, as a harness whose login lapsed.
 //! - `turn`: ends the turn.
+//! - `unstartable`, as the first line: exits before it answers `initialize`, as a harness that is
+//!   not installed.
 //!
 //! New sessions offer two models, `fast` and `deep`; `fast` is the default.
 //!
@@ -102,6 +104,12 @@ fn main() {
     let script = std::fs::read_to_string(&script_path).unwrap_or_default();
     let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
     let all: Vec<String> = script.lines().map(str::to_string).collect();
+    if all
+        .first()
+        .is_some_and(|operation| operation == "unstartable")
+    {
+        std::process::exit(127);
+    }
     let mut operations = all.clone().into_iter();
     let mut session = String::new();
     let mut done = 0;

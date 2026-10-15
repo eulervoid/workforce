@@ -742,6 +742,40 @@ async fn a_harness_that_crashes_fails_the_session() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_harness_that_does_not_start_ends_the_session_for_the_machine() {
+    let world = World::new("unstartable\n").await;
+    let item = world
+        .wf
+        .add(&["--title", "Unreachable", "--recovery", "none"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(
+        session["status"],
+        "harness_unreachable",
+        "{}",
+        world.item(&item)
+    );
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "open");
+    assert_eq!(comments(&shown), Value::Array(Vec::new()), "{shown}");
+    let entries = inbox(&world);
+    let titles: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry["kind"].as_str().unwrap(),
+                entry["title"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        titles,
+        [("machine_fault", "fake-coder cannot be reached")],
+        "{entries:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_lapsed_login_ends_sessions_for_the_machine_and_the_inbox_says_so_once() {
     let world = World::new("login\n").await;
     // Without a recovery level, one failure would leave the item to the principal.
