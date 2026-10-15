@@ -8,6 +8,7 @@ use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::HashId;
 use wf_core::item::{Item, ItemState, ItemView, Priority};
 use wf_core::state::State;
+use wf_core::stats::ItemStats;
 
 use crate::cli::ItemGrouping;
 
@@ -68,6 +69,38 @@ fn item_ref_view(state: &State, view: ItemView<'_>) -> ItemRefView {
         state: view.state(policy),
         priority,
     }
+}
+
+/// One line of `wf stats`: an item that was worked on, and how that went.
+#[derive(Serialize)]
+pub struct ItemStatsView {
+    #[serde(flatten)]
+    pub item: ItemRefView,
+    pub archived: bool,
+    #[serde(flatten)]
+    pub stats: ItemStats,
+}
+
+/// The items that had sessions, archived ones included: the most submissions first, then the
+/// most change requests.
+pub fn item_stats_views(state: &State) -> Vec<ItemStatsView> {
+    let mut views: Vec<ItemStatsView> = state
+        .items()
+        .filter_map(|view| {
+            let stats = state.item_stats(view.id())?;
+            (stats.sessions > 0).then(|| ItemStatsView {
+                item: item_ref_view(state, view),
+                archived: matches!(view, ItemView::Archived(_)),
+                stats,
+            })
+        })
+        .collect();
+    views.sort_by(|left, right| {
+        (right.stats.submissions, right.stats.change_requests)
+            .cmp(&(left.stats.submissions, left.stats.change_requests))
+            .then_with(|| left.item.id.cmp(&right.item.id))
+    });
+    views
 }
 
 fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<ItemRefView> {

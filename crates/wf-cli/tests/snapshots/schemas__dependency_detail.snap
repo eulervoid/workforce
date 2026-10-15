@@ -35,6 +35,12 @@ expression: "Envelope::new(&detail)"
     "review": null,
     "review_status": null,
     "recovery": "standard",
+    "stats": {
+      "sessions": 0,
+      "submissions": 0,
+      "change_requests": 0,
+      "lead_ms": null
+    },
     "waiting": [],
     "requires": [],
     "depends_on": [],

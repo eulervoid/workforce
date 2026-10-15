@@ -484,7 +484,28 @@ wf work submit --note \"all done\"
         "the start, the end and the merge move the item: {moves:?}"
     );
 
+    let log = world.wf(&["log"]);
+    let ended = log
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|event| event["kind"] == "SessionEnded")
+        .unwrap();
+    assert_eq!(ended["title"], "Add hello");
+    let outcome = &ended["outcome"]["session_ended"];
+    assert_eq!(outcome["reason"], "submitted", "{ended}");
+    assert_eq!(outcome["commit"], session["commit"]);
+    assert_eq!(outcome["because"], "all done");
+
     let shown = world.item(&item);
+    assert_eq!(
+        (&shown["stats"]["sessions"], &shown["stats"]["submissions"]),
+        (&1.into(), &1.into())
+    );
+    assert!(shown["stats"]["lead_ms"].is_u64(), "{}", shown["stats"]);
+    let stats = world.wf(&["stats"]);
+    assert_eq!(stats[0]["id"], shown["id"], "{stats}");
+    assert_eq!(stats[0]["submissions"], 1);
     let notes = comments(&shown);
     let notes = notes.as_array().unwrap();
     assert!(

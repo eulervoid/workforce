@@ -130,7 +130,8 @@ fn events_and_status() {
     let _ = scenario.done;
 }
 
-/// A session that released with a note, and a verdict with the comment that says why.
+/// A session that released with a note, and a verdict with the comment that says why; and how
+/// the item went.
 #[test]
 fn outcomes_in_the_log() {
     let fixture = Fixture::new(1);
@@ -180,6 +181,7 @@ fn outcomes_in_the_log() {
         .map(|event| view::event_view(&state, event, true, &comments))
         .collect();
     insta::assert_json_snapshot!("log_outcomes", Envelope::new(&views));
+    insta::assert_json_snapshot!("item_stats", Envelope::new(view::item_stats_views(&state)));
 }
 
 #[test]

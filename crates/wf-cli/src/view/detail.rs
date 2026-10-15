@@ -16,6 +16,7 @@ use wf_core::policy::{Field, ReviewStep};
 use wf_core::review::ReviewStatus;
 use wf_core::session::{CommitId, EndReason, SessionRole, Verdict};
 use wf_core::state::State;
+use wf_core::stats::ItemStats;
 use wf_core::supervision::WaitsOn;
 
 use super::item::{ItemSummary, summary};
@@ -245,6 +246,8 @@ pub struct ItemDetail {
     pub review_status: Option<ReviewStatusView>,
     /// What happens when a session ends without finishing: its own level, or its type's.
     pub recovery: Option<String>,
+    /// How many rounds the work went through, and how long it took.
+    pub stats: ItemStats,
     /// What about the item waits on the principal, as `wf inbox` lists it, in full.
     pub waiting: Vec<WaitingView>,
     pub requires: Vec<String>,
@@ -798,6 +801,9 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         author: actor_view(state, item.author()),
         created: timestamp(item.created()),
         updated: timestamp(item.updated()),
+        stats: state
+            .item_stats(item.id())
+            .expect("a live item of the state has stats"),
         review: item.effective_review_level(policy).map(ToString::to_string),
         review_status: state.review_status(item.id()).map(review_status_view),
         recovery: item

@@ -13,12 +13,13 @@ use crate::theme;
 use crate::transcript::Format;
 use crate::view::{
     ActivityKind, ActorKind, ActorView, AgentDetail, AgentView, BodyPartView, CommentKindView,
-    EventView, Flag, InboxEntryView, ItemDetail, ItemGroup, ItemSummary, MentionsView,
-    ReviewStatusView, SessionView, SourceView, StatusView, StepRefView, StepsView,
+    EventView, Flag, InboxEntryView, ItemDetail, ItemGroup, ItemStatsView, ItemSummary,
+    MentionsView, ReviewStatusView, SessionView, SourceView, StatusView, StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
 use wf_core::inbox::InboxKind;
 use wf_core::item::ItemState;
+use wf_core::stats::ItemStats;
 
 fn short(id: &str) -> &str {
     &id[..id.len().min(wf_core::id::SHORT_ID_LEN)]
@@ -403,6 +404,9 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         ),
         "  ",
     );
+    if detail.stats.sessions > 0 {
+        line(format!("  {}", paint(DIM, item_stats(&detail.stats))), "  ");
+    }
     if !detail.open.is_empty() {
         let open: Vec<String> = detail
             .open
@@ -590,6 +594,56 @@ pub fn flag_detail_for(flag: &Flag, width: Option<usize>) -> String {
     let mut paragraphs = vec![flag.what()];
     paragraphs.extend(flag.command().map(|command| format!("`{command}`")));
     notice_box(vec![(theme::ERROR, flag.heading(), paragraphs)], width)
+}
+
+pub fn item_stats_list(views: &[ItemStatsView]) -> String {
+    if views.is_empty() {
+        return "no items were worked on\n".to_string();
+    }
+    let mut table = table(&[
+        "ITEM",
+        "SESSIONS",
+        "SUBMISSIONS",
+        "CHANGE REQUESTS",
+        "TO DONE",
+        "TITLE",
+    ]);
+    for view in views {
+        let suffix = if view.archived { " · archived" } else { "" };
+        table.add_row([
+            item_label(
+                &view.item.id,
+                &view.item.item_type,
+                view.item.state,
+                None,
+                suffix,
+            ),
+            view.stats.sessions.to_string(),
+            view.stats.submissions.to_string(),
+            view.stats.change_requests.to_string(),
+            view.stats
+                .lead_ms
+                .map_or_else(|| paint(theme::DIM, "-"), duration),
+            view.item.title.clone(),
+        ]);
+    }
+    format!("{table}\n")
+}
+
+/// `3 sessions · 2 submissions · 4 change requests · 2d to done`.
+pub fn item_stats(stats: &ItemStats) -> String {
+    let count = |count: usize, one: &str, many: &str| {
+        format!("{count} {}", if count == 1 { one } else { many })
+    };
+    let mut parts = vec![
+        count(stats.sessions, "session", "sessions"),
+        count(stats.submissions, "submission", "submissions"),
+        count(stats.change_requests, "change request", "change requests"),
+    ];
+    if let Some(lead) = stats.lead_ms {
+        parts.push(format!("{} to done", duration(lead)));
+    }
+    parts.join(" · ")
 }
 
 /// `14m`, `3h05m`, `2d`.
@@ -1382,6 +1436,7 @@ mod tests {
             review: None,
             review_status: None,
             recovery: None,
+            stats: Default::default(),
             waiting: Vec::new(),
             requires: Vec::new(),
             depends_on: Vec::new(),

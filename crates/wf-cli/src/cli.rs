@@ -37,7 +37,7 @@ pub struct Cli {
 /// subcommands in one flat block.
 const COMMAND_GROUPS: &[&[&str]] = &[
     &[
-        "init", "status", "policy", "log", "export", "import", "members", "fork",
+        "init", "status", "policy", "log", "stats", "export", "import", "members", "fork",
     ],
     &["item", "comment", "mentions", "review", "check", "inbox"],
     &["agent", "harness", "session", "work", "permissions"],
@@ -116,6 +116,9 @@ pub enum Command {
     Policy(PolicyCommand),
     /// Print every event of the log, verified.
     Log(LogArgs),
+    /// For each item that was worked on: its sessions, submissions, change requests and the time
+    /// from its first work session to done. The most submissions first.
+    Stats,
     /// Start agents on items, and watch, stop or answer their sessions.
     #[command(subcommand)]
     Session(SessionCommand),
