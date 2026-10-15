@@ -236,8 +236,7 @@ service, where keys are kept, forking away a lost machine, and backups.
 Every command explains itself: `wf --help`, `wf <command> --help`. Commands that take an item or a
 session offer a picker at a terminal when you leave it out, and `--json` gives machine-readable output.
 
-How wf works inside, and where it is going, is in the design: [docs/SPEC.md](docs/SPEC.md). The milestone
-plans, proposals and reviews it grew from are in [docs/design](docs/design).
+How wf works inside, and where it is going, is in the design: [docs/SPEC.md](docs/SPEC.md).
 
 ## Working on wf
 
