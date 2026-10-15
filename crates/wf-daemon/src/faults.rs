@@ -11,14 +11,14 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use wf_core::name::HarnessName;
-use wf_core::session::MachineFault;
+use wf_core::session::{HarnessFault, MachineFault};
 
 /// What is wrong with this machine now.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MachineFaults {
     pub out_of_space: Option<OutOfSpace>,
     /// The harnesses whose sessions cannot run.
-    pub harnesses: BTreeMap<HarnessName, HarnessFault>,
+    pub harnesses: BTreeMap<HarnessName, HarnessAtFault>,
 }
 
 impl MachineFaults {
@@ -39,9 +39,8 @@ pub struct OutOfSpace {
 /// A harness whose sessions cannot run. Its agents are started again every
 /// [`RETRY_HARNESS`]; the first turn it answers shows that it is fine again.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct HarnessFault {
-    /// [`MachineFault::LoginLapsed`] or [`MachineFault::HarnessUnreachable`].
-    pub fault: MachineFault,
+pub struct HarnessAtFault {
+    pub fault: HarnessFault,
     /// When a session of the harness first failed for it, in milliseconds since the Unix epoch.
     pub since_ms: u64,
     /// When one last did.
@@ -83,7 +82,7 @@ impl Faults {
     }
 
     /// Remembers that a session of `harness` failed for `fault`, as `what` says.
-    pub(crate) fn note_harness(&self, harness: &HarnessName, fault: MachineFault, what: String) {
+    pub(crate) fn note_harness(&self, harness: &HarnessName, fault: HarnessFault, what: String) {
         let now_ms = crate::now_ms();
         let mut faults = self.lock();
         match faults.harnesses.get_mut(harness) {
@@ -91,12 +90,12 @@ impl Faults {
             Some(_) | None => {
                 tracing::warn!(
                     "{harness}: {}; its agents are tried again every {}: {what}",
-                    fault.name().replace('_', " "),
+                    MachineFault::from(fault).name().replace('_', " "),
                     humantime::format_duration(RETRY_HARNESS)
                 );
                 faults.harnesses.insert(
                     harness.clone(),
-                    HarnessFault {
+                    HarnessAtFault {
                         fault,
                         since_ms: now_ms,
                         last_ms: now_ms,
@@ -229,11 +228,11 @@ mod tests {
         let codex = HarnessName::new("codex").unwrap();
         faults.note_harness(
             &claude,
-            MachineFault::LoginLapsed,
+            HarnessFault::LoginLapsed,
             "Authentication required".to_string(),
         );
         let first = faults.current().harnesses[&claude].clone();
-        faults.note_harness(&claude, MachineFault::LoginLapsed, "again".to_string());
+        faults.note_harness(&claude, HarnessFault::LoginLapsed, "again".to_string());
         let again = faults.current().harnesses[&claude].clone();
         assert_eq!(
             (again.since_ms, again.what.as_str()),

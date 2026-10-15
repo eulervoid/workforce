@@ -9,7 +9,7 @@ use tokio::time::Instant;
 use wf_core::event::CommentKind;
 use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
-use wf_core::session::{CommitId, MachineFault, SessionRole};
+use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
 use wf_vcs::{GitCli, VcsAdapter};
 
@@ -171,7 +171,7 @@ async fn drive(
         started = start => started,
         Some(_) = stopped.recv() => return End::Over,
         () = tokio::time::sleep(START_TIMEOUT) => {
-            return harness_fault(daemon, run, MachineFault::HarnessUnreachable, format!(
+            return harness_fault(daemon, run, HarnessFault::Unreachable, format!(
                 "{} did not start within {}",
                 run.harness,
                 humantime::format_duration(START_TIMEOUT)
@@ -184,7 +184,7 @@ async fn drive(
             return harness_fault(
                 daemon,
                 run,
-                MachineFault::LoginLapsed,
+                HarnessFault::LoginLapsed,
                 wf_core::error_chain(&error),
             );
         }
@@ -223,7 +223,7 @@ async fn drive(
             return harness_fault(
                 daemon,
                 run,
-                MachineFault::HarnessUnreachable,
+                HarnessFault::Unreachable,
                 format!("{} did not start: {report}", run.harness),
             );
         }
@@ -301,7 +301,7 @@ async fn turns(
                 return harness_fault(
                     daemon,
                     run,
-                    MachineFault::LoginLapsed,
+                    HarnessFault::LoginLapsed,
                     wf_core::error_chain(&error),
                 );
             }
@@ -450,9 +450,9 @@ fn transcript_failed(daemon: &Daemon, run: &Run, error: &std::io::Error) -> End 
 
 /// The harness of the session cannot carry it, as `what` says: the session ends for `fault`, and
 /// the agents of the harness wait until it is tried again.
-fn harness_fault(daemon: &Daemon, run: &Run, fault: MachineFault, what: String) -> End {
+fn harness_fault(daemon: &Daemon, run: &Run, fault: HarnessFault, what: String) -> End {
     daemon.faults.note_harness(&run.harness, fault, what);
-    End::Interrupt(Interruption::MachineFault(fault))
+    End::Interrupt(Interruption::MachineFault(fault.into()))
 }
 
 async fn sleep_until(deadline: Option<Instant>) {

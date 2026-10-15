@@ -166,6 +166,24 @@ impl MachineFault {
     }
 }
 
+/// What is wrong with a harness, so that none of its sessions can run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum HarnessFault {
+    /// The harness says its login has lapsed.
+    LoginLapsed,
+    /// The harness could not be started.
+    Unreachable,
+}
+
+impl From<HarnessFault> for MachineFault {
+    fn from(fault: HarnessFault) -> Self {
+        match fault {
+            HarnessFault::LoginLapsed => MachineFault::LoginLapsed,
+            HarnessFault::Unreachable => MachineFault::HarnessUnreachable,
+        }
+    }
+}
+
 impl EndReason {
     /// The reason's name; a fault of the machine goes by the fault's, so that a sessions list
     /// names it.

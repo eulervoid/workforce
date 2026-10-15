@@ -3,7 +3,7 @@
 use serde::Serialize;
 use wf_core::id::HashId;
 use wf_core::inbox::{InboxKind, permission_waits};
-use wf_core::session::MachineFault;
+use wf_core::session::HarnessFault;
 use wf_core::state::State;
 use wf_daemon::proto::HeldPermission;
 use wf_daemon::{MachineFaults, RETRY_HARNESS};
@@ -86,17 +86,13 @@ fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
         .collect();
     entries.extend(faults.harnesses.iter().map(|(harness, fault)| {
         let (title, todo) = match fault.fault {
-            MachineFault::LoginLapsed => (
+            HarnessFault::LoginLapsed => (
                 format!("The login of {harness} has lapsed"),
                 format!("log in to {harness} again on this machine"),
             ),
-            MachineFault::HarnessUnreachable => (
+            HarnessFault::Unreachable => (
                 format!("{harness} cannot be reached"),
                 format!("check that {harness} is installed and starts on this machine"),
-            ),
-            MachineFault::NoSpace => (
-                "The disk is full".to_string(),
-                "free space on this machine".to_string(),
             ),
         };
         entry(
