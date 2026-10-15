@@ -42,20 +42,20 @@ trait Themed: Styled<Item = Self> + Sized {
 
 impl<T: Styled<Item = T>> Themed for T {}
 
-/// What every cell has under what is drawn on it: the theme's text, on its background. Without
-/// either, nothing: the terminal's own colours show.
-fn base() -> Style {
-    let text = Style::from(theme::text());
-    match theme::background() {
+/// What every cell has under what is drawn on it: `text`, on `background`. Without either,
+/// nothing: the terminal's own colours show.
+pub(super) fn base(text: anstyle::Style, background: Background) -> Style {
+    let text = Style::from(text);
+    match background {
         Background::Terminal => text,
         Background::Color(color) => text.bg(color.into()),
     }
 }
 
-/// Clears `area` for a popup, down to the base.
-fn clear(frame: &mut Frame, area: Rect) {
+/// Clears `area` for a popup, down to `base`.
+fn clear(frame: &mut Frame, area: Rect, base: Style) {
     frame.render_widget(Clear, area);
-    frame.buffer_mut().set_style(area, base());
+    frame.buffer_mut().set_style(area, base);
 }
 
 /// Text with escape codes, such as a rendered transcript, as ratatui text. A reset in it goes
@@ -162,7 +162,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 /// Draws the dashboard; where the text and the list on screen ended up.
 fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     let area = frame.area();
-    frame.buffer_mut().set_style(area, base());
+    frame.buffer_mut().set_style(area, app.base);
     let [header, counts, rule, body, rule_below, latest, keys] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -207,7 +207,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     shown.clickable.spots.extend(warning.clone());
     match &app.prompt {
         Some(Prompt::Choose(choice)) => {
-            draw_choice(frame, choice, accent(app, KeysAt::Choice), body);
+            draw_choice(frame, choice, accent(app, KeysAt::Choice), body, app.base);
             frame.render_widget(
                 Paragraph::new(
                     Line::from(" j/k move · enter pick · esc cancel").themed(theme::text_dimmed()),
@@ -216,7 +216,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
             );
         }
         Some(Prompt::Keys) => {
-            draw_keys(frame, accent(app, KeysAt::Keys), body);
+            draw_keys(frame, accent(app, KeysAt::Keys), body, app.base);
             frame.render_widget(
                 Paragraph::new(Line::from(" any key closes").themed(theme::text_dimmed())),
                 keys,
@@ -247,7 +247,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
                     width: latest.right() - event_area.right(),
                     ..latest
                 };
-                clear(frame, cleared);
+                clear(frame, cleared, app.base);
             }
             draw_tip(frame, &app.tip(&spot.target), latest_width, latest);
         }
@@ -256,7 +256,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         Some(Hovered::Tab(tab)) if *tab != app.tab => {
             let label = shown.clickable.tabs.iter().find(|(each, _)| each == tab);
             if let Some((_, label)) = label {
-                let text = base().fg.unwrap_or(Color::Reset);
+                let text = app.base.fg.unwrap_or(Color::Reset);
                 frame
                     .buffer_mut()
                     .set_style(*label, Style::new().not_dim().fg(text));
@@ -317,7 +317,7 @@ fn draw_warning(frame: &mut Frame, moved: &MovedBack, others: usize, latest: Rec
 }
 
 /// A list to pick from, at the bottom of the body, with the option picked in `accent`.
-fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
+fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect, base: Style) {
     let (title, options): (String, Vec<String>) = match choice {
         Choice::Start { item, starters, .. } => (
             format!(" start #{} ", item.short()),
@@ -366,7 +366,7 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
         width: width.min(body.width.saturating_sub(1)),
         height,
     };
-    clear(frame, area);
+    clear(frame, area, base);
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::bordered()
@@ -402,7 +402,7 @@ const KEYS: &[(&str, &str)] = &[
 ];
 
 /// Draws the keys, under their title in `accent`.
-fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
+fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Style) {
     let lines: Vec<Line> = KEYS
         .iter()
         .map(|(keys, what)| {
@@ -419,7 +419,7 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
         width: body.width.saturating_sub(2).min(52),
         height,
     };
-    clear(frame, area);
+    clear(frame, area, base);
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::bordered()
@@ -537,10 +537,10 @@ fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
 
 /// The label of the tab on screen, between ends in the colour behind it, as a highlight has. With
 /// `reverse` that is the colour of its text; without a colour behind it, the ends are spaces.
-fn active_tab(label: String) -> Vec<Span<'static>> {
+fn active_tab(label: String, base: Style) -> Vec<Span<'static>> {
     let style = Style::from(theme::tab_active());
     let behind = if style.add_modifier.contains(Modifier::REVERSED) {
-        Some(style.fg.or(base().fg).unwrap_or(Color::Reset))
+        Some(style.fg.or(base.fg).unwrap_or(Color::Reset))
     } else {
         style.bg
     };
@@ -572,7 +572,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
                 accent(app, KeysAt::Log),
             )
         } else if tab == app.tab {
-            active_tab(label)
+            active_tab(label, app.base)
         } else {
             // A space where the active tab has its ends, so the tabs keep their places.
             vec![Span::raw(format!(" {label} ")).themed(theme::text_dimmed())]
@@ -832,7 +832,12 @@ fn draw_list(
     let mut indicators = Vec::new();
     let above = entries_among(&list.entries[..top.min(bottom)]);
     if above > 0 {
-        indicators.push(draw_indicator(frame, row(area, 0), &format!("  ↑ {above}")));
+        indicators.push(draw_indicator(
+            frame,
+            row(area, 0),
+            &format!("  ↑ {above}"),
+            app.base,
+        ));
     }
     let below = entries_among(&list.entries[bottom..]);
     if below > 0 {
@@ -841,6 +846,7 @@ fn draw_list(
             frame,
             row(area, last),
             &format!("  ↓ {below}"),
+            app.base,
         ));
     }
     for ListButton {
@@ -888,7 +894,7 @@ fn row(area: Rect, index: u16) -> Rect {
 
 /// Draws `text` dim at the right end of `row`, a space either side of it, over what is there,
 /// with the background of the row's end behind it; returns where it was drawn.
-fn draw_indicator(frame: &mut Frame, row: Rect, text: &str) -> Rect {
+fn draw_indicator(frame: &mut Frame, row: Rect, text: &str, base: Style) -> Rect {
     let text = format!(" {text} ");
     let width = (textwrap::core::display_width(&text) as u16).min(row.width);
     let area = Rect {
@@ -904,7 +910,7 @@ fn draw_indicator(frame: &mut Frame, row: Rect, text: &str) -> Rect {
     for x in area.left()..area.right() {
         buffer[(x, row.y)].reset();
     }
-    let style = base().patch(theme::text_dimmed()).bg(background);
+    let style = base.patch(theme::text_dimmed()).bg(background);
     buffer.set_stringn(area.x, area.y, text, usize::from(width), style);
     area
 }
@@ -912,12 +918,12 @@ fn draw_indicator(frame: &mut Frame, row: Rect, text: &str) -> Rect {
 /// Draws where a scrolled text `area` high is, at the right end of its last row, as neovim's
 /// ruler shows it: `Top`, `Bot`, or how far down as a percentage. Nothing when all of the text
 /// is on screen, as for a list that fits.
-fn draw_position(frame: &mut Frame, area: Rect, top: usize, last_top: usize) {
+fn draw_position(frame: &mut Frame, area: Rect, top: usize, last_top: usize, base: Style) {
     if last_top == 0 || area.height == 0 {
         return;
     }
     let position = format!("{}%", (top * 100 / last_top).clamp(0, 100));
-    draw_indicator(frame, row(area, area.height - 1), &position);
+    draw_indicator(frame, row(area, area.height - 1), &position, base);
 }
 
 /// `area` without its last column, which keeps text off the right edge and out of the corner.
@@ -1537,7 +1543,10 @@ fn draw_detail(
                 return None;
             };
             let text = ansi_text(text);
-            (draw_scrolled(frame, text, opened.scroll, body), Some(*id))
+            (
+                draw_scrolled(frame, text, opened.scroll, body, app.base),
+                Some(*id),
+            )
         }
         Detail::Agent(id) => {
             let Some(InView::Agent { text, .. }) = in_view
@@ -1546,7 +1555,10 @@ fn draw_detail(
                 return None;
             };
             let text = ansi_text(text);
-            (draw_scrolled(frame, text, opened.scroll, body), None)
+            (
+                draw_scrolled(frame, text, opened.scroll, body, app.base),
+                None,
+            )
         }
         Detail::Flag(flag) => {
             let Some(InView::Flag { text, .. }) = in_view
@@ -1555,7 +1567,10 @@ fn draw_detail(
                 return None;
             };
             let text = ansi_text(text);
-            (draw_scrolled(frame, text, opened.scroll, body), None)
+            (
+                draw_scrolled(frame, text, opened.scroll, body, app.base),
+                None,
+            )
         }
         Detail::Session(id) => {
             let Some(InView::Session(session)) =
@@ -1644,7 +1659,7 @@ fn draw_session(
     if let Some(line) = bottom {
         frame.render_widget(Paragraph::new(line), context);
     }
-    let shown = draw_lines(frame, lines, &open, scroll, body);
+    let shown = draw_lines(frame, lines, &open, scroll, body, app.base);
     if let Some((what, request)) = asks.first() {
         let line = Line::from(vec![
             themed("? ", theme::attention().bold()),
@@ -1788,14 +1803,20 @@ fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
 
 /// Draws `text` wrapped to `area` without its last column at `scroll`, kept to what the text
 /// allows; returns the scroll it was drawn at.
-fn draw_scrolled(frame: &mut Frame, text: Text<'static>, scroll: Scroll, area: Rect) -> Scroll {
+fn draw_scrolled(
+    frame: &mut Frame,
+    text: Text<'static>,
+    scroll: Scroll,
+    area: Rect,
+    base: Style,
+) -> Scroll {
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let lines = paragraph.line_count(padded(area).width);
     let last_top = lines.saturating_sub(usize::from(area.height));
     let scroll = scroll.within(last_top);
     let top = u16::try_from(scroll.top()).unwrap_or(u16::MAX);
     frame.render_widget(paragraph.scroll((top, 0)), padded(area));
-    draw_position(frame, area, scroll.top(), last_top);
+    draw_position(frame, area, scroll.top(), last_top, base);
     scroll
 }
 
@@ -1808,6 +1829,7 @@ fn draw_lines(
     more: &[Line<'static>],
     scroll: Scroll,
     area: Rect,
+    base: Style,
 ) -> Scroll {
     let height = usize::from(area.height);
     let last_top = (lines.len() + more.len()).saturating_sub(height);
@@ -1820,7 +1842,7 @@ fn draw_lines(
         .cloned()
         .collect();
     frame.render_widget(Paragraph::new(shown), padded(area));
-    draw_position(frame, area, scroll.top(), last_top);
+    draw_position(frame, area, scroll.top(), last_top, base);
     scroll
 }
 
@@ -1841,7 +1863,7 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect, spots: &mut Vec<Spot>) -> 
         return None;
     }
     let text = ansi_text(&text);
-    let scroll = draw_scrolled(frame, text, app.log.scroll, area);
+    let scroll = draw_scrolled(frame, text, app.log.scroll, area, app.base);
     spots.extend(links::find(
         frame.buffer_mut(),
         area,
