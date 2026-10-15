@@ -1,15 +1,29 @@
 //! Which agent takes which item: the selection the dispatcher makes, and `wf item list --ready
 //! --for` shows. Pure functions of the state and the device the agent runs on.
 
+use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
 use crate::autonomy::StartMode;
-use crate::event::DeviceProfile;
+use crate::event::{CommentKind, DeviceProfile};
 use crate::identity::{AgentId, DeviceKey};
 use crate::item::Item;
 use crate::name::Requirement;
+use crate::review::ReviewStatus;
 use crate::session::SessionRole;
 use crate::state::{AgentDefinition, State};
+
+/// How far the work on an item got, in the order the dispatcher takes items of one priority:
+/// started work is finished before new work starts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Progress {
+    /// The latest review requested changes and change requests are still open.
+    SentBack,
+    /// Work sessions ran on it, and no review sent it back: released, or moved back to open
+    /// after a merge conflict.
+    Started,
+    NeverStarted,
+}
 
 impl State {
     /// What the device says about itself, if it has said anything.
@@ -73,9 +87,53 @@ impl State {
         offered
     }
 
-    /// The ready items `agent` may take on `device`, most urgent first: in a lane of the agent,
-    /// with every requirement met by its capabilities or the hardware of the device, and not
-    /// waiting for the principal after sessions that did not finish.
+    /// How far the work on `item` got.
+    pub fn progress(&self, item: &Item) -> Progress {
+        let changes_open = item
+            .comments()
+            .values()
+            .any(|comment| comment.kind == CommentKind::ChangeRequest && comment.is_open());
+        if changes_open && self.review_status(item.id()) == Some(ReviewStatus::ChangesRequested) {
+            return Progress::SentBack;
+        }
+        let worked_on = self
+            .sessions()
+            .any(|session| session.item() == item.id() && session.role() == SessionRole::Work);
+        if worked_on {
+            Progress::Started
+        } else {
+            Progress::NeverStarted
+        }
+    }
+
+    /// The order the dispatcher takes ready items in: priority (`P0` first, none last), then
+    /// [`Progress`], then fewer unchecked steps, then, for started work, more checked steps, so
+    /// what finishes soonest goes first; then creation time and id.
+    pub fn dispatch_order(&self, item: &Item) -> impl Ord + use<> {
+        let progress = self.progress(item);
+        let body = item.body();
+        let checked = body.steps().filter(|step| step.done).count();
+        let unchecked = body.steps().count() - checked;
+        let more_checked = match progress {
+            Progress::Started => checked,
+            Progress::SentBack | Progress::NeverStarted => 0,
+        };
+        (
+            item.priority().is_none(),
+            item.priority(),
+            progress,
+            unchecked,
+            Reverse(more_checked),
+            item.created(),
+            item.id(),
+        )
+    }
+
+    /// The ready items `agent` may take on `device`: in a lane of the agent, with every
+    /// requirement met by its capabilities or the hardware of the device, and not waiting for the
+    /// principal after sessions that did not finish. They come in [`State::dispatch_order`]: most
+    /// urgent first, and within a priority work sent back by review, then other started work,
+    /// then new work, each with the fewest unchecked steps first.
     pub fn dispatchable(&self, device: DeviceKey, agent: &AgentId) -> Vec<&Item> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
@@ -85,7 +143,8 @@ impl State {
         };
         let offered = self.offered(device, definition);
 
-        self.ready_items()
+        let mut dispatchable: Vec<&Item> = self
+            .ready_items()
             .into_iter()
             .filter(|item| {
                 item.effective_lane(policy)
@@ -93,6 +152,8 @@ impl State {
             })
             .filter(|item| item.requires().values().all(|need| offered.contains(need)))
             .filter(|item| self.recovery(item.id(), SessionRole::Work).allows_attempt())
-            .collect()
+            .collect();
+        dispatchable.sort_by_cached_key(|item| self.dispatch_order(item));
+        dispatchable
     }
 }
