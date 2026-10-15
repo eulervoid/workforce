@@ -1,7 +1,7 @@
 # M1 review
 
 Scope: `4015739..6408c0e` (sync, equivocation, device invites, daemon, gossip, fork), compared with
-`docs/M1.md` and `AGENTS.md`.
+`docs/design/M1.md` and `AGENTS.md`.
 
 State at review time: `cargo clippy --workspace --all-targets` is clean. `cargo test --workspace` passed
 except for one flaky failure (see T1). Findings marked **verified** were reproduced, either with a

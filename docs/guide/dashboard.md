@@ -105,6 +105,9 @@ before the dashboard started do not warn.
 The place that has the keys is marked in blue; the rest is dimmed. The whole dashboard dims while its
 terminal pane is not focused. In tmux this needs `set -g focus-events on`.
 
+The blue, and every other colour of the dashboard and the CLI, can be changed with `[theme]` in the
+machine config: see [Colours](machine-config.md#colours).
+
 ## `wf inbox`
 
 What waits on you, as a table:

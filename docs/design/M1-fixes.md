@@ -1,6 +1,6 @@
 # M1 fixes: plan
 
-Fixes for the findings in `docs/M1-review.md`. They are grouped into work items. Each item is one or a
+Fixes for the findings in `docs/design/M1-review.md`. They are grouped into work items. Each item is one or a
 few small commits and ends with `cargo test` green. The order matters: items 1-3 change how a fork's
 history is taken in, and the later items build on that.
 
@@ -235,7 +235,7 @@ The real fix is the key-provider hook that M1.md already lists under *Risks*: th
     stays, but it is now only for devices without the parent.
   - Remove the "Not done" entry about believing the first genesis.
   - Correct the "all prefix items intact" exit criterion once the content-equality test passes.
-* Delete or archive `docs/M1-review.md` and this file when the work is done.
+* Delete or archive `docs/design/M1-review.md` and this file when the work is done.
 
 ## Considered and rejected
 * **A snapshot in the fork's genesis instead of history.** It would remove the history path entirely,
