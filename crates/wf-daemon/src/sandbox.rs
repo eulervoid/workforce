@@ -28,6 +28,12 @@ pub(crate) struct Access<'a> {
     pub machine_config: Option<&'a Path>,
 }
 
+/// Whether `fence` is a file in one of the directories of `PATH`.
+pub(crate) fn fence_installed() -> bool {
+    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .any(|directory| directory.join("fence").is_file())
+}
+
 /// `agent`, started by Fence in the worktree. The settings Fence reads are written to `settings`.
 pub(crate) fn wrap(
     config: &FenceConfig,

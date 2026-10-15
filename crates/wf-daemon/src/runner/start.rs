@@ -46,10 +46,18 @@ pub(super) fn sandboxed(
     crate::sandbox::wrap(config, &access, &agent, &settings).map_err(|error| error.to_string())
 }
 
-/// Whether `program` is a file in one of the directories of `PATH`.
-fn on_path(program: &str) -> bool {
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .any(|directory| directory.join(program).is_file())
+/// The name an agent of `principal` commits under: `@principal/agent`, as it is named everywhere
+/// else.
+pub(super) fn git_identity(
+    state: &State,
+    principal: PrincipalKey,
+    agent: &AgentName,
+) -> Result<String, SessionError> {
+    let handle = &state
+        .member(&principal)
+        .ok_or(SessionError::NotBound)?
+        .handle;
+    Ok(format!("@{handle}/{agent}"))
 }
 
 impl Daemon {
@@ -90,11 +98,7 @@ impl Daemon {
         role: SessionRole,
     ) -> Result<Setup, SessionError> {
         let principal = self.principal_of_device(state)?;
-        let handle = &state
-            .member(&principal)
-            .ok_or(SessionError::NotBound)?
-            .handle;
-        let git_identity = format!("@{handle}/{agent}");
+        let git_identity = git_identity(state, principal, &agent)?;
         let definition = state
             .agent(&agent, principal)
             .ok_or_else(|| SessionError::UnknownAgent(agent.clone()))?
@@ -106,7 +110,9 @@ impl Daemon {
         let sandbox = machine_config.sandbox_of(&agent);
         let environment = machine_config.environment_of(&agent);
         match &sandbox {
-            SandboxConfig::Fence(_) if !on_path("fence") => return Err(SessionError::NoFence),
+            SandboxConfig::Fence(_) if !crate::sandbox::fence_installed() => {
+                return Err(SessionError::NoFence);
+            }
             SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
         }
         let policy = &state.policy().expect("a workforce has a policy").policy;
@@ -236,17 +242,6 @@ impl Daemon {
         // the item and a slot until the next daemon starts.
         let prepared = async {
             let state = self.snapshot(loaded).await?;
-            if state.merges_target_first(session) {
-                self.merge_target_first(
-                    loaded,
-                    setup.principal,
-                    item,
-                    worktree.clone(),
-                    repository.clone(),
-                    setup.target.clone(),
-                )
-                .await?;
-            }
             if let Some((item, to)) = state.start_move(session) {
                 self.move_item(loaded, setup.principal, item, to, None, Some(session))
                     .await?;

@@ -2,7 +2,8 @@ use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::ItemState;
 use crate::lifecycle::{
-    AfterEnd, Closing, Finish, Interruption, MergeFailure, SessionEnd, TurnOutcome,
+    AfterEnd, AfterFailedChecks, Closing, Finish, Interruption, MergeFailure, SessionEnd,
+    TurnOutcome,
 };
 use crate::session::{CommitId, EndReason, Verdict};
 use crate::state::State;
@@ -298,64 +299,153 @@ fn work_that_conflicts_reopens_and_work_that_may_merge_later_waits_in_review() {
 }
 
 #[test]
-fn a_session_after_a_conflicting_merge_begins_with_the_target_merged_in() {
+fn work_rebases_at_submit_until_it_is_approved() {
     let mut scene = Scene::new();
-    let task = scene.item(create("task", "work"));
+    let task = scene.item(create_reviewed("task", "careful", "standard"));
     let first = scene.start(task);
-    assert!(
-        !scene.state.merges_target_first(first),
-        "nothing was submitted yet"
-    );
-    scene.apply(moved(task, ItemState::Review));
-    scene.end(
-        first,
-        EndReason::Submitted {
-            commit: Some(commit()),
-        },
-    );
-    assert!(scene.state.unmerged_work(task).is_some());
-
-    scene.apply(moved(task, ItemState::Open));
-    let after_conflict = scene.start(task);
-    assert!(scene.state.merges_target_first(after_conflict));
+    assert!(scene.state.rebases_at_submit(first));
     let review = scene
         .apply(start_review("coder", task, commit()))
         .id()
         .into();
     assert!(
-        !scene.state.merges_target_first(review),
-        "only work merges the target in"
+        !scene.state.rebases_at_submit(review),
+        "only work is rebased"
     );
-}
-
-#[test]
-fn work_sent_back_by_its_review_does_not_merge_the_target_in() {
-    let mut scene = Scene::new();
-    let task = scene.item(create_reviewed("task", "careful", "standard"));
-    let first = scene.start(task);
     scene.apply(moved(task, ItemState::Review));
+    assert!(
+        !scene.state.rebases_at_submit(first),
+        "work that was moved on to review is not rewritten"
+    );
     let submitted = EndReason::Submitted {
         commit: Some(commit()),
     };
     scene.end(first, submitted);
+
+    // Sent back by its review.
     scene.apply(verdict(task, commit(), Verdict::RequestChanges));
     scene.apply(moved(task, ItemState::Open));
     let again = scene.start(task);
-    assert!(!scene.state.merges_target_first(again));
-    scene.end(again, EndReason::Released);
-
-    // Approved, then sent back by the merge's conflict.
-    let second = scene.start(task);
+    assert!(scene.state.rebases_at_submit(again));
     scene.apply(moved(task, ItemState::Review));
-    scene.end(second, submitted);
+    scene.end(again, submitted);
+
+    // Approved, it waits in review for its merge and is never rewritten.
     scene.apply(verdict(task, commit(), Verdict::Approve));
     let waiting = scene.start(task);
-    assert!(
-        !scene.state.merges_target_first(waiting),
-        "approved work in review waits for its merge"
-    );
+    assert!(!scene.state.rebases_at_submit(waiting));
     scene.end(waiting, EndReason::Released);
+
+    // Sent back by the merge's conflict, it is rebased at the next submit.
     scene.apply(moved(task, ItemState::Open));
     let after_conflict = scene.start(task);
-    assert!(scene.state.merges_target_first(after_conflict));
+    assert!(scene.state.rebases_at_submit(after_conflict));
+}
+
+impl Scene {
+    /// Applies `body` as the daemon, which does not count as the principal acting on an item.
+    fn apply_by_daemon(&mut self, body: crate::event::EventBody) -> crate::event::Event {
+        self.clock += 1;
+        let actor = Actor::Daemon(self.fixture.founder_actor().principal());
+        let event = self
+            .fixture
+            .author_as(&self.state, 0, actor, self.clock, body);
+        self.state
+            .receive(event.clone(), crate::state::Trust::Untrusted)
+            .unwrap();
+        event
+    }
+
+    /// A submission of work whose merge result then fails `checks` checks.
+    fn submit_and_fail_checks(&mut self, item: ItemId, checks: usize) {
+        let session = self
+            .apply_by_daemon(start_session("coder", item))
+            .id()
+            .into();
+        self.apply_by_daemon(end_session(
+            session,
+            EndReason::Submitted {
+                commit: Some(commit()),
+            },
+        ));
+        for check in 0..checks {
+            let failed = self.apply_by_daemon(change_request(item, &format!("check {check}")));
+            // The agent fixes each before it submits again.
+            let fixed = resolving(item, "fixed", &[failed.id().into()]);
+            self.apply_by_daemon(fixed);
+        }
+    }
+}
+
+#[test]
+fn failed_checks_send_work_back_twice_before_the_principal_decides() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    let back_to_work = AfterFailedChecks::BackToWork {
+        to: ItemState::Open,
+    };
+    assert_eq!(scene.state.failed_check_runs(task), 0);
+    assert_eq!(scene.state.after_failed_checks(task), back_to_work);
+
+    // One run with two failed checks counts once.
+    scene.submit_and_fail_checks(task, 2);
+    assert_eq!(scene.state.failed_check_runs(task), 1);
+    assert_eq!(scene.state.after_failed_checks(task), back_to_work);
+
+    scene.submit_and_fail_checks(task, 1);
+    assert_eq!(scene.state.failed_check_runs(task), 2);
+    assert_eq!(
+        scene.state.after_failed_checks(task),
+        AfterFailedChecks::WaitsForPrincipal { runs: 2 }
+    );
+
+    // Once the principal acts on the item, the count starts again.
+    scene.apply(comment(task, "go on"));
+    assert_eq!(scene.state.failed_check_runs(task), 0);
+    assert_eq!(scene.state.after_failed_checks(task), back_to_work);
+    scene.submit_and_fail_checks(task, 1);
+    assert_eq!(scene.state.failed_check_runs(task), 1);
+}
+
+#[test]
+fn change_requests_of_others_are_not_failed_checks() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    scene.submit_and_fail_checks(task, 0);
+    let principal = scene.apply(change_request(task, "rename it"));
+    scene.apply(resolving(task, "done", &[principal.id().into()]));
+    assert_eq!(scene.state.failed_check_runs(task), 0);
+}
+
+#[test]
+fn work_with_an_open_blocker_waits_to_merge_and_the_inbox_shows_the_blocker() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    scene.apply(moved(task, ItemState::Review));
+    scene.end(
+        session,
+        EndReason::Submitted {
+            commit: Some(commit()),
+        },
+    );
+    assert_eq!(scene.state.pending_merges().len(), 1);
+
+    let blocker = scene.apply_by_daemon(blocker(task, "main itself fails `clippy`"));
+    assert!(scene.state.pending_merges().is_empty());
+    let waiting: Vec<_> = scene
+        .state
+        .inbox()
+        .into_iter()
+        .map(|entry| entry.waiting)
+        .collect();
+    assert_eq!(
+        waiting,
+        [crate::inbox::Waiting::Blocker {
+            comment: blocker.id().into()
+        }]
+    );
+
+    scene.apply(resolving(task, "fixed on main", &[blocker.id().into()]));
+    assert_eq!(scene.state.pending_merges().len(), 1);
 }

@@ -137,7 +137,7 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
         .into_iter()
         .map(|peer| (peer, device_label(replica.state(), peer)))
         .collect();
-    let storage = StorageHandle::spawn(replica, move || {
+    let storage = StorageHandle::spawn(replica, move |_| {
         Replica::open(RedbStore::open(&store)?, workforce)
     });
 
@@ -362,7 +362,7 @@ pub fn join(
         bail!("this machine has already joined the workforce");
     }
     let workforce = code.workforce;
-    let storage = StorageHandle::spawn(replica, move || {
+    let storage = StorageHandle::spawn(replica, move |_| {
         Replica::open(RedbStore::open(&store)?, workforce)
     });
 

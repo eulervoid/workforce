@@ -4,7 +4,9 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::PathBuf;
-use std::process::Command;
+use std::process::{Command, Output, Stdio};
+use std::sync::mpsc;
+use std::time::Duration;
 
 use serde_json::Value;
 use tempfile::TempDir;
@@ -57,7 +59,7 @@ impl Sandbox {
     }
 
     pub fn run(&self, args: &[&str]) -> String {
-        let output = self.command(args).output().unwrap();
+        let output = output(&mut self.command(args));
         assert!(
             output.status.success(),
             "wf {args:?} failed: {}",
@@ -67,7 +69,7 @@ impl Sandbox {
     }
 
     pub fn fail(&self, args: &[&str]) -> String {
-        let output = self.command(args).output().unwrap();
+        let output = output(&mut self.command(args));
         assert!(!output.status.success(), "wf {args:?} should fail");
         String::from_utf8(output.stderr).unwrap()
     }
@@ -84,6 +86,39 @@ impl Sandbox {
         let mut all = vec!["item", "add"];
         all.extend_from_slice(args);
         self.json(&all)["id"].as_str().unwrap().to_string()
+    }
+}
+
+/// How long a command a test runs may take before the test fails instead of waiting on.
+const COMMAND_LIMIT: Duration = Duration::from_secs(120);
+
+/// Runs `command` to the end and reads its output, as `Command::output` does, but fails the test
+/// with what it ran once that takes longer than `COMMAND_LIMIT`. Output does not end while another
+/// process holds a descriptor of it, even after the command exited.
+pub fn output(command: &mut Command) -> Output {
+    output_within(command, COMMAND_LIMIT)
+}
+
+/// [`output`], with the time it may take.
+pub fn output_within(command: &mut Command, limit: Duration) -> Output {
+    let ran = format!("{command:?}");
+    let child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap_or_else(|error| panic!("{ran} does not start: {error}"));
+    let process = child.id();
+    let (finished, outcome) = mpsc::channel();
+    std::thread::spawn(move || finished.send(child.wait_with_output()));
+    match outcome.recv_timeout(limit) {
+        Ok(output) => output.unwrap_or_else(|error| panic!("{ran} failed: {error}")),
+        Err(_) => {
+            let _ = Command::new("/bin/kill")
+                .args(["-KILL", &process.to_string()])
+                .status();
+            panic!("{ran} did not finish within {}s", limit.as_secs());
+        }
     }
 }
 

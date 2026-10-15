@@ -1,7 +1,9 @@
 //! A scripted ACP agent for tests: answers one prompt with a message, a tool call and a
 //! permission request, and reports the permission outcome in its last message. Its sessions
 //! offer two models. `FAKE_AGENT_REOPENS` set to `resume` or `load` offers that way back into a
-//! session; a load first replays an earlier message.
+//! session; a load first replays an earlier message. `FAKE_AGENT_DESCRIPTORS` names a file it
+//! writes the descriptors it holds to when it starts, one per line. `FAKE_AGENT_SILENT` set makes
+//! it never answer a prompt, nor say anything while it does not.
 
 use std::io::{BufRead, Write};
 
@@ -40,8 +42,27 @@ fn config_options(model: &str) -> Value {
     }])
 }
 
+/// The descriptors this process holds. They are looked up one by one, as reading `/dev/fd`
+/// would hold one more, and by duplicating each: on macOS `stat` on `/dev/fd/N` now and then
+/// fails with EBADF for a pipe that is open.
+fn descriptors() -> Vec<String> {
+    (0..4096)
+        .filter(|&descriptor| {
+            // SAFETY: the descriptor is only duplicated, and the duplicate closed right away.
+            unsafe { std::os::fd::BorrowedFd::borrow_raw(descriptor) }
+                .try_clone_to_owned()
+                .is_ok()
+        })
+        .map(|descriptor| descriptor.to_string())
+        .collect()
+}
+
 fn main() {
+    if let Ok(path) = std::env::var("FAKE_AGENT_DESCRIPTORS") {
+        std::fs::write(path, descriptors().join("\n")).unwrap();
+    }
     let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
+    let silent = std::env::var_os("FAKE_AGENT_SILENT").is_some();
     let mut lines = std::io::stdin().lock().lines();
     while let Some(Ok(line)) = lines.next() {
         let request: Value = serde_json::from_str(&line).unwrap();
@@ -67,6 +88,7 @@ fn main() {
                 "jsonrpc": "2.0", "id": id,
                 "result": {"configOptions": config_options(request["params"]["value"].as_str().unwrap())},
             })),
+            Some("session/prompt") if silent => {}
             Some("session/prompt") => {
                 eprintln!("fake agent got a prompt");
                 chunk("Working on it. ");

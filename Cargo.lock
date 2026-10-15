@@ -677,6 +677,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "close_fds"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3bc416f33de9d59e79e57560f450d21ff8393adcf1cdfc3e6d8fb93d5f88a2ed"
+dependencies = [
+ "cfg-if",
+ "libc",
+]
+
+[[package]]
 name = "cmov"
 version = "0.5.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4086,6 +4096,7 @@ version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cbb175c433c8e28a809d1f5773a2ae96e68c0ce40db865cbab1020bf33ae479c"
 dependencies = [
+ "anstyle",
  "bitflags 2.13.2",
  "compact_str",
  "critical-section",
@@ -5963,6 +5974,7 @@ dependencies = [
  "pulldown-cmark",
  "rand 0.10.3",
  "ratatui",
+ "ratatui-core",
  "rustix",
  "serde",
  "serde_json",
@@ -5989,6 +6001,7 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "data-encoding",
+ "humantime",
  "iroh-base",
  "postcard",
  "proptest",
@@ -6003,10 +6016,14 @@ dependencies = [
 name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "bytesize",
+ "close_fds",
  "data-encoding",
  "globset",
  "humantime",
+ "jiff",
+ "nix 0.31.3",
  "rand 0.10.3",
  "reqwest",
  "rustls",
@@ -6032,6 +6049,7 @@ name = "wf-harness"
 version = "0.0.0"
 dependencies = [
  "agent-client-protocol",
+ "humantime",
  "jiff",
  "serde",
  "serde_json",
@@ -6073,6 +6091,7 @@ dependencies = [
 name = "wf-vcs"
 version = "0.0.0"
 dependencies = [
+ "close_fds",
  "ssh-key",
  "tempfile",
  "thiserror 2.0.21",

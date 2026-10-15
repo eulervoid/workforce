@@ -32,6 +32,8 @@ pub enum Error {
     Transcript(#[from] io::Error),
     #[error("the agent is gone")]
     Closed,
+    #[error("the agent said nothing for {}", humantime::format_duration(*.0))]
+    Silent(Duration),
     #[error("the agent can neither resume nor load a session it opened before")]
     CannotResume,
     #[error("the agent does not offer the model {model:?}; it offers: {}", .available.join(", "))]
@@ -111,7 +113,7 @@ fn choose_model(
 pub async fn models(agent: AcpAgentConfig, directory: PathBuf) -> Result<Vec<Model>, Error> {
     let models = Client
         .connect_with(
-            AcpAgent::new(agent),
+            spawned(agent),
             async move |connection: ConnectionTo<Agent>| {
                 connection
                     .send_request(InitializeRequest::new(ProtocolVersion::V1))
@@ -135,6 +137,39 @@ pub async fn models(agent: AcpAgentConfig, directory: PathBuf) -> Result<Vec<Mod
         .await?;
     Ok(models)
 }
+
+/// `agent`, started so that it inherits no descriptor of wf beyond stdin, stdout and stderr.
+///
+/// On macOS std creates a pipe and sets close-on-exec on it in two steps, as there is no
+/// `pipe2`, and sockets the same way. A process spawned on another thread in between inherits
+/// that end: an agent that holds the write end of the pipe a `git` call reads keeps the call
+/// waiting until the agent exits. `AcpAgent` builds its `Command` itself, so neither a `pre_exec`
+/// nor `POSIX_SPAWN_CLOEXEC_DEFAULT` can be set on it, and a lock around spawns would not cover
+/// pipes and sockets opened by other code. So the agent starts through `sh`, which closes every
+/// descriptor above stderr and then becomes the agent. Elsewhere std creates them close-on-exec
+/// at once and the agent starts as it is.
+fn spawned(agent: AcpAgentConfig) -> AcpAgent {
+    if cfg!(target_os = "macos") {
+        AcpAgent::new(
+            AcpAgentConfig::new("/bin/sh")
+                .arg("-c")
+                .arg(CLOSE_INHERITED)
+                .arg("sh")
+                .arg(agent.command().to_string_lossy())
+                .args(agent.arguments())
+                .envs(agent.environment()),
+        )
+    } else {
+        AcpAgent::new(agent)
+    }
+}
+
+/// Closes every descriptor above stderr, then runs its arguments in its place.
+const CLOSE_INHERITED: &str = r#"for path in /dev/fd/*; do
+    descriptor=${path##*/}
+    [ "$descriptor" -gt 2 ] && eval "exec $descriptor>&-"
+done
+exec "$@""#;
 
 /// The command that starts a known harness in ACP mode.
 pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
@@ -171,6 +206,9 @@ pub struct Launch<W> {
     pub directory: PathBuf,
     pub permissions: Arc<dyn Permissions>,
     pub transcript: W,
+    /// How long a turn may go without a line from the agent while no permission request of it
+    /// waits; the turn then fails with [`Error::Silent`].
+    pub silence_limit: Duration,
 }
 
 struct Turn {
@@ -180,6 +218,9 @@ struct Turn {
 
 /// How long [`Conversation::close`] waits for the agent to exit before it kills it.
 const CLOSE_GRACE: Duration = Duration::from_secs(10);
+
+/// How often a turn checks how long the agent has been silent.
+const SILENCE_CHECK: Duration = Duration::from_secs(1);
 
 /// The task that talks to the agent. Aborting it drops the agent's process, which kills its
 /// process group, so a conversation that is dropped, or a start that is given up, leaves nothing
@@ -214,12 +255,31 @@ impl Conversation {
         let writer = Arc::new(TranscriptWriter::new(launch.transcript));
         let recorder = Arc::clone(&writer);
         let decided = Arc::clone(&writer);
+        let writer_of_turns = Arc::clone(&writer);
+        let mut transcript_failed = writer.failed();
+        // When the agent was last heard from, and how many of its permission requests wait: a
+        // turn that waits on the principal is not silent.
+        let heard_at = Arc::new(Mutex::new(tokio::time::Instant::now()));
+        let heard = Arc::clone(&heard_at);
+        let answered = Arc::clone(&heard_at);
+        let asking = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let waiting = Arc::clone(&asking);
+        let silence_limit = launch.silence_limit;
         // While a loaded session replays its history, the updates are neither recorded nor heard.
         let replaying = Arc::new(AtomicBool::new(false));
         let muted = Arc::clone(&replaying);
-        let agent = AcpAgent::new(launch.agent).with_debug(move |line, direction| {
+        let agent = spawned(launch.agent).with_debug(move |line, direction| {
             let entry =
                 TranscriptEntry::from_line(Timestamp::now(), Direction::from(direction), line);
+            match entry.direction {
+                Direction::FromAgent | Direction::AgentLog => {
+                    *heard
+                        .lock()
+                        .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                        tokio::time::Instant::now();
+                }
+                Direction::ToAgent | Direction::Wf => {}
+            }
             if muted.load(Ordering::SeqCst) && entry.message["method"] == "session/update" {
                 return;
             }
@@ -238,7 +298,7 @@ impl Conversation {
         let mut cancelled_turn = cancelled.clone();
         // What the agent says in the turn that runs, as `reply` returns it.
         let said = Arc::new(Mutex::new(String::new()));
-        let heard = Arc::clone(&said);
+        let chunks = Arc::clone(&said);
 
         let task = tokio::spawn(async move {
             let outcome = Client
@@ -249,7 +309,7 @@ impl Conversation {
                             && let ContentBlock::Text(text) = chunk.content
                             && !unheard.load(Ordering::SeqCst)
                         {
-                            heard
+                            chunks
                                 .lock()
                                 .unwrap_or_else(|poisoned| poisoned.into_inner())
                                 .push_str(&text.text);
@@ -264,6 +324,7 @@ impl Conversation {
                         // answered `cancelled`, as ACP asks of a client.
                         let mut cancelled = cancelled.clone();
                         cancelled.mark_unchanged();
+                        waiting.fetch_add(1, Ordering::SeqCst);
                         let outcome = tokio::select! {
                             decision = permissions
                                 .decide(PermissionRequest::of(&request.tool_call.fields)) => {
@@ -276,6 +337,11 @@ impl Conversation {
                             }
                             _ = cancelled.changed() => RequestPermissionOutcome::Cancelled,
                         };
+                        waiting.fetch_sub(1, Ordering::SeqCst);
+                        *answered
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                            tokio::time::Instant::now();
                         responder.respond(RequestPermissionResponse::new(outcome))
                     },
                     agent_client_protocol::on_receive_request!(),
@@ -358,6 +424,10 @@ impl Conversation {
                         said.lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .clear();
+                        *heard_at
+                            .lock()
+                            .unwrap_or_else(|poisoned| poisoned.into_inner()) =
+                            tokio::time::Instant::now();
                         let request = connection
                             .send_request(PromptRequest::new(
                                 session_id.clone(),
@@ -365,24 +435,45 @@ impl Conversation {
                             ))
                             .block_task();
                         tokio::pin!(request);
+                        // A turn whose transcript cannot be written, or whose agent went silent,
+                        // fails: nobody could follow it, or it hangs.
                         let response = loop {
                             tokio::select! {
-                                response = &mut request => break response,
+                                response = &mut request => break response.map_err(Error::from),
                                 Ok(()) = cancelled_turn.changed() => {
                                     connection.send_notification(
                                         CancelNotification::new(session_id.clone()),
                                     )?;
+                                }
+                                Ok(_) = transcript_failed.wait_for(|failed| *failed) => {
+                                    break Err(match writer_of_turns.finish() {
+                                        Err(error) => Error::Transcript(error),
+                                        Ok(()) => Error::Closed,
+                                    });
+                                }
+                                () = tokio::time::sleep(SILENCE_CHECK) => {
+                                    let heard = *heard_at
+                                        .lock()
+                                        .unwrap_or_else(|poisoned| poisoned.into_inner());
+                                    if asking.load(Ordering::SeqCst) == 0
+                                        && heard.elapsed() >= silence_limit
+                                    {
+                                        break Err(Error::Silent(silence_limit));
+                                    }
                                 }
                             }
                         };
                         let text = std::mem::take(
                             &mut *said.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
                         );
-                        let _ = turn.reply.send(
-                            response
-                                .map(|response| (response.stop_reason, text))
-                                .map_err(Error::from),
-                        );
+                        let failed = response.is_err();
+                        let _ = turn
+                            .reply
+                            .send(response.map(|response| (response.stop_reason, text)));
+                        // The agent is left mid-turn: it is not prompted again.
+                        if failed {
+                            break;
+                        }
                     }
                     Ok(())
                 })

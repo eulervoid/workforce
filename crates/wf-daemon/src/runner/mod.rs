@@ -2,6 +2,7 @@
 //! until the session ends, and applies what follows from the end to the item.
 
 mod brief;
+mod check;
 mod dispatch;
 mod drive;
 mod end;
@@ -28,8 +29,8 @@ use wf_core::name::{AgentName, HarnessName};
 use wf_core::session::SessionRole;
 use wf_core::state::State;
 use wf_harness::{AcpAgentConfig, Permissions};
-use wf_store::AuthorError;
-use wf_vcs::VcsError;
+use wf_store::{AuthorError, ReceiveError};
+use wf_vcs::{DirtyCheckout, VcsError};
 
 use crate::machine_config::{MachineConfig, MachineConfigError, SandboxConfig};
 use crate::{Daemon, Loaded, StorageClosed};
@@ -62,6 +63,22 @@ pub enum SessionError {
     NotWork,
     #[error("{0}")]
     Vcs(#[from] VcsError),
+    #[error(
+        "the submission rebases the branch onto `{target}`, and the rebase stopped at a commit \
+         that conflicts in {}. Resolve the conflicts in these files, then submit again: the \
+         daemon stages them and goes on with the rebase, which may stop at a later commit",
+        .paths.join(", ")
+    )]
+    RebaseConflict { target: String, paths: Vec<String> },
+    #[error(
+        "the submission rebases the branch onto `{target}`, but the worktree has uncommitted \
+         changes to {}; commit or discard them, then submit again",
+        .dirty.files()
+    )]
+    RebaseDirty {
+        target: String,
+        dirty: DirtyCheckout,
+    },
     #[error(transparent)]
     Authoring(#[from] AuthorError),
     #[error(transparent)]
@@ -70,6 +87,8 @@ pub enum SessionError {
     MachineConfig(#[from] MachineConfigError),
     #[error(transparent)]
     SigningKey(#[from] wf_vcs::signing::SigningKeyError),
+    #[error("cannot run a check: {0}")]
+    Check(#[from] crate::command::CommandError),
     #[error(
         "agents run in Fence on this machine, but `fence` is not on PATH; install it, or set \
          `kind = \"off\"` under `[sandbox]` in the machine config to run them without a sandbox"
@@ -81,6 +100,41 @@ pub enum SessionError {
         #[source]
         source: std::io::Error,
     },
+}
+
+impl SessionError {
+    /// Whether something could not be written, so that the same call may succeed later, for
+    /// example once there is space on the disk again.
+    pub(crate) fn is_failed_write(&self) -> bool {
+        match self {
+            Self::Authoring(AuthorError::Receive(ReceiveError::Store(_)))
+            | Self::Storage(_)
+            | Self::Io { .. } => true,
+            Self::Authoring(
+                AuthorError::Receive(ReceiveError::Invalid(_))
+                | AuthorError::Build(_)
+                | AuthorError::Policy(_)
+                | AuthorError::OwnFeedEquivocated
+                | AuthorError::Sign(_),
+            )
+            | Self::NotBound
+            | Self::UnknownAgent(_)
+            | Self::UnknownHarness(_)
+            | Self::UnknownItem(_)
+            | Self::Archived(_)
+            | Self::Claimed { .. }
+            | Self::Starting(_)
+            | Self::UnknownSession(_)
+            | Self::NotOurs(_)
+            | Self::NotWork
+            | Self::Vcs(_)
+            | Self::RebaseConflict { .. }
+            | Self::RebaseDirty { .. }
+            | Self::MachineConfig(_)
+            | Self::SigningKey(_)
+            | Self::NoFence => false,
+        }
+    }
 }
 
 /// Refuses a work session on `item` while a live one holds it.
@@ -110,6 +164,11 @@ const GRACE: Duration = Duration::from_secs(20);
 /// How long a harness may take to start and open its session. Wrappers such as `npx` may first
 /// download the agent.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// How long a turn of an agent may go without a word from it, while no permission request of it
+/// waits, before the session ends: the harness has stopped answering. Longer than any quiet tool
+/// call, such as a build, should take.
+pub(crate) const SILENCE_LIMIT: Duration = Duration::from_secs(20 * 60);
 
 /// How long a cancelled turn may take to end before the harness is closed anyway.
 const CANCEL_GRACE: Duration = Duration::from_secs(20);
@@ -199,7 +258,9 @@ impl ItemLocks {
             .items
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
-        items.insert(item).then_some(ItemLock { locks: self, item })
+        // Built only when taken: a lock built and dropped here would release the holder's, and
+        // deadlock on `items` besides.
+        items.insert(item).then(|| ItemLock { locks: self, item })
     }
 }
 

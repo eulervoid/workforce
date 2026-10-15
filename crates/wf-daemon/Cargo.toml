@@ -10,6 +10,8 @@ wf-store.workspace = true
 wf-net.workspace = true
 wf-vcs.workspace = true
 wf-harness.workspace = true
+blake3.workspace = true
+close_fds.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
@@ -17,6 +19,8 @@ tokio = { workspace = true, features = ["process"] }
 toml.workspace = true
 tracing.workspace = true
 humantime.workspace = true
+jiff.workspace = true
+nix = { version = "0.31", default-features = false, features = ["signal"] }
 data-encoding.workspace = true
 rand.workspace = true
 url = { version = "2", features = ["serde"] }

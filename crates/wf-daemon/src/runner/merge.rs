@@ -7,12 +7,14 @@ use std::sync::{Arc, Mutex, Weak};
 use tokio::sync::Notify;
 use wf_core::event::{Comment, EventBody, Merged};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, PrincipalKey};
+use wf_core::identity::Actor;
 use wf_core::item::{ItemState, ItemView};
 use wf_core::lifecycle::MergeFailure;
+use wf_core::policy::MergeMode;
+use wf_core::review::PendingMerge;
 use wf_core::session::CommitId;
 use wf_vcs::{
-    CommitSigning, GitCli, MergeOutcome, TargetMerge, VcsAdapter, item_branch, item_worktree,
+    CommitSigning, GitCli, MergeOutcome, MergeTree, VcsAdapter, item_branch, item_worktree,
 };
 
 use super::{SessionError, blocking};
@@ -32,7 +34,7 @@ pub(super) enum Attempt {
 }
 
 impl Attempt {
-    fn by_session(self) -> Option<SessionId> {
+    pub(super) fn by_session(self) -> Option<SessionId> {
         match self {
             Attempt::First { session } => Some(session),
             Attempt::Retry => None,
@@ -252,6 +254,12 @@ impl Daemon {
         if live.state(policy) == ItemState::Done {
             return Ok(MergeEnd::Handled);
         }
+        // Queued while an earlier merge of the item ran, which sent it back to work or left it
+        // waiting on the principal, as failed checks do.
+        let pending = PendingMerge { item, commit };
+        if attempt == Attempt::Retry && !state.pending_merges().contains(&pending) {
+            return Ok(MergeEnd::Handled);
+        }
         let principal = self.principal_of_device(&state)?;
         // Merged by a request that did not get to move the item, as when the daemon stopped.
         if live
@@ -304,26 +312,65 @@ impl Daemon {
             Ok(signing) => signing,
             Err(error) => return cannot_merge(wf_core::error_chain(&error)).await,
         };
+        let checks = match policy.merge.mode {
+            MergeMode::Local => policy.merge.checks.as_slice(),
+        };
         let mut outcome = MergeOutcome::TargetMoved;
         for _ in 0..MERGE_ATTEMPTS {
-            let (repository, target, message, signing) = (
-                repository.clone(),
-                target.clone(),
-                message.clone(),
-                signing.clone(),
-            );
-            let merged = blocking(move || {
-                GitCli::open(&repository)?.merge(&target, commit, &message, &signing)
-            })
-            .await
-            .and_then(|merged| merged.map_err(SessionError::from));
-            outcome = match merged {
-                Ok(outcome) => outcome,
+            let made = {
+                let (repository, target) = (repository.clone(), target.clone());
+                blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit))
+                    .await
+                    .and_then(|made| made.map_err(SessionError::from))
+            };
+            let made = match made {
+                Ok(made) => made,
                 Err(error) => {
                     cannot_merge(wf_core::error_chain(&error)).await?;
                     return Err(error);
                 }
             };
+            outcome = match made {
+                MergeTree::Landed { commit } => MergeOutcome::Merged { commit },
+                MergeTree::Conflict { paths } => MergeOutcome::Conflict { paths },
+                MergeTree::Clean { base, tree } => {
+                    let failed = match self
+                        .check_merge(workforce, &repository, checks, base, tree)
+                        .await
+                    {
+                        Ok(failed) => failed,
+                        Err(error) => {
+                            cannot_merge(wf_core::error_chain(&error)).await?;
+                            return Err(error);
+                        }
+                    };
+                    if !failed.is_empty() {
+                        self.checks_failed(loaded, principal, item, attempt, &target, failed)
+                            .await?;
+                        return Ok(MergeEnd::Handled);
+                    }
+                    let (repository, target, message, signing) = (
+                        repository.clone(),
+                        target.clone(),
+                        message.clone(),
+                        signing.clone(),
+                    );
+                    let merged = blocking(move || {
+                        GitCli::open(&repository)?
+                            .commit_merge(&target, base, tree, commit, &message, &signing)
+                    })
+                    .await
+                    .and_then(|merged| merged.map_err(SessionError::from));
+                    match merged {
+                        Ok(outcome) => outcome,
+                        Err(error) => {
+                            cannot_merge(wf_core::error_chain(&error)).await?;
+                            return Err(error);
+                        }
+                    }
+                }
+            };
+            // The target moved while it was checked or merged: the new merge is checked again.
             if outcome != MergeOutcome::TargetMoved {
                 break;
             }
@@ -375,7 +422,7 @@ impl Daemon {
             }
             MergeOutcome::Conflict { paths } => {
                 comment(format!(
-                    "Merging into {target} conflicts in {}. The next session starts with {target} merged into the branch.",
+                    "Merging into {target} conflicts in {}. The next session resolves it: its submission rebases the branch onto {target}.",
                     paths.join(", ")
                 ))
                 .await?;
@@ -403,59 +450,6 @@ impl Daemon {
 }
 
 impl Daemon {
-    /// Merges `target` into the branch of `item` in its `worktree`, as a session starts on it
-    /// after its merge failed, and says on the item what happened, which the session's brief
-    /// shows. A conflict is left in the worktree for the session to resolve. Nothing is said when
-    /// the branch has the target already, as after a session that resolved the conflict.
-    pub(super) async fn merge_target_first(
-        &self,
-        loaded: &Loaded,
-        principal: PrincipalKey,
-        item: ItemId,
-        worktree: PathBuf,
-        repository: PathBuf,
-        target: String,
-    ) -> Result<(), SessionError> {
-        let message = format!("Merge {target} into #{}", HashId::short(&item));
-        let merged = match self.merge_signing() {
-            Ok(signing) => {
-                let target = target.clone();
-                blocking(move || {
-                    GitCli::open(&repository)?.merge_target(&worktree, &target, &message, &signing)
-                })
-                .await?
-                .map_err(SessionError::from)
-            }
-            Err(error) => Err(error),
-        };
-        let note = match merged {
-            Ok(TargetMerge::UpToDate) => return Ok(()),
-            Ok(TargetMerge::Merged) => format!(
-                "Merged {target} into the branch, since the work conflicted with it: it merged cleanly."
-            ),
-            Ok(TargetMerge::Conflict { paths }) => format!(
-                "Merged {target} into the branch, since the work conflicted with it: it conflicts in {}. \
-                 The conflicts are left in the worktree; resolve them and commit the merge before you go on.",
-                paths.join(", ")
-            ),
-            Ok(TargetMerge::Uncommitted) => format!(
-                "The merge of {target} into the branch, since the work conflicted with it, is still \
-                 in the worktree with every conflict resolved; commit it before you go on."
-            ),
-            Err(error) => format!(
-                "Could not merge {target} into the branch, though the work conflicted with it: {}",
-                wf_core::error_chain(&error)
-            ),
-        };
-        self.author(
-            loaded,
-            Actor::Daemon(principal),
-            EventBody::Commented(Comment::plain(item, note)),
-        )
-        .await?;
-        Ok(())
-    }
-
     /// How the merge commit is signed, as the machine config says now.
     fn merge_signing(&self) -> Result<CommitSigning, SessionError> {
         Ok(match self.machine_config()?.commits.merge_signing {

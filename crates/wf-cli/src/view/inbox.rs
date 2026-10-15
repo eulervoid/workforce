@@ -4,6 +4,7 @@ use serde::Serialize;
 use wf_core::id::HashId;
 use wf_core::inbox::{InboxKind, permission_waits};
 use wf_core::state::State;
+use wf_daemon::OutOfSpace;
 use wf_daemon::proto::HeldPermission;
 
 #[derive(Serialize)]
@@ -17,8 +18,13 @@ pub struct InboxEntryView {
     pub passed: Vec<String>,
 }
 
-/// What waits on the principal: what the state says, and the permission requests the daemon holds.
-pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView> {
+/// What waits on the principal: what the state says, the permission requests the daemon holds,
+/// and that the daemon's writes fail for lack of space.
+pub fn inbox_views(
+    state: &State,
+    held: &[HeldPermission],
+    out_of_space: Option<&OutOfSpace>,
+) -> Vec<InboxEntryView> {
     let mut entries: Vec<InboxEntryView> = state
         .inbox()
         .into_iter()
@@ -45,6 +51,19 @@ pub fn inbox_views(state: &State, held: &[HeldPermission]) -> Vec<InboxEntryView
             ),
             passed: request.passed.clone(),
         }
+    }));
+    entries.extend(out_of_space.map(|full| InboxEntryView {
+        kind: InboxKind::OutOfSpace,
+        item: None,
+        session: None,
+        title: "The disk is full".to_string(),
+        what: format!(
+            "nothing moves until there is space; since {}, the daemon could not write {}",
+            jiff::Timestamp::from_millisecond(i64::try_from(full.since_ms).unwrap_or(i64::MAX))
+                .map_or_else(|_| full.since_ms.to_string(), |at| at.to_string()),
+            full.what
+        ),
+        passed: Vec::new(),
     }));
     entries
 }

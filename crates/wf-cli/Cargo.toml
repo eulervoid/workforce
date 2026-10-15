@@ -43,6 +43,8 @@ similar = "3.2"
 textwrap = "0.16"
 cliclack = "0.5"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
+# Only for its `anstyle` feature: ratatui styles from the theme's `anstyle` styles.
+ratatui-core = { version = "0.1", features = ["anstyle"] }
 ansi-to-tui = "8"
 tui-input = "0.15"
 bytesize = "2.7.0"

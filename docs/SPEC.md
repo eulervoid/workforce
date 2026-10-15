@@ -902,6 +902,14 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
 * A verdict names the commit it reviewed. What was reviewed is what gets merged; a new submission starts
   the level again.
 * Merging needs no separate setting: a level with a principal step waits for the principal.
+* Submitting rebases the branch onto the target first, so the reviewer sees the commits as they will
+  land; a branch that has the target already is left as it is. Nobody has approved them yet, so
+  rewriting them costs nothing. The rebased commits are signed as the agent's own are
+  (`[commits] agent_signing`). A conflict refuses the submission with the files: the session goes on,
+  the rebase stays stopped in the worktree, and the agent resolves the files and submits again; the
+  daemon stages them and goes on with the rebase, which may stop at a later commit. A turn that ends
+  with the rebase stopped is nudged with the files. A session that ends without submitting gives
+  the stopped rebase up.
 
 ### Merge
 `[merge] mode` decides how an approved item lands in `target`:
@@ -911,9 +919,7 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
   compare-and-swap `git update-ref`. A dirty checkout makes the merge wait: the item sits in its review
   state with one comment, `wf inbox` shows it, and the dispatcher tries again on every change and
   tick without saying so again. A conflict sends the item back to work with a comment naming the
-  files. When the next session starts, the daemon merges the target into the branch, and says on
-  the item whether it merged cleanly or which files conflict; a conflict is left in the worktree for
-  the agent to resolve and commit. Once the work is merged: `Merged{item, reviewed, commit}`, the
+  files; approved work is never rewritten. Once the work is merged: `Merged{item, reviewed, commit}`, the
   branch and worktree are removed, and the item is done. Work without a review level
   merges as its session ends; approved work is merged by the dispatcher, one merge per item at a time.
 * **`origin` (M3):** a central origin (GitHub etc.). wf pushes approved branches and opens pull requests;

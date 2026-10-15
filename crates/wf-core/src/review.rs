@@ -112,6 +112,8 @@ impl State {
         };
         self.live_items()
             .filter(|item| item.state(policy) == ItemState::Review)
+            // Such as a check that fails on the target too: it waits until that is resolved.
+            .filter(|item| !item.has_open_blocker())
             .filter_map(|item| {
                 let (Some(commit), submitted) = self.submission(item.id())? else {
                     return None;
@@ -132,28 +134,6 @@ impl State {
                 })
             })
             .collect()
-    }
-
-    /// The commit of the latest submission of the live `item`, when it is ready to merge and not
-    /// merged yet: approved, or needing no review.
-    pub(crate) fn unmerged_work(&self, item: ItemId) -> Option<CommitId> {
-        let policy = &self.policy()?.policy;
-        let ItemView::Live(live) = self.item(item)? else {
-            return None;
-        };
-        let (Some(commit), _) = self.submission(item)? else {
-            return None;
-        };
-        let ready = match self.review_status(item) {
-            Some(ReviewStatus::Approved { .. }) => true,
-            Some(
-                ReviewStatus::Awaiting { .. }
-                | ReviewStatus::ChangesRequested
-                | ReviewStatus::Merged { .. },
-            ) => false,
-            None => !live.needs_review(policy),
-        };
-        ready.then_some(commit)
     }
 
     /// Items whose review is over and that wait in `review` only to be moved to `done`: approved

@@ -9,9 +9,10 @@ use wf_core::item::ItemState;
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
 use wf_core::session::{CommitId, EndReason};
 use wf_core::state::State;
-use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_worktree};
+use wf_vcs::{GitCli, Rebase, VcsAdapter, VcsError, item_branch, item_worktree};
 
 use super::merge::{Attempt, MergeRequest, Reservation};
+use super::start::git_identity;
 use super::{SessionError, Stop, blocking};
 use crate::{Daemon, Loaded};
 
@@ -65,6 +66,12 @@ impl Daemon {
         let role = folded.role();
         let submitted = match &end {
             SessionEnd::Finish(Finish::Submit { .. }) => {
+                if state.rebases_at_submit(session) {
+                    let agent = folded.agent();
+                    let committer = git_identity(&state, agent.principal, &agent.name)?;
+                    self.rebase_at_submit(workforce, &state, item, committer)
+                        .await?;
+                }
                 self.submitted_commit(workforce, &state, item).await?
             }
             SessionEnd::Finish(
@@ -189,6 +196,39 @@ impl Daemon {
         }
     }
 
+    /// Rebases the branch of `item` onto the target as its work is submitted, the commits signed
+    /// as the agent's own are. A conflict, or uncommitted changes the rebase would have to carry,
+    /// refuse the submission before anything is written: the session goes on, and the rebase
+    /// stopped at the conflict waits in the worktree for the next submission to go on with it.
+    async fn rebase_at_submit(
+        &self,
+        workforce: WorkforceId,
+        state: &State,
+        item: ItemId,
+        committer: String,
+    ) -> Result<(), SessionError> {
+        let Some(repository) = self.repository_of(workforce) else {
+            return Ok(());
+        };
+        let target = target_of(state);
+        let worktree = item_worktree(&self.workforce_directory(workforce), item);
+        let signing = self.machine_config()?.commits.agent_signing.signing();
+        let onto = target.clone();
+        let rebased = blocking(move || {
+            GitCli::open(&repository)?.rebase(&worktree, &onto, &signing, &committer)
+        })
+        .await??;
+        match rebased {
+            Rebase::UpToDate => Ok(()),
+            Rebase::Rebased => {
+                tracing::info!("rebased the branch of #{} onto {target}", item.short());
+                Ok(())
+            }
+            Rebase::Conflict { paths } => Err(SessionError::RebaseConflict { target, paths }),
+            Rebase::DirtyCheckout(dirty) => Err(SessionError::RebaseDirty { target, dirty }),
+        }
+    }
+
     /// The head of the branch of `item`, if it has commits of its own.
     async fn submitted_commit(
         &self,
@@ -199,13 +239,7 @@ impl Daemon {
         let Some(repository) = self.repository_of(workforce) else {
             return Ok(None);
         };
-        let target = state
-            .policy()
-            .expect("a workforce has a policy")
-            .policy
-            .merge
-            .target
-            .clone();
+        let target = target_of(state);
         let branch = item_branch(item);
         let commit = blocking(move || {
             let git = GitCli::open(&repository)?;
@@ -215,4 +249,15 @@ impl Daemon {
         .await??;
         Ok(commit)
     }
+}
+
+/// The branch that work merges into, as the policy says.
+fn target_of(state: &State) -> String {
+    state
+        .policy()
+        .expect("a workforce has a policy")
+        .policy
+        .merge
+        .target
+        .clone()
 }

@@ -32,8 +32,8 @@ pub enum Waiting {
     },
 }
 
-/// The kind of an entry of the inbox: what waits in the state, or a permission request that an
-/// agent's session holds, which the daemon keeps.
+/// The kind of an entry of the inbox: what waits in the state, or what the daemon keeps: a
+/// permission request that an agent's session holds, or that its writes fail for lack of space.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InboxKind {
@@ -43,6 +43,7 @@ pub enum InboxKind {
     Merge,
     Recovery,
     Permission,
+    OutOfSpace,
 }
 
 impl InboxKind {
@@ -55,6 +56,7 @@ impl InboxKind {
             InboxKind::Merge => "merge",
             InboxKind::Recovery => "recovery",
             InboxKind::Permission => "permission",
+            InboxKind::OutOfSpace => "out_of_space",
         }
     }
 }
@@ -133,6 +135,10 @@ impl State {
                             }
                         } else if finished.contains(&item.id()) {
                             // The daemon moves it to `done`.
+                            return None;
+                        } else if item.has_open_blocker() {
+                            // The blocker is what waits, such as a check that fails on the
+                            // target too; it is listed below.
                             return None;
                         } else {
                             Waiting::Proposal

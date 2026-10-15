@@ -337,7 +337,7 @@ pub fn accept(
             let store = workspace::store_path(&data, &child)?;
             let mut replica = Replica::open(RedbStore::open(&store)?, child)?;
             replica.set_history_source(parent);
-            let storage = StorageHandle::spawn(replica, move || {
+            let storage = StorageHandle::spawn(replica, move |_| {
                 Replica::open(RedbStore::open(&store)?, child)
             });
             let runtime = tokio::runtime::Builder::new_multi_thread()

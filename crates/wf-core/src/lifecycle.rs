@@ -1,8 +1,11 @@
 //! What follows from a session starting, ending and finishing a turn. Pure functions of the
 //! state: the daemon asks and then writes the events.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
+use crate::event::CommentKind;
 use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{ItemState, ItemView};
@@ -59,13 +62,26 @@ pub struct Closing {
 /// Why reviewed work could not be merged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MergeFailure {
-    /// The work conflicts with the target: the next session starts with the target merged into
-    /// the branch and resolves the conflict.
+    /// The work conflicts with the target: the item goes back to work, and the next submission
+    /// rebases the branch onto the target.
     Conflict,
     /// It may merge later: the target's checkout has changes, the target kept moving, or git
     /// failed. The dispatcher tries again.
     Transient,
 }
+
+/// What follows when checks fail on the merge result of an item's work, by its own fault.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AfterFailedChecks {
+    /// Each failed check becomes a change request and the item goes back to work, to `to`.
+    BackToWork { to: ItemState },
+    /// The checks failed `runs` times already since the principal last acted on the item: the
+    /// principal decides instead.
+    WaitsForPrincipal { runs: usize },
+}
+
+/// How many failed check runs send an item back to work before the next waits for the principal.
+const FAILED_CHECK_RUNS_LIMIT: usize = 2;
 
 /// How much of the last words of an agent that gave up goes into the comment, in characters.
 const LAST_MESSAGE_LIMIT: usize = 600;
@@ -172,13 +188,70 @@ impl State {
     }
 
     /// Where `item` goes when its reviewed work cannot be merged: back to `open` for a conflict,
-    /// which the next session resolves, and otherwise to `review`, where the dispatcher tries
-    /// again. `None` when its type does not use the state.
+    /// which the next session resolves as it submits, and otherwise to `review`, where the
+    /// dispatcher tries again. `None` when its type does not use the state.
     pub fn after_failed_merge(&self, item: ItemId, failure: MergeFailure) -> Option<ItemState> {
         match failure {
             MergeFailure::Conflict => self.state_if_used(item, ItemState::Open),
             MergeFailure::Transient => self.state_if_used(item, ItemState::Review),
         }
+    }
+
+    /// What follows when checks fail on the merge result of `item` by its own fault: back to work,
+    /// unless [`State::failed_check_runs`] reached the limit or its type has no `open` to go back
+    /// to.
+    pub fn after_failed_checks(&self, item: ItemId) -> AfterFailedChecks {
+        let runs = self.failed_check_runs(item);
+        match self.state_if_used(item, ItemState::Open) {
+            Some(open) if runs < FAILED_CHECK_RUNS_LIMIT => {
+                AfterFailedChecks::BackToWork { to: open }
+            }
+            Some(_) | None => AfterFailedChecks::WaitsForPrincipal { runs },
+        }
+    }
+
+    /// How many check runs on the merge result of `item` failed since the principal last acted on
+    /// it. A failed run is told as change requests by the daemon, one per failed check, after the
+    /// submission whose merge was checked; the submissions they follow are counted.
+    pub fn failed_check_runs(&self, item: ItemId) -> usize {
+        let Some(ItemView::Live(live)) = self.item(item) else {
+            return 0;
+        };
+        let since = live.principal_touched();
+        let submissions: Vec<_> = self
+            .sessions()
+            .filter(|session| session.item() == item && session.role() == SessionRole::Work)
+            .filter_map(|session| {
+                let ended = session.ended()?;
+                match ended.reason {
+                    EndReason::Submitted { .. } => Some(ended.at()),
+                    EndReason::Reviewed
+                    | EndReason::Released
+                    | EndReason::Supervised
+                    | EndReason::TimedOut
+                    | EndReason::Failed
+                    | EndReason::Cancelled
+                    | EndReason::Interrupted
+                    | EndReason::Diagnosed => None,
+                }
+            })
+            .collect();
+        let checked: BTreeSet<_> = live
+            .comments()
+            .values()
+            .filter(|comment| {
+                comment.kind == CommentKind::ChangeRequest
+                    && matches!(comment.by, Actor::Daemon(_))
+                    && since.is_none_or(|since| comment.at > since)
+            })
+            .map(|comment| {
+                submissions
+                    .iter()
+                    .filter(|submitted| **submitted < comment.at)
+                    .max()
+            })
+            .collect();
+        checked.len()
     }
 
     /// The state the daemon moves the item of a work session to when the session starts:
@@ -192,10 +265,11 @@ impl State {
         Some((session.item(), active))
     }
 
-    /// Whether the daemon merges the target into the item's branch as `session` starts, before
-    /// the agent works: when the last merge of the item's work failed, so that its work was ready
-    /// to merge and is not merged, yet the item is back at work, as a conflict sends it.
-    pub fn merges_target_first(&self, session: SessionId) -> bool {
+    /// Whether the daemon rebases the item's branch onto the target as `session` submits, before
+    /// anything is written: for work on an item that is being worked on. Nobody has approved its
+    /// commits yet, so rewriting them costs nothing, and the reviewer sees them as they will land.
+    /// Approved work, which waits in review for its merge, is never rewritten.
+    pub fn rebases_at_submit(&self, session: SessionId) -> bool {
         let Some(session) = self.session(session) else {
             return false;
         };
@@ -203,12 +277,12 @@ impl State {
             SessionRole::Work => true,
             SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => false,
         };
-        let back_at_work = match self.live_state(session.item()) {
+        let at_work = match self.live_state(session.item()) {
             Some(ItemState::Open | ItemState::Active) => true,
             Some(ItemState::Review | ItemState::Done | ItemState::Cancelled | ItemState::Draft)
             | None => false,
         };
-        working && back_at_work && self.unmerged_work(session.item()).is_some()
+        working && at_work
     }
 
     /// What happens to the item of `session` when it ends for `reason`. The daemon does it before

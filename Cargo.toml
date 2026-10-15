@@ -16,6 +16,7 @@ wf-harness = { path = "crates/wf-harness" }
 wf-vcs = { path = "crates/wf-vcs" }
 anyhow = "1"
 blake3 = "1"
+close_fds = "0.3"
 clap = { version = "4", features = ["derive"] }
 comfy-table = { version = "8", features = ["custom_styling"] }
 iroh = "1.3"

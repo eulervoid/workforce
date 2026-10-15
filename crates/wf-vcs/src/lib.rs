@@ -7,7 +7,7 @@ pub mod signing;
 use std::path::{Path, PathBuf};
 
 use wf_core::id::{HashId, ItemId};
-use wf_core::session::CommitId;
+use wf_core::session::{CommitId, GitOid};
 
 pub use git::GitCli;
 
@@ -110,19 +110,31 @@ pub enum MergeOutcome {
     TargetMoved,
 }
 
-/// What happened when the target branch was merged into an item's branch, in its worktree.
+/// What merging work into the target branch makes, before anything is committed.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum TargetMerge {
-    /// The branch had everything of the target already.
-    UpToDate,
-    /// The branch now has the target merged in.
-    Merged,
-    /// The merge conflicts in these files, relative to the worktree. The merge is left in the
-    /// worktree, for whoever works there to resolve the conflicts and commit it.
+pub enum MergeTree {
+    /// The work is in the target already, brought in by `commit`.
+    Landed { commit: CommitId },
+    /// The work merges cleanly with the target at `base` into `tree`.
+    Clean { base: CommitId, tree: GitOid },
+    /// The work does not merge cleanly. The paths are the files in conflict.
     Conflict { paths: Vec<String> },
-    /// A merge from earlier is still in the worktree with every conflict resolved; it only needs
-    /// committing.
-    Uncommitted,
+}
+
+/// What happened when an item's branch was rebased onto the target branch, in its worktree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Rebase {
+    /// The branch had everything of the target already, and nothing was rewritten.
+    UpToDate,
+    /// The branch's own commits are now on top of the target.
+    Rebased,
+    /// The rebase stopped at a commit that conflicts in these files, relative to the worktree.
+    /// It is left in the worktree for whoever works there to resolve the files; the next rebase
+    /// stages them and goes on.
+    Conflict { paths: Vec<String> },
+    /// The worktree has uncommitted changes, which a rebase would have to carry along. Nothing
+    /// was rewritten.
+    DirtyCheckout(DirtyCheckout),
 }
 
 /// A worktree with uncommitted changes to tracked files.
@@ -154,6 +166,12 @@ pub trait VcsAdapter {
 
     /// Checks `commit` out, detached, in a new worktree at `path`, for a reviewer.
     fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError>;
+
+    /// Makes the worktree at `path` hold the files of `tree`, a tree or a commit, and nothing
+    /// else: tracked files are reset and untracked ones removed. Ignored files, such as build
+    /// output, stay. A commit is checked out with HEAD detached at it. The worktree is made,
+    /// detached, when it is not there yet.
+    fn check_out_tree(&self, path: &Path, tree: GitOid) -> Result<(), VcsError>;
 
     /// Removes the worktree at `path` together with whatever is uncommitted in it.
     fn remove_worktree(&self, path: &Path) -> Result<(), VcsError>;
@@ -193,13 +211,41 @@ pub trait VcsAdapter {
         signing: &CommitSigning,
     ) -> Result<MergeOutcome, VcsError>;
 
-    /// Merges `target` into the branch checked out in `worktree`, with a commit signed as
-    /// `signing` says. A merge left unfinished there is not made again: its conflicts are named.
-    fn merge_target(
+    /// What merging `commit` into `target` makes, without committing it or moving `target`.
+    fn merge_tree(&self, target: &str, commit: CommitId) -> Result<MergeTree, VcsError>;
+
+    /// Commits `tree`, made by [`VcsAdapter::merge_tree`], as the merge of `commit` into `target`
+    /// at `base`, signed as `signing` says, and moves `target` to it. Never a conflict: the
+    /// outcome is the merge, a checkout of `target` with changes, or `target` no longer at `base`.
+    fn commit_merge(
+        &self,
+        target: &str,
+        base: CommitId,
+        tree: GitOid,
+        commit: CommitId,
+        message: &str,
+        signing: &CommitSigning,
+    ) -> Result<MergeOutcome, VcsError>;
+
+    /// The tree of `commit`.
+    fn tree_of(&self, commit: CommitId) -> Result<GitOid, VcsError>;
+
+    /// Rebases the branch checked out in `worktree` onto `target`, the rewritten commits signed as
+    /// `signing` says and committed by `committer`. A rebase stopped there earlier is not begun
+    /// again: the conflicting files are staged once they have no conflict markers left, and the
+    /// rebase goes on.
+    fn rebase(
         &self,
         worktree: &Path,
         target: &str,
-        message: &str,
         signing: &CommitSigning,
-    ) -> Result<TargetMerge, VcsError>;
+        committer: &str,
+    ) -> Result<Rebase, VcsError>;
+
+    /// The files in conflict when a rebase is stopped in `worktree`; `None` when none is.
+    fn stopped_rebase(&self, worktree: &Path) -> Result<Option<Vec<String>>, VcsError>;
+
+    /// Gives up the rebase stopped in `worktree`, if one is, which checks the branch out again
+    /// as it was before the rebase.
+    fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError>;
 }

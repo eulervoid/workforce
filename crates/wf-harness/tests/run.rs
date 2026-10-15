@@ -1,10 +1,14 @@
 use std::io;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use wf_harness::{
     AgentSessionId, Conversation, Direction, Error, Launch, Model, Opening, Permission, StopReason,
     TranscriptEntry,
 };
+
+/// Long enough that the fake agent, which answers at once, is never silent for it.
+const SILENCE_LIMIT: Duration = Duration::from_secs(60);
 
 #[derive(Clone, Default)]
 struct SharedBuffer(Arc<Mutex<Vec<u8>>>);
@@ -30,6 +34,7 @@ async fn run_fake_agent(permissions: Permission) -> Vec<TranscriptEntry> {
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(permissions),
         transcript: buffer.clone(),
+        silence_limit: SILENCE_LIMIT,
     })
     .await
     .unwrap();
@@ -95,6 +100,7 @@ async fn one_session_takes_several_prompts() {
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(Permission::Allow),
         transcript: buffer.clone(),
+        silence_limit: SILENCE_LIMIT,
     })
     .await
     .unwrap();
@@ -135,6 +141,7 @@ async fn a_reply_holds_what_the_agent_said_in_its_turn() {
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(Permission::Deny),
         transcript: SharedBuffer::default(),
+        silence_limit: SILENCE_LIMIT,
     })
     .await
     .unwrap();
@@ -153,6 +160,7 @@ async fn an_agent_that_cannot_start_is_an_error() {
         directory: std::env::temp_dir(),
         permissions: Arc::new(Permission::Allow),
         transcript: SharedBuffer::default(),
+        silence_limit: SILENCE_LIMIT,
     })
     .await;
     assert!(result.is_err());
@@ -187,6 +195,7 @@ async fn model_of_a_new_session(model: Option<&str>) -> Option<String> {
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(Permission::Allow),
         transcript: SharedBuffer::default(),
+        silence_limit: SILENCE_LIMIT,
     })
     .await
     .unwrap();
@@ -217,6 +226,7 @@ async fn reopen(reopens: &str) -> Result<(String, Vec<TranscriptEntry>), Error> 
         directory: directory.path().to_path_buf(),
         permissions: Arc::new(Permission::Allow),
         transcript: buffer.clone(),
+        silence_limit: SILENCE_LIMIT,
     })
     .await?;
     assert_eq!(conversation.session(), &AgentSessionId("fake".to_string()));
@@ -267,4 +277,136 @@ async fn a_loaded_session_does_not_record_or_hear_its_history_again() {
 #[tokio::test]
 async fn an_agent_that_cannot_reopen_sessions_says_so() {
     assert!(matches!(reopen("").await, Err(Error::CannotResume)));
+}
+
+/// While other threads run short commands with piped output, which on macOS create pipes that
+/// are not close-on-exec for a moment, every agent started holds only stdin, stdout and stderr.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_agent_inherits_no_descriptor_while_other_threads_create_pipes() {
+    let directory = tempfile::tempdir().unwrap();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let commands: Vec<_> = (0..4)
+        .map(|_| {
+            let stop = Arc::clone(&stop);
+            std::thread::spawn(move || {
+                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
+                    std::process::Command::new("true").output().unwrap();
+                }
+            })
+        })
+        .collect();
+    let mut agents = tokio::task::JoinSet::new();
+    for number in 0..100 {
+        let held = directory.path().join(format!("agent-{number}"));
+        let agent =
+            agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
+                .env("FAKE_AGENT_DESCRIPTORS", held.to_string_lossy());
+        let directory = directory.path().to_path_buf();
+        agents.spawn(async move {
+            wf_harness::models(agent, directory).await.unwrap();
+            std::fs::read_to_string(held).unwrap()
+        });
+    }
+    let held = agents.join_all().await;
+    stop.store(true, std::sync::atomic::Ordering::Relaxed);
+    for command in commands {
+        command.join().unwrap();
+    }
+    for descriptors in held {
+        let foreign: Vec<_> = descriptors
+            .lines()
+            .filter(|descriptor| descriptor.parse::<u32>().unwrap() > 2)
+            .collect();
+        assert!(foreign.is_empty(), "an agent holds {foreign:?}");
+    }
+}
+
+/// A transcript on a full disk.
+struct FullDisk;
+
+impl io::Write for FullDisk {
+    fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+        Err(io::Error::from(io::ErrorKind::StorageFull))
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn a_turn_whose_transcript_cannot_be_written_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut conversation = Conversation::start(Launch {
+        agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        opening: Opening::New,
+        model: None,
+        directory: directory.path().to_path_buf(),
+        permissions: Arc::new(Permission::Allow),
+        transcript: FullDisk,
+        silence_limit: SILENCE_LIMIT,
+    })
+    .await
+    .unwrap();
+    let Err(Error::Transcript(error)) = conversation.reply("do the thing").await else {
+        panic!("the turn fails");
+    };
+    assert_eq!(error.kind(), io::ErrorKind::StorageFull);
+    let _ = conversation.close().await;
+}
+
+#[tokio::test]
+async fn a_turn_of_an_agent_that_says_nothing_fails() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut conversation = Conversation::start(Launch {
+        agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
+            .env("FAKE_AGENT_SILENT", "1"),
+        opening: Opening::New,
+        model: None,
+        directory: directory.path().to_path_buf(),
+        permissions: Arc::new(Permission::Allow),
+        transcript: SharedBuffer::default(),
+        silence_limit: Duration::from_secs(1),
+    })
+    .await
+    .unwrap();
+    let reply = tokio::time::timeout(Duration::from_secs(10), conversation.reply("hello"))
+        .await
+        .expect("the turn ends");
+    assert!(matches!(reply, Err(Error::Silent(_))), "{reply:?}");
+    let _ = conversation.close().await;
+}
+
+/// Answers each permission request after a while, as a principal does.
+struct Slowly(Duration);
+
+impl wf_harness::Permissions for Slowly {
+    fn decide(
+        &self,
+        request: wf_harness::PermissionRequest,
+    ) -> agent_client_protocol::BoxFuture<'_, wf_harness::Decision> {
+        Box::pin(async move {
+            tokio::time::sleep(self.0).await;
+            Permission::Allow.decide(request).await
+        })
+    }
+}
+
+#[tokio::test]
+async fn waiting_on_a_permission_is_not_silence() {
+    let directory = tempfile::tempdir().unwrap();
+    let mut conversation = Conversation::start(Launch {
+        agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent")),
+        opening: Opening::New,
+        model: None,
+        directory: directory.path().to_path_buf(),
+        permissions: Arc::new(Slowly(Duration::from_secs(3))),
+        transcript: SharedBuffer::default(),
+        silence_limit: Duration::from_secs(1),
+    })
+    .await
+    .unwrap();
+    let (_, said) = conversation.reply("do the thing").await.unwrap();
+    assert!(said.contains("permission: yes"), "{said}");
+    conversation.close().await.unwrap();
 }

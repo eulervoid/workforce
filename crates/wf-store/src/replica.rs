@@ -67,7 +67,8 @@ pub struct Replica<S: EventStore> {
     state: State,
     snapshot_event_count: usize,
     history: Option<Box<dyn HistorySource>>,
-    needs_reopen: bool,
+    /// The first write that failed, with its causes.
+    failed_write: Option<String>,
 }
 
 impl<S: EventStore> Replica<S> {
@@ -115,7 +116,7 @@ impl<S: EventStore> Replica<S> {
             state,
             snapshot_event_count,
             history: None,
-            needs_reopen: false,
+            failed_write: None,
         };
         for event in replica.store.pending()? {
             let received = replica
@@ -131,10 +132,17 @@ impl<S: EventStore> Replica<S> {
         Ok(replica)
     }
 
-    /// Whether a write failed after the state had taken the event in, so the state may be ahead
+    /// The write that failed after the state had taken the event in, so the state may be ahead
     /// of the log. Drop the replica and open it again.
-    pub fn needs_reopen(&self) -> bool {
-        self.needs_reopen
+    pub fn failed_write(&self) -> Option<&str> {
+        self.failed_write.as_deref()
+    }
+
+    fn note_failed_write<T>(&mut self, result: &Result<T, StoreError>) {
+        if let Err(error) = result {
+            self.failed_write
+                .get_or_insert_with(|| wf_core::error_chain(error));
+        }
     }
 
     pub fn state(&self) -> &State {
@@ -166,7 +174,7 @@ impl<S: EventStore> Replica<S> {
         trust: Trust,
     ) -> Result<BatchReceived, StoreError> {
         let result = self.receive_events_unchecked(events, trust);
-        self.needs_reopen |= result.is_err();
+        self.note_failed_write(&result);
         result
     }
 
@@ -301,7 +309,7 @@ impl<S: EventStore> Replica<S> {
 
     fn persist(&mut self, submitted: &Event, received: &Received) -> Result<(), StoreError> {
         let result = self.persist_unchecked(submitted, received);
-        self.needs_reopen |= result.is_err();
+        self.note_failed_write(&result);
         result
     }
 
