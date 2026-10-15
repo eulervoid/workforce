@@ -83,17 +83,17 @@ impl KeysAt {
 /// otherwise.
 fn accent(app: &App, place: KeysAt) -> Color {
     if app.terminal_focused && KeysAt::of(app) == place {
-        theme::ACCENT.into()
+        theme::accent().into()
     } else {
-        theme::ACCENT_DIMMED.into()
+        theme::accent_dimmed().into()
     }
 }
 
 /// The bar left of a selection in `accent`, on the background of the selection: white while the
 /// accent is full, in the dimmed accent itself otherwise, so only the dimmed background shows.
 fn selection_bar(accent: Color) -> Span<'static> {
-    let style = if accent == Color::from(theme::ACCENT) {
-        Style::from(theme::ON_ACCENT)
+    let style = if accent == Color::from(theme::accent()) {
+        Style::from(theme::on_accent())
     } else {
         Style::new().fg(accent)
     };
@@ -176,7 +176,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
             draw_choice(frame, choice, accent(app, KeysAt::Choice), body);
             frame.render_widget(
                 Paragraph::new(
-                    Line::from(" j/k move · enter pick · esc cancel").themed(theme::DIM),
+                    Line::from(" j/k move · enter pick · esc cancel").themed(theme::text_dimmed()),
                 ),
                 keys,
             );
@@ -184,7 +184,7 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         Some(Prompt::Keys) => {
             draw_keys(frame, accent(app, KeysAt::Keys), body);
             frame.render_widget(
-                Paragraph::new(Line::from(" any key closes").themed(theme::DIM)),
+                Paragraph::new(Line::from(" any key closes").themed(theme::text_dimmed())),
                 keys,
             );
         }
@@ -200,12 +200,12 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         Some(Hovered::Spot(spot)) if Some(spot) == warning.as_ref() => {
             frame
                 .buffer_mut()
-                .set_style(spot.area, Style::from(theme::LINK));
+                .set_style(spot.area, Style::from(theme::link()));
         }
         Some(Hovered::Spot(spot)) => {
             frame
                 .buffer_mut()
-                .set_style(spot.area, Style::from(theme::LINK));
+                .set_style(spot.area, Style::from(theme::link()));
             // A tip takes the place of the warning while it shows.
             if warning.is_some() {
                 let cleared = Rect {
@@ -262,7 +262,7 @@ fn draw_warning(frame: &mut Frame, moved: &MovedBack, others: usize, latest: Rec
         reason_room,
     ));
     spans.push(Span::raw(count));
-    let line = Line::from(spans).style(theme::ATTENTION);
+    let line = Line::from(spans).style(theme::attention());
     let line_width = line.width().min(room) as u16;
     let area = Rect {
         x: latest.right().saturating_sub(line_width + 1),
@@ -307,7 +307,7 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
             if index == choice.index() {
                 Line::from(highlight(
                     vec![Span::raw(option)],
-                    Style::from(theme::BOLD),
+                    Style::from(theme::text_bold()),
                     accent,
                 ))
             } else {
@@ -333,7 +333,7 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::bordered()
-                .border_style(Style::from(theme::DIVIDER))
+                .border_style(Style::from(theme::divider()))
                 .title(title),
         ),
         area,
@@ -370,7 +370,7 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
         .iter()
         .map(|(keys, what)| {
             Line::from(vec![
-                themed(format!(" {keys:<12}"), theme::KEY),
+                themed(format!(" {keys:<12}"), theme::key()),
                 Span::raw(*what),
             ])
         })
@@ -386,10 +386,10 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::bordered()
-                .border_style(Style::from(theme::DIVIDER))
+                .border_style(Style::from(theme::divider()))
                 .title(Line::from(highlight(
                     vec![Span::raw("keys")],
-                    Style::from(theme::BOLD),
+                    Style::from(theme::text_bold()),
                     accent,
                 ))),
         ),
@@ -402,8 +402,12 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     // The label of what is asked has the accent; a question answered with keys has it on the
     // whole line.
     let accent = accent(app, KeysAt::Footer);
-    let question =
-        |text: String| Line::from(Span::styled(text, Style::from(theme::BOLD).bg(accent)));
+    let question = |text: String| {
+        Line::from(Span::styled(
+            text,
+            Style::from(theme::text_bold()).bg(accent),
+        ))
+    };
     let (label, input, hint) = match prompt {
         Prompt::Filter { input, .. } => ("/".to_owned(), input, ""),
         Prompt::Comment { item, input } => (
@@ -439,7 +443,11 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
         }
     };
     // The label between its ends, and a space before what is typed.
-    let mut label = highlight(vec![Span::raw(label)], Style::from(theme::BOLD), accent);
+    let mut label = highlight(
+        vec![Span::raw(label)],
+        Style::from(theme::text_bold()),
+        accent,
+    );
     label.push(Span::raw(" "));
     let label_width: usize = label.iter().map(Span::width).sum();
     // The hint keeps to the right while it leaves room to type; a narrow footer leaves it out.
@@ -448,7 +456,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
         let [typed, hint_area] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(hint_width)]).areas(area);
         frame.render_widget(
-            Paragraph::new(Line::from(hint).themed(theme::DIM)),
+            Paragraph::new(Line::from(hint).themed(theme::text_dimmed())),
             hint_area,
         );
         typed
@@ -482,7 +490,7 @@ fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
             spans.push(Span::raw(SEPARATOR));
         }
         let (key, what) = hint.split_once(' ').unwrap_or((hint, ""));
-        spans.push(themed(key, theme::ON_ACCENT.bold()));
+        spans.push(themed(key, theme::on_accent().bold()));
         if !what.is_empty() {
             spans.push(Span::raw(format!(" {what}")));
         }
@@ -493,7 +501,7 @@ fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
 /// The label of the tab on screen, between ends in the colour behind it, as a highlight has. With
 /// `reverse` that is the colour of its text; without a colour behind it, the ends are spaces.
 fn active_tab(label: String) -> Vec<Span<'static>> {
-    let style = Style::from(theme::TAB_ACTIVE);
+    let style = Style::from(theme::tab_active());
     let behind = if style.add_modifier.contains(Modifier::REVERSED) {
         Some(style.fg.unwrap_or(Color::Reset))
     } else {
@@ -523,14 +531,14 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
             // The log is the list of its tab: its label has the accent, as a selection would.
             highlight(
                 vec![Span::raw(label)],
-                Style::from(theme::BOLD),
+                Style::from(theme::text_bold()),
                 accent(app, KeysAt::Log),
             )
         } else if tab == app.tab {
             active_tab(label)
         } else {
             // A space where the active tab has its ends, so the tabs keep their places.
-            vec![Span::raw(format!(" {label} ")).themed(theme::DIM)]
+            vec![Span::raw(format!(" {label} ")).themed(theme::text_dimmed())]
         };
         let start: usize = tabs.iter().map(Span::width).sum();
         let width: usize = label.iter().map(Span::width).sum();
@@ -546,7 +554,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw(" "),
-            Span::raw(app.snapshot.name.clone()).themed(theme::BOLD),
+            Span::raw(app.snapshot.name.clone()).themed(theme::text_bold()),
         ])),
         name,
     );
@@ -582,7 +590,7 @@ fn counts_line(app: &App) -> Line<'static> {
     if counts.devices > 1 {
         parts.push(format!("{} devices", counts.devices));
     }
-    Line::from(format!(" {}", parts.join(SEPARATOR))).themed(theme::DIM)
+    Line::from(format!(" {}", parts.join(SEPARATOR))).themed(theme::text_dimmed())
 }
 
 /// A button `width` columns wide, `start` columns into the line `area`; what a narrow window cuts
@@ -601,7 +609,7 @@ fn button(area: Rect, start: usize, width: usize, target: Target) -> Spot {
 
 fn draw_rule(frame: &mut Frame, area: Rect) {
     let rule = "─".repeat(usize::from(area.width));
-    frame.render_widget(Paragraph::new(rule).themed(theme::DIVIDER), area);
+    frame.render_widget(Paragraph::new(rule).themed(theme::divider()), area);
 }
 
 fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
@@ -677,7 +685,7 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
     let mut spots = Vec::new();
     let (list_top, list) = draw_list(frame, app, list_lines, list, &mut spots);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
-    frame.render_widget(Paragraph::new(rule_text).themed(theme::DIVIDER), rule);
+    frame.render_widget(Paragraph::new(rule_text).themed(theme::divider()), rule);
     Drawn {
         text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail, &mut spots)),
         list_top: Some(list_top),
@@ -707,7 +715,7 @@ fn draw_strip(frame: &mut Frame, app: &App, area: Rect) -> (Rect, Rect) {
     };
     let mut lines = vec![Line::default(); usize::from(strip.height / 2)];
     lines.push(Line::from(chevron));
-    frame.render_widget(Paragraph::new(lines).themed(theme::DIM), strip);
+    frame.render_widget(Paragraph::new(lines).themed(theme::text_dimmed()), strip);
     (pane, strip)
 }
 
@@ -859,7 +867,7 @@ fn draw_indicator(frame: &mut Frame, row: Rect, text: &str) -> Rect {
     for x in area.left()..area.right() {
         buffer[(x, row.y)].reset();
     }
-    let style = Style::from(theme::DIM).bg(background);
+    let style = Style::from(theme::text_dimmed()).bg(background);
     buffer.set_stringn(area.x, area.y, text, usize::from(width), style);
     area
 }
@@ -905,7 +913,7 @@ pub fn list_top(
 }
 
 fn section(title: &str) -> Line<'static> {
-    Line::from(format!(" {title}")).themed(theme::BOLD)
+    Line::from(format!(" {title}")).themed(theme::text_bold())
 }
 
 /// One row of a list, `width` wide: the selection marker, what it says cut to fit, and `right`
@@ -928,7 +936,7 @@ impl RowLines {
 
     /// The keys of a row, shown only while it is selected.
     fn keys(&self, keys: &'static str) -> Option<Span<'static>> {
-        self.selected.then(|| themed(keys, theme::KEY))
+        self.selected.then(|| themed(keys, theme::key()))
     }
 
     /// The lines of the row; `more` start right of the marker column, and are cut to fit.
@@ -955,7 +963,7 @@ impl RowLines {
         }
         let mut first = Line::from(spans);
         if self.selected {
-            first = first.themed(theme::BOLD);
+            first = first.themed(theme::text_bold());
         }
         let mut lines = vec![first];
         for line in more {
@@ -1012,7 +1020,7 @@ fn cut_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Span<'static>> {
 
 fn item_spans(item: &ItemRef) -> Vec<Span<'static>> {
     vec![
-        themed(format!("#{}", item.id.short()), theme::ID),
+        themed(format!("#{}", item.id.short()), theme::id()),
         Span::raw(" "),
         Span::raw(item.title.clone()),
     ]
@@ -1035,20 +1043,20 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             agent, item, what, ..
         } => {
             let mut first = vec![
-                themed("? ", theme::ATTENTION),
-                themed(agent.clone(), theme::AGENT),
+                themed("? ", theme::attention()),
+                themed(agent.clone(), theme::agent()),
             ];
             if let Some(item) = item {
                 first.push(Span::raw(" on "));
-                first.push(themed(format!("#{}", item.id.short()), theme::ID));
+                first.push(themed(format!("#{}", item.id.short()), theme::id()));
             }
             first.push(Span::raw(" wants: "));
             first.push(Span::raw(what.clone()));
             row.lines(first, row.keys(ROW_ANSWERS).map(Line::from), Vec::new())
         }
         Waiting::Blocker { item, by, text, .. } => {
-            let mut first = vec![themed("⧗ ", theme::ATTENTION)];
-            first.push(themed(format!("#{}", item.id.short()), theme::ID));
+            let mut first = vec![themed("⧗ ", theme::attention())];
+            first.push(themed(format!("#{}", item.id.short()), theme::id()));
             first.push(Span::raw(format!(" blocker from {by}")));
             let quote = text
                 .lines()
@@ -1063,23 +1071,26 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             row.lines(
                 first,
                 row.keys("r").map(Line::from),
-                vec![Line::from(more).themed(theme::DIM)],
+                vec![Line::from(more).themed(theme::text_dimmed())],
             )
         }
         Waiting::Review { item, commit } => {
-            let mut first = vec![themed("◎ ", theme::ATTENTION)];
-            first.push(themed(format!("#{}", item.id.short()), theme::ID));
+            let mut first = vec![themed("◎ ", theme::attention())];
+            first.push(themed(format!("#{}", item.id.short()), theme::id()));
             first.push(Span::raw(" review"));
             if let Some(commit) = commit {
-                first.push(Span::raw(format!(" {}", &commit.to_string()[..8])).themed(theme::DIM));
+                first.push(
+                    Span::raw(format!(" {}", &commit.to_string()[..8]))
+                        .themed(theme::text_dimmed()),
+                );
             }
             first.push(Span::raw(format!("  {}", item.title)));
             row.lines(first, row.keys("v").map(Line::from), Vec::new())
         }
         Waiting::Notice { item, kind, what } => {
-            let mut first = vec![themed("• ", theme::ATTENTION)];
+            let mut first = vec![themed("• ", theme::attention())];
             first.extend(item_spans(item));
-            let more = Line::from(format!("  {kind}: {what}")).themed(theme::DIM);
+            let more = Line::from(format!("  {kind}: {what}")).themed(theme::text_dimmed());
             row.lines(first, None, vec![more])
         }
     }
@@ -1093,7 +1104,7 @@ fn age(since_ms: u64, now_ms: u64) -> String {
 /// What a session does now, from its transcript.
 fn activity(app: &App, session: &SessionInfo) -> Option<Line<'static>> {
     if let Place::Elsewhere(device) = &session.place {
-        return Some(Line::from(format!("  on {device}")).themed(theme::DIM));
+        return Some(Line::from(format!("  on {device}")).themed(theme::text_dimmed()));
     }
     let transcript = app.transcripts.get(&session.id)?;
     let spinner = SPINNER[(app.snapshot.now_ms / 500) as usize % SPINNER.len()];
@@ -1109,18 +1120,18 @@ fn activity(app: &App, session: &SessionInfo) -> Option<Line<'static>> {
         Now::Thinking => format!("  {spinner} thinking"),
         Now::Idle => return None,
     };
-    Some(Line::from(line).themed(theme::DIM))
+    Some(Line::from(line).themed(theme::text_dimmed()))
 }
 
 fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'static>> {
     let glyph = match session.status {
-        SessionStatus::Live => themed("◆ ", theme::LIVE),
-        SessionStatus::Parked => themed("◇ ", theme::LIVE),
-        SessionStatus::Ended { .. } => Span::raw("· ").themed(theme::DIM),
+        SessionStatus::Live => themed("◆ ", theme::live()),
+        SessionStatus::Parked => themed("◇ ", theme::live()),
+        SessionStatus::Ended { .. } => Span::raw("· ").themed(theme::text_dimmed()),
     };
     let mut first = vec![
         glyph,
-        themed(format!("{:<9}", session.agent), theme::AGENT),
+        themed(format!("{:<9}", session.agent), theme::agent()),
         Span::raw(" "),
     ];
     first.extend(item_spans(&session.item));
@@ -1137,9 +1148,9 @@ fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'s
 
 /// `right`, then how full the session's context is, `· 69k/1M`, when its agent reported it.
 fn with_context(app: &App, session: &SessionInfo, right: String) -> Line<'static> {
-    let mut line = Line::from(Span::raw(right).themed(theme::DIM));
+    let mut line = Line::from(Span::raw(right).themed(theme::text_dimmed()));
     if let Some(usage) = app.transcripts.get(&session.id).and_then(Transcript::usage) {
-        line.push_span(Span::raw(" · ").themed(theme::DIM));
+        line.push_span(Span::raw(" · ").themed(theme::text_dimmed()));
         line.push_span(context_span(
             usage,
             format!("{}/{}", tokens(usage.used), tokens(usage.size)),
@@ -1153,11 +1164,11 @@ fn with_context(app: &App, session: &SessionInfo, right: String) -> Line<'static
 fn context_line(model: Option<&str>, usage: Option<&Usage>) -> Option<Line<'static>> {
     let mut spans = Vec::new();
     if let Some(model) = model {
-        spans.push(Span::raw(model.to_owned()).themed(theme::DIM));
+        spans.push(Span::raw(model.to_owned()).themed(theme::text_dimmed()));
     }
     if let Some(usage) = usage {
         if !spans.is_empty() {
-            spans.push(Span::raw(" · ").themed(theme::DIM));
+            spans.push(Span::raw(" · ").themed(theme::text_dimmed()));
         }
         let mut text = format!(
             "{} of {} ({}%)",
@@ -1180,9 +1191,9 @@ fn context_line(model: Option<&str>, usage: Option<&Usage>) -> Option<Line<'stat
 /// `text` about `usage`: yellow once the context is nearly full, dim before.
 fn context_span(usage: &Usage, text: String) -> Span<'static> {
     if context_percent(usage) >= 80 {
-        themed(text, theme::ATTENTION)
+        themed(text, theme::attention())
     } else {
-        Span::raw(text).themed(theme::DIM)
+        Span::raw(text).themed(theme::text_dimmed())
     }
 }
 
@@ -1252,7 +1263,7 @@ fn now_lines(app: &App, width: u16) -> ListText {
         list.push(section("NEEDS ATTENTION"));
         for flag in &snapshot.flagged {
             let is_selected = selected == Some(&Row::Flag(flag.clone()));
-            let first = vec![themed("! ", theme::WARNING), Span::raw(flag.to_string())];
+            let first = vec![themed("! ", theme::warning()), Span::raw(flag.to_string())];
             list.entry(
                 RowLines::new(app, is_selected, width).lines(first, None, Vec::new()),
                 is_selected,
@@ -1260,7 +1271,10 @@ fn now_lines(app: &App, width: u16) -> ListText {
         }
     }
     if list.lines.is_empty() {
-        list.push(Line::from(" Nothing waits on you, and no agent is working.").themed(theme::DIM));
+        list.push(
+            Line::from(" Nothing waits on you, and no agent is working.")
+                .themed(theme::text_dimmed()),
+        );
     }
     list
 }
@@ -1282,14 +1296,14 @@ fn items_heading(app: &App) -> Line<'static> {
     if !app.items.filter.is_empty() {
         parts.push(format!("\"{}\"", app.items.filter));
     }
-    Line::from(format!(" {}", parts.join(" · "))).themed(theme::DIM)
+    Line::from(format!(" {}", parts.join(" · "))).themed(theme::text_dimmed())
 }
 
 fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
     let icon = render::item_icon(item.state, item.readiness);
     let first = vec![
         themed(format!("{icon} "), icon_style(item)),
-        themed(format!("#{}", item.id.short()), theme::ID),
+        themed(format!("#{}", item.id.short()), theme::id()),
         Span::raw(" "),
         Span::raw(item.title.clone()),
     ];
@@ -1305,7 +1319,7 @@ fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
     // The annotations dim, the priority in its own style, as `wf item list` shows it.
     let mut right = Vec::new();
     if !annotations.is_empty() {
-        right.push(Span::raw(annotations.join(" ")).themed(theme::DIM));
+        right.push(Span::raw(annotations.join(" ")).themed(theme::text_dimmed()));
     }
     if let Some(priority) = item.priority {
         if !right.is_empty() {
@@ -1357,24 +1371,24 @@ fn stats_lines(stats: &ProjectStats, width: u16) -> Vec<Line<'static>> {
     }
     lines
         .into_iter()
-        .map(|line| Line::from(format!(" {line}")).themed(theme::DIM))
+        .map(|line| Line::from(format!(" {line}")).themed(theme::text_dimmed()))
         .collect()
 }
 
 /// `coder  claude-code · opus  2/2 busy`, `1/2 live` while there is room, `0/2 idle`
 fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
     let first = vec![
-        Span::raw(agent.id.name.to_string()).themed(theme::BOLD),
-        Span::raw(format!("  {}", agent.runs_on)).themed(theme::DIM),
+        Span::raw(agent.id.name.to_string()).themed(theme::text_bold()),
+        Span::raw(format!("  {}", agent.runs_on)).themed(theme::text_dimmed()),
     ];
     let live = agent.stats.live;
     let load = match agent.capacity {
         Some(capacity) if live as u32 >= capacity => {
-            themed(format!("{live}/{capacity} busy"), theme::LIVE)
+            themed(format!("{live}/{capacity} busy"), theme::live())
         }
-        Some(capacity) if live > 0 => themed(format!("{live}/{capacity} live"), theme::LIVE),
-        Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).themed(theme::DIM),
-        None => Span::raw(format!("{live} live · not here")).themed(theme::DIM),
+        Some(capacity) if live > 0 => themed(format!("{live}/{capacity} live"), theme::live()),
+        Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).themed(theme::text_dimmed()),
+        None => Span::raw(format!("{live} live · not here")).themed(theme::text_dimmed()),
     };
     row.lines(first, Some(Line::from(load)), Vec::new())
 }
@@ -1382,9 +1396,9 @@ fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
 /// A session under its agent: `◆ #k3j1 Parse config lazily  work 12m`.
 fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'static>> {
     let glyph = match session.status {
-        SessionStatus::Live => themed("  ◆ ", theme::LIVE),
-        SessionStatus::Parked => themed("  ◇ ", theme::LIVE),
-        SessionStatus::Ended { .. } => Span::raw("  · ").themed(theme::DIM),
+        SessionStatus::Live => themed("  ◆ ", theme::live()),
+        SessionStatus::Parked => themed("  ◇ ", theme::live()),
+        SessionStatus::Ended { .. } => Span::raw("  · ").themed(theme::text_dimmed()),
     };
     let mut first = vec![glyph];
     first.extend(item_spans(&session.item));
@@ -1430,7 +1444,9 @@ fn agents_lines(app: &App, width: u16) -> ListText {
         }
     }
     if app.snapshot.agents.is_empty() {
-        list.push(Line::from(" no agents yet; `wf agent add` defines one").themed(theme::DIM));
+        list.push(
+            Line::from(" no agents yet; `wf agent add` defines one").themed(theme::text_dimmed()),
+        );
     }
     list
 }
@@ -1452,7 +1468,7 @@ fn items_lines(app: &App, width: u16) -> ListText {
         }
     }
     if list.lines.len() == 1 {
-        list.push(Line::from(" no items match").themed(theme::DIM));
+        list.push(Line::from(" no items match").themed(theme::text_dimmed()));
     }
     list
 }
@@ -1539,11 +1555,11 @@ fn draw_session(
         match (&session.place, app.transcripts.get(&session.id)) {
             (Place::Elsewhere(device), _) => (
                 &[],
-                vec![Line::from(format!(" transcript on {device}")).themed(theme::DIM)],
+                vec![Line::from(format!(" transcript on {device}")).themed(theme::text_dimmed())],
             ),
             (Place::Here, None) => (
                 &[],
-                vec![Line::from(" no transcript yet").themed(theme::DIM)],
+                vec![Line::from(" no transcript yet").themed(theme::text_dimmed())],
             ),
             (Place::Here, Some(transcript)) => {
                 let layout = transcript::Layout::new(
@@ -1594,12 +1610,12 @@ fn draw_session(
     let shown = draw_lines(frame, lines, &open, scroll, body);
     if let Some((what, request)) = asks.first() {
         let line = Line::from(vec![
-            themed("? ", theme::ATTENTION.bold()),
+            themed("? ", theme::attention().bold()),
             Span::raw(format!("wants: {what}")),
         ]);
         let keys = [ALLOW, DENY].join(SEPARATOR);
         let row = RowLines::new(app, false, bar.width);
-        let right = Line::from(themed(keys.clone(), theme::KEY));
+        let right = Line::from(themed(keys.clone(), theme::key()));
         let first = row.lines(line.spans, Some(right), Vec::new()).remove(0);
         let allow = right_start(&first, &keys);
         let width = textwrap::core::display_width;
@@ -1667,7 +1683,7 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let mut spans = Vec::new();
     for (index, (crumb, depth)) in crumbs.into_iter().enumerate() {
         if index > 0 {
-            spans.push(Span::raw(" ›").themed(theme::DIM));
+            spans.push(Span::raw(" ›").themed(theme::text_dimmed()));
         }
         // The last part has its start of the highlight where the others have a space.
         spans.push(if index == last {
@@ -1696,9 +1712,9 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
         }
         for span in crumb {
             spans.push(if index == last {
-                span.patch_style(Style::from(theme::BOLD).bg(accent))
+                span.patch_style(Style::from(theme::text_bold()).bg(accent))
             } else {
-                span.themed(theme::DIM)
+                span.themed(theme::text_dimmed())
             });
         }
     }
@@ -1718,8 +1734,8 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
 /// `coder · work · 12m ◆`
 fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
     let status = match session.status {
-        SessionStatus::Live => themed(" ◆", theme::LIVE),
-        SessionStatus::Parked => themed(" ◇ parked", theme::LIVE),
+        SessionStatus::Live => themed(" ◆", theme::live()),
+        SessionStatus::Parked => themed(" ◇ parked", theme::live()),
         SessionStatus::Ended { reason, .. } => Span::raw(format!(" · {}", reason.name())),
     };
     vec![
@@ -1784,7 +1800,7 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect, spots: &mut Vec<Spot>) -> 
         } else {
             "no events match the filter"
         };
-        frame.render_widget(Paragraph::new(empty).themed(theme::DIM), area);
+        frame.render_widget(Paragraph::new(empty).themed(theme::text_dimmed()), area);
         return None;
     }
     let text: Text = text.into_text().unwrap_or_default();
@@ -1803,11 +1819,11 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect, spots: &mut Vec<Spot>) -> 
 fn latest_line(app: &App) -> Line<'static> {
     match &app.status {
         Some(Status::Done { what, .. }) => {
-            return Line::from(format!(" ✓ {what}")).style(theme::SUCCESS);
+            return Line::from(format!(" ✓ {what}")).style(theme::success());
         }
         Some(Status::ActionFailed { error, .. } | Status::RefreshFailed(error)) => {
             let first = error.lines().next().unwrap_or_default();
-            return Line::from(format!(" error: {first}")).style(theme::ERROR);
+            return Line::from(format!(" error: {first}")).style(theme::error());
         }
         None => {}
     }
@@ -1825,7 +1841,7 @@ fn latest_line(app: &App) -> Line<'static> {
             );
             Line::from(spans)
         }
-        None => Line::from(" no events yet").themed(theme::DIM),
+        None => Line::from(" no events yet").themed(theme::text_dimmed()),
     }
 }
 
@@ -1844,7 +1860,7 @@ fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
         }
         start += width + textwrap::core::display_width(SEPARATOR);
     }
-    let line = Line::from(format!(" {}", hints.join(SEPARATOR))).themed(theme::DIM);
+    let line = Line::from(format!(" {}", hints.join(SEPARATOR))).themed(theme::text_dimmed());
     frame.render_widget(Paragraph::new(line), area);
     spots.retain(|spot| !spot.area.is_empty());
     spots

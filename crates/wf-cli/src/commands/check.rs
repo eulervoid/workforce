@@ -242,8 +242,8 @@ fn render(view: &CheckView) -> String {
         CheckResult::Passed => {
             return format!(
                 "{}✓{} {}\n",
-                theme::SUCCESS.render(),
-                theme::SUCCESS.render_reset(),
+                theme::success().render(),
+                theme::success().render_reset(),
                 view.name
             );
         }
@@ -252,15 +252,18 @@ fn render(view: &CheckView) -> String {
             (format!("stopped after {timeout}"), tail, log)
         }
     };
-    let (dim, dim_reset) = (theme::DIM.render(), theme::DIM.render_reset());
+    let (dim, dim_reset) = (
+        theme::text_dimmed().render(),
+        theme::text_dimmed().render_reset(),
+    );
     format!(
         "{}✗{} {}  {dim}{why}{dim_reset}\n  {}{}{}\n\n{tail}\n\n  {dim}log: {log}{dim_reset}\n",
-        theme::ERROR.render(),
-        theme::ERROR.render_reset(),
+        theme::error().render(),
+        theme::error().render_reset(),
         view.name,
-        theme::CODE.render(),
+        theme::code().render(),
         view.command.join(" "),
-        theme::CODE.render_reset(),
+        theme::code().render_reset(),
     )
 }
 

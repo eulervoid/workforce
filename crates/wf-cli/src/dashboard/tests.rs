@@ -56,11 +56,11 @@ fn session(seed: u8, agent: &str, item: ItemRef, minutes: u64) -> SessionInfo {
 }
 
 fn accent() -> Color {
-    theme::ACCENT.into()
+    theme::accent().into()
 }
 
 fn accent_dimmed() -> Color {
-    theme::ACCENT_DIMMED.into()
+    theme::accent_dimmed().into()
 }
 
 fn snapshot() -> Snapshot {
@@ -1515,7 +1515,7 @@ fn the_bar_and_the_background_cover_every_line_of_the_selection() {
         // The bar is white, on the background of the row, with no gap to the left edge.
         assert_eq!(
             style_at(&mut app, 60, 22, 0, line).fg,
-            Style::from(theme::ON_ACCENT).fg
+            Style::from(theme::on_accent()).fg
         );
         assert_eq!(bg_at(&mut app, 60, 22, 0, line), Some(accent()));
         assert_eq!(bg_at(&mut app, 60, 22, 10, line), Some(accent()));
@@ -1669,7 +1669,7 @@ fn while_the_terminal_pane_is_not_focused_the_accent_is_dimmed() {
     let bar = style_at(&mut app, 60, 16, 0, row);
     assert_eq!(
         (bar.fg, bar.bg),
-        (Style::from(theme::ON_ACCENT).fg, Some(accent()))
+        (Style::from(theme::on_accent()).fg, Some(accent()))
     );
 }
 
@@ -1738,7 +1738,7 @@ fn session_rows_show_how_full_their_context_is() {
     let (x, y) = (u16::try_from(x).unwrap(), u16::try_from(y).unwrap());
     assert_eq!(
         style_at(&mut app, 60, 22, x, y).fg,
-        Style::from(theme::ATTENTION).fg
+        Style::from(theme::attention()).fg
     );
     press(&mut app, KeyCode::Char('3'));
     app.refresh(with_agents());
@@ -1777,7 +1777,7 @@ fn a_nearly_full_context_is_yellow_in_the_detail() {
     let y = u16::try_from(line).unwrap();
     assert_eq!(
         style_at(&mut app, 130, 14, x, y).fg,
-        Style::from(theme::ATTENTION).fg
+        Style::from(theme::attention()).fg
     );
 }
 

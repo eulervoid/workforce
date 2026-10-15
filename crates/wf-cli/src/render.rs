@@ -130,22 +130,22 @@ fn item_label(
 ) -> String {
     let state_style = theme::state(state);
     let icon_style = match readiness {
-        Some(Readiness::Stranded) => theme::WARNING,
+        Some(Readiness::Stranded) => theme::warning(),
         Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => state_style,
     };
     format!(
         "{} {} {}{}{}{}",
         paint(icon_style, item_icon(state, readiness)),
         id_label(id),
-        paint(theme::DIM, format!("({item_type}:")),
+        paint(theme::text_dimmed(), format!("({item_type}:")),
         paint(state_style, state.name()),
-        paint(theme::DIM, suffix),
-        paint(theme::DIM, ")"),
+        paint(theme::text_dimmed(), suffix),
+        paint(theme::text_dimmed(), ")"),
     )
 }
 
 fn id_label(id: &str) -> String {
-    paint(theme::ID, format!("#{}", short(id)))
+    paint(theme::id(), format!("#{}", short(id)))
 }
 
 const ITEM_COLUMNS: [&str; 5] = [
@@ -159,7 +159,7 @@ const ITEM_COLUMNS: [&str; 5] = [
 fn item_row(item: &ItemSummary) -> [String; 5] {
     let suffix = if item.archived { " · archived" } else { "" };
     let priority = item.priority.map_or_else(
-        || paint(theme::DIM, "-"),
+        || paint(theme::text_dimmed(), "-"),
         |priority| paint(theme::priority(priority), priority),
     );
     let blocking = match item.blocking.split_first() {
@@ -168,7 +168,7 @@ fn item_row(item: &ItemSummary) -> [String; 5] {
         Some((first, rest)) => format!(
             "{} {}",
             id_label(&first.id),
-            paint(theme::DIM, format!("+{}", rest.len()))
+            paint(theme::text_dimmed(), format!("+{}", rest.len()))
         ),
     };
     [
@@ -213,16 +213,16 @@ fn group_heading(grouping: ItemGrouping, group: &ItemGroup) -> String {
         ItemGrouping::State => (state_icon(first.state), theme::state(first.state)),
         ItemGrouping::Readiness => match first.readiness {
             Some(readiness) => (readiness_icon(readiness), theme::readiness(readiness)),
-            None => ("·", theme::DIM),
+            None => ("·", theme::text_dimmed()),
         },
         ItemGrouping::Label | ItemGrouping::Type | ItemGrouping::Lane | ItemGrouping::Priority => {
-            ("·", theme::DIM)
+            ("·", theme::text_dimmed())
         }
     };
     format!(
         "{} {}",
         paint(heading_style, format!("{icon} {}", group.group)),
-        paint(theme::DIM, format!("({})", group.items.len()))
+        paint(theme::text_dimmed(), format!("({})", group.items.len()))
     )
 }
 
@@ -315,8 +315,6 @@ pub fn item_detail(detail: &ItemDetail) -> String {
 
 /// [`item_detail`] with prose wrapped to `width`, or not at all, and its markdown in `format`.
 pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format) -> String {
-    use theme::{BOLD, DIM, WARNING};
-
     let summary = &detail.summary;
     let mut out = String::new();
     // A header line continues under its text: past the label for the title, past `↳ ` for a link.
@@ -333,7 +331,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
     );
     let title_indent = " ".repeat(textwrap::core::display_width(&label) + 1);
     line(
-        format!("{label} {}", paint(BOLD, &summary.title)),
+        format!("{label} {}", paint(theme::text_bold(), &summary.title)),
         &title_indent,
     );
 
@@ -342,23 +340,23 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         status.push(paint(theme::priority(priority), priority));
     }
     if let Some(lane) = &detail.summary.lane {
-        status.push(paint(DIM, format!("lane={lane}")));
+        status.push(paint(theme::text_dimmed(), format!("lane={lane}")));
     }
     if let Some(review) = &detail.review {
-        status.push(paint(DIM, format!("review={review}")));
+        status.push(paint(theme::text_dimmed(), format!("review={review}")));
     }
     if let Some(recovery) = &detail.recovery {
-        status.push(paint(DIM, format!("recovery={recovery}")));
+        status.push(paint(theme::text_dimmed(), format!("recovery={recovery}")));
     }
     if !detail.summary.labels.is_empty() {
         status.push(paint(
-            DIM,
+            theme::text_dimmed(),
             format!("labels={}", detail.summary.labels.join(",")),
         ));
     }
     if !detail.requires.is_empty() {
         status.push(paint(
-            DIM,
+            theme::text_dimmed(),
             format!("requires={}", detail.requires.join(",")),
         ));
     }
@@ -397,15 +395,27 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
             "  {}",
             [
                 paint_actor(&detail.author),
-                paint(DIM, format!("created {}", short_time(&detail.created))),
-                paint(DIM, format!("updated {}", short_time(&detail.updated))),
+                paint(
+                    theme::text_dimmed(),
+                    format!("created {}", short_time(&detail.created))
+                ),
+                paint(
+                    theme::text_dimmed(),
+                    format!("updated {}", short_time(&detail.updated))
+                ),
             ]
-            .join(&format!(" {} ", paint(DIM, "·")))
+            .join(&format!(" {} ", paint(theme::text_dimmed(), "·")))
         ),
         "  ",
     );
     if detail.stats.sessions > 0 {
-        line(format!("  {}", paint(DIM, item_stats(&detail.stats))), "  ");
+        line(
+            format!(
+                "  {}",
+                paint(theme::text_dimmed(), item_stats(&detail.stats))
+            ),
+            "  ",
+        );
     }
     if !detail.open.is_empty() {
         let open: Vec<String> = detail
@@ -424,8 +434,8 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         line(
             format!(
                 "  {} {}",
-                paint(WARNING, format!("{} open:", detail.open.len())),
-                open.join(&format!(" {} ", paint(DIM, "·")))
+                paint(theme::warning(), format!("{} open:", detail.open.len())),
+                open.join(&format!(" {} ", paint(theme::text_dimmed(), "·")))
             ),
             "  ",
         );
@@ -455,7 +465,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
     for reference in &detail.references {
         let link = &reference.item;
         let what = match &reference.comment {
-            Some(comment) => format!("{} on ", paint(DIM, comment)),
+            Some(comment) => format!("{} on ", paint(theme::text_dimmed(), comment)),
             None => String::new(),
         };
         line(
@@ -469,7 +479,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
     }
     for backlink in &detail.referenced_by {
         let what = match &backlink.comment {
-            Some(comment) => format!("{} ", paint(DIM, comment)),
+            Some(comment) => format!("{} ", paint(theme::text_dimmed(), comment)),
             None => String::new(),
         };
         line(
@@ -503,7 +513,6 @@ const LINK_INDENT: &str = "    ";
 /// under a bar: yellow for what waits, red for failed sessions and the item's flags, each entry
 /// under a heading. Raw, one `!` line per entry with what it points to indented below.
 fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String {
-    use theme::{ATTENTION, ERROR, WARNING};
     let mut out = String::new();
     match format {
         Format::Styled => {
@@ -512,12 +521,12 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
                 .iter()
                 .map(|waiting| {
                     let style = match waiting.kind {
-                        InboxKind::Recovery | InboxKind::MachineFault => ERROR,
+                        InboxKind::Recovery | InboxKind::MachineFault => theme::error(),
                         InboxKind::Blocker
                         | InboxKind::Proposal
                         | InboxKind::PrincipalReview
                         | InboxKind::Merge
-                        | InboxKind::Permission => ATTENTION,
+                        | InboxKind::Permission => theme::attention(),
                     };
                     let paragraphs = std::iter::once(&waiting.what)
                         .chain(&waiting.points_to)
@@ -532,7 +541,7 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
                     .iter()
                     .map(|flag| format!("- {flag}"))
                     .collect();
-                entries.push((ERROR, "needs attention", vec![flags.join("\n")]));
+                entries.push((theme::error(), "needs attention", vec![flags.join("\n")]));
             }
             if entries.is_empty() {
                 return out;
@@ -543,7 +552,11 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
         Format::Raw => {
             for waiting in &detail.waiting {
                 let line = format!("! {}: {}", waiting.heading, waiting.what);
-                let _ = writeln!(out, "  {}", paint(WARNING, fill(&line, width, "    ")));
+                let _ = writeln!(
+                    out,
+                    "  {}",
+                    paint(theme::warning(), fill(&line, width, "    "))
+                );
                 for paragraph in &waiting.points_to {
                     let _ = writeln!(out, "{}", indented(paragraph, "    "));
                 }
@@ -552,7 +565,7 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
                 let _ = writeln!(
                     out,
                     "  {}",
-                    paint(WARNING, fill(&format!("! {flag}"), width, "    "))
+                    paint(theme::warning(), fill(&format!("! {flag}"), width, "    "))
                 );
             }
         }
@@ -593,7 +606,7 @@ fn notice_box(entries: Vec<Notice>, width: Option<usize>) -> String {
 pub fn flag_detail_for(flag: &Flag, width: Option<usize>) -> String {
     let mut paragraphs = vec![flag.what()];
     paragraphs.extend(flag.command().map(|command| format!("`{command}`")));
-    notice_box(vec![(theme::ERROR, flag.heading(), paragraphs)], width)
+    notice_box(vec![(theme::error(), flag.heading(), paragraphs)], width)
 }
 
 pub fn item_stats_list(views: &[ItemStatsView]) -> String {
@@ -623,7 +636,7 @@ pub fn item_stats_list(views: &[ItemStatsView]) -> String {
             view.stats.change_requests.to_string(),
             view.stats
                 .lead_ms
-                .map_or_else(|| paint(theme::DIM, "-"), duration),
+                .map_or_else(|| paint(theme::text_dimmed(), "-"), duration),
             view.item.title.clone(),
         ]);
     }
@@ -668,10 +681,8 @@ pub fn agent_detail_for(
     format: Format,
     now: jiff::Timestamp,
 ) -> String {
-    use theme::{BOLD, DIM};
-
     let agent = &detail.definition;
-    let separator = format!(" {} ", paint(DIM, "·"));
+    let separator = format!(" {} ", paint(theme::text_dimmed(), "·"));
     let mut out = String::new();
     let mut line = |text: String, indent: &str| {
         let _ = writeln!(out, "{}", fill(&text, width, indent));
@@ -685,7 +696,7 @@ pub fn agent_detail_for(
         Some(model) => format!("{} · {model}", agent.harness),
         None => agent.harness.clone(),
     };
-    let header = format!("{label}  {}", paint(DIM, runs_on));
+    let header = format!("{label}  {}", paint(theme::text_dimmed(), runs_on));
     let load = agent_load(detail);
     let fits = |text: &str| width.is_none_or(|width| textwrap::core::display_width(text) <= width);
     // The load stays whole: on the header's line if it fits there, else on its own.
@@ -697,7 +708,7 @@ pub fn agent_detail_for(
         line(format!("  {load}"), "  ");
     }
 
-    let field = |name: &str, value: &str| format!("{} {value}", paint(DIM, name));
+    let field = |name: &str, value: &str| format!("{} {value}", paint(theme::text_dimmed(), name));
     let mut fields = Vec::new();
     if !agent.lanes.is_empty() {
         fields.push(field("lanes", &agent.lanes.join(", ")));
@@ -724,13 +735,13 @@ pub fn agent_detail_for(
             format!(
                 "{}{this} {}",
                 host.device,
-                paint(DIM, format!("up to {}", host.sessions))
+                paint(theme::text_dimmed(), format!("up to {}", host.sessions))
             )
         })
         .collect();
     if hosts.is_empty() {
         line(
-            format!("  ↳ {}", paint(DIM, "hosted by no device")),
+            format!("  ↳ {}", paint(theme::text_dimmed(), "hosted by no device")),
             LINK_INDENT,
         );
     } else {
@@ -755,8 +766,8 @@ pub fn agent_detail_for(
         line(
             format!(
                 "{} {}",
-                paint(BOLD, "sessions"),
-                paint(DIM, format!("· {}", counts.join(" · ")))
+                paint(theme::text_bold(), "sessions"),
+                paint(theme::text_dimmed(), format!("· {}", counts.join(" · ")))
             ),
             "  ",
         );
@@ -767,7 +778,10 @@ pub fn agent_detail_for(
             line(
                 format!(
                     "  {}",
-                    paint(DIM, format!("… {} earlier", detail.older_sessions))
+                    paint(
+                        theme::text_dimmed(),
+                        format!("… {} earlier", detail.older_sessions)
+                    )
                 ),
                 "  ",
             );
@@ -778,7 +792,7 @@ pub fn agent_detail_for(
         let _ = writeln!(
             out,
             "\n{}\n{}",
-            paint(BOLD, "instructions"),
+            paint(theme::text_bold(), "instructions"),
             markdown_text(instructions, width, "  ", format)
         );
     }
@@ -791,20 +805,25 @@ pub fn agent_detail_for(
 /// `◆ 1/2 busy`: how many sessions of the agent are live, of how many this machine runs at once,
 /// or that it does not run it.
 fn agent_load(detail: &AgentDetail) -> String {
-    use theme::DIM;
     let live = detail.stats.live;
     let icon = if live > 0 {
-        paint(theme::LIVE, "◆")
+        paint(theme::live(), "◆")
     } else {
-        paint(DIM, "·")
+        paint(theme::text_dimmed(), "·")
     };
     let load = match detail.hosts.iter().find(|host| host.this_device) {
         Some(host) if live >= host.sessions as usize => {
-            paint(theme::LIVE, format!("{live}/{} busy", host.sessions))
+            paint(theme::live(), format!("{live}/{} busy", host.sessions))
         }
-        Some(host) if live > 0 => paint(theme::LIVE, format!("{live}/{} live", host.sessions)),
-        Some(host) => paint(DIM, format!("{live}/{} idle", host.sessions)),
-        None => paint(DIM, format!("{live} live · not hosted here")),
+        Some(host) if live > 0 => paint(theme::live(), format!("{live}/{} live", host.sessions)),
+        Some(host) => paint(
+            theme::text_dimmed(),
+            format!("{live}/{} idle", host.sessions),
+        ),
+        None => paint(
+            theme::text_dimmed(),
+            format!("{live} live · not hosted here"),
+        ),
     };
     format!("{icon} {load}")
 }
@@ -812,7 +831,6 @@ fn agent_load(detail: &AgentDetail) -> String {
 /// A session of an agent: `◆ #k3j1ab Parse config lazily · work 12m · @ada/coder/s4k2ab`, how
 /// long ago it started, or how it ended and how long ago, as of `now`.
 fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -> String {
-    use theme::DIM;
     let age = |timestamp: &str| {
         timestamp.parse::<jiff::Timestamp>().map_or_else(
             |_| timestamp.to_string(),
@@ -824,15 +842,15 @@ fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -
     };
     let (icon, state) = match (session.status.as_str(), &session.ended) {
         ("live", None) => (
-            paint(theme::LIVE, "◆"),
+            paint(theme::live(), "◆"),
             format!("{} {}", session.role, age(&session.started)),
         ),
         ("parked", None) => (
-            paint(theme::LIVE, "◇"),
+            paint(theme::live(), "◇"),
             format!("{} parked {}", session.role, age(&session.started)),
         ),
         (reason, ended) => (
-            paint(DIM, "·"),
+            paint(theme::text_dimmed(), "·"),
             format!(
                 "{} {} ago",
                 reason.replace('_', " "),
@@ -848,14 +866,13 @@ fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -
         "  {icon} {} {}{separator}{}{separator}{label}",
         id_label(&session.item),
         session.title,
-        paint(DIM, state),
+        paint(theme::text_dimmed(), state),
     )
 }
 
 /// The activity of an item: one line per thing that happened, and the text that goes with it
 /// below. The date heads the section and is repeated when the day changes.
 fn activity(entries: &[crate::view::ActivityView], width: Option<usize>, format: Format) -> String {
-    use theme::{BOLD, DIM};
     let mut out = String::new();
     let mut day = None;
     for entry in entries {
@@ -866,18 +883,26 @@ fn activity(entries: &[crate::view::ActivityView], width: Option<usize>, format:
                     let _ = writeln!(
                         out,
                         "\n{} {}",
-                        paint(BOLD, "activity"),
-                        paint(DIM, format!("· {date}"))
+                        paint(theme::text_bold(), "activity"),
+                        paint(theme::text_dimmed(), format!("· {date}"))
                     );
                 }
                 Some(_) => {
-                    let _ = writeln!(out, "  {}", paint(DIM, format!("· {date}")));
+                    let _ = writeln!(
+                        out,
+                        "  {}",
+                        paint(theme::text_dimmed(), format!("· {date}"))
+                    );
                 }
             }
             day = Some(date);
         }
-        let (line, text) =
-            activity_entry(entry, &format!("  {}  ", paint(DIM, time)), width, format);
+        let (line, text) = activity_entry(
+            entry,
+            &format!("  {}  ", paint(theme::text_dimmed(), time)),
+            width,
+            format,
+        );
         let _ = writeln!(out, "{line}");
         if let Some(text) = text {
             let _ = writeln!(out, "{text}");
@@ -899,13 +924,12 @@ fn activity_entry(
     width: Option<usize>,
     format: Format,
 ) -> (String, Option<String>) {
-    use theme::{BOLD, DIM, WARNING};
     let mut parts = vec![paint_actor(&entry.by)];
     match &entry.comment {
         Some(comment) if entry.kind == ActivityKind::Comment => {
             match comment.kind {
                 CommentKindView::Blocker | CommentKindView::ChangeRequest => parts.push(paint(
-                    WARNING,
+                    theme::warning(),
                     format!(
                         "{} {}",
                         comment_marker(comment.kind),
@@ -913,32 +937,37 @@ fn activity_entry(
                     ),
                 )),
                 CommentKindView::Comment if comment.resolves.is_empty() => {
-                    parts.push(paint(BOLD, "commented"))
+                    parts.push(paint(theme::text_bold(), "commented"))
                 }
                 CommentKindView::Comment => {}
             }
             if !comment.resolves.is_empty() {
                 parts.push(paint(
-                    BOLD,
+                    theme::text_bold(),
                     format!("resolved {}", comment.resolves.join(", ")),
                 ));
             }
             if let Some(by) = &comment.resolved_by {
-                parts.push(paint(DIM, format!("resolved by {by}")));
+                parts.push(paint(theme::text_dimmed(), format!("resolved by {by}")));
             }
             match &comment.step {
                 Some(StepRefView {
                     number: Some(number),
                     ..
-                }) => parts.push(paint(DIM, format!("on step {number}"))),
-                Some(StepRefView { .. }) => parts.push(paint(DIM, "on a step since edited")),
+                }) => parts.push(paint(theme::text_dimmed(), format!("on step {number}"))),
+                Some(StepRefView { .. }) => {
+                    parts.push(paint(theme::text_dimmed(), "on a step since edited"))
+                }
                 None => {}
             }
-            parts.push(paint(DIM, &comment.short));
+            parts.push(paint(theme::text_dimmed(), &comment.short));
         }
-        Some(_) | None => parts.push(paint(BOLD, &entry.summary)),
+        Some(_) | None => parts.push(paint(theme::text_bold(), &entry.summary)),
     }
-    let line = format!("{lead}{}", parts.join(&format!(" {} ", paint(DIM, "·"))));
+    let line = format!(
+        "{lead}{}",
+        parts.join(&format!(" {} ", paint(theme::text_dimmed(), "·")))
+    );
     let line = fill(&line, width, ACTIVITY_TEXT_INDENT);
     let text = entry
         .text
@@ -960,13 +989,12 @@ pub fn event_line_for(
     width: Option<usize>,
     format: Format,
 ) -> String {
-    use theme::DIM;
     let (_, time) = local_date_and_time(&line.activity.at);
     let item = match &line.item {
         Some(item) => format!("{}  ", id_label(item)),
         None => String::new(),
     };
-    let lead = format!("{}  {item}", paint(DIM, time));
+    let lead = format!("{}  {item}", paint(theme::text_dimmed(), time));
     let (entry, text) = activity_entry(&line.activity, &lead, width, format);
     let mut out = format!("{entry}\n");
     if let Some(text) = text {
@@ -1028,7 +1056,7 @@ fn body(parts: &[BodyPartView], width: Option<usize>, format: Format) -> String 
             }
             BodyPartView::Step { number, done, text } => {
                 let checkbox = if *done { "[x]" } else { "[ ]" };
-                let number = paint(theme::DIM, format!("{number}."));
+                let number = paint(theme::text_dimmed(), format!("{number}."));
                 let marker = format!("- {checkbox} {number} ");
                 let step = match format {
                     Format::Styled => markdown::render_after(&marker, text, width, "  ")
@@ -1065,7 +1093,7 @@ pub fn agents(agents: &[AgentView]) -> String {
         return "no agents defined\n".to_string();
     }
     let mut table = table(&[
-        "AGENT",
+        "theme::agent()",
         "HARNESS",
         "MODEL",
         "CAPABILITIES",
@@ -1091,7 +1119,7 @@ pub fn devices(devices: &[DeviceView]) -> String {
     let mut table = table(&[
         "DEVICE",
         "NAME",
-        "PRINCIPAL",
+        "theme::principal()",
         "HARDWARE",
         "SESSIONS",
         "LAST_SEEN",
@@ -1216,7 +1244,15 @@ pub fn sessions(sessions: &[SessionView]) -> String {
         return "no sessions\n".to_string();
     }
     let mut table = table(&[
-        "SESSION", "AGENT", "MODEL", "ITEM", "TITLE", "STEPS", "ROLE", "STATUS", "STARTED",
+        "SESSION",
+        "theme::agent()",
+        "MODEL",
+        "ITEM",
+        "TITLE",
+        "STEPS",
+        "ROLE",
+        "STATUS",
+        "STARTED",
     ]);
     for session in sessions {
         table.add_row([
@@ -1522,8 +1558,8 @@ mod tests {
     #[test]
     fn a_body_is_rendered_when_styled() {
         let shown = item_detail_for(&detail_with_a_body(), Some(30), Format::Styled);
-        assert!(shown.contains(&paint(theme::BOLD, "bold")));
-        assert!(shown.contains(&paint(theme::DIM, "2.")));
+        assert!(shown.contains(&paint(theme::text_bold(), "bold")));
+        assert!(shown.contains(&paint(theme::text_dimmed(), "2.")));
         assert_eq!(
             body_of(&shown),
             "  Plan\n\

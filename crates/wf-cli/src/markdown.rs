@@ -4,7 +4,7 @@
 use anstyle::Style;
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
-use crate::theme::{BOLD, CODE, DIM};
+use crate::theme;
 
 /// `text` rendered with every line indented by `indent` and wrapped to `width` columns, indent
 /// included, or not at all. Words longer than the width, such as URLs, are left whole.
@@ -153,9 +153,9 @@ impl MarkdownWriter {
 
     fn event(&mut self, event: Event<'_>) {
         match event {
-            Event::Start(Tag::Strong) => self.style_on(BOLD),
+            Event::Start(Tag::Strong) => self.style_on(theme::text_bold()),
             Event::Start(Tag::Emphasis) => self.style_on(Style::new().italic()),
-            Event::Start(Tag::Heading { .. }) => self.style_on(BOLD),
+            Event::Start(Tag::Heading { .. }) => self.style_on(theme::text_bold()),
             Event::End(TagEnd::Strong | TagEnd::Emphasis) => self.style_off(),
             Event::End(TagEnd::Heading(_)) => {
                 self.style_off();
@@ -217,20 +217,24 @@ impl MarkdownWriter {
             }
             Event::End(TagEnd::Link) => {
                 if let Some(Some(destination)) = self.links.pop() {
-                    self.line.push_str(&format!(" {DIM}({destination}){DIM:#}"));
+                    let dimmed = theme::text_dimmed();
+                    self.line
+                        .push_str(&format!(" {dimmed}({destination}){dimmed:#}"));
                     self.restyle();
                 }
             }
             Event::Text(text) if self.in_code => {
                 let indent = self.indent();
+                let dimmed = theme::text_dimmed();
                 for line in text.lines() {
                     self.out
-                        .push_str(&format!("{indent}    {DIM}{line}{DIM:#}\n"));
+                        .push_str(&format!("{indent}    {dimmed}{line}{dimmed:#}\n"));
                 }
             }
             Event::Text(text) => self.line.push_str(&text),
             Event::Code(text) => {
-                self.line.push_str(&format!("{CODE}{text}{CODE:#}"));
+                let code = theme::code();
+                self.line.push_str(&format!("{code}{text}{code:#}"));
                 self.restyle();
             }
             Event::SoftBreak => self.line.push(' '),
@@ -241,8 +245,9 @@ impl MarkdownWriter {
                     .width
                     .unwrap_or(40)
                     .saturating_sub(width_of(&self.indent()));
+                let divider = theme::divider();
                 self.out.push_str(&format!(
-                    "{}{DIM}{}{DIM:#}\n",
+                    "{}{divider}{}{divider:#}\n",
                     self.indent(),
                     "─".repeat(room.min(40))
                 ));
@@ -296,7 +301,8 @@ mod tests {
 
     #[test]
     fn text_after_a_marker_continues_under_the_text() {
-        let marker = format!("- [ ] {DIM}1.{DIM:#} ");
+        let dimmed = theme::text_dimmed();
+        let marker = format!("- [ ] {dimmed}1.{dimmed:#} ");
         assert_eq!(
             plain(&render_after(&marker, "one two three", Some(20), "  ")),
             "  - [ ] 1. one two\n           three\n\n"
