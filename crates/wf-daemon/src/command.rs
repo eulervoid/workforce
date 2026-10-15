@@ -25,6 +25,10 @@ const TAIL_BYTES: u64 = 16 * 1024;
 /// other worktrees mix into it.
 const CARGO_TARGET_DIR: &str = "CARGO_TARGET_DIR";
 
+/// The prefix of the variables wf sets for a session: `WF_SESSION`, `WF_SESSION_TOKEN`,
+/// `WF_WORKFORCE`.
+const SESSION_VARIABLES_PREFIX: &str = "WF_";
+
 /// Where and how the daemon runs commands on code: in one worktree it checks trees out in,
 /// confined as an agent working there would be.
 pub(crate) struct CommandRunner<'a> {
@@ -49,7 +53,7 @@ pub enum Confinement<'a> {
         git_config: &'a Path,
     },
     /// As this process is, which runs in a session and so in the sandbox and environment of its
-    /// agent already.
+    /// agent already, but without the session's variables.
     Session { directory: &'a Path },
 }
 
@@ -165,6 +169,15 @@ impl Confinement<'_> {
             // Its own process group, so that whatever it started can be stopped with it.
             .process_group(0)
             .kill_on_drop(true);
+        if let Confinement::Session { .. } = self {
+            // The session's variables, its token among them, would let the command act as the
+            // session; outside a session the agents' environment leaves them out already.
+            for name in crate::environment::daemon_variables() {
+                if name.starts_with(SESSION_VARIABLES_PREFIX) {
+                    process.env_remove(name);
+                }
+            }
+        }
         crate::inherit::only_stdio(&mut process);
         let mut child = process.spawn().map_err(|source| CommandError::Io {
             path: command.command().to_path_buf(),
@@ -611,17 +624,26 @@ git cat-file commit HEAD | grep -q gpgsig"#;
     }
 
     #[tokio::test]
-    async fn in_a_session_a_command_runs_in_the_directory_as_it_is_without_the_cargo_target_directory()
+    async fn in_a_session_a_command_runs_in_the_directory_as_it_is_without_the_cargo_target_directory_and_the_session_variables()
      {
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("file.txt"), "uncommitted\n").unwrap();
         let log = directory.path().join("logs").join("test.log");
-        let argv: Vec<String> = ["sh", "-c", "cat file.txt; echo ${CARGO_TARGET_DIR-unset}"]
-            .map(String::from)
-            .to_vec();
-        // SAFETY: no other test of this crate depends on this variable; the test of the agents'
-        // environment removes it either way.
-        unsafe { std::env::set_var(CARGO_TARGET_DIR, "/shared/target") };
+        let argv: Vec<String> = [
+            "sh",
+            "-c",
+            "cat file.txt; echo ${CARGO_TARGET_DIR-unset}; env | grep ^WF_ || echo none",
+        ]
+        .map(String::from)
+        .to_vec();
+        // SAFETY: no other test of this crate depends on these variables; the test of the agents'
+        // environment removes them either way.
+        unsafe {
+            std::env::set_var(CARGO_TARGET_DIR, "/shared/target");
+            std::env::set_var("WF_SESSION", "s1");
+            std::env::set_var(crate::caller::SESSION_TOKEN_VARIABLE, "token");
+            std::env::set_var("WF_WORKFORCE", "w1");
+        }
         let run = Confinement::Session {
             directory: directory.path(),
         }
@@ -634,7 +656,7 @@ git cat-file commit HEAD | grep -q gpgsig"#;
         .await
         .unwrap();
         assert_eq!(run.outcome, Outcome::Passed);
-        assert_eq!(run.tail, "uncommitted\nunset");
+        assert_eq!(run.tail, "uncommitted\nunset\nnone");
         assert_eq!(run.log, log);
     }
 }
