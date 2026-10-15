@@ -499,28 +499,27 @@ const LINK_INDENT: &str = "    ";
 /// under a bar: yellow for what waits, red for failed sessions and the item's flags, each entry
 /// under a heading. Raw, one `!` line per entry with what it points to indented below.
 fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String {
-    use anstyle::AnsiColor;
-    use style::{BOLD, WARNING, paint};
+    use theme::{ATTENTION, ERROR, WARNING};
     let mut out = String::new();
     match format {
         Format::Styled => {
-            let mut entries: Vec<(AnsiColor, &str, Vec<String>)> = detail
+            let mut entries: Vec<(anstyle::Style, &str, Vec<String>)> = detail
                 .waiting
                 .iter()
                 .map(|waiting| {
-                    let color = match waiting.kind {
-                        InboxKind::Recovery => AnsiColor::Red,
+                    let style = match waiting.kind {
+                        InboxKind::Recovery | InboxKind::OutOfSpace => ERROR,
                         InboxKind::Blocker
                         | InboxKind::Proposal
                         | InboxKind::PrincipalReview
                         | InboxKind::Merge
-                        | InboxKind::Permission => AnsiColor::Yellow,
+                        | InboxKind::Permission => ATTENTION,
                     };
                     let paragraphs = std::iter::once(&waiting.what)
                         .chain(&waiting.points_to)
                         .cloned()
                         .collect();
-                    (color, waiting.heading.as_str(), paragraphs)
+                    (style, waiting.heading.as_str(), paragraphs)
                 })
                 .collect();
             if !detail.flags.is_empty() {
@@ -529,7 +528,7 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
                     .iter()
                     .map(|flag| format!("- {flag}"))
                     .collect();
-                entries.push((AnsiColor::Red, "needs attention", vec![flags.join("\n")]));
+                entries.push((ERROR, "needs attention", vec![flags.join("\n")]));
             }
             if entries.is_empty() {
                 return out;
@@ -537,12 +536,12 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
             out.push('\n');
             // The bar and the space after it.
             let inner = width.map(|width| width.saturating_sub(4));
-            for (index, (color, heading, paragraphs)) in entries.into_iter().enumerate() {
-                let bar = paint(style::color(color), "┃");
+            for (index, (style, heading, paragraphs)) in entries.into_iter().enumerate() {
+                let bar = paint(style, "┃");
                 if index > 0 {
                     let _ = writeln!(out, "  {bar}");
                 }
-                let heading = paint(BOLD.fg_color(Some(anstyle::Color::Ansi(color))), heading);
+                let heading = paint(style.bold(), heading);
                 let _ = writeln!(out, "  {bar} {heading}");
                 for paragraph in paragraphs {
                     for line in markdown::render(&paragraph, inner, "")
