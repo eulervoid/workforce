@@ -2,9 +2,9 @@
 
 The policy says how the workforce works, and it syncs to every machine. What only makes sense on
 one machine lives in its **machine config**: the sandbox agents and checks run in, the environment
-they get, how commits are signed, how you are notified, the colours of `wf`, and who decides permission requests (see
-[permissions.md](permissions.md)). It is never synced, so another machine can never make yours run
-a program or call a paid API.
+they get, how commits are signed, how you are notified, the colours of `wf`, and who decides
+permission requests (see [permissions.md](permissions.md)). It is never synced, so another machine
+can never make yours run a program or call a paid API.
 
 The file is `~/.config/workforce/config.toml`, or `$XDG_CONFIG_HOME/workforce/config.toml` when that
 is set. Without a file, every default below applies. Unknown keys are an error, so a typo does not
