@@ -20,8 +20,8 @@ use super::snapshot::{
     AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Links, MovedBack, Place,
     SessionInfo, SessionStatus, Snapshot, Waiting, moves_back,
 };
-use crate::theme;
 use crate::view::Flag;
+use crate::{render, theme};
 use ratatui::style::{Color, Modifier, Style};
 use wf_core::identity::AgentId;
 use wf_core::session::EndReason;
@@ -180,6 +180,39 @@ fn the_now_tab_shows_what_waits_what_works_and_what_is_flagged() {
     let coder = app.snapshot.working[0].id;
     app.transcribed(coder, &coder_transcript());
     insta::assert_snapshot!(screen(&mut app, 60, 22));
+}
+
+#[test]
+fn a_flag_about_an_item_opens_the_item() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('G'));
+    assert!(matches!(app.now.selection.get(), Some(Row::Flag(_))));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(item(4, "Watch").id)));
+}
+
+#[test]
+fn a_flag_about_no_item_opens_in_full_with_its_command_on_its_own_line() {
+    let flag = Flag::UnreadablePolicy {
+        error: "unknown field `review_levels` in the policy of 2026-10-14, expected one of `types`, `lanes`, `recovery`".to_owned(),
+    };
+    let mut flagged = snapshot();
+    flagged.flagged = vec![flag.clone()];
+    let mut app = App::new(flagged.clone(), TimeZone::UTC);
+    app.resize(44, 24);
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.wanted().detail, Some(Detail::Flag(flag.clone())));
+    flagged.in_view = Some(InView::Flag {
+        text: render::flag_detail_for(&flag, Some(42)),
+        flag,
+    });
+    app.refresh(flagged);
+    let shown = screen(&mut app, 44, 24);
+    assert!(shown.contains("┃ wf policy edit"), "{shown}");
+    insta::assert_snapshot!(shown);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.wanted().detail, None);
 }
 
 #[test]
@@ -1106,13 +1139,15 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     assert_eq!(app.wanted().detail, Some(blocked));
     app.wheel(10, Wheel::Up);
     assert_eq!(app.wanted().detail, Some(item.clone()));
-    // Over the detail of a selection without one, there is nothing to scroll.
+    // Over the detail of a flag, the wheel scrolls the detail it opens.
     press(&mut app, KeyCode::Char('1'));
     app.refresh(snapshot());
     press(&mut app, KeyCode::Char('G'));
     assert!(matches!(app.now.selection.get(), Some(Row::Flag(_))));
     app.wheel(100, Wheel::Down);
-    assert!(matches!(app.now.selection.get(), Some(Row::Flag(_))));
+    assert_eq!(app.stack().len(), 1);
+    assert_eq!(app.wanted().detail, Some(item.clone()));
+    press(&mut app, KeyCode::Esc);
     assert!(app.list_has_keys());
     press(&mut app, KeyCode::Char('2'));
     app.refresh(with_items());

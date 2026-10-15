@@ -18,6 +18,7 @@ use wf_daemon::proto::HeldPermission;
 use crate::cli::ItemGrouping;
 use crate::commands::sorted_views;
 use crate::transcript::Format;
+use crate::view::Flag;
 use crate::{render, view};
 
 /// Everything the dashboard draws besides transcripts, as plain data: the loop takes one at each
@@ -33,7 +34,7 @@ pub struct Snapshot {
     /// The live sessions, the newest first.
     pub working: Vec<SessionInfo>,
     /// What `wf status` flags.
-    pub flagged: Vec<view::Flag>,
+    pub flagged: Vec<Flag>,
     /// What the detail on screen shows.
     pub in_view: Option<InView>,
     /// The live items in groups, when the Items tab is on screen.
@@ -244,6 +245,11 @@ pub enum InView {
         session: Option<SessionId>,
     },
     Session(SessionInfo),
+    /// A flag that is not about an item, in the notice box of an item.
+    Flag {
+        flag: Flag,
+        text: String,
+    },
 }
 
 /// What the dashboard asks the workspace about, besides what it always shows.
@@ -262,6 +268,8 @@ pub enum Detail {
     Item(ItemId),
     Session(SessionId),
     Agent(AgentId),
+    /// A flag of `wf status` that is not about an item.
+    Flag(Flag),
 }
 
 /// What a snapshot is taken from.
@@ -285,7 +293,7 @@ impl Snapshot {
             own,
             last_seen,
             now_ms,
-            detail_width,
+            detail_width: _,
         } = *sources;
         let waiting = waiting(state, events, held);
         let context = view::StatusContext {
@@ -300,6 +308,7 @@ impl Snapshot {
         let graph = state.dependency_graph();
         let mut live: Vec<&Session> = state.live_sessions().collect();
         live.sort_by_key(|session| std::cmp::Reverse(session.started()));
+        let flagged = view::status(state, context).flagged;
         Snapshot {
             name: state.name().unwrap_or("workforce").to_owned(),
             now_ms,
@@ -309,10 +318,11 @@ impl Snapshot {
                 .into_iter()
                 .map(|session| session_info(state, &graph, own, session))
                 .collect(),
-            flagged: view::status(state, context).flagged,
-            in_view: wanted.detail.clone().and_then(|wanted| {
-                in_view(state, events, &graph, own, now_ms, wanted, detail_width)
-            }),
+            in_view: wanted
+                .detail
+                .clone()
+                .and_then(|wanted| in_view(sources, &graph, &flagged, wanted)),
+            flagged,
             agents: if wanted.agents {
                 agents(state, &graph, own)
             } else {
@@ -469,14 +479,19 @@ fn session_info(
 }
 
 fn in_view(
-    state: &State,
-    events: &[Event],
+    sources: &Sources,
     graph: &wf_core::graph::DependencyGraph,
-    own: DeviceKey,
-    now_ms: u64,
+    flagged: &[Flag],
     wanted: Detail,
-    width: u16,
 ) -> Option<InView> {
+    let Sources {
+        state,
+        events,
+        own,
+        now_ms,
+        detail_width: width,
+        ..
+    } = *sources;
     match wanted {
         Detail::Item(id) => {
             let item = state.item(id)?;
@@ -513,6 +528,11 @@ fn in_view(
                 id,
             })
         }
+        // Gone once fixed.
+        Detail::Flag(flag) => flagged.contains(&flag).then(|| InView::Flag {
+            text: render::flag_detail_for(&flag, Some(usize::from(width).min(100))),
+            flag,
+        }),
     }
 }
 

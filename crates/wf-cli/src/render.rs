@@ -13,8 +13,8 @@ use crate::theme;
 use crate::transcript::Format;
 use crate::view::{
     ActivityKind, ActorKind, ActorView, AgentDetail, AgentView, BodyPartView, CommentKindView,
-    InboxEntryView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView, ReviewStatusView,
-    SessionView, SourceView, StatusView, StepRefView, StepsView,
+    Flag, InboxEntryView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView,
+    ReviewStatusView, SessionView, SourceView, StatusView, StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
 use wf_core::inbox::InboxKind;
@@ -503,7 +503,7 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
     let mut out = String::new();
     match format {
         Format::Styled => {
-            let mut entries: Vec<(anstyle::Style, &str, Vec<String>)> = detail
+            let mut entries: Vec<Notice> = detail
                 .waiting
                 .iter()
                 .map(|waiting| {
@@ -534,24 +534,7 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
                 return out;
             }
             out.push('\n');
-            // The bar and the space after it.
-            let inner = width.map(|width| width.saturating_sub(4));
-            for (index, (style, heading, paragraphs)) in entries.into_iter().enumerate() {
-                let bar = paint(style, "┃");
-                if index > 0 {
-                    let _ = writeln!(out, "  {bar}");
-                }
-                let heading = paint(style.bold(), heading);
-                let _ = writeln!(out, "  {bar} {heading}");
-                for paragraph in paragraphs {
-                    for line in markdown::render(&paragraph, inner, "")
-                        .trim_end_matches('\n')
-                        .lines()
-                    {
-                        let _ = writeln!(out, "  {bar} {line}");
-                    }
-                }
-            }
+            out.push_str(&notice_box(entries, width));
         }
         Format::Raw => {
             for waiting in &detail.waiting {
@@ -571,6 +554,42 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
         }
     }
     out
+}
+
+/// An entry of a notice box: the style of its bar, its heading, and its paragraphs in markdown.
+type Notice<'a> = (anstyle::Style, &'a str, Vec<String>);
+
+/// Notices under a bar in their style, each under its heading, the paragraphs wrapped to `width`
+/// and never cut.
+fn notice_box(entries: Vec<Notice>, width: Option<usize>) -> String {
+    let mut out = String::new();
+    // The bar and the space after it.
+    let inner = width.map(|width| width.saturating_sub(4));
+    for (index, (style, heading, paragraphs)) in entries.into_iter().enumerate() {
+        let bar = paint(style, "┃");
+        if index > 0 {
+            let _ = writeln!(out, "  {bar}");
+        }
+        let heading = paint(style.bold(), heading);
+        let _ = writeln!(out, "  {bar} {heading}");
+        for paragraph in paragraphs {
+            for line in markdown::render(&paragraph, inner, "")
+                .trim_end_matches('\n')
+                .lines()
+            {
+                let _ = writeln!(out, "  {bar} {line}");
+            }
+        }
+    }
+    out
+}
+
+/// A flag of `wf status` alone, in the notice box of an item: its heading, what is wrong, and the
+/// command that fixes it on a line of its own.
+pub fn flag_detail_for(flag: &Flag, width: Option<usize>) -> String {
+    let mut paragraphs = vec![flag.what()];
+    paragraphs.extend(flag.command().map(|command| format!("`{command}`")));
+    notice_box(vec![(theme::ERROR, flag.heading(), paragraphs)], width)
 }
 
 /// `14m`, `3h05m`, `2d`.
