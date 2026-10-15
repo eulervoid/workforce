@@ -1263,6 +1263,22 @@ fn a_key_after_scrolling_moves_the_selection_and_shows_it() {
 }
 
 #[test]
+fn a_refresh_that_moves_the_selection_shows_it() {
+    let mut app = long_item_list();
+    screen(&mut app, 130, 14);
+    for _ in 0..4 {
+        app.wheel(10, Wheel::Down);
+        screen(&mut app, 130, 14);
+    }
+    // The selected item is gone, so the selection moves to the next one, which the list shows.
+    let mut snapshot = app.snapshot.clone();
+    snapshot.items[0].items.remove(0);
+    app.refresh(snapshot);
+    assert_eq!(selected_item(&app), Some(ItemId::from_bytes([2; 32])));
+    assert!(screen(&mut app, 130, 14).contains("Item 2 "));
+}
+
+#[test]
 fn a_click_on_a_scrolled_list_selects_the_row_under_it() {
     let mut app = long_item_list();
     screen(&mut app, 130, 14);

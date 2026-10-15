@@ -391,6 +391,18 @@ pub struct ListTab<Key> {
     pub panes: Panes,
 }
 
+impl<Key: Clone + PartialEq> ListTab<Key> {
+    /// Keeps the selection on its row of `rows`; when that moved it to another row, the list
+    /// follows it on screen again.
+    fn update(&mut self, rows: &[Key]) {
+        let before = self.selection.get().cloned();
+        self.selection.update(rows);
+        if self.selection.get() != before.as_ref() {
+            self.panes.list_top = self.panes.list_top.follow_selection();
+        }
+    }
+}
+
 impl<Key> Default for ListTab<Key> {
     fn default() -> Self {
         Self {
@@ -851,16 +863,16 @@ impl App {
             self.unconfirmed_allow = None;
         }
         let rows = self.now_rows();
-        self.now.selection.update(&rows);
+        self.now.update(&rows);
         // The rows of these tabs are only known while they are on screen.
         match self.tab {
             Tab::Items => {
                 let rows = self.item_rows();
-                self.items.list.selection.update(&rows);
+                self.items.list.update(&rows);
             }
             Tab::Agents => {
                 let rows = self.agent_rows();
-                self.agents.selection.update(&rows);
+                self.agents.update(&rows);
             }
             Tab::Now | Tab::Log => {}
         }
