@@ -55,8 +55,8 @@ const RETRY_END: Duration = Duration::from_secs(30);
 
 /// Ends the session with `interruption`. An end that cannot be written, as on a full disk, is
 /// tried again until it is or the daemon halts, so the session does not stay live without a
-/// harness; one refused for any other reason is not. Returns the workforce as it was loaded last, since a store that failed a write may
-/// have been opened again.
+/// harness; one refused for any other reason is not. Returns the workforce as it was loaded
+/// last, since a store that failed a write may have been opened again.
 async fn interrupt(
     daemon: &Arc<Daemon>,
     mut loaded: Arc<Loaded>,
