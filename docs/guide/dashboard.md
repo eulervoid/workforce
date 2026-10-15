@@ -87,6 +87,19 @@ it. `#item`, `@you/agent`, sessions and commits are links. The footer's key hint
 the top of a detail are clickable too. Allowing a request by click needs a second click on it within
 three seconds; denying acts at once. To select text, hold shift while dragging.
 
+### Warnings
+
+When the daemon moves an item from review back to open, as it does when approved work conflicts with
+the target, the dashboard warns in yellow at the bottom right, on the line above the key hints:
+
+```
+⚠ #wjgenw back to open: merging into main conflicts in README.md
+```
+
+A click opens the item. The warning stays until you press a key or open the item; several at once show
+the latest with ` · 2 more`. A tip under the pointer takes its place while it is hovered. Moves from
+before the dashboard started do not warn.
+
 ### Focus
 
 The place that has the keys is marked in blue; the rest is dimmed. The whole dashboard dims while its
