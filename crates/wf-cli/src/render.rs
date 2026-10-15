@@ -1587,6 +1587,18 @@ mod tests {
     /// The detail of an approved item whose merge waits on a dirty checkout, which the daemon
     /// commented on twice.
     fn held_merge() -> ItemDetail {
+        merge_pending(
+            &[],
+            &[
+                "Waiting to merge: main kept moving.",
+                "Waiting to merge: main is checked out in /src/app with changes to src/lib.rs, Cargo.toml. Commit or stash them.",
+            ],
+        )
+    }
+
+    /// The detail of an approved item whose merge is pending. With `earlier` comments, the daemon
+    /// made them on an earlier submission, before the latest one; `after` it made on the latest.
+    fn merge_pending(earlier: &[&str], after: &[&str]) -> ItemDetail {
         use wf_core::id::{ItemId, SessionId};
         use wf_core::identity::Actor;
         use wf_core::item::ItemView;
@@ -1617,12 +1629,26 @@ mod tests {
         )
         .id()
         .into();
-        let session: SessionId = apply(&mut state, principal.clone(), start_session("coder", item))
-            .id()
-            .into();
         let submitted = EndReason::Submitted {
             commit: Some(commit),
         };
+        if !earlier.is_empty() {
+            let session: SessionId =
+                apply(&mut state, principal.clone(), start_session("coder", item))
+                    .id()
+                    .into();
+            apply(
+                &mut state,
+                principal.clone(),
+                end_session(session, submitted.clone()),
+            );
+            for text in earlier {
+                apply(&mut state, daemon.clone(), comment(item, text));
+            }
+        }
+        let session: SessionId = apply(&mut state, principal.clone(), start_session("coder", item))
+            .id()
+            .into();
         apply(
             &mut state,
             principal.clone(),
@@ -1638,19 +1664,9 @@ mod tests {
             principal.clone(),
             verdict(item, commit, Verdict::Approve),
         );
-        apply(
-            &mut state,
-            daemon.clone(),
-            comment(item, "Waiting to merge: main kept moving."),
-        );
-        apply(
-            &mut state,
-            daemon,
-            comment(
-                item,
-                "Waiting to merge: main is checked out in /src/app with changes to src/lib.rs, Cargo.toml. Commit or stash them.",
-            ),
-        );
+        for text in after {
+            apply(&mut state, daemon.clone(), comment(item, text));
+        }
         let ItemView::Live(live) = state.item(item).unwrap() else {
             panic!()
         };
@@ -1691,6 +1707,21 @@ mod tests {
         assert!(!text.contains("kept moving"), "only the latest: {text}");
         let body = plain.find("activity").unwrap();
         assert!(plain.find("merge waits").unwrap() < body, "{plain}");
+    }
+
+    #[test]
+    fn a_daemon_comment_from_an_earlier_round_is_not_in_the_box() {
+        let detail = merge_pending(
+            &[
+                "Merging into main conflicts in src/lib.rs. The next session merges main into the branch first.",
+            ],
+            &[],
+        );
+        let shown = item_detail_for(&detail, Some(60), Format::Styled);
+        let boxed = boxed(&shown);
+        assert_eq!(boxed[0], "merge waits");
+        assert!(detail.waiting[0].points_to.is_empty(), "{boxed:?}");
+        assert!(!boxed.join(" ").contains("conflicts"), "{boxed:?}");
     }
 
     #[test]
