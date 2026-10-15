@@ -1204,7 +1204,7 @@ fn now_lines(app: &App, width: u16) -> ListText {
         list.push(section("NEEDS ATTENTION"));
         for flag in &snapshot.flagged {
             let is_selected = selected == Some(&Row::Flag(flag.clone()));
-            let first = vec![themed("! ", theme::WARNING), Span::raw(flag.clone())];
+            let first = vec![themed("! ", theme::WARNING), Span::raw(flag.to_string())];
             list.entry(
                 RowLines::new(app, is_selected, width).lines(first, None, Vec::new()),
                 is_selected,
@@ -1447,6 +1447,15 @@ fn draw_detail(
             let text: Text = text.into_text().unwrap_or_default();
             (draw_scrolled(frame, text, opened.scroll, body), None)
         }
+        Detail::Flag(flag) => {
+            let Some(InView::Flag { text, .. }) = in_view
+                .filter(|shown| matches!(shown, InView::Flag { flag: shown, .. } if shown == flag))
+            else {
+                return None;
+            };
+            let text: Text = text.into_text().unwrap_or_default();
+            (draw_scrolled(frame, text, opened.scroll, body), None)
+        }
         Detail::Session(id) => {
             let Some(InView::Session(session)) =
                 in_view.filter(|shown| matches!(shown, InView::Session(shown) if shown.id == *id))
@@ -1566,6 +1575,7 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
                 crumbs.push((vec![Span::raw(format!("#{}", item.short()))], depth));
             }
             Detail::Agent(agent) => crumbs.push((vec![Span::raw(agent.name.to_string())], depth)),
+            Detail::Flag(flag) => crumbs.push((vec![Span::raw(flag.heading())], depth)),
             Detail::Session(id) => {
                 let Some(session) = app.session_info(*id) else {
                     crumbs.push((vec![Span::raw(id.short())], depth));
@@ -1845,7 +1855,9 @@ fn hints(app: &App) -> Vec<&'static str> {
     let navigation: &[&str] = match (app.tab, opened.map(|opened| &opened.detail)) {
         (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full"],
         (_, Some(Detail::Item(_))) if item_session => &["esc back", "j/k scroll", "enter session"],
-        (_, Some(Detail::Item(_) | Detail::Agent(_))) => &["esc back", "j/k scroll"],
+        (_, Some(Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_))) => {
+            &["esc back", "j/k scroll"]
+        }
         (Tab::Now, None) => &["enter open", "j/k move"],
         (Tab::Items, None) => &["enter open", "o group", "/ filter", "F ready"],
         (Tab::Log, None) if !app.log.filter.is_empty() => &["/ change filter", "esc clear"],
@@ -1856,7 +1868,7 @@ fn hints(app: &App) -> Vec<&'static str> {
     let followed = match (app.tab, opened) {
         (_, Some(opened)) => match opened.detail {
             Detail::Session(_) => Some(opened.scroll),
-            Detail::Item(_) | Detail::Agent(_) => None,
+            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) => None,
         },
         (Tab::Log, None) => Some(app.log.scroll),
         (Tab::Now | Tab::Items | Tab::Agents, None) => None,

@@ -166,7 +166,7 @@ impl Detail {
     /// Where a detail starts: a transcript at its end, which is what happens now.
     fn start(&self) -> Scroll {
         match self {
-            Detail::Item(_) | Detail::Agent(_) => Scroll::At(0),
+            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) => Scroll::At(0),
             Detail::Session(_) => Scroll::END,
         }
     }
@@ -248,7 +248,7 @@ pub enum AgentRow {
 pub enum Row {
     Waiting(WaitingKey),
     Session(SessionId),
-    Flag(String),
+    Flag(crate::view::Flag),
 }
 
 /// A list whose selection holds what is selected, not where it is, so a refresh that adds or
@@ -489,7 +489,7 @@ impl Target {
                 name,
             } => format!("open the transcript of {name}"),
             Target::Open {
-                detail: Detail::Item(_) | Detail::Agent(_),
+                detail: Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_),
                 name,
             } => format!("open {name}"),
             Target::Diff { commit, .. } => {
@@ -1002,7 +1002,11 @@ impl App {
                 | Waiting::Notice { item, .. } => Detail::Item(item.id),
             }),
             Row::Session(session) => Some(Detail::Session(*session)),
-            Row::Flag(_) => None,
+            // A flag about an item shows in the item's notice box.
+            Row::Flag(flag) => Some(
+                flag.item()
+                    .map_or_else(|| Detail::Flag(flag.clone()), Detail::Item),
+            ),
         }
     }
 
@@ -1200,7 +1204,7 @@ impl App {
                     Waiting::Permission { .. } | Waiting::Notice { .. } => false,
                 })
                 .collect(),
-            Some(Detail::Agent(_)) | None => Vec::new(),
+            Some(Detail::Agent(_) | Detail::Flag(_)) | None => Vec::new(),
         }
     }
 
@@ -1209,7 +1213,7 @@ impl App {
         match self.focus()? {
             Detail::Item(item) => Some(item),
             Detail::Session(session) => self.session_info(session).map(|info| info.item.id),
-            Detail::Agent(_) => None,
+            Detail::Agent(_) | Detail::Flag(_) => None,
         }
     }
 
@@ -1223,7 +1227,7 @@ impl App {
                     SessionStatus::Ended { .. } => false,
                 })
                 .map(|info| info.id),
-            Detail::Item(_) | Detail::Agent(_) => None,
+            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) => None,
         }
     }
 
@@ -1231,7 +1235,7 @@ impl App {
     pub fn session_info(&self, session: SessionId) -> Option<&SessionInfo> {
         let in_view = match &self.snapshot.in_view {
             Some(InView::Session(info)) => Some(info),
-            Some(InView::Item { .. } | InView::Agent { .. }) | None => None,
+            Some(InView::Item { .. } | InView::Agent { .. } | InView::Flag { .. }) | None => None,
         };
         self.snapshot
             .working
@@ -1834,7 +1838,7 @@ impl App {
     fn detail_key(&mut self, key: KeyEvent) {
         let item_session = match &self.snapshot.in_view {
             Some(InView::Item { session, .. }) => *session,
-            Some(InView::Session(_) | InView::Agent { .. }) | None => None,
+            Some(InView::Session(_) | InView::Agent { .. } | InView::Flag { .. }) | None => None,
         };
         let item_of_session = self.item_subject();
         let page = self.page();
