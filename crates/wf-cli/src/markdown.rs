@@ -4,7 +4,7 @@
 use anstyle::Style;
 use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
-use crate::theme::{CODE, DIM};
+use crate::theme::{BOLD, CODE, DIM};
 
 /// `text` rendered with every line indented by `indent` and wrapped to `width` columns, indent
 /// included, or not at all. Words longer than the width, such as URLs, are left whole.
@@ -124,7 +124,7 @@ impl MarkdownWriter {
 
     fn style_off(&mut self) {
         self.styles.pop();
-        self.line.push_str(&format!("{:#}", Style::new().bold()));
+        self.line.push_str(&anstyle::Reset.to_string());
         self.restyle();
     }
 
@@ -153,9 +153,9 @@ impl MarkdownWriter {
 
     fn event(&mut self, event: Event<'_>) {
         match event {
-            Event::Start(Tag::Strong) => self.style_on(Style::new().bold()),
+            Event::Start(Tag::Strong) => self.style_on(BOLD),
             Event::Start(Tag::Emphasis) => self.style_on(Style::new().italic()),
-            Event::Start(Tag::Heading { .. }) => self.style_on(Style::new().bold()),
+            Event::Start(Tag::Heading { .. }) => self.style_on(BOLD),
             Event::End(TagEnd::Strong | TagEnd::Emphasis) => self.style_off(),
             Event::End(TagEnd::Heading(_)) => {
                 self.style_off();

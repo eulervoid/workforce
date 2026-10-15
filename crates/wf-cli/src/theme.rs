@@ -13,6 +13,12 @@ const fn fg(color: AnsiColor) -> Style {
 
 pub const BOLD: Style = Style::new().bold();
 pub const DIM: Style = Style::new().dimmed();
+/// Rules and pane separators, and the frames of popups.
+pub const DIVIDER: Style = Style::new().dimmed();
+/// What the pointer is over, in the dashboard.
+pub const LINK: Style = Style::new().underline();
+/// The label of the tab on screen.
+pub const TAB_ACTIVE: Style = Style::new().bold().invert();
 pub const ID: Style = fg(AnsiColor::Cyan);
 pub const PRINCIPAL: Style = fg(AnsiColor::Magenta);
 pub const AGENT: Style = fg(AnsiColor::BrightBlue);
@@ -31,6 +37,10 @@ pub const KEY: Style = fg(AnsiColor::Yellow);
 pub const LIVE: Style = fg(AnsiColor::Blue);
 /// Inline code: blue, as Claude Code shows it, so it looks familiar.
 pub const CODE: Style = fg(AnsiColor::Blue);
+/// Lines a diff adds, in transcripts.
+pub const DIFF_ADDED: Style = fg(AnsiColor::Green);
+/// Lines a diff removes, in transcripts.
+pub const DIFF_REMOVED: Style = fg(AnsiColor::Red);
 
 /// Marine blue: marks the one place that has the keys.
 pub const ACCENT: Color = Color::Rgb(RgbColor(30, 80, 160));

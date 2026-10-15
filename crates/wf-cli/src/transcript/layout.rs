@@ -1,7 +1,7 @@
 //! How a transcript is drawn in a terminal: each block laid out for a fixed width, so long lines
 //! never wrap by themselves, as text with escape codes for its styles.
 
-use anstyle::{AnsiColor, Style};
+use anstyle::Style;
 use jiff::tz::TimeZone;
 use jiff::{SignedDuration, Timestamp};
 use serde_json::Value;
@@ -11,6 +11,7 @@ use wf_harness::{Decider, Decision, Permission};
 use super::{
     Asked, Block, Outcome, PlanEntry, PlanStatus, Prompter, StopReason, Thinking, ToolCall,
 };
+use crate::theme::{AGENT, BOLD, DAEMON, DIFF_ADDED, DIFF_REMOVED, DIM, ERROR, SUCCESS, WARNING};
 
 /// Lines kept from the start and the end of long tool output: the tail holds the errors.
 const HEAD: usize = 5;
@@ -26,13 +27,6 @@ const MARGIN: usize = 2;
 const NESTED: usize = 4;
 /// The columns left of output and diffs under a tool call, after `NESTED`.
 const GUTTER: usize = 2;
-
-const DIM: Style = Style::new().dimmed();
-const BOLD: Style = Style::new().bold();
-
-fn color(color: AnsiColor) -> Style {
-    Style::new().fg_color(Some(color.into()))
-}
 
 /// The width to lay out for: the terminal's, within readable bounds.
 pub fn terminal_width() -> usize {
@@ -147,12 +141,7 @@ impl Layout {
     pub fn block(&self, block: &Block) -> String {
         match block {
             Block::Prompt { by, at, text } => self.prompt(*by, *at, text),
-            Block::Answer { at } => self.turn_header(
-                &self.agent,
-                BOLD.fg_color(Some(AnsiColor::Magenta.into())),
-                *at,
-                "",
-            ),
+            Block::Answer { at } => self.turn_header(&self.agent, AGENT.bold(), *at, ""),
             Block::Prose { kind, text, .. } => self.prose(*kind, text),
             Block::Call { call, outcome } => self.finished_call(call, outcome),
             Block::Log(text) => self.log(text),
@@ -188,7 +177,7 @@ impl Layout {
     fn gutter(&self, gutter: Gutter) -> String {
         match (gutter, self.format) {
             (Gutter::Blank, _) => "  ".to_owned(),
-            (Gutter::Failed, Format::Styled) => self.styled("│", color(AnsiColor::Red)) + " ",
+            (Gutter::Failed, Format::Styled) => self.styled("│", ERROR) + " ",
             (Gutter::Failed, Format::Raw) => "| ".to_owned(),
         }
     }
@@ -348,7 +337,7 @@ impl Layout {
             Prompter::Brief => "brief",
             Prompter::Wf => "wf",
         };
-        let style = color(AnsiColor::Cyan).bold();
+        let style = DAEMON.bold();
         let lines = text.trim_end().lines().count();
         let mut out = String::new();
         match self.verbosity {
@@ -395,8 +384,8 @@ impl Layout {
         let left = format!(
             "{}{} {}",
             " ".repeat(MARGIN),
-            self.styled("✗", color(AnsiColor::Red)),
-            self.styled(&text, color(AnsiColor::Red))
+            self.styled("✗", ERROR),
+            self.styled(&text, ERROR)
         );
         let elapsed = elapsed.map(duration).unwrap_or_default();
         self.spread(&left, MARGIN + 2 + width_of(&text), &elapsed, DIM)
@@ -404,7 +393,7 @@ impl Layout {
 
     /// `finished` and how long the turn took.
     fn footer(&self, reason: &StopReason, elapsed: Option<SignedDuration>) -> String {
-        let warn = color(AnsiColor::Yellow);
+        let warn = WARNING;
         let (text, style) = match reason {
             StopReason::EndTurn => ("finished", DIM),
             StopReason::Cancelled => ("stopped", warn),
@@ -485,7 +474,7 @@ impl Layout {
         let mut left_width = indent + width_of(&first);
         if !suffix.is_empty() {
             let suffix_style = match &verdict {
-                Some((_, Permission::Deny)) => color(AnsiColor::Red),
+                Some((_, Permission::Deny)) => ERROR,
                 Some((_, Permission::Allow)) | None => DIM,
             };
             left.push_str("  ");
@@ -560,7 +549,7 @@ impl Layout {
         };
         let style = match permission {
             Permission::Allow => DIM,
-            Permission::Deny => color(AnsiColor::Red),
+            Permission::Deny => ERROR,
         };
         self.fit(&format!("{verdict}: {reason}"), NESTED, true)
             .iter()
@@ -570,17 +559,15 @@ impl Layout {
 
     fn finished_call(&self, call: &ToolCall, outcome: &Outcome) -> String {
         let (glyph, state, style) = match outcome {
-            Outcome::Completed(at) => (
-                ("✓", color(AnsiColor::Green)),
-                duration(at.duration_since(call.since)),
-                DIM,
-            ),
+            Outcome::Completed(at) => {
+                (("✓", SUCCESS), duration(at.duration_since(call.since)), DIM)
+            }
             Outcome::Failed(at) => (
-                ("✗", color(AnsiColor::Red)),
+                ("✗", ERROR),
                 format!("failed  {}", duration(at.duration_since(call.since))),
-                color(AnsiColor::Red),
+                ERROR,
             ),
-            Outcome::Denied => (("✗", color(AnsiColor::Red)), String::new(), DIM),
+            Outcome::Denied => (("✗", ERROR), String::new(), DIM),
             Outcome::Unfinished => (("·", DIM), "unfinished".to_owned(), DIM),
         };
         let mut out = self.call_header(call, glyph, &state, style);
@@ -651,9 +638,9 @@ impl Layout {
         }
         out.push_str(&self.guttered(self.abridged(lines), Gutter::Blank, |line| {
             if line.starts_with('+') {
-                color(AnsiColor::Green)
+                DIFF_ADDED
             } else if line.starts_with('-') {
-                color(AnsiColor::Red)
+                DIFF_REMOVED
             } else {
                 DIM
             }

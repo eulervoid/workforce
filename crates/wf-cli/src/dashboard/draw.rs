@@ -4,7 +4,7 @@ use ansi_to_tui::IntoText;
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style, Stylize};
+use ratatui::style::{Color, Modifier, Style, Styled, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use wf_core::graph::Readiness;
@@ -30,6 +30,16 @@ use wf_core::stats::ProjectStats;
 fn themed<'a>(text: impl Into<std::borrow::Cow<'a, str>>, style: anstyle::Style) -> Span<'a> {
     Span::styled(text, Style::from(style))
 }
+
+/// A style of the theme on top of what is styled already, as `Stylize` puts its own.
+trait Themed: Styled<Item = Self> + Sized {
+    fn themed(self, style: anstyle::Style) -> Self {
+        let style = self.style().patch(Style::from(style));
+        self.set_style(style)
+    }
+}
+
+impl<T: Styled<Item = T>> Themed for T {}
 
 /// The place on screen the keys go to, which the accent marks.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -165,13 +175,18 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         Some(Prompt::Choose(choice)) => {
             draw_choice(frame, choice, accent(app, KeysAt::Choice), body);
             frame.render_widget(
-                Paragraph::new(Line::from(" j/k move · enter pick · esc cancel").dim()),
+                Paragraph::new(
+                    Line::from(" j/k move · enter pick · esc cancel").themed(theme::DIM),
+                ),
                 keys,
             );
         }
         Some(Prompt::Keys) => {
             draw_keys(frame, accent(app, KeysAt::Keys), body);
-            frame.render_widget(Paragraph::new(Line::from(" any key closes").dim()), keys);
+            frame.render_widget(
+                Paragraph::new(Line::from(" any key closes").themed(theme::DIM)),
+                keys,
+            );
         }
         Some(prompt) => draw_prompt(frame, app, prompt, keys),
         None => shown.clickable.spots.extend(draw_hints(frame, app, keys)),
@@ -185,12 +200,12 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         Some(Hovered::Spot(spot)) if Some(spot) == warning.as_ref() => {
             frame
                 .buffer_mut()
-                .set_style(spot.area, Style::new().underlined());
+                .set_style(spot.area, Style::from(theme::LINK));
         }
         Some(Hovered::Spot(spot)) => {
             frame
                 .buffer_mut()
-                .set_style(spot.area, Style::new().underlined());
+                .set_style(spot.area, Style::from(theme::LINK));
             // A tip takes the place of the warning while it shows.
             if warning.is_some() {
                 let cleared = Rect {
@@ -292,7 +307,7 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
             if index == choice.index() {
                 Line::from(highlight(
                     vec![Span::raw(option)],
-                    Style::new().bold(),
+                    Style::from(theme::BOLD),
                     accent,
                 ))
             } else {
@@ -316,7 +331,11 @@ fn draw_choice(frame: &mut Frame, choice: &Choice, accent: Color, body: Rect) {
     };
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title(title)),
+        Paragraph::new(lines).block(
+            Block::bordered()
+                .border_style(Style::from(theme::DIVIDER))
+                .title(title),
+        ),
         area,
     );
 }
@@ -365,11 +384,15 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect) {
     };
     frame.render_widget(Clear, area);
     frame.render_widget(
-        Paragraph::new(lines).block(Block::bordered().title(Line::from(highlight(
-            vec![Span::raw("keys")],
-            Style::new().bold(),
-            accent,
-        )))),
+        Paragraph::new(lines).block(
+            Block::bordered()
+                .border_style(Style::from(theme::DIVIDER))
+                .title(Line::from(highlight(
+                    vec![Span::raw("keys")],
+                    Style::from(theme::BOLD),
+                    accent,
+                ))),
+        ),
         area,
     );
 }
@@ -379,7 +402,8 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     // The label of what is asked has the accent; a question answered with keys has it on the
     // whole line.
     let accent = accent(app, KeysAt::Footer);
-    let question = |text: String| Line::from(Span::styled(text, Style::new().bold().bg(accent)));
+    let question =
+        |text: String| Line::from(Span::styled(text, Style::from(theme::BOLD).bg(accent)));
     let (label, input, hint) = match prompt {
         Prompt::Filter { input, .. } => ("/".to_owned(), input, ""),
         Prompt::Comment { item, input } => (
@@ -415,7 +439,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
         }
     };
     // The label between its ends, and a space before what is typed.
-    let mut label = highlight(vec![Span::raw(label)], Style::new().bold(), accent);
+    let mut label = highlight(vec![Span::raw(label)], Style::from(theme::BOLD), accent);
     label.push(Span::raw(" "));
     let label_width: usize = label.iter().map(Span::width).sum();
     // The hint keeps to the right while it leaves room to type; a narrow footer leaves it out.
@@ -423,7 +447,10 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
     let area = if area.width >= label_width as u16 + hint_width + 16 {
         let [typed, hint_area] =
             Layout::horizontal([Constraint::Fill(1), Constraint::Length(hint_width)]).areas(area);
-        frame.render_widget(Paragraph::new(Line::from(hint).dim()), hint_area);
+        frame.render_widget(
+            Paragraph::new(Line::from(hint).themed(theme::DIM)),
+            hint_area,
+        );
         typed
     } else {
         area
@@ -463,6 +490,25 @@ fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
     spans
 }
 
+/// The label of the tab on screen, between ends in the colour behind it, as a highlight has. With
+/// `reverse` that is the colour of its text; without a colour behind it, the ends are spaces.
+fn active_tab(label: String) -> Vec<Span<'static>> {
+    let style = Style::from(theme::TAB_ACTIVE);
+    let behind = if style.add_modifier.contains(Modifier::REVERSED) {
+        Some(style.fg.unwrap_or(Color::Reset))
+    } else {
+        style.bg
+    };
+    let label = Span::styled(label, style);
+    match behind {
+        Some(behind) => {
+            let (start, end) = highlight_ends(behind);
+            vec![start, label, end]
+        }
+        None => vec![Span::raw(" "), label, Span::raw(" ")],
+    }
+}
+
 /// Draws the name of the project and the tabs; returns where the label of each tab went.
 fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
     let mut tabs = Vec::new();
@@ -477,19 +523,14 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
             // The log is the list of its tab: its label has the accent, as a selection would.
             highlight(
                 vec![Span::raw(label)],
-                Style::new().bold(),
+                Style::from(theme::BOLD),
                 accent(app, KeysAt::Log),
             )
         } else if tab == app.tab {
-            // Reversed, the background of the label is the colour of the text.
-            highlight(
-                vec![Span::raw(label)],
-                Style::new().bold().reversed(),
-                Color::Reset,
-            )
+            active_tab(label)
         } else {
             // A space where the active tab has its ends, so the tabs keep their places.
-            vec![Span::raw(format!(" {label} ")).dim()]
+            vec![Span::raw(format!(" {label} ")).themed(theme::DIM)]
         };
         let start: usize = tabs.iter().map(Span::width).sum();
         let width: usize = label.iter().map(Span::width).sum();
@@ -505,7 +546,7 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
     frame.render_widget(
         Paragraph::new(Line::from(vec![
             Span::raw(" "),
-            Span::raw(app.snapshot.name.clone()).bold(),
+            Span::raw(app.snapshot.name.clone()).themed(theme::BOLD),
         ])),
         name,
     );
@@ -541,7 +582,7 @@ fn counts_line(app: &App) -> Line<'static> {
     if counts.devices > 1 {
         parts.push(format!("{} devices", counts.devices));
     }
-    Line::from(format!(" {}", parts.join(SEPARATOR))).dim()
+    Line::from(format!(" {}", parts.join(SEPARATOR))).themed(theme::DIM)
 }
 
 /// A button `width` columns wide, `start` columns into the line `area`; what a narrow window cuts
@@ -560,7 +601,7 @@ fn button(area: Rect, start: usize, width: usize, target: Target) -> Spot {
 
 fn draw_rule(frame: &mut Frame, area: Rect) {
     let rule = "─".repeat(usize::from(area.width));
-    frame.render_widget(Paragraph::new(rule).dim(), area);
+    frame.render_widget(Paragraph::new(rule).themed(theme::DIVIDER), area);
 }
 
 fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
@@ -636,7 +677,7 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
     let mut spots = Vec::new();
     let (list_top, list) = draw_list(frame, app, list_lines, list, &mut spots);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
-    frame.render_widget(Paragraph::new(rule_text).dim(), rule);
+    frame.render_widget(Paragraph::new(rule_text).themed(theme::DIVIDER), rule);
     Drawn {
         text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail, &mut spots)),
         list_top: Some(list_top),
@@ -666,7 +707,7 @@ fn draw_strip(frame: &mut Frame, app: &App, area: Rect) -> (Rect, Rect) {
     };
     let mut lines = vec![Line::default(); usize::from(strip.height / 2)];
     lines.push(Line::from(chevron));
-    frame.render_widget(Paragraph::new(lines).dim(), strip);
+    frame.render_widget(Paragraph::new(lines).themed(theme::DIM), strip);
     (pane, strip)
 }
 
@@ -818,7 +859,7 @@ fn draw_indicator(frame: &mut Frame, row: Rect, text: &str) -> Rect {
     for x in area.left()..area.right() {
         buffer[(x, row.y)].reset();
     }
-    let style = Style::new().dim().bg(background);
+    let style = Style::from(theme::DIM).bg(background);
     buffer.set_stringn(area.x, area.y, text, usize::from(width), style);
     area
 }
@@ -864,7 +905,7 @@ pub fn list_top(
 }
 
 fn section(title: &str) -> Line<'static> {
-    Line::from(format!(" {title}")).bold()
+    Line::from(format!(" {title}")).themed(theme::BOLD)
 }
 
 /// One row of a list, `width` wide: the selection marker, what it says cut to fit, and `right`
@@ -914,7 +955,7 @@ impl RowLines {
         }
         let mut first = Line::from(spans);
         if self.selected {
-            first = first.bold();
+            first = first.themed(theme::BOLD);
         }
         let mut lines = vec![first];
         for line in more {
@@ -1022,7 +1063,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             row.lines(
                 first,
                 row.keys("r").map(Line::from),
-                vec![Line::from(more).dim()],
+                vec![Line::from(more).themed(theme::DIM)],
             )
         }
         Waiting::Review { item, commit } => {
@@ -1030,7 +1071,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             first.push(themed(format!("#{}", item.id.short()), theme::ID));
             first.push(Span::raw(" review"));
             if let Some(commit) = commit {
-                first.push(Span::raw(format!(" {}", &commit.to_string()[..8])).dim());
+                first.push(Span::raw(format!(" {}", &commit.to_string()[..8])).themed(theme::DIM));
             }
             first.push(Span::raw(format!("  {}", item.title)));
             row.lines(first, row.keys("v").map(Line::from), Vec::new())
@@ -1038,7 +1079,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
         Waiting::Notice { item, kind, what } => {
             let mut first = vec![themed("• ", theme::ATTENTION)];
             first.extend(item_spans(item));
-            let more = Line::from(format!("  {kind}: {what}")).dim();
+            let more = Line::from(format!("  {kind}: {what}")).themed(theme::DIM);
             row.lines(first, None, vec![more])
         }
     }
@@ -1052,7 +1093,7 @@ fn age(since_ms: u64, now_ms: u64) -> String {
 /// What a session does now, from its transcript.
 fn activity(app: &App, session: &SessionInfo) -> Option<Line<'static>> {
     if let Place::Elsewhere(device) = &session.place {
-        return Some(Line::from(format!("  on {device}")).dim());
+        return Some(Line::from(format!("  on {device}")).themed(theme::DIM));
     }
     let transcript = app.transcripts.get(&session.id)?;
     let spinner = SPINNER[(app.snapshot.now_ms / 500) as usize % SPINNER.len()];
@@ -1068,14 +1109,14 @@ fn activity(app: &App, session: &SessionInfo) -> Option<Line<'static>> {
         Now::Thinking => format!("  {spinner} thinking"),
         Now::Idle => return None,
     };
-    Some(Line::from(line).dim())
+    Some(Line::from(line).themed(theme::DIM))
 }
 
 fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'static>> {
     let glyph = match session.status {
         SessionStatus::Live => themed("◆ ", theme::LIVE),
         SessionStatus::Parked => themed("◇ ", theme::LIVE),
-        SessionStatus::Ended { .. } => Span::raw("· ").dim(),
+        SessionStatus::Ended { .. } => Span::raw("· ").themed(theme::DIM),
     };
     let mut first = vec![
         glyph,
@@ -1096,9 +1137,9 @@ fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'s
 
 /// `right`, then how full the session's context is, `· 69k/1M`, when its agent reported it.
 fn with_context(app: &App, session: &SessionInfo, right: String) -> Line<'static> {
-    let mut line = Line::from(Span::raw(right).dim());
+    let mut line = Line::from(Span::raw(right).themed(theme::DIM));
     if let Some(usage) = app.transcripts.get(&session.id).and_then(Transcript::usage) {
-        line.push_span(Span::raw(" · ").dim());
+        line.push_span(Span::raw(" · ").themed(theme::DIM));
         line.push_span(context_span(
             usage,
             format!("{}/{}", tokens(usage.used), tokens(usage.size)),
@@ -1112,11 +1153,11 @@ fn with_context(app: &App, session: &SessionInfo, right: String) -> Line<'static
 fn context_line(model: Option<&str>, usage: Option<&Usage>) -> Option<Line<'static>> {
     let mut spans = Vec::new();
     if let Some(model) = model {
-        spans.push(Span::raw(model.to_owned()).dim());
+        spans.push(Span::raw(model.to_owned()).themed(theme::DIM));
     }
     if let Some(usage) = usage {
         if !spans.is_empty() {
-            spans.push(Span::raw(" · ").dim());
+            spans.push(Span::raw(" · ").themed(theme::DIM));
         }
         let mut text = format!(
             "{} of {} ({}%)",
@@ -1141,7 +1182,7 @@ fn context_span(usage: &Usage, text: String) -> Span<'static> {
     if context_percent(usage) >= 80 {
         themed(text, theme::ATTENTION)
     } else {
-        Span::raw(text).dim()
+        Span::raw(text).themed(theme::DIM)
     }
 }
 
@@ -1219,7 +1260,7 @@ fn now_lines(app: &App, width: u16) -> ListText {
         }
     }
     if list.lines.is_empty() {
-        list.push(Line::from(" Nothing waits on you, and no agent is working.").dim());
+        list.push(Line::from(" Nothing waits on you, and no agent is working.").themed(theme::DIM));
     }
     list
 }
@@ -1241,7 +1282,7 @@ fn items_heading(app: &App) -> Line<'static> {
     if !app.items.filter.is_empty() {
         parts.push(format!("\"{}\"", app.items.filter));
     }
-    Line::from(format!(" {}", parts.join(" · "))).dim()
+    Line::from(format!(" {}", parts.join(" · "))).themed(theme::DIM)
 }
 
 fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
@@ -1264,7 +1305,7 @@ fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
     // The annotations dim, the priority in its own style, as `wf item list` shows it.
     let mut right = Vec::new();
     if !annotations.is_empty() {
-        right.push(Span::raw(annotations.join(" ")).dim());
+        right.push(Span::raw(annotations.join(" ")).themed(theme::DIM));
     }
     if let Some(priority) = item.priority {
         if !right.is_empty() {
@@ -1316,15 +1357,15 @@ fn stats_lines(stats: &ProjectStats, width: u16) -> Vec<Line<'static>> {
     }
     lines
         .into_iter()
-        .map(|line| Line::from(format!(" {line}")).dim())
+        .map(|line| Line::from(format!(" {line}")).themed(theme::DIM))
         .collect()
 }
 
 /// `coder  claude-code · opus  2/2 busy`, `1/2 live` while there is room, `0/2 idle`
 fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
     let first = vec![
-        Span::raw(agent.id.name.to_string()).bold(),
-        Span::raw(format!("  {}", agent.runs_on)).dim(),
+        Span::raw(agent.id.name.to_string()).themed(theme::BOLD),
+        Span::raw(format!("  {}", agent.runs_on)).themed(theme::DIM),
     ];
     let live = agent.stats.live;
     let load = match agent.capacity {
@@ -1332,8 +1373,8 @@ fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
             themed(format!("{live}/{capacity} busy"), theme::LIVE)
         }
         Some(capacity) if live > 0 => themed(format!("{live}/{capacity} live"), theme::LIVE),
-        Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).dim(),
-        None => Span::raw(format!("{live} live · not here")).dim(),
+        Some(capacity) => Span::raw(format!("{live}/{capacity} idle")).themed(theme::DIM),
+        None => Span::raw(format!("{live} live · not here")).themed(theme::DIM),
     };
     row.lines(first, Some(Line::from(load)), Vec::new())
 }
@@ -1343,7 +1384,7 @@ fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<L
     let glyph = match session.status {
         SessionStatus::Live => themed("  ◆ ", theme::LIVE),
         SessionStatus::Parked => themed("  ◇ ", theme::LIVE),
-        SessionStatus::Ended { .. } => Span::raw("  · ").dim(),
+        SessionStatus::Ended { .. } => Span::raw("  · ").themed(theme::DIM),
     };
     let mut first = vec![glyph];
     first.extend(item_spans(&session.item));
@@ -1389,7 +1430,7 @@ fn agents_lines(app: &App, width: u16) -> ListText {
         }
     }
     if app.snapshot.agents.is_empty() {
-        list.push(Line::from(" no agents yet; `wf agent add` defines one").dim());
+        list.push(Line::from(" no agents yet; `wf agent add` defines one").themed(theme::DIM));
     }
     list
 }
@@ -1411,7 +1452,7 @@ fn items_lines(app: &App, width: u16) -> ListText {
         }
     }
     if list.lines.len() == 1 {
-        list.push(Line::from(" no items match").dim());
+        list.push(Line::from(" no items match").themed(theme::DIM));
     }
     list
 }
@@ -1498,9 +1539,12 @@ fn draw_session(
         match (&session.place, app.transcripts.get(&session.id)) {
             (Place::Elsewhere(device), _) => (
                 &[],
-                vec![Line::from(format!(" transcript on {device}")).dim()],
+                vec![Line::from(format!(" transcript on {device}")).themed(theme::DIM)],
             ),
-            (Place::Here, None) => (&[], vec![Line::from(" no transcript yet").dim()]),
+            (Place::Here, None) => (
+                &[],
+                vec![Line::from(" no transcript yet").themed(theme::DIM)],
+            ),
             (Place::Here, Some(transcript)) => {
                 let layout = transcript::Layout::new(
                     &session.agent,
@@ -1623,7 +1667,7 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let mut spans = Vec::new();
     for (index, (crumb, depth)) in crumbs.into_iter().enumerate() {
         if index > 0 {
-            spans.push(Span::raw(" ›").dim());
+            spans.push(Span::raw(" ›").themed(theme::DIM));
         }
         // The last part has its start of the highlight where the others have a space.
         spans.push(if index == last {
@@ -1652,9 +1696,9 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
         }
         for span in crumb {
             spans.push(if index == last {
-                span.patch_style(Style::new().bold().bg(accent))
+                span.patch_style(Style::from(theme::BOLD).bg(accent))
             } else {
-                span.dim()
+                span.themed(theme::DIM)
             });
         }
     }
@@ -1740,7 +1784,7 @@ fn draw_log(frame: &mut Frame, app: &App, area: Rect, spots: &mut Vec<Spot>) -> 
         } else {
             "no events match the filter"
         };
-        frame.render_widget(Paragraph::new(empty).dim(), area);
+        frame.render_widget(Paragraph::new(empty).themed(theme::DIM), area);
         return None;
     }
     let text: Text = text.into_text().unwrap_or_default();
@@ -1781,7 +1825,7 @@ fn latest_line(app: &App) -> Line<'static> {
             );
             Line::from(spans)
         }
-        None => Line::from(" no events yet").dim(),
+        None => Line::from(" no events yet").themed(theme::DIM),
     }
 }
 
@@ -1800,7 +1844,7 @@ fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
         }
         start += width + textwrap::core::display_width(SEPARATOR);
     }
-    let line = Line::from(format!(" {}", hints.join(SEPARATOR))).dim();
+    let line = Line::from(format!(" {}", hints.join(SEPARATOR))).themed(theme::DIM);
     frame.render_widget(Paragraph::new(line), area);
     spots.retain(|spot| !spot.area.is_empty());
     spots
