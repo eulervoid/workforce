@@ -155,6 +155,16 @@ the policy does not know.
 event as it arrives, one line per thing it did, until you interrupt it. `--item <item>` keeps only
 the events of one item. With `--json`, `--follow` prints one JSON object per line.
 
+With `--json`, each event names its item and the item's title. A review carries its `outcome`: the
+commit it judged, the verdict and the comment that says why. A session's end carries the reason it
+ended, the commit it submitted and its note.
+
+## `wf stats`
+
+`wf stats` lists each item that had sessions, archived ones included: its sessions, its submissions
+(each a round of review), its change requests and the time from its first work session to done. The
+items with the most rounds come first. `wf item show` prints the same for one item.
+
 ## Sessions
 
 ```sh
