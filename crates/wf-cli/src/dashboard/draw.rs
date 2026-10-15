@@ -15,7 +15,9 @@ use super::app::{
     STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
 use super::links;
-use super::snapshot::{AgentInfo, InView, ItemRef, Place, SessionInfo, SessionStatus, Waiting};
+use super::snapshot::{
+    AgentInfo, InView, ItemRef, MovedBack, Place, SessionInfo, SessionStatus, Waiting,
+};
 use super::snapshot::{Detail, ItemRow};
 use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;
@@ -133,18 +135,32 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
     let mut shown = draw_body(frame, app, body);
     shown.clickable.tabs = tabs;
     draw_rule(frame, rule_below);
+    // A warning takes the right of the line, and the latest event what is left.
+    let warning = app
+        .moved_back
+        .last()
+        .map(|moved| draw_warning(frame, moved, app.moved_back.len() - 1, latest));
+    let event_area = match &warning {
+        // Two columns apart, as a tip keeps from the event.
+        Some(warning) => Rect {
+            width: warning.area.x.saturating_sub(latest.x + 2),
+            ..latest
+        },
+        None => latest,
+    };
     let latest_line = latest_line(app);
-    let latest_width = latest_line.width();
-    frame.render_widget(Paragraph::new(latest_line), latest);
+    let latest_width = latest_line.width().min(usize::from(event_area.width));
+    frame.render_widget(Paragraph::new(latest_line), event_area);
     if app.status.is_none() {
         shown.clickable.spots.extend(links::find(
             frame.buffer_mut(),
-            latest,
+            event_area,
             None,
             None,
             &app.snapshot.links,
         ));
     }
+    shown.clickable.spots.extend(warning.clone());
     match &app.prompt {
         Some(Prompt::Choose(choice)) => {
             draw_choice(frame, choice, accent(app, KeysAt::Choice), body);
@@ -165,10 +181,25 @@ fn draw_all(frame: &mut Frame, app: &App) -> Drawn {
         .filter(|_| app.mouse_passes())
         .and_then(|pointer| shown.clickable.hovered(pointer));
     match &shown.hovered {
+        // The warning under the pointer stays: it says more than its tip would.
+        Some(Hovered::Spot(spot)) if Some(spot) == warning.as_ref() => {
+            frame
+                .buffer_mut()
+                .set_style(spot.area, Style::new().underlined());
+        }
         Some(Hovered::Spot(spot)) => {
             frame
                 .buffer_mut()
                 .set_style(spot.area, Style::new().underlined());
+            // A tip takes the place of the warning while it shows.
+            if warning.is_some() {
+                let cleared = Rect {
+                    x: event_area.right(),
+                    width: latest.right() - event_area.right(),
+                    ..latest
+                };
+                frame.render_widget(Clear, cleared);
+            }
             draw_tip(frame, &app.tip(&spot.target), latest_width, latest);
         }
         // An inactive tab under the pointer is no longer dim: stronger than the other inactive
@@ -194,6 +225,43 @@ fn draw_tip(frame: &mut Frame, tip: &str, taken: usize, latest: Rect) {
         return;
     }
     frame.render_widget(Paragraph::new(tip).right_aligned(), latest);
+}
+
+/// Draws the warning of `moved` at the right of the latest-event line, with how many `others` it
+/// stands for, its reason cut to fit; returns it as a button that opens the item.
+fn draw_warning(frame: &mut Frame, moved: &MovedBack, others: usize, latest: Rect) -> Spot {
+    let name = format!("#{}", moved.item.short());
+    let opening = format!("⚠ {name} back to open: ");
+    let count = if others > 0 {
+        format!(" · {others} more")
+    } else {
+        String::new()
+    };
+    // A column off either edge.
+    let room = usize::from(latest.width).saturating_sub(2);
+    let width = textwrap::core::display_width;
+    let reason_room = room.saturating_sub(width(&opening) + width(&count));
+    let mut spans = vec![Span::raw(opening)];
+    spans.extend(cut_spans(
+        vec![Span::raw(moved.reason.clone())],
+        reason_room,
+    ));
+    spans.push(Span::raw(count));
+    let line = Line::from(spans).style(theme::ATTENTION);
+    let line_width = line.width().min(room) as u16;
+    let area = Rect {
+        x: latest.right().saturating_sub(line_width + 1),
+        width: line_width,
+        ..latest
+    };
+    frame.render_widget(Paragraph::new(line), area);
+    Spot {
+        target: Target::Open {
+            detail: Detail::Item(moved.item),
+            name,
+        },
+        area,
+    }
 }
 
 /// A list to pick from, at the bottom of the body, with the option picked in `accent`.

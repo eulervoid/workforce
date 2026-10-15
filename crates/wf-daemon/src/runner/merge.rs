@@ -421,13 +421,14 @@ impl Daemon {
                 .await?;
             }
             MergeOutcome::Conflict { paths } => {
-                comment(format!(
+                let written = comment(format!(
                     "Merging into {target} conflicts in {}. The next session resolves it: its submission rebases the branch onto {target}.",
                     paths.join(", ")
                 ))
                 .await?;
                 if let Some(open) = open {
-                    self.move_item(loaded, principal, item, open, None, attempt.by_session())
+                    let because = Some(CommentId::from(written.id()));
+                    self.move_item(loaded, principal, item, open, because, attempt.by_session())
                         .await?;
                 }
             }

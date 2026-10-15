@@ -17,7 +17,8 @@ use wf_core::name::AgentName;
 use wf_harness::{Permission, TranscriptEntry};
 
 use super::snapshot::{
-    Detail, InView, ItemRow, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey, Wanted,
+    Detail, InView, ItemRow, MovedBack, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey,
+    Wanted,
 };
 use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;
@@ -735,6 +736,9 @@ pub struct App {
     pub height: u16,
     pub time_zone: TimeZone,
     pub status: Option<Status>,
+    /// The moves back to `open` the daemon made since the dashboard started, the latest last, the
+    /// footer warns of until a key or until their item is opened.
+    pub moved_back: Vec<MovedBack>,
     /// What a click can land on, as last drawn.
     pub clickable: Clickable,
     /// Where the pointer was last reported.
@@ -775,6 +779,7 @@ impl App {
             height: 24,
             time_zone,
             status: None,
+            moved_back: Vec::new(),
             clickable: Clickable::default(),
             pointer: None,
             hovered: None,
@@ -842,6 +847,11 @@ impl App {
             what,
             at_ms: now_ms,
         });
+    }
+
+    /// Warns of `moves` back to `open`, besides those it warns of already.
+    pub fn warn(&mut self, moves: impl IntoIterator<Item = MovedBack>) {
+        self.moved_back.extend(moves);
     }
 
     /// Asks the principal to pick one of `choice`.
@@ -1249,6 +1259,9 @@ impl App {
     /// opened before. Those opened from the list on `detail` before are given the keys back as
     /// they were left.
     fn open(&mut self, detail: Detail) {
+        if let Detail::Item(item) = detail {
+            self.moved_back.retain(|moved| moved.item != item);
+        }
         let from_list = self.list_has_keys();
         if let Some(panes) = self.panes_mut() {
             panes.focus = Pane::Detail;
@@ -1271,6 +1284,7 @@ impl App {
             return Some(Effect::Quit);
         }
         self.unconfirmed_allow = None;
+        self.moved_back.clear();
         if matches!(
             self.status,
             Some(Status::Done { .. } | Status::ActionFailed { .. })

@@ -88,7 +88,8 @@ Two things can hold a merge:
   changes to src/lib.rs. Commit or stash them.`, and `wf inbox` lists a `merge` entry. Commit or stash,
   and the daemon merges within half a minute.
 * **A conflict.** The daemon comments `Merging into main conflicts in src/parse.rs. The next session
-  merges main into the branch first.`, and the item goes back to open. The next session resolves the
+  merges main into the branch first.`, the item goes back to open, and the dashboard warns of it
+  (see [Warnings](dashboard.md#warnings)). The next session resolves the
   conflict and submits again, for a new review.
 
 What was reviewed is what gets merged: a new submission starts the review over.

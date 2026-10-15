@@ -1808,6 +1808,34 @@ wf review --approve
         approved,
         "approved work is never rewritten"
     );
+    // The move back to open names the conflict comment as its reason.
+    {
+        use wf_core::event::EventBody;
+        use wf_core::id::CommentId;
+        use wf_core::item::ItemState;
+        let socket = world.wf.root.path().join("run/workforce/daemon.sock");
+        let (_, workforce) = wf_cli::workspace::find_workforce(repository).unwrap();
+        let token = wf_daemon::caller::read_principal_token(&world.wf.data.join("workforce"));
+        let mut client = wf_daemon::client::DaemonClient::connect(&socket, token)
+            .unwrap()
+            .expect("a daemon");
+        let events = client.events(workforce).unwrap();
+        let conflict = events
+            .iter()
+            .position(|event| {
+                matches!(&event.content.body, EventBody::Commented(comment)
+                    if comment.text.contains("conflicts in file.txt"))
+            })
+            .expect("the conflict comment");
+        let moved = events[conflict..]
+            .iter()
+            .find_map(|event| match &event.content.body {
+                EventBody::ItemMoved(moved) if moved.to.state() == ItemState::Open => Some(moved),
+                _ => None,
+            })
+            .expect("the move back to open");
+        assert_eq!(moved.because, Some(CommentId::from(events[conflict].id())));
+    }
 
     // The next session's submission rebases the branch and stops at the conflict; the session
     // stays live, is told of the file, resolves it, and its work is reviewed again and merges.
