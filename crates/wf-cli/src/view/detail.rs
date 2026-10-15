@@ -760,6 +760,12 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
                 .to_string(),
         );
     }
+    if state.unstaffed_reviews().contains(&item.id()) {
+        flags.push(
+            "the review waits for an agent step that no agent started on this workforce can take"
+                .to_string(),
+        );
+    }
 
     let entries = state.activity(item.id(), events);
     let activity = activity_views(state, item, &entries);
