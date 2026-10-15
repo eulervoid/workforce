@@ -21,7 +21,7 @@ expression: visible(&styled)
   ␛[2mlog␛[0m ␛[2m[session/create] sessionId=d3af90e3-59ba-44e1-9696-1db21a1eb1f1␛[0m
   ␛[2mlog␛[0m ␛[2mphase=register durationMs=1 totalMs=825␛[0m
 
-␛[1m␛[36mbrief␛[0m  ␛[2m00:49␛[0m
+␛[1m␛[32mbrief␛[0m  ␛[2m00:49␛[0m
   You are the agent `coder`, working on item #qp7jzs: Dummy: add a hello
   subcommand note to the README
 
@@ -49,7 +49,7 @@ expression: visible(&styled)
   - Stuck: `wf work release --note "<why>"`
   - Lost track: `wf work brief` prints this brief again.
 
-␛[1m␛[35mcoder␛[0m  ␛[2m00:49␛[0m
+␛[1m␛[94mcoder␛[0m  ␛[2m00:49␛[0m
   ␛[32m✓␛[0m ␛[1mBash␛[0m  cat README.md; ls crates; grep -A15  ␛[2mallowed by you␛[0m               ␛[2m0.2s␛[0m
           '^\[workspace\]' Cargo.toml; for f in crates/*/Cargo.toml; do echo
           "$f: $(grep -m1 '^description' $f)"; done
