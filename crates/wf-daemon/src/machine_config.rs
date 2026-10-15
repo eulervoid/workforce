@@ -16,6 +16,11 @@ use wf_core::policy::CheckConfig;
 use wf_harness::Decider;
 use wf_vcs::CommitSigning;
 
+mod theme;
+pub use theme::{
+    Background, PriorityThemeConfig, ReadinessThemeConfig, StateThemeConfig, ThemeConfig,
+};
+
 #[derive(Debug, thiserror::Error)]
 pub enum MachineConfigError {
     #[error("{path}: {source}")]
@@ -54,6 +59,9 @@ pub struct MachineConfig {
     pub storage: Option<StorageConfig>,
     #[serde(default)]
     pub check: CheckRunConfig,
+    /// The colours of the CLI and the dashboard.
+    #[serde(default)]
+    pub theme: ThemeConfig,
 }
 
 /// How the checks of the policy run on this machine: `[check]`.

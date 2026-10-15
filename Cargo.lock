@@ -161,6 +161,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "940b3a0ca603d1eade50a4846a2afffd5ef57a9feac2c0e2ec2e14f9ead76000"
 
 [[package]]
+name = "anstyle-git"
+version = "1.1.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e86fff69ec7e94d6ef2fcd935505a9687e75000cc4bd20172c292a1ac3a8655"
+dependencies = [
+ "anstyle",
+]
+
+[[package]]
 name = "anstyle-parse"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6016,6 +6025,8 @@ dependencies = [
 name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
+ "anstyle",
+ "anstyle-git",
  "blake3",
  "bytesize",
  "close_fds",
