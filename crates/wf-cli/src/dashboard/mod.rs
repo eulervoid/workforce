@@ -22,7 +22,7 @@ use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
 
 use self::app::{App, Effect, Wheel};
-use self::snapshot::{Detail, Snapshot, Sources};
+use self::snapshot::{Detail, InView, Snapshot, Sources};
 use crate::transcript::Format;
 use crate::workspace::{self, Workspace};
 use crate::{render, transcript, view};
@@ -120,9 +120,20 @@ fn event_loop(
                 draw = true;
                 continue;
             }
-        } else if !changed && app.wanted() == wanted {
-            // Scrolling within what is on screen needs nothing new from the workspace.
-            continue;
+        } else if !changed {
+            let now_wanted = app.wanted();
+            if now_wanted == wanted {
+                // Scrolling within what is on screen needs nothing new from the workspace.
+                continue;
+            }
+            if now_wanted.items == wanted.items && now_wanted.agents == wanted.agents {
+                // A move of the selection needs only the detail it comes to.
+                draw = true;
+                feed.read_transcripts(workspace, &mut app);
+                let in_view = feed.in_view(workspace, &app);
+                app.refresh_detail(in_view);
+                continue;
+            }
         }
         draw = true;
         feed.read_transcripts(workspace, &mut app);
@@ -286,19 +297,29 @@ impl Feed {
         }
     }
 
+    fn sources<'a>(&'a self, workspace: &'a Workspace, app: &App) -> Sources<'a> {
+        Sources {
+            state: workspace.state(),
+            events: &self.events,
+            own: workspace.device_key(),
+            now_ms: workspace::now_ms(),
+            detail_width: app.detail_width(),
+        }
+    }
+
     fn snapshot(&self, workspace: &Workspace, app: &App) -> Snapshot {
         let held = workspace.held_permissions();
         let last_seen = workspace.last_seen();
-        let sources = Sources {
-            state: workspace.state(),
-            events: &self.events,
-            held: &held,
-            own: workspace.device_key(),
-            last_seen: &last_seen,
-            now_ms: workspace::now_ms(),
-            detail_width: app.detail_width(),
-        };
-        Snapshot::take(&sources, app.wanted())
+        let sources = self.sources(workspace, app);
+        Snapshot::take(&sources, &held, &last_seen, app.wanted())
+    }
+
+    /// What the detail on screen shows, read against what the snapshot on screen flags.
+    fn in_view(&self, workspace: &Workspace, app: &App) -> Option<InView> {
+        let detail = app.wanted().detail?;
+        let sources = self.sources(workspace, app);
+        let graph = workspace.state().dependency_graph();
+        InView::take(&sources, &graph, &app.snapshot.flagged, detail)
     }
 }
 

@@ -272,26 +272,29 @@ pub enum Detail {
     Flag(Flag),
 }
 
-/// What a snapshot is taken from.
+/// What a snapshot or a detail is taken from.
 pub struct Sources<'a> {
     pub state: &'a State,
     pub events: &'a [Event],
-    pub held: &'a [HeldPermission],
     pub own: DeviceKey,
-    pub last_seen: &'a crate::devices::LastSeen,
     pub now_ms: u64,
     /// How many columns the text of a detail has.
     pub detail_width: u16,
 }
 
 impl Snapshot {
-    pub fn take(sources: &Sources, wanted: Wanted) -> Self {
+    /// Takes all the dashboard shows of the workforce; `held` are the permission requests the
+    /// daemon holds, and `last_seen` when it last heard from each device.
+    pub fn take(
+        sources: &Sources,
+        held: &[HeldPermission],
+        last_seen: &crate::devices::LastSeen,
+        wanted: Wanted,
+    ) -> Self {
         let Sources {
             state,
             events,
-            held,
             own,
-            last_seen,
             now_ms,
             detail_width: _,
         } = *sources;
@@ -321,7 +324,7 @@ impl Snapshot {
             in_view: wanted
                 .detail
                 .clone()
-                .and_then(|wanted| in_view(sources, &graph, &flagged, wanted)),
+                .and_then(|wanted| InView::take(sources, &graph, &flagged, wanted)),
             flagged,
             agents: if wanted.agents {
                 agents(state, &graph, own)
@@ -478,61 +481,65 @@ fn session_info(
     }
 }
 
-fn in_view(
-    sources: &Sources,
-    graph: &wf_core::graph::DependencyGraph,
-    flagged: &[Flag],
-    wanted: Detail,
-) -> Option<InView> {
-    let Sources {
-        state,
-        events,
-        own,
-        now_ms,
-        detail_width: width,
-        ..
-    } = *sources;
-    match wanted {
-        Detail::Item(id) => {
-            let item = state.item(id)?;
-            let text = match item {
-                ItemView::Live(live) => render::item_detail_for(
-                    &view::item_detail(state, live, events),
-                    Some(usize::from(width).min(100)),
-                    Format::Styled,
-                ),
-                ItemView::Archived(_) => format!("#{} {} (archived)\n", id.short(), item.title()),
-            };
-            let mut sessions: Vec<&Session> = state
-                .sessions()
-                .filter(|session| session.item() == id)
-                .collect();
-            sessions.sort_by_key(|session| (session.is_live(), session.started()));
-            let session = sessions.last().map(|session| session.id());
-            Some(InView::Item { id, text, session })
+impl InView {
+    /// Takes what `wanted` shows; `flagged` is what `wf status` flags.
+    pub fn take(
+        sources: &Sources,
+        graph: &wf_core::graph::DependencyGraph,
+        flagged: &[Flag],
+        wanted: Detail,
+    ) -> Option<InView> {
+        let Sources {
+            state,
+            events,
+            own,
+            now_ms,
+            detail_width: width,
+        } = *sources;
+        match wanted {
+            Detail::Item(id) => {
+                let item = state.item(id)?;
+                let text = match item {
+                    ItemView::Live(live) => render::item_detail_for(
+                        &view::item_detail(state, live, events),
+                        Some(usize::from(width).min(100)),
+                        Format::Styled,
+                    ),
+                    ItemView::Archived(_) => {
+                        format!("#{} {} (archived)\n", id.short(), item.title())
+                    }
+                };
+                let mut sessions: Vec<&Session> = state
+                    .sessions()
+                    .filter(|session| session.item() == id)
+                    .collect();
+                sessions.sort_by_key(|session| (session.is_live(), session.started()));
+                let session = sessions.last().map(|session| session.id());
+                Some(InView::Item { id, text, session })
+            }
+            Detail::Session(id) => {
+                let session = state.session(id)?;
+                Some(InView::Session(session_info(state, graph, own, session)))
+            }
+            Detail::Agent(id) => {
+                let detail = view::agent_detail(state, &id, events, Some(own))?;
+                let now = jiff::Timestamp::from_millisecond(i64::try_from(now_ms).ok()?).ok()?;
+                Some(InView::Agent {
+                    text: render::agent_detail_for(
+                        &detail,
+                        Some(usize::from(width).min(100)),
+                        Format::Styled,
+                        now,
+                    ),
+                    id,
+                })
+            }
+            // Gone once fixed.
+            Detail::Flag(flag) => flagged.contains(&flag).then(|| InView::Flag {
+                text: render::flag_detail_for(&flag, Some(usize::from(width).min(100))),
+                flag,
+            }),
         }
-        Detail::Session(id) => {
-            let session = state.session(id)?;
-            Some(InView::Session(session_info(state, graph, own, session)))
-        }
-        Detail::Agent(id) => {
-            let detail = view::agent_detail(state, &id, events, Some(own))?;
-            let now = jiff::Timestamp::from_millisecond(i64::try_from(now_ms).ok()?).ok()?;
-            Some(InView::Agent {
-                text: render::agent_detail_for(
-                    &detail,
-                    Some(usize::from(width).min(100)),
-                    Format::Styled,
-                    now,
-                ),
-                id,
-            })
-        }
-        // Gone once fixed.
-        Detail::Flag(flag) => flagged.contains(&flag).then(|| InView::Flag {
-            text: render::flag_detail_for(&flag, Some(usize::from(width).min(100))),
-            flag,
-        }),
     }
 }
 
