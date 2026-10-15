@@ -1,6 +1,7 @@
 //! The task of a running session: prompts the harness turn after turn, parks it while its
 //! item waits, and ends it when nobody else does.
 
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,6 +18,7 @@ use super::brief::{brief, restarted, resumed};
 use super::resume::AgentSessionRecord;
 use super::start::sandboxed;
 use super::{Begin, CANCEL_GRACE, End, GRACE, Run, SILENCE_LIMIT, START_TIMEOUT, Stop, blocking};
+use crate::faults::Faults;
 use crate::{Daemon, Loaded};
 
 /// The task of one session: runs the harness, and ends the session if nobody else does.
@@ -116,7 +118,7 @@ async fn drive(
         .open(&run.transcript)
     {
         Ok(transcript) => transcript,
-        Err(error) => return transcript_failed(daemon, run, &error),
+        Err(error) => return transcript_failed(&daemon.faults, &run.transcript, &error),
     };
     let mut path =
         std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect::<Vec<_>>();
@@ -199,7 +201,9 @@ async fn drive(
             );
             return End::Interrupt(Interruption::Interrupted);
         }
-        Err(wf_harness::Error::Transcript(error)) => return transcript_failed(daemon, run, &error),
+        Err(wf_harness::Error::Transcript(error)) => {
+            return transcript_failed(&daemon.faults, &run.transcript, &error);
+        }
         // The agent's own config is at fault, not the machine.
         Err(error @ wf_harness::Error::UnknownModel { .. }) => {
             return failed(format!(
@@ -246,7 +250,7 @@ async fn drive(
     // Without the record, a restart could not resume the session.
     if let Err(error) = record.write(&run.agent_session) {
         let _ = conversation.close().await;
-        return not_kept(daemon, run, &error);
+        return not_kept(&daemon.faults, &run.agent_session, &error);
     }
     let end = turns(daemon, loaded, run, stopped, &mut conversation, &mut record).await;
     let _ = conversation.close().await;
@@ -273,7 +277,7 @@ async fn turns(
     loop {
         record.prompted_ms = Some(crate::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
-            return not_kept(daemon, run, &error);
+            return not_kept(&daemon.faults, &run.agent_session, &error);
         }
         let turn = conversation.reply(prompt);
         tokio::pin!(turn);
@@ -306,7 +310,7 @@ async fn turns(
                 );
             }
             Err(wf_harness::Error::Transcript(error)) => {
-                return transcript_failed(daemon, run, &error);
+                return transcript_failed(&daemon.faults, &run.transcript, &error);
             }
             // A harness that crashes, hangs or refuses a turn it was reached for may do so for
             // the work.
@@ -426,25 +430,25 @@ fn failed(because: String) -> End {
     End::Interrupt(Interruption::Failed { because })
 }
 
-/// The session's record cannot be written, so a restart would not resume it as it is.
-fn not_kept(daemon: &Daemon, run: &Run, error: &std::io::Error) -> End {
-    if daemon.faults.note_space("the record of a session", error) {
+/// The session's record at `path` cannot be written, so a restart would not resume it as it is.
+fn not_kept(faults: &Faults, path: &Path, error: &std::io::Error) -> End {
+    if faults.note_space("the record of a session", error) {
         return End::Interrupt(Interruption::MachineFault(MachineFault::NoSpace));
     }
     failed(format!(
         "the record of the session {} cannot be written: {error}",
-        run.agent_session.display()
+        path.display()
     ))
 }
 
-/// The session's transcript cannot be written, so nobody could follow it.
-fn transcript_failed(daemon: &Daemon, run: &Run, error: &std::io::Error) -> End {
-    if daemon.faults.note_space("a transcript", error) {
+/// The session's transcript at `path` cannot be written, so nobody could follow it.
+fn transcript_failed(faults: &Faults, path: &Path, error: &std::io::Error) -> End {
+    if faults.note_space("a transcript", error) {
         return End::Interrupt(Interruption::MachineFault(MachineFault::NoSpace));
     }
     failed(format!(
         "the transcript {} cannot be written: {error}",
-        run.transcript.display()
+        path.display()
     ))
 }
 
@@ -533,6 +537,33 @@ async fn park(
             Some(_) = stopped.recv() => return Parked::Over,
             () = tokio::time::sleep_until(wake) => return Parked::TimedOut,
             () = sleep_until(*deadline) => return Parked::TimedOut,
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_write_that_fails_for_lack_of_space_ends_the_session_for_the_machine() {
+        let path = Path::new("session.json");
+        for end in [not_kept, transcript_failed] {
+            let faults = Faults::default();
+            let full = std::io::Error::from(std::io::ErrorKind::StorageFull);
+            assert!(matches!(
+                end(&faults, path, &full),
+                End::Interrupt(Interruption::MachineFault(MachineFault::NoSpace))
+            ));
+            assert_eq!(faults.blocking_all(), Some(MachineFault::NoSpace));
+
+            let faults = Faults::default();
+            let denied = std::io::Error::from(std::io::ErrorKind::PermissionDenied);
+            assert!(matches!(
+                end(&faults, path, &denied),
+                End::Interrupt(Interruption::Failed { because }) if because.contains("session.json")
+            ));
+            assert!(faults.current().is_empty(), "other failures are the work's");
         }
     }
 }

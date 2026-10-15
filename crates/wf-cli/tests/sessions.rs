@@ -821,6 +821,54 @@ async fn a_lapsed_login_ends_sessions_for_the_machine_and_the_inbox_says_so_once
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_full_disk_ends_the_session_for_the_machine_and_the_inbox_says_so_once() {
+    // The first turn of the coder lasts until the disk is full; the next would nudge it.
+    let script = "sh while [ ! -e \"$(git rev-parse --git-common-dir)/disk-full\" ]; do sleep 0.1; done\nturn\n";
+    let world = World::new(script).await;
+    let item = world
+        .wf
+        .add(&["--title", "Full disk", "--recovery", "none"]);
+    start_session(&world, &item);
+
+    // The disk fills while the turn runs: a write of the daemon fails for it, and so does the
+    // probe that would tell there is space again.
+    std::fs::create_dir_all(world.wf.data.join("workforce/.space-probe")).unwrap();
+    assert!(world.daemon.write_failed(
+        "a transcript",
+        &std::io::Error::from(std::io::ErrorKind::StorageFull)
+    ));
+    std::fs::write(world.wf.repository.join(".git/disk-full"), "").unwrap();
+
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "no_space", "{}", world.item(&item));
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "open");
+    assert_eq!(comments(&shown), Value::Array(Vec::new()), "{shown}");
+    let entries = inbox(&world);
+    let titles: Vec<(&str, &str)> = entries
+        .iter()
+        .map(|entry| {
+            (
+                entry["kind"].as_str().unwrap(),
+                entry["title"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        titles,
+        [("machine_fault", "The disk is full")],
+        "{entries:?}"
+    );
+    assert!(
+        entries[0]["what"]
+            .as_str()
+            .unwrap()
+            .contains("could not write a transcript"),
+        "{entries:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_session_whose_record_cannot_be_written_fails() {
     // The first turn takes the write permission of the directory the records of sessions are
     // kept in, beside the transcripts, as a full disk would; the next prompt cannot be recorded.

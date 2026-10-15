@@ -294,6 +294,13 @@ impl Daemon {
         self.runners.halt().await;
     }
 
+    /// Takes `error` as the error of a write of the daemon that failed: whether it says the disk
+    /// is full. For the tests, which cannot fill a disk.
+    #[doc(hidden)]
+    pub fn write_failed(&self, what: &str, error: &std::io::Error) -> bool {
+        self.faults.note_space(what, error)
+    }
+
     /// Completes once the daemon halts.
     pub(crate) async fn until_halted(&self) {
         let mut halted = self.halted.subscribe();
