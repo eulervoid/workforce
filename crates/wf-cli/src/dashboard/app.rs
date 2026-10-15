@@ -7,6 +7,7 @@ use std::collections::HashMap;
 use jiff::tz::TimeZone;
 use ratatui::crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Position, Rect};
+use ratatui::style::Style;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 use wf_core::graph::Readiness;
@@ -16,12 +17,14 @@ use wf_core::item::ItemState;
 use wf_core::name::AgentName;
 use wf_harness::{Permission, TranscriptEntry};
 
+use super::draw;
 use super::snapshot::{
     Detail, InView, ItemRow, MovedBack, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey,
     Wanted,
 };
 use super::transcript_lines::TranscriptLines;
 use crate::cli::ItemGrouping;
+use crate::theme;
 use crate::transcript::{Transcript, Verbosity};
 
 /// From this width the detail sits right of the list, instead of in its place.
@@ -799,6 +802,8 @@ pub struct App {
     /// Whether the terminal pane the dashboard runs in is focused, as far as the terminal reports
     /// it; a terminal that does not report it counts as focused.
     pub terminal_focused: bool,
+    /// What every cell has under what is drawn on it: the theme's text, on its background.
+    pub base: Style,
 }
 
 impl App {
@@ -835,6 +840,7 @@ impl App {
             hovered: None,
             unconfirmed_allow: None,
             terminal_focused: true,
+            base: draw::base(theme::text(), theme::background()),
         };
         app.refresh(snapshot);
         app

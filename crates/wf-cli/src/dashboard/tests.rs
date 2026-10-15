@@ -26,6 +26,7 @@ use ratatui::style::{Color, Modifier, Style};
 use wf_core::identity::AgentId;
 use wf_core::session::EndReason;
 use wf_core::stats::{AgentStats, ProjectStats};
+use wf_daemon::machine_config::Background;
 
 /// 2026-10-14 07:00 UTC.
 const NOW_MS: u64 = 1_792_047_600_000;
@@ -56,11 +57,11 @@ fn session(seed: u8, agent: &str, item: ItemRef, minutes: u64) -> SessionInfo {
 }
 
 fn accent() -> Color {
-    theme::ACCENT.into()
+    theme::accent().into()
 }
 
 fn accent_dimmed() -> Color {
-    theme::ACCENT_DIMMED.into()
+    theme::accent_dimmed().into()
 }
 
 fn snapshot() -> Snapshot {
@@ -1515,7 +1516,7 @@ fn the_bar_and_the_background_cover_every_line_of_the_selection() {
         // The bar is white, on the background of the row, with no gap to the left edge.
         assert_eq!(
             style_at(&mut app, 60, 22, 0, line).fg,
-            Style::from(theme::ON_ACCENT).fg
+            Style::from(theme::on_accent()).fg
         );
         assert_eq!(bg_at(&mut app, 60, 22, 0, line), Some(accent()));
         assert_eq!(bg_at(&mut app, 60, 22, 10, line), Some(accent()));
@@ -1669,7 +1670,7 @@ fn while_the_terminal_pane_is_not_focused_the_accent_is_dimmed() {
     let bar = style_at(&mut app, 60, 16, 0, row);
     assert_eq!(
         (bar.fg, bar.bg),
-        (Style::from(theme::ON_ACCENT).fg, Some(accent()))
+        (Style::from(theme::on_accent()).fg, Some(accent()))
     );
 }
 
@@ -1738,7 +1739,7 @@ fn session_rows_show_how_full_their_context_is() {
     let (x, y) = (u16::try_from(x).unwrap(), u16::try_from(y).unwrap());
     assert_eq!(
         style_at(&mut app, 60, 22, x, y).fg,
-        Style::from(theme::ATTENTION).fg
+        Style::from(theme::attention()).fg
     );
     press(&mut app, KeyCode::Char('3'));
     app.refresh(with_agents());
@@ -1777,7 +1778,7 @@ fn a_nearly_full_context_is_yellow_in_the_detail() {
     let y = u16::try_from(line).unwrap();
     assert_eq!(
         style_at(&mut app, 130, 14, x, y).fg,
-        Style::from(theme::ATTENTION).fg
+        Style::from(theme::attention()).fg
     );
 }
 
@@ -2708,4 +2709,78 @@ fn only_new_daemon_moves_from_review_back_to_open_with_a_reason_warn() {
     let by_principal = fixture.author(&state, 0, 3_002, moved(item, ItemState::Open));
     events.push(by_principal);
     assert_eq!(moves_back(&events, events.len() - 1), Vec::new());
+}
+
+/// What `app` draws into a test terminal, cell by cell.
+fn buffer(app: &mut App, width: u16, height: u16) -> ratatui::buffer::Buffer {
+    let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+    terminal.draw(|frame| draw::draw(frame, app)).unwrap();
+    terminal.backend().buffer().clone()
+}
+
+#[test]
+fn a_background_colour_and_the_text_are_under_every_cell_popups_included() {
+    let background = anstyle::RgbColor(0x1b, 0x1d, 0x23);
+    let text = anstyle::RgbColor(0xd0, 0xd0, 0xd0);
+    let mut app = app();
+    app.base = draw::base(
+        anstyle::Style::new().fg_color(Some(text.into())),
+        Background::Color(background.into()),
+    );
+    let (background, text) = (Color::from(background), Color::from(text));
+    // The keys are a popup over the list, drawn on an area cleared for it.
+    press(&mut app, KeyCode::Char('?'));
+    let buffer = buffer(&mut app, 60, 24);
+    let accents = [accent(), accent_dimmed()];
+    for cell in buffer.content() {
+        let style = cell.style();
+        assert!(
+            style.bg == Some(background) || style.bg.is_some_and(|bg| accents.contains(&bg)),
+            "{:?} on {:?}",
+            cell.symbol(),
+            style.bg
+        );
+        assert!(
+            style.fg.is_some_and(|fg| fg != Color::Reset),
+            "{:?} in {:?}",
+            cell.symbol(),
+            style.fg
+        );
+    }
+    // A blank inside the popup, and one outside it, in the text colour on the background.
+    let (x, y) = find(&mut app, 60, 24, "switch tabs");
+    for (x, y) in [(x + 35, y), (59, 0)] {
+        let style = buffer[(x, y)].style();
+        assert_eq!(buffer[(x, y)].symbol(), " ");
+        assert_eq!((style.fg, style.bg), (Some(text), Some(background)));
+    }
+}
+
+#[test]
+fn the_terminals_background_and_no_text_paint_nothing() {
+    let mut app = app();
+    // The built-in theme.
+    assert_eq!(app.base, Style::new());
+    assert_eq!(
+        app.base,
+        draw::base(anstyle::Style::new(), Background::Terminal)
+    );
+    press(&mut app, KeyCode::Char('?'));
+    let buffer = buffer(&mut app, 60, 24);
+    // Nothing but the accents has a background, inside the popup as outside it.
+    let accents = [accent(), accent_dimmed()];
+    for cell in buffer.content() {
+        let bg = cell.style().bg;
+        assert!(
+            bg == Some(Color::Reset) || bg.is_some_and(|bg| accents.contains(&bg)),
+            "{:?} on {:?}",
+            cell.symbol(),
+            bg
+        );
+    }
+    // A blank inside the popup, and one outside it, in the terminal's own colours.
+    let (x, y) = find(&mut app, 60, 24, "switch tabs");
+    for (x, y) in [(x + 35, y), (59, 0)] {
+        assert_eq!(buffer[(x, y)], ratatui::buffer::Cell::EMPTY);
+    }
 }

@@ -2,10 +2,10 @@
 source: crates/wf-cli/tests/transcript.rs
 expression: visible(&styled)
 ---
-␛[1m␛[36mbrief␛[0m  ␛[2m00:49␛[0m                                                            ␛[2m19 lines␛[0m
+␛[1m␛[32mbrief␛[0m  ␛[2m00:49␛[0m                                                            ␛[2m19 lines␛[0m
   You are the agent `coder`, working on item #qp7jzs: Dummy: add a hello subcom…
 
-␛[1m␛[35mcoder␛[0m  ␛[2m00:49␛[0m
+␛[1m␛[94mcoder␛[0m  ␛[2m00:49␛[0m
   ␛[32m✓␛[0m ␛[1mBash␛[0m  cat README.md; ls crates; grep -A15 '^\[workspa…  ␛[2mallowed by you␛[0m  ␛[2m0.2s␛[0m
       ␛[2m# workforce (`wf`)␛[0m
 
