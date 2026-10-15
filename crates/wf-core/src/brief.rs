@@ -350,9 +350,10 @@ impl WorkBrief {
         if let Some(checks) = checks(&self.checks) {
             let _ = writeln!(
                 text,
-                "- Tests that cannot run in your sandbox are run by the checks of the merge \
-                 ({checks}), not by the principal. Run what you can, and say in your note what \
-                 you could not run here."
+                "- Before you submit, run the checks the merge runs ({checks}): `wf check`. Fix \
+                 what fails; `wf check <name>` runs one again. Tests that cannot run in your \
+                 sandbox are run by the checks of the merge, not by the principal. Run what you \
+                 can, and say in your note what you could not run here."
             );
         }
         let _ = writeln!(
@@ -733,6 +734,7 @@ mod tests {
         assert!(text.contains("- @ada/coder (comment): tried serde first"));
         assert!(text.contains("`wf/k3f9ab`") && text.contains("`main`"));
         assert!(!text.contains("change request"), "{text}");
+        assert!(!text.contains("wf check"), "{text}");
         for command in [
             "wf item check k3f9ab",
             "wf comment k3f9ab",
@@ -755,7 +757,7 @@ mod tests {
             body: String::new(),
             branch: "wf/k3f9ab".into(),
             target: "main".into(),
-            checks: vec![],
+            checks: vec!["fmt".into(), "test".into()],
             dependencies: vec![],
             change_requests: vec![OpenComment {
                 comment: "c4d2e1".into(),
@@ -769,6 +771,10 @@ mod tests {
         assert!(!text.contains("## Instructions"), "{text}");
         assert!(text.contains("- c4d2e1 by @ada/reviewer: Exit with 2 on a missing file"));
         assert!(text.contains("--resolve <id>"));
+        assert!(
+            text.contains("run the checks the merge runs (`fmt`, `test`): `wf check`"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -852,7 +858,9 @@ mod tests {
         };
         for text in [work.render(), review.render()] {
             assert!(
-                text.contains("Tests that cannot run in your sandbox are run by the checks of the merge (`fmt`, `test`)"),
+                text.contains(
+                    "Tests that cannot run in your sandbox are run by the checks of the merge"
+                ),
                 "{text}"
             );
             assert!(text.contains("not by"), "{text}");

@@ -28,7 +28,7 @@ fn briefs() -> Vec<String> {
         body: "- [ ] 1. parse the arguments".into(),
         branch: "wf/k3f9ab".into(),
         target: "main".into(),
-        checks: vec!["test".into()],
+        checks: vec!["fmt".into(), "clippy".into()],
         dependencies: vec![Dependency {
             item: "q7x2cd".into(),
             title: "Parser".into(),
@@ -104,6 +104,7 @@ fn words(command: &str) -> Vec<String> {
         .map(|word| match word.as_str() {
             "<number>" => "1".to_string(),
             "<id>" => "c4d2e1".to_string(),
+            "<name>" => "clippy".to_string(),
             _ => word,
         })
         .collect()
