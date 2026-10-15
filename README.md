@@ -200,7 +200,8 @@ Agents run in a sandbox and are allowed what they ask inside it by default. An a
 
 * Agents, models and autonomy (`wf agent add/edit`, `wf harness models`), and how many sessions run on
   which machine (`wf device edit --max-sessions 3 --agent coder=2`): [agents.md](docs/guide/agents.md)
-* The sandbox, the agents' environment, a shared build cache, the storage budget, commit signing and notifications:
+* The sandbox, the agents' environment, a shared build cache, the storage budget, checks, commit signing,
+  notifications and colours:
   [machine-config.md](docs/guide/machine-config.md)
 * Permission requests: allow, ask or deny, and the deciders (rules, a model, your own hook, an agent):
   [permissions.md](docs/guide/permissions.md)
@@ -227,7 +228,7 @@ service, where keys are kept, forking away a lost machine, and backups.
 | [agents.md](docs/guide/agents.md) | harnesses, defining agents, reviewers and supervisors, where agents run, sessions |
 | [review-and-merge.md](docs/guide/review-and-merge.md) | review levels, your review, the merge, recovery |
 | [dashboard.md](docs/guide/dashboard.md) | the dashboard and its keys, `wf inbox`, `wf status`, `wf log`, watching sessions |
-| [machine-config.md](docs/guide/machine-config.md) | sandbox, environment, storage, signing, notifications |
+| [machine-config.md](docs/guide/machine-config.md) | sandbox, environment, storage, checks, signing, notifications, colours |
 | [permissions.md](docs/guide/permissions.md) | permission requests and their deciders |
 | [policy.md](docs/guide/policy.md) | the policy and its defaults |
 | [machines.md](docs/guide/machines.md) | several machines, the daemon, keys, fork, backups |
@@ -235,7 +236,8 @@ service, where keys are kept, forking away a lost machine, and backups.
 Every command explains itself: `wf --help`, `wf <command> --help`. Commands that take an item or a
 session offer a picker at a terminal when you leave it out, and `--json` gives machine-readable output.
 
-How wf works inside, and where it is going, is in the design: [docs/SPEC.md](docs/SPEC.md).
+How wf works inside, and where it is going, is in the design: [docs/SPEC.md](docs/SPEC.md). The milestone
+plans, proposals and reviews it grew from are in [docs/design](docs/design).
 
 ## Working on wf
 
