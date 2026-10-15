@@ -53,19 +53,22 @@ pub struct MachineConfig {
     /// Without it, the daemon deletes no cache.
     pub storage: Option<StorageConfig>,
     #[serde(default)]
-    pub check: CheckLimitsConfig,
+    pub check: CheckRunConfig,
 }
 
-/// What this machine allows the checks of the policy: `[check]`.
+/// How the checks of the policy run on this machine: `[check]`.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct CheckLimitsConfig {
+pub struct CheckRunConfig {
     /// The longest a check runs here, whatever its timeout in the policy, such as `"10m"`.
     #[serde(default, deserialize_with = "optional_duration")]
     pub max_timeout: Option<Duration>,
+    /// The sandbox checks run in, when it is not the one of every agent: `{ kind = "off" }` for
+    /// tests that need what Fence cannot allow, such as the route socket iroh opens on macOS.
+    pub sandbox: Option<SandboxConfig>,
 }
 
-impl CheckLimitsConfig {
+impl CheckRunConfig {
     /// How long `check` may run on this machine.
     pub fn timeout(&self, check: &CheckConfig) -> Duration {
         self.max_timeout
@@ -456,8 +459,13 @@ impl MachineConfig {
             }
         }
         config.environment.expand(variable)?;
-        if let SandboxConfig::Fence(fence) = &mut config.sandbox {
-            fence.expand(variable)?;
+        for sandbox in [Some(&mut config.sandbox), config.check.sandbox.as_mut()]
+            .into_iter()
+            .flatten()
+        {
+            if let SandboxConfig::Fence(fence) = sandbox {
+                fence.expand(variable)?;
+            }
         }
         for agent_config in config.agents.values_mut() {
             agent_config.environment.expand(variable)?;
@@ -477,6 +485,11 @@ impl MachineConfig {
             environment.set.extend(own.environment.set.clone());
         }
         environment
+    }
+
+    /// The sandbox checks run in: their own, or else the one of every agent.
+    pub fn check_sandbox(&self) -> &SandboxConfig {
+        self.check.sandbox.as_ref().unwrap_or(&self.sandbox)
     }
 
     /// The sandbox `agent` runs in: what Fence allows every agent, and what it allows the agent.
@@ -712,6 +725,29 @@ mod tests {
         assert_eq!(capped.timeout(&check(5)), Duration::from_secs(5 * 60));
         assert!(MachineConfig::parse("[check]\nmax_timeout = \"soon\"\n").is_err());
         assert!(MachineConfig::parse("[check]\ntimeout = \"10m\"\n").is_err());
+    }
+
+    #[test]
+    fn checks_run_in_the_sandbox_of_agents_unless_they_have_their_own() {
+        let config = |text: &str| MachineConfig::parse(text).ok().unwrap();
+        let fence = SandboxConfig::Fence(FenceConfig::default());
+        assert_eq!(config("").check_sandbox(), &fence);
+        assert_eq!(
+            config("[sandbox]\nkind = \"off\"\n").check_sandbox(),
+            &SandboxConfig::Off {}
+        );
+        assert_eq!(
+            config("[check]\nsandbox = { kind = \"off\" }\n").check_sandbox(),
+            &SandboxConfig::Off {}
+        );
+        let own = config(
+            "[sandbox]\nkind = \"off\"\n[check.sandbox]\nkind = \"fence\"\nallow_write = [\"~/cache\"]\n",
+        );
+        let SandboxConfig::Fence(check) = own.check_sandbox() else {
+            panic!("a fence sandbox");
+        };
+        assert!(!check.allow_write[0].starts_with("~"), "expanded");
+        assert!(MachineConfig::parse("[check]\nsandbox = { kind = \"none\" }\n").is_err());
     }
 
     #[test]

@@ -15,7 +15,7 @@ use wf_vcs::{GitCli, VcsAdapter};
 use super::merge::Attempt;
 use super::{SessionError, blocking};
 use crate::command::{CommandRun, CommandRunner, Outcome};
-use crate::machine_config::CheckLimitsConfig;
+use crate::machine_config::{CheckRunConfig, SandboxConfig};
 use crate::{Daemon, Loaded};
 
 /// A check that did not pass on the merge result, and whose fault that is.
@@ -45,8 +45,12 @@ impl FailedCheck {
                 humantime::format_duration(timeout)
             ),
         };
+        let sandbox = match self.run.sandbox {
+            SandboxConfig::Fence(_) => "Fence",
+            SandboxConfig::Off {} => "none",
+        };
         format!(
-            "{what}\n\nCommand: `{}`\nTree: {}\nLog: {}\n\n```\n{}\n```",
+            "{what}\n\nCommand: `{}`\nTree: {}\nSandbox: {sandbox}\nLog: {}\n\n```\n{}\n```",
             self.check.run.join(" "),
             self.tree,
             self.run.log.display(),
@@ -96,11 +100,11 @@ impl PassedChecks {
     }
 }
 
-/// Runs checks in the check worktree, as an agent working there would run them.
+/// Runs checks in the check worktree, in the sandbox of checks on this machine.
 struct Checker<'a> {
     runner: CommandRunner<'a>,
     passed: PassedChecks,
-    limits: &'a CheckLimitsConfig,
+    limits: &'a CheckRunConfig,
 }
 
 impl Checker<'_> {
@@ -145,9 +149,10 @@ impl Daemon {
         let config = self.machine_config()?;
         let git = GitCli::open(repository)?;
         let directory = self.workforce_directory(workforce);
-        let (worktree, settings, logs) = (
+        let (worktree, settings, git_config, logs) = (
             directory.join("check"),
             directory.join("sandbox").join("check.json"),
+            directory.join("sandbox").join("check.gitconfig"),
             directory.join("check-logs"),
         );
         let checker = Checker {
@@ -160,9 +165,10 @@ impl Daemon {
                     data_dir: &self.config.data_dir,
                     machine_config: self.config.machine_config.as_deref(),
                 },
-                sandbox: &config.sandbox,
+                sandbox: config.check_sandbox(),
                 environment: &config.environment,
                 settings: &settings,
+                git_config: &git_config,
                 logs: &logs,
             },
             passed: PassedChecks {
