@@ -128,6 +128,7 @@ impl SessionError {
             | Self::NotOurs(_)
             | Self::NotWork
             | Self::Vcs(_)
+            | Self::Check(_)
             | Self::RebaseConflict { .. }
             | Self::RebaseDirty { .. }
             | Self::MachineConfig(_)
