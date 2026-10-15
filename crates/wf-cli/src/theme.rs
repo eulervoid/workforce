@@ -325,3 +325,60 @@ pub fn priority(priority: Priority) -> Style {
         Priority::P3 => theme.priority_p3,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use wf_daemon::machine_config::{PriorityThemeConfig, ReadinessThemeConfig, StateThemeConfig};
+
+    use super::*;
+
+    #[test]
+    fn what_the_config_sets_replaces_the_built_in_style_and_the_rest_stays() {
+        let background = Color::Rgb(RgbColor(0x1b, 0x1d, 0x23));
+        let accent = Color::Rgb(RgbColor(0x1e, 0x50, 0xa0));
+        let config = ThemeConfig {
+            background: Background::Color(background),
+            text_dimmed: Some(fg(AnsiColor::BrightBlack)),
+            accent: Some(accent),
+            state: StateThemeConfig {
+                review: Some(fg(AnsiColor::Yellow).bold()),
+                ..StateThemeConfig::default()
+            },
+            readiness: ReadinessThemeConfig {
+                blocked: Some(fg(AnsiColor::Magenta)),
+                ..ReadinessThemeConfig::default()
+            },
+            priority: PriorityThemeConfig {
+                p1: Some(fg(AnsiColor::Yellow).bold()),
+                ..PriorityThemeConfig::default()
+            },
+            ..ThemeConfig::default()
+        };
+        let theme = Theme::new(&config);
+        let default = Theme::default();
+        assert_eq!(theme.background, Background::Color(background));
+        assert_eq!(theme.text_dimmed, fg(AnsiColor::BrightBlack));
+        assert_eq!(theme.accent, accent);
+        assert_eq!(theme.state_review, fg(AnsiColor::Yellow).bold());
+        assert_eq!(theme.readiness_blocked, fg(AnsiColor::Magenta));
+        assert_eq!(theme.priority_p1, fg(AnsiColor::Yellow).bold());
+        // Everything else keeps the built-in style, the neighbours of each key set included.
+        assert_eq!(
+            Theme {
+                background: default.background,
+                text_dimmed: default.text_dimmed,
+                accent: default.accent,
+                state_review: default.state_review,
+                readiness_blocked: default.readiness_blocked,
+                priority_p1: default.priority_p1,
+                ..theme
+            },
+            default
+        );
+    }
+
+    #[test]
+    fn an_empty_config_is_the_built_in_theme() {
+        assert_eq!(Theme::new(&ThemeConfig::default()), Theme::default());
+    }
+}
