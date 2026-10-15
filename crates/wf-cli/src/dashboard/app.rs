@@ -829,6 +829,11 @@ impl App {
         }
     }
 
+    /// Takes in what the detail on screen shows, when only the detail changed.
+    pub fn refresh_detail(&mut self, in_view: Option<InView>) {
+        self.snapshot.in_view = in_view;
+    }
+
     pub fn refresh_failed(&mut self, error: &anyhow::Error) {
         self.status = Some(Status::RefreshFailed(format!("{error:#}")));
     }
