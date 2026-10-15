@@ -325,6 +325,50 @@ fn an_item_detail_shows_the_item_as_wf_item_show_prints_it() {
 }
 
 #[test]
+fn enter_on_what_waits_opens_the_item_with_its_notice_in_view() {
+    let held = item(4, "Held merge");
+    let what = "75eba435 is ready to merge, but main is checked out with changes; the daemon's comment on the item names them";
+    let mut snapshot = snapshot();
+    snapshot.waiting = vec![Waiting::Notice {
+        item: held.clone(),
+        kind: wf_core::inbox::InboxKind::Merge,
+        what: what.to_owned(),
+    }];
+    let mut app = App::new(snapshot.clone(), TimeZone::UTC);
+    app.resize(60, 24);
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.wanted().detail, Some(Detail::Item(held.id)));
+    assert_eq!(
+        app.in_view().map(|opened| opened.scroll),
+        Some(Scroll::At(0))
+    );
+    // As `wf item show` renders it, with a long body under the notice.
+    let bar = "\x1b[33m┃\x1b[0m";
+    let mut text = format!(
+        "◎ #aqcaqcaqcaqc (task:review) Held merge\n\n  {bar} \x1b[1;33mmerge waits\x1b[0m\n"
+    );
+    for line in textwrap::wrap(what, 50) {
+        text.push_str(&format!("  {bar} {line}\n"));
+    }
+    text.push_str(&format!(
+        "  {bar} Waiting to merge: main has changes to src/lib.rs.\n\n"
+    ));
+    for line in 1..=30 {
+        text.push_str(&format!("  body line {line}\n"));
+    }
+    snapshot.in_view = Some(InView::Item {
+        id: held.id,
+        text,
+        session: None,
+    });
+    app.refresh(snapshot);
+    let shown = screen(&mut app, 60, 16);
+    assert!(shown.contains("┃ merge waits"), "{shown}");
+    assert!(shown.contains("┃ names them"), "{shown}");
+    assert!(shown.contains("changes to src/lib.rs."), "{shown}");
+}
+
+#[test]
 fn scrolling_stops_at_the_end_of_a_detail() {
     let mut app = app();
     let spans = ItemId::from_bytes([2; 32]);
