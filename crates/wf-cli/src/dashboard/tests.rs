@@ -1137,7 +1137,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     app.resize(130, 24);
     let item = Detail::Item(ItemId::from_bytes([4; 32]));
     let blocked = Detail::Item(ItemId::from_bytes([5; 32]));
-    // Over the detail beside the list, the wheel gives the detail the keys and scrolls it.
+    // Over the detail beside the list, the wheel scrolls it and leaves the keys with the list.
     app.wheel(100, Wheel::Down);
     assert_eq!(
         app.stack(),
@@ -1146,8 +1146,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
             scroll: Scroll::END,
         }]
     );
-    assert!(!app.list_has_keys());
-    press(&mut app, KeyCode::Esc);
+    assert!(app.list_has_keys());
     press(&mut app, KeyCode::Char('2'));
     app.refresh(with_items());
     app.wheel(100, Wheel::Down);
@@ -1159,13 +1158,13 @@ fn the_wheel_moves_what_is_under_the_pointer() {
             scroll: Scroll::At(6),
         }]
     );
+    assert!(app.list_has_keys());
     // Over the list, the wheel scrolls it; the keys, the selection and the detail stay.
     app.wheel(10, Wheel::Down);
-    assert!(!app.list_has_keys());
+    assert!(app.list_has_keys());
     assert_eq!(app.stack().len(), 1);
     assert_eq!(app.wanted().detail, Some(item.clone()));
     // The keys move the selection, whose detail takes the place of the one opened.
-    press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(app.stack().len(), 0);
     assert_eq!(app.wanted().detail, Some(blocked));

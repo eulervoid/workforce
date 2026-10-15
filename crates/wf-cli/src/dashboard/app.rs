@@ -1416,9 +1416,9 @@ impl App {
         }
     }
 
-    /// The mouse wheel turned over `column`. It scrolls what is under the pointer: the list,
-    /// leaving its selection and the keys where they are, or the detail beside it, which takes
-    /// the keys; with one pane on screen, that one.
+    /// The mouse wheel turned over `column`. It scrolls what is under the pointer, the list or
+    /// the detail beside it, and leaves the selection and the keys where they are; with one pane
+    /// on screen, that one.
     pub fn wheel(&mut self, column: u16, wheel: Wheel) {
         if !self.mouse_passes() {
             return;
@@ -1442,8 +1442,15 @@ impl App {
             }
             return;
         }
-        self.focus_detail();
-        // Without a detail to give the keys to, there is nothing to scroll.
+        // The selection's detail beside the list keeps a scroll only once opened; opening it
+        // leaves the keys with the list.
+        if self.stack().is_empty()
+            && let Some(detail) = self.selected_detail()
+        {
+            self.open(detail);
+            self.focus_list();
+        }
+        // Without a detail beside the list, there is nothing to scroll.
         if let Some(opened) = self.stack_mut().last_mut() {
             opened.scroll = wheel.scroll(opened.scroll);
         }
