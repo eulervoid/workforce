@@ -225,11 +225,11 @@ fn the_demo_script_works_end_to_end() {
 
     let log = wf.run(&["log"]);
     assert!(log.contains("events verified"), "{log}");
-    let events = wf.json(&["log"])["events"].as_array().unwrap().len();
+    let events = wf.json(&["log"]).as_array().unwrap().len();
     // genesis, device profile, one agent, then the items
     assert_eq!(events, 1 + 1 + 1 + 2 + 1 + 1 + 1 + 1 + 1 + 2);
     assert!(
-        wf.json(&["log"])["events"]
+        wf.json(&["log"])
             .as_array()
             .unwrap()
             .iter()
@@ -475,7 +475,7 @@ fn log_item_prints_only_the_events_of_the_item() {
     let shown = wf.add(&["--title", "Shown"]);
     wf.add(&["--title", "Hidden"]);
     wf.run(&["comment", &shown, "on the shown item"]);
-    let events = wf.json(&["log", "--item", &shown])["events"].clone();
+    let events = wf.json(&["log", "--item", &shown]).clone();
     let summaries: Vec<&str> = events
         .as_array()
         .unwrap()
@@ -808,7 +808,7 @@ fn an_export_restores_a_store_that_was_lost() {
         .lines()
         .map(|line| serde_json::from_str(line).unwrap())
         .collect();
-    assert_eq!(lines.len(), log["events"].as_array().unwrap().len());
+    assert_eq!(lines.len(), log.as_array().unwrap().len());
     assert_eq!(lines[0]["kind"], "Genesis");
     assert!(
         lines
@@ -1042,7 +1042,7 @@ mod forking {
         assert_eq!(comments(&through_daemon).as_array().unwrap().len(), 1);
         sandbox.add(&["--title", "After the fork", "--priority", "P2"]);
         let log = sandbox.json(&["log"]);
-        let unverified = log["events"]
+        let unverified = log
             .as_array()
             .unwrap()
             .iter()

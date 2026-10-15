@@ -3,8 +3,10 @@
 use serde::Serialize;
 
 use crate::event::CommentKind;
+use crate::id::ItemId;
 use crate::identity::AgentId;
 use crate::item::{Item, ItemState};
+use crate::policy::Policy;
 use crate::session::{EndReason, Session, SessionRole};
 use crate::state::State;
 
@@ -40,6 +42,19 @@ pub struct AgentStats {
     pub failed: usize,
     /// The median time an ended session ran, in milliseconds.
     pub median_duration_ms: Option<u64>,
+}
+
+/// How long the work on an item took, and how many rounds it went through.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+pub struct ItemStats {
+    /// Its sessions of every role, live ones included.
+    pub sessions: usize,
+    /// The work sessions that submitted: each starts a round of review.
+    pub submissions: usize,
+    pub change_requests: usize,
+    /// From the start of its first work session to done, in milliseconds; `None` until it is
+    /// done.
+    pub lead_ms: Option<u64>,
 }
 
 /// How a session ended, for counting.
@@ -91,16 +106,7 @@ impl State {
             let done = item.state(policy) == ItemState::Done;
             if done && now_ms.saturating_sub(done_at) <= RECENT_MS {
                 stats.done_lately += 1;
-                let first_work = self
-                    .sessions()
-                    .filter(|session| {
-                        session.item() == item.id() && session.role() == SessionRole::Work
-                    })
-                    .map(|session| session.started().hlc.wall_ms())
-                    .min();
-                if let Some(started) = first_work {
-                    leads.push(done_at.saturating_sub(started));
-                }
+                leads.extend(self.lead_ms(item, policy));
             }
             if !item.merges().is_empty() {
                 stats.merged += 1;
@@ -129,6 +135,47 @@ impl State {
             }
         }
         stats
+    }
+
+    /// How the work on `item` went, archived or not. `None` for an item that does not exist.
+    pub fn item_stats(&self, item: ItemId) -> Option<ItemStats> {
+        let policy = &self.policy()?.policy;
+        let item = self.workforce.as_ref()?.items.get(&item)?;
+        let mut stats = ItemStats {
+            lead_ms: self.lead_ms(item, policy),
+            change_requests: item
+                .comments()
+                .values()
+                .filter(|comment| comment.kind == CommentKind::ChangeRequest)
+                .count(),
+            ..ItemStats::default()
+        };
+        for session in self
+            .sessions()
+            .filter(|session| session.item() == item.id())
+        {
+            stats.sessions += 1;
+            if let Some(ended) = session.ended()
+                && matches!(ended.reason, EndReason::Submitted { .. })
+            {
+                stats.submissions += 1;
+            }
+        }
+        Some(stats)
+    }
+
+    /// From the start of the first work session of `item` to its move to done; `None` unless it
+    /// is done and was worked on.
+    fn lead_ms(&self, item: &Item, policy: &Policy) -> Option<u64> {
+        if item.state(policy) != ItemState::Done {
+            return None;
+        }
+        let first_work = self
+            .sessions()
+            .filter(|session| session.item() == item.id() && session.role() == SessionRole::Work)
+            .map(|session| session.started().hlc.wall_ms())
+            .min()?;
+        Some(item.state.stamp().hlc.wall_ms().saturating_sub(first_work))
     }
 
     /// How `agent` is doing, over all its sessions.

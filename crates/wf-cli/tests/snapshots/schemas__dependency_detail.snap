@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&detail)"
 ---
 {
-  "schema": 7,
+  "schema": 8,
   "data": {
     "id": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
     "type": "task",
@@ -35,6 +35,12 @@ expression: "Envelope::new(&detail)"
     "review": null,
     "review_status": null,
     "recovery": "standard",
+    "stats": {
+      "sessions": 0,
+      "submissions": 0,
+      "change_requests": 0,
+      "lead_ms": null
+    },
     "waiting": [],
     "requires": [],
     "depends_on": [],

@@ -4,9 +4,10 @@
 use std::collections::HashMap;
 
 use wf_cli::view::{self, Envelope};
-use wf_core::event::{Change, Event};
+use wf_core::event::{Change, Event, EventBody, Review, SessionEnded};
 use wf_core::id::{EventId, HashId, ItemId};
 use wf_core::item::{ItemView, Priority};
+use wf_core::session::{CommitId, EndReason, Verdict};
 use wf_core::state::State;
 use wf_core::testing::*;
 
@@ -108,7 +109,7 @@ fn events_and_status() {
     ordered.sort_by_key(|event| (event.content.hlc, event.id()));
     let events: Vec<_> = ordered
         .iter()
-        .map(|event| view::event_view(&scenario.state, event, true))
+        .map(|event| view::event_view(&scenario.state, event, true, &HashMap::new()))
         .collect();
     insta::assert_json_snapshot!("log", Envelope::new(&events));
     insta::assert_json_snapshot!(
@@ -127,6 +128,60 @@ fn events_and_status() {
     );
     insta::assert_json_snapshot!("agents", Envelope::new(view::agent_views(&scenario.state)));
     let _ = scenario.done;
+}
+
+/// A session that released with a note, and a verdict with the comment that says why; and how
+/// the item went.
+#[test]
+fn outcomes_in_the_log() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let mut events = Vec::new();
+    let mut now = 2_000;
+    let mut apply = |state: &mut State, body| {
+        now += 1_000;
+        let event = fixture.apply(state, 0, now, body);
+        events.push(event.clone());
+        event
+    };
+    apply(&mut state, define_agent("coder"));
+    let item: ItemId = apply(&mut state, create("task", "Implement feed sync"))
+        .id()
+        .into();
+    let session = apply(&mut state, start_session("coder", item)).id().into();
+    let note = apply(&mut state, comment(item, "the relay is down"))
+        .id()
+        .into();
+    apply(
+        &mut state,
+        EventBody::SessionEnded(SessionEnded {
+            session,
+            reason: EndReason::Released,
+            because: Some(note),
+        }),
+    );
+    let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
+    let why = apply(&mut state, comment(item, "needs a test")).id().into();
+    apply(
+        &mut state,
+        EventBody::Reviewed(Review {
+            item,
+            commit: Some(commit),
+            verdict: Verdict::RequestChanges,
+            because: Some(why),
+        }),
+    );
+    let comments = view::comment_texts(&events);
+    let views: Vec<_> = events
+        .iter()
+        .rev()
+        .take(4)
+        .rev()
+        .filter(|event| !matches!(event.content.body, EventBody::Commented(_)))
+        .map(|event| view::event_view(&state, event, true, &comments))
+        .collect();
+    insta::assert_json_snapshot!("log_outcomes", Envelope::new(&views));
+    insta::assert_json_snapshot!("item_stats", Envelope::new(view::item_stats_views(&state)));
 }
 
 #[test]

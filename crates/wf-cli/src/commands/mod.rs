@@ -169,6 +169,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Mentions { target } => mentions(json, &workspace, &target),
                 Command::Policy(command) => policy(json, command, &mut workspace),
                 Command::Log(args) => log(json, mode, &mut workspace, args),
+                Command::Stats => {
+                    let views = view::item_stats_views(workspace.state());
+                    emit_paged(json, mode, &views, |views| render::item_stats_list(views))
+                }
                 Command::Export => crate::export::export(&workspace),
                 Command::Device(command) => crate::devices::device(json, command, &mut workspace),
                 Command::Members => crate::devices::members(json, &workspace),

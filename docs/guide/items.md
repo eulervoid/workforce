@@ -140,6 +140,6 @@ Blockers that wait on you are in `wf inbox` and the dashboard, where `r` answers
 ```sh
 wf item archive k3f7             # hide a done or cancelled item from lists; its history stays
 wf item archive --done           # archive every done item; --cancelled for the cancelled ones
-wf item list --archived          # include archived items
+wf item list --archived          # the live items, then the archived
 wf item unarchive k3f7
 ```

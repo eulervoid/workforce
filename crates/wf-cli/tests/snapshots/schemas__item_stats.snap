@@ -1,0 +1,21 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(view::item_stats_views(&state))"
+---
+{
+  "schema": 8,
+  "data": [
+    {
+      "id": "tdinlpggfb2i72qhsyzhfpzah3gs6mert3ts5r3eupz5oltjyulq",
+      "type": "task",
+      "title": "Implement feed sync",
+      "state": "open",
+      "priority": "P2",
+      "archived": false,
+      "sessions": 1,
+      "submissions": 0,
+      "change_requests": 0,
+      "lead_ms": null
+    }
+  ]
+}

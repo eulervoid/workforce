@@ -4,7 +4,7 @@ use crate::identity::AgentId;
 use crate::item::ItemState;
 use crate::name::AgentName;
 use crate::session::EndReason;
-use crate::stats::RECENT_MS;
+use crate::stats::{ItemStats, RECENT_MS};
 use crate::testing::*;
 
 fn item_id(event: &Event) -> ItemId {
@@ -81,4 +81,41 @@ fn stats_count_what_was_done_lately_and_how_attempts_ended() {
     assert_eq!((agent.finished, agent.failed), (1, 2));
     // One, one, one and two hours.
     assert_eq!(agent.median_duration_ms, Some(HOUR));
+}
+
+#[test]
+fn item_stats_count_rounds_and_the_time_to_done() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    fixture.apply(&mut state, 0, HOUR, define_agent("coder"));
+    let item = item_id(&fixture.apply(&mut state, 0, HOUR, create("task", "work")));
+    let first = session_id(&fixture.apply(&mut state, 0, 2 * HOUR, start_session("coder", item)));
+    fixture.apply(
+        &mut state,
+        0,
+        3 * HOUR,
+        end_session(first, EndReason::Submitted { commit: None }),
+    );
+    fixture.apply(&mut state, 0, 3 * HOUR, change_request(item, "add a test"));
+    fixture.apply(&mut state, 0, 3 * HOUR, change_request(item, "and docs"));
+    let second = session_id(&fixture.apply(&mut state, 0, 4 * HOUR, start_session("coder", item)));
+    fixture.apply(
+        &mut state,
+        0,
+        5 * HOUR,
+        end_session(second, EndReason::Submitted { commit: None }),
+    );
+    assert_eq!(
+        state.item_stats(item),
+        Some(ItemStats {
+            sessions: 2,
+            submissions: 2,
+            change_requests: 2,
+            lead_ms: None,
+        })
+    );
+    fixture.apply(&mut state, 0, 6 * HOUR, moved(item, ItemState::Done));
+    fixture.apply(&mut state, 0, 7 * HOUR, archive(item));
+    // From the first session to done, and still for the archived item.
+    assert_eq!(state.item_stats(item).unwrap().lead_ms, Some(4 * HOUR));
 }

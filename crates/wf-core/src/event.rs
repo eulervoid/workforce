@@ -358,6 +358,48 @@ pub struct SessionStarted {
 pub struct SessionEnded {
     pub session: SessionId,
     pub reason: EndReason,
+    /// The comment on the item that says why, written just before.
+    pub because: Option<CommentId>,
+}
+
+/// The wire form of `SessionEnded` before it named the comment that says why.
+#[derive(Serialize, Deserialize)]
+struct SessionEndedWithoutComment {
+    session: SessionId,
+    reason: EndReason,
+}
+
+impl SessionEnded {
+    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        match self.because {
+            Some(_) => Ok((tag::SESSION_ENDED, encoding::encode(self)?)),
+            None => Ok((
+                tag::SESSION_ENDED_WITHOUT_COMMENT,
+                encoding::encode(&SessionEndedWithoutComment {
+                    session: self.session,
+                    reason: self.reason,
+                })?,
+            )),
+        }
+    }
+
+    /// One without a comment would encode to other bytes than were signed.
+    fn with_comment(payload: &[u8]) -> Result<Self, EncodingError> {
+        let ended: SessionEnded = encoding::decode(payload)?;
+        match ended.because {
+            Some(_) => Ok(ended),
+            None => Err(EncodingError::malformed()),
+        }
+    }
+
+    fn without_comment(payload: &[u8]) -> Result<Self, EncodingError> {
+        let old: SessionEndedWithoutComment = encoding::decode(payload)?;
+        Ok(SessionEnded {
+            session: old.session,
+            reason: old.reason,
+            because: None,
+        })
+    }
 }
 
 /// The verdict of a review session or of a principal on the work submitted for an item.
@@ -426,10 +468,13 @@ mod tag {
     pub const COMMENT: u16 = 16;
     pub const ITEM_CREATED: u16 = 17;
     pub const SESSION_STARTED: u16 = 20;
-    pub const SESSION_ENDED: u16 = 21;
+    /// `SessionEnded` as written before it named the comment that says why, and still for an end
+    /// without one.
+    pub const SESSION_ENDED_WITHOUT_COMMENT: u16 = 21;
     pub const REVIEW: u16 = 22;
     pub const MERGED: u16 = 23;
     // 24 was `Report`, now a comment with a step. Retired: never reuse it.
+    pub const SESSION_ENDED: u16 = 25;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -514,7 +559,7 @@ impl EventBody {
             EventBody::ItemUnarchived(body) => (tag::ITEM_UNARCHIVED, encoding::encode(body)?),
             EventBody::Commented(body) => (tag::COMMENT, encoding::encode(body)?),
             EventBody::SessionStarted(body) => (tag::SESSION_STARTED, encoding::encode(body)?),
-            EventBody::SessionEnded(body) => (tag::SESSION_ENDED, encoding::encode(body)?),
+            EventBody::SessionEnded(body) => body.to_tagged()?,
             EventBody::Reviewed(body) => (tag::REVIEW, encoding::encode(body)?),
             EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
             EventBody::Unknown { tag, payload } => (*tag, payload.clone()),
@@ -544,7 +589,10 @@ impl EventBody {
             tag::ITEM_UNARCHIVED => EventBody::ItemUnarchived(encoding::decode(payload)?),
             tag::COMMENT => EventBody::Commented(encoding::decode(payload)?),
             tag::SESSION_STARTED => EventBody::SessionStarted(encoding::decode(payload)?),
-            tag::SESSION_ENDED => EventBody::SessionEnded(encoding::decode(payload)?),
+            tag::SESSION_ENDED_WITHOUT_COMMENT => {
+                EventBody::SessionEnded(SessionEnded::without_comment(payload)?)
+            }
+            tag::SESSION_ENDED => EventBody::SessionEnded(SessionEnded::with_comment(payload)?),
             tag::REVIEW => EventBody::Reviewed(encoding::decode(payload)?),
             tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
             tag => EventBody::Unknown {
@@ -761,6 +809,7 @@ mod tests {
                 reason: EndReason::Submitted {
                     commit: Some(commit),
                 },
+                because: None,
             }),
             EventBody::Reviewed(Review {
                 item,
@@ -836,6 +885,30 @@ mod tests {
         let forged = TaggedBody {
             tag: tag::ITEM_CREATED,
             payload: encoding::encode(&without).unwrap(),
+        };
+        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_session_end_with_a_comment_round_trips_under_its_own_tag() {
+        let ended = SessionEnded {
+            session: SessionId::from_bytes([2; 32]),
+            reason: EndReason::Released,
+            because: Some(CommentId::from_bytes([3; 32])),
+        };
+        let bytes = encoding::encode(&EventBody::SessionEnded(ended.clone())).unwrap();
+        assert_eq!(bytes[0], tag::SESSION_ENDED as u8);
+        assert_eq!(
+            encoding::decode::<EventBody>(&bytes).unwrap(),
+            EventBody::SessionEnded(ended.clone())
+        );
+        let forged = TaggedBody {
+            tag: tag::SESSION_ENDED,
+            payload: encoding::encode(&SessionEnded {
+                because: None,
+                ..ended
+            })
+            .unwrap(),
         };
         assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
     }

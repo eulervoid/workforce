@@ -206,8 +206,10 @@ need different capabilities.
 
 * `SessionStarted{agent, item, role}` (device-signed), `role` = `Work`, `Review{commit}`, `Supervise`
   or `Diagnose` (a step of a recovery level, M2.2).
-  Its hash prefix is the session id. `SessionEnded{reason}`, reason = `Submitted{commit} | Reviewed |
-  Supervised | Released | TimedOut | Failed | Cancelled | Interrupted | Diagnosed`.
+  Its hash prefix is the session id. `SessionEnded{reason, because}`, reason = `Submitted{commit} |
+  Reviewed | Supervised | Released | TimedOut | Failed | Cancelled | Interrupted | Diagnosed`;
+  `because` names the comment that says why (the agent's note, or how the session failed), written
+  just before.
 * One branch per **item** (`wf/<item>`, section 9) in one worktree. A session is an attempt: the next
   session on the item (after a release, a crash or requested changes) continues the branch.
 * **Ending moves the item first.** `after_end(session, reason)` in `wf-core` says what happens to the

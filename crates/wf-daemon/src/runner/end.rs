@@ -88,7 +88,11 @@ impl Daemon {
             .ok_or(SessionError::NotBound)?;
         // A submission with open change requests is refused before anything is written.
         state
-            .check_policy(&EventBody::SessionEnded(SessionEnded { session, reason }))
+            .check_policy(&EventBody::SessionEnded(SessionEnded {
+                session,
+                reason,
+                because: None,
+            }))
             .map_err(|violation| SessionError::Authoring(violation.into()))?;
         // The comment comes first: once the session has ended it can no longer write.
         let because = match note {
@@ -138,7 +142,11 @@ impl Daemon {
         self.author(
             loaded,
             actor,
-            EventBody::SessionEnded(SessionEnded { session, reason }),
+            EventBody::SessionEnded(SessionEnded {
+                session,
+                reason,
+                because,
+            }),
         )
         .await?;
         // The merge task merges it after the merges before it, now that the submission is
