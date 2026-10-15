@@ -57,7 +57,7 @@ pub(crate) struct CommandRun {
 }
 
 #[derive(Debug, thiserror::Error)]
-pub(crate) enum CommandError {
+pub enum CommandError {
     #[error("the command `{0}` is empty")]
     Empty(CommandName),
     #[error("cannot check the tree out: {0}")]

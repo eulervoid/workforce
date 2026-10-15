@@ -134,6 +134,10 @@ impl State {
                         } else if finished.contains(&item.id()) {
                             // The daemon moves it to `done`.
                             return None;
+                        } else if item.has_open_blocker() {
+                            // The blocker is what waits, such as a check that fails on the
+                            // target too; it is listed below.
+                            return None;
                         } else {
                             Waiting::Proposal
                         }

@@ -110,6 +110,17 @@ pub enum MergeOutcome {
     TargetMoved,
 }
 
+/// What merging work into the target branch makes, before anything is committed.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MergeTree {
+    /// The work is in the target already, brought in by `commit`.
+    Landed { commit: CommitId },
+    /// The work merges cleanly with the target at `base` into `tree`.
+    Clean { base: CommitId, tree: GitOid },
+    /// The work does not merge cleanly. The paths are the files in conflict.
+    Conflict { paths: Vec<String> },
+}
+
 /// What happened when an item's branch was rebased onto the target branch, in its worktree.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rebase {
@@ -199,6 +210,25 @@ pub trait VcsAdapter {
         message: &str,
         signing: &CommitSigning,
     ) -> Result<MergeOutcome, VcsError>;
+
+    /// What merging `commit` into `target` makes, without committing it or moving `target`.
+    fn merge_tree(&self, target: &str, commit: CommitId) -> Result<MergeTree, VcsError>;
+
+    /// Commits `tree`, made by [`VcsAdapter::merge_tree`], as the merge of `commit` into `target`
+    /// at `base`, signed as `signing` says, and moves `target` to it. Never a conflict: the
+    /// outcome is the merge, a checkout of `target` with changes, or `target` no longer at `base`.
+    fn commit_merge(
+        &self,
+        target: &str,
+        base: CommitId,
+        tree: GitOid,
+        commit: CommitId,
+        message: &str,
+        signing: &CommitSigning,
+    ) -> Result<MergeOutcome, VcsError>;
+
+    /// The tree of `commit`.
+    fn tree_of(&self, commit: CommitId) -> Result<GitOid, VcsError>;
 
     /// Rebases the branch checked out in `worktree` onto `target`, the rewritten commits signed as
     /// `signing` says and committed by `committer`. A rebase stopped there earlier is not begun

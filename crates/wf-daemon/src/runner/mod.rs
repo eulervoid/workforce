@@ -2,6 +2,7 @@
 //! until the session ends, and applies what follows from the end to the item.
 
 mod brief;
+mod check;
 mod dispatch;
 mod drive;
 mod end;
@@ -86,6 +87,8 @@ pub enum SessionError {
     MachineConfig(#[from] MachineConfigError),
     #[error(transparent)]
     SigningKey(#[from] wf_vcs::signing::SigningKeyError),
+    #[error("cannot run a check: {0}")]
+    Check(#[from] crate::command::CommandError),
     #[error(
         "agents run in Fence on this machine, but `fence` is not on PATH; install it, or set \
          `kind = \"off\"` under `[sandbox]` in the machine config to run them without a sandbox"

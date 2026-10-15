@@ -12,6 +12,7 @@ use url::Url;
 use wf_core::autonomy::PermissionMode;
 use wf_core::inbox::InboxKind;
 use wf_core::name::AgentName;
+use wf_core::policy::CheckConfig;
 use wf_harness::Decider;
 use wf_vcs::CommitSigning;
 
@@ -51,6 +52,25 @@ pub struct MachineConfig {
     pub notify: NotifyConfig,
     /// Without it, the daemon deletes no cache.
     pub storage: Option<StorageConfig>,
+    #[serde(default)]
+    pub check: CheckLimitsConfig,
+}
+
+/// What this machine allows the checks of the policy: `[check]`.
+#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CheckLimitsConfig {
+    /// The longest a check runs here, whatever its timeout in the policy, such as `"10m"`.
+    #[serde(default, deserialize_with = "optional_duration")]
+    pub max_timeout: Option<Duration>,
+}
+
+impl CheckLimitsConfig {
+    /// How long `check` may run on this machine.
+    pub fn timeout(&self, check: &CheckConfig) -> Duration {
+        self.max_timeout
+            .map_or(check.timeout, |max| max.min(check.timeout))
+    }
 }
 
 /// How much disk the caches in the worktrees of each workforce may take on this machine.
@@ -355,6 +375,12 @@ fn default_timeout() -> Duration {
 fn duration<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
     let text = String::deserialize(deserializer)?;
     humantime::parse_duration(&text).map_err(serde::de::Error::custom)
+}
+
+fn optional_duration<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Duration>, D::Error> {
+    duration(deserializer).map(Some)
 }
 
 impl MachineConfig {
@@ -667,6 +693,25 @@ mod tests {
         ] {
             assert!(MachineConfig::parse(text).is_err(), "{text}");
         }
+    }
+
+    #[test]
+    fn the_longest_a_check_runs_is_capped_by_the_machine() {
+        let check = |timeout: u64| CheckConfig {
+            name: wf_core::name::CommandName::new("test").unwrap(),
+            run: vec!["true".to_string()],
+            timeout: Duration::from_secs(timeout * 60),
+        };
+        let uncapped = MachineConfig::parse("").ok().unwrap().check;
+        assert_eq!(uncapped.timeout(&check(30)), Duration::from_secs(30 * 60));
+        let capped = MachineConfig::parse("[check]\nmax_timeout = \"10m\"\n")
+            .ok()
+            .unwrap()
+            .check;
+        assert_eq!(capped.timeout(&check(30)), Duration::from_secs(10 * 60));
+        assert_eq!(capped.timeout(&check(5)), Duration::from_secs(5 * 60));
+        assert!(MachineConfig::parse("[check]\nmax_timeout = \"soon\"\n").is_err());
+        assert!(MachineConfig::parse("[check]\ntimeout = \"10m\"\n").is_err());
     }
 
     #[test]

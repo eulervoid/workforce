@@ -1630,15 +1630,21 @@ wf review --approve
     git(repository, &["commit", "--quiet", "-am", "main moves on"]);
     let main = git(repository, &["rev-parse", "main"]);
     std::fs::write(world.wf.data.join("go"), "").unwrap();
+    // The item is open only until the next session starts on it, so the note is waited for.
     world
-        .wait("the conflict", |world| world.item(&item)["state"] == "open")
+        .wait("the conflict", |world| {
+            comments(&world.item(&item))
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|note| {
+                    note["text"]
+                        .as_str()
+                        .is_some_and(|text| text.contains("conflicts in file.txt"))
+                })
+        })
         .await;
-    let shown = world.item(&item);
-    assert!(comments(&shown).as_array().unwrap().iter().any(|note| {
-        note["text"]
-            .as_str()
-            .is_some_and(|text| text.contains("conflicts in file.txt"))
-    }));
+    assert_ne!(world.item(&item)["state"], "review");
     assert_eq!(git(repository, &["rev-parse", "main"]), main);
     let branch = format!("wf/{}", &item[..12]);
     assert_eq!(
@@ -2187,4 +2193,255 @@ fn a_command_that_runs_past_its_limit_fails_with_what_it_ran() {
     let message = failure.downcast_ref::<String>().unwrap();
     assert!(message.contains("sleep 5 & exit 0"), "{message}");
     assert!(message.contains("did not finish"), "{message}");
+}
+
+/// Adds `checks`, `[[merge.check]]` tables, to the policy.
+fn add_checks(world: &World, checks: &str) {
+    let policy = world.wf.run(&["policy", "show"]);
+    let path = world.wf.root.path().join("checked-policy.toml");
+    std::fs::write(&path, format!("{policy}\n{checks}")).unwrap();
+    world.wf.run(&["policy", "apply", path.to_str().unwrap()]);
+}
+
+/// A check `name` that appends a line to a file each time it runs, then runs `then` in the check
+/// worktree. Returns the check and the file.
+fn counted_check(world: &World, name: &str, then: &str) -> (String, PathBuf) {
+    let runs = world.wf.root.path().join(format!("{name}-runs.txt"));
+    let check = format!(
+        "[[merge.check]]\nname = \"{name}\"\nrun = [\"sh\", \"-c\", '''echo ran >> \"{}\"; {then}''']\n",
+        runs.display()
+    );
+    (check, runs)
+}
+
+fn runs(file: &Path) -> usize {
+    std::fs::read_to_string(file).map_or(0, |text| text.lines().count())
+}
+
+/// The comments of `kind` on the item whose text has `needle`.
+fn comments_with(world: &World, item: &str, kind: &str, needle: &str) -> Vec<String> {
+    comments(&world.item(item))
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|note| note["kind"] == kind)
+        .filter_map(|note| note["text"].as_str())
+        .filter(|text| text.contains(needle))
+        .map(str::to_string)
+        .collect()
+}
+
+const ADD_HELLO: &str = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"
+wf work submit
+";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn checks_that_pass_let_the_work_merge_and_a_moved_target_is_checked_again() {
+    let world = World::new(ADD_HELLO).await;
+    let repository = world.wf.repository.clone();
+    let moved = world.wf.root.path().join("moved");
+    // The first run moves main, as another merge would while the checks run.
+    let (check, check_runs) = counted_check(
+        &world,
+        "hello",
+        &format!(
+            "test -f hello.txt || exit 1; [ -f \"{moved}\" ] && exit 0; touch \"{moved}\"; \
+             echo moved > \"{repo}/moved.txt\" && git -C \"{repo}\" add moved.txt && \
+             git -C \"{repo}\" -c commit.gpgsign=false commit -q -m moved",
+            moved = moved.display(),
+            repo = repository.display()
+        ),
+    );
+    add_checks(&world, &check);
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    for _ in 0..100 {
+        if world.item(&item)["state"] == "done" {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(100)).await;
+    }
+    assert_eq!(
+        world.item(&item)["state"],
+        "done",
+        "{:#}",
+        comments(&world.item(&item))
+    );
+    assert_eq!(runs(&check_runs), 2, "the moved target is checked again");
+    for file in ["hello.txt", "moved.txt"] {
+        assert!(repository.join(file).exists(), "{file} is on main");
+    }
+    let subject = git(&repository, &["log", "-1", "--format=%s", "main"]);
+    assert!(subject.starts_with("Merge #"), "{subject}");
+    let checked_in = std::fs::read_dir(world.wf.data.join("workforce"))
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("check"))
+        .find(|path| path.is_dir())
+        .expect("the check worktree of the workforce");
+    assert!(checked_in.join("hello.txt").is_file());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_the_work_breaks_sends_it_back_with_a_change_request() {
+    let script = "\
+sh echo x > broken.txt && git add broken.txt && git commit -q -m break
+wf work submit
+";
+    let world = World::new(script).await;
+    let (check, check_runs) = counted_check(&world, "unbroken", "! test -f broken.txt");
+    add_checks(&world, &check);
+    let main = git(&world.wf.repository, &["rev-parse", "main"]);
+    let item = world.wf.add(&["--title", "Break it"]);
+    start_session(&world, &item);
+    world
+        .wait("the failed check", |world| {
+            world.item(&item)["state"] == "open"
+        })
+        .await;
+    let requests = comments_with(&world, &item, "change_request", "`unbroken`");
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    let request = &requests[0];
+    assert!(
+        request.starts_with("The check `unbroken` fails on the merge into main."),
+        "{request}"
+    );
+    for part in [
+        "Command: `sh -c ",
+        "Tree: ",
+        "Log: ",
+        "check-logs/unbroken/",
+    ] {
+        assert!(request.contains(part), "{part} in {request}");
+    }
+    assert_eq!(git(&world.wf.repository, &["rev-parse", "main"]), main);
+    assert_eq!(runs(&check_runs), 2, "on the merge, then on main itself");
+    assert!(inbox(&world).is_empty(), "{:?}", inbox(&world));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_checks_send_work_back_twice_then_wait_for_the_principal() {
+    // Each session adds another broken file, so that each merge is a new tree.
+    let script = "\
+sh n=$(ls broken-* 2>/dev/null | wc -l | tr -d ' '); echo x > broken-$n.txt && git add . && git commit -q -m break
+sh \"$WF_BIN\" comment {item} \"tried again\" --resolve-change-requests || true
+wf work submit
+";
+    let world = World::new(script).await;
+    let (check, check_runs) = counted_check(&world, "unbroken", "! ls broken-* >/dev/null 2>&1");
+    add_checks(&world, &check);
+    let item = world.wf.add(&["--title", "Break it again and again"]);
+    for round in 1..=2 {
+        start_session(&world, &item);
+        world
+            .wait("the failed check", |world| {
+                world.item(&item)["state"] == "open"
+                    && comments_with(world, &item, "change_request", "`unbroken`").len() == round
+            })
+            .await;
+    }
+    start_session(&world, &item);
+    world
+        .wait("the blocker", |world| {
+            !comments_with(world, &item, "blocker", "`unbroken`").is_empty()
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(world.item(&item)["state"], "review");
+    let blocker = &comments_with(&world, &item, "blocker", "`unbroken`")[0];
+    assert!(blocker.starts_with("@ada "), "{blocker}");
+    assert!(blocker.contains("after 2 failed runs"), "{blocker}");
+    assert_eq!(
+        comments_with(&world, &item, "change_request", "`unbroken`").len(),
+        2,
+        "the third failure is not sent back"
+    );
+    let waiting = inbox(&world);
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!(waiting[0]["kind"], "blocker", "{waiting:?}");
+    // Three merges, and main once: its pass is kept.
+    assert_eq!(runs(&check_runs), 4);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_that_fails_on_the_target_too_waits_for_the_principal() {
+    let world = World::new(ADD_HELLO).await;
+    let repository = &world.wf.repository;
+    std::fs::write(repository.join("broken.txt"), "x\n").unwrap();
+    git(repository, &["add", "broken.txt"]);
+    git(repository, &["commit", "--quiet", "-m", "main breaks"]);
+    let (check, check_runs) = counted_check(&world, "unbroken", "! test -f broken.txt");
+    add_checks(&world, &check);
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    world
+        .wait("the blocker", |world| {
+            !comments_with(world, &item, "blocker", "`unbroken`").is_empty()
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert_eq!(world.item(&item)["state"], "review");
+    let blocker = &comments_with(&world, &item, "blocker", "`unbroken`")[0];
+    assert!(
+        blocker.starts_with("@ada The check `unbroken` fails on main itself"),
+        "{blocker}"
+    );
+    assert!(comments_with(&world, &item, "change_request", "").is_empty());
+    let waiting = inbox(&world);
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    assert_eq!(waiting[0]["kind"], "blocker", "{waiting:?}");
+    assert_eq!(runs(&check_runs), 2, "on the merge, then on main itself");
+    assert!(!repository.join("hello.txt").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn whose_fault_a_failed_check_is_is_decided_per_check() {
+    let script = "\
+sh echo x > broken.txt && git add broken.txt && git commit -q -m break
+wf work submit
+";
+    let world = World::new(script).await;
+    let repository = &world.wf.repository;
+    std::fs::write(repository.join("main-broken.txt"), "x\n").unwrap();
+    git(repository, &["add", "main-broken.txt"]);
+    git(repository, &["commit", "--quiet", "-m", "main breaks"]);
+    let (by_work, _) = counted_check(&world, "unbroken", "! test -f broken.txt");
+    let (by_main, _) = counted_check(&world, "main-unbroken", "! test -f main-broken.txt");
+    add_checks(&world, &format!("{by_work}\n{by_main}"));
+    let item = world.wf.add(&["--title", "Break it"]);
+    start_session(&world, &item);
+    world
+        .wait("the failed check", |world| {
+            world.item(&item)["state"] == "open"
+        })
+        .await;
+    let requests = comments_with(&world, &item, "change_request", "");
+    assert_eq!(requests.len(), 1, "{requests:?}");
+    assert!(requests[0].contains("`unbroken`"), "{requests:?}");
+    let told = comments_with(&world, &item, "comment", "`main-unbroken`");
+    assert_eq!(told.len(), 1, "{told:?}");
+    assert!(told[0].contains("fails on main itself"), "{told:?}");
+    assert!(comments_with(&world, &item, "blocker", "").is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_check_that_runs_too_long_is_stopped_and_waits_for_the_principal() {
+    let world = World::new(ADD_HELLO).await;
+    world.machine_config("[check]\nmax_timeout = \"1s\"\n");
+    add_checks(
+        &world,
+        "[[merge.check]]\nname = \"slow\"\nrun = [\"sleep\", \"30\"]\n",
+    );
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    world
+        .wait("the blocker", |world| {
+            !comments_with(world, &item, "blocker", "`slow`").is_empty()
+        })
+        .await;
+    assert_eq!(world.item(&item)["state"], "review");
+    let blocker = &comments_with(&world, &item, "blocker", "`slow`")[0];
+    assert!(blocker.contains("ran longer than 1s"), "{blocker}");
+    assert!(!world.wf.repository.join("hello.txt").exists());
 }

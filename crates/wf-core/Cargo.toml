@@ -10,6 +10,7 @@ testing = []
 [dependencies]
 blake3.workspace = true
 data-encoding.workspace = true
+humantime.workspace = true
 iroh-base.workspace = true
 postcard.workspace = true
 pulldown-cmark.workspace = true

@@ -112,6 +112,8 @@ impl State {
         };
         self.live_items()
             .filter(|item| item.state(policy) == ItemState::Review)
+            // Such as a check that fails on the target too: it waits until that is resolved.
+            .filter(|item| !item.has_open_blocker())
             .filter_map(|item| {
                 let (Some(commit), submitted) = self.submission(item.id())? else {
                     return None;

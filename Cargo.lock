@@ -6001,6 +6001,7 @@ version = "0.0.0"
 dependencies = [
  "blake3",
  "data-encoding",
+ "humantime",
  "iroh-base",
  "postcard",
  "proptest",
@@ -6015,6 +6016,7 @@ dependencies = [
 name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
+ "blake3",
  "bytesize",
  "close_fds",
  "data-encoding",
