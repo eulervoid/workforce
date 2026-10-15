@@ -1640,7 +1640,7 @@ mod tests {
             apply(
                 &mut state,
                 principal.clone(),
-                end_session(session, submitted.clone()),
+                end_session(session, submitted),
             );
             for text in earlier {
                 apply(&mut state, daemon.clone(), comment(item, text));
