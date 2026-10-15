@@ -13,7 +13,7 @@ use crate::theme;
 use crate::transcript::Format;
 use crate::view::{
     ActivityKind, ActorKind, ActorView, AgentDetail, AgentView, BodyPartView, CommentKindView,
-    Flag, InboxEntryView, ItemDetail, ItemGroup, ItemSummary, LogView, MentionsView,
+    EventView, Flag, InboxEntryView, ItemDetail, ItemGroup, ItemSummary, MentionsView,
     ReviewStatusView, SessionView, SourceView, StatusView, StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
@@ -1083,9 +1083,9 @@ pub fn members(members: &[MemberView]) -> String {
     format!("{table}\n")
 }
 
-pub fn log(view: &LogView) -> String {
+pub fn log(events: &[EventView]) -> String {
     let mut table = table(&["EVENT", "DEVICE", "SEQ", "AT", "KIND", "ACTOR", "SUMMARY"]);
-    for event in &view.events {
+    for event in events {
         table.add_row([
             short(&event.id).to_string(),
             event.device.to_string(),
@@ -1096,11 +1096,8 @@ pub fn log(view: &LogView) -> String {
             event.summary.to_string(),
         ]);
     }
-    let verified = view.events.iter().filter(|event| event.verified).count();
-    format!(
-        "{table}\n{verified}/{} events verified\n",
-        view.events.len()
-    )
+    let verified = events.iter().filter(|event| event.verified).count();
+    format!("{table}\n{verified}/{} events verified\n", events.len())
 }
 
 pub fn status(view: &StatusView) -> String {

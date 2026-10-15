@@ -1,0 +1,48 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(&views)"
+---
+{
+  "schema": 8,
+  "data": [
+    {
+      "id": "wkb2yqmtascyibp5rgbwosmcm5lyzwl3zxto5dppssdxjag4gaaq",
+      "seq": 6,
+      "device": "43a72e7144",
+      "actor": "@ada",
+      "at": "1970-01-01T00:00:07Z",
+      "kind": "SessionEnded",
+      "item": "tdinlpggfb2i72qhsyzhfpzah3gs6mert3ts5r3eupz5oltjyulq",
+      "title": "Implement feed sync",
+      "summary": "session 74njtf ended: released",
+      "outcome": {
+        "session_ended": {
+          "session": "74njtfjjtx5hymdaltx4za34e3ga2cd7xs2fwgdtfnqe6mwuavtq",
+          "reason": "released",
+          "commit": null,
+          "because": "the relay is down"
+        }
+      },
+      "verified": true
+    },
+    {
+      "id": "ueconq3toxahla735tgyefq3fcdmhiuho45pg4qfu5j2zs5mgjzq",
+      "seq": 8,
+      "device": "43a72e7144",
+      "actor": "@ada",
+      "at": "1970-01-01T00:00:09Z",
+      "kind": "Reviewed",
+      "item": "tdinlpggfb2i72qhsyzhfpzah3gs6mert3ts5r3eupz5oltjyulq",
+      "title": "Implement feed sync",
+      "summary": "#tdinlp reviewed: changes requested",
+      "outcome": {
+        "reviewed": {
+          "commit": "00112233445566778899aabbccddeeff00112233",
+          "verdict": "request_changes",
+          "because": "needs a test"
+        }
+      },
+      "verified": true
+    }
+  ]
+}

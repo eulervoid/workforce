@@ -11,7 +11,7 @@ use super::{emit_line, emit_paged};
 use crate::cli::LogArgs;
 use crate::interactive::Mode;
 use crate::render;
-use crate::view::{self, LogView};
+use crate::view;
 use crate::workspace::Workspace;
 
 /// How often the daemon is asked for what is new.
@@ -39,8 +39,10 @@ pub(super) fn log(
         Some(id) => State::expecting(id),
         None => State::new(),
     };
+    let events = workspace.events()?;
+    let comments = view::comment_texts(&events);
     let mut views = Vec::new();
-    for event in workspace.events()? {
+    for event in events {
         let verified = event.verify_signature().is_ok()
             && replay.receive(event.clone(), Trust::Untrusted).is_ok();
         if !concerns(state, &event, only) {
@@ -48,22 +50,15 @@ pub(super) fn log(
         }
         views.push((
             (event.content.hlc, event.id()),
-            view::event_view(state, &event, verified),
+            view::event_view(state, &event, verified, &comments),
         ));
     }
     if replay.pending_events().next().is_some() || replay.history_incomplete() {
         bail!("the log is incomplete: some events are missing their parents");
     }
     views.sort_by_key(|(order, _)| *order);
-    let views = views.into_iter().map(|(_, view)| view).collect();
-    let log = LogView {
-        workforce: state
-            .workforce_id()
-            .map(|id| id.to_string())
-            .unwrap_or_default(),
-        events: views,
-    };
-    emit_paged(json, mode, &log, render::log)
+    let views: Vec<_> = views.into_iter().map(|(_, view)| view).collect();
+    emit_paged(json, mode, &views, |views| render::log(views))
 }
 
 /// Prints the whole log, then the events as they arrive, until interrupted.

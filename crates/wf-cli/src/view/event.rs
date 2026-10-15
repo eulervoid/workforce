@@ -5,7 +5,8 @@ use std::collections::HashMap;
 use serde::Serialize;
 use wf_core::activity::Entry;
 use wf_core::event::{Change, Event, EventBody, Link};
-use wf_core::id::{HashId, ItemId};
+use wf_core::id::{CommentId, HashId, ItemId};
+use wf_core::session::{EndReason, Verdict};
 use wf_core::item::ItemView;
 use wf_core::state::State;
 
@@ -69,6 +70,7 @@ pub fn event_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<EventL
     lines
 }
 
+/// One event of `wf log`.
 #[derive(Serialize)]
 pub struct EventView {
     pub id: String,
@@ -77,8 +79,51 @@ pub struct EventView {
     pub actor: String,
     pub at: String,
     pub kind: String,
+    /// The item the event is about, and its title.
+    pub item: Option<String>,
+    pub title: Option<String>,
     pub summary: String,
+    /// How a review or a session came out.
+    pub outcome: Option<OutcomeView>,
     pub verified: bool,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum OutcomeView {
+    Reviewed {
+        /// The commit judged; `None` for work submitted without commits.
+        commit: Option<String>,
+        verdict: VerdictView,
+        /// The text of the comment that says why.
+        because: Option<String>,
+    },
+    SessionEnded {
+        session: String,
+        /// `submitted`, `released`, `failed` and so on.
+        reason: &'static str,
+        /// The commit submitted, for a submission with commits.
+        commit: Option<String>,
+        because: Option<String>,
+    },
+}
+
+#[derive(Clone, Copy, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum VerdictView {
+    Approve,
+    RequestChanges,
+    Escalate,
+}
+
+impl From<Verdict> for VerdictView {
+    fn from(verdict: Verdict) -> Self {
+        match verdict {
+            Verdict::Approve => VerdictView::Approve,
+            Verdict::RequestChanges => VerdictView::RequestChanges,
+            Verdict::Escalate => VerdictView::Escalate,
+        }
+    }
 }
 
 pub fn describe(state: &State, body: &EventBody) -> String {
@@ -142,12 +187,17 @@ pub fn describe(state: &State, body: &EventBody) -> String {
             format!("{} started on {}", started.agent, item(&started.item))
         }
         EventBody::SessionEnded(ended) => format!(
-            "session {} ended: {:?}",
+            "session {} ended: {}",
             ended.session.short(),
-            ended.reason
+            ended.reason.name()
         ),
         EventBody::Reviewed(review) => {
-            format!("{} reviewed: {:?}", item(&review.item), review.verdict)
+            let verdict = match review.verdict {
+                Verdict::Approve => "approved",
+                Verdict::RequestChanges => "changes requested",
+                Verdict::Escalate => "escalated",
+            };
+            format!("{} reviewed: {verdict}", item(&review.item))
         }
         EventBody::Merged(merged) => format!("{} merged as {}", item(&merged.item), merged.commit),
         EventBody::Unknown { tag, .. } => {
@@ -157,7 +207,57 @@ pub fn describe(state: &State, body: &EventBody) -> String {
     }
 }
 
-pub fn event_view(state: &State, event: &Event, verified: bool) -> EventView {
+/// `comments` holds the text of the comments in the log, for the comment that says why.
+pub fn event_view(
+    state: &State,
+    event: &Event,
+    verified: bool,
+    comments: &HashMap<CommentId, String>,
+) -> EventView {
+    let item = state.item_of(event);
+    let because = |comment: Option<CommentId>| comment.and_then(|id| comments.get(&id).cloned());
+    let outcome = match &event.content.body {
+        EventBody::Reviewed(review) => Some(OutcomeView::Reviewed {
+            commit: review.commit.map(|commit| commit.to_string()),
+            verdict: review.verdict.into(),
+            because: because(review.because),
+        }),
+        EventBody::SessionEnded(ended) => Some(OutcomeView::SessionEnded {
+            session: ended.session.to_string(),
+            reason: ended.reason.name(),
+            commit: match ended.reason {
+                EndReason::Submitted { commit } => commit.map(|commit| commit.to_string()),
+                EndReason::Reviewed
+                | EndReason::Supervised
+                | EndReason::Released
+                | EndReason::TimedOut
+                | EndReason::Failed
+                | EndReason::Cancelled
+                | EndReason::Interrupted
+                | EndReason::Diagnosed
+                | EndReason::MachineFault(_) => None,
+            },
+            because: because(ended.because),
+        }),
+        EventBody::Genesis(_)
+        | EventBody::PolicySet(_)
+        | EventBody::AgentDefined(_)
+        | EventBody::AgentRemoved(_)
+        | EventBody::InviteCreated(_)
+        | EventBody::DeviceBound(_)
+        | EventBody::DeviceProfile(_)
+        | EventBody::ForkAnnounced(_)
+        | EventBody::ItemCreated(_)
+        | EventBody::ItemEdited(_)
+        | EventBody::ItemMoved(_)
+        | EventBody::ItemLinked(_)
+        | EventBody::ItemArchived(_)
+        | EventBody::ItemUnarchived(_)
+        | EventBody::Commented(_)
+        | EventBody::SessionStarted(_)
+        | EventBody::Merged(_)
+        | EventBody::Unknown { .. } => None,
+    };
     EventView {
         id: event.id().to_string(),
         seq: event.content.seq,
@@ -165,13 +265,25 @@ pub fn event_view(state: &State, event: &Event, verified: bool) -> EventView {
         actor: state.actor_label(&event.content.actor),
         at: timestamp(event.content.hlc),
         kind: event.content.body.name().to_string(),
+        item: item.map(|id| id.to_base32()),
+        title: item
+            .and_then(|id| state.item(id))
+            .map(|view| view.title().to_string()),
         summary: describe(state, &event.content.body),
+        outcome,
         verified,
     }
 }
 
-#[derive(Serialize)]
-pub struct LogView {
-    pub workforce: String,
-    pub events: Vec<EventView>,
+/// The text of each comment in `events`.
+pub fn comment_texts(events: &[Event]) -> HashMap<CommentId, String> {
+    events
+        .iter()
+        .filter_map(|event| {
+            let EventBody::Commented(comment) = &event.content.body else {
+                return None;
+            };
+            Some((event.id().into(), comment.text.clone()))
+        })
+        .collect()
 }

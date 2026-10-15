@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&events)"
 ---
 {
-  "schema": 7,
+  "schema": 8,
   "data": [
     {
       "id": "nfnj57dtact7pkkcglpbebfpsjvcd3y4uybno3f2566m3nei565a",
@@ -12,7 +12,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:01Z",
       "kind": "Genesis",
+      "item": null,
+      "title": null,
       "summary": "workforce \"demo\"",
+      "outcome": null,
       "verified": true
     },
     {
@@ -22,7 +25,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:03Z",
       "kind": "AgentDefined",
+      "item": null,
+      "title": null,
       "summary": "coder on opencode",
+      "outcome": null,
       "verified": true
     },
     {
@@ -32,7 +38,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:04Z",
       "kind": "ItemCreated",
+      "item": "hnutwd5ld5clspbipg5pel74ikkurid57noe3hrqeqfu5553aj5a",
+      "title": "Pick a hash for event ids",
       "summary": "task \"Pick a hash for event ids\"",
+      "outcome": null,
       "verified": true
     },
     {
@@ -42,7 +51,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:05Z",
       "kind": "ItemCreated",
+      "item": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+      "title": "Implement feed sync",
       "summary": "task \"Implement feed sync\"",
+      "outcome": null,
       "verified": true
     },
     {
@@ -52,7 +64,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:06Z",
       "kind": "ItemCreated",
+      "item": "cb6sbemiktyi34wi5kjxlqmn74vwahoedqwy2qekdpadbjp62p7q",
+      "title": "Write spec",
       "summary": "task \"Write spec\"",
+      "outcome": null,
       "verified": true
     },
     {
@@ -62,7 +77,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:07Z",
       "kind": "ItemEdited",
+      "item": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+      "title": "Implement feed sync",
       "summary": "#gzsd5d priority",
+      "outcome": null,
       "verified": true
     },
     {
@@ -72,7 +90,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:08Z",
       "kind": "ItemLinked",
+      "item": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+      "title": "Implement feed sync",
       "summary": "#gzsd5d depends on #hnutwd",
+      "outcome": null,
       "verified": true
     },
     {
@@ -82,7 +103,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:09Z",
       "kind": "Commented",
+      "item": "gzsd5dq273ovaqpnoxysjn4cpp3fuonxjy3ncifnm7q57aetujfa",
+      "title": "Implement feed sync",
       "summary": "#gzsd5d commented",
+      "outcome": null,
       "verified": true
     },
     {
@@ -92,7 +116,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:10Z",
       "kind": "ItemMoved",
+      "item": "cb6sbemiktyi34wi5kjxlqmn74vwahoedqwy2qekdpadbjp62p7q",
+      "title": "Write spec",
       "summary": "#cb6sbe -> done",
+      "outcome": null,
       "verified": true
     },
     {
@@ -102,7 +129,10 @@ expression: "Envelope::new(&events)"
       "actor": "@ada",
       "at": "1970-01-01T00:00:11Z",
       "kind": "ItemArchived",
+      "item": "cb6sbemiktyi34wi5kjxlqmn74vwahoedqwy2qekdpadbjp62p7q",
+      "title": "Write spec",
       "summary": "#cb6sbe archived",
+      "outcome": null,
       "verified": true
     }
   ]
