@@ -76,12 +76,10 @@ pub(super) fn ansi_text(text: &str) -> Text<'static> {
 /// The place on screen the keys go to, which the accent marks.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum KeysAt {
-    /// The list of the tab: its selection.
+    /// The list of the tab: its selection. The log has none, so nothing marks it.
     List,
     /// A detail: the last part of its breadcrumb.
     Detail,
-    /// The Log tab without a detail opened: its label.
-    Log,
     /// What the footer asks for: its label.
     Footer,
     /// A list to pick from: the option picked.
@@ -103,8 +101,7 @@ impl KeysAt {
             Some(Prompt::Choose(_)) => KeysAt::Choice,
             Some(Prompt::Keys) => KeysAt::Keys,
             None => match (app.tab, app.list_has_keys()) {
-                (Tab::Now | Tab::Items | Tab::Agents, true) => KeysAt::List,
-                (Tab::Log, true) => KeysAt::Log,
+                (Tab::Now | Tab::Items | Tab::Agents | Tab::Log, true) => KeysAt::List,
                 (Tab::Now | Tab::Items | Tab::Agents | Tab::Log, false) => KeysAt::Detail,
             },
         }
@@ -535,20 +532,27 @@ fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
     spans
 }
 
-/// The label of the tab on screen, between ends in the colour behind it, as a highlight has. With
-/// `reverse` that is the colour of its text; without a colour behind it, the ends are spaces.
-fn active_tab(label: String, base: Style) -> Vec<Span<'static>> {
-    let style = Style::from(theme::tab_active());
-    let behind = if style.add_modifier.contains(Modifier::REVERSED) {
-        Some(style.fg.or(base.fg).unwrap_or(Color::Reset))
+/// The label of the tab on screen, between ends in the colour behind it, as a highlight has; dimmed
+/// while the terminal pane is not focused. With `reverse` that is the colour of its text, dimmed
+/// as the text is; without a colour behind it, the ends are spaces.
+fn active_tab(label: String, app: &App) -> Vec<Span<'static>> {
+    let style = Style::from(if app.terminal_focused {
+        theme::tab_active()
     } else {
-        style.bg
+        theme::tab_active_dimmed()
+    });
+    let (behind, ends) = if style.add_modifier.contains(Modifier::REVERSED) {
+        let behind = style.fg.or(app.base.fg).unwrap_or(Color::Reset);
+        let dimmed = style.add_modifier & Modifier::DIM;
+        (Some(behind), Style::new().add_modifier(dimmed))
+    } else {
+        (style.bg, Style::new())
     };
     let label = Span::styled(label, style);
     match behind {
         Some(behind) => {
             let (start, end) = highlight_ends(behind);
-            vec![start, label, end]
+            vec![start.patch_style(ends), label, end.patch_style(ends)]
         }
         None => vec![Span::raw(" "), label, Span::raw(" ")],
     }
@@ -564,15 +568,8 @@ fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab, Rect)> {
             tabs.push(Span::raw(" "));
         }
         let label = format!("{} {}", tab.key(), tab.name());
-        let label = if tab == app.tab && tab == Tab::Log {
-            // The log is the list of its tab: its label has the accent, as a selection would.
-            highlight(
-                vec![Span::raw(label)],
-                Style::from(theme::text_bold()),
-                accent(app, KeysAt::Log),
-            )
-        } else if tab == app.tab {
-            active_tab(label, app.base)
+        let label = if tab == app.tab {
+            active_tab(label, app)
         } else {
             // A space where the active tab has its ends, so the tabs keep their places.
             vec![Span::raw(format!(" {label} ")).themed(theme::text_dimmed())]

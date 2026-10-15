@@ -234,10 +234,11 @@ priority.p1 = "bold yellow"
 | `text_bold` | `bold` | names, titles, headings, markdown bold |
 | `divider` | `dim` | rules, pane separators, the frames of popups |
 | `link` | `ul` | what the pointer is over, in the dashboard |
-| `accent` | `#1e50a0` | the selection, or the log tab, that has the keys; one colour |
+| `accent` | `#1e50a0` | the selection that has the keys; one colour |
 | `accent_dimmed` | `#1e2d4b` | a selection without the keys, or in an unfocused pane; one colour |
 | `on_accent` | `brightwhite` | text on the full accent |
 | `tab_active` | `bold reverse` | the label of the tab on screen |
+| `tab_active_dimmed` | `bold reverse dim` | the label of the tab on screen, in an unfocused pane |
 | `key` | `yellow` | keys to press, in hints |
 | `id` | `cyan` | item ids |
 | `principal`, `agent`, `daemon` | `magenta`, `brightblue`, `green` | who did something; in transcripts, the headers of answers (`agent`) and of prompts from wf or the brief (`daemon`) |

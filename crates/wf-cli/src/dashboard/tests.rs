@@ -1610,9 +1610,9 @@ fn the_active_tab_has_its_ends_in_the_colour_of_its_highlight() {
     app.click(column + 9, row);
     assert_eq!(app.tab, Tab::Items);
     assert_ends(&mut app, 60, 16, "2 Items", Color::Reset);
-    // The log has the accent, as its list would.
+    // The log looks like the others.
     press(&mut app, KeyCode::Char('4'));
-    assert_ends(&mut app, 60, 16, "4 Log", accent());
+    assert_ends(&mut app, 60, 16, "4 Log", Color::Reset);
     // Its ends are part of it.
     let (column, row) = find(&mut app, 60, 16, "▐4 Log▌");
     for end in [column, column + 6] {
@@ -1623,16 +1623,28 @@ fn the_active_tab_has_its_ends_in_the_colour_of_its_highlight() {
 }
 
 #[test]
-fn the_log_tab_and_a_prompt_have_the_accent() {
+fn the_active_tab_dims_while_the_terminal_pane_is_not_focused() {
     let mut app = app();
     press(&mut app, KeyCode::Char('4'));
-    let (column, row) = find(&mut app, 60, 16, "4 Log");
-    assert_eq!(bg_at(&mut app, 60, 16, column, row), Some(accent()));
-    // The filter takes the keys: its label has the accent, and the label of the log keeps the
-    // dimmed accent.
+    let (column, row) = find(&mut app, 60, 16, "▐4 Log▌");
+    let dimmed = |app: &mut App, x| {
+        style_at(app, 60, 16, x, row)
+            .add_modifier
+            .contains(ratatui::style::Modifier::DIM)
+    };
+    assert!(!dimmed(&mut app, column) && !dimmed(&mut app, column + 1));
+    app.terminal_focus(false);
+    // The label and its ends dim together.
+    assert!(dimmed(&mut app, column) && dimmed(&mut app, column + 1));
+    assert!(dimmed(&mut app, column + 6));
+}
+
+#[test]
+fn a_prompt_on_the_log_tab_has_the_accent() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('4'));
     press(&mut app, KeyCode::Char('/'));
     assert_eq!(bg_at(&mut app, 60, 16, 1, 15), Some(accent()));
-    assert_eq!(bg_at(&mut app, 60, 16, column, row), Some(accent_dimmed()));
 }
 
 #[test]

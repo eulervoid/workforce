@@ -27,6 +27,7 @@ pub struct Theme {
     accent_dimmed: Color,
     on_accent: Style,
     tab_active: Style,
+    tab_active_dimmed: Style,
     key: Style,
     id: Style,
     principal: Style,
@@ -72,6 +73,7 @@ impl Default for Theme {
             accent_dimmed: Color::Rgb(RgbColor(30, 45, 75)),
             on_accent: fg(AnsiColor::BrightWhite),
             tab_active: Style::new().bold().invert(),
+            tab_active_dimmed: Style::new().bold().invert().dimmed(),
             key: fg(AnsiColor::Yellow),
             id: fg(AnsiColor::Cyan),
             principal: fg(AnsiColor::Magenta),
@@ -116,6 +118,9 @@ impl Theme {
             accent_dimmed: config.accent_dimmed.unwrap_or(default.accent_dimmed),
             on_accent: config.on_accent.unwrap_or(default.on_accent),
             tab_active: config.tab_active.unwrap_or(default.tab_active),
+            tab_active_dimmed: config
+                .tab_active_dimmed
+                .unwrap_or(default.tab_active_dimmed),
             key: config.key.unwrap_or(default.key),
             id: config.id.unwrap_or(default.id),
             principal: config.principal.unwrap_or(default.principal),
@@ -223,6 +228,11 @@ pub fn on_accent() -> Style {
 /// The label of the tab on screen.
 pub fn tab_active() -> Style {
     get().tab_active
+}
+
+/// The label of the tab on screen, dimmed: while the terminal pane is not focused.
+pub fn tab_active_dimmed() -> Style {
+    get().tab_active_dimmed
 }
 
 /// A key to press.
