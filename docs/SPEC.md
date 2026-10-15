@@ -1,1497 +1,1285 @@
-# workforce (`wf`): spec, draft v0
+# workforce (`wf`): spec
 
-> A peer-to-peer, CLI-first coordination layer for coding agents and the humans who work with them.
+> A peer-to-peer, CLI-first coordination layer for coding agents and the principals they work for.
 
-Status: draft. wf grows through four **stages**, each trusting more parties than the one before.
-The current target is **stage 1**; everything marked *later* is designed for, but not built.
+This is the design of wf: its concepts, formats, rules and the reasons for them. It describes what
+is built; what is not yet built is marked **Planned** with its milestone (section 18). How to use wf
+is in the guides (`docs/guide/`), which this spec does not repeat.
 
 ## 1. Stages
 
-| Stage | Who | Machines | Milestones |
+wf grows through four stages, each trusting more parties than the one before.
+
+| Stage | Who | Machines | Status |
 |---|---|---|---|
-| **1** | single user | a single machine | M0, M2, M2.1 built; M2.2 makes it fit for daily use |
-| **2** | single user | several trusted machines | M1 (sync, invites, fork) built; M3 (sessions across machines) next |
+| **1** | one principal | one machine | built (M0, M2 to M2.3) |
+| **2** | one principal | several trusted machines | sync, invites and fork built (M1); sessions across machines next (M3) |
 | **3** | a trusted team | several trusted machines | M5 |
 | **4** | untrusted participants | several, possibly untrusted machines | M7, a possible end goal |
 
-Stage 4 is far off and may never happen. Designs keep it in mind, so that they do not rule it out,
-but it does not drive them: until then members and their machines are trusted (section 5).
+Stage 4 may never happen. Designs keep it in mind so they do not rule it out, but until then
+members and their machines are trusted (section 5).
 
-### Stage 1: single user, single machine (current)
-One developer with agents on their own machine, working on a real project every day.
+* **Stage 1.** One developer with agents on their own machine, every day. Nothing to run besides
+  the daemon, no network. A session that fails, stalls or is interrupted never leaves an item stuck
+  without saying so. A daemon restart costs no work, and no agent context where the harness can
+  resume its sessions.
+* **Stage 2.** A laptop (sleeps, roams), a cloud VM (always on), a desktop (GPU, behind a NAT), all
+  of one principal, each running agents. No port forwarding or VPN; the laptop is often offline and
+  merges back when it reconnects. Work goes to the machine that fits, and two agents never silently
+  take the same item.
+* **Stage 3.** Every change traces back to a principal; review by another principal is a useful
+  default; lots of asynchronous "why did we decide X?"; not every transcript is for everyone.
+* **Stage 4.** Donated agent work needs revocation, rate limits, sandboxing and probation;
+  governance is advisory; prompt injection through item text is a real risk on donor machines.
 
-* Nothing to run besides `wf daemon`; no network is needed.
-* Off-path cases are handled visibly: a session that fails, stalls or is interrupted never leaves an
-  item stuck without saying so.
-* A daemon restart (for example after rebuilding wf) costs no work, and no agent context with an
-  agent that can resume its sessions.
-
-### Stage 2: single user, several trusted machines
-A laptop (sleeps, roams), a cloud VM (always on), a home desktop (GPU, behind a NAT). Each runs agents.
-
-* Machines sit behind different NATs with changing IPs. No port forwarding, no VPN.
-* The laptop is often offline. Work continues and merges back when it reconnects.
-* All machines are the same human. One principal with several device keys.
-* Work should go to the machine that fits (GPU, OS, harness, model).
-* Two agents should not silently pick up the same item.
-
-### Stage 3: a trusted team, several trusted machines
-* Every change traces back to a principal.
-* Review by a different principal than the author is a useful default.
-* Async, multi-timezone: lots of "why did we decide X?" lookups.
-* Not every transcript is meant for everyone.
-
-### Stage 4: untrusted participants, possibly untrusted machines
-* Donated agent work: needs revocation, rate limits, sandboxing, probation.
-* Donors can take part in discussions. Governance is advisory.
-* Prompt injection through issue text is a real risk on donor machines.
-
-### Cross-cutting
-1. The only thing all peers must agree on is **project state**: items, claims, comments, decisions, membership.
-2. Authorization data replicates with the project and is checkable offline.
-3. "No external infrastructure" means none the user has to run. Public relays and discovery are
-   defaults and can be swapped.
-4. Someone must be online to hold data. This role is the **anchor**. It is named, never required.
+Across all stages: the only thing peers must agree on is **project state** (items, sessions,
+comments, membership, policy). Authorization replicates with it and is checkable offline. "No
+infrastructure" means none the principal has to run: public relays and discovery are defaults that
+can be swapped. Someone must be online to hold data; that role is the **anchor** (Planned, M3),
+named, never required.
 
 ## 2. Properties
 
 | # | Property |
 |---|---|
-| P1 | Zero ops: `init`, `invite`, `join`, work. No server to deploy. |
-| P2 | Local-first: every peer has a full replica of what it may read; all reads are local. |
+| P1 | Zero ops: `init`, `invite`, `join`, work. No server. |
+| P2 | Local-first: every peer has a full replica; all reads are local. |
 | P3 | Event-sourced: truth is an append-only log of signed events; state is a deterministic fold. |
 | P4 | Authorization is data in the log, verifiable offline. |
 | P5 | Principals own delegated device keys; every action resolves to a principal. |
-| P6 | Deterministic conflict resolution, with an optional coordinator (dispatcher). |
-| P7 | Git first; VCS access behind a trait so another VCS can be added later. |
-| P8 | Harness-agnostic through ACP, with a CLI fallback. |
-| P9 | **Forkable:** any member can start a new workforce from a frozen point of an old one. |
-| P10 | Indirect communication: agents coordinate through shared artifacts, not messages. |
-| P11 | **Derivable:** all workforce state is derivable from the log plus the repo. No daemon-only state. After compaction, the log means the kept events plus everything above the frontier. |
+| P6 | Deterministic conflict resolution, with an optional coordinator (Planned: the anchor). |
+| P7 | Git first, behind one crate, so another VCS can be added later. |
+| P8 | Harness-agnostic through ACP. |
+| P9 | Forkable: any member can start a new workforce from a frozen point of an old one. |
+| P10 | Indirect communication: agents coordinate through items and comments, not messages. |
+| P11 | Derivable: all workforce state is derivable from the log plus the repository. What a machine keeps besides (transcripts, check passes) is local and never needed by another. |
 
 ## 3. Non-goals for v1
-* Revocation of access (use `wf fork` instead).
-* Voting or binding governance (advisory only).
-* A recovery key (fork instead).
-* jj support (kept in mind, see 9).
-* Peer-to-peer repositories (central origin first).
-* A web UI.
+
+Revocation (fork instead), a recovery key (fork instead), voting or binding governance, jj support
+(kept possible, section 10), peer-to-peer repositories (a central origin first), a web UI.
 
 ## 4. Architecture
 
 ```
-wf CLI (humans, agents)  ──unix socket──►  wf daemon (one per machine)
-                                            ├─ event store (per-author feeds, redb)
-                                            ├─ state (in memory, folded from the log, snapshotted to redb)
-                                            ├─ policy engine (validates events)
-                                            ├─ git adapter (worktrees, origin observer)
-                                            ├─ harness runner (ACP client, wf MCP server)
-                                            └─ iroh endpoint
+wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine, serves every workforce)
+                                            ├─ replica per workforce: redb event store + folded State
+                                            ├─ wf-core: admission, fold, policy, lifecycle (pure)
+                                            ├─ runner: dispatcher, ACP sessions, merge task, checks
+                                            ├─ permission deciders, notifications
+                                            ├─ wf-vcs: worktrees, rebase, merge (the only crate that runs git)
+                                            └─ iroh endpoint, started once a second device exists
                                                  ├─ wf/join/1   invites
                                                  ├─ wf/sync/1   feed sync
-                                                 ├─ iroh-gossip announce heads, presence
-                                                 └─ iroh-blobs  (later) bundles, transcripts
+                                                 └─ iroh-gossip heads
 ```
 
-Without a daemon, `wf sync` does a one-shot sync. Any always-on daemon can act as the anchor.
+| Crate | Role |
+|---|---|
+| `wf-core` | events, encoding, identity, admission, fold, items, policy, sessions, lifecycle, recovery, briefs. Pure: no IO, no async, no clock or randomness except through parameters |
+| `wf-store` | the redb event store, snapshots, the `Replica` (store plus state) |
+| `wf-net` | sync, join and gossip over generic streams and a `SyncLog` trait, so convergence is tested in memory; iroh only carries them |
+| `wf-vcs` | git |
+| `wf-harness` | the ACP client |
+| `wf-daemon` | socket, runner, machine config, sandbox, deciders, network |
+| `wf-cli` | the `wf` binary: commands, views, the dashboard |
 
-The log and its fold do not depend on sync or the network: `wf-core` is pure and `wf-net` only carries
-the log. Sync can therefore be a cargo feature; without it, `wf` is a local tool for one machine with
-the same store, log and item model.
+**The daemon owns the store when it runs.** redb is single-process. The CLI reads and writes through
+a `Workspace`, which asks the daemon or, when none runs, opens the store itself. In the daemon one
+storage task owns each store and takes writes over a channel. Agents and the dashboard need the
+daemon. The CLI fetches the whole folded `State` per command, the dashboard twice a second. *Planned:*
+when that grows too slow, an `events_since` call with a local fold cache, or a subscription.
 
-### Storage
-* **The event log is the only durable truth.** It is a key-value workload (append, get by `EventId`,
-  range by `(author, seq)`, heads, pending) and lives in **redb**: pure Rust, one file, copy-on-write
-  B+trees, one writer with concurrent MVCC readers, stable file format.
-* **State is folded into in-memory Rust structs** by `wf-core`. Queries are typed Rust, not SQL. Changing
-  the state shape needs no migration, only a refold.
-* **Snapshots:** the folded state is serialized to redb, with the number of events it has applied. Startup
-  loads the latest snapshot and applies newer events. Large bodies (comments) stay in the log
-  and are loaded on demand by `EventId`.
-* **Derived indexes** (search, M4) are rebuildable and never a second source of truth.
-* redb is single-process. The daemon owns the store; the CLI talks to the daemon and opens the store
-  directly only when no daemon runs. In the daemon, one storage task owns the database and receives
-  writes over a channel.
-* Access goes through a narrow `EventStore` trait so the backend (fjall, SQLite) can be swapped in one module.
-* Debugging without SQL: `wf export --json` plus `jq`, or load the export into DuckDB.
+### Files
+
+`<data>` is `$XDG_DATA_HOME/workforce` (`~/.local/share/workforce`); `<wf>` is `<data>/<workforce id>`.
+
+| Path | What |
+|---|---|
+| `<data>/keys/device.key` | the device key, one per machine (hex, 0600) |
+| `<data>/keys/principal.token` | the principal token (section 5) |
+| `<data>/keys/device-ssh` | the device key as an OpenSSH key, for signing merges |
+| `<data>/bin/wf` | the daemon's copy of its own binary, first on the agents' `PATH` |
+| `<data>/daemon.pid`, `<data>/daemon.log` | the daemon (`WF_LOG` sets the `tracing` filter) |
+| `$XDG_RUNTIME_DIR/workforce/daemon.sock` | the socket (else `<data>/daemon.sock`), 0600 in a 0700 directory |
+| `<wf>/principal.key` | the principal key for this workforce |
+| `<wf>/store.redb` | the event store |
+| `<wf>/repository` | where the main checkout is; every `wf` command run in it refreshes this |
+| `<wf>/worktrees/` | worktrees of items and checkouts of sessions (section 10) |
+| `<wf>/transcripts/` | ACP transcripts and resume records of sessions (local, never synced) |
+| `<wf>/check/`, `check-logs/`, `checks-passed/` | the check worktree, logs, passes |
+| `<wf>/sandbox/`, `judges/`, `announced.json` | sandbox profiles, agent deciders, notified inbox entries |
+| `$XDG_CONFIG_HOME/workforce/config.toml` | the machine config (section 13) |
+| `.workforce.toml` in the repository | only the workforce id, committed so clones find it |
+
+### Socket
+
+Length-prefixed postcard frames (u32 big-endian length, at most 32 MiB). The client sends
+`Hello{version}` and a `Credential{token}`; the daemon answers `Ready{version, device, caller}`, or
+refuses. The protocol version must match exactly: agents run the daemon's own copy of `wf`
+(`<data>/bin/wf`), so rebuilding wf never changes what running agents speak. Requests name a
+workforce and a call: read the state, events or a page of the log; author a body; sync now; fork;
+join; start, end or stop a session; list and answer permission requests; machine faults.
 
 ## 5. Identity and authority
 
-### Concepts
-
-| Concept | Lifetime | Answers | Address |
+| Concept | Lifetime | Answers | Shown as |
 |---|---|---|---|
-| **Principal** | permanent | who is accountable (a human) | `@ada` |
-| **Agent** | long-lived profile | what kind of worker: harness, model, capabilities, lanes | `@ada/coder` |
-| **Session** | minutes to hours | who is working on which item right now, where, in which worktree | `@ada/coder/s4k2` |
-| **Device** | long-lived infrastructure | where things run; mostly invisible | not mentionable |
+| **Principal** | permanent | who is accountable | `@ada` |
+| **Agent** | long-lived definition | what kind of worker: harness, model, capabilities, lanes, autonomy | `@ada/coder` |
+| **Session** | minutes to hours | which agent works on which item, where | `@ada/coder/s4k2` |
+| **Device** | long-lived | where things run; mostly invisible | `<handle>@<device name>` in signatures |
 
-**Principal always means the accountable person**, and nothing else: who owns the keys, whom agents
-act for, who decides a `principal` step of a review or recovery level, whom blockers escalate to.
-Stages 1 and 2 have one principal; a team (stage 3) has several. Code, CLI and docs say *principal*
-for this concept, never *human*, *user* or *person*; a step that waits on a principal names no
-particular one until stage 3, when it may (`{ principal = "@ada" }`).
+**Principal always means the accountable person**: who owns the keys, whom agents act for, who
+takes a `principal` step of a review or recovery level, whom blockers escalate to. Code, CLI and docs
+say *principal*, never human, user or person. Stages 1 and 2 have one principal.
 
-* **Principal key** (ed25519): one per human. Signs authority events: owner actions, invites,
-  device bindings, policy. Kept on disk for M0 (`$XDG_DATA_HOME/workforce/keys/`); a 1Password or
-  ssh-agent hook comes later.
-* **Device key** (ed25519): one per machine. Signs all ordinary events. It is the iroh `EndpointId`.
-  Never copied between machines.
-* **Agents have no keys.** The device signs, and every event carries an `actor`:
+* **Principal key** (ed25519): signs authority statements (genesis, policy, invites, fork
+  announcements). One per workforce, at `<wf>/principal.key`: `wf init` generates it, `wf fork`
+  copies it or, with `--new-principal`, makes a new one. A joined device never has it, so it cannot
+  invite, set policy or fork. *Planned:* a key provider (OS keychain, 1Password, ssh-agent) behind
+  the one function that loads it.
+* **Device key** (ed25519): one per machine, never copied. Signs every event and is the iroh
+  `EndpointId`.
+* **Agents have no keys.** The device signs; every event names an `actor`:
 
 ```rust
 enum Actor {
     Principal(PrincipalKey),
-    Agent { agent: AgentId, session: SessionId },
-    Daemon(PrincipalKey),     // what the daemon of a principal's device does by itself
+    Agent { agent: AgentId, session: SessionId },   // AgentId = (principal, name)
+    Daemon(PrincipalKey),                            // what a daemon does by itself, for its principal
 }
 ```
 
-  The device is trusted to state the actor truthfully (members are trusted in v1); on the device, the
-  daemon decides it from the connection, not from what a client says (below). Attribution chain:
-  principal → agent → session → device signature. Actors are shown as `@ada`, `@ada/coder` and
-  `@daemon`.
-* **Workforce id**: BLAKE3 hash of the genesis event. Identifies, but is not a capability, so it may be
-  committed to the repo.
+Attribution: principal → agent → session → device signature. Actors show as `@ada`, `@ada/coder`
+and `@daemon`.
 
-### Agents
-Defined once per principal, in the log, and runnable on any device that hosts them.
-
-```toml
-# AgentDefined, signed by a device of the owning principal
-[agents.coder]
-harness = "claude-code"
-model = "..."
-capabilities = ["rust", "typescript"]
-lanes = ["default"]
-start = "manual"          # auto: the dispatcher starts sessions; manual: only `wf session start`
-nudges = 3                # "continue" prompts in a row without a new commit before giving up
-park_timeout = "2h"       # how long a session waits on a blocker or dependency before it ends
-max_duration = "4h"       # optional limit per session
-permissions = "allow"     # allow | ask | deny: answers to the harness's permission requests; a machine
-                          # that runs agents without a sandbox asks instead of allowing
-instructions = "..."      # optional: told in every brief, before the item (how strictly to review, ...)
-```
-
-* Named by role, not by harness, so the harness can change later.
-* Names are unique per principal and immutable in v1, so mentions keep resolving. The other fields can
-  change: a new `AgentDefined` for an existing name replaces the definition (last writer wins).
-* Agent definitions are work configuration, not authority, so a device key may sign them. Agent actors
-  cannot write them, so an agent cannot raise its own autonomy.
-* An agent whose `lanes` include `supervision` is a **supervisor**: it resolves the blockers of other
-  agents or escalates them to the principal (section 10). It has no other rights; lanes route, members are
-  trusted.
-
-### Devices
-A device publishes a mutable, device-signed `DeviceProfile`:
-
-```toml
-name = "desktop"
-hardware = ["gpu", "os:linux"]
-max_sessions = 3          # total concurrent sessions (default 1)
-
-[agents.coder]            # agents this device hosts
-max_sessions = 2
-[agents.reviewer]
-max_sessions = 1
-```
-
-Device names only appear in `wf status`, `wf device list` and debugging.
-
-### Sessions
-A **session** is one attempt by one agent on one device at **exactly one item**. It is the unit that
-holds a claim. Items are sized for a session: steps inside one are a checklist in its body, and work is
-split into several items only when the parts can run in parallel, need a different review level, or
-need different capabilities.
-
-* `SessionStarted{agent, item, role}` (device-signed), `role` = `Work`, `Review{commit}`, `Supervise`
-  or `Diagnose` (a step of a recovery level, M2.2).
-  Its hash prefix is the session id. `SessionEnded{reason, because}`, reason = `Submitted{commit} |
-  Reviewed | Supervised | Released | TimedOut | Failed | Cancelled | Interrupted | Diagnosed`;
-  `because` names the comment that says why (the agent's note, or how the session failed), written
-  just before.
-* One branch per **item** (`wf/<item>`, section 9) in one worktree. A session is an attempt: the next
-  session on the item (after a release, a crash or requested changes) continues the branch.
-* **Ending moves the item first.** `after_end(session, reason)` in `wf-core` says what happens to the
-  item (back to open, to the review state, merged and done, or nothing), and the daemon does it
-  while the session still holds the item, then writes `SessionEnded`. Otherwise the dispatcher would see
-  an open item without a live session in between and start another. An item that is no longer being
-  worked on is not reopened by a stale end. The daemon writes such a move as `ItemMoved{by_session}`
-  naming the session, so the move is attributed to the start or end that caused it. The same holds for
-  the move to the active state when a work session starts.
-* A work session ends when the agent submits (`wf work submit`), releases (`wf work release`), or runs out
-  of nudges or time. Waiting on a **blocker** (an open blocking comment, section 10, such as its own
-  question) or on a dependency **parks** it: the harness keeps its conversation and continues once the item
-  is ready again, or ends after the agent's `park_timeout`.
-* A supervise session ends when the supervisor resolves the blocker it was started for, or escalates it.
-* Context carries over within a session in the conversation, and across sessions through comments.
-* **Liveness:** on one machine (M2) a session is live from `SessionStarted` until `SessionEnded`. A
-  daemon that stops leaves its sessions live: it cancels their turns and closes the harnesses. The next
-  daemon resumes each in the agent's own conversation (ACP `session/resume`, or `session/load` with the
-  replayed history left out of the transcript), by the id the agent gave the session, which the daemon
-  keeps beside the transcript. A session that was working is told that wf restarted and what others
-  wrote on its item since its last prompt; a parked one parks again. When the agent can do neither,
-  the session ends `Interrupted`, no failure of the attempt. Across devices (M3) liveness is computed
-  at query time from a lease: a session without a renewal within the lease counts as dead, even without
-  `SessionEnded` (crash, sleeping laptop). Its claim expires and the item becomes assignable again,
-  possibly to the same agent on another device.
-* The claim belongs to the earliest live work session of an item by `(hlc, EventId)`; a later one
-  cancels itself (M3: two daemons can only start sessions on one item at the same time across devices).
-  On one machine `wf session start` refuses an item that has a live work session.
-* Agents run `wf` with `WF_SESSION`, `WF_SESSION_TOKEN` and `WF_WORKFORCE` set by the runner, so
-  their events carry `Actor::Agent{agent, session}` and they address the workforce of the session,
-  whatever the committed `.workforce.toml` of their checkout says.
-* Location transparency stops at uncommitted work. Reassignment carries over only what was pushed, which
-  is why agents commit small.
-* wf session ids are separate from ACP session ids; the ACP id is a local detail of the runner.
+* **Workforce id**: the hash of the genesis event. It identifies but grants nothing, so it is
+  committed in `.workforce.toml`.
 
 ### Who the daemon acts for
-Everything written on a machine is signed by its daemon, which authors it for whom the connection to
-its socket acts for. A request never names an actor; the daemon decides it once per connection, from
-the token the client presents first:
 
-* **A session token** acts as that session's agent, in the session's workforce, and nothing else. The
-  runner draws a new one each time it starts the session's harness (`WF_SESSION_TOKEN`, next to
-  `WF_SESSION`) and forgets it when the harness is gone. What the connection authors carries
-  `Actor::Agent{agent, session}`; it may read, author, sync and end its own session, and nothing that is
-  the principal's: answer permission requests, start or stop sessions, join, follow or fork.
-* **The principal token** acts as the principal of the machine's device. The daemon draws it when it
-  starts and writes it to `keys/principal.token` in wf's data directory (mode 0600), where the agent
-  sandbox denies reading it, as it denies the keys. `wf` presents it when it runs outside a session.
-* **No token, or one the daemon did not hand out,** is refused.
+A request never names its actor; the daemon decides it once per connection from the token the client
+presents:
 
-What the agent may then author is for wf-core to say (`check_actor`, the guards below): the daemon
-only makes sure the actor is the true one.
+* **A session token** acts as that session's agent, in the session's workforce only. The runner draws
+  a fresh one each time it starts the session's harness (`WF_SESSION_TOKEN`, beside `WF_SESSION` and
+  `WF_WORKFORCE`) and revokes it when the harness exits. It may read, author, sync and end its own
+  session: nothing that is the principal's (answer permission requests, start or stop sessions,
+  join, fork).
+* **The principal token** acts as the principal of the machine's device. The daemon draws it at every
+  start and writes it to `<data>/keys/principal.token` (0600), which the agent sandbox cannot read.
+  `wf` presents it outside a session.
+* No token, or an unknown one, is refused.
 
-Decision: a principal token the sandbox keeps from agents, not peer credentials and the session's
-process tree. The peer's uid is the same for the principal and the agents, and a pid only says where a
-process started: a process can leave its session's tree (`setsid`, a double fork, `launchd`), a pid can
-be reused, and walking the tree is code of its own for each OS. The token puts the boundary where the
-keys already have it, in the sandbox: an agent that runs without one can read the principal token,
-as it can read the principal key.
+What the actor may then author is for `wf-core` to say (guards, below). Decision: a token the
+sandbox keeps from agents, not peer credentials or process trees. The uid is the same for principal
+and agents, and a pid only says where a process started (`setsid`, double forks and pid reuse defeat
+it). The token puts the boundary where the keys already have it: in the sandbox. An agent without
+one can read the token, as it can read the keys.
 
-### Roles (v1)
+Without a daemon the CLI opens the store itself and takes the actor from `WF_SESSION`, unchecked.
+
+### Roles and guards
+
 | Role | Can do |
 |---|---|
-| `owner` | everything: invites, policy, `ForkAnnounced`, naming other owners |
-| `member` | items, claims, comments, reviews, decisions |
+| `owner` | everything, including policy and fork announcements |
+| `member` | items, comments, sessions, reviews, invites of their own devices |
 
-Agent actors act for their principal with the member's rights, minus a few **guards** (authoring checks
-against mistakes and shortcuts; as the daemon decides the actor, they also hold against an agent in its
-sandbox, though not against members): a session cannot resolve a blocker it wrote, cannot lower
-the review level of an item its agent worked on, cannot move its own item to a done state (it submits),
-and cannot write `AgentDefined` or authority bodies. A reviewer or supervisor agent never worked on the
-item it reviews or supervises.
+The founder (named in genesis) is the only owner. Membership comes from genesis seeds only; devices
+are added by binding (section 14). Agents act for their principal with a member's rights, minus
+**guards**, authoring checks against mistakes and shortcuts. Because the daemon decides the actor,
+they hold against an agent in its sandbox, though not against members. An agent cannot:
 
-Hard rule: `policy.*`, `invite.*` and `owner.*` events are valid only when signed by a **principal key**
-(owner principal where the role requires it). A device binding carries a proof from a principal-signed
-invite instead (section 14). No device key, so no agent, can create them on its own.
+* write authority or configuration: `Genesis`, `PolicySet`, `InviteCreated`, `DeviceBound`,
+  `ForkAnnounced`, `AgentDefined`, `AgentRemoved` (so it cannot raise its own autonomy);
+* start a session, end another session, or write `Merged`;
+* resolve a blocker its own session wrote;
+* lower the review level of an item its agent worked on (a supervisor may), or change a recovery
+  level;
+* move its item to a done state (it submits);
+* give a verdict, unless it is the review session of that commit and its agent never worked on the
+  item, or comment on a step from a review session.
 
-The founder (named in genesis) holds `owner` and loses it only by explicitly giving it away.
-Membership only grows in v1, so validation is: *was the author a member at any causally earlier point?*
-That answer is stable regardless of arrival order.
+A principal cannot `Escalate` (it decides instead).
 
-### Anchor
-The owner may designate one device as anchor. It gets `dispatch` only. A compromised anchor can reorder
-assignments, not change policy or roles.
+**Planned (M5):** member invites (`MemberJoined`), more owners (`OwnerAdded`, `wf owner add|transfer`).
+Membership then still only grows, so "was the author a member at a causally earlier point?" stays
+independent of arrival order.
+
+**Planned (M3): anchor.** An owner may designate one device as anchor. It may only assign work, so a
+compromised anchor can reorder assignments, not change policy or roles.
 
 ## 6. Event log
 
-Each device writes an append-only feed. Events also name causal dependencies.
+Each device writes an append-only, gapless feed; events also name what their author had seen.
 
 ```rust
-struct Event {
-    v: u16,
-    workforce: Hash,
+struct Event { content: EventContent, sig: Signature }   // device signature
+struct EventContent {
+    v: u16,                          // 1
+    workforce: Option<WorkforceId>,  // None only in genesis
     author: DeviceKey,
-    actor: Actor,            // principal, agent session or daemon acting through this device
-    seq: u64,                // per author, gapless, starting at 1
-    prev: Option<EventId>,   // author's previous event
-    seen: Vec<EventRef>,     // heads seen when writing, with author and seq
-    hlc: Hlc,                // tie-breaks only, never authority
+    actor: Actor,
+    seq: u64,                        // per author, from 1
+    prev: Option<EventId>,           // the author's previous event; None exactly when seq == 1
+    deps: Vec<EventId>,              // heads seen when writing, sorted, deduplicated
+    hlc: Hlc,                        // wall_ms: u64, counter: u32; tie-breaks only, never authority
     body: EventBody,
-    sig: Signature,
 }
-// EventId = blake3(canonical encoding of everything incl. sig)
+// EventId = BLAKE3 of the encoded Event, signature included
 ```
 
-* **Encoding:** canonical postcard (deterministic, compact). Signature covers the encoding without `sig`. See *Encoding and data format* below for the decision and the exact layout.
-* **Sync:** exchange version vectors `{author -> max_seq}`, stream missing ranges, then fetch missing
-  parents by id until nothing is missing. Below a peer's compaction frontier only kept events are sent.
-* **Equivocation:** two events with the same `(author, seq)` are proof of misbehavior, or of a machine
-  restored from a snapshot. Both branches are admitted, stored and relayed, and the fold applies both, so
-  peers converge whatever they saw first. The device is flagged; a device that sees its own key write an
-  event it did not write stops authoring.
-* **Unknown event types** are stored, relayed, and ignored by the fold, so newer peers can add types.
-* **Fold order:** the causal order from `prev` and `seen`, ties broken by `(hlc, EventId)`.
-* `seen` is about events, not items: it records what the author had seen. Relations between items
-  (`depends_on`, `supersedes`) are item links in event bodies.
+* `hlc` is greater than that of `prev` and every dep, so `(hlc, EventId)` extends causal order.
+* `deps` records events, not item relations: those (`depends_on`, `supersedes`) are links in bodies.
+* **Unknown body tags** are stored, relayed and ignored by the fold, so newer peers can add bodies.
+* **Equivocation:** two events with the same `(author, seq)` prove misbehaviour, or a machine
+  restored from a backup. Both are admitted, stored, relayed and folded, so peers converge whatever
+  they saw first; the device is flagged. A device whose own feed is flagged refuses to author.
 
-### Event bodies (v1)
-| Group | Bodies | Signed by |
-|---|---|---|
-| Authority | `Genesis`, `InviteCreated`, `MemberJoined`, `PolicySet`, `OwnerAdded`, `ForkAnnounced` | principal key (carried in a device feed) |
-| Binding | `DeviceBound` | invite key proof, the new device's first event |
-| Identity | `AgentDefined`, `DeviceProfile` | device |
-| Items | `ItemCreated`, `ItemEdited`, `ItemMoved`, `ItemLinked`, `ItemArchived`, `ItemUnarchived`, `Comment` | device |
-| Work | `SessionStarted`, `SessionEnded`, `Review`, `Merged` (M2); `Assigned`, `Claim`, `Heartbeat` (M3) | device (`Assigned` by the anchor) |
+### Encoding: postcard
 
-Decisions are an item type, not a separate event family. Questions, requested changes and reports are
-comments (section 10).
+Event ids hash the encoding and signatures cover it, so one value must have exactly one byte string,
+stable across releases, and decode fast (a 100k-event snapshot decodes in about 40 ms). We use
+**postcard 1.x**, all of it in `wf-core::encoding`.
 
-### Encoding and data format
-
-#### Decision: postcard
-Event ids are the hash of the encoded event and signatures cover the encoded content, so the encoding
-must give one value exactly one byte string, stay stable across releases, and be cheap to decode (a
-snapshot of 100k events decodes in about 40 ms). We use **postcard** 1.x (a serde binary format with a
-documented wire format).
-
-| Alternative | Why not (for now) |
+| Alternative | Why not |
 |---|---|
-| Deterministic CBOR / DAG-CBOR | The strongest alternative: a standard, self-describing format with implementations in every language, and what AT Protocol (Bluesky) uses for content-addressed, signed repository data. Larger and slower to decode, and determinism needs a strict profile. Choose it if non-Rust clients or third-party readers of the log appear. |
-| bincode | Similar speed, but uncertain maintenance and a wire format that changed between major versions. |
-| Protobuf, Cap'n Proto | Not canonical by default; adds a schema toolchain and code generation for a Rust-only system. |
-| JSON | Not canonical without extra rules (JCS), bulky, needs base64 for hashes and keys. Used only for `--json` output. |
+| Deterministic CBOR / DAG-CBOR | The strongest one: standard, self-describing, what AT Protocol uses for signed data. Larger, slower, and needs a strict profile. Choose it if non-Rust readers of the log appear. |
+| bincode | Uncertain maintenance; its wire format changed between majors. |
+| Protobuf, Cap'n Proto | Not canonical by default; a schema toolchain for a Rust-only system. |
+| JSON | Not canonical without JCS; bulky. Used only for `--json` and export. |
 
-Consequences, accepted:
-* Postcard is not self-describing and struct field order is part of the format. Any layout change
-  changes every event id, so layout is pinned by golden tests and changes go through the envelope
-  version `v`.
-* Because a decoder cannot skip a variant it does not know, event bodies are wrapped as
-  `(tag, payload)` (below), which is what lets peers relay bodies from newer versions.
-* The decoder rejects trailing bytes but does not require minimal varints. Ids are always recomputed by
-  re-encoding the decoded value, never taken from received bytes, so this is harmless today. A relay
-  that trusts received bytes would need a stricter decoder.
-* All encoding lives in one module (`wf-core::encoding`), so replacing the format is a contained
-  change, but it must happen before sync ships (M1): it changes every event id.
+Consequences: postcard is not self-describing and field order is part of the format, pinned by
+golden tests. A decoder cannot skip an unknown variant, so bodies are wrapped as `(tag, payload)`.
+**A body whose layout changes gets a new tag**; the old tag stays decodable, and a payload that lacks
+its tag's fields is rejected, so one value keeps one encoding. Ids are always recomputed by
+re-encoding, never taken from received bytes (the decoder does not insist on minimal varints).
 
-#### Primitives
 | Type | Encoding |
 |---|---|
-| integers | postcard varints (`u16`, `u32`, `u64`); `seq` and `Hlc` fields included |
-| strings, byte strings | varint length, then bytes |
-| `Option<T>` | one byte `0` or `1`, then `T` |
-| enums | varint variant index, then fields. Variant order is part of the format: append only |
-| `Vec<T>`, `BTreeMap`, `BTreeSet` | varint length, then elements; maps and sets in key order. Hash maps are never serialized |
-| ids (`EventId`, `WorkforceId`, `ItemId`, `SessionId`) | 32-byte BLAKE3 hash, written as a length-prefixed byte string (`0x20` + 32 bytes). Shown as lowercase base32 without padding |
-| `PrincipalKey`, `DeviceKey` | 32 raw bytes, length-prefixed, kept as bytes without validating the curve point on decode. A key that is not a point never verifies a signature |
-| `Signature` | 64 raw bytes, **no** length prefix (ed25519, deterministic) |
-| names (`Handle`, `AgentName`, `TypeName`, `StateName`, `LaneName`, `HarnessName`, `Label`, `Requirement`) | strings, validated on decode: lowercase `a-z 0-9 - _` (labels and requirements also allow `:` and `.`), starting with a letter or digit, at most 64 characters |
-| `Hlc` | `wall_ms: u64`, `counter: u32` |
-| `Priority` | enum `P0..P3` |
+| integers | varints |
+| strings, bytes, `Vec`, `BTreeMap`, `BTreeSet` | varint length, then elements; maps and sets in key order; hash maps are never encoded |
+| `Option<T>` | `0` or `1`, then `T` |
+| enums | varint variant index, then fields; variants are append-only |
+| ids (`EventId`, `WorkforceId`, `ItemId`, `SessionId`, `CommentId`) | 32-byte BLAKE3 hash, length-prefixed; shown as lowercase base32 |
+| `PrincipalKey`, `DeviceKey` | 32 bytes, length-prefixed, not checked as curve points (a bad point never verifies) |
+| `Signature` | 64 bytes, no prefix |
+| `Duration` | `(secs: u64, nanos: u32)` |
+| `CommitId` | `Git(oid)`: variant 0, then the 20-byte oid, length-prefixed |
+| names (`Handle`, `AgentName`, `TypeName`, `LaneName`, `HarnessName`, `Label`, `Requirement`, `ReviewLevelName`, `RecoveryLevelName`, `CommandName`) | strings validated on decode: `a-z 0-9 - _` (labels and requirements also `:` `.`), starting with a letter or digit, at most 64 characters |
 
-Human-readable formats (`--json`) write ids, keys and names as strings instead.
+**Signatures** have three domains: the device signature covers `wf/event/1\0` + `EventContent`; a
+principal signature in an authority body covers `wf/authority/1\0` + `(workforce, statement)`, so a
+statement cannot be replayed into another workforce; an invite proof covers `wf/invite/1\0` +
+`(workforce, invite, device)`. The key types are distinct in code for the same reason.
 
-#### Event
-```
-Event        = EventContent, sig: Signature
-EventContent = v: u16 (currently 1)
-               workforce: Option<WorkforceId>     // None only in genesis
-               author: DeviceKey
-               actor: Actor                       // Principal(PrincipalKey) | Agent{agent: AgentId, session: SessionId} | Daemon(PrincipalKey)
-               seq: u64                           // per author, from 1
-               prev: Option<EventId>              // None exactly when seq == 1
-               seen: Vec<EventRef>                // sorted by id, deduplicated
-               hlc: Hlc
-               body: EventBody
-EventRef     = author: DeviceKey, seq: u64, id: EventId
-AgentId      = principal: PrincipalKey, name: AgentName
-EventBody    = tag: u16, payload: bytes           // payload = postcard of the body struct for that tag
-```
-* **Event id** = BLAKE3 of the encoded `Event` (signature included). The **workforce id** is the id of
-  the genesis event.
-* **Device signature** covers `b"wf/event/1\0"` followed by the encoded `EventContent`.
-* **Principal signature** (inside authority bodies) covers `b"wf/authority/1\0"` followed by the encoding
-  of `(workforce: Option<WorkforceId>, statement)`. The workforce is `None` only for genesis, so a
-  statement cannot be replayed into another workforce. The two domain prefixes keep a device signature
-  from ever being valid as a principal signature, and the key types are distinct in code for the same
-  reason.
-* `hlc` of an event is greater than the `hlc` of its `prev` and every event in `seen`. The fold orders
-  concurrent writes by `(hlc, event id)`, which therefore extends causal order.
-* `seen` names the author and seq of each event, not only its id, so a peer can tell whether a missing
-  parent lies below its compaction frontier (see *Compaction*). This replaces the id-only `deps` of
-  M1 and changes every event id, so it lands before compaction does.
-
-#### Body tags
-Tags are explicit and never reused. An unknown tag decodes to `Unknown{tag, payload}`, is stored and
-relayed unchanged, and is ignored by the fold. A known tag with an undecodable payload makes the whole
-event invalid.
+### Bodies
 
 | Tag | Body | Payload |
 |---|---|---|
-| 1 | `Genesis` | `Signed<Genesis>`: `name`, `founder: MemberSeed`, `members: Vec<MemberSeed>`, `policy` (TOML text), `forked_from: Option<ForkPoint>` |
-| 2 | `PolicySet` | `Signed<PolicySet>`: `policy` (TOML text, stored verbatim) |
-| 3 | `AgentDefined` | `name`, `harness`, `model: Option<String>`, `capabilities`, `lanes`, `start`, `nudges`, `park_timeout`, `max_duration`, `permissions` (M2) |
-| 4 | `InviteCreated` | `Signed<InviteCreated>`: `kind` (`Device`), `invite: InviteKey`, `expires` (M1) |
-| 5 | `DeviceBound` | `invite: EventId`, `proof: Signature` by the invite key (M1) |
-| 6 | `DeviceProfile` | `name`, `hardware` (requirements in one string, separated by commas or spaces), `agents: {agent -> max_sessions}`, `max_sessions` (M1) |
-| 7 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` (M1) |
-| 8 | `AgentRemoved` | `name`: the acting principal's agent is gone until it is defined again; its sessions and their events stay valid (M2.2) |
-| 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires`, `review: Option<ReviewName>` |
-| 11 | `ItemEdited` | `item`, `changes: Vec<Change>` (`Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires`, `Review`, `StepDone`, `Recovery`) |
-| 12 | `ItemMoved` | `item`, `to`, `by_session: Option<SessionId>` (the session whose start or end the move carries out), `because: Option<EventId>` (the comment that says why) |
+| 1 | `Genesis` | `Signed<Genesis>`: `name`, `founder: MemberSeed`, `members: Vec<MemberSeed>`, `policy` (TOML text), `forked_from: Option<ForkPoint{workforce, heads}>` |
+| 2 | `PolicySet` | `Signed<PolicySet>`: `policy` (TOML text, verbatim) |
+| 3 | `AgentDefined` | `name`, `harness`, `model: Option`, `capabilities`, `lanes`, `autonomy{start, nudges, park_timeout, max_duration: Option, permissions}`, `instructions: Option` |
+| 4 | `InviteCreated` | `Signed<InviteCreated>`: `kind` (`Device`), `invite: InviteKey`, `expires_ms` |
+| 5 | `DeviceBound` | `invite: EventId`, `proof` by the invite key |
+| 6 | `DeviceProfile` | `name`, `hardware` (requirements in one string, comma or space separated), `agents: {agent → max_sessions}`, `max_sessions` |
+| 7 | `ForkAnnounced` | `Signed<ForkAnnounced>`: `to: WorkforceId`, `members` |
+| 8 | `AgentRemoved` | `name`: gone until defined again; its sessions stay valid |
+| 10 | `ItemCreated` | `item_type`, `title`, `body`, `priority`, `lane`, `labels`, `requires`, `review` (older, without a state) |
+| 11 | `ItemEdited` | `item`, `changes`: `Title`, `Body`, `Priority`, `Lane`, `Labels`, `Requires` (set changes), `ReviewLevel`, `StepDone{step, done}`, `RecoveryLevel` |
+| 12 | `ItemMoved` | `item`, `to` (a state name as written), `by_session: Option<SessionId>`, `because: Option<CommentId>` |
 | 13 | `ItemLinked` | `item`, `link`: `DependsOn(SetChange<ItemId>)` or `Supersedes(ItemId)` |
-| 14 | `ItemArchived` | `item` |
-| 15 | `ItemUnarchived` | `item` |
-| 16 | `Comment` | `item`, `text`, `kind`: `Plain`, `Blocker` or `ChangeRequest`, `resolves: Vec<EventId>`, `step: Option<StepId>` (see *Comments*) |
-| 17 | `ItemCheckpoint` | `item`, `state`: the folded item with stamps, add tags and comment text (M6, see *Compaction*) |
-| 20 | `SessionStarted` | `agent: AgentName`, `item`, `role`: `Work`, `Review{commit: Option<CommitId>}` or `Supervise` (M2) |
-| 21 | `SessionEnded` | `session: SessionId`, `reason: EndReason` (M2, see *Sessions*) |
-| 22 | `Review` | `item`, `commit: Option<CommitId>` (`None`: work submitted without commits), `verdict`: `Approve`, `RequestChanges` or `Escalate`, `because: Option<EventId>` (M2) |
-| 23 | `Merged` | `item`, `reviewed: CommitId`, `commit: CommitId` (M2) |
+| 14, 15 | `ItemArchived`, `ItemUnarchived` | `item` |
+| 16 | `Commented` | `item`, `text`, `kind` (`Plain`, `Blocker`, `ChangeRequest`), `resolves: Vec<CommentId>`, `step: Option<StepId>` |
+| 17 | `ItemCreated` | as tag 10, plus `state` |
+| 20 | `SessionStarted` | `agent`, `item`, `role`: `Work`, `Review{commit: Option}`, `Supervise`, `Diagnose` |
+| 21 | `SessionEnded` | `session`, `reason` (section 9) |
+| 22 | `Reviewed` | `item`, `commit: Option` (none: submitted without commits), `verdict` (`Approve`, `RequestChanges`, `Escalate`), `because: Option<CommentId>` |
+| 23 | `Merged` | `item`, `reviewed`, `commit` |
+| 24 | retired | (`Report`, now a comment) |
+| 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
 
-* `Signed<T>` = `statement: T`, `signer: PrincipalKey`, `signature: Signature`.
-* `MemberSeed` = `principal`, `handle`, `devices: Vec<DeviceKey>`, `previous: Vec<PrincipalKey>`. The
-  founder is `owner`; seeded members are `member`. `previous` lists keys the member used in the parent
-  workforce of a fork, so prefix events resolve to the same handle.
-* `SetChange<T>` = `Add(T)` or `Remove{value: T, observed: Vec<EventId>}`. A removal lists the add events
-  its author had seen, so a concurrent add survives it (add wins) without any ancestry index.
-* An item id is the id of its `ItemCreated` event. Policy and `Genesis` carry TOML text, not a parsed
-  structure, so the stored policy is exactly what the owner wrote. Peers do not parse it to admit
-  the event: a policy a version cannot read (written by a newer one) is flagged in `wf status`, and
-  that version keeps running on the last policy it could read, or the default.
-* `CommitId` = `Git(GitOid)`, the single `vcs` variant (section 9).
-* Bodies for later milestones (`Assigned`, `Claim`, `Heartbeat`, ...) take new tags. Tag 24 (`Report`,
-  now a comment) is retired.
+* `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.
+* `MemberSeed` = `principal`, `handle`, `devices`, `previous: Vec<PrincipalKey>` (keys the member
+  used in the parent of a fork, so history resolves to the same handle). The founder is `owner`,
+  seeds are `member`.
+* `SetChange<T>` = `Add(T)` or `Remove{value, observed: Vec<EventId>}`: a removal lists the adds its
+  author saw, so a concurrent add survives (add wins) without an ancestry index.
+* An item id is the id of its `ItemCreated`; a session id that of its `SessionStarted`; a comment id
+  that of its `Commented`.
+* Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
+  parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
+  and the workforce keeps running on the last policy that parsed, or the default.
+* Tags are never reused. *Planned (M3):* `Assigned`, `Claim`, `Heartbeat`.
 
-#### Local storage (redb)
-One file per workforce at `$XDG_DATA_HOME/workforce/<workforce id>/store.redb`. Values are the postcard
-encodings above; redb itself stores bytes.
+### Store
 
-| Table | Key | Value |
-|---|---|---|
-| `events` | event id (32 bytes) | encoded `Event` |
-| `feeds` | `(author, seq)` | event ids (multimap: more than one only after equivocation). An append's `prev` must be stored |
-| `log` | position | event id, in the order events were applied |
-| `pending` | event id | encoded `Event` still waiting for parents |
-| `meta` | `snapshot` | the snapshot blob |
+One redb file per workforce, `<wf>/store.redb`: pure Rust, one file, one writer with MVCC readers.
+The log is the only durable truth; state is folded into in-memory Rust structs and queried as typed
+Rust, so changing its shape needs a refold, not a migration. The store sits behind an `EventStore`
+trait. Debugging needs no SQL: `wf export | jq`.
 
-A snapshot blob is `(format: u32, ref parser version: u16, State)`. It is a cache: any mismatch of
-format or parser version, or a snapshot that is ahead of the log or disagrees with it, discards it and the state is refolded
-from `events`. Appends and the snapshot that covers them commit in one transaction.
+| Table | Key → value |
+|---|---|
+| `events` | event id → encoded event |
+| `feeds` | `(author, seq)` → event ids (multimap: several only after equivocation) |
+| `log` | position → event id, in the order events were applied |
+| `pending` | event id → event waiting for its parents |
+| `meta` | `snapshot` → `(format, ref parser version, State)` |
 
-Principal-signed statements are wrapped in an ordinary device-feed event, so every feed stays gapless
-and a principal key never needs its own sequence across machines.
+The snapshot is a cache, written every `max(256, events / 8)` events in the same transaction as the
+appends it covers. Any mismatch of format or parser version, or with the log, discards it and the
+state is refolded. Comment text stays in the log and loads on demand.
+
+**Export** (`wf export`): one JSON line per event in log order, `{id, kind, content, event}`, where
+`event` is the signed encoding in base64. **Import** (`wf import`) reads only `event`, so it
+verifies everything again; it creates or extends the store (daemon stopped), and does not cover keys
+or forks.
 
 ### Admission and fold
-Two kinds of rules, because a rule is only safe for peers to enforce if its answer cannot depend on the
-order events arrive in.
 
-**Admission** (`State::receive`, enforced by every peer; depends only on an event's causal past):
-version; device signature; `workforce` matches (genesis names none); all parents (`prev` and `seen`)
-are known or below the frontier; `prev` is the author's event with `seq - 1` (none for `seq == 1`); `hlc` is greater than
-every parent's; the author is a bound device and the actor belongs to its principal, where a
-`DeviceBound` as the author's first event, with its invite among its parents and a valid proof, binds
-it; authority bodies carry a valid principal signature of an owner for this workforce; referenced items
-exist; no item links to itself.
-* Events with missing parents (or arriving before genesis) wait in a **pending set**, capped at 10,000
-  events, and are applied when their parents arrive. Any arrival order and any duplication give the same
-  state; this is tested with generated event sets.
-* A second event with the same `(author, seq)` is admitted and the author flagged (see *Equivocation*).
+A rule is safe for peers to enforce only if its answer cannot depend on arrival order. So rules come
+in two kinds.
 
-**Authoring checks** (`State::check_policy`, run by the author before signing; peers do not repeat
-them): type exists, the type uses the target state, an item is created in its type's initial state
-or as a draft, field allowed for the type (`priority`, `labels`, `requires`),
-lane exists, `depends_on` target type allowed, no dependency cycle, archive only from `done`/`cancelled`,
-`supersedes` only between decisions. Peers cannot re-check these deterministically: a concurrent policy
-change would make acceptance depend on arrival order. Instead the fold keeps the event and flags the
-outcome (an unknown type, or a state its type no longer uses, visible in `wf item show` and
-`wf status`), and the item keeps its state until moved.
+**Admission** (`State::receive`, every peer; depends only on the event's causal past): version;
+device signature; workforce; all parents known; `prev` is the author's `seq - 1`; `hlc` above every
+parent's; the author is a bound device and the actor belongs to its principal (a `DeviceBound` as
+the author's first event, with its invite among its deps and a valid proof, binds it); an agent
+actor is a defined agent and its session belongs to that agent on that device; authority bodies carry
+a valid principal signature (an owner's for `PolicySet` and `ForkAnnounced`, the actor's own
+principal's for `InviteCreated`); genesis is signed by its founder from a founder device, with unique
+principals, handles and devices; referenced items, sessions and agents exist; no item links to
+itself.
+
+* Events with missing parents wait in a **pending set** (at most 10,000; events waiting on a fork's
+  history are exempt) and are applied when their parents arrive. Any arrival order and duplication
+  give the same state, tested with generated event sets and a simulation of 1,000 sync schedules.
+
+**Authoring checks** (`check_policy` and `check_actor`, run by the author before signing; peers do
+not repeat them, because a concurrent policy change would make acceptance order-dependent): the guards
+of section 5; the type exists and uses the state; a new item starts in its type's initial state or as
+a draft; fields allowed for the type; the lane exists; `depends_on` target type allowed; no dependency
+cycle; archive only from `done` or `cancelled`; `supersedes` only between decisions; verdict rules
+(section 10). The fold keeps whatever a peer wrote and flags what no longer fits (an unknown type, a
+state its type no longer uses).
 
 **Fold:**
-* Concurrent writes order by `(hlc, EventId)`. This extends causal order because authors stamp every
-  event above everything it follows, and admission enforces it.
-* Last-writer-wins registers: `title`, `body`, `state`, `priority`, `lane`, `supersedes`, archived.
-* Add-wins sets (`labels`, `requires`, `depends_on`) are observed-remove: each add is tagged with its
-  event id and a removal lists the tags its author saw, so a concurrent add survives.
-* An item's `state` is the one its `ItemCreated` names. An item created before `ItemCreated` carried a
-  state has none until its first move, which means "the type's initial state under the current
-  policy", so folding it does not depend on concurrent policy changes.
-* A request for changes moves the item back to `open` in the same `Reviewed` event.
-* `supersedes` writes only the superseding item; that the target is superseded is derived from the
-  link. Folds of older logs, where the link also wrote `superseded` into the target's state, keep the
-  target in its state instead (normally `done`).
-* `depends_on` cycles from concurrent links are resolved at query time, not stored: edges are taken in
-  `(hlc, EventId)` order and an edge that would close a cycle is ignored and flagged.
-* Comment text stays in the log. The fold keeps who wrote each comment, its kind, what it resolves, its
-  step and the tokens parsed from it. Resolving is grow-only (a resolved comment never reopens), so
-  concurrent resolutions converge. `#refs` and `@mentions` are stored as unresolved tokens and resolved against the whole state
-  at query time, because resolution depends on what is known.
-* The first device and the members' handles come from genesis (`founder`, `members`); handles are what
-  `@mentions` resolve against. `DeviceBound` and `MemberJoined` arrive with invites in M1.
+* Concurrent writes order by `(hlc, EventId)`.
+* Last-writer-wins registers: title, body, state, priority, lane, review level, recovery level, each
+  step's tick, `supersedes`, archived.
+* Observed-remove sets, add wins: labels, requires, `depends_on`.
+* `depends_on` cycles from concurrent links are resolved at query time: edges in `(hlc, EventId)`
+  order, an edge that would close a cycle is ignored and flagged.
+* Comments keep author, kind, resolutions, step and the tokens parsed from the text; the text stays
+  in the log. Resolving is grow-only, so concurrent resolutions converge. `#refs` and `@mentions` are
+  resolved at query time, since resolution depends on what is known.
+* Handles come from genesis seeds; a device bound twice resolves to its earliest `DeviceBound`.
 
-### Compaction (M6)
-History matters most for the last few months and for active items. Compaction lets a device drop old
-events without changing the folded state, and keeping everything stays a valid choice. It has two
-parts: **item checkpoints** carry the state, and a **frontier** drops events. Neither needs a format for
-the whole `State`.
+**Older events and policies** are read as they were written, since events are signed: an
+`ItemCreated` without a state starts in its type's initial state under the current policy; old state
+names map to the fixed states (`backlog` → draft, `in_progress` → active, `in_review`/`proposed` →
+review, `ratified`/`superseded` → done, `dropped`/`rejected` → cancelled; an unknown name reads as
+draft and is flagged); a `supersedes` that wrote `superseded` into its target's state leaves the target
+in that state; policies with `{name, category}` states, `transitions` and `"human"` steps are read,
+but `wf policy apply` and `edit` refuse them.
 
-The merge rules make this possible. Every merge is commutative, associative and idempotent, and the
-state keeps the stamp of every register and set tag. So the folded state of an item is a valid base
-for any later event, including a concurrent event that arrives months late. And a write that lost a
-register to a greater `(hlc, EventId)` can never win again.
+### Planned: `seen` and compaction (M6)
 
-#### Item checkpoints
-`ItemCheckpoint{item, state}` (tag 17) is an ordinary device-signed event. It is synced, admitted and
-relayed like any other.
+History matters most for recent and active items. Compaction lets a device drop old events without
+changing the folded state; keeping everything stays valid. Every merge rule is commutative,
+associative and idempotent, and the state keeps the stamp of every register and set tag, so an item's
+folded state is a valid base for any later event, even one arriving months late.
 
-* **Covers:** every event that affects the item and lies in the checkpoint's causal past (`prev` and
-  `seen`, transitively). That includes a `Supersedes` link written on another item and earlier
-  checkpoints of the same item.
-* **Coverage is a version vector** `{author -> seq}`: feeds are chains, so a causal past holds each feed
-  up to some seq. Events of an author flagged for equivocation are never covered and stay as events.
-* **State:** type, author, `created`, `updated`, every register with its stamp, every set element with
-  its add tags (stamp, author, seq), and comments including their text. An old item is then one event.
-* **Applying** a checkpoint merges it into the item: registers by stamp. In a set, a tag absent from the
-  checkpoint whose event the checkpoint covers is removed. Plain union would bring back elements that
-  the checkpoint had seen removed. Concurrent checkpoints of the same item, written by different devices,
-  merge the same way.
-* **Verification:** a peer that holds every covered event refolds the item from them and compares. On a
-  mismatch it flags the checkpoint and folds the events instead. This is a flag, not an admission rule,
-  because a peer without the covered events cannot check. A joiner trusts checkpoints, which is fine
-  while members are trusted (v1).
-* **Writing** is an authoring decision, so it may read the clock. The anchor checkpoints items without
-  events for the policy's `[compaction] after` (for example `90d`); without an anchor, any device may.
-  Duplicates are harmless.
-* Some events need no checkpoint: a newer `AgentDefined` or `DeviceProfile` replaces the whole value, so
-  older ones are covered by it. `SessionEnded` closes a session the same way.
-
-#### Frontier
-A device's **frontier** is a version vector below which it has dropped events. It may raise its frontier
-when every event below the new frontier is either covered or **kept**:
-
-| Kept below the frontier | Why |
-|---|---|
-| authority (`Genesis`, `InviteCreated`, `DeviceBound`, `MemberJoined`, `PolicySet`, `OwnerAdded`, `ForkAnnounced`) | admission depends on them, and they are few |
-| the newest checkpoint of each item | it carries the state |
-| uncovered events | they still change the state |
-| unknown body tags | their effect is unknown |
-
-* **Admission:** a parent counts as known when it is stored or when its `(author, seq)` is at or below
-  the frontier. This is why `seen` carries author and seq.
-* An event at or below the frontier that is not stored is ignored as already covered. Equivocation below
-  the frontier goes undetected: an accepted cost.
-* **Sync:** a peer whose frontier is ahead sends its kept events and its frontier for the gap. The
-  receiver raises its own frontier for the part it cannot get. A joiner starts from the frontier of the
-  peer it joins through.
-* **Local choice:** each device decides whether and how far to compact. A device that never compacts is
-  an archive. It serves full history and makes forks from before a frontier possible.
-* `known` and the pending set shrink with the frontier, so memory stays bounded as well as disk.
-* P11 becomes: state is derivable from the log, where after compaction the log means the kept events plus
-  everything above the frontier.
-
-Tests: for any cut, any checkpointing and any arrival order, applying checkpoints plus later events
-gives the same state as folding the full log.
+* **`seen`.** `deps` becomes `seen: Vec<EventRef{author, seq, id}>`, so a peer can tell whether a
+  missing parent lies below its frontier. This changes every event id and lands first.
+* **Item checkpoints** (a new tag): an ordinary event carrying an item's folded state with every
+  stamp, add tag and comment text. It covers every event of the item in its causal past, a version
+  vector since feeds are chains. Applying it merges by stamp; a set tag the checkpoint covers but
+  lacks is removed. A peer holding the covered events refolds and compares, flagging a mismatch
+  (a flag, not admission: a joiner cannot check). The anchor writes checkpoints for items quiet for
+  the policy's `[compaction] after`; duplicates are harmless. Equivocating feeds are never covered.
+* **Frontier**: a version vector below which a device dropped events. It may rise when everything
+  below is covered or kept: authority bodies, the newest checkpoint per item, uncovered events and
+  unknown tags. A parent at or below the frontier counts as known; equivocation below it goes
+  unnoticed (accepted). Sync sends kept events plus the frontier for the gap, and a joiner starts from
+  the frontier of the peer it joins through. Each device decides how far to compact; one that never
+  does is an archive, and makes forks from before a frontier possible. P11 then reads: the log means
+  the kept events plus everything above the frontier.
+* Tested: for any cut, checkpointing and arrival order, checkpoints plus later events fold to the
+  same state as the full log.
 
 ## 7. Forking
 
-A fork is a **new genesis that points at a frozen point in the parent's history**.
+A fork is a **new genesis that points at a frozen point of the parent's history**
+(`forked_from: ForkPoint{workforce, heads}`). It replaces revocation and recovery keys in v1.
 
-```rust
-struct Genesis {
-    name: String,
-    founder: PrincipalKey,
-    policy: Policy,
-    members: Vec<MemberSeed>,        // pre-seeded principals, devices, roles
-    forked_from: Option<ForkPoint>,
-}
-struct ForkPoint { workforce: Hash, heads: Vec<EventId> }
-```
+* The genesis continues the forker's device feed (`seq` = its head + 1), and the fork point is the
+  forker's current heads. The policy text is copied.
+* **History is admitted by descent.** A parent event is admitted unchecked when its id is wanted:
+  named by the fork point, or a parent of history already admitted. The id is the proof. Once nothing
+  is wanted, the history is folded at once in `(hlc, id)` order. Parent events after the fork point
+  never get in. The fork's own events wait until the history is complete, and the device refuses to
+  author before that, so it cannot equivocate against its own history.
+* What carries over: items, comments, links, the agents of kept members and the profiles of kept
+  devices. What does not: policy, invites, bindings, sessions, reviews and merges.
+* Excluded members and devices are absent from the new seeds, so their events are not admitted and
+  their sync connections are refused once they name the fork. A lost machine is excluded as a device;
+  the forker cannot exclude itself.
+* `--new-principal` founds the fork with a fresh principal key, for when the lost machine held it;
+  the seed lists the old key as `previous`.
+* Any member that holds the principal key on the machine can fork and becomes the founder. An owner
+  forking without `--new-principal` writes `ForkAnnounced{to, members}` in the old workforce. Devices
+  follow by hand: `wf fork accept <id>` fetches the history from the kept devices, then rewrites
+  `.workforce.toml`.
 
-* Parent events up to `heads` are a read-only prefix, validated under the parent's rules. They are
-  admitted only when fetched by id from a known descendant, so nothing after the fork point gets in.
-  Item ids, comments and decisions carry over.
-* Parent events after the fork point are ignored.
-* After compaction the prefix is the parent's kept events plus its frontier, which the fork takes over.
-  A fork point below a frontier needs an archive device that kept the full history.
-* Excluded members and devices are absent from the new member list, so their connections are rejected
-  at the iroh handshake and their new events are not admitted. A lost machine is excluded as a device.
-* `--new-principal` founds the fork with a fresh principal key, for when the lost machine held it. The
-  member seed lists the old key as `previous`.
-* Anyone can fork. The forker becomes founder of the new workforce.
-* When an owner forks without `--new-principal`, they publish `ForkAnnounced{to, members}` in the old
-  workforce. In v1 devices follow by hand (`wf fork accept`), which writes the new id to
-  `.workforce.toml`. The old workforce is archived locally.
-
-This replaces revocation and recovery keys in v1.
-
-```
-wf fork [--exclude <device|member>...] [--new-principal] [--name <name>]
-wf fork accept <id>
-wf fork list
-```
+*Planned:* following a fork automatically once a fork is not a security event; asking first for
+non-owner forks; archiving the old workforce locally; importing a fork from an export.
 
 ## 8. Items
 
-The item is the **single universal document**: tasks, decisions, meta work, and later discussions are
-all items. Types differ only in configuration and behaviour, so comments, mentions, references,
-search and inbox work the same everywhere. A question is not an item: it is a blocking comment on the item
-it is about (section 10). `items` is a reference for the model, not a
-compatibility target.
+The item is the single universal document: tasks, decisions and meta work are items, and differ only
+in their type's configuration, so comments, references, mentions and the inbox work the same for all.
+A question is not an item but a blocker on the item it is about (section 11).
 
 ### States
-Every item is in one of six fixed **states**. Built-in behaviour keys on them, and a type lists the ones
-it uses (see *Type configuration*).
 
-| State | Meaning | Built-in behaviour |
+Every item is in one of six fixed states. Built-in behaviour keys on them; a type lists which it uses.
+
+| State | Meaning | Behaviour |
 |---|---|---|
-| `draft` | exists, not actionable: held back while it is thought through | nothing starts it |
-| `open` | actionable | claimable once dependencies are done |
-| `active` | a session works on it | has a session/claim; when the session ends without submitting (or its lease expires) the item returns to `open` |
-| `review` | the work is submitted and waits for its review steps | not claimable; entering it ends the session's claim |
-| `done` | finished successfully | terminal; satisfies dependents |
-| `cancelled` | finished without success | terminal; open dependents become **stranded** (flagged, not unblocked) |
+| `draft` | held back while it is thought through | nothing starts it |
+| `open` | actionable | ready once dependencies are done and no blocker is open |
+| `active` | a work session holds it | returns to `open` when the session ends without submitting |
+| `review` | submitted work waits for its review steps, or a proposal waits for a decision | not claimable |
+| `done` | finished | terminal; satisfies dependents |
+| `cancelled` | finished without success | terminal; open dependents become stranded |
 
-Every item shows as `(task:draft)`, `(decision:done)` and so on: the second half means the same whatever
-the type. The runner moves items into `active` and `review` (start, release, submit, merge); a principal
-moves them with verbs: `wf item open` releases a draft or reopens an item, `wf item draft` holds it back,
-`wf item done` finishes it without a session, `wf item cancel` cancels it. `wf item add --draft` creates an
-item as a draft in the one `ItemCreated` event, so the dispatcher never sees it open. There is no move by
-hand into `active` or `review`: nothing ends an `active` item without a session, and `review` reviews a
-submitted commit.
+Items show as `task:open`, `decision:review` and so on. The daemon moves items into `active`,
+`review` and, after the merge, `done`. A principal moves them with verbs: `wf item open` (release a
+draft, reopen), `draft`, `done` (finish without a session), `cancel`. Nothing moves an item by hand
+into `active` or `review`: an `active` item without a session would never return to `open`, and a
+review needs a submitted commit. `wf item add --draft` creates a draft in the one `ItemCreated`, so the dispatcher never sees
+it open.
 
-Being blocked is **computed**, never stored as a state: from `depends_on`, and from **blockers**, the
-open blocking comments on the item (section 10).
+**Readiness** is computed for open, unarchived items, never stored:
 
-\[\text{ready}(i) \iff \text{state}(i) = \texttt{open} \wedge \forall d \in \text{depends\_on}(i): \text{state}(d) = \texttt{done} \wedge \text{no open blocker on } i \wedge \text{no live session on } i\]
+| Readiness | When |
+|---|---|
+| `stranded` | some dependency is `cancelled`: waiting will not free it; someone removes the dependency or cancels the item |
+| `blocked` | some dependency is not done, or a blocker on the item is open |
+| `claimed` | otherwise, and a live work session holds it |
+| `ready` | otherwise |
 
-The live-session condition ignores a session parked on the item: it is the one that continues once the
-item is ready again.
+`wf status` flags stranded items, items in a state their type no longer uses, and unknown types.
 
-An open or active item is **blocked** while some dependency is not done or some blocker is open, and
-**stranded** when some dependency is `cancelled`: waiting will not free it, so someone has to remove the
-dependency or cancel the item. `wf item list` filters with `--ready`, `--blocked` and `--stranded`
-(combined, they match any), and `wf status` flags stranded items.
+### Types
 
-`wf item show` prints an effective status, e.g. `open · blocked by #x7k2 (task, open)` or
-`active · 1 blocker → supervisor (c7f2)`.
+A type is configured in the policy (section 15) with its `lane`, its `fields` (any of `priority`,
+`labels`, `requires`), the types it may `depends_on`, its `states` and `initial` state, and default
+`review` and `recovery` levels. The `states` list keeps a decision from being moved to `open`, where
+an agent would take it. A type that uses `active` must use `open` to return to; one with a review
+level with steps must use `review`. If a policy change drops a state items are still in, they keep it,
+`wf status` flags them, and only moves into it are refused.
 
-**Older events.** Before the states were fixed, each type named its own states and mapped each to one of
-these six as its category. Events are signed and hashed, so those keep their names: a move names its state
-as written, and reading it maps the old names of the built-in types: `backlog` is `draft`, `in_progress`
-is `active`, `in_review` and `proposed` are `review`, `ratified` and `superseded` are `done`, `dropped`
-and `rejected` are `cancelled`. A name no version knew reads as `draft`, so nothing starts the item, and
-`wf status` and `wf item show` flag it. An `ItemCreated` written before it carried a state starts in the
-initial state of its type under the current policy. Writing an old name is refused.
-
-### Archiving
-`archived` is a flag, orthogonal to state, so an archived item keeps its terminal outcome.
-
-* `ItemArchived` / `ItemUnarchived`, allowed only in `done` or `cancelled`.
-* The fold still processes all events, but readers only get a **stub** for archived items (id, type, title,
-  final state, archived time). Body, comments and history load from the log on demand. M0 still keeps the
-  full item in memory behind that stub view: dropping bodies at fold time would make the state depend on
-  the order of archive, unarchive and concurrent edits, so real stubs wait for compaction (M6).
-* Hidden from lists, search and agent context by default (`--archived`). Dependencies on them still resolve.
-* Reclaiming disk space is compaction (M6): an archived item is the typical candidate for an item
-  checkpoint.
-
-### Type configuration (part of the signed policy)
-
-Types stay configurable, except for the names of their states: a type has a lane, fields, allowed
-dependencies, review and recovery level, and lists which of the six states it uses and which one its
-items start in.
-
-```toml
-[types.task]
-lane = "default"
-fields = ["priority", "labels", "requires"]
-depends_on = ["task", "decision"]               # allowed target types
-initial = "open"                                 # "draft" holds every new task back
-review = "standard"                              # optional default review level (section 9)
-states = ["draft", "open", "active", "review", "done", "cancelled"]
-```
-
-The list matters: it keeps a decision from being moved to `open`, where an agent would take it. The
-initial state must be one of them, a type that uses `active` must use `open` to return to, and one with
-a review level must use `review`. An item is created in its type's initial state, or as a `draft` when the
-type uses it. If a policy change drops a state that items are still in, they keep it, `wf status` flags
-them, and only moves into it are refused.
-
-### Built-in types
-Types the code relies on. Shipped in the default policy, names reserved.
+Built in, shipped in the default policy, names reserved:
 
 | Type | Initial | States | Purpose |
 |---|---|---|---|
-| `task` | `open` | draft, open, active, review, done, cancelled | default unit of work; what agent sessions are assigned |
-| `decision` | `review` | review, done, cancelled | project decisions; a proposed decision is accepted with `wf item done` and rejected with `wf item cancel`, objections are change requests; only decisions that are `done` and not superseded enter agent context |
-| `distill` | `open` | open, active, done, cancelled | system-created meta work in the `meta` lane |
+| `task` | `open` | all six | work for agent sessions; `review = "manual"`, `recovery = "standard"` |
+| `decision` | `review` | review, done, cancelled | a proposal, accepted with `wf item done`, rejected with `wf item cancel`; objections are change requests |
+| `distill` | `open` | open, active, done, cancelled | meta work in the `meta` lane |
 
-Custom types (`bug`, `doc`, `spike`, ...) are fully configurable.
+**Planned (M4):** only decisions that are `done` and not superseded enter agent briefs; distilling
+threads into decisions is ordinary work in `distill` items, so there is no separate scribe.
 
 ### Priority
-`priority` orders work; it is a field only of types that list it in `fields`. By default that is only
-`task`. A decision records an outcome and `distill` is housekeeping, so ordering them means
-nothing. A custom type opts in with `fields = ["priority", ...]`.
 
-| Level | Meaning |
-|---|---|
-| `P0` | Drop everything: it blocks the team, or something is broken. Picked first. |
-| `P1` | Important; do it this cycle. |
-| `P2` | Normal. The default. |
-| `P3` | Nice to have; when nothing else is waiting. |
-
-* **Required where it exists.** An item of a type with priorities must have one: `wf item add` sets `P2`
-  unless told otherwise, and the author check refuses to create such an item without a priority or to clear
-  it. Items of other types have none, and setting one is refused. Peers do not repeat the check (see
-  authoring checks), so an item whose type gained the field later, or an old one, can lack a priority:
-  `item show` flags it and it sorts last until one is set.
-* **Ordering** of `item list` and `item list --ready`: priority (`P0` first), items without a priority last, then
-  oldest first, then id.
-* **Not decided:** letting an item inherit the highest priority of the items it blocks, so `ready` puts what
-  unblocks urgent work first. It would make the order depend on the dependency graph; if added, it should
-  be shown separately from the item's own priority.
+A field only of types that list it (by default `task`): `P0` (drop everything), `P1` (this cycle),
+`P2` (normal, the default), `P3` (when nothing else waits). The author check requires one where the
+type has the field and refuses one where it has not; an item whose type gained the field later sorts
+last until one is set. `item list` orders by priority, then age, then id. *Not decided:* inheriting
+the highest priority of the items an item blocks.
 
 ### Relations
-Relations that change behaviour are explicit events. Informational ones are derived from text.
 
-| Relation | Source | Cardinality | Semantics |
-|---|---|---|---|
-| `depends_on` | explicit `ItemLinked` | many, acyclic | readiness; allowed targets per type |
-| `supersedes` | explicit `ItemLinked` | one, decisions only | the target keeps its state and shows as superseded, derived like blocked |
-| `references` | derived from body and comments | many, cycles fine | backlinks only, to an item or a comment |
-| `mentions` | derived from body and comments | many | inbox entries |
-
-* **No parent/child.** Decomposition is "the big task depends on its parts", which also makes it ready
-  for integration exactly when the parts are done. `item show` lists dependents as "required by".
-  A label on the edge can be added later if "part of" needs to be distinguishable.
-* `depends_on` is never derived from text: a stray `#ref` must not block work.
-
-### Derived references and mentions
-* `#k3f7a2` for items (any unique prefix of at least 4 characters, like git), `#k3f7a2/c7f2` for a
-  comment on an item (section 10).
-* `@ada` for principals, `@ada/coder` for agents, and with session inboxes (M3)
-  `@ada/coder/s4k2` for sessions. Short forms (`@coder`) work when unique in the workforce.
-* Parsed with `pulldown-cmark`, skipping code spans and blocks. Tokens that do not resolve are plain text.
-* Derived in the fold with a versioned parser, not stored as events. A better parser means a refold.
-
-A handle match wins: `@ada` is a principal even if an agent is also called `ada`. A short name that
-matches no handle resolves to an agent only if exactly one agent has that name.
-
-**Mention resolution:**
-
-| Written | Goes to |
-|---|---|
-| `@ada` | the principal's inbox |
-| `@ada/coder` in a comment **on an item** | the live session of that agent on this item; otherwise the agent's inbox, picked up by its next session |
-| `@ada/coder` elsewhere | the agent's inbox |
-| `@ada/coder/s4k2` (M3) | that session; if it has ended, the agent's inbox with a note |
-
-So `@coder please also handle the empty case` on an item reaches the session working on it, which checks
-its inbox after each commit.
-
-### Fields, events and merge rules
-
-| Field | Merge rule |
-|---|---|
-| `type` | set at creation, immutable |
-| `title`, `body`, `priority`, `lane`, `review` | last writer wins per field; losing concurrent body edits stay visible in the activity of `item show` (section 10) |
-| `state` | set at creation, then last writer wins. Not validated by peers: the author checks it against the policy before signing, and a state the type no longer uses is flagged, not rejected (see *Admission and fold*) |
-| `labels`, `requires` | set with add/remove; add wins over concurrent remove |
-| `depends_on` | same set semantics; concurrent adds that form a cycle: the edge with the greatest `(hlc, EventId)` is ignored and flagged |
-
-Events: `ItemCreated{.., state}` (id = short base32 prefix of the event hash), `ItemEdited{changes}`,
-`ItemMoved{to, by_session, because}`, `ItemLinked{kind, target, add|remove}`, `ItemArchived`,
-`ItemUnarchived`, `Comment{item, text, kind, resolves, step}`.
-
-### Stored vs computed
-
-| Stored (events) | Computed in the fold | Computed at query time |
+| Relation | Source | Semantics |
 |---|---|---|
-| type, title, body, state, priority, lane, review, labels, requires, depends_on, supersedes, archived, comments | author, created, updated, superseded by, references, mentions, backlinks, `blocked_by`, open blockers and change requests, cycle and unknown-state flags, sessions per item, claim holder, checklist progress (`- [ ]` items in the body) | session liveness, `ready`, review status, overlap notifications |
+| `depends_on` | `ItemLinked`, many, acyclic | readiness; allowed target types per type |
+| `supersedes` | `ItemLinked`, one, decisions only, not removable | the target keeps its state and shows as superseded |
+| references | `#k3f7a2` or `#k3f7a2/c7f2` in body and comments | backlinks to an item or a comment |
+| mentions | `@ada`, `@ada/coder` in body and comments | `wf mentions`; a blocker goes to the first one it names |
 
-The fold is a pure function of events and never reads the clock. Everything that depends on "now" is
-computed per query.
+* No parent/child: decomposition is "the big task depends on its parts", which makes it ready for
+  integration exactly when the parts are done. `item show` lists dependents as "required by".
+* `depends_on` is never derived from text: a stray `#ref` must not block work.
+* References and mentions are parsed with `pulldown-cmark`, skipping code, by a versioned parser in
+  the fold; a better parser means a refold. Item ids take any unique prefix of at least 4 characters.
+  A handle wins over an agent name; a short `@coder` resolves when exactly one agent has the name.
 
-### Routing work: three separate axes
+**Planned (M3):** mentions are delivered: `@ada` to the principal's inbox, `@ada/coder` on an item to
+the agent's live session there or else the agent's inbox, `@ada/coder/s4k2` to a session.
+
+### Archiving
+
+`archived` is a flag beside the state, allowed only in `done` or `cancelled`, so an archived item
+keeps its outcome. Archived items are hidden from lists and briefs (`--archived` shows them);
+dependencies on them still resolve. The fold keeps them whole: dropping bodies at fold time would make
+the state depend on the order of archive, unarchive and edits. Reclaiming their space is compaction.
+
+### Stored and computed
+
+| Stored (events) | Computed in the fold | Computed per query |
+|---|---|---|
+| type, title, body, state, priority, lane, labels, requires, review and recovery level, step ticks, `depends_on`, `supersedes`, archived, comments | author, created, updated, superseded by, references, mentions, open blockers and change requests, sessions, flags | readiness, claim holder, session liveness, review status, recovery step, inbox |
+
+The fold never reads the clock; whatever depends on "now" is computed per query.
+
+### Routing
+
 | Axis | Question | Mechanism |
 |---|---|---|
-| **scope** | who can *see* it | replication filter (*later*, v1 has one scope) |
-| **lane** | who may *claim* it | lane policy, matched by role and kind |
-| **requires** | who is *able* to | item `requires` and agent review or recovery steps vs. agent capabilities plus device hardware |
+| scope | who can *see* it | *Planned (M5):* replication filter; v1 has one scope |
+| lane | who may *take* it | an item is in one lane (its type's unless set); an agent takes items from the lanes it lists |
+| requires | who is *able* to | the item's or the review step's `requires` against the agent's capabilities plus the device's hardware |
 
-* Every item is in exactly one lane. The lane may derive from the item type (`distill`, `triage` go to
-  `meta`). An agent takes items from the lanes in its definition. The `supervision` lane holds no items:
-  agents in it take blockers (section 10).
-* In v1 lanes are **routing, not security**: members are trusted.
-* `wf item list --ready --for <agent>` and the dispatcher apply the same lane and requires filter.
-* Judgment about what to work on next lives in items, not in the dispatcher: planner and supervisor
-  agents create, split, order and unblock items, and the dispatcher follows the data.
+Lanes route; they are not security. The `supervision` lane holds no items: its agents answer
+blockers. Judgment about what to work on lives in items, not the dispatcher: planner and supervisor
+agents create, split, order and unblock items, and the dispatcher follows the data.
 
-### Assignment
-**On one machine (M2)** each daemon dispatches for the agents its device hosts, woken by new events,
-ended sessions and a slow tick. For each agent with `start = "auto"` and a free slot (device and
-per-agent `max_sessions`, parked sessions included) it starts, in this order:
+## 9. Sessions
 
-1. a review session for an item awaiting a review step the agent can take (section 9);
-2. a supervise session for an item with an open blocker routed to supervisors, if the agent is in the
-   `supervision` lane and never worked on the item (section 10);
-3. a work session for the first ready item in the agent's lanes that its capabilities and the device's
-   hardware meet, in dispatch order.
+A **session** is one attempt by one agent on one device at **exactly one item**, in one role:
 
-**Dispatch order** finishes started work before it starts new work, so branches do not pile up and go stale
-against the target. Priority always comes first (`P0` first, items without one last). Among ready items of
-one priority:
+| Role | Does | Runs in |
+|---|---|---|
+| `Work` | does the item; holds its claim | the item's worktree, on branch `wf/<item>` |
+| `Review{commit}` | takes one review step on one submitted commit | a detached checkout of that commit |
+| `Supervise` | answers or escalates blockers waiting on its agent | an empty directory |
+| `Diagnose` | says why earlier attempts failed (a recovery step) | an empty directory |
 
-1. work sent back by review: its latest review requested changes and change requests are still open;
-2. other started work: it had work sessions, e.g. it was released or moved back to open after a merge
-   conflict;
-3. work never started.
+Items are sized for a session: steps inside one are a checklist in the body. Work is split into
+items only where parts can run in parallel, need another review level, or other capabilities.
 
-Within each group fewer unchecked steps go first, and among started work more checked steps go first
-when the unchecked ones are equal, so what finishes soonest goes first; then oldest first, then id. It is a
-plain sort key, no weights or score. `wf item list --ready` keeps its own order (priority, age, id).
+### Agents and devices
 
-Agents with `start = "manual"` run only through `wf session start <item> --agent <name>`.
+An agent is defined once per principal in the log (`AgentDefined`), with a harness, an optional
+model, capabilities, lanes, instructions told in every brief, and its **autonomy**:
 
-**Across devices (M3)** `dispatch` is the default; `pull` will be configurable per workforce, in an
-`[assignment]` table with `mode`, `fallback` and `lease`. The dispatch
-target is an **agent**; the dispatcher picks any device that hosts it and has a free slot.
+| Field | Default | Says |
+|---|---|---|
+| `start` | `manual` | `auto`: the dispatcher starts it; `manual`: only `wf session start` |
+| `permissions` | `allow` | `allow`, `ask` or `deny` the harness's permission requests (section 12) |
+| `nudges` | 3 | turns in a row without a new commit before the session is released |
+| `park_timeout` | 2h | how long a parked session waits |
+| `max_duration` | none | the longest a session runs |
 
-1. A device with free capacity requests work for an agent it hosts.
-2. The anchor picks an item and signs `Assigned{item, agent, device, lease}`.
-3. The device starts a session (`SessionStarted`) for that item.
-4. If the anchor is unreachable, policy `fallback` decides: `optimistic` (the session starts with an
-   unconfirmed `Claim`; conflicts resolve to the earliest causal claim, then lowest hlc, then lowest id)
-   or `wait`.
-5. Sessions renew with `Heartbeat`. A dead session's claim expires and the item is assignable again.
+Agents are named by role, not harness; names are unique per principal and immutable, so mentions
+keep resolving. A new `AgentDefined` replaces the definition (last writer wins); `AgentRemoved`
+tombstones it until it is defined again. A device signs definitions, but agents cannot write them.
 
-## 9. VCS
+A device publishes a `DeviceProfile`: its name, hardware (`os:linux, arch:aarch64, gpu`), how many
+sessions it runs at once (`max_sessions`, default 1, parked ones included), and which agents it hosts
+with how many sessions each. Defining or editing an agent with `start = auto` makes this device host
+it with one session.
 
-* Git only. A `VcsAdapter` trait is a code boundary with one implementation. Events carry a `vcs` enum
-  with a single variant, so jj can be added later without a format change.
-* One worktree and branch per **item**, `wf/<item>`, continued by every session on the item, where
-  `<item>` is the first 12 characters of the item id (short ids are too short to name a branch safely).
-  Worktrees live outside the repo in `$XDG_DATA_HOME/workforce/<id>/worktrees/<item>` and are removed
-  after the merge, or at once when a session submits without commits. A review
-  session gets a detached checkout of the commit it reviews in `worktrees/<item>-<commit prefix>`,
-  removed when the session ends.
-* Git is called through the `git` CLI (2.38 or later) behind the adapter, and `wf-vcs` is the only
-  crate that does. Whichever worktree it is given, the adapter works on the main checkout of the
-  repository.
-* The daemon finds the repository from a file next to the store of the workforce, which every `wf`
-  command run in the main checkout refreshes. Checkouts of sessions do not count: they come and go.
+### Lifecycle
+
+* `SessionStarted{agent, item, role}`, written by `@daemon`. A work start moves the item to
+  `active` (`ItemMoved{by_session}`).
+* `SessionEnded{session, reason, because}`. `because` names the comment that says why, written just
+  before (the agent's note, or how it failed).
+
+| Reason | Ends when |
+|---|---|
+| `Submitted{commit}` | the agent ran `wf work submit` |
+| `Reviewed`, `Supervised`, `Diagnosed` | the agent gave a verdict, resolved a blocker, wrote its diagnosis |
+| `Released` | `wf work release`, or the nudges ran out |
+| `TimedOut` | `park_timeout` or `max_duration` passed |
+| `Failed` | the harness failed or went silent |
+| `Cancelled` | the principal stopped it, or its item moved on (cancelled, done, drafted, archived) |
+| `Interrupted` | the daemon stopped and could not resume it |
+| `MachineFault` | `LoginLapsed`, `NoSpace` or `HarnessUnreachable`: the machine, not the attempt |
+
+**Ending moves the item first.** `after_end` in `wf-core::lifecycle` says what happens to the item:
+back to open, to review, merge then done, or nothing. The daemon writes that move while the session
+still holds the item (as `ItemMoved{by_session}`), then `SessionEnded`, so the dispatcher never sees
+an open item without its session in between. Only work sessions move items, and a stale end never
+reopens an item that moved on. Ends are split by who decides them: a `Finish` (submit, release,
+verdict, answer, diagnosis) is the agent's, and waits up to 20 s for its turn to end, since the
+command it ran waits for the answer; an `Interruption` (stop, moved on, timeout, failure, giving up,
+machine fault) is the daemon's and acts at once.
+
+**Claims.** On one machine the claim of an item is its earliest live work session; starts take a
+per-item lock and refuse an item with a live work session. Across devices (*Planned, M3*) liveness
+comes from a lease: a session without renewal counts as dead, its claim expires and the item can be
+assigned again; of two concurrent claims, the earliest by `(hlc, EventId)` wins and the other cancels
+itself.
+
+One branch per item: every work session on it (after a release, a crash or requested changes)
+continues `wf/<item>`. Context carries over within a session in the conversation, and across sessions
+through comments. Reassignment carries only what was committed, which is why agents commit small.
+
+### Dispatch
+
+Each daemon dispatches for the agents its device hosts, woken by new events, ended sessions and a
+30 s tick. A round first queues approved work for the merge task and finishes approved work without
+commits. Then, for each agent with `start = auto` and a free slot, it starts the first of:
+
+1. a **review** of an item waiting on a step the agent can take: its capabilities meet the step's
+   `requires`, and it never worked on the item;
+2. a **supervise** session for a blocker waiting on the agent (section 11), on an item it never
+   worked on and without a live supervise session;
+3. a **diagnose** session for an item whose recovery level asks for one the agent can take;
+4. a **work** session on the first ready item in its lanes whose `requires` the agent and device
+   meet, in dispatch order.
+
+Every start also needs the item's recovery level to allow another attempt of that role. Agents whose
+harness is at fault wait, all agents wait while the disk is full, and a start that failed is not
+retried for that item and agent for 10 minutes.
+
+**Dispatch order** finishes started work before starting new work, so branches do not go stale.
+Priority first (`P0` first, none last); within a priority: work sent back by review with change
+requests still open, then other started work, then work never started; within each, fewer unchecked
+steps first (more checked steps first when equal), then oldest, then id. A plain sort key, no weights.
+`wf item list --ready` keeps its own order; `--for <agent>` applies the dispatcher's filter.
+
+`wf session start <item> [--agent]` starts a work session by hand, for any agent (by default the
+policy's `default_agent`). Reviews, supervision and diagnosis need hosted `start = auto` agents.
+
+**Planned (M3): across devices.** The dispatch target stays an agent; any device that hosts it with a
+free slot may run it. A device with capacity asks the anchor, which signs `Assigned{item, agent,
+device, lease}`; the device starts the session and renews it with `Heartbeat`. Without a reachable
+anchor, a policy `fallback` decides: `optimistic` (start with an unconfirmed `Claim`) or `wait`. Until
+then, two daemons do not coordinate, so each agent should be hosted on one machine.
+
+### Briefs
+
+The first prompt is the brief (`wf work brief` prints it again): the agent's instructions, the item
+with its numbered steps, and every earlier comment with its kind. By role it adds:
+
+* **Work:** dependencies with their last comment; open change requests, each to resolve; the rules:
+  commit small on the branch, tick steps (`wf item check`), report per step (`wf comment --step
+  [--done]`), run `wf check` before submitting when the policy has checks, ask with a blocker and end
+  the turn, and end with `wf work submit --note` or `release --note`.
+* **Review:** the commit and its diff (inline up to 60 kB), the step in words, change nothing,
+  request changes even when small, give exactly one verdict. Tests the sandbox cannot run are left to
+  the checks.
+* **Supervise:** the blockers waiting on the agent: answer with `--resolve`, or escalate with a
+  blocker mentioning the principal that resolves the old one.
+* **Diagnose:** the attempts that did not finish, with their reasons and last words.
+
+### Turn end
+
+When a prompt turn returns, the runner checks, in order (`State::turn_outcome`):
+
+| Situation | Next |
+|---|---|
+| the session ended | close the harness |
+| a work session's item moved on (review, done, cancelled, draft, archived) | end `Cancelled` |
+| the machine is at fault | end `MachineFault` |
+| a work session's item has an open blocker or an unfinished dependency | **park**: keep the harness and its conversation; once the item is ready, prompt again with the comments written meanwhile; end `TimedOut` after `park_timeout` |
+| `nudges` turns in a row without a new commit on the branch (for other roles: without a verdict, answer or diagnosis) | end `Released`, by `@daemon`, with the agent's last words |
+| otherwise | nudge: a role-specific "continue"; with a rebase stopped by a refused submission, name its files |
+
+### Recovery levels
+
+What happens when sessions end without finishing is configured like review: an ordered list of
+levels in the policy, each a list of steps, one taken per unsuccessful attempt. A type names its
+default level; an item can name another (`--recovery`).
+
+| Step | Does |
+|---|---|
+| `"retry"` | any agent that can take the item may start again |
+| `{ agent = { requires = [...] } }` | a diagnose session says what went wrong before the next step (for work; for other roles it acts as a retry) |
+| `"principal"` | the item waits in `wf inbox` with how the last attempt ended |
+
+* **Attempts:** a session ending `Released`, `TimedOut` or `Failed` takes the next step, as does a
+  finished diagnosis. `Interrupted`, `Cancelled` and `MachineFault` never do: they say nothing about
+  the attempt.
+* **Computed, not stored** (`State::recovery(item, role)`): the step is the number of unsuccessful
+  attempts of the role since the item last moved on (work: since the last submission; review: since
+  the submission and its latest verdict; supervise: since the oldest open blocker), and always since
+  the principal last acted on the item (created, edited, moved, linked, commented on or reviewed it).
+  So the level can change at any time and applies at once, and the principal's action starts it over.
+* After the last step, or without a level (decisions), the principal decides. Starting a session by
+  hand is not held back by recovery.
+
+### Resume and faults
+
+* **Restart.** A daemon that stops cancels its sessions' turns and closes their harnesses, but leaves
+  the sessions live. It keeps, beside each transcript, the agent's ACP session id, the time of the
+  last prompt and the model. The next daemon resumes each session in the agent's own conversation
+  (ACP `session/resume`, else `session/load` with the replayed history left out of the transcript): a
+  working session is told that wf restarted and what was written on its item since its last prompt,
+  a parked one parks again, and `max_duration` counts from the resume. A session whose item moved on
+  ends `Cancelled`; one the agent cannot resume ends `Interrupted`, which costs no recovery step.
+* **No silent stalls.** A harness has 3 minutes to start, else `HarnessUnreachable`; a turn silent for
+  20 minutes with no permission request pending ends the session `Failed`; ACP `AuthRequired` is
+  `LoginLapsed`; a write that fails for lack of space is `NoSpace`. A machine fault ends the session
+  without using a recovery step, holds the harness's agents for 10 minutes (all agents while the disk
+  is full, probed each round), and shows once in `wf inbox` as `machine_fault` rather than as a
+  comment on every item. A session end that cannot be written is retried.
+* **Storage.** Daemon start removes stray worktrees. With a `[storage]` budget in the machine config,
+  the build caches of the least recently built idle worktrees are deleted until the rest fits.
+
+## 10. VCS, review and merge
+
+* Git only, through the `git` CLI (2.38 or later), run by `wf-vcs` alone, always with
+  `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `LC_ALL=C` and no terminal prompt. Commit ids
+  are a `vcs` enum with one variant, so jj can be added without a format change.
+* One worktree and branch per item: `wf/<item>`, where `<item>` is the first 12 characters of the item
+  id. Worktrees live in `<wf>/worktrees/<item>`, outside the repository, and are removed after the
+  merge, when the item is cancelled, or at once when a session submits without commits. A review
+  gets a detached checkout in `<item>-<commit prefix>` (an empty `<item>-answer` for a submission
+  without commits), removed when it ends.
+* Whichever worktree it is given, the adapter works on the repository's main checkout, found through
+  `<wf>/repository`.
 
 ### Review
-Review levels are an ordered list in the policy, from least to most strict. Each level is a sequence of
-steps; a step is an agent matched by capabilities or the principal:
 
-```toml
-[[review]]
-name = "light"
-steps = [{ agent = { requires = ["review"] } }]
+Review levels are an ordered list in the policy, least strict first. Each is a sequence of steps; a
+step is an agent matched by capabilities, or the principal. Default levels: `none` (no steps),
+`light`, `standard`, `critical` (an agent, then the principal) and `manual` (the principal alone, the
+default for tasks).
 
-[[review]]
-name = "critical"
-steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
-```
+* An item's level is its own `review` or its type's; `--review default` goes back to the type's, so
+  `default` is not a level name. A type or item without steps is not reviewed.
+* **Submitting** (`wf work submit`) is refused while a change request is open, or with uncommitted
+  changes. It first **rebases** the branch onto the target, so the reviewer sees the commits as they
+  will land; nobody has approved them, so rewriting costs nothing (the rebased commits are signed as
+  agents' commits are). A conflict refuses the submission with the files: the rebase stays stopped in
+  the worktree, the agent resolves the files and submits again, and the daemon continues the rebase.
+  A session that ends without submitting abandons the rebase. Once the rebase is through, the session
+  ends `Submitted` and the item moves to `review`.
+* Steps run in order. The status (`Awaiting{step}`, `ChangesRequested`, `Approved`, `Merged`) is
+  computed from the latest submitted commit, the level and the verdicts on that commit. A new
+  submission starts the level over; what was reviewed is what gets merged.
+* **Verdicts** (`wf review <item>`; in a review session it also ends the session `Reviewed`) name the
+  commit and are refused on any other one:
+  * `Approve` moves on to the next step; refused while a change request is open.
+  * `RequestChanges` needs an open change request (written first, one comment each) and moves the item
+    back to its open state in the same event. The next work session continues the branch and resolves
+    them; a resolution the reviewer does not accept gets a new change request.
+  * `Escalate` (agents only) inserts a principal step after the current one.
+  * A verdict may carry a plain comment as its `because`.
+* Principal steps wait in `wf inbox` as `principal_review`. `wf item diff` shows the work through git
+  (the principal's pager and diff settings apply); `wf item checkout` puts the main checkout on it,
+  detached, since the branch is checked out in the item's worktree.
+* When the last step approves, the item is merged and then done, which unblocks its dependents. An
+  item someone moved after the submission is left where it is.
 
-* An item names a level in its `review` field, defaulting to its type's `review` (`manual` for `task`
-  and `decision`). A type without one, like an item on the level `none`, is not reviewed.
-  `wf item edit --review <level>` sets it and `--review default` goes back to the type's level; `default`
-  is therefore not a level name. The planner, a supervisor or the working agent set it; a session may
-  raise it but not lower it for an item its agent worked on.
-* Submitting (`wf work submit`) moves the item to its type's review state and starts the level's first
-  step. It is refused while the item has an open change request. A submission without commits is
-  reviewed too; its reviewer gets the history of the item and an empty directory. When the last step
-  approves, the dispatcher moves the item to its done state (after the merge, if there are commits),
-  which unblocks what depends on it. An item that someone moved after the submission is left where it is.
-  Steps run in order. A reviewer agent never did the work on the item; the same reviewer looks again
-  after changes. The status (`Awaiting{step}`, `ChangesRequested`, `Approved`, `Merged`) is computed
-  from the latest submitted commit, the level and the verdicts on that commit; nothing is stored.
-* `wf review <item>` writes the verdict; in a review session it also ends the session `Reviewed`. A
-  verdict on a commit other than the submitted one is refused, and a review session comments on the item,
-  not on its steps. `wf item diff` shows the work as a reviewer sees it, through git so the user's
-  pager and diff settings apply, and `wf item checkout` puts the main checkout on it (detached, since
-  the branch is checked out in the item's worktree). *Later:* `wf review --annotate` turns comments
-  written in a diff tool such as lumen into change requests.
-* Verdicts: `Approve` moves on to the next step, and is refused while a change request is open;
-  `RequestChanges` needs at least one open change request, written by the reviewer (section 10), and
-  moves the item back to the first open state of its type in the same event, as the fold applies it;
-  the next session continues the branch and resolves them;
-  `Escalate` (agents only) inserts a principal step right after the current one. Principal steps wait in
-  `wf inbox`. A verdict may carry a plain comment as its `because`.
-* On the next review, the reviewer sees how each change request was resolved. A resolution it does not
-  accept gets a new change request; resolved comments never reopen.
-* A verdict names the commit it reviewed. What was reviewed is what gets merged; a new submission starts
-  the level again.
-* Merging needs no separate setting: a level with a principal step waits for the principal.
-* Submitting rebases the branch onto the target first, so the reviewer sees the commits as they will
-  land; a branch that has the target already is left as it is. Nobody has approved them yet, so
-  rewriting them costs nothing. The rebased commits are signed as the agent's own are
-  (`[commits] agent_signing`). A conflict refuses the submission with the files: the session goes on,
-  the rebase stays stopped in the worktree, and the agent resolves the files and submits again; the
-  daemon stages them and goes on with the rebase, which may stop at a later commit. A turn that ends
-  with the rebase stopped is nudged with the files. A session that ends without submitting gives
-  the stopped rebase up.
+*Planned:* `wf review --annotate`, turning annotations made in a diff tool (such as lumen) into change
+requests; a comment naming a file and lines as data.
 
 ### Merge
-`[merge] mode` decides how an approved item lands in `target`:
 
-* **`local` (M2):** the daemon builds the merge with `git merge-tree --write-tree` and `git commit-tree`,
-  without touching any checkout, then advances the target: fast-forward in a clean checkout of it, or a
-  compare-and-swap `git update-ref`. A dirty checkout makes the merge wait: the item sits in its review
-  state with one comment, `wf inbox` shows it, and the dispatcher tries again on every change and
-  tick without saying so again. A conflict sends the item back to work with a comment naming the
-  files; approved work is never rewritten. Once the work is merged: `Merged{item, reviewed, commit}`, the
-  branch and worktree are removed, and the item is done. Work without a review level
-  merges as its session ends; approved work is merged by the dispatcher, one merge per item at a time.
-* **Checks (`local`).** The policy's `[[merge.check]]` commands (section 15) must pass on the merge
-  result before the target moves. One merge task per workforce merges one item at a time, outside the
-  dispatch loop; it checks the tree `merge-tree` made out in the workforce's one **check worktree**
-  (`<data>/<workforce>/check`), cleaned before each run, whose build caches stay warm. The checks run
-  one after another in the policy's order, all of them even after one failed, each without a shell, in
-  the sandbox of checks (`[check] sandbox`, by default the agents') and the agents' environment
-  without `CARGO_TARGET_DIR` (a shared target directory could give a false pass), with the global git
-  config but signing off, for its timeout at most; the machine config's `[check] max_timeout` caps
-  it. Each run keeps its output in `<data>/<workforce>/check-logs/<name>/`. A pass is kept by tree and
-  command on the merging machine, so a check that passed on a tree does not run there again.
-  * All pass: the merge commit is made from that tree. When the target moved meanwhile, the new merge is
-    checked again; a target that keeps moving can make an item wait.
-  * A check that fails runs on the target's own tree too, decided per check. If it passes there, the
-    work broke it: a change request by `@daemon` per such check (its name, command, tree, the end of
-    its output and the log's path), and the item goes back to its open state, where the next session
-    has to resolve them before it submits again. If it fails there as well, or timed out, it is not the
-    work's fault: a blocker to the principal, and the item stays in `review`; resolving it checks the
-    merge again.
-  * After two failed check runs since the principal last acted on the item (`wf-core::lifecycle`), or
-    when its type has no open state, the failures are a blocker to the principal instead of going back
-    to work.
-  * Nothing else goes into the log: a check's result is about one machine's toolchain.
-  * `wf check [<name>...]` runs the checks, or the named ones, on the checkout it is run in, as it is,
-    in the same sandbox (in a session: the session's), and prints a mark per check with the end of each
-    failure's output: for an agent before `wf work submit`, whose brief says so, for a reviewer or the
-    principal. The daemon's run before the merge is the one that counts.
-* **`origin` (M3):** a central origin (GitHub etc.). wf pushes approved branches and opens pull requests;
-  **the origin decides merging** (branch protection). `wf` observes it and emits `Merged` when a
-  `wf/<item>` branch lands in the target.
-* **Later:** git bundles over iroh-blobs for peer-to-peer repositories; `git-remote-iroh` as prior art.
+`[merge] mode = "local"` merges approved work into `[merge] target` in this repository. One **merge
+task** per workforce merges one item at a time, outside the dispatch loop; the dispatcher and session
+ends only queue work for it. Work without a review level waits in `review` while queued.
+
+1. Build the merge with `git merge-tree --write-tree`, touching no checkout.
+2. Run the policy's checks on that tree (below).
+3. Commit it (`Merge #<item>: <title>`) with `git commit-tree`, and advance the target: fast-forward a
+   clean checkout of it, or compare-and-swap with `git update-ref`. A target that moved meanwhile is
+   tried again (3 times, then one comment).
+4. Write `Merged{item, reviewed, commit}`, remove the branch and worktree, move the item to done.
+
+* A **dirty checkout** of the target makes the merge wait: one comment naming the files, a `merge`
+  entry in `wf inbox`, and a retry on every change and tick. Untracked files do not count.
+* A **conflict** sends the item back to its open state with a comment naming the files; approved work
+  is never rewritten. The next session's submission rebases it.
+* Any other failure comments once and leaves the item in `review` to retry. A reviewed commit that
+  already landed only moves the item to done.
+
+**Checks.** `[[merge.check]]` commands (section 15) must pass on the merge result before the target
+moves. They run in the workforce's one check worktree (`<wf>/check`, cleaned before each run, build
+caches warm), one after another in the policy's order, all of them even after a failure, each without
+a shell, for its timeout at most (capped by the machine config's `[check] max_timeout`). They get the
+agents' environment without `CARGO_TARGET_DIR` (a shared target could give a false pass), the global
+git config with signing off, and the check sandbox of the machine config (section 13). Each run's
+output stays in `check-logs/<name>/`. A pass is kept per tree and command on this machine, so a check
+does not run twice on the same tree.
+
+* **All pass:** the merge commit is made from that tree; if the target moved, the new merge is
+  checked again.
+* **A check fails:** it runs on the target's own tree too. If it passes there, the work broke it: a
+  change request by `@daemon` per such check (name, command, tree, the end of the output, the log's
+  path) and the item goes back to open. If it fails there too, or timed out, it is not the work's
+  fault: a blocker to the principal, the item stays in `review`, and resolving the blocker checks the
+  merge again. Mixed results send the item back for the work's failures and tell the principal of the
+  others.
+* After two failed runs since the principal last acted on the item, or when its type has no open
+  state, failures go to the principal instead of back to work.
+* A check's result is about one machine's toolchain, so nothing else goes into the log.
+* `wf check [<name>...]` runs the checks on the checkout it is run in, as it is, and prints a mark per
+  check with the end of each failure's output: in a session in the session's sandbox, otherwise in
+  the check sandbox. Agents are told to run it before submitting; the daemon's run is the one that
+  counts.
+
+**Planned:**
+* `mode = "origin"` (M3): wf pushes approved branches and opens pull requests; the origin decides
+  merging (branch protection), and wf writes `Merged` when `wf/<item>` lands in the target.
+* `[[merge.after]]`: a command after a merge (release, deploy), run only by the daemon that merged,
+  outside the sandbox with secrets from the broker. Its failure goes to the inbox and never reopens the
+  item. wf does not become a CI system: no jobs, artifacts or matrices.
+* Git bundles over iroh-blobs for peer-to-peer repositories (M6); `git-remote-iroh` as prior art.
 
 ### Commit identity and signatures
-* An agent commits as itself: the daemon sets `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME` of its
-  processes to `@principal/agent`, the name it has everywhere else, without the session. The email is
-  what the git config says. Which session made a commit is in the log: `SessionEnded` names it.
-* Agents commit unsigned by default (`[commits] agent_signing` in the machine config), so they never
-  wait for a key the principal has to unlock or approve; `as_configured` lets the git config decide.
-  Git config reaches the agent through `GIT_CONFIG_*` variables of its processes.
-* The merge commit (`[commits] merge_signing`) is signed as the git config says (the principal's key,
-  the default), not at all, or with the key of the daemon's **device** (`device`). A device signature
-  says "this device of the workforce merged it"; the approval it carries out is the `Reviewed` event,
-  which a device signed as well. The daemon writes the device key as an OpenSSH key file beside it
-  and signs through `ssh-keygen`. `wf device allowed-signers` prints a git allowed-signers file with
-  every bound device as `<handle>@<device name>`, so `git verify-commit` checks merges against the
-  workforce. The device key also signs events; the two never sign the same bytes, since an SSH
-  signature covers a blob that starts with `SSHSIG` and names the namespace `git`, and an event
-  signature covers bytes that start with `wf/event/1\0`.
-* **Later: a signing key per session.** One key for all agents proves only that some agent of the
-  machine committed, not which: anyone with the key can sign as any `@principal/agent`. For the
-  signature to name the session, the daemon generates a key when a session starts, lets only that
-  session's sandbox read it, records its public key in the log (in `SessionStarted`, a format change),
-  and throws it away when the session ends. `wf device allowed-signers` then also lists each
-  session's key, and a commit checks out against the session that made it.
 
-## 10. Comments
+* An agent commits as itself: the daemon sets `GIT_AUTHOR_NAME` and `GIT_COMMITTER_NAME` to
+  `@principal/agent`, with the email of the git config. `SessionEnded` says which session made a
+  commit.
+* Agents commit unsigned by default (`[commits] agent_signing`), so they never wait for a key the
+  principal has to unlock; `as_configured` lets the git config decide. Git config reaches agents only
+  through `GIT_CONFIG_*` variables.
+* The merge commit (`[commits] merge_signing`) is signed as the git config says (the default; with
+  signing configured, the principal's key says "I accepted this"), not at all, or with the device key
+  (`device`: "this device of the workforce merged it", carrying out an approval the log records). The daemon signs through
+  `ssh-keygen` with `<data>/keys/device-ssh`; `wf device allowed-signers` prints every bound device as
+  `<handle>@<device name>` for `git verify-commit`. An SSH signature covers a blob starting with
+  `SSHSIG` in namespace `git`, so it never collides with an event signature.
+* *Planned:* a signing key per session, readable only by its sandbox, with its public key in
+  `SessionStarted`, so a commit's signature names the session, not just "some agent of the machine".
 
-All text about an item is a comment: discussion, questions, requested changes, the reasons for a move or
-a verdict, and what the working agent reports. There is no second kind of note.
+## 11. Comments
+
+All text about an item is a comment: discussion, questions, change requests, the reasons for a move
+or a verdict, and what the working agent reports. There is no second kind of note.
 
 ```rust
 struct Comment {
     item: ItemId,
     text: String,
-    kind: CommentKind,
-    resolves: Vec<EventId>,         // blockers and change requests this comment resolves
-    step: Option<StepId>,           // the step this is about, named by the hash of its text
+    kind: CommentKind,              // Plain | Blocker | ChangeRequest
+    resolves: Vec<CommentId>,       // blockers and change requests this comment resolves
+    step: Option<StepId>,           // the step it is about: the hash of the step's text
 }
-enum CommentKind { Plain, Blocker, ChangeRequest }
-```
-
-```
-wf comment <item> "<text>"
-wf comment <item> "<text>" --block              # a blocker
-wf comment <item> "<text>" --request-change     # a change request
-wf comment <item> "<reply>" --resolve <comment> [--resolve <comment> ...]
-wf comment <item> "<reply>" --resolve-blockers | --resolve-change-requests
-wf comment <item> "<text>" --step <number> [--done]
 ```
 
 ### Blockers and change requests
-Both stay **open** until a later comment resolves them. They differ in what they hold up:
 
-| Kind | Purpose | While open | Goes to |
+Both stay **open** until a later comment resolves them.
+
+| Kind | Says | While open | Goes to |
 |---|---|---|---|
-| **Blocker** | the work cannot start or continue until someone else answers or acts | the item is not ready; a work session on it parks (section 5) | whoever it `@mentions`; otherwise a supervisor; otherwise the principal of the agent that wrote it, or the author if a principal |
-| **Change request** | something the work must do before it is submitted | `wf work submit` and `Approve` are refused | whoever works on the item next; the work brief lists it |
+| **Blocker** | the work cannot start or go on until someone answers or acts | the item is not ready; a work session on it parks | the first principal or agent it mentions; else a supervisor; else the writer's principal |
+| **Change request** | something the work must do before it is submitted | `wf work submit` and `Approve` are refused | whoever works on the item next; the brief lists it |
 
-* A question from an agent is a blocker on its own item: `wf comment <item> "<question>" --block`. Its
-  session parks, and resumes with every comment written while it was parked once the blocker is resolved.
-  So does a wait on something outside the model (credentials, CI, a vendor).
-* A blocker without a mention goes to the `supervision` lane: the dispatcher starts a **supervise
-  session** for an agent in that lane that never worked on the item. It gets the item's history and an
-  empty directory, and ends `Supervised` when it either resolves the blocker with an answer, or escalates
-  it with a new blocker that `@mentions` the principal and resolves the old one. Without a supervisor, the
-  blocker goes straight to the principal. Blockers waiting on a principal are listed in `wf inbox`.
-* Change requests come from reviewers (section 9) and from anyone who wants something done before the
-  work is submitted. The working agent resolves each once it is done, saying how or naming the commit.
+* An agent asks by writing a blocker on its own item and ending its turn; its session parks and
+  continues, with what was written meanwhile, once the blocker is resolved. The same holds for waits
+  outside the model (credentials, a vendor).
+* A blocker that mentions no one goes to the agents in the `supervision` lane, if any: one that never
+  worked on the item gets a supervise session with the item's history in an empty directory. It
+  either answers (a comment resolving the blocker) or escalates (a new blocker mentioning the
+  principal that resolves the old one), which ends the session `Supervised`. A blocker that mentions
+  an agent gets a supervise session for that agent. Blockers waiting on a principal are in `wf inbox`.
 * **Resolving:** any comment can resolve open blockers and change requests of its item, including a
-  blocker or change request itself (an escalation). `--resolve-blockers` and `--resolve-change-requests`
-  expand to the ids open when the command runs, and the event stores those ids: a blocker written
-  concurrently on another device is never resolved by a reply that did not see it. A resolving comment
-  may have empty text. Anyone may resolve, except that a session cannot resolve a blocker it wrote.
-* Resolution is grow-only: there is no reopening. A resolution someone does not accept gets a new
-  blocker or change request.
+  blocker or change request (an escalation), and may have empty text. `--resolve-blockers` and
+  `--resolve-change-requests` expand to the ids open when the command runs, and the event stores those,
+  so a blocker written concurrently elsewhere is never resolved by a reply that did not see it.
+  Resolution is grow-only; a resolution someone does not accept gets a new comment.
 
 ### Comment ids
-A comment's id is its event id. It prints as the first **4** characters of its base32 hash, scoped to the
-item: `--resolve c7f2` on `#rpdhor`, or `#rpdhor/c7f2` from anywhere else, which also makes a backlink
-to the comment. A longer prefix is accepted, and an ambiguous one is refused, as with items.
 
-* Fixed length, not the shortest unique prefix: a shortest prefix grows when a later comment collides,
-  and ids already printed or pasted would stop matching.
-* Not sequence numbers (`c1`, `c2`): two devices commenting concurrently would both write the same
-  number, and the numbering would shift as their events sync.
+A comment's id is its event id, printed as the first **4** characters of its base32 hash, scoped to
+the item: `--resolve c7f2` on `#rpdhor`, or `#rpdhor/c7f2` elsewhere (a backlink). Longer prefixes are
+accepted, ambiguous ones refused. Fixed length, not the shortest unique prefix, which would grow when a
+later comment collides and break ids already printed; not sequence numbers, which two devices would
+write concurrently.
 
-### Reports
-What the working agent says about what it is doing and why: progress, decisions made, options rejected. A
-report is a comment written by a work session, so it belongs to that session and through it to the item.
-An item can have several sessions (an agent gives up, a review requests changes), and the activity shows
-which one each comment came from.
+### Reports and steps
 
-* `--step` takes the number `wf item show` prints for the step, and is stored as the step's id. `--done`
-  requires `--step` and also writes `StepDone` for it. Review and supervise sessions comment without
-  `--step`, since they do not tick the author's steps.
-* The step link is plain data and is not checked when read. `--step` is checked against the item's body
-  when the comment is written, so a mistyped number writes nothing. If the step's text is edited later,
-  the comment keeps pointing at a hash that is no longer in the body, and it is shown without a step.
-* The tick is its own event with its own rules, so a comment never becomes invalid because a step changed.
-* Reports are encouraged and never required: `wf work submit` does not check for them. Agent instructions
-  ask for reports that stand on their own, saying what was chosen, what was rejected and why.
-* Attribution comes from the event signature and the session.
-* Redaction happens before signing (M3; until then comments are signed as written).
-* A work brief includes the comments of earlier sessions of the item.
-* Nothing depends on commit messages. Overlap notifications (M3) come from the files commits touch, which
-  are read from the repository and are not part of a comment.
+A report is a comment by a work session: progress, what was chosen and rejected, and why. It belongs
+to its session, so an item's activity shows which attempt said what. Reports are asked for, never
+required; nothing depends on commit messages.
+
+* Steps are the `- [ ]` lines of the body. `--step <n>` takes the number `wf item show` prints,
+  checked against the body when written, and stores the step's id (the hash of its text). If the text
+  changes later, the comment keeps pointing at a hash no longer in the body and shows without a step.
+* Ticks are their own edit (`StepDone{step, done}`), written by `wf item check` or `--step <n> --done`,
+  so a comment never becomes invalid because a step changed. Review sessions do not comment on steps.
+* *Planned (M3):* comments of agent sessions pass redaction before signing (section 13).
 
 ### Activity
+
 `wf item show` ends with the item's **activity**: one timeline of everything that happened to it, in
-fold order. It replaces a separate history listing.
+fold order, replacing a separate history.
 
-```
-activity · 2026-10-11
-  06:32  @ada created the task
-  06:52  @ada/coder/pp74s3 started work
-  06:52  @ada/coder/pp74s3 ⧗ blocker → supervisor                               c7f2
-           Item has two steps with no concrete work … What change do you want made?
-  06:55  @ada/supervisor/k3j1 ⧗ blocker → @ada · resolves c7f2                  a91d
-           No decision covers this; it's about intent.
-  06:59  @ada resolved a91d                                                     e04b
-           Fix the formatting of the body, nothing else
-  06:59  @ada/coder/pp74s3 resumed
-  07:04  @ada/coder/pp74s3 submitted 3e8a1c → review
-  07:10  @ada/reviewer/m2p9 requested changes on 3e8a1c
-           △ b2e4  parser.rs: the error path drops the span
-           △ d81c  missing test for empty input
-  07:31  @ada/coder/pp74s3 resolved b2e4, d81c                                  f13a
-           Kept the span in ParseError; added empty_input test.
-```
+* Comments get a header (time, actor, kind, what they resolve, id) and their text; change requests
+  written with a verdict are listed under it.
+* Events get one line: moves (with their `because`), edits, links, sessions, verdicts, merges,
+  archiving. A move carried out for a session (`by_session`) shows in the session's line
+  (`submitted 3e8a1c → review`).
+* Other items appear where they change this one: a dependency done or cancelled, a new dependent, a
+  reference.
+* A body edit that lost to a concurrent edit is shown with its text, so nothing disappears silently.
+* The header lists what is open: blockers with whom they wait on, and change requests.
 
-* **Comments** take a header line (time, actor, kind, what they resolve, id) and their wrapped text.
-  Change requests written together with a verdict are listed under it.
-* **Events** take one line: moves (`moved to draft`; with a `because`, the comment's text below),
-  edits (`set priority P1`, `labels +bug`, `review → principal`, `edited the body`, `checked step 2: …`),
-  links (`now depends on #x7k2`, `no longer depends on #x7k2`), sessions (`started work`,
-  `started review of 3e8a1c`, `released`, `timed out`), verdicts, merges and archiving.
-* **Moves carried out for a session** (`by_session`) are shown in the session's line, not on their own:
-  `started work`, `submitted 3e8a1c → review`, `released → open`.
-* **Other items** appear where they change this one: a dependency done (`#x7k2 done`) or cancelled
-  (`#x7k2 cancelled · stranded`), a new dependent (`#abc now depends on this`), a reference
-  (`referenced in #abc`).
-* A body edit that lost to a concurrent edit is shown with its text, so nothing silently disappears.
-* The date heads the section and is repeated when the day changes; lines show the time only.
-* The item header lists what is open: `2 open: ⧗ c7f2 blocker → supervisor · △ d81c change request`.
-* `--json` gives the activity as a list of entries tagged by kind.
+`wf item show` and `wf stats` also count each item's sessions, submissions (review rounds), change
+requests and the time from its first work session to done.
 
-### Two kinds of decisions
+### Planned: project decisions and search (M4)
+
 | | Item decisions | Project decisions |
 |---|---|---|
-| Where | the reports (comments) of the item's work sessions | the project decision log |
-| Written by | the working agent | agents, scribes, humans |
-| Ratified | no | yes |
-| Agent context | when working on that item | always, once ratified |
+| Where | reports on the item | `decision` items |
+| Written by | the working agent | agents, distill sessions, principals |
+| Ratified | no | yes: `done` |
+| In agent briefs | when working on that item | always, once ratified and not superseded |
 
-## 11. Project decisions and search (M4)
+A ratified decision changes only through a new decision that `supersedes` it. Search is local per
+peer: a derived, rebuildable index (tantivy for keywords, a local vector index with a local embedding
+model), fused by reciprocal rank: `wf search "..." --kind decision,comment --since 30d`.
 
-* Distilling threads and comments into project decisions is **normal work**: a `distill` item in the
-  `meta` lane, claimed like any other. This avoids duplicate scribes.
-* Decisions are items of the built-in `decision` type. A ratified decision, one that is `done`, changes
-  only through a new decision that `supersedes` it.
-* Only **ratified** decisions, `done` and not superseded, enter agent context. The others are
-  searchable by humans.
-* Search is local per peer, not synced: a derived, rebuildable index (tantivy for keywords, a local vector
-  index with a local embedding model), fused by reciprocal rank. `wf search "..." --kind decision,comment --since 30d`.
+## 12. Harnesses
 
-## 12. Harness integration via ACP
-
-The daemon is an ACP client (protocol v1). Each **wf session** drives one harness subprocess in its own
-worktree. A device runs as many sessions as its `max_sessions` allows.
-
-Harnesses are detected on `PATH` by their ACP command; probing them with ACP `initialize` (installed,
-authenticated) is *later*. wf never handles harness credentials.
-
-| ACP | Use |
-|---|---|
-| `session/new` + MCP servers | start in the item's worktree with `WF_SESSION` and its token `WF_SESSION_TOKEN` set (section 5, *Who the daemon acts for*); attach the `wf` MCP server (`item_show`, `comment`, `inbox`, `search`, `decision_propose`, M3) |
-| `session/prompt` | send the brief: item, dependencies, comments of earlier sessions, open change requests, the agent rules; later ratified decisions and search hits |
-| end of a prompt turn | decides the next step (below) |
-| `session/update` | transcript capture (local, `wf session watch`), redaction (M3), presence |
-| `session/request_permission` | answered by the agent's `permissions`: allow, deny, or ask, which goes through the permission chain below |
-| `terminal/*`, `fs/*` | not offered in M2, harnesses use their own tools; later run inside wf's environment with secret injection |
-| `session/cancel` | `wf session stop`, `max_duration`, claim or lease lost, or item reassigned. Not when the agent ended its own session (`submit`, `release`, a verdict): it then gets 20 seconds to finish its turn, because the command it ran is still waiting for its answer |
-
-**Turn end.** When a prompt turn returns, the runner looks at the session and its item:
-
-| Situation | Next |
-|---|---|
-| the session ended (`wf work submit`, `wf work release`, a verdict, a supervisor's resolution) | close the harness |
-| the item has an open blocker or waits on a dependency | park; prompt again with the comments written meanwhile once the item is ready, end `TimedOut` after `park_timeout` |
-| otherwise, nudges left | prompt "continue": submit, write a blocker or release when done or stuck |
-| `nudges` turns in a row without a new commit | end `Released`, with a comment |
+The daemon is an ACP client (protocol v1, behind a `Harness` trait). Each session drives one harness
+subprocess, in the agent sandbox (section 13).
 
 | Harness | ACP command |
 |---|---|
-| `opencode` | `opencode acp` |
 | `claude-code` | `claude-agent-acp` |
+| `opencode` | `opencode acp` |
 | `codex` | `codex-acp` |
 | `gemini-cli` | `gemini --experimental-acp` |
 
-* Pin ACP v1 and keep it behind a `Harness` trait; a `raw-cli` fallback (M3) starts any agent with a
-  prompt file and observes commits.
-* ACP-level sandboxing only covers what the agent routes through the client; real isolation is OS-level
-  (donor mode, *later*).
-* `wf attach <session>` over an iroh ALPN `wf/acp/1` (M5).
-* The CLI stays. MCP tools and CLI are thin wrappers over the same daemon API.
-* *Later:* a scheduler hook, an external program asked at the dispatch and turn-end decisions, for
-  policies the agent settings cannot express.
+wf never handles harness credentials. `wf init` lists the harnesses on `PATH`; `wf harness models`
+starts one and lists its models. An agent's model is set as the ACP `model` config option, and a
+model the harness does not offer fails the session with the list.
 
-**Hooks.** Every hook wf runs speaks JSON. wf writes one object to the hook's stdin, naming the hook
-and its version (`{"hook": "permission", "version": 1, ...}`), and reads one object from its stdout.
-Both sides ignore fields they do not know.
+| ACP | Use |
+|---|---|
+| `session/new` | start in the session's directory with `WF_SESSION`, `WF_SESSION_TOKEN`, `WF_WORKFORCE` |
+| `session/resume`, `session/load` | resume after a daemon restart (section 9) |
+| `session/prompt` | the brief, nudges, "what you were waiting for is resolved", "wf restarted" |
+| `session/update` | the transcript (local, `wf session watch` and the dashboard) |
+| `session/request_permission` | answered by the agent's `permissions` (below) |
+| `session/cancel` | `wf session stop`, `max_duration`, the item moved on, daemon halt; not when the agent ended its own session, which gets 20 s to finish its turn |
+| `terminal/*`, `fs/*` | not offered; harnesses use their own tools |
 
-### Permission requests (M2.1)
-A request of an agent whose permissions are `ask` passes through a chain of deciders, in the order the
-machine config lists them, until one answers. Each one allows, denies or passes the request on:
+The CLI and the dashboard are thin layers over the same daemon calls.
 
-* **`rules`**: built-in. Running `wf` alone is allowed, because it is how a session reports back:
-  its session commands, help for any command (`wf … --help`), and lists of these joined by `;` or
-  `&&`, each optionally piped into filters such as `grep`.
-* **`hook`**: a program that gets the request on stdin and prints
-  `{"permission": "allow" | "deny" | "ask", "reason": ...}`. `ask`, a crash or a timeout passes on.
-* **`model`**: a decision model such as Jev, called over the System One API at a configured
-  endpoint `url` (TypeSafe, OpenRouter, Cloudflare Workers AI, ...). Asked as a `noul`, its probability that the call
-  should be allowed is compared with two thresholds: allow above one, deny below the other, pass on in
-  between. Asked as a `choice` between allow, deny and ask, its pick is taken above a minimum
-  confidence. Its API key comes from an environment variable.
-* **`agent`**: an agent that the daemon keeps one live session of, prompted with the request, the
-  item and the guidance. It answers like a hook.
+*Planned:* a `wf` MCP server attached at `session/new` (M3); a `raw-cli` fallback that starts any
+agent with a prompt file and watches commits (M3); `wf attach <session>` over an iroh ALPN `wf/acp/1`
+(M5); probing harnesses with ACP `initialize`.
 
-What every decider passes on goes to the principal, through `wf inbox`, the dashboard (`wf`) or
-`wf session allow|deny`. Only a connection that acts for the principal answers it: a session cannot
-answer its own request, nor another's. Without a config the chain is `rules`, then the principal.
-Deciders are set in the machine config (`$XDG_CONFIG_HOME/workforce/config.toml`), never in the
-signed policy: policy that syncs must not make other machines run programs or call paid APIs. The
-policy's checks (section 9) are programs too, but they run in the sandbox the machine config gives
-them and get nothing more. Each decision, its decider and its reason go into the transcript of the
-session that asked.
+### Permission requests
+
+An agent's `permissions` decide its harness's requests: `deny` refuses, `allow` allows (on a machine
+without a sandbox it is treated as `ask`), and `ask` passes the request through a chain of
+**deciders**, in the machine config's order, until one allows or denies:
+
+* **`rules`** (built in): a command that only runs `wf item|comment|work|review|inbox|status|log|
+  search|mentions`, or asks any `wf` command for `--help`, alone or joined by `;` or `&&`, optionally
+  piped into `head`, `tail`, `grep`, `rg`, `wc`, `sort`, `uniq`, `cut` or `jq`. Nothing that changes
+  devices, agents, policy or permissions, so an agent cannot widen its own rights. Whatever it does not
+  fully understand it passes on.
+* **`hook`**: a program, run without a shell in the session's directory, gets the request as JSON
+  and answers `{"permission": "allow" | "deny" | "ask", "reason": ...}`.
+* **`model`**: a decision model behind the System One API at a configured `url`, asked either for the
+  probability that the call should be allowed (`noul`: allow above one threshold, deny below another)
+  or to choose (`choice`, taken above a minimum confidence). Its key comes from a daemon environment
+  variable that agents do not get.
+* **`agent`**: an agent of the workforce, in a harness session the daemon keeps per agent, replaced
+  after `turns` requests, answering like a hook. It runs outside Fence and every permission request of
+  its own is denied. The model decider is preferred: one judge session serializes requests, and an
+  injection stays in its context for later decisions.
+
+A decider that fails, times out or answers something unparseable passes the request on; it never
+decides by accident. What every decider passes on goes to the principal (`wf inbox`, the dashboard,
+`wf session allow|deny`); only a principal connection may answer, never a session. Without a config
+the chain is `rules`, then the principal. Each decision, its decider and reason go into the session's
+transcript. `wf permissions test` runs the chain on a request without a session.
+
+Deciders live in the machine config, never in the signed policy: policy that syncs must not make
+other machines run programs or call paid APIs.
+
+### Hooks
+
+Every program wf asks for a decision speaks one protocol: one JSON object on stdin naming the hook and
+its version (`{"hook": "permission", "version": 1, ...}`), one object on stdout, unknown fields
+ignored on both sides, and failure passes on. Only the permission hook is built.
+
+**Planned: command steps.** A review or recovery step may name a command, `{ command = "ci-gate" }`;
+the machine config's `[commands.<name>]` says what it runs there (argv, timeout), and a machine without
+it cannot take the step (flagged like an unstaffed step). The command gets the item, the submission
+and earlier steps (`"hook": "review"`) or the ended attempts (`"hook": "recovery"`) and answers a
+verdict with a note and change requests, or `retry | principal | cancel` with a note. wf validates the
+answer and writes the events, attributed to `@daemon` with the command's name; a command needs no key,
+session or socket. `wf hook schema` prints JSON Schema generated from the Rust types (`schemars`), from
+which bindings (a TypeScript library first) are generated; `wf hook test` runs a command on a request.
+Open: whether review commands run in Fence; progress output for long gates; whether a scheduler hook
+for dispatch and turn-end decisions uses the same protocol.
 
 ### Notifications
-The principal does not have to watch `wf inbox`: with a command under `[notify]` in the machine
-config, the daemon runs it, without a shell, once for each new entry of the inbox (a blocker, a
-proposal, a review step or a merge that waits on the principal, a recovery left to the principal, a
-held permission request). `{kind}`, `{item}`, `{title}` and `{what}` in its arguments are replaced
-with the kind, the short id and the title of the item, and the text of `wf inbox`. No command, no
-notifications.
 
-```toml
-[notify]
-command = ["terminal-notifier", "-title", "wf: {title}", "-message", "{what}"]   # macOS; or osascript
-# command = ["notify-send", "wf: {title}", "{what}"]                             # Linux
-```
+With `[notify] command` in the machine config, the daemon runs it, without a shell, once for each new
+inbox entry that waits on the principal: a blocker, a proposal, a principal review step, a merge
+waiting on a dirty checkout, a recovery left to the principal, and a held permission request.
+`{kind}`, `{item}`, `{title}` and `{what}` in its arguments are replaced. Entries are announced after
+each dispatcher round, so work about to merge is not announced. What was announced is kept in
+`<wf>/announced.json`, so a restart does not repeat it, and an entry that goes and comes back (a
+resubmission) is announced again. A command that fails or takes over 20 s is logged and stopped.
 
-The dispatcher tells of what waits after each of its turns, so approved work it is about to merge or
-finish is not told of: a merge only once the dispatcher found the target branch checked out with
-changes. The entries told of are kept in the daemon and beside the store of the workforce
-(`announced.json`), so a restart does not tell of them again, and an entry that was gone and comes
-back, such as a resubmission, is told of anew. Permission requests do not outlive the daemon and are
-told of when they are held. A command that fails or takes longer than 20 seconds is logged and
-stopped; nothing waits for it.
+## 13. Machine config, sandbox and secrets
 
-## 13. Secrets and transcripts
+What makes sense on one machine only lives in its **machine config**,
+`$XDG_CONFIG_HOME/workforce/config.toml`, never synced: another machine can never make this one run a
+program or call a paid API. Unknown keys are errors; without a file every default applies. The daemon
+reads it anew for each session and permission request; a broken config sends permission requests to
+the principal with the reason. A mistake in `[theme]` only warns and keeps the built-in colours.
 
-* Transcripts (the stored ACP update stream) stay **local and unpublished by default**.
-  `publish = none | redacted | full` is a per-workforce policy (*later*).
-* `wf` **brokers** secrets, it does not store them. Sources: `secretspec.toml`, 1Password `op://`
-  references, the system keyring. Values are injected into the harness environment.
-* An agent's environment is only what wf sets, a few variables every program expects (`HOME`, `PATH`,
-  ...), and what the machine config inherits or sets for every agent or for one (M2.2). Nothing else
-  of the daemon's environment reaches it; a variable set allows nothing in the sandbox by itself.
-* **The agent sandbox.** The daemon runs agents in Fence, with a profile it writes for each session
-  from Fence's `code` template. An agent may write its worktree, the repository's `.git` where its
-  commits go, the daemon's socket, temporary files, the caches and state of agent tools, and what the
-  machine config adds; nowhere else in `~/.config` or `~/.local/share`, so not wf's stores nor the
-  worktrees of other items. Whatever the machine config adds, the sandbox denies:
-  * reading or writing the device key, the principal keys, the principal token and the machine
-    config, with which an agent would sign as the device or the principal, have the daemon act for
-    the principal, or turn its sandbox off;
-  * writing the repository's `.git/config` and `.git/hooks`, the worktree's `.git` file and the
-    `commondir` it leads to, and git's own config (`~/.gitconfig`, `~/.config/git`), with which git
-    would run the agent's code outside the sandbox. wf also runs every git command with
-    `core.hooksPath=/dev/null` and `core.fsmonitor=false`;
-  * reading SSH and GPG keys and the credentials of clouds and package registries.
+| Section | Sets |
+|---|---|
+| `[sandbox]` | `kind = "fence"` (default) with `allow_write` and `allow_domains`, or `"off"` |
+| `[environment]` | `inherit` from the daemon's environment, `set` values (with `~`, `$NAME` expanded) |
+| `[agent.<name>]` | more `environment` and `sandbox` for one agent |
+| `[commits]` | `agent_signing`, `merge_signing` (section 10) |
+| `[check]` | `max_timeout`, and the checks' own `sandbox` (default: `[sandbox]` without per-agent additions) |
+| `[storage]` | `budget` and the rebuildable `caches` paths inside worktrees (section 9) |
+| `[notify]` | `command` (section 12) |
+| `[permissions]` | `guidance` text for models and agents, and the `[[permissions.decider]]` chain |
+| `[theme]` | colours of the CLI and dashboard, in git's colour syntax |
 
-  `wf` in a session reads no key: the daemon signs what it writes and tells it the device's key.
-* wf keeps the injected values in memory only and uses them to scrub: exact match plus base64, URL and hex
-  encodings, then pattern scanning (gitleaks-style) as a second layer.
-* Comments written by agent sessions always pass redaction before signing.
+### The agent sandbox
 
-## 14. Connectivity and lifecycle
+The daemon runs every harness in **Fence**, with a profile it writes per session from Fence's `code`
+template. Without Fence installed, sessions fail; there is no silent fallback. `kind = "off"` runs
+agents with the principal's privileges, and then `allow` is treated as `ask`.
+
+* **Write:** the session's directory, the repository's `.git` (where its commits go), temporary files,
+  `~/.cache` and the caches and state of agent tools and package managers, the daemon's socket, and
+  `allow_write`. Not `.env*` or key files.
+* **Network:** model APIs, git hosts and package registries, plus `allow_domains`; cloud metadata and
+  telemetry are denied.
+* **Commands denied:** pushing, resetting, rebasing and merging with git, publishing packages, `sudo`,
+  and `gh` commands that change anything.
+* **Always denied, whatever the config adds:**
+  * reading or writing the device key, principal keys, the principal token and the machine config,
+    with which an agent could sign as the device or the principal, have the daemon act for the
+    principal, or turn its sandbox off;
+  * writing `.git/config`, `.git/hooks`, the worktree's `.git` file and the `commondir` it leads to,
+    and git's own config, with which git would run the agent's code outside the sandbox;
+  * reading SSH and GPG keys and the credentials of clouds, registries and docker.
+
+`wf` in a session reads no key: the daemon signs what it writes.
+
+### Environment
+
+An agent's environment is only: what wf sets (`WF_SESSION`, `WF_SESSION_TOKEN`, `WF_WORKFORCE`,
+`PATH` with `<data>/bin` first, `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, signing through
+`GIT_CONFIG_*`); what every program expects (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`,
+`LC_*`, `XDG_*_HOME`); and what the machine config inherits or sets, for all agents or one (the
+agent's value wins). wf's own variables cannot be set there. A variable allows nothing in the sandbox
+by itself: a directory to write to also goes in `allow_write`.
+
+### Planned: secrets and transcripts (M3, M7)
+
+* `wf` brokers secrets, it does not store them: sources such as `secretspec.toml`, 1Password `op://`
+  references and the system keyring; values are injected into the harness environment and kept in
+  memory only.
+* Those values are used to scrub: exact match plus base64, URL and hex encodings, then gitleaks-style
+  pattern scanning. Comments of agent sessions pass this redaction before signing.
+* Transcripts are local and never synced today. A per-workforce `publish = none | redacted | full`
+  comes with stage 3 and 4 (M7).
+* Real isolation of donor agents is OS-level, beyond what ACP routes through the client (M7).
+
+## 14. Connectivity
 
 ### Creating
-`wf init --name <name>` inside a git clone: writes genesis, `.workforce.toml` (only the id), reads the
-origin from the clone, and lists the harnesses found on PATH with the `wf agent add` command for each; it
-defines no agent. `wf init -i` asks which harnesses to define agents for, with their permissions and model.
 
-### Joining
-Two invite kinds, one command:
+`wf init --name <name> [--handle] [--device-name]` inside a git clone writes genesis with the default
+policy and the principal as founder (handle `$USER` by default), a fresh principal key, a
+`DeviceProfile` (host name; hardware `os:…, arch:…`) and `.workforce.toml`. It lists the harnesses
+found on `PATH` with the `wf agent add` command for each, and defines no agent; `wf init -i` asks for
+the name and which agents to define.
 
-| Kind | Created by | Effect |
-|---|---|---|
-| `device` | the principal (principal key required) | adds another machine of yours, same identity |
-| `member` | an owner | a new person with their own principal and handle |
-
-User's view, adding the cloud VM:
+### Joining a device
 
 ```
-$ wf invite device                     # on a machine holding the principal key
-Invite code (valid 24h, single use):  wfi1qk7m3...x9ta
-
-$ cd ~/src/workforce && wf join wfi1qk7m3...x9ta     # on the VM, inside an existing clone
-✓ Connected to workforce "workforce" via laptop (direct)
-✓ This machine joins as a device of @ada
-Machine name [vm-hetzner-1]: ⏎
-Detected harnesses:  [x] opencode (authenticated)  [x] claude-code (not logged in)  [ ] codex (missing)
-Host your agents here:  [x] @ada/coder  [ ] @ada/reviewer (codex missing)
-Max concurrent sessions [1]: 2
-Run wf in the background (systemd user service)? [Y/n] ⏎
-✓ Daemon running. This machine takes work for: @ada/coder
+wf invite device [--expires 24h]       # on a machine with the principal key; prints wfi1...
+wf join <code> [--name] [--max-sessions] [--agent NAME=N] [--hardware]   # on the new machine, in a clone
 ```
 
-Everything is also available as flags for headless and Nix setups:
-`wf join <code> --yes --name vm --agents coder --max-sessions 2 --daemon`.
+1. The code carries the workforce id, the id of the `InviteCreated` event, the invite secret key and
+   the endpoint ids of the inviting device and other devices of the principal. Long codes, no
+   rendezvous infrastructure.
+2. **Invites are self-authorizing.** The principal signs `InviteCreated{kind, invite key, expires}`.
+   The joiner writes `DeviceBound` as the first event of its feed, with the invite among its deps and
+   a proof by the invite key over its own device key. Any peer verifies it offline; no owner needs to
+   be online, the new device never sees the principal key, and nothing in the log could bind another
+   device.
+3. **Expiry and single use are enforced by the member serving `wf/join/1`**, not by admission: they
+   need a clock and coordination, and admission must depend on neither. The member reserves an invite
+   for the first device that proves it (in memory). A leaked code redeemed through two members that
+   cannot see each other binds both devices, on every peer alike, and both are flagged; the fix is
+   `wf fork --exclude`.
+4. The joiner receives the log, writes `DeviceBound` and its `DeviceProfile`, and pushes them back on
+   the same stream. Joining is idempotent for the same device, and goes through the daemon when one
+   runs.
 
-Under the hood:
-1. The code contains the workforce id, the id of the `InviteCreated` event, the endpoint ids of a few
-   members, and the invite secret key. Long codes, no rendezvous infrastructure.
-2. **Invites are self-authorizing.** At invite time the principal (or an owner, for member invites) signs
-   `InviteCreated{kind, invite: InviteKey, expires}` with the invite's public key. The joiner writes its
-   own `DeviceBound` (or `MemberJoined` with a new principal key) as the first event of its feed, with a
-   signature by the invite key over its own device key. Any peer verifies this offline; no owner needs to
-   be online, the new device never sees the principal key, and nothing in the log could bind another device.
-3. **Expiry and single use are enforced at the handshake** by the member serving `wf/join/1`, not by
-   admission: they need a clock and coordination, and admission must not depend on either. A leaked code
-   redeemed through two members that cannot see each other binds both devices, on every peer alike, and
-   is flagged; the fix is `wf fork --exclude <device>`.
-4. The joiner dials `wf/join/1` on any reachable member, proves the invite, syncs the log, writes its
-   `DeviceBound`, then publishes its `DeviceProfile`.
-5. Gossip topics derive from the workforce id; bootstrap peers are the known members' endpoint ids.
-6. Non-member endpoints are rejected at the handshake.
-7. State lives in `$XDG_DATA_HOME/workforce/<id>/`. The repo holds only `.workforce.toml` with the id.
+*Planned:* member invites (M5), an interactive join that offers to host agents and install a service,
+mDNS for LAN-only use.
 
-Defaults use n0's public relays and discovery. `--relay <url>` for self-hosted, mDNS for LAN-only.
+### Sync
 
-## 15. Policy
+* **`wf/sync/1`**: the initiator opens a workforce; both sides exchange version vectors
+  `{author → (max seq, tips)}` (tips for equivocated feeds); each streams what the other lacks, in
+  `(hlc, id)` order, 256 events per frame; then missing parents and wanted history are fetched by id.
+  One side writes at a time, with a 30 s idle timeout per frame.
+* **Gossip** on a topic derived from the workforce id announces a digest of each device's heads after
+  writes and every 60 s; a digest that differs from its own makes a device sync with that peer. One
+  task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes. Presence ("last
+  seen") is kept in memory.
+* **Members only**: each protocol handler rejects endpoints that are not bound devices of a workforce
+  the node serves; sync checks again once the workforce is named. Join is open, and checks the invite.
+* **The network is off until it is needed.** A daemon starts no endpoint and no gossip for a
+  workforce with one device and no open invite; `wf invite` turns it on.
+* `wf sync` syncs once without a daemon (`--serve` keeps listening). `--relay <url>` replaces n0's
+  public relays; address lookup is n0's.
+* *Not tested yet:* real NATs and relay fallback.
 
-Stored in the log as principal-signed `PolicySet`. A repo copy is optional and **has no effect on its own**.
-
-```
-wf policy edit | diff <file> | apply <file> | export
-```
-
-```toml
-[merge]
-mode = "local"           # local | origin (M3)
-target = "main"
-
-[[merge.check]]          # optional; run on the merge result before the target moves (section 9)
-name = "clippy"          # unique; how the result is shown
-run = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]   # argv, no shell
-timeout = "20m"          # the default is 30m; a machine may allow less
-
-[[review]]               # ordered, least strict first
-name = "none"
-steps = []               # no steps: nothing waits for approval
-[[review]]
-name = "light"
-steps = [{ agent = { requires = ["review"] } }]
-[[review]]
-name = "standard"
-steps = [{ agent = { requires = ["review", "strong-model"] } }]
-[[review]]
-name = "critical"
-steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
-[[review]]
-name = "manual"          # the strictest: a principal decides alone
-steps = ["principal"]
-
-[[recovery]]             # what happens when a session ends without finishing (M2.2)
-name = "none"
-steps = ["principal"]
-[[recovery]]
-name = "standard"        # tasks: try twice more, then the principal decides
-steps = ["retry", "retry", "principal"]
-[[recovery]]
-name = "diagnose"        # an agent says what went wrong, before the one retry
-steps = [{ agent = { requires = ["review"] } }, "retry", "principal"]
-
-[lanes.default]
-[lanes.meta]
-[lanes.supervision]      # holds no items: its agents supervise blockers
-
-[types.task]             # section 8; a type lists the fixed states it uses
-lane = "default"
-initial = "open"
-states = ["draft", "open", "active", "review", "done", "cancelled"]
-
-[types.decision]
-lane = "default"
-initial = "review"
-states = ["review", "done", "cancelled"]
-
-[types.distill]
-lane = "meta"
-initial = "open"
-states = ["open", "active", "done", "cancelled"]
-
-[transcripts]
-publish = "none"
-
-[compaction]             # M6: when the anchor writes item checkpoints
-after = "90d"
-
-[governance]
-mode = "advisory"
-```
-
-Checks are the one place where the policy names programs. A check runs in the agents' environment and
-gets no secrets, in the sandbox the machine config gives checks (by default the agents'), so the
-machine's principal decides what it can do: it runs the branch's code, as agents there already do.
-Being in the policy, the checks are out of reach of the work they check. An empty `run` or a repeated
-name is refused.
-
-Policies already in the log list states the old way, as `{ name, category }` tables with names such as
-`in_progress`, and say `transitions = "any"`. They are still read: the category is the state, and an old
-`initial` is the category of the state it names. `wf policy apply` and `wf policy edit` refuse the old form,
-so a policy written now names the states as above.
-
-## 16. iroh usage
+### iroh
 
 | Need | Piece |
 |---|---|
-| connectivity, NAT traversal, relay fallback, E2E encryption | `iroh` endpoint, dial by `EndpointId` |
-| restrict to members | endpoint hooks rejecting unknown ids |
-| announce heads, presence | `iroh-gossip` (hashes and heads only, payloads over `wf/sync/1`) |
-| large artifacts (later) | `iroh-blobs` |
+| connectivity, NAT traversal, relays, encryption | `iroh` endpoint, dialed by `EndpointId` |
+| announce heads | `iroh-gossip` (digests only; events go over `wf/sync/1`) |
+| large artifacts (*Planned*: bundles, transcripts) | `iroh-blobs` |
 
 **Not iroh-docs:** it is a mutable key-value store, not a log. Each `(author, key)` keeps only its
-latest value by wall clock, and a write removes the author's older entries under the same prefix, so a
-device could erase its own events on every replica. That breaks the append-only log, equivocation
-evidence and admission against the causal past. Its namespace secret is a bearer credential shared by
-every writer, and it is pre-1.0. Adopting it would remove only `wf/sync/1`, while admission, fold,
-equivocation, fork and invites stay ours. A state-based model on iroh-docs (one key per item field) would
-be simpler, but gives up history, offline authorization and causal conflict resolution (P3, P4, P6,
-P9). We write `wf/sync/1` ourselves (about 1-2k lines); it also keeps the log independent of transport.
-Keep the shape compatible with Willow ideas (author as subspace, `kind/id` as path) in case that matures.
+latest value by wall clock, and a write removes the author's older entries under a prefix, so a device
+could erase its own events on every replica. That breaks the append-only log, equivocation evidence
+and admission against the causal past. Its namespace secret is a bearer credential shared by every
+writer. A state-based model on it would be simpler but gives up history, offline authorization and
+causal conflict resolution (P3, P4, P6, P9), while removing only `wf/sync/1`. We write sync ourselves,
+which also keeps the log independent of transport. Keep the shape compatible with Willow ideas (author
+as subspace, `kind/id` as path) in case that matures.
 
-Missing and built by us: authorization, authenticated gossip membership, ordering, store-and-forward
-(the anchor), compaction (later), search, blob access control (later).
+Built by us on top: authorization, members-only gossip, ordering, and (*Planned*) store-and-forward
+through the anchor, compaction, search and blob access control.
 
-## 17. CLI (v1 surface)
+## 15. Policy
+
+The policy is TOML text in the log, signed by an owner's principal key (`PolicySet`), so every machine
+follows the same one. A copy in the repository has no effect. `wf policy show | edit | apply <file>`;
+`edit` and `apply` need the principal key. The default is `crates/wf-core/src/default_policy.toml`,
+reproduced in `docs/guide/policy.md`.
+
+| Key | Holds |
+|---|---|
+| `default_agent` | the agent `wf session start` uses without `--agent` |
+| `[lanes.<name>]` | the lanes (`default`, `meta`, `supervision` by default) |
+| `[types.<name>]` | `lane`, `fields`, `depends_on`, `states`, `initial`, `review`, `recovery` (section 8) |
+| `[[review]]` | `name`, `steps`: `{ agent = { requires = [...] } }` or `"principal"` (section 10) |
+| `[[recovery]]` | `name`, `steps`: `"retry"`, `{ agent = { requires = [...] } }` or `"principal"` (section 9) |
+| `[merge]` | `mode = "local"`, `target` (default `main`) |
+| `[[merge.check]]` | `name` (unique), `run` (argv, no shell, not empty), `timeout` (default 30m) |
+
+Validation: the built-in types must be present; level and check names are unique, and `default` is
+reserved; types name existing types and levels; the state rules of section 8. A policy that does not
+parse is refused when written, and flagged if it arrives (section 6).
+
+Checks are the one place the policy names programs. They run what the branch contains, as agents
+already do, but in the sandbox this machine's config gives checks and with no secrets, so each
+machine's principal decides what they may do. Being in the policy puts them out of reach of the work
+they check.
+
+*Planned:* `[compaction] after` (M6), `[assignment]` with `mode`, `fallback` and `lease` (M3),
+`[transcripts] publish` (M7), `[governance]` (advisory, M7), `wf policy diff`. *Open:* whether
+`default_agent`, a convenience of one principal, belongs in the machine config instead.
+
+## 16. CLI
 
 ```
-wf [--item <item>]                        # the dashboard at a terminal; piped, the help
-wf init [-i] | status | export | import <file> | members
-wf log [--item <item>] [--follow]         # verified; --follow: the whole log, then events as they arrive
-wf policy show|edit|apply <file>          # apply and edit need an owner's principal key
-wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
-wf item add [--draft]|list|show|edit|link|check|archive|unarchive   # all types; check ticks steps
-wf item open|draft|done <item>... | cancel <item>   # release or reopen, hold back, finish, cancel
-wf item list [--type] [--state <state>,...] [--label] [--lane] [--priority] [--ready [--for <agent>]] [--blocked] [--stranded] [--group-by]
-wf item archive <item> | --done | --cancelled
-wf item diff|checkout|path <item>         # the work through git; the main checkout on it; its worktree
-wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | --resolve-blockers | --resolve-change-requests] [--step <number> [--done]]
+wf [--item <item>]                                  # the dashboard at a terminal; piped, the help
+wf init | status [--refold] | stats | members | log [--follow] [--item] | export | import <file>
+wf policy show | edit | apply <file>
+wf item add [--draft] | list | show | edit | link | check | archive | unarchive | diff | checkout | path
+wf item open | draft | done <item>... | cancel <item>       # [--note]
+wf comment <item> [<text>] [--block | --request-change] [--resolve <c>... | --resolve-blockers |
+           --resolve-change-requests] [--step <n> [--done]]
 wf mentions <@handle | @handle/agent>
-wf review <item> --approve|--request-changes|--escalate [--note]
-wf check [<name>...]                      # the policy's checks on this checkout, as before a merge
-wf inbox                                  # blockers, reviews, merges, recovery, permission requests
-wf agent add|list|edit|remove             # harness, model, capabilities, lanes, instructions, autonomy
-wf harness models <harness>               # the models a harness offers
-wf session start|list [--live]|show|stop|watch|allow|deny
-wf work brief | submit | release          # agents, inside a session
-wf permissions test                       # run the permission chain on a request
-wf daemon start|stop|status|run
-wf sync [--serve] | invite device | join <code> | device list|edit
+wf review <item> --approve | --request-changes | --escalate [--note]
+wf check [<name>...]
+wf inbox
+wf agent add | list | show | edit | remove;  wf harness models <harness>
+wf session start [--watch] | list [--live] | show | stop | watch | allow | deny
+wf work brief | submit | release                            # agents, inside a session
+wf permissions test [--command <cmd>]
+wf daemon start | stop | status | run
+wf sync [--serve] | invite device | join <code> | device list | edit | allowed-signers
+wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
 ```
-*Later:* `wf invite member`, `wf owner add|transfer`, `wf policy diff|export`, `wf search <query>`.
 
-All commands support `--json`. Output is `{"schema": 5, "data": ...}`; the schema number is bumped on
-incompatible changes and the shapes are snapshot-tested. Item ids print as the first 6 characters of their
-base32 hash and any unique prefix of at least 4 characters is accepted, with or without `#`.
-Without `--json`, lists (`item list`, `agent list`, `session list`, `device list`, `log`, `mentions`)
-print as borderless tables with bold headers, and say so when they are empty; times are local. Every table is built by one function in `wf-cli`, so the look is defined in one place.
-Styling is emitted only when stdout is a terminal; piped output is plain.
+* **Ids** print as 6 characters of base32 for items (any unique prefix of at least 4 is accepted,
+  with or without `#`) and 4 for comments. Missing item or session arguments open a picker at a
+  terminal; a missing text opens `$EDITOR`.
+* **`wf item add` and `edit`** without flags open a draft in `$EDITOR`: TOML front matter between
+  `+++` fences (`title`, `priority`, `lane`, `labels`, `requires`, `review`, `recovery`; `type` and a
+  commented `state = "draft"` for new items), then the body verbatim. Unknown keys are refused. State
+  changes only through the verbs.
+* **`wf inbox`** lists what waits on the principal: `blocker`, `proposal` (an item in `review` without
+  submitted work, such as a decision), `principal_review`, `merge`, `recovery`, `permission` and
+  `machine_fault`, each with the command that answers it. `wf status` summarises the workforce, flags
+  what needs someone (stranded items, steps no agent can take, unknown states, an unreadable policy)
+  and says what to do next.
+* **`--json`** gives `{"schema": 8, "data": ...}` for every command with output to read (not the
+  dashboard or `session watch`; `log --follow` prints one object per line). The number is bumped on
+  incompatible changes, and the shapes are snapshot-tested.
+* **Plain output**: lists are borderless tables built by one function in `wf-cli`; times are local;
+  styling only at a terminal, in the colours of `[theme]`.
 
-`wf item edit <item>` without flags opens a markdown draft in `$VISUAL` or `$EDITOR`: TOML front matter
-between `+++` fences (`title`, `priority`, `lane`, `labels`, `requires`, `review`, `recovery`), then the body as plain markdown,
-taken verbatim. TOML has no null, so unset fields appear as commented-out hints. Unknown keys, an
-invalid priority or label, and a missing or unclosed fence are rejected. Flags (`--title`, `--body`,
-`--add-label`, ...) edit single fields instead. The item type and state are not editable here: the state
-changes with `wf item open`, `draft`, `done` and `cancel`. `wf item add` opens the same draft with `type`,
-and a `# state = "draft"` hint that holds the new item back when uncommented.
+### The dashboard
 
-`--state` takes the six states, which complete in the shell and show in `--help`; `--state draft,open`
-lists both. `wf item list --group-by state` lists the groups in the order of section 8. `wf item open`,
-`draft` and `done` take several items and check them all before writing, so a typo moves none; items
-already in the state are left alone and named. In the dashboard, `s` on a draft first offers "release:
-open it for the dispatcher", then the agents, and `m` offers the verbs the item's type uses, less the
-state it is in.
+Plain `wf` at a terminal opens a dashboard (ratatui) meant to stay open beside the editor. It needs
+the daemon and polls it every 500 ms. It shows only view models the commands show too, and its
+actions write the same events as the commands. Four tabs, each a list with a detail beside it (from
+120 columns) or opened with `enter`:
 
-Keys are hex files with mode `0600` under `$XDG_DATA_HOME/workforce/keys/`; the repository holds only
-`.workforce.toml` with the workforce id.
+* **Now:** what waits on the principal (the inbox), the live and parked sessions with what each is
+  doing and how much context it used, and the `wf status` flags.
+* **Items:** grouped by state, lane, priority or type, filtered by readiness or title.
+* **Agents:** this week's numbers, and each agent's load and sessions.
+* **Log:** `wf log --follow`.
+
+An item's detail is `wf item show`; a session's is its live transcript (this machine's sessions
+only). Keys answer what waits in place (allow or deny a request, answer a blocker, approve or request
+changes, start, stop, move, comment, edit), the mouse selects and follows links, and a footer warns
+when the daemon sends approved work back after a conflict. Keys are in `docs/guide/dashboard.md`.
+*Planned:* a push subscription instead of polling; transcripts of other devices (M3).
+
+## 17. Not yet decided
+
+1. Should merges into the main branch need a principal key once origin-side protection is not enough?
+   (v1: a review level with a principal step in `local` mode, the origin in `origin` mode.)
+2. Do heartbeats belong in the log (M3)? One per minute for three sessions is about 130k events a
+   month, the main source of log growth. Liveness is computed at query time anyway, so a lease renewed
+   over gossip plus a final `SessionEnded` might do. Settle this before M3; it decides how urgent
+   compaction is.
+3. With several principals (M5), can a review step require a principal other than the author?
+4. Merging without the checks: `wf item merge --unchecked`, or edit the policy for a moment?
+5. Should the limit of two failed check runs be part of the recovery level?
+6. Batching several approved items into one checked merge, if checks get slow. Not before it hurts.
+7. A version byte per body instead of a new tag per layout change, before bodies change often.
+8. Prior art to read before M7: Radicle, p2panda, Keyhive, Matrix state resolution.
 
 ## 18. Milestones
 
-| M | Scope |
-|---|---|
-| **M0** | Event log with `actor`, `owner`/`member`, principal and device keys, agent definitions, item model (types, states, built-in types, relations, derived refs and mentions, archiving), in-memory fold, redb event store with snapshots. Single peer. |
-| **M1** | iroh sync, equivocation handling, self-authorizing device invites and `wf join`, device profiles, daemon, gossip, `wf fork`. |
-| M2 | Agents at work on one machine: sessions, worktrees and branches per item, ACP harness runner, turn-end handling and parking, local dispatcher, blockers, change requests and supervisors, review levels, local merge, permission modes, `wf inbox`, checklist progress, reports as comments, item activity |
-| M2.1 | Convenience at the CLI: machine config, permission chain (rules, hooks, decision models, agents), `wf item diff` through git, `wf item checkout\|path`, `wf watch` |
-| M2.2 | Daily use on one machine: recovery levels, no silent stalls, daemon management, export, network off for a single device, CLI polish. **= stage 1** |
-| M2.3 | The dashboard: `wf watch` at a terminal shows what waits on the principal, the live sessions with their transcripts, items, agents and stats, and answers what waits |
-| M3 | Sessions across devices: anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, session inboxes, overlap notifications, secret brokering, redaction, merge mode `origin` with `Merged` from origin. **= stage 2** |
-| M4 | Decision ratification flow, distill items, hybrid search |
-| M5 | Multiple principals, threads, scopes, `wf attach`. **= stage 3** |
-| M6 | Git bundles over iroh-blobs, peer-to-peer repos, compaction (item checkpoints, frontier) |
-| M7 | Donors: revocation, rate limits, sandbox, transcript publishing, governance. **= stage 4** |
-
-## 19. Open questions
-1. Should merges to the main branch require a principal key once origin-side protection is not enough?
-   (v1: a review level with a principal step in `local` mode, the origin in `origin` mode.)
-2. Fork following for non-owner forks: ask-first UX.
-3. Prior art to read: **Radicle**, **p2panda**, Keyhive, Matrix state resolution (before M7).
-4. Do heartbeats belong in the log (M3)? One per minute for three sessions is about 130k events a
-   month, the main source of log growth. Liveness is computed against the clock at query time anyway, so
-   a lease renewed over gossip plus a final `SessionEnded` might be enough. M2 needs neither: on one
-   machine the daemon knows its sessions. Settle this before M3; it decides how urgent compaction is.
-5. With several principals (M5), should review steps be able to require a different principal than
-   the author (the former `distinct_principal`)?
+| M | Scope | Status |
+|---|---|---|
+| M0 | Signed event log, identity, item model, fold, redb store with snapshots; one peer | built |
+| M1 | iroh sync, equivocation, device invites and `wf join`, device profiles, daemon, gossip, `wf fork` | built |
+| M2 | Agents on one machine: sessions, worktrees, ACP runner, turn end and parking, dispatcher, blockers, change requests, supervisors, review levels, local merge, permission modes, inbox, steps, reports, activity | built |
+| M2.1 | Machine config, permission deciders, `wf item diff`, `checkout`, `path` | built |
+| M2.2 | Daily use on one machine (**stage 1**): recovery levels, machine faults, resume after restart, daemon management, export and import, network off for one device, notifications | built |
+| M2.3 | The dashboard | built |
+| — | Since: merge checks and `wf check`, rebase at submit, fixed states with verbs, commit signing, storage budget, `[theme]`, `wf stats` | built |
+| M3 | Sessions across devices (**stage 2**): anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
+| M4 | Decision ratification, distill items, hybrid search | |
+| M5 | Several principals, member invites, threads, scopes, `wf attach` (**stage 3**) | |
+| M6 | Git bundles over iroh-blobs, peer-to-peer repositories, `seen` and compaction | |
+| M7 | Donors (**stage 4**): revocation, rate limits, sandboxing, transcript publishing, governance | |
