@@ -457,7 +457,10 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                 },
             ),
             Activity::SessionEnded {
-                reason, moved_to, ..
+                reason,
+                moved_to,
+                because,
+                ..
             } => {
                 let ended = match reason {
                     EndReason::Submitted {
@@ -485,7 +488,17 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     Some(to) => format!("{ended} → {to}"),
                     None => ended,
                 };
-                (ActivityKind::SessionEnded, summary)
+                let mut view = ActivityView {
+                    at,
+                    by,
+                    kind: ActivityKind::SessionEnded,
+                    summary,
+                    comment: None,
+                    text: None,
+                };
+                attach_reason(&mut views, &mut view, *because);
+                views.push(view);
+                continue;
             }
             Activity::Merged { commit } => (
                 ActivityKind::Merged,
@@ -539,8 +552,8 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
     views
 }
 
-/// A move or verdict names the comment that says why; written just before, it is shown with the
-/// move or verdict instead of on its own.
+/// A move, verdict or end of a session names the comment that says why; written just before, it is
+/// shown with it instead of on its own.
 fn attach_reason(
     views: &mut Vec<ActivityView>,
     view: &mut ActivityView,

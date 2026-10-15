@@ -74,6 +74,7 @@ fn a_session_shows_the_moves_it_caused_at_its_start_and_end() {
                 session,
                 reason: EndReason::Submitted { commit: None },
                 moved_to: Some(ItemState::Done),
+                because: None,
             },
             Activity::Moved {
                 to: ItemState::Open,
