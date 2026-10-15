@@ -1,8 +1,8 @@
 # The machine config
 
 The policy says how the workforce works, and it syncs to every machine. What only makes sense on
-one machine lives in its **machine config**: the sandbox agents run in, the environment they get,
-how commits are signed, how you are notified, and who decides permission requests (see
+one machine lives in its **machine config**: the sandbox agents and checks run in, the environment
+they get, how commits are signed, how you are notified, and who decides permission requests (see
 [permissions.md](permissions.md)). It is never synced, so another machine can never make yours run
 a program or call a paid API.
 
@@ -33,6 +33,9 @@ merge_signing = "as_configured"
 
 [notify]
 command = ["terminal-notifier", "-title", "wf: {title}", "-message", "{what}"]
+
+[check]
+max_timeout = "15m"
 
 [permissions]
 guidance = "Allow reading anything and writing in the worktree. Ask about the network."
@@ -153,7 +156,8 @@ sandbox = { kind = "off" }       # or a sandbox of their own, as under [sandbox]
 
 Checks run the code of the work they check, so without a sandbox an agent's code runs with your
 privileges at merge, also for work that no one reviewed. A check that fails says the sandbox it ran
-in.
+in. `wf check` outside a session runs them the same way; in a session it runs them in the session's
+sandbox, with the policy's timeouts.
 
 ## Commits and signatures
 

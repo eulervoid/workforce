@@ -7,8 +7,8 @@ use wf_core::autonomy::{Autonomy, PermissionMode, StartMode};
 use wf_core::graph::Readiness;
 use wf_core::item::{ItemState, Priority};
 use wf_core::name::{
-    AgentName, HarnessName, Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName,
-    TypeName,
+    AgentName, CommandName, HarnessName, Label, LaneName, RecoveryLevelName, Requirement,
+    ReviewLevelName, TypeName,
 };
 
 #[derive(Parser)]
@@ -39,7 +39,7 @@ const COMMAND_GROUPS: &[&[&str]] = &[
     &[
         "init", "status", "policy", "log", "export", "import", "members", "fork",
     ],
-    &["item", "comment", "mentions", "review", "inbox"],
+    &["item", "comment", "mentions", "review", "check", "inbox"],
     &["agent", "harness", "session", "work", "permissions"],
     &["daemon", "sync", "invite", "join", "device"],
 ];
@@ -124,6 +124,12 @@ pub enum Command {
     Work(WorkCommand),
     /// Give a verdict on the submitted work of an item.
     Review(ReviewArgs),
+    /// Run the policy's checks on this checkout as it is, in the sandbox of checks, as they run
+    /// before a merge: `wf check` before `wf work submit`, `wf check clippy` for one.
+    Check {
+        /// The checks to run, by their names in the policy. Defaults to all of them.
+        names: Vec<CommandName>,
+    },
     /// What waits on you: blockers, reviews, merges and permission requests.
     Inbox,
     /// Try out how this machine decides the permission requests of agents.
@@ -598,6 +604,7 @@ pub enum ItemCommand {
     /// Change an item. Without flags, edit it in `$VISUAL` or `$EDITOR` at a terminal.
     Edit(ItemEditArgs),
     /// Tick steps of an item, numbered as `wf item show` prints them: `wf item check k3f 1 3`.
+    /// `wf check` runs the policy's checks instead.
     Check(ItemCheckArgs),
     /// Release drafts for the dispatcher, or reopen items: `wf item open k3f a8c`.
     Open(ItemMoveArgs),

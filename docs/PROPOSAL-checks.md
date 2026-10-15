@@ -1,6 +1,7 @@
 # Proposal: checks before merging
 
-Status: proposed; reviewed once (findings folded in below); not built.
+Status: built (steps 1 to 6). SPEC section 9 (merge) and 15 (policy) and the guides describe checks as
+they are; open questions below remain open.
 
 ## Why
 On 2026-10-14 an approved branch merged into `main` without a text conflict and did not compile:

@@ -1,6 +1,7 @@
 //! The commands of `wf`: `run` hands each to its module; the output helpers they share live here.
 
 mod agent;
+mod check;
 mod comment;
 mod init;
 mod item;
@@ -30,6 +31,7 @@ use crate::render;
 use crate::view::{self, Envelope};
 use crate::workspace::Workspace;
 use agent::agent;
+use check::check;
 use comment::{comment, mentions};
 use init::init;
 use item::item;
@@ -152,6 +154,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 }
                 Command::Work(command) => work(json, command, &mut workspace),
                 Command::Review(args) => review(json, mode, &mut workspace, args),
+                Command::Check { names } => check(json, &workspace, cwd, names),
                 Command::Inbox => {
                     let views = view::inbox_views(
                         workspace.state(),

@@ -14,7 +14,7 @@ use wf_vcs::{GitCli, VcsAdapter};
 
 use super::merge::Attempt;
 use super::{SessionError, blocking};
-use crate::command::{CommandRun, CommandRunner, Outcome};
+use crate::command::{CommandRun, CommandRunner, Confinement, Outcome};
 use crate::machine_config::{CheckRunConfig, SandboxConfig};
 use crate::{Daemon, Loaded};
 
@@ -25,6 +25,8 @@ pub(super) struct FailedCheck {
     pub tree: GitOid,
     /// The run on the merge result.
     pub run: CommandRun,
+    /// The sandbox it ran in.
+    pub sandbox: SandboxConfig,
     pub blame: Blame,
 }
 
@@ -45,7 +47,7 @@ impl FailedCheck {
                 humantime::format_duration(timeout)
             ),
         };
-        let sandbox = match self.run.sandbox {
+        let sandbox = match self.sandbox {
             SandboxConfig::Fence(_) => "Fence",
             SandboxConfig::Off {} => "none",
         };
@@ -158,17 +160,19 @@ impl Daemon {
         let checker = Checker {
             runner: CommandRunner {
                 git: &git,
-                access: crate::sandbox::Access {
-                    worktree: &worktree,
-                    repository,
-                    socket: &self.config.socket,
-                    data_dir: &self.config.data_dir,
-                    machine_config: self.config.machine_config.as_deref(),
+                confinement: Confinement::Agents {
+                    access: crate::sandbox::Access {
+                        worktree: &worktree,
+                        repository,
+                        socket: &self.config.socket,
+                        data_dir: &self.config.data_dir,
+                        machine_config: self.config.machine_config.as_deref(),
+                    },
+                    sandbox: config.check_sandbox(),
+                    environment: &config.environment,
+                    settings: &settings,
+                    git_config: &git_config,
                 },
-                sandbox: config.check_sandbox(),
-                environment: &config.environment,
-                settings: &settings,
-                git_config: &git_config,
                 logs: &logs,
             },
             passed: PassedChecks {
@@ -206,6 +210,7 @@ impl Daemon {
                 check: check.clone(),
                 tree,
                 run,
+                sandbox: config.check_sandbox().clone(),
                 blame,
             });
         }
