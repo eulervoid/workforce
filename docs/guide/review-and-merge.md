@@ -98,7 +98,7 @@ What was reviewed is what gets merged: a new submission starts the review over.
 
 With checks in the policy (see [policy.md](policy.md#checks)), the daemon runs them on the merge
 result before it moves the target: one after another, all of them even when one fails, in a worktree
-of their own and in the agents' sandbox. A check that passed on a tree is not run on it again.
+of their own and in the sandbox the machine config gives checks. A check that passed on a tree is not run on it again.
 
 * **All pass:** the work is merged. If the target moved meanwhile, the new merge result is checked.
 * **The work broke one:** for each such check the daemon writes a change request that the check

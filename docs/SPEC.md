@@ -927,8 +927,9 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
   dispatch loop; it checks the tree `merge-tree` made out in the workforce's one **check worktree**
   (`<data>/<workforce>/check`), cleaned before each run, whose build caches stay warm. The checks run
   one after another in the policy's order, all of them even after one failed, each without a shell, in
-  the agents' sandbox and environment without `CARGO_TARGET_DIR` (a shared target directory could give
-  a false pass), for its timeout at most; the machine config's `[check] max_timeout` caps it. Each run
+  the sandbox of checks (`[check] sandbox`, by default the agents') and the agents' environment
+  without `CARGO_TARGET_DIR` (a shared target directory could give a false pass), with the global git
+  config but signing off, for its timeout at most; the machine config's `[check] max_timeout` caps it. Each run
   keeps its output in `<data>/<workforce>/check-logs/<name>/`. A pass is kept by tree and command on the
   merging machine, so a check that passed on a tree does not run there again.
   * All pass: the merge commit is made from that tree. When the target moved meanwhile, the new merge is
@@ -1184,7 +1185,7 @@ What every decider passes on goes to the principal, through `wf inbox`, the dash
 answer its own request, nor another's. Without a config the chain is `rules`, then the principal.
 Deciders are set in the machine config (`$XDG_CONFIG_HOME/workforce/config.toml`), never in the
 signed policy: policy that syncs must not make other machines run programs or call paid APIs. The
-policy's checks (section 9) are programs too, but they run in the agents' sandbox and get nothing more. Each
+policy's checks (section 9) are programs too, but they run in the sandbox the machine config gives them and get nothing more. Each
 decision, its decider and its reason go into the transcript of the session that asked.
 
 ### Notifications
@@ -1365,9 +1366,9 @@ after = "90d"
 mode = "advisory"
 ```
 
-Checks are the one place where the policy names programs. A check runs in the agents' sandbox and
-environment and gets no secrets, so it can do nothing an agent on the same machine cannot: it runs the
-branch's code, as agents there already do. Being in the policy, the checks are out of reach of the work
+Checks are the one place where the policy names programs. A check runs in the agents' environment and
+gets no secrets, in the sandbox the machine config gives checks (by default the agents'), so the
+machine's principal decides what it can do: it runs the branch's code, as agents there already do. Being in the policy, the checks are out of reach of the work
 they check. An empty `run` or a repeated name is refused.
 
 Policies already in the log list states the old way, as `{ name, category }` tables with names such as
@@ -1413,7 +1414,7 @@ wf item diff|checkout|path <item>         # the work through git; the main check
 wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | --resolve-blockers | --resolve-change-requests] [--step <number> [--done]]
 wf mentions <@handle | @handle/agent>
 wf review <item> --approve|--request-changes|--escalate [--note]
-wf check [<name>...]                      # the policy's checks on this checkout, in the agents' sandbox
+wf check [<name>...]                      # the policy's checks on this checkout, as before a merge
 wf inbox                                  # blockers, reviews, merges, recovery, permission requests
 wf agent add|list|edit|remove             # harness, model, capabilities, lanes, instructions, autonomy
 wf harness models <harness>               # the models a harness offers

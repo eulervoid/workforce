@@ -123,22 +123,6 @@ caches = ["target"]              # paths inside a worktree that can be rebuilt
 The checkout of a review goes when the review ends, the worktree of an item when it is done or
 cancelled, and a daemon that starts removes whatever else is left in its worktrees directory.
 
-## Checks
-
-The policy's checks run on this machine before it merges (see
-[review-and-merge.md](review-and-merge.md#checks)), as an agent on it would run them: in the sandbox
-and the environment of agents, with nothing more, so a check can do nothing an agent here cannot.
-Only `CARGO_TARGET_DIR` is left out: a shared build directory mixes the builds of different trees and
-could pass a check that should fail. Checks build in their own worktree's `target` instead, which
-stays between merges.
-
-`[check] max_timeout` caps how long any check runs here, whatever its timeout in the policy:
-
-```toml
-[check]
-max_timeout = "15m"              # without it, the policy's timeouts apply
-```
-
 ## One agent
 
 `[agent.<name>]` gives one of your agents more, on top of what every agent gets. Where both set the
@@ -172,7 +156,8 @@ sandbox = { kind = "off" }       # or a sandbox of their own, as under [sandbox]
 
 Checks run the code of the work they check, so without a sandbox an agent's code runs with your
 privileges at merge, also for work that no one reviewed. A check that fails says the sandbox it ran
-in.
+in. `wf check` outside a session runs them the same way; in a session it runs them in the session's
+sandbox, with the policy's timeouts.
 
 ## Commits and signatures
 

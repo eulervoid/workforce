@@ -184,7 +184,7 @@ name = "examples"
 run = ["cargo", "build", "--workspace", "--examples"]
 ```
 
-A check runs in the agents' sandbox and gets no secrets, so it can do nothing an agent on that machine
-cannot. Being in the policy, it is out of reach of the work it checks: a branch cannot turn its own
-checks off. `wf check` runs them on your checkout, and agents are told to run it before they submit;
+A check gets the agents' environment and no secrets, and runs in the sandbox the machine config gives
+checks, by default the agents' (see [machine-config.md](machine-config.md#checks)). Being in the
+policy, it is out of reach of the work it checks: a branch cannot turn its own checks off. `wf check` runs them on your checkout, and agents are told to run it before they submit;
 what happens when one fails before a merge is in [review-and-merge.md](review-and-merge.md#checks).
