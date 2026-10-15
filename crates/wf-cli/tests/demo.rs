@@ -1508,3 +1508,70 @@ fn archive_by_state_takes_every_finished_item_of_every_type() {
         "{nothing}"
     );
 }
+
+#[test]
+fn check_runs_the_policys_checks_on_the_checkout_and_fails_when_one_does() {
+    let wf = Sandbox::new();
+    let git = std::process::Command::new("git")
+        .args(["init", "--quiet"])
+        .current_dir(&wf.repository)
+        .status()
+        .unwrap();
+    assert!(git.success());
+    wf.run(&["init", "--name", "demo"]);
+    assert!(wf.run(&["check"]).contains("the policy has no checks"));
+
+    // The test machine may not have Fence.
+    let config = wf.root.path().join("config").join("workforce");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("config.toml"), "[sandbox]\nkind = \"off\"\n").unwrap();
+    let policy = wf.run(&["policy", "show"]);
+    let file = wf.root.path().join("policy.toml");
+    std::fs::write(
+        &file,
+        format!(
+            "{policy}\n[[merge.check]]\nname = \"present\"\nrun = [\"/bin/sh\", \"-c\", \"test -f file.txt\"]\n\n\
+             [[merge.check]]\nname = \"broken\"\nrun = [\"/bin/sh\", \"-c\", \"echo it broke; exit 3\"]\n"
+        ),
+    )
+    .unwrap();
+    wf.run(&["policy", "apply", file.to_str().unwrap()]);
+    // Uncommitted, and found from a subdirectory: the checkout is checked as it is.
+    std::fs::write(wf.repository.join("file.txt"), "").unwrap();
+    std::fs::create_dir(wf.repository.join("src")).unwrap();
+
+    let output = common::output(
+        wf.command(&["check"])
+            .current_dir(wf.repository.join("src")),
+    );
+    assert!(!output.status.success());
+    let (stdout, stderr) = (
+        String::from_utf8(output.stdout).unwrap(),
+        String::from_utf8(output.stderr).unwrap(),
+    );
+    assert!(
+        stdout.starts_with("✓ present\n✗ broken  exit status: 3\n"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("\nit broke\n"), "{stdout}");
+    assert!(
+        stderr.contains("1 of 2 checks did not pass: broken"),
+        "{stderr}"
+    );
+    let log = stdout
+        .lines()
+        .last()
+        .unwrap()
+        .trim()
+        .strip_prefix("log: ")
+        .unwrap();
+    assert_eq!(std::fs::read_to_string(log).unwrap(), "it broke\n");
+
+    let checks = wf.json(&["check", "present"]);
+    assert_eq!(checks[0]["name"], "present");
+    assert_eq!(checks[0]["outcome"], "passed");
+    assert!(
+        wf.fail(&["check", "lint"])
+            .contains("the policy has no check `lint`; it has present, broken")
+    );
+}
