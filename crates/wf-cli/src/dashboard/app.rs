@@ -343,6 +343,7 @@ pub struct Panes {
     pub stack: Vec<Opened>,
     /// In a wide window, which of the list and the detail opened beside it has the keys.
     pub focus: Pane,
+    /// The first line of the list on screen, and whether it follows the selection.
     pub list_top: ListTop,
 }
 
