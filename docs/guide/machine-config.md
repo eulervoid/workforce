@@ -1,8 +1,8 @@
 # The machine config
 
 The policy says how the workforce works, and it syncs to every machine. What only makes sense on
-one machine lives in its **machine config**: the sandbox agents run in, the environment they get,
-how commits are signed, how you are notified, and who decides permission requests (see
+one machine lives in its **machine config**: the sandbox agents and checks run in, the environment
+they get, how commits are signed, how you are notified, and who decides permission requests (see
 [permissions.md](permissions.md)). It is never synced, so another machine can never make yours run
 a program or call a paid API.
 
@@ -33,6 +33,9 @@ merge_signing = "as_configured"
 
 [notify]
 command = ["terminal-notifier", "-title", "wf: {title}", "-message", "{what}"]
+
+[check]
+max_timeout = "15m"
 
 [permissions]
 guidance = "Allow reading anything and writing in the worktree. Ask about the network."
@@ -119,6 +122,22 @@ caches = ["target"]              # paths inside a worktree that can be rebuilt
 
 The checkout of a review goes when the review ends, the worktree of an item when it is done or
 cancelled, and a daemon that starts removes whatever else is left in its worktrees directory.
+
+## Checks
+
+The policy's checks run on this machine before it merges (see
+[review-and-merge.md](review-and-merge.md#checks)), as an agent on it would run them: in the sandbox
+and the environment of agents, with nothing more, so a check can do nothing an agent here cannot.
+Only `CARGO_TARGET_DIR` is left out: a shared build directory mixes the builds of different trees and
+could pass a check that should fail. Checks build in their own worktree's `target` instead, which
+stays between merges.
+
+`[check] max_timeout` caps how long any check runs here, whatever its timeout in the policy:
+
+```toml
+[check]
+max_timeout = "15m"              # without it, the policy's timeouts apply
+```
 
 ## One agent
 

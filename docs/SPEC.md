@@ -922,6 +922,31 @@ steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
   files; approved work is never rewritten. Once the work is merged: `Merged{item, reviewed, commit}`, the
   branch and worktree are removed, and the item is done. Work without a review level
   merges as its session ends; approved work is merged by the dispatcher, one merge per item at a time.
+* **Checks (`local`).** The policy's `[[merge.check]]` commands (section 15) must pass on the merge
+  result before the target moves. One merge task per workforce merges one item at a time, outside the
+  dispatch loop; it checks the tree `merge-tree` made out in the workforce's one **check worktree**
+  (`<data>/<workforce>/check`), cleaned before each run, whose build caches stay warm. The checks run
+  one after another in the policy's order, all of them even after one failed, each without a shell, in
+  the agents' sandbox and environment without `CARGO_TARGET_DIR` (a shared target directory could give
+  a false pass), for its timeout at most; the machine config's `[check] max_timeout` caps it. Each run
+  keeps its output in `<data>/<workforce>/check-logs/<name>/`. A pass is kept by tree and command on the
+  merging machine, so a check that passed on a tree does not run there again.
+  * All pass: the merge commit is made from that tree. When the target moved meanwhile, the new merge is
+    checked again; a target that keeps moving can make an item wait.
+  * A check that fails runs on the target's own tree too, decided per check. If it passes there, the
+    work broke it: a change request by `@daemon` per such check (its name, command, tree, the end of
+    its output and the log's path), and the item goes back to its open state, where the next session
+    has to resolve them before it submits again. If it fails there as well, or timed out, it is not the
+    work's fault: a blocker to the principal, and the item stays in `review`; resolving it checks the
+    merge again.
+  * After two failed check runs since the principal last acted on the item (`wf-core::lifecycle`), or
+    when its type has no open state, the failures are a blocker to the principal instead of going back
+    to work.
+  * Nothing else goes into the log: a check's result is about one machine's toolchain.
+  * `wf check [<name>...]` runs the checks, or the named ones, on the checkout it is run in, as it is,
+    in the same sandbox (in a session: the session's), and prints a mark per check with the end of each
+    failure's output: for an agent before `wf work submit`, whose brief says so, for a reviewer or the
+    principal. The daemon's run before the merge is the one that counts.
 * **`origin` (M3):** a central origin (GitHub etc.). wf pushes approved branches and opens pull requests;
   **the origin decides merging** (branch protection). `wf` observes it and emits `Merged` when a
   `wf/<item>` branch lands in the target.
@@ -1158,7 +1183,8 @@ What every decider passes on goes to the principal, through `wf inbox`, the dash
 `wf session allow|deny`. Only a connection that acts for the principal answers it: a session cannot
 answer its own request, nor another's. Without a config the chain is `rules`, then the principal.
 Deciders are set in the machine config (`$XDG_CONFIG_HOME/workforce/config.toml`), never in the
-signed policy: policy that syncs must not make other machines run programs or call paid APIs. Each
+signed policy: policy that syncs must not make other machines run programs or call paid APIs. The
+policy's checks (section 9) are programs too, but they run in the agents' sandbox and get nothing more. Each
 decision, its decider and its reason go into the transcript of the session that asked.
 
 ### Notifications
@@ -1279,6 +1305,11 @@ wf policy edit | diff <file> | apply <file> | export
 mode = "local"           # local | origin (M3)
 target = "main"
 
+[[merge.check]]          # optional; run on the merge result before the target moves (section 9)
+name = "clippy"          # unique; how the result is shown
+run = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]   # argv, no shell
+timeout = "20m"          # the default is 30m; a machine may allow less
+
 [[review]]               # ordered, least strict first
 name = "none"
 steps = []               # no steps: nothing waits for approval
@@ -1334,6 +1365,11 @@ after = "90d"
 mode = "advisory"
 ```
 
+Checks are the one place where the policy names programs. A check runs in the agents' sandbox and
+environment and gets no secrets, so it can do nothing an agent on the same machine cannot: it runs the
+branch's code, as agents there already do. Being in the policy, the checks are out of reach of the work
+they check. An empty `run` or a repeated name is refused.
+
 Policies already in the log list states the old way, as `{ name, category }` tables with names such as
 `in_progress`, and say `transitions = "any"`. They are still read: the category is the state, and an old
 `initial` is the category of the state it names. `wf policy apply` and `wf policy edit` refuse the old form,
@@ -1369,7 +1405,7 @@ wf init [-i] | status | export | import <file> | members
 wf log [--item <item>] [--follow]         # verified; --follow: the whole log, then events as they arrive
 wf policy show|edit|apply <file>          # apply and edit need an owner's principal key
 wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
-wf item add [--draft]|list|show|edit|link|check|archive|unarchive   # all types: task, decision, ...
+wf item add [--draft]|list|show|edit|link|check|archive|unarchive   # all types; check ticks steps
 wf item open|draft|done <item>... | cancel <item>   # release or reopen, hold back, finish, cancel
 wf item list [--type] [--state <state>,...] [--label] [--lane] [--priority] [--ready [--for <agent>]] [--blocked] [--stranded] [--group-by]
 wf item archive <item> | --done | --cancelled
@@ -1377,6 +1413,7 @@ wf item diff|checkout|path <item>         # the work through git; the main check
 wf comment <item> <text> [--block | --request-change] [--resolve <comment>... | --resolve-blockers | --resolve-change-requests] [--step <number> [--done]]
 wf mentions <@handle | @handle/agent>
 wf review <item> --approve|--request-changes|--escalate [--note]
+wf check [<name>...]                      # the policy's checks on this checkout, in the agents' sandbox
 wf inbox                                  # blockers, reviews, merges, recovery, permission requests
 wf agent add|list|edit|remove             # harness, model, capabilities, lanes, instructions, autonomy
 wf harness models <harness>               # the models a harness offers

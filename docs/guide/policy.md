@@ -11,7 +11,8 @@ wf policy apply policy.toml      # replace it with a file
 ```
 
 Changing it needs the principal key of an owner. What only one machine should do, such as running
-programs or calling paid APIs, goes in the [machine config](machine-config.md) instead.
+programs outside the agents' sandbox or calling paid APIs, goes in the
+[machine config](machine-config.md) instead.
 
 ## The default policy
 
@@ -156,3 +157,34 @@ waits for you.
 
 `[merge] target` is the branch approved work is merged into, `main` by default. `mode = "local"`
 merges in this repository; see [review-and-merge.md](review-and-merge.md#the-merge).
+
+### Checks
+
+`[[merge.check]]` names a command that has to pass on the merge result before the target moves. Each
+has a `name`, unique in the policy, a `run` (the program and its arguments, without a shell) and a
+`timeout`, 30 minutes by default. Without checks, work merges as soon as it is approved. These are the
+checks of wf's own repository:
+
+```toml
+[[merge.check]]
+name = "fmt"
+run = ["cargo", "fmt", "--all", "--check"]
+
+[[merge.check]]
+name = "clippy"
+run = ["cargo", "clippy", "--workspace", "--all-targets", "--", "-D", "warnings"]
+
+[[merge.check]]
+name = "test"
+run = ["cargo", "test", "--workspace"]
+timeout = "20m"
+
+[[merge.check]]
+name = "examples"
+run = ["cargo", "build", "--workspace", "--examples"]
+```
+
+A check runs in the agents' sandbox and gets no secrets, so it can do nothing an agent on that machine
+cannot. Being in the policy, it is out of reach of the work it checks: a branch cannot turn its own
+checks off. `wf check` runs them on your checkout, and agents are told to run it before they submit;
+what happens when one fails before a merge is in [review-and-merge.md](review-and-merge.md#checks).
