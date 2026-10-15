@@ -1,6 +1,6 @@
 //! `wf check`: the checks of the policy, run on the checkout here as the merge runs them.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, bail};
@@ -168,13 +168,13 @@ enum Machine<'a> {
     /// Outside a session: confined as the machine config confines agents.
     Agents {
         directory: &'a Path,
-        repository: std::path::PathBuf,
-        socket: std::path::PathBuf,
-        data_dir: std::path::PathBuf,
-        config_path: std::path::PathBuf,
+        repository: PathBuf,
+        socket: PathBuf,
+        data_dir: PathBuf,
+        config_path: PathBuf,
         config: Box<MachineConfig>,
         /// Where Fence's settings are written.
-        settings: std::path::PathBuf,
+        settings: PathBuf,
     },
 }
 
