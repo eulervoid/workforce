@@ -33,6 +33,8 @@ pub struct ThemeConfig {
     #[serde(default, deserialize_with = "optional_style")]
     pub tab_active: Option<Style>,
     #[serde(default, deserialize_with = "optional_style")]
+    pub tab_active_dimmed: Option<Style>,
+    #[serde(default, deserialize_with = "optional_style")]
     pub key: Option<Style>,
     #[serde(default, deserialize_with = "optional_style")]
     pub id: Option<Style>,
