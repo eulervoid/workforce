@@ -2,6 +2,7 @@
 //! item waits, and ends it when nobody else does.
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
@@ -15,7 +16,7 @@ use wf_vcs::{GitCli, VcsAdapter};
 use super::brief::{brief, restarted, resumed};
 use super::resume::AgentSessionRecord;
 use super::start::sandboxed;
-use super::{Begin, CANCEL_GRACE, End, GRACE, Run, START_TIMEOUT, Stop, blocking};
+use super::{Begin, CANCEL_GRACE, End, GRACE, Run, SILENCE_LIMIT, START_TIMEOUT, Stop, blocking};
 use crate::{Daemon, Loaded};
 
 /// The task of one session: runs the harness, and ends the session if nobody else does.
@@ -26,22 +27,12 @@ pub(super) async fn run_session(
     mut stopped: mpsc::UnboundedReceiver<Stop>,
 ) {
     let end = drive(&daemon, &loaded, &run, &mut stopped).await;
-    if let End::Interrupt(interruption) = end
-        && let Err(error) = daemon
-            .finish_session(
-                run.workforce,
-                &loaded,
-                run.session,
-                SessionEnd::Interruption(interruption),
-            )
-            .await
-    {
-        tracing::warn!(
-            "could not end session {}: {}",
-            run.session,
-            wf_core::error_chain(&error)
-        );
-    }
+    // The session stays among the runners until its end is written, so that it is not resumed
+    // while its end is tried again.
+    let loaded = match end {
+        End::Interrupt(interruption) => interrupt(&daemon, loaded, &run, interruption).await,
+        End::Over => loaded,
+    };
     daemon.runners.stop(run.session, Stop::Now);
     daemon.held.forget(run.session);
     daemon.callers.revoke(run.session);
@@ -56,6 +47,60 @@ pub(super) async fn run_session(
             .discard_session_directory(run.workforce, run.item, run.role)
             .await;
         daemon.keep_caches_in_budget(run.workforce, &loaded).await;
+    }
+}
+
+/// How long to wait before trying again to end a session whose end could not be written.
+const RETRY_END: Duration = Duration::from_secs(30);
+
+/// Ends the session with `interruption`. An end that cannot be written, as on a full disk, is
+/// tried again until it is or the daemon halts, so the session does not stay live without a
+/// harness; one refused for any other reason is not. Returns the workforce as it was loaded
+/// last, since a store that failed a write may have been opened again.
+async fn interrupt(
+    daemon: &Arc<Daemon>,
+    mut loaded: Arc<Loaded>,
+    run: &Run,
+    interruption: Interruption,
+) -> Arc<Loaded> {
+    let mut reported = false;
+    loop {
+        let ended = daemon
+            .finish_session(
+                run.workforce,
+                &loaded,
+                run.session,
+                SessionEnd::Interruption(interruption.clone()),
+            )
+            .await;
+        let Err(error) = ended else {
+            return loaded;
+        };
+        if !error.is_failed_write() {
+            tracing::warn!(
+                "could not end session {}: {}",
+                run.session,
+                wf_core::error_chain(&error)
+            );
+            return loaded;
+        }
+        if !reported {
+            tracing::warn!(
+                "could not end session {}, trying again every {}: {}",
+                run.session,
+                humantime::format_duration(RETRY_END),
+                wf_core::error_chain(&error)
+            );
+            reported = true;
+        }
+        tokio::select! {
+            () = tokio::time::sleep(RETRY_END) => {}
+            () = daemon.until_halted() => return loaded,
+        }
+        // A store that failed a write may have been closed and opened again.
+        if let Ok(reopened) = daemon.workforce(run.workforce) {
+            loaded = reopened;
+        }
     }
 }
 
@@ -120,6 +165,7 @@ async fn drive(
         directory: run.worktree.clone(),
         permissions: Arc::clone(&run.permissions),
         transcript,
+        silence_limit: SILENCE_LIMIT,
     });
     // A harness that waits on a login or hangs at start can still be stopped; giving up the
     // start stops it.
@@ -172,13 +218,10 @@ async fn drive(
                 Begin::Resume(record) => record.model.clone(),
             }),
     };
+    // Without the record, a restart could not resume the session.
     if let Err(error) = record.write(&run.agent_session) {
-        // Without the record the session still runs; it only cannot be resumed after a restart.
-        tracing::warn!(
-            "session {}: could not keep the agent's id of it in {}: {error}",
-            run.session,
-            run.agent_session.display()
-        );
+        let _ = conversation.close().await;
+        return not_kept(daemon, run, &error);
     }
     let end = turns(daemon, loaded, run, stopped, &mut conversation, &mut record).await;
     let _ = conversation.close().await;
@@ -205,10 +248,7 @@ async fn turns(
     loop {
         record.prompted_ms = Some(crate::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
-            tracing::warn!(
-                "session {}: could not keep when it was prompted: {error}",
-                run.session
-            );
+            return not_kept(daemon, run, &error);
         }
         let turn = conversation.reply(prompt);
         tokio::pin!(turn);
@@ -232,6 +272,13 @@ async fn turns(
         };
         let (_stop_reason, last_message) = match result {
             Ok(reply) => reply,
+            Err(wf_harness::Error::Transcript(error)) => {
+                daemon.space.note("a transcript", &error);
+                return failed(format!(
+                    "the transcript {} cannot be written: {error}",
+                    run.transcript.display()
+                ));
+            }
             Err(error) => {
                 return failed(format!(
                     "{} stopped answering: {}",
@@ -334,6 +381,15 @@ async fn first_prompt(
 
 fn failed(because: String) -> End {
     End::Interrupt(Interruption::Failed { because })
+}
+
+/// The session's record cannot be written, so a restart would not resume it as it is.
+fn not_kept(daemon: &Daemon, run: &Run, error: &std::io::Error) -> End {
+    daemon.space.note("the record of a session", error);
+    failed(format!(
+        "the record of the session {} cannot be written: {error}",
+        run.agent_session.display()
+    ))
 }
 
 async fn sleep_until(deadline: Option<Instant>) {

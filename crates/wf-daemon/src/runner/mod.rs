@@ -29,7 +29,7 @@ use wf_core::name::{AgentName, HarnessName};
 use wf_core::session::SessionRole;
 use wf_core::state::State;
 use wf_harness::{AcpAgentConfig, Permissions};
-use wf_store::AuthorError;
+use wf_store::{AuthorError, ReceiveError};
 use wf_vcs::{DirtyCheckout, VcsError};
 
 use crate::machine_config::{MachineConfig, MachineConfigError, SandboxConfig};
@@ -102,6 +102,41 @@ pub enum SessionError {
     },
 }
 
+impl SessionError {
+    /// Whether something could not be written, so that the same call may succeed later, for
+    /// example once there is space on the disk again.
+    pub(crate) fn is_failed_write(&self) -> bool {
+        match self {
+            Self::Authoring(AuthorError::Receive(ReceiveError::Store(_)))
+            | Self::Storage(_)
+            | Self::Io { .. } => true,
+            Self::Authoring(
+                AuthorError::Receive(ReceiveError::Invalid(_))
+                | AuthorError::Build(_)
+                | AuthorError::Policy(_)
+                | AuthorError::OwnFeedEquivocated
+                | AuthorError::Sign(_),
+            )
+            | Self::NotBound
+            | Self::UnknownAgent(_)
+            | Self::UnknownHarness(_)
+            | Self::UnknownItem(_)
+            | Self::Archived(_)
+            | Self::Claimed { .. }
+            | Self::Starting(_)
+            | Self::UnknownSession(_)
+            | Self::NotOurs(_)
+            | Self::NotWork
+            | Self::Vcs(_)
+            | Self::RebaseConflict { .. }
+            | Self::RebaseDirty { .. }
+            | Self::MachineConfig(_)
+            | Self::SigningKey(_)
+            | Self::NoFence => false,
+        }
+    }
+}
+
 /// Refuses a work session on `item` while a live one holds it.
 pub fn ensure_unclaimed(state: &State, item: ItemId) -> Result<(), SessionError> {
     match state.claim(item) {
@@ -129,6 +164,11 @@ const GRACE: Duration = Duration::from_secs(20);
 /// How long a harness may take to start and open its session. Wrappers such as `npx` may first
 /// download the agent.
 const START_TIMEOUT: Duration = Duration::from_secs(180);
+
+/// How long a turn of an agent may go without a word from it, while no permission request of it
+/// waits, before the session ends: the harness has stopped answering. Longer than any quiet tool
+/// call, such as a build, should take.
+pub(crate) const SILENCE_LIMIT: Duration = Duration::from_secs(20 * 60);
 
 /// How long a cancelled turn may take to end before the harness is closed anyway.
 const CANCEL_GRACE: Duration = Duration::from_secs(20);

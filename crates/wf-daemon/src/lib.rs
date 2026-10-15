@@ -13,12 +13,14 @@ mod inherit;
 mod judges;
 pub mod machine_config;
 mod notify;
+mod panics;
 mod peers;
 mod permissions;
 pub mod proto;
 mod runner;
 mod sandbox;
 mod server;
+mod space;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -34,8 +36,10 @@ use wf_net::replica::bind_device;
 use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
+pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, ensure_unclaimed, session_model};
+pub use space::OutOfSpace;
 pub use wf_net::{StorageClosed, StorageHandle};
 
 pub const STORE_FILE: &str = "store.redb";
@@ -248,6 +252,8 @@ pub struct Daemon {
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
     /// Turns true when the daemon halts; its background tasks then return.
     halted: tokio::sync::watch::Sender<bool>,
+    /// Whether the disk is full, as the last failed write said.
+    space: space::Space,
 }
 
 impl Daemon {
@@ -269,6 +275,7 @@ impl Daemon {
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
             halted: tokio::sync::watch::Sender::new(false),
+            space: space::Space::default(),
         });
         daemon.load_stored_workforces();
         tokio::spawn(rescan(Arc::downgrade(&daemon)));
@@ -381,7 +388,22 @@ impl Daemon {
                 Ok(replica)
             }
         };
-        let storage = StorageHandle::spawn(open()?, open);
+        // Every write to the log goes through the storage task, so it is where a full disk is
+        // noticed, whoever wrote: a session, the principal, an agent, the merge task or a peer.
+        let reopen = {
+            let daemon = Arc::downgrade(self);
+            let open = open.clone();
+            move |failed: &str| {
+                let space = |error: &(dyn std::error::Error + 'static)| {
+                    if let Some(daemon) = daemon.upgrade() {
+                        daemon.space.note("the event log", error);
+                    }
+                };
+                space(&std::io::Error::other(failed.to_owned()));
+                open().inspect_err(|error| space(error))
+            }
+        };
+        let storage = StorageHandle::spawn(open()?, reopen);
         // With the network on, serve at once: a device may sync a fork right after it was made.
         if let Some(node) = self.node.get() {
             node.serve(id, storage.clone());

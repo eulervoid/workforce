@@ -6049,6 +6049,7 @@ name = "wf-harness"
 version = "0.0.0"
 dependencies = [
  "agent-client-protocol",
+ "humantime",
  "jiff",
  "serde",
  "serde_json",

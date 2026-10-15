@@ -38,11 +38,12 @@ pub struct StorageHandle {
 
 impl StorageHandle {
     /// Starts the task. `reopen` opens the replica again after a write failed, when what the
-    /// replica holds in memory may be ahead of the log. If that fails too, or a job panics, the
-    /// task ends and [`StorageHandle::is_closed`] turns true.
+    /// replica holds in memory may be ahead of the log; it is told the failed write, with its
+    /// causes. If that fails too, or a job panics, the task ends and
+    /// [`StorageHandle::is_closed`] turns true.
     pub fn spawn(
         replica: Replica<RedbStore>,
-        reopen: impl Fn() -> Result<Replica<RedbStore>, StoreError> + Send + 'static,
+        reopen: impl Fn(&str) -> Result<Replica<RedbStore>, StoreError> + Send + 'static,
     ) -> Self {
         let (jobs, queue) = mpsc::channel::<Job>();
         let (publish, heads) = watch::channel(replica.state().heads().clone());
@@ -53,10 +54,10 @@ impl StorageHandle {
                     break;
                 };
                 job(replica);
-                if replica.needs_reopen() {
+                if let Some(failed) = replica.failed_write().map(str::to_owned) {
                     // The old replica holds the lock on the store until it is dropped.
                     drop(current.take());
-                    current = reopen().ok();
+                    current = reopen(&failed).ok();
                 }
                 let Some(replica) = current.as_ref() else {
                     break;
@@ -171,7 +172,7 @@ mod tests {
         let workforce = fixture.workforce();
         let mut replica = Replica::open(RedbStore::in_memory().unwrap(), workforce).unwrap();
         replica.receive(fixture.genesis.clone()).unwrap();
-        StorageHandle::spawn(replica, move || {
+        StorageHandle::spawn(replica, move |_| {
             Replica::open(RedbStore::in_memory().unwrap(), workforce)
         })
     }

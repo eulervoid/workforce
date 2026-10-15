@@ -5,6 +5,7 @@ use agent_client_protocol::LineDirection;
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use tokio::sync::watch;
 
 /// Which side of the connection a transcript line came from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -70,6 +71,8 @@ impl TranscriptEntry {
 /// The first write failure is kept and the entries after it are dropped.
 pub(crate) struct TranscriptWriter<W> {
     state: Mutex<WriterState<W>>,
+    /// Turns true at the first write failure.
+    failed: watch::Sender<bool>,
 }
 
 struct WriterState<W> {
@@ -84,7 +87,13 @@ impl<W: Write> TranscriptWriter<W> {
                 writer,
                 failure: None,
             }),
+            failed: watch::Sender::new(false),
         }
+    }
+
+    /// Turns true once a write has failed.
+    pub(crate) fn failed(&self) -> watch::Receiver<bool> {
+        self.failed.subscribe()
     }
 
     pub(crate) fn record(&self, entry: &TranscriptEntry) {
@@ -101,6 +110,7 @@ impl<W: Write> TranscriptWriter<W> {
             .and_then(|()| state.writer.flush());
         if let Err(error) = result {
             state.failure = Some(error);
+            self.failed.send_replace(true);
         }
     }
 

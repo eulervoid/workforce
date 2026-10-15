@@ -146,6 +146,7 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
         .with_writer(std::io::stderr)
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
+    let mut panics = wf_daemon::watch_panics();
 
     let device = data
         .device(false)?
@@ -194,11 +195,13 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
                 )
             },
         )?;
+        let mut panicked = None;
         let served = std::sync::Arc::clone(&daemon)
             .serve(async {
                 tokio::select! {
                     _ = tokio::signal::ctrl_c() => {}
                     _ = terminate.recv() => {}
+                    report = panics.first() => panicked = Some(report),
                 }
             })
             .await;
@@ -208,7 +211,10 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
             let _ = std::fs::remove_file(&pid_file);
         }
         served?;
-        Ok(())
+        match panicked {
+            Some(report) => bail!("the daemon stopped because a task of it panicked: {report}"),
+            None => Ok(()),
+        }
     })
 }
 
