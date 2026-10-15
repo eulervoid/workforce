@@ -364,14 +364,10 @@ impl Daemon {
     ) -> Result<Event, SessionError> {
         let signer = self.signer().clone();
         let now_ms = crate::now_ms();
-        let authored = loaded
+        Ok(loaded
             .storage
             .with(move |replica| replica.author(&signer, actor, now_ms, body))
-            .await?;
-        if let Err(error) = &authored {
-            self.space.note("an event", error);
-        }
-        Ok(authored?)
+            .await??)
     }
 
     pub(crate) fn principal_of_device(

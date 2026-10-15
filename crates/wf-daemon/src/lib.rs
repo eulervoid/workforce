@@ -388,7 +388,22 @@ impl Daemon {
                 Ok(replica)
             }
         };
-        let storage = StorageHandle::spawn(open()?, open);
+        // Every write to the log goes through the storage task, so it is where a full disk is
+        // noticed, whoever wrote: a session, the principal, an agent, the merge task or a peer.
+        let reopen = {
+            let daemon = Arc::downgrade(self);
+            let open = open.clone();
+            move |failed: &str| {
+                let space = |error: &(dyn std::error::Error + 'static)| {
+                    if let Some(daemon) = daemon.upgrade() {
+                        daemon.space.note("the event log", error);
+                    }
+                };
+                space(&std::io::Error::other(failed.to_owned()));
+                open().inspect_err(|error| space(error))
+            }
+        };
+        let storage = StorageHandle::spawn(open()?, reopen);
         // With the network on, serve at once: a device may sync a fork right after it was made.
         if let Some(node) = self.node.get() {
             node.serve(id, storage.clone());

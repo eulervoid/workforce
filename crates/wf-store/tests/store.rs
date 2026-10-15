@@ -565,7 +565,7 @@ fn a_failed_write_marks_the_replica_for_reopening() {
     };
     let mut replica = Replica::open(store, fixture.workforce()).unwrap();
     replica.receive(fixture.genesis.clone()).unwrap();
-    assert!(!replica.needs_reopen());
+    assert_eq!(replica.failed_write(), None);
 
     replica.store().failing.set(true);
     let result = replica.author(
@@ -575,6 +575,6 @@ fn a_failed_write_marks_the_replica_for_reopening() {
         create("task", "never stored"),
     );
     assert!(result.is_err());
-    assert!(replica.needs_reopen());
+    assert!(replica.failed_write().is_some());
     assert_eq!(replica.store().log_len().unwrap(), 1);
 }
