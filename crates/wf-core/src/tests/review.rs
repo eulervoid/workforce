@@ -453,7 +453,7 @@ mod guards {
             .id()
             .into();
         assert_eq!(
-            scene.state.turn_outcome(review, 0, 3),
+            scene.state.turn_outcome(review, 0, 3, None),
             crate::lifecycle::TurnOutcome::Continue
         );
     }

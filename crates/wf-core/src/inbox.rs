@@ -33,7 +33,7 @@ pub enum Waiting {
 }
 
 /// The kind of an entry of the inbox: what waits in the state, or what the daemon keeps: a
-/// permission request that an agent's session holds, or that its writes fail for lack of space.
+/// permission request that an agent's session holds, or what is wrong with its machine.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InboxKind {
@@ -43,7 +43,7 @@ pub enum InboxKind {
     Merge,
     Recovery,
     Permission,
-    OutOfSpace,
+    MachineFault,
 }
 
 impl InboxKind {
@@ -56,7 +56,7 @@ impl InboxKind {
             InboxKind::Merge => "merge",
             InboxKind::Recovery => "recovery",
             InboxKind::Permission => "permission",
-            InboxKind::OutOfSpace => "out_of_space",
+            InboxKind::MachineFault => "machine_fault",
         }
     }
 }

@@ -46,7 +46,8 @@ pub struct AgentStats {
 enum Outcome {
     Finished,
     Failed,
-    /// Interrupted by a restart or cancelled by the principal: no attempt either way.
+    /// Interrupted by a restart, cancelled by the principal or ended by a fault of the machine:
+    /// no attempt either way.
     Neither,
 }
 
@@ -57,7 +58,9 @@ fn outcome(reason: EndReason) -> Outcome {
         | EndReason::Supervised
         | EndReason::Diagnosed => Outcome::Finished,
         EndReason::Released | EndReason::TimedOut | EndReason::Failed => Outcome::Failed,
-        EndReason::Interrupted | EndReason::Cancelled => Outcome::Neither,
+        EndReason::Interrupted | EndReason::Cancelled | EndReason::MachineFault(_) => {
+            Outcome::Neither
+        }
     }
 }
 

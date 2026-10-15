@@ -14,7 +14,10 @@
 //! - `permission <command>`: asks to run the command, with `{item}` replaced.
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
+//! - `login`: answers the prompt `Authentication required`, as a harness whose login lapsed.
 //! - `turn`: ends the turn.
+//! - `unstartable`, as the first line: exits before it answers `initialize`, as a harness that is
+//!   not installed.
 //!
 //! New sessions offer two models, `fast` and `deep`; `fast` is the default.
 //!
@@ -101,6 +104,12 @@ fn main() {
     let script = std::fs::read_to_string(&script_path).unwrap_or_default();
     let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
     let all: Vec<String> = script.lines().map(str::to_string).collect();
+    if all
+        .first()
+        .is_some_and(|operation| operation == "unstartable")
+    {
+        std::process::exit(127);
+    }
     let mut operations = all.clone().into_iter();
     let mut session = String::new();
     let mut done = 0;
@@ -170,6 +179,7 @@ fn main() {
                         .collect();
                 }
                 let mut stop = "end_turn";
+                let mut logged_out = false;
                 for operation in operations.by_ref() {
                     done += 1;
                     std::fs::write(progress_file(&script_path, &session), done.to_string())
@@ -253,11 +263,22 @@ fn main() {
                             break;
                         }
                         "crash" => std::process::exit(1),
+                        "login" => {
+                            logged_out = true;
+                            break;
+                        }
                         "turn" => break,
                         other => panic!("unknown operation {other}"),
                     }
                 }
-                send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": stop}}));
+                if logged_out {
+                    send(json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "error": {"code": -32000, "message": "Authentication required"},
+                    }));
+                } else {
+                    send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": stop}}));
+                }
             }
             _ => {}
         }

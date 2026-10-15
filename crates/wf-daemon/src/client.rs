@@ -212,12 +212,12 @@ impl DaemonClient {
         self.call(workforce, Call::Permissions)
     }
 
-    /// Whether the daemon's writes fail for lack of space.
-    pub fn out_of_space(
+    /// What is wrong with the machine the daemon runs on.
+    pub fn machine_faults(
         &mut self,
         workforce: WorkforceId,
-    ) -> Result<Option<crate::OutOfSpace>, ClientError> {
-        self.call(workforce, Call::OutOfSpace)
+    ) -> Result<crate::MachineFaults, ClientError> {
+        self.call(workforce, Call::MachineFaults)
     }
 
     /// Answers the oldest request of a session, and says which it was.

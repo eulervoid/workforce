@@ -5,7 +5,7 @@ use crate::lifecycle::{
     AfterEnd, AfterFailedChecks, Closing, Finish, Interruption, MergeFailure, SessionEnd,
     TurnOutcome,
 };
-use crate::session::{CommitId, EndReason, Verdict};
+use crate::session::{CommitId, EndReason, MachineFault, Verdict};
 use crate::state::State;
 use crate::testing::*;
 
@@ -164,7 +164,7 @@ fn a_turn_continues_until_the_nudges_are_used_up() {
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
     scene.apply(moved(task, ItemState::Active));
-    let outcome = |scene: &Scene, used| scene.state.turn_outcome(session, used, 3);
+    let outcome = |scene: &Scene, used| scene.state.turn_outcome(session, used, 3, None);
     assert_eq!(outcome(&scene, 0), TurnOutcome::Continue);
     assert_eq!(outcome(&scene, 3), TurnOutcome::Continue);
     assert_eq!(outcome(&scene, 4), TurnOutcome::GiveUp);
@@ -178,7 +178,7 @@ fn a_turn_closes_when_the_session_ended_or_the_item_is_blocked() {
     for moved_on in [ItemState::Review, ItemState::Cancelled, ItemState::Draft] {
         scene.apply(moved(task, moved_on));
         assert_eq!(
-            scene.state.turn_outcome(session, 0, 3),
+            scene.state.turn_outcome(session, 0, 3, None),
             TurnOutcome::Close,
             "{moved_on}"
         );
@@ -186,11 +186,14 @@ fn a_turn_closes_when_the_session_ended_or_the_item_is_blocked() {
 
     scene.apply(moved(task, ItemState::Active));
     assert_eq!(
-        scene.state.turn_outcome(session, 0, 3),
+        scene.state.turn_outcome(session, 0, 3, None),
         TurnOutcome::Continue
     );
     scene.end(session, EndReason::Released);
-    assert_eq!(scene.state.turn_outcome(session, 0, 3), TurnOutcome::Close);
+    assert_eq!(
+        scene.state.turn_outcome(session, 0, 3, None),
+        TurnOutcome::Close
+    );
 }
 
 #[test]
@@ -201,11 +204,14 @@ fn a_turn_parks_while_the_item_waits_on_a_dependency() {
     scene.apply(moved(task, ItemState::Active));
     let first = scene.item(create("task", "pick a database"));
     scene.apply(depends_on(task, first));
-    assert_eq!(scene.state.turn_outcome(session, 0, 3), TurnOutcome::Park);
+    assert_eq!(
+        scene.state.turn_outcome(session, 0, 3, None),
+        TurnOutcome::Park
+    );
 
     scene.apply(moved(first, ItemState::Done));
     assert_eq!(
-        scene.state.turn_outcome(session, 0, 3),
+        scene.state.turn_outcome(session, 0, 3, None),
         TurnOutcome::Continue
     );
 }
@@ -251,6 +257,71 @@ fn an_agent_finish_is_written_by_the_agent_and_an_interruption_by_the_daemon() {
     assert_eq!(
         failed.note.as_deref(),
         Some("The session failed: the harness exited")
+    );
+}
+
+const MACHINE_FAULTS: [MachineFault; 3] = [
+    MachineFault::LoginLapsed,
+    MachineFault::NoSpace,
+    MachineFault::HarnessUnreachable,
+];
+
+#[test]
+fn a_fault_of_the_machine_ends_the_session_with_it_and_without_a_comment() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    let by_daemon = Actor::Daemon(scene.fixture.founder.key());
+    for fault in MACHINE_FAULTS {
+        let session = scene.start(task);
+        scene.apply(moved(task, ItemState::Active));
+        let closing = scene
+            .state
+            .closing(
+                session,
+                &SessionEnd::Interruption(Interruption::MachineFault(fault)),
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            closing,
+            Closing {
+                reason: EndReason::MachineFault(fault),
+                actor: by_daemon.clone(),
+                note: None,
+            },
+            "the inbox says what is wrong, not a comment per session"
+        );
+        assert_eq!(
+            scene.state.after_end(session, closing.reason),
+            Some(AfterEnd::MoveTo(ItemState::Open)),
+            "{fault:?}"
+        );
+        scene.end(session, closing.reason);
+        scene.apply(moved(task, ItemState::Open));
+    }
+}
+
+#[test]
+fn a_turn_on_a_machine_at_fault_ends_the_session_without_using_up_the_nudges() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    scene.apply(moved(task, ItemState::Active));
+    for fault in MACHINE_FAULTS {
+        for used in [1, 4] {
+            assert_eq!(
+                scene.state.turn_outcome(session, used, 3, Some(fault)),
+                TurnOutcome::MachineFault(fault)
+            );
+        }
+    }
+    scene.apply(moved(task, ItemState::Review));
+    assert_eq!(
+        scene
+            .state
+            .turn_outcome(session, 0, 3, Some(MachineFault::NoSpace)),
+        TurnOutcome::Close,
+        "an item that moved on is closed as before"
     );
 }
 

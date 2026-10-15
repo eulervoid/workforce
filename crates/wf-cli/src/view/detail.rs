@@ -474,6 +474,12 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     EndReason::Cancelled => "was stopped".into(),
                     EndReason::Interrupted => "was interrupted".into(),
                     EndReason::Diagnosed => "said what went wrong".into(),
+                    EndReason::MachineFault(fault) => {
+                        format!(
+                            "was ended by the machine: {}",
+                            fault.name().replace('_', " ")
+                        )
+                    }
                 };
                 let summary = match moved_to {
                     Some(to) => format!("{ended} → {to}"),

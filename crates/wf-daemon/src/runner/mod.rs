@@ -282,7 +282,9 @@ struct Run {
     item: ItemId,
     role: SessionRole,
     agent: AgentName,
-    harness: AcpAgentConfig,
+    /// The harness of the agent, and the command that starts it.
+    harness: HarnessName,
+    command: AcpAgentConfig,
     model: Option<String>,
     worktree: PathBuf,
     transcript: PathBuf,

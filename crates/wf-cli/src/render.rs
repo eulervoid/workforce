@@ -508,7 +508,7 @@ fn notices(detail: &ItemDetail, width: Option<usize>, format: Format) -> String 
                 .iter()
                 .map(|waiting| {
                     let style = match waiting.kind {
-                        InboxKind::Recovery | InboxKind::OutOfSpace => ERROR,
+                        InboxKind::Recovery | InboxKind::MachineFault => ERROR,
                         InboxKind::Blocker
                         | InboxKind::Proposal
                         | InboxKind::PrincipalReview
