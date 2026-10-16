@@ -856,6 +856,16 @@ struct Comment {
     kind: CommentKind,              // Plain | Blocker | ChangeRequest
     resolves: Vec<CommentId>,       // blockers and change requests this comment resolves
     step: Option<StepId>,           // the step it is about: the hash of the step's text
+    lines: Option<LineAnchor>,      // the lines of the diff of the item's work it is about
+}
+
+struct LineAnchor {
+    commit: CommitId,               // whose diff against the target the lines are of
+    path: String,                   // the file, by its path after the change
+    side: DiffSide,                 // Old (lines removed) | New: where `first` and `last` count
+    first: u32,                     // from 1, `last` no smaller
+    last: u32,
+    quote: String,                  // the lines as the diff showed them, each after its + - or space
 }
 ```
 
@@ -881,6 +891,19 @@ Both stay **open** until a later comment resolves them.
   `--resolve-change-requests` expand to the ids open when the command runs, and the event stores those,
   so a blocker written concurrently elsewhere is never resolved by a reply that did not see it.
   Resolution is grow-only; a resolution someone does not accept gets a new comment.
+
+### Comments on lines
+
+A comment can be about lines of the diff of the item's work, as the dashboard's diff writes them. The
+anchor names the commit the diff was of, so it means the same once the branch has moved on, and it
+quotes the lines, so it reads without git: everywhere a comment's text is shown (`wf item show`,
+`wf log`, a brief) the anchor goes above it, as `src/lib.rs:12-14 at a8d49484` and the lines indented
+under it. The dashboard's diff shows each under the last line it is about. One about lines of a commit other
+than the one on screen is outdated: it shows under the header of its file with the lines it quotes,
+not under lines that may now say something else. While a review waits, comments written in the diff
+are drafts of it, sent just before the verdict; otherwise they are posted at once. One about lines is
+written under its own tag (`COMMENT_ON_LINES`), one without them as before, so earlier comments keep
+their bytes.
 
 ### Comment ids
 

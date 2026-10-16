@@ -15,6 +15,7 @@ use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
 use wf_daemon::proto::HeldPermission;
 
+use super::diff::{LineComment, PostedComment};
 use crate::cli::ItemGrouping;
 use crate::commands::sorted_views;
 use crate::transcript::Format;
@@ -245,6 +246,12 @@ pub enum InView {
         session: Option<SessionId>,
     },
     Session(SessionInfo),
+    /// What a diff shows besides the diff, which the loop reads from git: the comments on its
+    /// lines in the log.
+    Diff {
+        id: ItemId,
+        comments: Vec<PostedComment>,
+    },
     /// A flag that is not about an item, in the notice box of an item.
     Flag {
         flag: Flag,
@@ -267,6 +274,9 @@ pub struct Wanted {
 pub enum Detail {
     Item(ItemId),
     Session(SessionId),
+    /// The work of an item against its target, read from git by the loop rather than taken
+    /// with the snapshot.
+    Diff(ItemId),
     Agent(AgentId),
     /// A flag of `wf status` that is not about an item.
     Flag(Flag),
@@ -533,6 +543,34 @@ impl InView {
                     ),
                     id,
                 })
+            }
+            Detail::Diff(id) => {
+                let ItemView::Live(item) = state.item(id)? else {
+                    return None;
+                };
+                let comments = events
+                    .iter()
+                    .filter_map(|event| {
+                        let EventBody::Commented(comment) = &event.content.body else {
+                            return None;
+                        };
+                        let lines = comment.lines.clone().filter(|_| comment.item == id)?;
+                        let resolved = item
+                            .comments()
+                            .get(&CommentId::from(event.id()))
+                            .is_some_and(|folded| folded.resolved().is_some());
+                        Some(PostedComment {
+                            by: who(state, &event.content.actor),
+                            comment: LineComment {
+                                kind: comment.kind,
+                                lines,
+                                text: comment.text.clone(),
+                            },
+                            resolved,
+                        })
+                    })
+                    .collect();
+                Some(InView::Diff { id, comments })
             }
             // Gone once fixed.
             Detail::Flag(flag) => flagged.contains(&flag).then(|| InView::Flag {

@@ -10,6 +10,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
+use wf_core::event::{CommentKind, LineAnchor};
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, ItemId, SessionId};
 use wf_core::identity::AgentId;
@@ -17,6 +18,7 @@ use wf_core::item::ItemState;
 use wf_core::name::AgentName;
 use wf_harness::{Permission, TranscriptEntry};
 
+use super::diff::{DiffPane, LineComment};
 use super::draw;
 use super::snapshot::{
     Detail, InView, ItemRow, MovedBack, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey,
@@ -120,15 +122,31 @@ pub enum Effect {
         blocker: CommentId,
         text: String,
     },
+    /// Posts the comments on lines of the review, then approves.
     Approve {
         item: ItemId,
+        comments: Vec<LineComment>,
     },
-    /// Writes the change requests in `$EDITOR`, one per line, then requests the changes.
+    /// Posts the comments on lines of the review, then requests the changes. Without a change
+    /// request among them, writes the change requests in `$EDITOR` first, one per line.
     RequestChanges {
         item: ItemId,
+        comments: Vec<LineComment>,
     },
-    /// The work of an item through git, in its pager.
-    ShowDiff {
+    /// Posts a comment about lines of the diff, while no review waits.
+    PostLineComment {
+        item: ItemId,
+        comment: LineComment,
+    },
+    /// Writes a comment about lines of the diff in `$EDITOR`, starting from its text.
+    LineCommentInEditor {
+        item: ItemId,
+        comment: LineComment,
+        then: Written,
+    },
+    /// The work of an item through git, in its pager, for those who read diffs with their own
+    /// tools, such as delta.
+    PageDiff {
         item: ItemId,
     },
     /// Asks who starts work on an item: an agent, or the dispatcher for a draft.
@@ -169,7 +187,7 @@ impl Detail {
     /// Where a detail starts: a transcript at its end, which is what happens now.
     fn start(&self) -> Scroll {
         match self {
-            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) => Scroll::At(0),
+            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) | Detail::Diff(_) => Scroll::At(0),
             Detail::Session(_) => Scroll::END,
         }
     }
@@ -360,14 +378,14 @@ pub enum ListTop {
 }
 
 impl ListTop {
-    fn line(self) -> usize {
+    pub(super) fn line(self) -> usize {
         match self {
             ListTop::FollowsSelection(line) | ListTop::Scrolled(line) => line,
         }
     }
 
     /// The same way of keeping the list, from `line`.
-    fn at(self, line: usize) -> Self {
+    pub(super) fn at(self, line: usize) -> Self {
         match self {
             ListTop::FollowsSelection(_) => ListTop::FollowsSelection(line),
             ListTop::Scrolled(_) => ListTop::Scrolled(line),
@@ -375,11 +393,11 @@ impl ListTop {
     }
 
     /// The list from where it is on screen, kept to the selection again.
-    fn follow_selection(self) -> Self {
+    pub(super) fn follow_selection(self) -> Self {
         ListTop::FollowsSelection(self.line())
     }
 
-    fn scroll(self, wheel: Wheel) -> Self {
+    pub(super) fn scroll(self, wheel: Wheel) -> Self {
         let line = self.line();
         ListTop::Scrolled(match wheel {
             Wheel::Up => line.saturating_sub(WHEEL_LINES),
@@ -425,6 +443,9 @@ impl<Key> Default for ListTab<Key> {
 #[derive(Clone, Debug, Default)]
 pub struct Drawn {
     pub text: Option<Scroll>,
+    /// Where the rows of a diff were drawn, the first row on screen and the row of its cursor,
+    /// where a diff is.
+    pub diff: Option<(Rect, usize, usize)>,
     pub list_top: Option<usize>,
     pub clickable: Clickable,
     /// What is under the pointer.
@@ -484,7 +505,7 @@ pub struct Spot {
 pub enum Target {
     /// Opens a detail; `name` is how it was written: `#k3f9ab`, `@ada/grace`.
     Open { detail: Detail, name: String },
-    /// Shows the work of an item, as `D` does, from one of its commits.
+    /// Opens the diff of an item, as `D` does, from one of its commits.
     Diff { item: ItemId, commit: String },
     /// A key hint of the footer: does what its key does.
     Key {
@@ -541,6 +562,10 @@ impl Target {
                 detail: Detail::Session(_),
                 name,
             } => format!("open the transcript of {name}"),
+            Target::Open {
+                detail: Detail::Diff(_),
+                name,
+            } => format!("open the diff of {name}"),
             Target::Open {
                 detail: Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_),
                 name,
@@ -737,6 +762,14 @@ pub enum Prompt {
         item: ItemId,
         input: Input,
     },
+    /// A comment or change request about lines of the diff of an item.
+    LineComment {
+        item: ItemId,
+        kind: CommentKind,
+        lines: LineAnchor,
+        then: Written,
+        input: Input,
+    },
     Choose(Choice),
     /// Whether to stop a session, which costs the agent what it has not written down.
     Stop {
@@ -744,6 +777,15 @@ pub enum Prompt {
     },
     /// The keys, until any key is pressed.
     Keys,
+}
+
+/// What becomes of a comment on lines once it is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Written {
+    /// It is posted, as no review waits to send it with.
+    Post,
+    /// It is a draft of the review, in place of the draft `replacing`.
+    Draft { replacing: Option<usize> },
 }
 
 /// A list that can be filtered.
@@ -774,6 +816,9 @@ pub struct App {
     /// The lines of the transcripts as last drawn, kept so that drawing lays out only what was
     /// added since.
     pub transcript_lines: RefCell<HashMap<SessionId, TranscriptLines>>,
+    /// The diffs opened, by item, kept with where their cursor is and the comments of the review
+    /// being written while other details are on screen.
+    pub diffs: HashMap<ItemId, DiffPane>,
     pub tab: Tab,
     pub now: ListTab<Row>,
     pub items: ItemsTab,
@@ -812,6 +857,7 @@ impl App {
             snapshot: Snapshot::default(),
             transcripts: HashMap::new(),
             transcript_lines: RefCell::default(),
+            diffs: HashMap::new(),
             tab: Tab::Now,
             now: ListTab::default(),
             items: ItemsTab {
@@ -854,6 +900,7 @@ impl App {
 
     pub fn refresh(&mut self, snapshot: Snapshot) {
         self.snapshot = snapshot;
+        self.take_posted();
         match self.status {
             Some(Status::RefreshFailed(_)) => self.status = None,
             Some(Status::Done { at_ms, .. } | Status::ActionFailed { at_ms, .. })
@@ -888,6 +935,16 @@ impl App {
     /// Takes in what the detail on screen shows, when only the detail changed.
     pub fn refresh_detail(&mut self, in_view: Option<InView>) {
         self.snapshot.in_view = in_view;
+        self.take_posted();
+    }
+
+    /// Hands the diff in view the comments on its lines in the log.
+    fn take_posted(&mut self) {
+        if let Some(InView::Diff { id, comments }) = &self.snapshot.in_view
+            && let Some(pane) = self.diffs.get_mut(id)
+        {
+            pane.posted.clone_from(comments);
+        }
     }
 
     pub fn refresh_failed(&mut self, error: &anyhow::Error) {
@@ -1126,6 +1183,14 @@ impl App {
         {
             panes.list_top = panes.list_top.at(list_top);
         }
+        for pane in self.diffs.values_mut() {
+            pane.area = None;
+        }
+        if let Some((area, top, cursor)) = drawn.diff
+            && let Some(pane) = self.diff_on_top_mut()
+        {
+            pane.shown(area, top, cursor);
+        }
         let Some(scroll) = drawn.text else {
             return;
         };
@@ -1265,6 +1330,15 @@ impl App {
                     Waiting::Permission { .. } | Waiting::Notice { .. } => false,
                 })
                 .collect(),
+            // A diff is looked at to review it.
+            Some(Detail::Diff(id)) => waiting
+                .filter(|entry| match entry {
+                    Waiting::Review { item, .. } => item.id == id,
+                    Waiting::Permission { .. }
+                    | Waiting::Blocker { .. }
+                    | Waiting::Notice { .. } => false,
+                })
+                .collect(),
             Some(Detail::Agent(_) | Detail::Flag(_)) | None => Vec::new(),
         }
     }
@@ -1272,7 +1346,7 @@ impl App {
     /// The item the item keys act on: of the open or selected detail.
     pub fn item_subject(&self) -> Option<ItemId> {
         match self.focus()? {
-            Detail::Item(item) => Some(item),
+            Detail::Item(item) | Detail::Diff(item) => Some(item),
             Detail::Session(session) => self.session_info(session).map(|info| info.item.id),
             Detail::Agent(_) | Detail::Flag(_) => None,
         }
@@ -1288,7 +1362,7 @@ impl App {
                     SessionStatus::Ended { .. } => false,
                 })
                 .map(|info| info.id),
-            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) => None,
+            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) | Detail::Diff(_) => None,
         }
     }
 
@@ -1296,7 +1370,13 @@ impl App {
     pub fn session_info(&self, session: SessionId) -> Option<&SessionInfo> {
         let in_view = match &self.snapshot.in_view {
             Some(InView::Session(info)) => Some(info),
-            Some(InView::Item { .. } | InView::Agent { .. } | InView::Flag { .. }) | None => None,
+            Some(
+                InView::Item { .. }
+                | InView::Agent { .. }
+                | InView::Flag { .. }
+                | InView::Diff { .. },
+            )
+            | None => None,
         };
         self.snapshot
             .working
@@ -1327,6 +1407,9 @@ impl App {
         if let Detail::Item(item) = detail {
             self.moved_back.retain(|moved| moved.item != item);
         }
+        if let Detail::Diff(item) = detail {
+            self.diffs.entry(item).or_default();
+        }
         let from_list = self.list_has_keys();
         if let Some(panes) = self.panes_mut() {
             panes.focus = Pane::Detail;
@@ -1337,6 +1420,8 @@ impl App {
                 return;
             }
             stack.clear();
+        } else if stack.last().is_some_and(|opened| opened.detail == detail) {
+            return;
         }
         stack.push(Opened {
             scroll: detail.start(),
@@ -1360,6 +1445,11 @@ impl App {
             let (prompt, effect) = self.prompt_key(prompt, key);
             self.prompt = prompt;
             return effect;
+        }
+        // In a diff, `v` selects lines, as in vim, and `R` asks for the verdict; `c` and `r`
+        // write about the lines; `e` and `d` edit and drop a draft of the review.
+        if matches!(key.code, KeyCode::Char('v' | 'c' | 'r' | 'e' | 'd')) && self.diff_has_keys() {
+            return self.detail_key(key);
         }
         if let Some(effect) = self.act(key) {
             return Some(effect);
@@ -1385,7 +1475,7 @@ impl App {
                 self.step_split(Pane::Detail);
             }
             // A detail covers the list behind it, so the list takes no keys while one is open.
-            _ if !self.list_has_keys() => self.detail_key(key),
+            _ if !self.list_has_keys() => return self.detail_key(key),
             _ if self.tab == Tab::Log => self.log_key(key),
             _ if self.move_selection(key) => {}
             _ => self.list_key(key),
@@ -1432,6 +1522,14 @@ impl App {
         }
         if self.tab == Tab::Log {
             match self.log.stack.last_mut() {
+                Some(Opened {
+                    detail: Detail::Diff(item),
+                    ..
+                }) => {
+                    if let Some(pane) = self.diffs.get_mut(item) {
+                        pane.scroll(pane.top.scroll(wheel));
+                    }
+                }
                 Some(opened) => opened.scroll = wheel.scroll(opened.scroll),
                 None => self.log.scroll = wheel.scroll(self.log.scroll),
             }
@@ -1458,7 +1556,9 @@ impl App {
             self.focus_list();
         }
         // Without a detail beside the list, there is nothing to scroll.
-        if let Some(opened) = self.stack_mut().last_mut() {
+        if let Some(pane) = self.diff_on_top_mut() {
+            pane.scroll(pane.top.scroll(wheel));
+        } else if let Some(opened) = self.stack_mut().last_mut() {
             opened.scroll = wheel.scroll(opened.scroll);
         }
     }
@@ -1502,6 +1602,15 @@ impl App {
             self.split = Split::Both;
             return None;
         }
+        if let Some(pane) = self.diff_on_top_mut()
+            && pane.press(position)
+        {
+            if in_detail {
+                self.focus_detail();
+            }
+            return None;
+        }
+        let clickable = &self.clickable;
         if let Some(list) = &clickable.list
             && list.area.contains(position)
         {
@@ -1534,7 +1643,13 @@ impl App {
                 self.open(detail);
                 None
             }
-            Target::Diff { item, .. } => Some(Effect::ShowDiff { item }),
+            Target::Diff { item, .. } => {
+                if in_detail {
+                    self.focus_detail();
+                }
+                self.open(Detail::Diff(item));
+                None
+            }
             Target::Key { code, .. } => self.key(KeyEvent::from(code)),
             Target::Back { depth, .. } => {
                 self.stack_mut().truncate(depth);
@@ -1669,6 +1784,17 @@ impl App {
         }
     }
 
+    /// The pointer dragged to `column`, `row` with the left button down: in a diff, it selects
+    /// lines from where it was pressed.
+    pub fn drag(&mut self, column: u16, row: u16) {
+        if !self.mouse_passes() {
+            return;
+        }
+        if let Some(pane) = self.diff_on_top_mut() {
+            pane.drag(Position::new(column, row));
+        }
+    }
+
     /// Gives the keys to the list, leaving the details opened from it as they are.
     fn focus_list(&mut self) {
         if let Some(panes) = self.panes_mut() {
@@ -1713,6 +1839,7 @@ impl App {
                 | Prompt::Answer { .. }
                 | Prompt::Verdict { .. }
                 | Prompt::Comment { .. }
+                | Prompt::LineComment { .. }
                 | Prompt::Choose(_)
                 | Prompt::Stop { .. }
                 | Prompt::Keys,
@@ -1765,7 +1892,10 @@ impl App {
                 self.prompt = Some(Prompt::Verdict { item: review? });
                 None
             }
-            KeyCode::Char('D') => self.item_with_work().map(|item| Effect::ShowDiff { item }),
+            KeyCode::Char('D') => {
+                self.open(Detail::Diff(self.item_with_work()?));
+                None
+            }
             KeyCode::Char('s') => self.item_subject().map(|item| Effect::ChooseStart { item }),
             KeyCode::Char('m') => self.item_subject().map(|item| Effect::ChooseState { item }),
             KeyCode::Char('e') => self.item_subject().map(|item| Effect::Edit { item }),
@@ -1870,16 +2000,83 @@ impl App {
                 }
             },
             Prompt::Verdict { item } => match key.code {
-                KeyCode::Char('a') => (None, Some(Effect::Approve { item })),
-                KeyCode::Char('r') => (None, Some(Effect::RequestChanges { item })),
-                // The diff is looked at before deciding, so the question stays.
-                KeyCode::Char('D') => (
-                    Some(Prompt::Verdict { item }),
-                    Some(Effect::ShowDiff { item }),
-                ),
+                KeyCode::Char('a') => {
+                    let comments = self.drafts(item).to_vec();
+                    if comments
+                        .iter()
+                        .any(|comment| comment.kind == CommentKind::ChangeRequest)
+                    {
+                        self.status = Some(Status::ActionFailed {
+                            error: "the review has change requests: request changes, or drop them \
+                                    in the diff"
+                                .to_owned(),
+                            at_ms: self.snapshot.now_ms,
+                        });
+                        return (None, None);
+                    }
+                    (None, Some(Effect::Approve { item, comments }))
+                }
+                KeyCode::Char('r') => {
+                    let comments = self.drafts(item).to_vec();
+                    (None, Some(Effect::RequestChanges { item, comments }))
+                }
+                // The diff is looked at before deciding.
+                KeyCode::Char('D') => {
+                    self.open(Detail::Diff(item));
+                    (None, None)
+                }
                 KeyCode::Esc => (None, None),
                 _ => (Some(Prompt::Verdict { item }), None),
             },
+            Prompt::LineComment {
+                item,
+                kind,
+                lines,
+                then,
+                mut input,
+            } => {
+                let comment = |input: &Input| LineComment {
+                    kind,
+                    lines: lines.clone(),
+                    text: input.value().trim().to_owned(),
+                };
+                match key.code {
+                    KeyCode::Esc => (None, None),
+                    KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
+                        None,
+                        Some(Effect::LineCommentInEditor {
+                            item,
+                            comment: comment(&input),
+                            then,
+                        }),
+                    ),
+                    KeyCode::Enter if input.value().trim().is_empty() => (None, None),
+                    KeyCode::Enter => match then {
+                        Written::Post => (
+                            None,
+                            Some(Effect::PostLineComment {
+                                item,
+                                comment: comment(&input),
+                            }),
+                        ),
+                        Written::Draft { replacing } => {
+                            self.drafted(item, comment(&input), replacing);
+                            (None, None)
+                        }
+                    },
+                    _ => {
+                        input.handle_event(&TerminalEvent::Key(key));
+                        let prompt = Prompt::LineComment {
+                            item,
+                            kind,
+                            lines,
+                            then,
+                            input,
+                        };
+                        (Some(prompt), None)
+                    }
+                }
+            }
             Prompt::Choose(mut choice) => {
                 let last = choice.len().saturating_sub(1);
                 let index = choice.index_mut();
@@ -1902,13 +2099,27 @@ impl App {
     }
 
     /// The keys of the open detail.
-    fn detail_key(&mut self, key: KeyEvent) {
+    fn detail_key(&mut self, key: KeyEvent) -> Option<Effect> {
         let item_session = match &self.snapshot.in_view {
             Some(InView::Item { session, .. }) => *session,
-            Some(InView::Session(_) | InView::Agent { .. } | InView::Flag { .. }) | None => None,
+            Some(
+                InView::Session(_)
+                | InView::Agent { .. }
+                | InView::Flag { .. }
+                | InView::Diff { .. },
+            )
+            | None => None,
         };
         let item_of_session = self.item_subject();
         let page = self.page();
+        // A selection in a diff ends before esc goes back.
+        if key.code == KeyCode::Esc
+            && let Some(pane) = self.diff_on_top_mut()
+            && pane.selection.is_some()
+        {
+            pane.selection = None;
+            return None;
+        }
         if matches!(key.code, KeyCode::Esc | KeyCode::Left | KeyCode::Char('h')) {
             match self.panes_mut() {
                 // The detail opened from the list stays as it is, to come back to with `l`.
@@ -1917,19 +2128,33 @@ impl App {
                     self.stack_mut().pop();
                 }
             }
-            return;
+            return None;
         }
-        let Some(opened) = self.stack_mut().last_mut() else {
-            return;
-        };
+        if let Some(Opened {
+            detail: Detail::Diff(item),
+            ..
+        }) = self.stack().last()
+        {
+            let item = *item;
+            return self.diff_key(item, key);
+        }
+        let opened = self.stack_mut().last_mut()?;
         if let Some(scroll) = opened.scroll.key(key, page) {
             opened.scroll = scroll;
-            return;
+            return None;
         }
         match (key.code, &opened.detail) {
-            (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'), Detail::Item(_)) => {
-                if let Some(session) = item_session {
-                    self.open(Detail::Session(session));
+            // Item, transcript, diff: each further right.
+            (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'), Detail::Item(item)) => {
+                let item = *item;
+                match item_session {
+                    Some(session) => self.open(Detail::Session(session)),
+                    None => self.open(Detail::Diff(item)),
+                }
+            }
+            (KeyCode::Enter | KeyCode::Right | KeyCode::Char('l'), Detail::Session(_)) => {
+                if let Some(item) = item_of_session {
+                    self.open(Detail::Diff(item));
                 }
             }
             (KeyCode::Char('i'), Detail::Session(_)) => {
@@ -1947,6 +2172,134 @@ impl App {
             }
             _ => {}
         }
+        None
+    }
+
+    /// The diff open on top, on screen or kept beside the list.
+    pub fn diff_on_top(&self) -> Option<&DiffPane> {
+        let Some(Opened {
+            detail: Detail::Diff(item),
+            ..
+        }) = self.stack().last()
+        else {
+            return None;
+        };
+        self.diffs.get(item)
+    }
+
+    /// The diff open on top, on screen or kept beside the list.
+    pub fn diff_on_top_mut(&mut self) -> Option<&mut DiffPane> {
+        let Some(Opened {
+            detail: Detail::Diff(item),
+            ..
+        }) = self.stack().last()
+        else {
+            return None;
+        };
+        let item = *item;
+        self.diffs.get_mut(&item)
+    }
+
+    /// Whether the work of `item` waits for the principal's review.
+    fn review_waits(&self, item: ItemId) -> bool {
+        self.snapshot.waiting.iter().any(|entry| match entry {
+            Waiting::Review { item: reviewed, .. } => reviewed.id == item,
+            Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => false,
+        })
+    }
+
+    /// The comments on lines of the review of `item` being written.
+    pub fn drafts(&self, item: ItemId) -> &[LineComment] {
+        self.diffs
+            .get(&item)
+            .map_or(&[], |pane| pane.drafts.as_slice())
+    }
+
+    /// Takes in a comment on lines written in `$EDITOR`: a draft of the review of `item`, in
+    /// place of `replacing`.
+    pub fn drafted(&mut self, item: ItemId, comment: LineComment, replacing: Option<usize>) {
+        if let Some(pane) = self.diffs.get_mut(&item) {
+            pane.drafted(comment, replacing);
+        }
+    }
+
+    /// The review of `item` was sent, with its drafts.
+    pub fn reviewed(&mut self, item: ItemId) {
+        if let Some(pane) = self.diffs.get_mut(&item) {
+            pane.drafts.clear();
+        }
+    }
+
+    /// Whether the keys go to a diff.
+    pub fn diff_has_keys(&self) -> bool {
+        !self.list_has_keys()
+            && matches!(
+                self.stack().last(),
+                Some(Opened {
+                    detail: Detail::Diff(_),
+                    ..
+                })
+            )
+    }
+
+    /// The keys of the diff of `item`, open on top.
+    fn diff_key(&mut self, item: ItemId, key: KeyEvent) -> Option<Effect> {
+        let page = self.page();
+        match key.code {
+            KeyCode::Char('i') => self.open(Detail::Item(item)),
+            KeyCode::Char('R') => {
+                if self.review_waits(item) {
+                    self.prompt = Some(Prompt::Verdict { item });
+                }
+            }
+            KeyCode::Char('p') => return Some(Effect::PageDiff { item }),
+            KeyCode::Char(key @ ('c' | 'r')) => {
+                let kind = if key == 'c' {
+                    CommentKind::Plain
+                } else {
+                    CommentKind::ChangeRequest
+                };
+                // While a review waits, a comment is a draft of it; else it is posted at once.
+                let then = if self.review_waits(item) {
+                    Written::Draft { replacing: None }
+                } else {
+                    Written::Post
+                };
+                let lines = self.diffs.get(&item)?.selected_lines()?;
+                self.prompt = Some(Prompt::LineComment {
+                    item,
+                    kind,
+                    lines,
+                    then,
+                    input: Input::default(),
+                });
+            }
+            KeyCode::Char('e') => {
+                let pane = self.diffs.get(&item)?;
+                let index = pane.draft_at_cursor()?;
+                let draft = pane.drafts[index].clone();
+                self.prompt = Some(Prompt::LineComment {
+                    item,
+                    kind: draft.kind,
+                    lines: draft.lines,
+                    then: Written::Draft {
+                        replacing: Some(index),
+                    },
+                    input: Input::new(draft.text),
+                });
+            }
+            KeyCode::Char('d') => {
+                let pane = self.diffs.get_mut(&item)?;
+                let index = pane.draft_at_cursor()?;
+                pane.drop_draft(index);
+            }
+            _ => {
+                if let Some(pane) = self.diffs.get_mut(&item) {
+                    pane.key(key, page);
+                }
+            }
+        }
+        None
     }
 
     /// Moves the selection of the list on screen as `key` asks; `false` for a key that does not

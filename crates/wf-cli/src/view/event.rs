@@ -283,7 +283,7 @@ pub fn comment_texts(events: &[Event]) -> HashMap<CommentId, String> {
             let EventBody::Commented(comment) = &event.content.body else {
                 return None;
             };
-            Some((event.id().into(), comment.text.clone()))
+            Some((event.id().into(), comment.text_with_lines()))
         })
         .collect()
 }

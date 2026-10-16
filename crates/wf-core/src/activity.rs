@@ -31,6 +31,7 @@ pub enum Activity {
     Commented {
         comment: CommentId,
         kind: CommentKind,
+        /// With the lines of the diff it is about above it, when it is about some.
         text: String,
         resolves: Vec<CommentId>,
         step: Option<StepId>,
@@ -166,7 +167,7 @@ impl State {
                 EventBody::Commented(comment) if comment.item == item => Activity::Commented {
                     comment: event.id().into(),
                     kind: comment.kind,
-                    text: comment.text.clone(),
+                    text: comment.text_with_lines(),
                     resolves: comment.resolves.clone(),
                     step: comment.step,
                 },

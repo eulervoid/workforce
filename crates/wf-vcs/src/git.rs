@@ -1099,6 +1099,34 @@ mod tests {
     }
 
     #[test]
+    fn the_diff_as_data_ignores_how_the_config_says_a_diff_looks() {
+        let repo = TestRepo::new();
+        let main = repo.directory();
+        for (key, value) in [
+            ("color.diff", "always"),
+            ("diff.noprefix", "true"),
+            ("diff.mnemonicPrefix", "true"),
+        ] {
+            git_in(&main, &["config", key, value]);
+        }
+        let commit = repo.work("wf/k3f9", "file.txt", "one\n2\nthree\nfour\n");
+        let files = repo.git.file_diffs("main", commit).unwrap();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(files[0].path, "file.txt");
+        assert_eq!(files[0].counts(), (2, 1));
+        let crate::diff::Content::Text(hunks) = &files[0].content else {
+            panic!("a text diff: {files:?}");
+        };
+        let added: Vec<_> = hunks[0]
+            .lines
+            .iter()
+            .filter(|line| line.marker() == '+')
+            .map(|line| (line.new_number(), line.text()))
+            .collect();
+        assert_eq!(added, [(Some(2), "2"), (Some(4), "four")]);
+    }
+
+    #[test]
     fn the_main_checkout_goes_to_a_commit_and_back() {
         let repo = TestRepo::new();
         let commit = repo.work("wf/k3f9", "file.txt", "one\ntwo\nthree\nfour\n");

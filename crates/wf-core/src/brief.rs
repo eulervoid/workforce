@@ -15,6 +15,8 @@ use crate::state::State;
 /// What a brief tells that the state does not hold: the texts of comments, which only the log
 /// has, and the branch and diffs of the repository.
 pub trait Sources {
+    /// The text of a comment, with the lines of the diff it is about above it, as
+    /// [`crate::event::Comment::text_with_lines`] writes them.
     fn text(&self, comment: CommentId) -> Option<String>;
     /// The branch the work on `item` is committed to.
     fn branch(&self, item: ItemId) -> String;

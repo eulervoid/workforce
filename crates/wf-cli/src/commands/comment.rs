@@ -49,6 +49,7 @@ pub(super) fn comment(
         kind,
         resolves: resolves.clone(),
         step,
+        lines: None,
     }))?;
     if let (Some(step), true) = (step, args.done) {
         workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {

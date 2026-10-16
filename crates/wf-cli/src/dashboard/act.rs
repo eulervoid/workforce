@@ -15,7 +15,8 @@ use wf_core::name::AgentName;
 use wf_core::session::Verdict;
 use wf_harness::Permission;
 
-use super::app::{Choice, Effect, Starter};
+use super::app::{Choice, Effect, Starter, Written};
+use super::diff::LineComment;
 use crate::commands::{edit_in_editor, repository, target, work_commit};
 use crate::draft::Draft;
 use crate::workspace::{self, Workspace};
@@ -29,6 +30,15 @@ pub enum Outcome {
     Did(String),
     /// Something to pick before it can be done.
     Choose(Choice),
+    /// A comment on lines written in `$EDITOR`, a draft of the review of `item` in place of the
+    /// draft `replacing`.
+    Drafted {
+        item: ItemId,
+        comment: LineComment,
+        replacing: Option<usize>,
+    },
+    /// The review of `item` was sent with the comments on lines drafted for it, as `what` says.
+    Reviewed { item: ItemId, what: String },
 }
 
 /// Carries out `effect`. Quitting is up to the loop.
@@ -40,6 +50,52 @@ pub fn carry_out(
     match effect {
         Effect::ChooseStart { item } => Ok(Outcome::Choose(starters(workspace, item)?)),
         Effect::ChooseState { item } => Ok(Outcome::Choose(states(workspace, item)?)),
+        Effect::Approve { item, comments } => {
+            post_line_comments(workspace, item, &comments)?;
+            verdict(workspace, item, Verdict::Approve)?;
+            Ok(Outcome::Reviewed {
+                item,
+                what: format!("approved #{}{}", item.short(), with(&comments)),
+            })
+        }
+        Effect::RequestChanges { item, comments } => {
+            request_changes(workspace, terminal, item, &comments)
+        }
+        Effect::LineCommentInEditor {
+            item,
+            mut comment,
+            then,
+        } => {
+            let quote: String = comment
+                .lines
+                .quote
+                .lines()
+                .map(|line| format!("    {line}\n"))
+                .collect();
+            let template = format!(
+                "{}\n{SCISSORS}\nYour {} on {} of #{}:\n\n{quote}",
+                comment.text,
+                comment.kind.name().replace('_', " "),
+                comment.lines.location(),
+                item.short()
+            );
+            let text = suspended(terminal, || edit_in_editor(&template, ".md"))??;
+            comment.text = above_scissors(&text);
+            if comment.text.is_empty() {
+                return Ok(Outcome::Did("nothing written".to_owned()));
+            }
+            match then {
+                Written::Post => post_line_comment(workspace, item, comment).map(Outcome::Did),
+                Written::Draft { replacing } => Ok(Outcome::Drafted {
+                    item,
+                    comment,
+                    replacing,
+                }),
+            }
+        }
+        Effect::PostLineComment { item, comment } => {
+            post_line_comment(workspace, item, comment).map(Outcome::Did)
+        }
         effect => done(effect, workspace, terminal).map(Outcome::Did),
     }
 }
@@ -123,7 +179,14 @@ fn done(
     terminal: &mut DefaultTerminal,
 ) -> anyhow::Result<String> {
     match effect {
-        Effect::Quit | Effect::ChooseStart { .. } | Effect::ChooseState { .. } => Ok(String::new()),
+        // Carried out by `carry_out`.
+        Effect::Quit
+        | Effect::ChooseStart { .. }
+        | Effect::ChooseState { .. }
+        | Effect::Approve { .. }
+        | Effect::RequestChanges { .. }
+        | Effect::LineCommentInEditor { .. }
+        | Effect::PostLineComment { .. } => Ok(String::new()),
         Effect::StartSession { item, agent } => {
             let (file, _) = workspace::find_workforce(&std::env::current_dir()?)?;
             let repository = file
@@ -223,40 +286,8 @@ fn done(
             }
             resolve(workspace, item, blocker, text)
         }
-        Effect::Approve { item } => {
-            verdict(workspace, item, Verdict::Approve)?;
-            Ok(format!("approved #{}", item.short()))
-        }
-        Effect::RequestChanges { item } => {
-            let template = format!(
-                "\n{SCISSORS}\nThe changes the work of #{} needs, one per line.\n",
-                item.short()
-            );
-            let text = suspended(terminal, || edit_in_editor(&template, ".md"))??;
-            let text = above_scissors(&text);
-            let changes: Vec<&str> = text
-                .lines()
-                .map(str::trim)
-                .filter(|line| !line.is_empty())
-                .collect();
-            if changes.is_empty() {
-                return Ok("no changes written, the review still waits".to_owned());
-            }
-            for change in &changes {
-                workspace.author(EventBody::Commented(Comment {
-                    kind: CommentKind::ChangeRequest,
-                    ..Comment::plain(item, *change)
-                }))?;
-            }
-            verdict(workspace, item, Verdict::RequestChanges)?;
-            Ok(format!(
-                "requested {} change{} on #{}",
-                changes.len(),
-                if changes.len() == 1 { "" } else { "s" },
-                item.short()
-            ))
-        }
-        Effect::ShowDiff { item } => {
+
+        Effect::PageDiff { item } => {
             let git = repository()?;
             let commit = work_commit(workspace, &git, item)?;
             let target = target(workspace);
@@ -277,6 +308,105 @@ fn done(
             Ok(String::new())
         }
     }
+}
+
+/// Requests changes on the work of `item`, with the comments on lines drafted for its review.
+/// Without a change request among them, the change requests are written in `$EDITOR` first, one
+/// per line.
+fn request_changes(
+    workspace: &mut Workspace,
+    terminal: &mut DefaultTerminal,
+    item: ItemId,
+    comments: &[LineComment],
+) -> anyhow::Result<Outcome> {
+    let on_lines = comments
+        .iter()
+        .filter(|comment| comment.kind == CommentKind::ChangeRequest)
+        .count();
+    let mut changes = Vec::new();
+    if on_lines == 0 {
+        let template = format!(
+            "\n{SCISSORS}\nThe changes the work of #{} needs, one per line.\n",
+            item.short()
+        );
+        let text = suspended(terminal, || edit_in_editor(&template, ".md"))??;
+        changes = above_scissors(&text)
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .map(str::to_owned)
+            .collect();
+        if changes.is_empty() {
+            return Ok(Outcome::Did(
+                "no changes written, the review still waits".to_owned(),
+            ));
+        }
+    }
+    post_line_comments(workspace, item, comments)?;
+    for change in &changes {
+        workspace.author(EventBody::Commented(Comment {
+            kind: CommentKind::ChangeRequest,
+            ..Comment::plain(item, change.as_str())
+        }))?;
+    }
+    let count = changes.len() + on_lines;
+    verdict(workspace, item, Verdict::RequestChanges)?;
+    let plain = comments.len() - on_lines;
+    let also = if plain > 0 {
+        format!(" and {plain} comment{}", plural(plain))
+    } else {
+        String::new()
+    };
+    Ok(Outcome::Reviewed {
+        item,
+        what: format!(
+            "requested {count} change{} on #{}{also}",
+            plural(count),
+            item.short()
+        ),
+    })
+}
+
+fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
+}
+
+/// ` with 2 comments on lines`, or nothing for none.
+fn with(comments: &[LineComment]) -> String {
+    match comments.len() {
+        0 => String::new(),
+        count => format!(" with {count} comment{} on lines", plural(count)),
+    }
+}
+
+fn post_line_comments(
+    workspace: &mut Workspace,
+    item: ItemId,
+    comments: &[LineComment],
+) -> anyhow::Result<()> {
+    for comment in comments {
+        post_line_comment(workspace, item, comment.clone())?;
+    }
+    Ok(())
+}
+
+fn post_line_comment(
+    workspace: &mut Workspace,
+    item: ItemId,
+    comment: LineComment,
+) -> anyhow::Result<String> {
+    let location = comment.lines.location();
+    let kind = comment.kind;
+    workspace.author(EventBody::Commented(Comment {
+        kind,
+        lines: Some(comment.lines),
+        ..Comment::plain(item, comment.text)
+    }))?;
+    Ok(format!(
+        "wrote a {} on {location} of #{}",
+        kind.name().replace('_', " "),
+        item.short()
+    ))
 }
 
 fn comment(workspace: &mut Workspace, item: ItemId, text: String) -> anyhow::Result<String> {

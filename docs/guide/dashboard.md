@@ -46,7 +46,9 @@ Piped, plain `wf` prints the help instead; `wf log --follow` prints the event st
 
 Each tab is a list with a detail. From 120 columns the detail sits right of the list and follows the
 selection; narrower, `enter` opens it and `esc` goes back. An item's detail shows its body, steps,
-comments and history; a session's detail is its live transcript.
+comments and history; a session's detail is its live transcript; one further right is the diff of the
+item's work against the target, as `wf item diff` computes it: a header for each file with what it adds
+and removes, then its hunks, each line with its numbers before and after.
 
 ### Keys
 
@@ -58,19 +60,25 @@ session that is open.
 | `1`–`4`, `tab`, `shift-tab` | switch tabs |
 | `j`/`k`, `↓`/`↑`, `g`/`G` | move, top, end (and follow a log or transcript) |
 | `pgup`/`pgdn`, `space` | a page up, down |
-| `enter`, `l`, `→` | open; on an item, its session |
+| `enter`, `l`, `→` | open; on an item, its session; on a session, the diff of its item |
 | `esc`, `h`, `←` | go back |
 | `H`, `L` (or `shift ←/→`) | only the list, both, or only the detail, in a wide window |
 | `a` / `d` | allow / deny a permission request |
 | `r` / `R` | answer a blocker in the footer / in `$EDITOR` |
-| `v` | review: then `a` approves, `r` writes change requests in `$EDITOR`, `D` shows the diff |
-| `D` | show the diff of the item, through git and your pager |
+| `v` | review: then `a` approves, `r` writes change requests in `$EDITOR`, `D` opens the diff |
+| `D` | open the diff of the item |
+| `]` / `[`, `enter` | in the diff: the next, previous file; fold a file to its header, or unfold it |
+| `v`, then `j`/`k` | in the diff: select lines, as in vim's visual line mode, within one hunk; `esc` ends the selection |
+| `c` / `r` | in the diff: comment on the selected lines, or the line of the cursor, or request a change to them |
+| `e` / `d` | in the diff, on a comment of the review being written: edit it, drop it |
+| `R` | in the diff: review, as `v` does elsewhere, sending the comments written on lines with the verdict |
+| `p` | in the diff: show it through git instead, with your pager and diff config, such as delta |
 | `s` | start a session on the item (pick the agent), or release a draft |
 | `x` | stop the session (asks `y/n`) |
 | `m` | move the item to another state (pick it) |
 | `c` | comment on the item |
 | `e` | edit the item in `$EDITOR` |
-| `i` | on a session: open its item |
+| `i` | on a session or a diff: open its item |
 | `f` | on a session: the full transcript, without the abridged tool output |
 | `o` / `F` / `/` | on the Items tab: grouping, readiness filter (ready, blocked, stranded), title filter |
 | `/` | on the Log tab: filter the events |
@@ -80,12 +88,27 @@ session that is open.
 Answering a blocker posts a comment that resolves it. Requesting changes in a review writes one change
 request per line you write, then the verdict; the item goes back to the agent.
 
+### Comments on lines
+
+In the diff, select lines with `v` and `j`/`k` or a drag, then `c` comments on them and `r` requests a
+change to them; without a selection, they are about the line of the cursor. While the work waits for
+your review, what you write is a draft of the review: it shows under its lines, `e` edits it and `d`
+drops it, and the verdict (`R`, or `v` on the item) sends them all with it, so the agent gets one
+review. Change requests on lines take the place of the ones written in `$EDITOR`; approving is refused
+while there are some. With no review waiting, a comment on lines is posted at once.
+
+A comment on lines names the commit, the file and the lines, and quotes them; `wf item show`, `wf log`
+and the agent's brief show it as `src/lib.rs:12-14 at a8d49484` with the lines above its text. In the
+diff, comments of the log show under their lines, or, when they are about an earlier commit, under the
+header of their file, outdated, with the lines they quote.
+
 ### Mouse
 
 The wheel scrolls what is under the pointer. A click picks a tab or an entry, and a second click opens
 it. `#item`, `@you/agent`, sessions and commits are links. The footer's key hints and the breadcrumb at
 the top of a detail are clickable too. Allowing a request by click needs a second click on it within
-three seconds; denying acts at once. To select text, hold shift while dragging.
+three seconds; denying acts at once. In the diff, a click moves the cursor and a drag selects lines.
+To select text, hold shift while dragging.
 
 ### Warnings
 
