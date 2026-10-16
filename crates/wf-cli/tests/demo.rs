@@ -459,6 +459,16 @@ fn plain_wf_without_a_terminal_prints_the_help() {
 }
 
 #[test]
+fn daemon_log_without_a_terminal_prints_the_log() {
+    let wf = Sandbox::new();
+    assert!(wf.fail(&["daemon", "log"]).contains("no daemon log yet"));
+    let log = "first line\nsecond line\n";
+    std::fs::create_dir_all(wf.data.join("workforce")).unwrap();
+    std::fs::write(wf.data.join("workforce/daemon.log"), log).unwrap();
+    assert_eq!(wf.run(&["daemon", "log"]), log);
+}
+
+#[test]
 fn item_opens_the_dashboard_and_takes_no_command() {
     let wf = Sandbox::new();
     assert!(
