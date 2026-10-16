@@ -4,7 +4,7 @@ use ansi_to_tui::IntoText;
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Modifier, Style, Styled, Stylize};
+use ratatui::style::{Color, Style, Styled, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use wf_core::graph::Readiness;
@@ -562,27 +562,20 @@ fn answer_keys(keys: &[&'static str]) -> Vec<Span<'static>> {
     spans
 }
 
-/// The label of the tab on screen, between ends in the colour behind it, as a highlight has; dimmed
-/// while the terminal pane is not focused. With `reverse` that is the colour of its text, dimmed
-/// as the text is; without a colour behind it, the ends are spaces.
+/// The label of the tab on screen, between ends in the colour behind it, as a highlight has; on a
+/// dimmer background while the terminal pane is not focused. Without a colour behind it, the ends
+/// are spaces.
 fn active_tab(label: String, app: &App) -> Vec<Span<'static>> {
     let style = Style::from(if app.terminal_focused {
         theme::tab_active()
     } else {
         theme::tab_active_dimmed()
     });
-    let (behind, ends) = if style.add_modifier.contains(Modifier::REVERSED) {
-        let behind = style.fg.or(app.base.fg).unwrap_or(Color::Reset);
-        let dimmed = style.add_modifier & Modifier::DIM;
-        (Some(behind), Style::new().add_modifier(dimmed))
-    } else {
-        (style.bg, Style::new())
-    };
     let label = Span::styled(label, style);
-    match behind {
+    match style.bg {
         Some(behind) => {
             let (start, end) = highlight_ends(behind);
-            vec![start.patch_style(ends), label, end.patch_style(ends)]
+            vec![start, label, end]
         }
         None => vec![Span::raw(" "), label, Span::raw(" ")],
     }
