@@ -2867,9 +2867,34 @@ fn diff_app() -> App {
         .unwrap()
         .read(Ok(super::diff::ItemWork {
             commit: work_commit(),
-            files: wf_vcs::diff::parse(DIFF),
+            changes: super::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
         }));
     app
+}
+
+#[test]
+fn the_diff_says_when_the_agent_has_not_made_any_commits_or_they_change_no_files() {
+    let mut app = diff_app();
+    let pane = app.diff_on_top_mut().unwrap();
+    pane.read(Ok(super::diff::ItemWork {
+        commit: work_commit(),
+        changes: super::diff::Changes::NoCommits,
+    }));
+    let screen_text = screen(&mut app, 60, 24);
+    assert!(
+        screen_text.contains("the agent has not made any commits"),
+        "{screen_text}"
+    );
+    let pane = app.diff_on_top_mut().unwrap();
+    pane.read(Ok(super::diff::ItemWork {
+        commit: work_commit(),
+        changes: super::diff::Changes::Files(Vec::new()),
+    }));
+    let screen_text = screen(&mut app, 60, 24);
+    assert!(
+        screen_text.contains("the work changes no files"),
+        "{screen_text}"
+    );
 }
 
 #[test]
@@ -3072,7 +3097,7 @@ fn without_a_review_a_comment_on_lines_is_posted_at_once() {
         .unwrap()
         .read(Ok(super::diff::ItemWork {
             commit: work_commit(),
-            files: wf_vcs::diff::parse(DIFF),
+            changes: super::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
         }));
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));

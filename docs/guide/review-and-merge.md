@@ -46,7 +46,9 @@ cd $(wf item path k3f7)          # or go to the item's worktree
 
 `wf item diff` shows what the work changes since it left the target. Once the item is merged, it shows
 what the merge brought into the target, however far the target moved since, and `wf item checkout`
-still checks out the work itself.
+still checks out the work itself. While the branch has no commits ahead of the target, it says the
+agent has not made any commits; with `--json`, `diff` is then `null`, where commits that change nothing
+give an empty one.
 
 Then give a verdict:
 

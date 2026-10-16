@@ -1996,6 +1996,27 @@ wf work release --note later
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_diff_says_when_the_agent_has_not_made_any_commits() {
+    let world = World::new("hang\n").await;
+    let item = world.wf.add(&["--title", "Still thinking"]);
+    start_session(&world, &item);
+
+    let text = world.wf.run(&["item", "diff", short(&item)]);
+    assert_eq!(text, "the agent has not made any commits\n");
+    let diff = world.wf.json(&["item", "diff", short(&item)]);
+    assert!(diff["diff"].is_null(), "{diff}");
+
+    // Commits that change nothing are an empty diff.
+    let path = world.wf.run(&["item", "path", short(&item)]);
+    git(
+        Path::new(path.trim()),
+        &["commit", "-q", "--allow-empty", "-m", "nothing"],
+    );
+    let diff = world.wf.json(&["item", "diff", short(&item)]);
+    assert_eq!(diff["diff"], "", "{diff}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn the_work_of_a_merged_item_is_what_its_merge_brought_in() {
     let script = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"
