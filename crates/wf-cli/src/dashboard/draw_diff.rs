@@ -3,7 +3,7 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
+use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use wf_vcs::diff::{Content, DiffLine, FileChange, FileDiff};
@@ -38,20 +38,32 @@ pub fn draw_diff(frame: &mut Frame, app: &App, pane: &DiffPane, area: Rect) -> (
     let numbers = number_width(files);
     let width = usize::from(padded(area).width);
     let accent = accent(app, KeysAt::Detail);
+    let selected = pane.selected();
     let lines: Vec<Line> = rows
         .iter()
         .enumerate()
         .skip(top)
         .take(height)
         .map(|(index, row)| {
-            let marker = if index == cursor {
+            let is_selected = selected.as_ref().is_some_and(|rows| rows.contains(&index));
+            let marker = if index == cursor || is_selected {
                 selection_bar(accent)
             } else {
                 Span::raw(" ")
             };
             let mut spans = vec![marker];
             spans.extend(row_spans(pane, *row, numbers, width.saturating_sub(1)));
-            Line::from(spans)
+            let line = Line::from(spans);
+            if is_selected {
+                // Across the whole width, so the selection reads as a block.
+                let used = line.width();
+                let mut line = line;
+                line.spans
+                    .push(Span::raw(" ".repeat(width.saturating_sub(used))));
+                line.bg(Color::from(theme::accent_dimmed()))
+            } else {
+                line
+            }
         })
         .collect();
     frame.render_widget(Paragraph::new(lines), padded(area));

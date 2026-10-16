@@ -362,7 +362,7 @@ pub enum ListTop {
 }
 
 impl ListTop {
-    fn line(self) -> usize {
+    pub(super) fn line(self) -> usize {
         match self {
             ListTop::FollowsSelection(line) | ListTop::Scrolled(line) => line,
         }
@@ -427,8 +427,9 @@ impl<Key> Default for ListTab<Key> {
 #[derive(Clone, Debug, Default)]
 pub struct Drawn {
     pub text: Option<Scroll>,
-    /// The first row of the diff on screen and the row of its cursor, where a diff is.
-    pub diff: Option<(usize, usize)>,
+    /// Where the rows of a diff were drawn, the first row on screen and the row of its cursor,
+    /// where a diff is.
+    pub diff: Option<(Rect, usize, usize)>,
     pub list_top: Option<usize>,
     pub clickable: Clickable,
     /// What is under the pointer.
@@ -1137,10 +1138,11 @@ impl App {
         {
             panes.list_top = panes.list_top.at(list_top);
         }
-        if let Some((top, cursor)) = drawn.diff
-            && let Some(pane) = &mut self.diff
-        {
-            pane.shown(top, cursor);
+        if let Some(pane) = &mut self.diff {
+            match drawn.diff {
+                Some((area, top, cursor)) => pane.shown(area, top, cursor),
+                None => pane.area = None,
+            }
         }
         let Some(scroll) = drawn.text else {
             return;
@@ -1393,6 +1395,10 @@ impl App {
             self.prompt = prompt;
             return effect;
         }
+        // In a diff, `v` selects lines, as in vim; `R` asks for the verdict there.
+        if key.code == KeyCode::Char('v') && self.diff_has_keys() {
+            return self.detail_key(key);
+        }
         if let Some(effect) = self.act(key) {
             return Some(effect);
         }
@@ -1550,6 +1556,15 @@ impl App {
             self.split = Split::Both;
             return None;
         }
+        if let Some(pane) = &mut self.diff
+            && pane.press(position)
+        {
+            if in_detail {
+                self.focus_detail();
+            }
+            return None;
+        }
+        let clickable = &self.clickable;
         if let Some(list) = &clickable.list
             && list.area.contains(position)
         {
@@ -1720,6 +1735,17 @@ impl App {
                 panes.stack.clear();
                 panes.list_top = panes.list_top.follow_selection();
             }
+        }
+    }
+
+    /// The pointer dragged to `column`, `row` with the left button down: in a diff, it selects
+    /// lines from where it was pressed.
+    pub fn drag(&mut self, column: u16, row: u16) {
+        if !self.mouse_passes() {
+            return;
+        }
+        if let Some(pane) = &mut self.diff {
+            pane.drag(Position::new(column, row));
         }
     }
 
@@ -1966,6 +1992,18 @@ impl App {
         };
         let item_of_session = self.item_subject();
         let page = self.page();
+        // A selection in a diff ends before esc goes back.
+        if key.code == KeyCode::Esc
+            && let Some(Opened {
+                detail: Detail::Diff(_),
+                ..
+            }) = self.stack().last()
+            && let Some(pane) = self.diff.as_mut()
+            && pane.selection.is_some()
+        {
+            pane.selection = None;
+            return None;
+        }
         if matches!(key.code, KeyCode::Esc | KeyCode::Left | KeyCode::Char('h')) {
             match self.panes_mut() {
                 // The detail opened from the list stays as it is, to come back to with `l`.
@@ -2021,11 +2059,34 @@ impl App {
         None
     }
 
+    /// Whether the keys go to a diff.
+    pub fn diff_has_keys(&self) -> bool {
+        !self.list_has_keys()
+            && matches!(
+                self.stack().last(),
+                Some(Opened {
+                    detail: Detail::Diff(_),
+                    ..
+                })
+            )
+    }
+
     /// The keys of the diff of `item`, open on top.
     fn diff_key(&mut self, item: ItemId, key: KeyEvent) -> Option<Effect> {
         let page = self.page();
         match key.code {
             KeyCode::Char('i') => self.open(Detail::Item(item)),
+            KeyCode::Char('R') => {
+                let review = self.subjects().into_iter().any(|entry| match entry {
+                    Waiting::Review { item: reviewed, .. } => reviewed.id == item,
+                    Waiting::Permission { .. }
+                    | Waiting::Blocker { .. }
+                    | Waiting::Notice { .. } => false,
+                });
+                if review {
+                    self.prompt = Some(Prompt::Verdict { item });
+                }
+            }
             KeyCode::Char('p') => return Some(Effect::PageDiff { item }),
             _ => {
                 if let Some(pane) = self.diff.as_mut() {

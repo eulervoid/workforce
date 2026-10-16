@@ -626,13 +626,13 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
     assert_eq!(press(&mut app, KeyCode::Char('D')), None);
     assert!(app.prompt.is_none(), "the diff takes the keys");
     assert_eq!(app.wanted().detail, Some(Detail::Diff(archive)));
-    // The verdict is asked for again from the diff.
-    press(&mut app, KeyCode::Char('v'));
+    // The verdict is asked for again from the diff, where `v` selects lines.
+    press(&mut app, KeyCode::Char('R'));
     assert_eq!(
         press(&mut app, KeyCode::Char('a')),
         Some(Effect::Approve { item: archive })
     );
-    press(&mut app, KeyCode::Char('v'));
+    press(&mut app, KeyCode::Char('R'));
     assert_eq!(
         press(&mut app, KeyCode::Char('r')),
         Some(Effect::RequestChanges { item: archive })
@@ -2897,4 +2897,58 @@ fn the_wheel_scrolls_the_diff_and_takes_the_cursor_along() {
     assert!(!shown.contains("src/lib.rs"), "{shown}");
     let cursor = shown.lines().find(|line| line.contains('▎'));
     assert!(cursor.is_some(), "the cursor is on screen: {shown}");
+}
+
+#[test]
+fn v_selects_lines_within_their_hunk_and_esc_ends_the_selection() {
+    let mut app = diff_app();
+    // On `use std::io;`, the first line of the first hunk.
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('v'));
+    assert!(
+        app.prompt.is_none(),
+        "v selects in a diff rather than review"
+    );
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    insta::assert_snapshot!(screen(&mut app, 60, 16));
+    // The selection stays in its hunk.
+    for _ in 0..5 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    let pane = app.diff.as_ref().unwrap();
+    let rows = pane.rows();
+    let selected = pane.selected().unwrap();
+    assert_eq!(selected.clone().count(), 4);
+    assert!(
+        selected
+            .map(|row| rows[row])
+            .all(|row| matches!(row, super::diff::DiffRow::Line { hunk: 0, .. }))
+    );
+    press(&mut app, KeyCode::Esc);
+    assert!(app.diff.as_ref().unwrap().selection.is_none());
+    assert!(
+        matches!(app.path().last(), Some(Detail::Diff(_))),
+        "esc ended only the selection"
+    );
+    // `R` asks for the verdict on the review, as `v` does elsewhere.
+    press(&mut app, KeyCode::Char('R'));
+    assert!(matches!(app.prompt, Some(Prompt::Verdict { .. })));
+}
+
+#[test]
+fn a_drag_selects_lines_and_a_click_moves_the_cursor() {
+    let mut app = diff_app();
+    let (column, row) = find(&mut app, 60, 24, "fn parse() {}");
+    assert_eq!(app.click(column, row), None);
+    let pane = app.diff.as_ref().unwrap();
+    assert_eq!(pane.cursor, 3, "the cursor is on the line clicked");
+    assert!(pane.selection.is_none());
+    let (_, below) = find(&mut app, 60, 24, "fn main() {}");
+    app.drag(column, below);
+    let pane = app.diff.as_ref().unwrap();
+    assert_eq!(pane.selected(), Some(3..=5));
+    // A drag past the hunk keeps to it.
+    app.drag(column, 22);
+    assert_eq!(app.diff.as_ref().unwrap().selected(), Some(3..=5));
 }

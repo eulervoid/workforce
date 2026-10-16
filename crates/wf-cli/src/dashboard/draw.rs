@@ -395,6 +395,8 @@ const KEYS: &[(&str, &str)] = &[
     ("ctrl+g", "carry a comment or answer to $EDITOR"),
     ("v D", "review, open the diff"),
     ("] [ enter", "diff: next, previous file, fold one"),
+    ("v drag", "diff: select lines, as vim's visual line"),
+    ("R", "diff: review, as v does elsewhere"),
     ("p", "diff: in git's pager, as `wf item diff`"),
     ("s x", "start a session, stop one"),
     ("m c e", "move, comment on, edit an item"),
@@ -1528,8 +1530,12 @@ fn items_lines(app: &App, width: u16) -> ListText {
 enum Shown {
     /// A text, at this scroll.
     Text(Scroll),
-    /// A diff, from this row, with the cursor on that one.
-    Diff { top: usize, cursor: usize },
+    /// A diff, its rows in `area` from `top`, with the cursor on the row `cursor`.
+    Diff {
+        area: Rect,
+        top: usize,
+        cursor: usize,
+    },
 }
 
 /// What drawing showed of a detail, for the rest of what was drawn to go with.
@@ -1539,8 +1545,8 @@ fn shown_detail(shown: Option<Shown>) -> Drawn {
             text: Some(scroll),
             ..Drawn::default()
         },
-        Some(Shown::Diff { top, cursor }) => Drawn {
-            diff: Some((top, cursor)),
+        Some(Shown::Diff { area, top, cursor }) => Drawn {
+            diff: Some((area, top, cursor)),
             ..Drawn::default()
         },
         None => Drawn::default(),
@@ -1616,7 +1622,11 @@ fn draw_detail(
         Detail::Diff(id) => {
             let pane = app.diff.as_ref().filter(|pane| pane.item == *id)?;
             let (top, cursor) = draw_diff::draw_diff(frame, app, pane, body);
-            return Some(Shown::Diff { top, cursor });
+            return Some(Shown::Diff {
+                area: body,
+                top,
+                cursor,
+            });
         }
     };
     spots.extend(links::find(
@@ -2012,6 +2022,8 @@ fn hints(app: &App) -> Vec<&'static str> {
         let keys: &[&str] = match entry {
             Waiting::Permission { .. } => &[ALLOW, DENY],
             Waiting::Blocker { .. } => &["r answer", "R in editor"],
+            // In the diff, `v` selects lines.
+            Waiting::Review { .. } if app.diff_has_keys() => &["R review"],
             Waiting::Review { .. } => &["v review", "D diff"],
             Waiting::Notice { .. } => &[],
         };
@@ -2035,6 +2047,7 @@ fn hints(app: &App) -> Vec<&'static str> {
         (_, Some(Detail::Diff(_))) => &[
             "esc back",
             "j/k move",
+            "v select",
             "]/[ file",
             "enter fold",
             "i item",

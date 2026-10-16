@@ -68,6 +68,8 @@ session that is open.
 | `v` | review: then `a` approves, `r` writes change requests in `$EDITOR`, `D` opens the diff |
 | `D` | open the diff of the item |
 | `]` / `[`, `enter` | in the diff: the next, previous file; fold a file to its header, or unfold it |
+| `v`, then `j`/`k` | in the diff: select lines, as in vim's visual line mode, within one hunk; `esc` ends the selection |
+| `R` | in the diff: review, as `v` does elsewhere |
 | `p` | in the diff: show it through git instead, with your pager and diff config, such as delta |
 | `s` | start a session on the item (pick the agent), or release a draft |
 | `x` | stop the session (asks `y/n`) |
@@ -89,7 +91,8 @@ request per line you write, then the verdict; the item goes back to the agent.
 The wheel scrolls what is under the pointer. A click picks a tab or an entry, and a second click opens
 it. `#item`, `@you/agent`, sessions and commits are links. The footer's key hints and the breadcrumb at
 the top of a detail are clickable too. Allowing a request by click needs a second click on it within
-three seconds; denying acts at once. To select text, hold shift while dragging.
+three seconds; denying acts at once. In the diff, a click moves the cursor and a drag selects lines.
+To select text, hold shift while dragging.
 
 ### Warnings
 

@@ -180,6 +180,15 @@ fn handle(
             ..
         }) => app.click(column, row),
         TerminalEvent::Mouse(MouseEvent {
+            kind: MouseEventKind::Drag(MouseButton::Left),
+            column,
+            row,
+            ..
+        }) => {
+            app.drag(column, row);
+            None
+        }
+        TerminalEvent::Mouse(MouseEvent {
             kind: MouseEventKind::Moved,
             column,
             row,

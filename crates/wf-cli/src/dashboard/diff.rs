@@ -3,7 +3,10 @@
 
 use std::collections::HashSet;
 
+use std::ops::RangeInclusive;
+
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::layout::{Position, Rect};
 use wf_core::id::ItemId;
 use wf_core::session::CommitId;
 use wf_vcs::diff::{Content, FileDiff};
@@ -68,6 +71,14 @@ pub struct DiffPane {
     pub top: ListTop,
     /// The files folded to their header, by path, so they stay folded as the work moves on.
     pub folded: HashSet<String>,
+    /// The row a selection of lines started on, which reaches from there to the cursor; `None`
+    /// while no lines are selected.
+    pub selection: Option<usize>,
+    /// The line the left button was pressed on, which a drag selects from.
+    pressed: Option<usize>,
+    /// Where the rows were drawn, the first of them at the top; `None` while the diff is not on
+    /// screen.
+    pub area: Option<Rect>,
 }
 
 impl DiffPane {
@@ -78,6 +89,9 @@ impl DiffPane {
             cursor: 0,
             top: ListTop::FollowsSelection(0),
             folded: HashSet::new(),
+            selection: None,
+            pressed: None,
+            area: None,
         }
     }
 
@@ -90,8 +104,11 @@ impl DiffPane {
     }
 
     /// Takes in the work as read again. The cursor stays on its row, as near as there is one.
+    /// A selection is of lines that may be gone.
     pub fn read(&mut self, work: Result<ItemWork, String>) {
         self.work = Some(work);
+        self.selection = None;
+        self.pressed = None;
         let rows = self.rows();
         self.cursor = self.cursor.min(rows.len().saturating_sub(1));
         self.cursor = nearest_cursor_row(&rows, self.cursor);
@@ -142,6 +159,23 @@ impl DiffPane {
             return false;
         }
         let last = rows.len() - 1;
+        match key.code {
+            KeyCode::Char('v') => {
+                self.selection = match self.selection {
+                    Some(_) => None,
+                    None => matches!(rows.get(self.cursor), Some(DiffRow::Line { .. }))
+                        .then_some(self.cursor),
+                };
+                return true;
+            }
+            KeyCode::Esc if self.selection.is_some() => {
+                self.selection = None;
+                return true;
+            }
+            // A selection is of the lines of one hunk: jumping or folding ends it.
+            KeyCode::Char(']' | '[') | KeyCode::Enter => self.selection = None,
+            _ => {}
+        }
         let cursor = match key.code {
             KeyCode::Down | KeyCode::Char('j') => next_cursor_row(&rows, self.cursor, 1),
             KeyCode::Up | KeyCode::Char('k') => previous_cursor_row(&rows, self.cursor, 1),
@@ -162,9 +196,61 @@ impl DiffPane {
             }
             _ => return false,
         };
-        self.cursor = cursor;
+        self.cursor = match self.selection {
+            Some(start) => keep_to_hunk(&rows, start, cursor),
+            None => cursor,
+        };
         self.top = self.top.follow_selection();
         true
+    }
+
+    /// The rows selected, from the first to the last; `None` while none are.
+    pub fn selected(&self) -> Option<RangeInclusive<usize>> {
+        let start = self.selection?;
+        Some(start.min(self.cursor)..=start.max(self.cursor))
+    }
+
+    /// The row on screen at `y`, as last drawn; `None` off the diff.
+    fn row_at(&self, rows: &[DiffRow], position: Position) -> Option<usize> {
+        let area = self.area.filter(|area| area.contains(position))?;
+        let row = self.top.line() + usize::from(position.y - area.y);
+        (row < rows.len()).then_some(row)
+    }
+
+    /// The left button pressed at `position`: the cursor goes to the row there, and a selection
+    /// ends. Returns whether that was on the diff.
+    pub fn press(&mut self, position: Position) -> bool {
+        let rows = self.rows();
+        let Some(row) = self.row_at(&rows, position) else {
+            return false;
+        };
+        self.cursor = nearest_cursor_row(&rows, row);
+        self.selection = None;
+        self.pressed = matches!(rows[self.cursor], DiffRow::Line { .. }).then_some(self.cursor);
+        self.top = self.top.follow_selection();
+        true
+    }
+
+    /// The pointer dragged to `position` with the left button down: the lines from where it was
+    /// pressed to there are selected, within the hunk it was pressed in.
+    pub fn drag(&mut self, position: Position) {
+        let Some(start) = self.pressed else {
+            return;
+        };
+        let rows = self.rows();
+        let Some(area) = self.area else {
+            return;
+        };
+        // Above or below the diff, the drag reaches its first or last row on screen.
+        let y = position
+            .y
+            .clamp(area.top(), area.bottom().saturating_sub(1));
+        let Some(row) = self.row_at(&rows, Position::new(area.x, y)) else {
+            return;
+        };
+        self.selection = Some(start);
+        self.cursor = keep_to_hunk(&rows, start, row);
+        self.top = self.top.follow_selection();
     }
 
     /// Folds the file the cursor is in to its header, or unfolds it; the cursor goes to the
@@ -192,11 +278,33 @@ impl DiffPane {
         self.top = top;
     }
 
-    /// Takes in where drawing put the top and the cursor.
-    pub fn shown(&mut self, top: usize, cursor: usize) {
+    /// Takes in where drawing put the rows, the top and the cursor.
+    pub fn shown(&mut self, area: Rect, top: usize, cursor: usize) {
+        self.area = Some(area);
         self.top = self.top.at(top);
         self.cursor = cursor;
     }
+}
+
+/// `row`, or the nearest line to it of the hunk that `start` is a line of.
+fn keep_to_hunk(rows: &[DiffRow], start: usize, row: usize) -> usize {
+    let DiffRow::Line { file, hunk, .. } = rows[start] else {
+        return start;
+    };
+    let in_hunk = |row: &usize| {
+        matches!(rows[*row], DiffRow::Line { file: line_file, hunk: line_hunk, .. }
+            if line_file == file && line_hunk == hunk)
+    };
+    let first = (0..=start)
+        .rev()
+        .take_while(in_hunk)
+        .last()
+        .unwrap_or(start);
+    let last = (start..rows.len())
+        .take_while(in_hunk)
+        .last()
+        .unwrap_or(start);
+    row.clamp(first, last)
 }
 
 /// The row `count` rows of the cursor further down from `from`, or the last there is.
