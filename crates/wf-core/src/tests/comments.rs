@@ -281,3 +281,38 @@ mod supervision {
         );
     }
 }
+
+#[test]
+fn a_comment_on_lines_needs_lines_from_1_the_last_after_the_first() {
+    let (_, state, task) = with_task();
+    let on_lines = |first, last| {
+        let EventBody::Commented(written) = comment(task, "rename it back") else {
+            unreachable!("a comment")
+        };
+        EventBody::Commented(crate::event::Comment {
+            lines: Some(crate::event::LineAnchor {
+                commit: crate::session::CommitId::Git(
+                    "00112233445566778899aabbccddeeff00112233".parse().unwrap(),
+                ),
+                path: "src/lib.rs".into(),
+                side: crate::event::DiffSide::New,
+                first,
+                last,
+                quote: "+fn parse_lazily() {}".into(),
+            }),
+            ..written
+        })
+    };
+    assert_eq!(state.check_policy(&on_lines(12, 12)), Ok(()));
+    assert_eq!(
+        state.check_policy(&on_lines(0, 3)),
+        Err(PolicyViolation::NoLines { first: 0, last: 3 })
+    );
+    assert_eq!(
+        state.check_policy(&on_lines(14, 12)),
+        Err(PolicyViolation::NoLines {
+            first: 14,
+            last: 12
+        })
+    );
+}

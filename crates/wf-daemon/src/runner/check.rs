@@ -239,11 +239,8 @@ impl Daemon {
                 loaded,
                 Actor::Daemon(principal),
                 EventBody::Commented(Comment {
-                    item,
-                    text,
                     kind,
-                    resolves: Vec::new(),
-                    step: None,
+                    ..Comment::plain(item, text)
                 }),
             )
         };

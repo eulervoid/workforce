@@ -312,6 +312,19 @@ pub struct Comment {
     /// The step of the item's body the comment is about, named by the hash of its text. The link
     /// is not checked when read, so it dangles once the step is edited.
     pub step: Option<StepId>,
+    /// The lines of the diff of the item's work the comment is about.
+    pub lines: Option<LineAnchor>,
+}
+
+/// The wire form of `Comment` before it could be about lines of a diff, and still for one that
+/// is not.
+#[derive(Serialize, Deserialize)]
+struct CommentWithoutLines {
+    item: ItemId,
+    text: String,
+    kind: CommentKind,
+    resolves: Vec<CommentId>,
+    step: Option<StepId>,
 }
 
 impl Comment {
@@ -322,7 +335,111 @@ impl Comment {
             kind: CommentKind::Plain,
             resolves: Vec::new(),
             step: None,
+            lines: None,
         }
+    }
+
+    /// The text as it reads away from the diff: where the lines it is about are, and the lines
+    /// themselves, above it.
+    pub fn text_with_lines(&self) -> String {
+        match &self.lines {
+            None => self.text.clone(),
+            Some(lines) => {
+                let quote: String = lines
+                    .quote
+                    .lines()
+                    .map(|line| format!("    {line}\n"))
+                    .collect();
+                format!("{}:\n{quote}\n{}", lines.heading(), self.text)
+            }
+        }
+    }
+
+    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        match self.lines {
+            Some(_) => Ok((tag::COMMENT_ON_LINES, encoding::encode(self)?)),
+            None => Ok((
+                tag::COMMENT,
+                encoding::encode(&CommentWithoutLines {
+                    item: self.item,
+                    text: self.text.clone(),
+                    kind: self.kind,
+                    resolves: self.resolves.clone(),
+                    step: self.step,
+                })?,
+            )),
+        }
+    }
+
+    /// One without lines would encode to other bytes than were signed.
+    fn on_lines(payload: &[u8]) -> Result<Self, EncodingError> {
+        let comment: Comment = encoding::decode(payload)?;
+        match comment.lines {
+            Some(_) => Ok(comment),
+            None => Err(EncodingError::malformed()),
+        }
+    }
+
+    fn without_lines(payload: &[u8]) -> Result<Self, EncodingError> {
+        let old: CommentWithoutLines = encoding::decode(payload)?;
+        Ok(Comment {
+            item: old.item,
+            text: old.text,
+            kind: old.kind,
+            resolves: old.resolves,
+            step: old.step,
+            lines: None,
+        })
+    }
+}
+
+/// Lines of the diff of an item's work against its target, as a comment names them: they stay
+/// where they were when the branch moves on, as of the commit they were read at.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LineAnchor {
+    /// The commit whose diff the lines are of.
+    pub commit: CommitId,
+    /// The file, by its path after the change.
+    pub path: String,
+    /// Which side of the diff `first` and `last` count on.
+    pub side: DiffSide,
+    /// The first and the last line, from 1, the last no smaller than the first.
+    pub first: u32,
+    pub last: u32,
+    /// The lines as the diff showed them, each after its `+`, `-` or space: for reading the
+    /// comment without the diff, and after the lines changed.
+    pub quote: String,
+}
+
+/// Which side of a diff a line number counts on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum DiffSide {
+    /// Before the change: for lines it removes, and only those.
+    Old,
+    /// After the change.
+    New,
+}
+
+impl LineAnchor {
+    /// `src/lib.rs:12-14`, `src/lib.rs:12`: where the lines are, as editors and compilers write
+    /// it.
+    pub fn location(&self) -> String {
+        let lines = if self.first == self.last {
+            self.first.to_string()
+        } else {
+            format!("{}-{}", self.first, self.last)
+        };
+        format!("{}:{lines}", self.path)
+    }
+
+    /// `src/lib.rs:12-14 at a8d49484`, saying which side lines removed are numbered on.
+    pub fn heading(&self) -> String {
+        let commit: String = self.commit.to_string().chars().take(8).collect();
+        let side = match self.side {
+            DiffSide::New => "",
+            DiffSide::Old => ", removed, numbered as before the change,",
+        };
+        format!("{}{side} at {commit}", self.location())
     }
 }
 
@@ -465,6 +582,7 @@ mod tag {
     pub const ITEM_LINKED: u16 = 13;
     pub const ITEM_ARCHIVED: u16 = 14;
     pub const ITEM_UNARCHIVED: u16 = 15;
+    /// `Comment` as written before it could be about lines, and still for one that is not.
     pub const COMMENT: u16 = 16;
     pub const ITEM_CREATED: u16 = 17;
     pub const SESSION_STARTED: u16 = 20;
@@ -475,6 +593,8 @@ mod tag {
     pub const MERGED: u16 = 23;
     // 24 was `Report`, now a comment with a step. Retired: never reuse it.
     pub const SESSION_ENDED: u16 = 25;
+    /// `Comment` about lines of a diff; one that is not is still written as `COMMENT`.
+    pub const COMMENT_ON_LINES: u16 = 26;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -557,7 +677,7 @@ impl EventBody {
             EventBody::ItemLinked(body) => (tag::ITEM_LINKED, encoding::encode(body)?),
             EventBody::ItemArchived(body) => (tag::ITEM_ARCHIVED, encoding::encode(body)?),
             EventBody::ItemUnarchived(body) => (tag::ITEM_UNARCHIVED, encoding::encode(body)?),
-            EventBody::Commented(body) => (tag::COMMENT, encoding::encode(body)?),
+            EventBody::Commented(body) => body.to_tagged()?,
             EventBody::SessionStarted(body) => (tag::SESSION_STARTED, encoding::encode(body)?),
             EventBody::SessionEnded(body) => body.to_tagged()?,
             EventBody::Reviewed(body) => (tag::REVIEW, encoding::encode(body)?),
@@ -587,7 +707,8 @@ impl EventBody {
             tag::ITEM_LINKED => EventBody::ItemLinked(encoding::decode(payload)?),
             tag::ITEM_ARCHIVED => EventBody::ItemArchived(encoding::decode(payload)?),
             tag::ITEM_UNARCHIVED => EventBody::ItemUnarchived(encoding::decode(payload)?),
-            tag::COMMENT => EventBody::Commented(encoding::decode(payload)?),
+            tag::COMMENT => EventBody::Commented(Comment::without_lines(payload)?),
+            tag::COMMENT_ON_LINES => EventBody::Commented(Comment::on_lines(payload)?),
             tag::SESSION_STARTED => EventBody::SessionStarted(encoding::decode(payload)?),
             tag::SESSION_ENDED_WITHOUT_COMMENT => {
                 EventBody::SessionEnded(SessionEnded::without_comment(payload)?)
@@ -785,6 +906,7 @@ mod tests {
             kind: CommentKind::ChangeRequest,
             resolves: vec![CommentId::from_bytes([3; 32])],
             step: Some(StepId::of("pick storage")),
+            lines: None,
         });
         assert_eq!(golden_body_bytes(&body), GOLDEN_COMMENT_BODY);
     }
@@ -887,6 +1009,49 @@ mod tests {
             payload: encoding::encode(&without).unwrap(),
         };
         assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
+    }
+
+    fn comment_on_lines() -> Comment {
+        Comment {
+            kind: CommentKind::ChangeRequest,
+            lines: Some(LineAnchor {
+                commit: CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap()),
+                path: "src/lib.rs".into(),
+                side: DiffSide::New,
+                first: 12,
+                last: 13,
+                quote: "+fn parse_lazily() {}\n fn main() {}".into(),
+            }),
+            ..Comment::plain(ItemId::from_bytes([1; 32]), "Keep the old name.")
+        }
+    }
+
+    #[test]
+    fn a_comment_on_lines_round_trips_under_its_own_tag() {
+        let comment = comment_on_lines();
+        let bytes = encoding::encode(&EventBody::Commented(comment.clone())).unwrap();
+        assert_eq!(bytes[0], tag::COMMENT_ON_LINES as u8);
+        assert_eq!(
+            encoding::decode::<EventBody>(&bytes).unwrap(),
+            EventBody::Commented(comment.clone())
+        );
+        let forged = TaggedBody {
+            tag: tag::COMMENT_ON_LINES,
+            payload: encoding::encode(&Comment {
+                lines: None,
+                ..comment
+            })
+            .unwrap(),
+        };
+        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_comment_on_lines_reads_with_where_they_are_and_the_lines_above_it() {
+        assert_eq!(
+            comment_on_lines().text_with_lines(),
+            "src/lib.rs:12-13 at 00112233:\n    +fn parse_lazily() {}\n     fn main() {}\n\nKeep the old name."
+        );
     }
 
     #[test]

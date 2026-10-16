@@ -219,6 +219,8 @@ pub enum PolicyViolation {
     UnknownComment(CommentId),
     #[error("a comment needs text unless it resolves something")]
     EmptyComment,
+    #[error("lines {first} to {last} are no lines: they count from 1, the last after the first")]
+    NoLines { first: u32, last: u32 },
     #[error("{0} is not a blocker or change request of this item")]
     NotResolvable(CommentId),
     #[error("{0} is resolved already")]
@@ -907,6 +909,14 @@ impl State {
             EventBody::Commented(comment) => {
                 if comment.text.trim().is_empty() && comment.resolves.is_empty() {
                     return Err(PolicyViolation::EmptyComment);
+                }
+                if let Some(lines) = &comment.lines
+                    && (lines.first == 0 || lines.first > lines.last)
+                {
+                    return Err(PolicyViolation::NoLines {
+                        first: lines.first,
+                        last: lines.last,
+                    });
                 }
                 let item = item_of(&comment.item)?;
                 for resolved in &comment.resolves {

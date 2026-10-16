@@ -32,7 +32,7 @@ impl Sources for Logged<'_> {
         else {
             return None;
         };
-        Some(written.text)
+        Some(written.text_with_lines())
     }
 
     fn branch(&self, item: ItemId) -> String {

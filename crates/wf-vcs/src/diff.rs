@@ -421,7 +421,14 @@ index 1111111..2222222 100644
         let numbers: Vec<_> = hunks[0]
             .lines
             .iter()
-            .map(|line| (line.marker(), line.old_number(), line.new_number(), line.text()))
+            .map(|line| {
+                (
+                    line.marker(),
+                    line.old_number(),
+                    line.new_number(),
+                    line.text(),
+                )
+            })
             .collect();
         assert_eq!(
             numbers,
