@@ -64,6 +64,15 @@ fn accent_dimmed() -> Color {
     theme::accent_dimmed().into()
 }
 
+/// The style of the label of the tab on screen, focused and not.
+fn tab_active() -> Style {
+    theme::tab_active().into()
+}
+
+fn tab_active_dimmed() -> Style {
+    theme::tab_active_dimmed().into()
+}
+
 fn snapshot() -> Snapshot {
     let parse = item(1, "Parse config lazily");
     let spans = item(2, "Fix error spans");
@@ -1628,23 +1637,17 @@ fn a_breadcrumb_cut_short_leaves_out_the_end_of_its_highlight() {
 #[test]
 fn the_active_tab_has_its_ends_in_the_colour_of_its_highlight() {
     let mut app = app();
-    // Reversed, the highlight has the colour of the text, which the ends take.
-    assert_ends(&mut app, 60, 16, "1 Now", Color::Reset);
+    let behind = tab_active().bg.unwrap();
+    assert_ends(&mut app, 60, 16, "1 Now", behind);
     let (column, row) = find(&mut app, 60, 16, "1 Now");
-    let label = style_at(&mut app, 60, 16, column, row);
-    assert!(
-        label
-            .add_modifier
-            .contains(ratatui::style::Modifier::REVERSED)
-    );
     // The others have spaces in their place, and are clicked there too.
     assert_eq!(symbol_at(&mut app, 60, 16, column + 9, row), " ");
     app.click(column + 9, row);
     assert_eq!(app.tab, Tab::Items);
-    assert_ends(&mut app, 60, 16, "2 Items", Color::Reset);
+    assert_ends(&mut app, 60, 16, "2 Items", behind);
     // The log looks like the others.
     press(&mut app, KeyCode::Char('4'));
-    assert_ends(&mut app, 60, 16, "4 Log", Color::Reset);
+    assert_ends(&mut app, 60, 16, "4 Log", behind);
     // Its ends are part of it.
     let (column, row) = find(&mut app, 60, 16, "▐4 Log▌");
     for end in [column, column + 6] {
@@ -1655,20 +1658,31 @@ fn the_active_tab_has_its_ends_in_the_colour_of_its_highlight() {
 }
 
 #[test]
-fn the_active_tab_dims_while_the_terminal_pane_is_not_focused() {
+fn while_the_terminal_pane_is_not_focused_only_the_background_of_the_active_tab_dims() {
     let mut app = app();
     press(&mut app, KeyCode::Char('4'));
     let (column, row) = find(&mut app, 60, 16, "▐4 Log▌");
-    let dimmed = |app: &mut App, x| {
-        style_at(app, 60, 16, x, row)
-            .add_modifier
-            .contains(ratatui::style::Modifier::DIM)
-    };
-    assert!(!dimmed(&mut app, column) && !dimmed(&mut app, column + 1));
+    let label = |app: &mut App| style_at(app, 60, 16, column + 1, row);
+    let ends = |app: &mut App| [column, column + 6].map(|x| style_at(app, 60, 16, x, row).fg);
+    let focused = label(&mut app);
+    assert_eq!(focused.bg, tab_active().bg);
+    assert_eq!(ends(&mut app), [tab_active().bg; 2]);
     app.terminal_focus(false);
-    // The label and its ends dim together.
-    assert!(dimmed(&mut app, column) && dimmed(&mut app, column + 1));
-    assert!(dimmed(&mut app, column + 6));
+    let unfocused = label(&mut app);
+    assert_eq!(unfocused.bg, tab_active_dimmed().bg);
+    assert_ne!(unfocused.bg, focused.bg);
+    // The label and its ends take the dimmer background; the text stays as it was.
+    assert_eq!(ends(&mut app), [tab_active_dimmed().bg; 2]);
+    assert_eq!(
+        Style {
+            bg: None,
+            ..unfocused
+        },
+        Style {
+            bg: None,
+            ..focused
+        }
+    );
 }
 
 #[test]
@@ -2332,12 +2346,13 @@ fn an_inactive_tab_under_the_pointer_is_drawn_stronger_than_the_others() {
     let (agents, _) = find(&mut app, 60, 24, "3 Agents");
     let (now, _) = find(&mut app, 60, 24, "1 Now");
     let modifiers = |app: &mut App, column| style_at(app, 60, 24, column, row).add_modifier;
+    let bg = |app: &mut App, column| bg_at(app, 60, 24, column, row);
     assert!(modifiers(&mut app, items).contains(Modifier::DIM));
     assert!(app.hover(items, row));
     assert!(!modifiers(&mut app, items).contains(Modifier::DIM));
-    assert!(!modifiers(&mut app, items).contains(Modifier::REVERSED));
+    assert_ne!(bg(&mut app, items), tab_active().bg);
     assert!(modifiers(&mut app, agents).contains(Modifier::DIM));
-    assert!(modifiers(&mut app, now).contains(Modifier::REVERSED));
+    assert_eq!(bg(&mut app, now), tab_active().bg);
     // Along the same tab nothing is drawn again; off it, it is dim again.
     assert!(!app.hover(items + 3, row));
     assert!(app.hover(items, row + 3));
@@ -2773,7 +2788,12 @@ fn a_background_colour_and_the_text_are_under_every_cell_popups_included() {
     // The keys are a popup over the list, drawn on an area cleared for it.
     press(&mut app, KeyCode::Char('?'));
     let buffer = buffer(&mut app, 60, 24);
-    let accents = [accent(), accent_dimmed()];
+    let accents = [
+        accent(),
+        accent_dimmed(),
+        tab_active().bg.unwrap(),
+        tab_active_dimmed().bg.unwrap(),
+    ];
     for cell in buffer.content() {
         let style = cell.style();
         assert!(
@@ -2810,7 +2830,12 @@ fn the_terminals_background_and_no_text_paint_nothing() {
     press(&mut app, KeyCode::Char('?'));
     let buffer = buffer(&mut app, 60, 24);
     // Nothing but the accents has a background, inside the popup as outside it.
-    let accents = [accent(), accent_dimmed()];
+    let accents = [
+        accent(),
+        accent_dimmed(),
+        tab_active().bg.unwrap(),
+        tab_active_dimmed().bg.unwrap(),
+    ];
     for cell in buffer.content() {
         let bg = cell.style().bg;
         assert!(

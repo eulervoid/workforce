@@ -237,8 +237,8 @@ priority.p1 = "bold yellow"
 | `accent` | `#1e50a0` | the selection that has the keys; one colour |
 | `accent_dimmed` | `#1e2d4b` | a selection without the keys, or in an unfocused pane; one colour |
 | `on_accent` | `brightwhite` | text on the full accent |
-| `tab_active` | `bold reverse` | the label of the tab on screen |
-| `tab_active_dimmed` | `bold reverse dim` | the label of the tab on screen, in an unfocused pane |
+| `tab_active` | `bold brightwhite #555a69` | the label of the tab on screen |
+| `tab_active_dimmed` | `bold brightwhite #32363f` | the label of the tab on screen, in an unfocused pane: the same text on a dimmer background |
 | `key` | `yellow` | keys to press, in hints |
 | `id` | `cyan` | item ids |
 | `principal`, `agent`, `daemon` | `magenta`, `brightblue`, `green` | who did something; in transcripts, the headers of answers (`agent`) and of prompts from wf or the brief (`daemon`) |

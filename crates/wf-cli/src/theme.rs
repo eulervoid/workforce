@@ -72,8 +72,12 @@ impl Default for Theme {
             accent: Color::Rgb(RgbColor(30, 80, 160)),
             accent_dimmed: Color::Rgb(RgbColor(30, 45, 75)),
             on_accent: fg(AnsiColor::BrightWhite),
-            tab_active: Style::new().bold().invert(),
-            tab_active_dimmed: Style::new().bold().invert().dimmed(),
+            tab_active: fg(AnsiColor::BrightWhite)
+                .bg_color(Some(Color::Rgb(RgbColor(85, 90, 105))))
+                .bold(),
+            tab_active_dimmed: fg(AnsiColor::BrightWhite)
+                .bg_color(Some(Color::Rgb(RgbColor(50, 54, 63))))
+                .bold(),
             key: fg(AnsiColor::Yellow),
             id: fg(AnsiColor::Cyan),
             principal: fg(AnsiColor::Magenta),
@@ -230,7 +234,8 @@ pub fn tab_active() -> Style {
     get().tab_active
 }
 
-/// The label of the tab on screen, dimmed: while the terminal pane is not focused.
+/// The label of the tab on screen while the terminal pane is not focused: the same text on a
+/// dimmer background.
 pub fn tab_active_dimmed() -> Style {
     get().tab_active_dimmed
 }
