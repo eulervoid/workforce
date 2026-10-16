@@ -13,7 +13,7 @@ use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
     AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll,
-    Split, Starter, Tab, Target, Wheel,
+    Split, Starter, Status, Tab, Target, Wheel,
 };
 use super::draw;
 use super::snapshot::{
@@ -630,12 +630,18 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
     press(&mut app, KeyCode::Char('R'));
     assert_eq!(
         press(&mut app, KeyCode::Char('a')),
-        Some(Effect::Approve { item: archive })
+        Some(Effect::Approve {
+            item: archive,
+            comments: Vec::new()
+        })
     );
     press(&mut app, KeyCode::Char('R'));
     assert_eq!(
         press(&mut app, KeyCode::Char('r')),
-        Some(Effect::RequestChanges { item: archive })
+        Some(Effect::RequestChanges {
+            item: archive,
+            comments: Vec::new()
+        })
     );
 }
 
@@ -2836,10 +2842,12 @@ fn diff_app() -> App {
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('D'));
     assert_eq!(app.wanted().detail, Some(Detail::Diff(archive)));
-    app.diff.as_mut().unwrap().read(Ok(super::diff::ItemWork {
-        commit: work_commit(),
-        files: wf_vcs::diff::parse(DIFF),
-    }));
+    app.diff_on_top_mut()
+        .unwrap()
+        .read(Ok(super::diff::ItemWork {
+            commit: work_commit(),
+            files: wf_vcs::diff::parse(DIFF),
+        }));
     app
 }
 
@@ -2916,7 +2924,7 @@ fn v_selects_lines_within_their_hunk_and_esc_ends_the_selection() {
     for _ in 0..5 {
         press(&mut app, KeyCode::Char('j'));
     }
-    let pane = app.diff.as_ref().unwrap();
+    let pane = app.diff_on_top().unwrap();
     let rows = pane.rows();
     let selected = pane.selected().unwrap();
     assert_eq!(selected.clone().count(), 4);
@@ -2926,7 +2934,7 @@ fn v_selects_lines_within_their_hunk_and_esc_ends_the_selection() {
             .all(|row| matches!(row, super::diff::DiffRow::Line { hunk: 0, .. }))
     );
     press(&mut app, KeyCode::Esc);
-    assert!(app.diff.as_ref().unwrap().selection.is_none());
+    assert!(app.diff_on_top().unwrap().selection.is_none());
     assert!(
         matches!(app.path().last(), Some(Detail::Diff(_))),
         "esc ended only the selection"
@@ -2941,14 +2949,153 @@ fn a_drag_selects_lines_and_a_click_moves_the_cursor() {
     let mut app = diff_app();
     let (column, row) = find(&mut app, 60, 24, "fn parse() {}");
     assert_eq!(app.click(column, row), None);
-    let pane = app.diff.as_ref().unwrap();
+    let pane = app.diff_on_top().unwrap();
     assert_eq!(pane.cursor, 3, "the cursor is on the line clicked");
     assert!(pane.selection.is_none());
     let (_, below) = find(&mut app, 60, 24, "fn main() {}");
     app.drag(column, below);
-    let pane = app.diff.as_ref().unwrap();
+    let pane = app.diff_on_top().unwrap();
     assert_eq!(pane.selected(), Some(3..=5));
     // A drag past the hunk keeps to it.
     app.drag(column, 22);
-    assert_eq!(app.diff.as_ref().unwrap().selected(), Some(3..=5));
+    assert_eq!(app.diff_on_top().unwrap().selected(), Some(3..=5));
+}
+
+fn type_text(app: &mut App, text: &str) {
+    for character in text.chars() {
+        press(app, KeyCode::Char(character));
+    }
+}
+
+#[test]
+fn a_change_request_on_selected_lines_is_a_draft_under_them_until_the_verdict_sends_it() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    // From `use std::io;` to `+fn parse_lazily() {}`.
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('v'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('r'));
+    type_text(&mut app, "Keep the old name, callers use it.");
+    insta::assert_snapshot!("line_comment_prompt", screen(&mut app, 80, 16));
+    press(&mut app, KeyCode::Enter);
+    let drafts = app.drafts(archive).to_vec();
+    assert_eq!(drafts.len(), 1);
+    let lines = &drafts[0].lines;
+    assert_eq!(drafts[0].kind, wf_core::event::CommentKind::ChangeRequest);
+    assert_eq!(lines.location(), "src/lib.rs:1-2");
+    assert_eq!(lines.side, wf_core::event::DiffSide::New);
+    assert_eq!(lines.commit, work_commit());
+    assert_eq!(
+        lines.quote,
+        " use std::io;\n-fn parse() {}\n+fn parse_lazily() {}"
+    );
+    assert!(app.diff_on_top().unwrap().selection.is_none());
+    insta::assert_snapshot!("line_comment_draft", screen(&mut app, 80, 16));
+    // Approving with a change request drafted is refused; requesting changes sends it.
+    press(&mut app, KeyCode::Char('R'));
+    assert!(screen(&mut app, 80, 16).contains("with 1 comment on lines"));
+    assert_eq!(press(&mut app, KeyCode::Char('a')), None);
+    assert!(matches!(app.status, Some(Status::ActionFailed { .. })));
+    press(&mut app, KeyCode::Char('R'));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('r')),
+        Some(Effect::RequestChanges {
+            item: archive,
+            comments: drafts
+        })
+    );
+    app.reviewed(archive);
+    assert!(app.drafts(archive).is_empty());
+}
+
+#[test]
+fn a_draft_under_the_cursor_is_edited_with_e_and_dropped_with_d() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('c'));
+    type_text(&mut app, "Why io?");
+    press(&mut app, KeyCode::Enter);
+    // The cursor stops on the draft, under its line.
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.diff_on_top().unwrap().draft_at_cursor(), Some(0));
+    assert!(screen(&mut app, 80, 16).contains("e edit · d drop"));
+    press(&mut app, KeyCode::Char('e'));
+    type_text(&mut app, " It is unused.");
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.drafts(archive)[0].text, "Why io? It is unused.");
+    assert_eq!(app.drafts(archive).len(), 1);
+    press(&mut app, KeyCode::Char('d'));
+    assert!(app.drafts(archive).is_empty());
+    // The drafts go with the verdict, whichever it is.
+    press(&mut app, KeyCode::Char('c'));
+    type_text(&mut app, "Fine.");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('R'));
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('a')),
+        Some(Effect::Approve { comments, .. }) if comments.len() == 1
+    ));
+}
+
+#[test]
+fn without_a_review_a_comment_on_lines_is_posted_at_once() {
+    let mut app = app();
+    let parse = ItemId::from_bytes([1; 32]);
+    app.open_item(parse);
+    press(&mut app, KeyCode::Char('l'));
+    assert_eq!(app.wanted().detail, Some(Detail::Diff(parse)));
+    app.diff_on_top_mut()
+        .unwrap()
+        .read(Ok(super::diff::ItemWork {
+            commit: work_commit(),
+            files: wf_vcs::diff::parse(DIFF),
+        }));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('c'));
+    type_text(&mut app, "Removed on purpose?");
+    let Some(Effect::PostLineComment { item, comment }) = press(&mut app, KeyCode::Enter) else {
+        panic!("a comment posted");
+    };
+    assert_eq!(item, parse);
+    // A removed line alone counts on the old side.
+    assert_eq!(comment.lines.side, wf_core::event::DiffSide::Old);
+    assert_eq!(comment.lines.location(), "src/lib.rs:2");
+    assert!(app.drafts(parse).is_empty());
+}
+
+#[test]
+fn comments_in_the_log_show_under_their_lines_or_as_outdated_under_their_file() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    let posted = |commit: wf_core::session::CommitId, text: &str| super::diff::PostedComment {
+        by: "@ada".to_owned(),
+        comment: super::diff::LineComment {
+            kind: wf_core::event::CommentKind::ChangeRequest,
+            lines: wf_core::event::LineAnchor {
+                commit,
+                path: "src/lib.rs".to_owned(),
+                side: wf_core::event::DiffSide::New,
+                first: 21,
+                last: 21,
+                quote: "+// really".to_owned(),
+            },
+            text: text.to_owned(),
+        },
+        resolved: false,
+    };
+    let older = wf_core::session::CommitId::Git(
+        "0000000000000000000000000000000000000001".parse().unwrap(),
+    );
+    app.refresh_detail(Some(InView::Diff {
+        id: archive,
+        comments: vec![
+            posted(work_commit(), "Say why."),
+            posted(older, "Was this here before?"),
+        ],
+    }));
+    insta::assert_snapshot!(screen(&mut app, 80, 24));
 }

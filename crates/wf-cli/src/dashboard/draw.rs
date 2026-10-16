@@ -13,7 +13,7 @@ use wf_daemon::machine_config::Background;
 
 use super::app::{
     AgentRow, App, Choice, Clickable, ClickableList, Drawn, Hovered, ListTop, Opened, Prompt,
-    Request, Row, STRIP, Scroll, Spot, Starter, Status, Tab, Target,
+    Request, Row, STRIP, Scroll, Spot, Starter, Status, Tab, Target, Written,
 };
 use super::draw_diff;
 use super::links;
@@ -100,6 +100,7 @@ impl KeysAt {
                 | Prompt::Answer { .. }
                 | Prompt::Verdict { .. }
                 | Prompt::Comment { .. }
+                | Prompt::LineComment { .. }
                 | Prompt::Stop { .. },
             ) => KeysAt::Footer,
             Some(Prompt::Choose(_)) => KeysAt::Choice,
@@ -396,6 +397,8 @@ const KEYS: &[(&str, &str)] = &[
     ("v D", "review, open the diff"),
     ("] [ enter", "diff: next, previous file, fold one"),
     ("v drag", "diff: select lines, as vim's visual line"),
+    ("c r", "diff: comment, request a change on them"),
+    ("e d", "diff: edit, drop a comment of the review"),
     ("R", "diff: review, as v does elsewhere"),
     ("p", "diff: in git's pager, as `wf item diff`"),
     ("s x", "start a session, stop one"),
@@ -457,6 +460,20 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
             input,
             "enter post · ctrl+g editor · esc cancel ",
         ),
+        Prompt::LineComment {
+            kind,
+            lines,
+            then,
+            input,
+            ..
+        } => (
+            format!("{} on {}:", kind.name().replace('_', " "), lines.location()),
+            input,
+            match then {
+                Written::Post => "enter post · ctrl+g editor · esc cancel ",
+                Written::Draft { .. } => "enter keep for the review · ctrl+g editor · esc cancel ",
+            },
+        ),
         Prompt::Stop { session } => {
             let agent = app
                 .snapshot
@@ -478,7 +495,12 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
             "enter resolve · ctrl+g editor · esc cancel ",
         ),
         Prompt::Verdict { item } => {
-            let mut line = question(format!(" ◎ #{}: ", item.short()));
+            let drafts = match app.drafts(*item).len() {
+                0 => String::new(),
+                1 => " with 1 comment on lines".to_owned(),
+                count => format!(" with {count} comments on lines"),
+            };
+            let mut line = question(format!(" ◎ #{}{drafts}: ", item.short()));
             line.extend(answer_keys(&["a approve", "r changes", "D diff", "esc"]));
             draw_question(frame, app, line, area);
             return;
@@ -1620,7 +1642,7 @@ fn draw_detail(
         }
         // Code is no text with links in it.
         Detail::Diff(id) => {
-            let pane = app.diff.as_ref().filter(|pane| pane.item == *id)?;
+            let pane = app.diffs.get(id)?;
             let (top, cursor) = draw_diff::draw_diff(frame, app, pane, body);
             return Some(Shown::Diff {
                 area: body,
@@ -2044,15 +2066,25 @@ fn hints(app: &App) -> Vec<&'static str> {
     let opened = app.stack().last().filter(|_| !app.list_has_keys());
     let navigation: &[&str] = match (app.tab, opened.map(|opened| &opened.detail)) {
         (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full", "l diff"],
-        (_, Some(Detail::Diff(_))) => &[
-            "esc back",
-            "j/k move",
-            "v select",
-            "]/[ file",
-            "enter fold",
-            "i item",
-            "p pager",
-        ],
+        (_, Some(Detail::Diff(_))) => match app.diff_on_top() {
+            Some(pane) if pane.selection.is_some() => {
+                &["esc unselect", "j/k extend", "c comment", "r change"]
+            }
+            Some(pane) if pane.draft_at_cursor().is_some() => {
+                &["esc back", "j/k move", "e edit", "d drop"]
+            }
+            Some(_) | None => &[
+                "esc back",
+                "j/k move",
+                "v select",
+                "c comment",
+                "r change",
+                "]/[ file",
+                "enter fold",
+                "i item",
+                "p pager",
+            ],
+        },
         (_, Some(Detail::Item(_))) if item_session => &["esc back", "j/k scroll", "enter session"],
         (_, Some(Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_))) => {
             &["esc back", "j/k scroll"]

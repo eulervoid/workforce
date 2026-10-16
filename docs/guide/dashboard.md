@@ -69,7 +69,9 @@ session that is open.
 | `D` | open the diff of the item |
 | `]` / `[`, `enter` | in the diff: the next, previous file; fold a file to its header, or unfold it |
 | `v`, then `j`/`k` | in the diff: select lines, as in vim's visual line mode, within one hunk; `esc` ends the selection |
-| `R` | in the diff: review, as `v` does elsewhere |
+| `c` / `r` | in the diff: comment on the selected lines, or the line of the cursor, or request a change to them |
+| `e` / `d` | in the diff, on a comment of the review being written: edit it, drop it |
+| `R` | in the diff: review, as `v` does elsewhere, sending the comments written on lines with the verdict |
 | `p` | in the diff: show it through git instead, with your pager and diff config, such as delta |
 | `s` | start a session on the item (pick the agent), or release a draft |
 | `x` | stop the session (asks `y/n`) |
@@ -85,6 +87,20 @@ session that is open.
 
 Answering a blocker posts a comment that resolves it. Requesting changes in a review writes one change
 request per line you write, then the verdict; the item goes back to the agent.
+
+### Comments on lines
+
+In the diff, select lines with `v` and `j`/`k` or a drag, then `c` comments on them and `r` requests a
+change to them; without a selection, they are about the line of the cursor. While the work waits for
+your review, what you write is a draft of the review: it shows under its lines, `e` edits it and `d`
+drops it, and the verdict (`R`, or `v` on the item) sends them all with it, so the agent gets one
+review. Change requests on lines take the place of the ones written in `$EDITOR`; approving is refused
+while there are some. With no review waiting, a comment on lines is posted at once.
+
+A comment on lines names the commit, the file and the lines, and quotes them; `wf item show`, `wf log`
+and the agent's brief show it as `src/lib.rs:12-14 at a8d49484` with the lines above its text. In the
+diff, comments of the log show under their lines, or, when they are about an earlier commit, under the
+header of their file, outdated, with the lines they quote.
 
 ### Mouse
 

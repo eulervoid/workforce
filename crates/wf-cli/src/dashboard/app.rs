@@ -10,6 +10,7 @@ use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
 use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
+use wf_core::event::{CommentKind, LineAnchor};
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, ItemId, SessionId};
 use wf_core::identity::AgentId;
@@ -17,7 +18,7 @@ use wf_core::item::ItemState;
 use wf_core::name::AgentName;
 use wf_harness::{Permission, TranscriptEntry};
 
-use super::diff::DiffPane;
+use super::diff::{DiffPane, LineComment};
 use super::draw;
 use super::snapshot::{
     Detail, InView, ItemRow, MovedBack, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey,
@@ -121,12 +122,27 @@ pub enum Effect {
         blocker: CommentId,
         text: String,
     },
+    /// Posts the comments on lines of the review, then approves.
     Approve {
         item: ItemId,
+        comments: Vec<LineComment>,
     },
-    /// Writes the change requests in `$EDITOR`, one per line, then requests the changes.
+    /// Posts the comments on lines of the review, then requests the changes. Without a change
+    /// request among them, writes the change requests in `$EDITOR` first, one per line.
     RequestChanges {
         item: ItemId,
+        comments: Vec<LineComment>,
+    },
+    /// Posts a comment about lines of the diff, while no review waits.
+    PostLineComment {
+        item: ItemId,
+        comment: LineComment,
+    },
+    /// Writes a comment about lines of the diff in `$EDITOR`, starting from its text.
+    LineCommentInEditor {
+        item: ItemId,
+        comment: LineComment,
+        then: Written,
     },
     /// The work of an item through git, in its pager, for those who read diffs with their own
     /// tools, such as delta.
@@ -746,6 +762,14 @@ pub enum Prompt {
         item: ItemId,
         input: Input,
     },
+    /// A comment or change request about lines of the diff of an item.
+    LineComment {
+        item: ItemId,
+        kind: CommentKind,
+        lines: LineAnchor,
+        then: Written,
+        input: Input,
+    },
     Choose(Choice),
     /// Whether to stop a session, which costs the agent what it has not written down.
     Stop {
@@ -753,6 +777,15 @@ pub enum Prompt {
     },
     /// The keys, until any key is pressed.
     Keys,
+}
+
+/// What becomes of a comment on lines once it is written.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Written {
+    /// It is posted, as no review waits to send it with.
+    Post,
+    /// It is a draft of the review, in place of the draft `replacing`.
+    Draft { replacing: Option<usize> },
 }
 
 /// A list that can be filtered.
@@ -783,8 +816,9 @@ pub struct App {
     /// The lines of the transcripts as last drawn, kept so that drawing lays out only what was
     /// added since.
     pub transcript_lines: RefCell<HashMap<SessionId, TranscriptLines>>,
-    /// The diff opened last, kept with where its cursor is while other details are on screen.
-    pub diff: Option<DiffPane>,
+    /// The diffs opened, by item, kept with where their cursor is and the comments of the review
+    /// being written while other details are on screen.
+    pub diffs: HashMap<ItemId, DiffPane>,
     pub tab: Tab,
     pub now: ListTab<Row>,
     pub items: ItemsTab,
@@ -823,7 +857,7 @@ impl App {
             snapshot: Snapshot::default(),
             transcripts: HashMap::new(),
             transcript_lines: RefCell::default(),
-            diff: None,
+            diffs: HashMap::new(),
             tab: Tab::Now,
             now: ListTab::default(),
             items: ItemsTab {
@@ -866,6 +900,7 @@ impl App {
 
     pub fn refresh(&mut self, snapshot: Snapshot) {
         self.snapshot = snapshot;
+        self.take_posted();
         match self.status {
             Some(Status::RefreshFailed(_)) => self.status = None,
             Some(Status::Done { at_ms, .. } | Status::ActionFailed { at_ms, .. })
@@ -900,6 +935,16 @@ impl App {
     /// Takes in what the detail on screen shows, when only the detail changed.
     pub fn refresh_detail(&mut self, in_view: Option<InView>) {
         self.snapshot.in_view = in_view;
+        self.take_posted();
+    }
+
+    /// Hands the diff in view the comments on its lines in the log.
+    fn take_posted(&mut self) {
+        if let Some(InView::Diff { id, comments }) = &self.snapshot.in_view
+            && let Some(pane) = self.diffs.get_mut(id)
+        {
+            pane.posted.clone_from(comments);
+        }
     }
 
     pub fn refresh_failed(&mut self, error: &anyhow::Error) {
@@ -1138,11 +1183,13 @@ impl App {
         {
             panes.list_top = panes.list_top.at(list_top);
         }
-        if let Some(pane) = &mut self.diff {
-            match drawn.diff {
-                Some((area, top, cursor)) => pane.shown(area, top, cursor),
-                None => pane.area = None,
-            }
+        for pane in self.diffs.values_mut() {
+            pane.area = None;
+        }
+        if let Some((area, top, cursor)) = drawn.diff
+            && let Some(pane) = self.diff_on_top_mut()
+        {
+            pane.shown(area, top, cursor);
         }
         let Some(scroll) = drawn.text else {
             return;
@@ -1323,7 +1370,13 @@ impl App {
     pub fn session_info(&self, session: SessionId) -> Option<&SessionInfo> {
         let in_view = match &self.snapshot.in_view {
             Some(InView::Session(info)) => Some(info),
-            Some(InView::Item { .. } | InView::Agent { .. } | InView::Flag { .. }) | None => None,
+            Some(
+                InView::Item { .. }
+                | InView::Agent { .. }
+                | InView::Flag { .. }
+                | InView::Diff { .. },
+            )
+            | None => None,
         };
         self.snapshot
             .working
@@ -1354,10 +1407,8 @@ impl App {
         if let Detail::Item(item) = detail {
             self.moved_back.retain(|moved| moved.item != item);
         }
-        if let Detail::Diff(item) = detail
-            && self.diff.as_ref().is_none_or(|pane| pane.item != item)
-        {
-            self.diff = Some(DiffPane::new(item));
+        if let Detail::Diff(item) = detail {
+            self.diffs.entry(item).or_default();
         }
         let from_list = self.list_has_keys();
         if let Some(panes) = self.panes_mut() {
@@ -1395,8 +1446,9 @@ impl App {
             self.prompt = prompt;
             return effect;
         }
-        // In a diff, `v` selects lines, as in vim; `R` asks for the verdict there.
-        if key.code == KeyCode::Char('v') && self.diff_has_keys() {
+        // In a diff, `v` selects lines, as in vim, and `R` asks for the verdict; `c` and `r`
+        // write about the lines; `e` and `d` edit and drop a draft of the review.
+        if matches!(key.code, KeyCode::Char('v' | 'c' | 'r' | 'e' | 'd')) && self.diff_has_keys() {
             return self.detail_key(key);
         }
         if let Some(effect) = self.act(key) {
@@ -1471,10 +1523,10 @@ impl App {
         if self.tab == Tab::Log {
             match self.log.stack.last_mut() {
                 Some(Opened {
-                    detail: Detail::Diff(_),
+                    detail: Detail::Diff(item),
                     ..
                 }) => {
-                    if let Some(pane) = &mut self.diff {
+                    if let Some(pane) = self.diffs.get_mut(item) {
                         pane.scroll(pane.top.scroll(wheel));
                     }
                 }
@@ -1504,14 +1556,8 @@ impl App {
             self.focus_list();
         }
         // Without a detail beside the list, there is nothing to scroll.
-        if let Some(Opened {
-            detail: Detail::Diff(_),
-            ..
-        }) = self.stack().last()
-        {
-            if let Some(pane) = &mut self.diff {
-                pane.scroll(pane.top.scroll(wheel));
-            }
+        if let Some(pane) = self.diff_on_top_mut() {
+            pane.scroll(pane.top.scroll(wheel));
         } else if let Some(opened) = self.stack_mut().last_mut() {
             opened.scroll = wheel.scroll(opened.scroll);
         }
@@ -1556,7 +1602,7 @@ impl App {
             self.split = Split::Both;
             return None;
         }
-        if let Some(pane) = &mut self.diff
+        if let Some(pane) = self.diff_on_top_mut()
             && pane.press(position)
         {
             if in_detail {
@@ -1744,7 +1790,7 @@ impl App {
         if !self.mouse_passes() {
             return;
         }
-        if let Some(pane) = &mut self.diff {
+        if let Some(pane) = self.diff_on_top_mut() {
             pane.drag(Position::new(column, row));
         }
     }
@@ -1793,6 +1839,7 @@ impl App {
                 | Prompt::Answer { .. }
                 | Prompt::Verdict { .. }
                 | Prompt::Comment { .. }
+                | Prompt::LineComment { .. }
                 | Prompt::Choose(_)
                 | Prompt::Stop { .. }
                 | Prompt::Keys,
@@ -1953,8 +2000,26 @@ impl App {
                 }
             },
             Prompt::Verdict { item } => match key.code {
-                KeyCode::Char('a') => (None, Some(Effect::Approve { item })),
-                KeyCode::Char('r') => (None, Some(Effect::RequestChanges { item })),
+                KeyCode::Char('a') => {
+                    let comments = self.drafts(item).to_vec();
+                    if comments
+                        .iter()
+                        .any(|comment| comment.kind == CommentKind::ChangeRequest)
+                    {
+                        self.status = Some(Status::ActionFailed {
+                            error: "the review has change requests: request changes, or drop them \
+                                    in the diff"
+                                .to_owned(),
+                            at_ms: self.snapshot.now_ms,
+                        });
+                        return (None, None);
+                    }
+                    (None, Some(Effect::Approve { item, comments }))
+                }
+                KeyCode::Char('r') => {
+                    let comments = self.drafts(item).to_vec();
+                    (None, Some(Effect::RequestChanges { item, comments }))
+                }
                 // The diff is looked at before deciding.
                 KeyCode::Char('D') => {
                     self.open(Detail::Diff(item));
@@ -1963,6 +2028,55 @@ impl App {
                 KeyCode::Esc => (None, None),
                 _ => (Some(Prompt::Verdict { item }), None),
             },
+            Prompt::LineComment {
+                item,
+                kind,
+                lines,
+                then,
+                mut input,
+            } => {
+                let comment = |input: &Input| LineComment {
+                    kind,
+                    lines: lines.clone(),
+                    text: input.value().trim().to_owned(),
+                };
+                match key.code {
+                    KeyCode::Esc => (None, None),
+                    KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
+                        None,
+                        Some(Effect::LineCommentInEditor {
+                            item,
+                            comment: comment(&input),
+                            then,
+                        }),
+                    ),
+                    KeyCode::Enter if input.value().trim().is_empty() => (None, None),
+                    KeyCode::Enter => match then {
+                        Written::Post => (
+                            None,
+                            Some(Effect::PostLineComment {
+                                item,
+                                comment: comment(&input),
+                            }),
+                        ),
+                        Written::Draft { replacing } => {
+                            self.drafted(item, comment(&input), replacing);
+                            (None, None)
+                        }
+                    },
+                    _ => {
+                        input.handle_event(&TerminalEvent::Key(key));
+                        let prompt = Prompt::LineComment {
+                            item,
+                            kind,
+                            lines,
+                            then,
+                            input,
+                        };
+                        (Some(prompt), None)
+                    }
+                }
+            }
             Prompt::Choose(mut choice) => {
                 let last = choice.len().saturating_sub(1);
                 let index = choice.index_mut();
@@ -1988,17 +2102,19 @@ impl App {
     fn detail_key(&mut self, key: KeyEvent) -> Option<Effect> {
         let item_session = match &self.snapshot.in_view {
             Some(InView::Item { session, .. }) => *session,
-            Some(InView::Session(_) | InView::Agent { .. } | InView::Flag { .. }) | None => None,
+            Some(
+                InView::Session(_)
+                | InView::Agent { .. }
+                | InView::Flag { .. }
+                | InView::Diff { .. },
+            )
+            | None => None,
         };
         let item_of_session = self.item_subject();
         let page = self.page();
         // A selection in a diff ends before esc goes back.
         if key.code == KeyCode::Esc
-            && let Some(Opened {
-                detail: Detail::Diff(_),
-                ..
-            }) = self.stack().last()
-            && let Some(pane) = self.diff.as_mut()
+            && let Some(pane) = self.diff_on_top_mut()
             && pane.selection.is_some()
         {
             pane.selection = None;
@@ -2059,6 +2175,61 @@ impl App {
         None
     }
 
+    /// The diff open on top, on screen or kept beside the list.
+    pub fn diff_on_top(&self) -> Option<&DiffPane> {
+        let Some(Opened {
+            detail: Detail::Diff(item),
+            ..
+        }) = self.stack().last()
+        else {
+            return None;
+        };
+        self.diffs.get(item)
+    }
+
+    /// The diff open on top, on screen or kept beside the list.
+    pub fn diff_on_top_mut(&mut self) -> Option<&mut DiffPane> {
+        let Some(Opened {
+            detail: Detail::Diff(item),
+            ..
+        }) = self.stack().last()
+        else {
+            return None;
+        };
+        let item = *item;
+        self.diffs.get_mut(&item)
+    }
+
+    /// Whether the work of `item` waits for the principal's review.
+    fn review_waits(&self, item: ItemId) -> bool {
+        self.snapshot.waiting.iter().any(|entry| match entry {
+            Waiting::Review { item: reviewed, .. } => reviewed.id == item,
+            Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => false,
+        })
+    }
+
+    /// The comments on lines of the review of `item` being written.
+    pub fn drafts(&self, item: ItemId) -> &[LineComment] {
+        self.diffs
+            .get(&item)
+            .map_or(&[], |pane| pane.drafts.as_slice())
+    }
+
+    /// Takes in a comment on lines written in `$EDITOR`: a draft of the review of `item`, in
+    /// place of `replacing`.
+    pub fn drafted(&mut self, item: ItemId, comment: LineComment, replacing: Option<usize>) {
+        if let Some(pane) = self.diffs.get_mut(&item) {
+            pane.drafted(comment, replacing);
+        }
+    }
+
+    /// The review of `item` was sent, with its drafts.
+    pub fn reviewed(&mut self, item: ItemId) {
+        if let Some(pane) = self.diffs.get_mut(&item) {
+            pane.drafts.clear();
+        }
+    }
+
     /// Whether the keys go to a diff.
     pub fn diff_has_keys(&self) -> bool {
         !self.list_has_keys()
@@ -2077,19 +2248,53 @@ impl App {
         match key.code {
             KeyCode::Char('i') => self.open(Detail::Item(item)),
             KeyCode::Char('R') => {
-                let review = self.subjects().into_iter().any(|entry| match entry {
-                    Waiting::Review { item: reviewed, .. } => reviewed.id == item,
-                    Waiting::Permission { .. }
-                    | Waiting::Blocker { .. }
-                    | Waiting::Notice { .. } => false,
-                });
-                if review {
+                if self.review_waits(item) {
                     self.prompt = Some(Prompt::Verdict { item });
                 }
             }
             KeyCode::Char('p') => return Some(Effect::PageDiff { item }),
+            KeyCode::Char(key @ ('c' | 'r')) => {
+                let kind = if key == 'c' {
+                    CommentKind::Plain
+                } else {
+                    CommentKind::ChangeRequest
+                };
+                // While a review waits, a comment is a draft of it; else it is posted at once.
+                let then = if self.review_waits(item) {
+                    Written::Draft { replacing: None }
+                } else {
+                    Written::Post
+                };
+                let lines = self.diffs.get(&item)?.selected_lines()?;
+                self.prompt = Some(Prompt::LineComment {
+                    item,
+                    kind,
+                    lines,
+                    then,
+                    input: Input::default(),
+                });
+            }
+            KeyCode::Char('e') => {
+                let pane = self.diffs.get(&item)?;
+                let index = pane.draft_at_cursor()?;
+                let draft = pane.drafts[index].clone();
+                self.prompt = Some(Prompt::LineComment {
+                    item,
+                    kind: draft.kind,
+                    lines: draft.lines,
+                    then: Written::Draft {
+                        replacing: Some(index),
+                    },
+                    input: Input::new(draft.text),
+                });
+            }
+            KeyCode::Char('d') => {
+                let pane = self.diffs.get_mut(&item)?;
+                let index = pane.draft_at_cursor()?;
+                pane.drop_draft(index);
+            }
             _ => {
-                if let Some(pane) = self.diff.as_mut() {
+                if let Some(pane) = self.diffs.get_mut(&item) {
                     pane.key(key, page);
                 }
             }

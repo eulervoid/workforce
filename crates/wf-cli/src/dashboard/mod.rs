@@ -220,6 +220,15 @@ fn handle(
             match act::carry_out(effect, workspace, terminal) {
                 Ok(act::Outcome::Did(what)) => app.did(what, workspace::now_ms()),
                 Ok(act::Outcome::Choose(choice)) => app.choose(choice),
+                Ok(act::Outcome::Drafted {
+                    item,
+                    comment,
+                    replacing,
+                }) => app.drafted(item, comment, replacing),
+                Ok(act::Outcome::Reviewed { item, what }) => {
+                    app.reviewed(item);
+                    app.did(what, workspace::now_ms());
+                }
                 Err(error) => app.action_failed(&error, workspace::now_ms()),
             }
             // Show what the action changed right away.
@@ -321,7 +330,7 @@ impl Feed {
         let Some(Detail::Diff(item)) = app.wanted().detail else {
             return;
         };
-        let Some(pane) = app.diff.as_mut().filter(|pane| pane.item == item) else {
+        let Some(pane) = app.diffs.get_mut(&item) else {
             return;
         };
         let mut read = || -> anyhow::Result<Option<ItemWork>> {

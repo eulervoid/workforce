@@ -898,10 +898,12 @@ A comment can be about lines of the diff of the item's work, as the dashboard's 
 anchor names the commit the diff was of, so it means the same once the branch has moved on, and it
 quotes the lines, so it reads without git: everywhere a comment's text is shown (`wf item show`,
 `wf log`, a brief) the anchor goes above it, as `src/lib.rs:12-14 at a8d49484` and the lines indented
-under it. A comment on lines of a commit other than the one on screen is outdated; the dashboard shows
-it as such, under the lines it quotes rather than under lines that may now say something else. One about
-lines is written under its own tag (`COMMENT_ON_LINES`), one without them as before, so earlier
-comments keep their bytes.
+under it. The dashboard's diff shows each under the last line it is about. One about lines of a commit other
+than the one on screen is outdated: it shows under the header of its file with the lines it quotes,
+not under lines that may now say something else. While a review waits, comments written in the diff
+are drafts of it, sent just before the verdict; otherwise they are posted at once. One about lines is
+written under its own tag (`COMMENT_ON_LINES`), one without them as before, so earlier comments keep
+their bytes.
 
 ### Comment ids
 

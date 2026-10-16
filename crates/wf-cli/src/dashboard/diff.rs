@@ -1,15 +1,15 @@
 //! The diff detail: the work of an item against its target, as `wf item diff` computes it, in
-//! files of hunks of lines, with a cursor line. Pure: the loop reads the diff, drawing shows it.
+//! files of hunks of lines, with a cursor line, a selection of lines, and the comments on lines
+//! under the lines they are about. Pure: the loop reads the diff, drawing shows it.
 
-use std::collections::HashSet;
-
+use std::collections::{HashMap, HashSet};
 use std::ops::RangeInclusive;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
-use wf_core::id::ItemId;
+use wf_core::event::{CommentKind, DiffSide, LineAnchor};
 use wf_core::session::CommitId;
-use wf_vcs::diff::{Content, FileDiff};
+use wf_vcs::diff::{Content, DiffLine, FileDiff};
 
 use super::app::ListTop;
 
@@ -19,6 +19,38 @@ pub struct ItemWork {
     /// The commit whose diff it is: the head of the item's branch.
     pub commit: CommitId,
     pub files: Vec<FileDiff>,
+}
+
+/// How many columns the text of a comment is wrapped to under the lines it is about, whatever the
+/// width of the window, so that its rows do not depend on it.
+const COMMENT_WIDTH: usize = 72;
+
+/// A comment on lines of the diff, as written in the dashboard.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LineComment {
+    /// A plain comment or a change request.
+    pub kind: CommentKind,
+    pub lines: LineAnchor,
+    pub text: String,
+}
+
+/// A comment on lines of the diff of an item that is in the log already.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PostedComment {
+    /// `@ada`, `coder`.
+    pub by: String,
+    pub comment: LineComment,
+    /// A change request a later comment resolved.
+    pub resolved: bool,
+}
+
+/// One of the comments the diff shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown {
+    /// Of the review being written, by its place among the drafts.
+    Draft(usize),
+    /// In the log, by its place among the posted ones.
+    Posted(usize),
 }
 
 /// A line of the diff detail, as it is drawn.
@@ -34,17 +66,33 @@ pub enum DiffRow {
         line: usize,
     },
     /// What a file without hunks changed: binary, or only its mode or name.
-    Note(usize),
+    NoLines(usize),
+    /// A row of a comment under the lines it is about, or under the header of its file when
+    /// it is about lines of another commit: its header on row 0, then its text.
+    Comment {
+        file: usize,
+        shown: Shown,
+        row: usize,
+    },
     /// Between two files.
     Blank,
 }
 
 impl DiffRow {
-    /// Whether the cursor stops on it.
+    /// Whether the cursor stops on it: the files, the lines, and the drafts, to edit or drop.
     fn takes_cursor(self) -> bool {
         match self {
-            DiffRow::File(_) | DiffRow::Line { .. } => true,
-            DiffRow::Hunk { .. } | DiffRow::Note(_) | DiffRow::Blank => false,
+            DiffRow::File(_)
+            | DiffRow::Line { .. }
+            | DiffRow::Comment {
+                shown: Shown::Draft(_),
+                row: 0,
+                ..
+            } => true,
+            DiffRow::Hunk { .. }
+            | DiffRow::NoLines(_)
+            | DiffRow::Comment { .. }
+            | DiffRow::Blank => false,
         }
     }
 
@@ -53,7 +101,8 @@ impl DiffRow {
             DiffRow::File(file)
             | DiffRow::Hunk { file, .. }
             | DiffRow::Line { file, .. }
-            | DiffRow::Note(file) => Some(file),
+            | DiffRow::NoLines(file)
+            | DiffRow::Comment { file, .. } => Some(file),
             DiffRow::Blank => None,
         }
     }
@@ -62,7 +111,6 @@ impl DiffRow {
 /// The diff of an item on screen, and where the cursor is in it.
 #[derive(Clone, Debug)]
 pub struct DiffPane {
-    pub item: ItemId,
     /// The work as last read, or why it could not be; `None` until it is read.
     pub work: Option<Result<ItemWork, String>>,
     /// The row the cursor is on.
@@ -79,12 +127,21 @@ pub struct DiffPane {
     /// Where the rows were drawn, the first of them at the top; `None` while the diff is not on
     /// screen.
     pub area: Option<Rect>,
+    /// The comments on lines of the review being written, which the verdict sends.
+    pub drafts: Vec<LineComment>,
+    /// The comments on lines of the item in the log, the oldest first.
+    pub posted: Vec<PostedComment>,
+}
+
+impl Default for DiffPane {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl DiffPane {
-    pub fn new(item: ItemId) -> Self {
+    pub fn new() -> Self {
         Self {
-            item,
             work: None,
             cursor: 0,
             top: ListTop::FollowsSelection(0),
@@ -92,6 +149,8 @@ impl DiffPane {
             selection: None,
             pressed: None,
             area: None,
+            drafts: Vec::new(),
+            posted: Vec::new(),
         }
     }
 
@@ -123,7 +182,18 @@ impl DiffPane {
 
     /// The rows of the diff, from the top.
     pub fn rows(&self) -> Vec<DiffRow> {
+        let (under_lines, under_files) = self.placed_comments();
         let mut rows = Vec::new();
+        let comment_rows = |rows: &mut Vec<DiffRow>, file: usize, shown: &[Shown]| {
+            for shown in shown {
+                let height = 1 + self.comment_body(*shown).len();
+                rows.extend((0..height).map(|row| DiffRow::Comment {
+                    file,
+                    shown: *shown,
+                    row,
+                }));
+            }
+        };
         for (index, file) in self.files().iter().enumerate() {
             if index > 0 {
                 rows.push(DiffRow::Blank);
@@ -132,6 +202,9 @@ impl DiffPane {
             if self.folded.contains(&file.path) {
                 continue;
             }
+            if let Some(shown) = under_files.get(&index) {
+                comment_rows(&mut rows, index, shown);
+            }
             match &file.content {
                 Content::Text(hunks) if !hunks.is_empty() => {
                     for (hunk_index, hunk) in hunks.iter().enumerate() {
@@ -139,17 +212,192 @@ impl DiffPane {
                             file: index,
                             hunk: hunk_index,
                         });
-                        rows.extend((0..hunk.lines.len()).map(|line| DiffRow::Line {
-                            file: index,
-                            hunk: hunk_index,
-                            line,
-                        }));
+                        for line in 0..hunk.lines.len() {
+                            rows.push(DiffRow::Line {
+                                file: index,
+                                hunk: hunk_index,
+                                line,
+                            });
+                            if let Some(shown) = under_lines.get(&(index, hunk_index, line)) {
+                                comment_rows(&mut rows, index, shown);
+                            }
+                        }
                     }
                 }
-                Content::Text(_) | Content::Binary => rows.push(DiffRow::Note(index)),
+                Content::Text(_) | Content::Binary => rows.push(DiffRow::NoLines(index)),
             }
         }
         rows
+    }
+
+    /// The comment `shown` is of.
+    pub fn comment(&self, shown: Shown) -> &LineComment {
+        match shown {
+            Shown::Draft(index) => &self.drafts[index],
+            Shown::Posted(index) => &self.posted[index].comment,
+        }
+    }
+
+    /// Whether the comment is about lines of another commit than the one on screen.
+    pub fn is_outdated(&self, shown: Shown) -> bool {
+        Some(self.comment(shown).lines.commit) != self.commit()
+    }
+
+    /// The rows of a comment under its header: the lines it quotes when they are of another
+    /// commit, then its text, wrapped.
+    pub fn comment_body(&self, shown: Shown) -> Vec<String> {
+        let comment = self.comment(shown);
+        let mut body = Vec::new();
+        if self.is_outdated(shown) {
+            body.extend(comment.lines.quote.lines().map(str::to_owned));
+        }
+        for paragraph in comment.text.lines() {
+            if paragraph.trim().is_empty() {
+                body.push(String::new());
+                continue;
+            }
+            body.extend(
+                textwrap::wrap(paragraph, COMMENT_WIDTH)
+                    .into_iter()
+                    .map(|line| line.into_owned()),
+            );
+        }
+        body
+    }
+
+    /// Where each comment goes: under the last line it is about, by file, hunk and line; or,
+    /// when it is about another commit or lines not in the diff, under the header of its file.
+    /// A comment on a file the diff no longer changes is not shown.
+    #[allow(clippy::type_complexity)]
+    fn placed_comments(
+        &self,
+    ) -> (
+        HashMap<(usize, usize, usize), Vec<Shown>>,
+        HashMap<usize, Vec<Shown>>,
+    ) {
+        let mut under_lines: HashMap<_, Vec<Shown>> = HashMap::new();
+        let mut under_files: HashMap<_, Vec<Shown>> = HashMap::new();
+        let shown = (0..self.posted.len())
+            .map(Shown::Posted)
+            .chain((0..self.drafts.len()).map(Shown::Draft));
+        for shown in shown {
+            let lines = &self.comment(shown).lines;
+            let Some(file) = self.files().iter().position(|file| file.path == lines.path) else {
+                continue;
+            };
+            let line = (!self.is_outdated(shown))
+                .then(|| self.line_numbered(file, lines.side, lines.last))
+                .flatten();
+            match line {
+                Some(line) => under_lines.entry(line).or_default().push(shown),
+                None => under_files.entry(file).or_default().push(shown),
+            }
+        }
+        (under_lines, under_files)
+    }
+
+    /// The hunk and line of `file` with the number `number` on `side`.
+    fn line_numbered(
+        &self,
+        file: usize,
+        side: DiffSide,
+        number: u32,
+    ) -> Option<(usize, usize, usize)> {
+        let Content::Text(hunks) = &self.files()[file].content else {
+            return None;
+        };
+        hunks.iter().enumerate().find_map(|(hunk_index, hunk)| {
+            let line = hunk.lines.iter().position(|line| match side {
+                DiffSide::New => line.new_number() == Some(number),
+                DiffSide::Old => {
+                    matches!(line, DiffLine::Removed { .. }) && line.old_number() == Some(number)
+                }
+            })?;
+            Some((file, hunk_index, line))
+        })
+    }
+
+    /// The lines the selection holds, or the line of the cursor without one, as a comment names
+    /// them; `None` when neither is on lines.
+    pub fn selected_lines(&self) -> Option<LineAnchor> {
+        let commit = self.commit()?;
+        let rows = self.rows();
+        let range = self.selected().unwrap_or(self.cursor..=self.cursor);
+        let mut path = None;
+        let lines: Vec<&DiffLine> = rows
+            .get(range)?
+            .iter()
+            .filter_map(|row| {
+                let DiffRow::Line { file, hunk, line } = *row else {
+                    return None;
+                };
+                let file = &self.files()[file];
+                path = Some(file.path.clone());
+                let Content::Text(hunks) = &file.content else {
+                    return None;
+                };
+                Some(&hunks[hunk].lines[line])
+            })
+            .collect();
+        // Lines removed count on the old side only when they are all there is.
+        let new: Vec<u32> = lines.iter().filter_map(|line| line.new_number()).collect();
+        let (side, numbers) = if new.is_empty() {
+            let old = lines.iter().filter_map(|line| line.old_number()).collect();
+            (DiffSide::Old, old)
+        } else {
+            (DiffSide::New, new)
+        };
+        let quote = lines
+            .iter()
+            .map(|line| format!("{}{}", line.marker(), line.text()))
+            .collect::<Vec<_>>()
+            .join("\n");
+        Some(LineAnchor {
+            commit,
+            path: path?,
+            side,
+            first: *numbers.iter().min()?,
+            last: *numbers.iter().max()?,
+            quote,
+        })
+    }
+
+    /// The draft the cursor is on.
+    pub fn draft_at_cursor(&self) -> Option<usize> {
+        match self.rows().get(self.cursor)? {
+            DiffRow::Comment {
+                shown: Shown::Draft(index),
+                ..
+            } => Some(*index),
+            DiffRow::Comment {
+                shown: Shown::Posted(_),
+                ..
+            }
+            | DiffRow::File(_)
+            | DiffRow::Hunk { .. }
+            | DiffRow::Line { .. }
+            | DiffRow::NoLines(_)
+            | DiffRow::Blank => None,
+        }
+    }
+
+    /// Takes in a comment written about lines: a new draft, or one written again in place of
+    /// the draft `replacing`. The selection it was written about ends.
+    pub fn drafted(&mut self, comment: LineComment, replacing: Option<usize>) {
+        match replacing.and_then(|index| self.drafts.get_mut(index)) {
+            Some(draft) => *draft = comment,
+            None => self.drafts.push(comment),
+        }
+        self.selection = None;
+    }
+
+    /// Drops the draft `index`; the cursor stays where it is, as near as there is a row.
+    pub fn drop_draft(&mut self, index: usize) {
+        if index < self.drafts.len() {
+            self.drafts.remove(index);
+        }
+        let rows = self.rows();
+        self.cursor = nearest_cursor_row(&rows, self.cursor.min(rows.len().saturating_sub(1)));
     }
 
     /// What the keys of the diff do; `false` for a key it does not take. A page is `page` rows.
@@ -291,9 +539,15 @@ fn keep_to_hunk(rows: &[DiffRow], start: usize, row: usize) -> usize {
     let DiffRow::Line { file, hunk, .. } = rows[start] else {
         return start;
     };
-    let in_hunk = |row: &usize| {
-        matches!(rows[*row], DiffRow::Line { file: line_file, hunk: line_hunk, .. }
-            if line_file == file && line_hunk == hunk)
+    // The comments under its lines are within it too.
+    let in_hunk = |row: &usize| match rows[*row] {
+        DiffRow::Line {
+            file: line_file,
+            hunk: line_hunk,
+            ..
+        } => line_file == file && line_hunk == hunk,
+        DiffRow::Comment { .. } => true,
+        DiffRow::File(_) | DiffRow::Hunk { .. } | DiffRow::NoLines(_) | DiffRow::Blank => false,
     };
     let first = (0..=start)
         .rev()

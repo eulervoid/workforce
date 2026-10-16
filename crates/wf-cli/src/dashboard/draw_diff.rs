@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use wf_vcs::diff::{Content, DiffLine, FileChange, FileDiff};
 
-use super::diff::{self, DiffPane, DiffRow};
+use super::diff::{self, DiffPane, DiffRow, Shown};
 use super::draw::{KeysAt, Themed, accent, draw_position, padded, selection_bar, themed};
 use crate::dashboard::app::App;
 use crate::theme;
@@ -103,7 +103,8 @@ fn row_spans(pane: &DiffPane, row: DiffRow, numbers: usize, room: usize) -> Vec<
             let file = &files[index];
             file_header(file, pane.folded.contains(&file.path), room)
         }
-        DiffRow::Note(index) => {
+        DiffRow::Comment { shown, row, .. } => comment_spans(pane, shown, row, numbers),
+        DiffRow::NoLines(index) => {
             let note = match (&files[index].content, &files[index].change) {
                 (Content::Binary, _) => "binary, not shown",
                 (Content::Text(_), FileChange::Renamed { .. }) => "renamed, no lines changed",
@@ -126,6 +127,54 @@ fn row_spans(pane: &DiffPane, row: DiffRow, numbers: usize, room: usize) -> Vec<
             line_spans(&hunks[hunk].lines[line], numbers)
         }
     }
+}
+
+/// A row of a comment, below the numbers of the lines: its header, a line it quotes when it is of
+/// another commit, or a line of its text.
+fn comment_spans(pane: &DiffPane, shown: Shown, row: usize, numbers: usize) -> Vec<Span<'static>> {
+    let gap = " ".repeat(numbers * 2 + 2);
+    let comment = pane.comment(shown);
+    let (bar, by) = match shown {
+        Shown::Draft(_) => (theme::attention(), "✎ draft".to_owned()),
+        Shown::Posted(index) => (theme::text_dimmed(), pane.posted[index].by.clone()),
+    };
+    let mut spans = vec![Span::raw(gap), themed("┃ ", bar)];
+    let outdated = pane.is_outdated(shown);
+    if row == 0 {
+        let mut header = format!("{by} · {}", comment.kind.name().replace('_', " "));
+        if let Shown::Posted(index) = shown
+            && pane.posted[index].resolved
+        {
+            header.push_str(" · resolved");
+        }
+        if outdated {
+            header.push_str(&format!(" · outdated: {}", comment.lines.heading()));
+        }
+        spans.push(themed(header, bar.bold()));
+        return spans;
+    }
+    let quoted = if outdated {
+        comment.lines.quote.lines().count()
+    } else {
+        0
+    };
+    let body = pane.comment_body(shown);
+    let text = body
+        .get(row - 1)
+        .cloned()
+        .unwrap_or_default()
+        .replace('\t', TAB);
+    if row <= quoted {
+        let style = match text.chars().next() {
+            Some('+') => theme::diff_added(),
+            Some('-') => theme::diff_removed(),
+            _ => theme::text_dimmed(),
+        };
+        spans.push(themed(text, style.dimmed()));
+    } else {
+        spans.push(Span::raw(text));
+    }
+    spans
 }
 
 /// `▾ src/lib.rs  +12 −3`, with where a file renamed came from; `▸` while it is folded.
