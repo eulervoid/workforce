@@ -22,7 +22,7 @@ use super::snapshot::{
 };
 use super::snapshot::{Detail, ItemRow};
 use super::transcript_lines::TranscriptLines;
-use crate::cli::ItemGrouping;
+use crate::cli::{ItemGrouping, ItemOrder};
 use crate::render::{self, duration};
 use crate::theme;
 use crate::transcript::{self, Format, Now, Transcript, Usage};
@@ -404,7 +404,8 @@ const KEYS: &[(&str, &str)] = &[
     ("s x", "start a session, stop one"),
     ("m c e", "move, comment on, edit an item"),
     ("i f l", "item, full transcript, diff"),
-    ("o / F", "items: grouping, title or id, readiness"),
+    ("o O", "items: grouping, order"),
+    ("/ F", "items: title or id, readiness"),
     ("q", "quit"),
     ("tmux", "focus-events on: dims when unfocused"),
 ];
@@ -1347,7 +1348,7 @@ fn now_lines(app: &App, width: u16) -> ListText {
     list
 }
 
-/// `active · ready · "parse"`: how the items are grouped and filtered.
+/// `by state · sorted by merge · only ready · "parse"`: how the items are grouped, ordered and filtered.
 fn items_heading(app: &App) -> Line<'static> {
     let grouping = match app.items.grouping {
         ItemGrouping::State => "state",
@@ -1357,7 +1358,12 @@ fn items_heading(app: &App) -> Line<'static> {
         ItemGrouping::Label => "label",
         ItemGrouping::Readiness => "readiness",
     };
-    let mut parts = vec![format!("by {grouping}")];
+    let order = match app.items.order {
+        ItemOrder::Priority => "sorted by priority",
+        ItemOrder::Created => "sorted by creation",
+        ItemOrder::Merged => "sorted by merge",
+    };
+    let mut parts = vec![format!("by {grouping}"), order.to_owned()];
     if let Some(readiness) = app.items.readiness.name() {
         parts.push(format!("only {readiness}"));
     }

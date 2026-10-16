@@ -21,11 +21,11 @@ use wf_harness::{Permission, TranscriptEntry};
 use super::diff::{DiffPane, LineComment};
 use super::draw;
 use super::snapshot::{
-    Detail, InView, ItemRow, MovedBack, SessionInfo, SessionStatus, Snapshot, Waiting, WaitingKey,
-    Wanted,
+    Detail, InView, ItemListing, ItemRow, MovedBack, SessionInfo, SessionStatus, Snapshot, Waiting,
+    WaitingKey, Wanted,
 };
 use super::transcript_lines::TranscriptLines;
-use crate::cli::ItemGrouping;
+use crate::cli::{ItemGrouping, ItemOrder};
 use crate::theme;
 use crate::transcript::{Transcript, Verbosity};
 
@@ -636,11 +636,12 @@ impl ReadinessFilter {
     }
 }
 
-/// `wf item list --group-by`.
+/// `wf item list --group-by --sort`.
 #[derive(Clone, Debug)]
 pub struct ItemsTab {
     pub list: ListTab<ItemId>,
     pub grouping: ItemGrouping,
+    pub order: ItemOrder,
     /// Only items whose title has this text are listed.
     pub filter: String,
     pub readiness: ReadinessFilter,
@@ -653,6 +654,9 @@ const GROUPINGS: [ItemGrouping; 4] = [
     ItemGrouping::Priority,
     ItemGrouping::Type,
 ];
+
+/// The orders `O` goes through, in order.
+const ORDERS: [ItemOrder; 3] = [ItemOrder::Priority, ItemOrder::Created, ItemOrder::Merged];
 
 /// How many lines of the event stream are kept.
 const LOG_LINES: usize = 1000;
@@ -863,6 +867,7 @@ impl App {
             items: ItemsTab {
                 list: ListTab::default(),
                 grouping: ItemGrouping::State,
+                order: ItemOrder::Priority,
                 filter: String::new(),
                 readiness: ReadinessFilter::All,
             },
@@ -1308,7 +1313,10 @@ impl App {
     pub fn wanted(&self) -> Wanted {
         Wanted {
             detail: self.in_view().map(|opened| opened.detail),
-            items: (self.tab == Tab::Items).then_some(self.items.grouping),
+            items: (self.tab == Tab::Items).then_some(ItemListing {
+                grouping: self.items.grouping,
+                order: self.items.order,
+            }),
             agents: self.tab == Tab::Agents,
         }
     }
@@ -2353,6 +2361,13 @@ impl App {
                     .position(|grouping| *grouping == self.items.grouping)
                     .map_or(0, |index| (index + 1) % GROUPINGS.len());
                 self.items.grouping = GROUPINGS[index];
+            }
+            (Tab::Items, KeyCode::Char('O')) => {
+                let index = ORDERS
+                    .iter()
+                    .position(|order| *order == self.items.order)
+                    .map_or(0, |index| (index + 1) % ORDERS.len());
+                self.items.order = ORDERS[index];
             }
             (Tab::Items, KeyCode::Char('F')) => self.items.readiness = self.items.readiness.next(),
             (Tab::Items, KeyCode::Char('/')) => {

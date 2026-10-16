@@ -17,8 +17,8 @@ use super::app::{
 };
 use super::draw;
 use super::snapshot::{
-    AgentInfo, Counts, Detail, InView, ItemGroup, ItemRef, ItemRow, Links, MovedBack, Place,
-    SessionInfo, SessionStatus, Snapshot, Waiting, moves_back,
+    AgentInfo, Counts, Detail, InView, ItemGroup, ItemListing, ItemRef, ItemRow, Links, MovedBack,
+    Place, SessionInfo, SessionStatus, Snapshot, Waiting, moves_back,
 };
 use crate::view::Flag;
 use crate::{render, theme};
@@ -731,7 +731,10 @@ fn with_items() -> Snapshot {
 fn the_items_tab_lists_items_by_state_and_filters_them() {
     let mut app = app();
     press(&mut app, KeyCode::Char('2'));
-    assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::State));
+    assert_eq!(
+        app.wanted().items.map(|listing| listing.grouping),
+        Some(crate::cli::ItemGrouping::State)
+    );
     app.refresh(with_items());
     insta::assert_snapshot!("items", screen(&mut app, 60, 14));
     press(&mut app, KeyCode::Char('F'));
@@ -751,7 +754,29 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
         .collect();
     assert_eq!(titles, ["Parse config lazily"]);
     press(&mut app, KeyCode::Char('o'));
-    assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::Lane));
+    assert_eq!(
+        app.wanted().items.map(|listing| listing.grouping),
+        Some(crate::cli::ItemGrouping::Lane)
+    );
+}
+
+#[test]
+fn the_items_tab_cycles_its_order_and_shows_it_in_its_title() {
+    use crate::cli::ItemOrder;
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    let order = |app: &App| app.wanted().items.map(|listing| listing.order);
+    assert_eq!(order(&app), Some(ItemOrder::Priority));
+    assert!(screen(&mut app, 60, 14).contains("by state · sorted by priority"));
+    press(&mut app, KeyCode::Char('O'));
+    assert_eq!(order(&app), Some(ItemOrder::Created));
+    assert!(screen(&mut app, 60, 14).contains("sorted by creation"));
+    press(&mut app, KeyCode::Char('O'));
+    assert_eq!(order(&app), Some(ItemOrder::Merged));
+    assert!(screen(&mut app, 60, 14).contains("sorted by merge"));
+    press(&mut app, KeyCode::Char('O'));
+    assert_eq!(order(&app), Some(ItemOrder::Priority));
 }
 
 #[test]
@@ -1368,9 +1393,16 @@ fn the_list_behind_an_open_detail_takes_no_keys() {
     app.refresh(with_items());
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Char('o'));
+    press(&mut app, KeyCode::Char('O'));
     press(&mut app, KeyCode::Char('F'));
     press(&mut app, KeyCode::Char('/'));
-    assert_eq!(app.wanted().items, Some(crate::cli::ItemGrouping::State));
+    assert_eq!(
+        app.wanted().items,
+        Some(ItemListing {
+            grouping: crate::cli::ItemGrouping::State,
+            order: crate::cli::ItemOrder::Priority,
+        })
+    );
     assert!(app.prompt.is_none());
     assert_eq!(app.item_groups().len(), with_items().items.len());
     press(&mut app, KeyCode::Char('?'));

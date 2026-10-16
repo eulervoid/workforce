@@ -1,5 +1,6 @@
 //! `wf item`: creating, showing, editing, moving and linking items.
 
+use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use anyhow::{Context, bail};
@@ -7,7 +8,7 @@ use serde::Serialize;
 use wf_core::crdt::SetChange;
 use wf_core::event::{Change, EventBody, ItemCreated, ItemLinked, ItemMoved, ItemRef, Link};
 use wf_core::id::{HashId, ItemId};
-use wf_core::item::{ItemState, ItemView, Priority};
+use wf_core::item::{Item, ItemState, ItemView, Merge, Priority};
 use wf_core::policy::Field;
 use wf_core::state::State;
 use wf_core::validate::OneOf;
@@ -22,22 +23,52 @@ use crate::render;
 use crate::view::{self, ItemSummary};
 use crate::workspace::Workspace;
 
-pub(crate) fn sorted_views(state: &State, include_archived: bool) -> Vec<ItemView<'_>> {
+/// The items, the live ones in `order` and the archived ones after them by when they were
+/// archived.
+pub(crate) fn sorted_views(
+    state: &State,
+    include_archived: bool,
+    order: ItemOrder,
+) -> Vec<ItemView<'_>> {
     let mut views: Vec<ItemView<'_>> = state
         .items()
         .filter(|view| include_archived || matches!(view, ItemView::Live(_)))
         .collect();
-    views.sort_by_key(|view| match view {
-        ItemView::Live(item) => (
-            false,
+    views.sort_by(|first, second| match (first, second) {
+        (ItemView::Live(first), ItemView::Live(second)) => compare_items(order, first, second),
+        (ItemView::Live(_), ItemView::Archived(_)) => Ordering::Less,
+        (ItemView::Archived(_), ItemView::Live(_)) => Ordering::Greater,
+        (ItemView::Archived(first), ItemView::Archived(second)) => {
+            (first.archived_at(), first.id()).cmp(&(second.archived_at(), second.id()))
+        }
+    });
+    views
+}
+
+fn compare_items(order: ItemOrder, first: &Item, second: &Item) -> Ordering {
+    let by_priority = |item: &Item| {
+        (
             item.priority().is_none(),
             item.priority(),
             item.created(),
             item.id(),
-        ),
-        ItemView::Archived(stub) => (true, true, None, stub.archived_at(), stub.id()),
-    });
-    views
+        )
+    };
+    match order {
+        ItemOrder::Priority => by_priority(first).cmp(&by_priority(second)),
+        ItemOrder::Created => (first.created(), first.id()).cmp(&(second.created(), second.id())),
+        ItemOrder::Merged => {
+            let merged_at = |item: &Item| item.latest_merge().map(Merge::merged_at);
+            match (merged_at(first), merged_at(second)) {
+                (Some(first_at), Some(second_at)) => {
+                    (first_at, first.id()).cmp(&(second_at, second.id()))
+                }
+                (Some(_), None) => Ordering::Less,
+                (None, Some(_)) => Ordering::Greater,
+                (None, None) => by_priority(first).cmp(&by_priority(second)),
+            }
+        }
+    }
 }
 
 /// Which items a picker offers.
@@ -81,7 +112,7 @@ fn pick_item(
     }
     let state = workspace.state();
     let graph = state.dependency_graph();
-    let choices = sorted_views(state, true)
+    let choices = sorted_views(state, true, ItemOrder::Priority)
         .into_iter()
         .filter(|view| scope.includes(state, view))
         .map(|view| item_choice(&view::summary(state, &graph, view)))
@@ -200,7 +231,7 @@ pub(super) fn item(
             let state = workspace.state();
             check_list_filters(state, &args)?;
             let graph = state.dependency_graph();
-            let views = sorted_views(state, args.archived);
+            let views = sorted_views(state, args.archived, args.sort);
             let dispatchable: Option<BTreeSet<String>> = match &args.for_agent {
                 None => None,
                 Some(name) => {
@@ -452,7 +483,7 @@ fn archive_finished(
     let ids: Vec<ItemId> = {
         let state = workspace.state();
         let policy = &state.policy().expect("a workforce has a policy").policy;
-        sorted_views(state, false)
+        sorted_views(state, false, ItemOrder::Priority)
             .into_iter()
             .filter(|view| states.contains(&view.state(policy)))
             .map(|view| view.id())
@@ -791,7 +822,8 @@ fn pick_dependency(workspace: &Workspace, id: ItemId) -> anyhow::Result<ItemId> 
 
 #[cfg(test)]
 mod tests {
-    use wf_core::testing::{Fixture, create, define_agent, start_session};
+    use wf_core::session::CommitId;
+    use wf_core::testing::{Fixture, create, define_agent, edit, merged, start_session};
 
     use super::*;
 
@@ -820,5 +852,57 @@ mod tests {
         };
         assert_eq!(offered(Scope::Unclaimed), vec![free]);
         assert_eq!(offered(Scope::Live).len(), 2);
+    }
+
+    fn commit(byte: u8) -> CommitId {
+        let text: String = std::iter::repeat_n(format!("{byte:02x}"), 20).collect();
+        CommitId::Git(text.parse().unwrap())
+    }
+
+    #[test]
+    fn items_are_sorted_by_priority_creation_or_merge() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let mut clock = 2_000;
+        let mut apply = |state: &mut State, body: EventBody| {
+            clock += 1;
+            fixture.apply(state, 0, clock, body)
+        };
+        let mut add = |state: &mut State, title: &str, priority: Option<Priority>| {
+            let id = ItemId::from(apply(state, create("task", title)).id());
+            apply(state, edit(id, Change::Priority(priority)));
+            id
+        };
+        let low = add(&mut state, "Low", Some(Priority::P2));
+        let urgent = add(&mut state, "Urgent", Some(Priority::P0));
+        let unprioritized = add(&mut state, "Unprioritized", None);
+        let high = add(&mut state, "High", Some(Priority::P1));
+        let sorted = |state: &State, order: ItemOrder| -> Vec<ItemId> {
+            sorted_views(state, false, order)
+                .into_iter()
+                .map(|view| view.id())
+                .collect()
+        };
+        assert_eq!(
+            sorted(&state, ItemOrder::Priority),
+            [urgent, high, low, unprioritized]
+        );
+        assert_eq!(
+            sorted(&state, ItemOrder::Created),
+            [low, urgent, unprioritized, high]
+        );
+        apply(&mut state, merged(high, commit(1), commit(2)));
+        apply(&mut state, merged(low, commit(3), commit(4)));
+        assert_eq!(
+            sorted(&state, ItemOrder::Merged),
+            [high, low, urgent, unprioritized],
+            "merged items in the order they went in, the rest by priority"
+        );
+        apply(&mut state, merged(high, commit(5), commit(6)));
+        assert_eq!(
+            sorted(&state, ItemOrder::Merged),
+            [low, high, urgent, unprioritized],
+            "by the latest merge"
+        );
     }
 }
