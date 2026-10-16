@@ -28,6 +28,7 @@ pub fn daemon(json: bool, command: DaemonCommand, data: DataDir) -> anyhow::Resu
         DaemonCommand::Start(args) => start(json, args, &data),
         DaemonCommand::Stop => stop(json, &data),
         DaemonCommand::Status => emit(json, &status(&data), render_status),
+        DaemonCommand::Log => log(&data),
         DaemonCommand::Run(args) => run(json, args, data),
     }
 }
@@ -64,6 +65,19 @@ fn render_status(status: &DaemonStatus) -> String {
         ),
         (false, _) => "the daemon does not run; start it with `wf daemon start`\n".to_string(),
     }
+}
+
+fn log(data: &DataDir) -> anyhow::Result<()> {
+    let path = data.daemon_log();
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => bail!(
+            "there is no daemon log yet at {}; `wf daemon start` writes it",
+            path.display()
+        ),
+        Err(error) => return Err(error).with_context(|| format!("reading {}", path.display())),
+    };
+    crate::interactive::page(&String::from_utf8_lossy(&bytes))
 }
 
 fn start(json: bool, args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {

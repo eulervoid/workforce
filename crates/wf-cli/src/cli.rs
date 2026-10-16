@@ -362,6 +362,8 @@ pub enum DaemonCommand {
     Stop,
     /// Whether the daemon of this machine runs, and where it logs.
     Status,
+    /// Show the log of this machine's daemon in a pager.
+    Log,
     /// Run the daemon in this terminal until it is interrupted.
     Run(DaemonArgs),
 }
