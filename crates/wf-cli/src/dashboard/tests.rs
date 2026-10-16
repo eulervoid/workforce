@@ -2358,6 +2358,19 @@ fn the_answers_under_a_session_and_in_the_footer_are_buttons_too() {
 }
 
 #[test]
+fn the_title_of_the_keys_is_not_dimmed_as_their_border() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('?'));
+    let (title, row) = find(&mut app, 60, 18, "▐keys▌");
+    for column in title..title + "▐keys▌".chars().count() as u16 {
+        let style = style_at(&mut app, 60, 18, column, row);
+        assert!(!style.add_modifier.contains(Modifier::DIM), "{column}");
+    }
+    let border = style_at(&mut app, 60, 18, title - 1, row);
+    assert!(border.add_modifier.contains(Modifier::DIM));
+}
+
+#[test]
 fn a_click_on_a_count_in_the_header_does_nothing() {
     let mut app = app();
     let before = screen(&mut app, 60, 24);
