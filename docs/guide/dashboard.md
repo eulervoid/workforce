@@ -46,7 +46,9 @@ Piped, plain `wf` prints the help instead; `wf log --follow` prints the event st
 
 Each tab is a list with a detail. From 120 columns the detail sits right of the list and follows the
 selection; narrower, `enter` opens it and `esc` goes back. An item's detail shows its body, steps,
-comments and history; a session's detail is its live transcript.
+comments and history; a session's detail is its live transcript; one further right is the diff of the
+item's work against the target, as `wf item diff` computes it: a header for each file with what it adds
+and removes, then its hunks, each line with its numbers before and after.
 
 ### Keys
 
@@ -58,19 +60,21 @@ session that is open.
 | `1`–`4`, `tab`, `shift-tab` | switch tabs |
 | `j`/`k`, `↓`/`↑`, `g`/`G` | move, top, end (and follow a log or transcript) |
 | `pgup`/`pgdn`, `space` | a page up, down |
-| `enter`, `l`, `→` | open; on an item, its session |
+| `enter`, `l`, `→` | open; on an item, its session; on a session, the diff of its item |
 | `esc`, `h`, `←` | go back |
 | `H`, `L` (or `shift ←/→`) | only the list, both, or only the detail, in a wide window |
 | `a` / `d` | allow / deny a permission request |
 | `r` / `R` | answer a blocker in the footer / in `$EDITOR` |
-| `v` | review: then `a` approves, `r` writes change requests in `$EDITOR`, `D` shows the diff |
-| `D` | show the diff of the item, through git and your pager |
+| `v` | review: then `a` approves, `r` writes change requests in `$EDITOR`, `D` opens the diff |
+| `D` | open the diff of the item |
+| `]` / `[`, `enter` | in the diff: the next, previous file; fold a file to its header, or unfold it |
+| `p` | in the diff: show it through git instead, with your pager and diff config, such as delta |
 | `s` | start a session on the item (pick the agent), or release a draft |
 | `x` | stop the session (asks `y/n`) |
 | `m` | move the item to another state (pick it) |
 | `c` | comment on the item |
 | `e` | edit the item in `$EDITOR` |
-| `i` | on a session: open its item |
+| `i` | on a session or a diff: open its item |
 | `f` | on a session: the full transcript, without the abridged tool output |
 | `o` / `F` / `/` | on the Items tab: grouping, readiness filter (ready, blocked, stranded), title filter |
 | `/` | on the Log tab: filter the events |

@@ -3,7 +3,9 @@
 
 mod act;
 mod app;
+mod diff;
 mod draw;
+mod draw_diff;
 mod links;
 mod snapshot;
 mod transcript_lines;
@@ -22,10 +24,11 @@ use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
 
 use self::app::{App, Effect, Wheel};
+use self::diff::ItemWork;
 use self::snapshot::{Detail, InView, Snapshot, Sources};
 use crate::transcript::Format;
 use crate::workspace::{self, Workspace};
-use crate::{render, transcript, view};
+use crate::{commands, render, transcript, view};
 
 /// How often the daemon is asked for what is new.
 const REFRESH_EVERY: Duration = Duration::from_millis(500);
@@ -90,6 +93,7 @@ fn event_loop(
         app.open_item(item);
     }
     feed.read_transcripts(workspace, &mut app);
+    feed.read_diff(workspace, &mut app);
     let snapshot = feed.snapshot(workspace, &app);
     app.refresh(snapshot);
     let mut refreshed = Instant::now();
@@ -130,6 +134,7 @@ fn event_loop(
                 // A move of the selection needs only the detail it comes to.
                 draw = true;
                 feed.read_transcripts(workspace, &mut app);
+                feed.read_diff(workspace, &mut app);
                 let in_view = feed.in_view(workspace, &app);
                 app.refresh_detail(in_view);
                 continue;
@@ -137,6 +142,7 @@ fn event_loop(
         }
         draw = true;
         feed.read_transcripts(workspace, &mut app);
+        feed.read_diff(workspace, &mut app);
         let snapshot = feed.snapshot(workspace, &app);
         app.refresh(snapshot);
     }
@@ -222,6 +228,8 @@ struct Feed {
     events: Vec<Event>,
     /// The transcripts followed, by session.
     readers: HashMap<SessionId, transcript::Reader>,
+    /// The repository the diffs are read from, once one was.
+    git: Option<wf_vcs::GitCli>,
 }
 
 impl Feed {
@@ -233,6 +241,7 @@ impl Feed {
         Ok(Self {
             events,
             readers: HashMap::new(),
+            git: None,
         })
     }
 
@@ -294,6 +303,35 @@ impl Feed {
                 }
                 Err(error) => app.refresh_failed(&error),
             }
+        }
+    }
+
+    /// Hands the app the work of the item whose diff is on screen, when its branch moved since
+    /// it was last read, or why it cannot be read.
+    fn read_diff(&mut self, workspace: &Workspace, app: &mut App) {
+        let Some(Detail::Diff(item)) = app.wanted().detail else {
+            return;
+        };
+        let Some(pane) = app.diff.as_mut().filter(|pane| pane.item == item) else {
+            return;
+        };
+        let mut read = || -> anyhow::Result<Option<ItemWork>> {
+            let git = match &self.git {
+                Some(git) => git,
+                None => self.git.insert(commands::repository()?),
+            };
+            let commit = commands::work_commit(workspace, git, item)?;
+            if pane.commit() == Some(commit) {
+                return Ok(None);
+            }
+            let target = commands::target(workspace);
+            let files = wf_vcs::VcsAdapter::file_diffs(git, &target, commit)?;
+            Ok(Some(ItemWork { commit, files }))
+        };
+        match read() {
+            Ok(None) => {}
+            Ok(Some(work)) => pane.read(Ok(work)),
+            Err(error) => pane.read(Err(format!("{error:#}"))),
         }
     }
 

@@ -286,12 +286,12 @@ pub fn code() -> Style {
     get().code
 }
 
-/// Lines a diff adds, in transcripts.
+/// Lines a diff adds, in transcripts and the diff of the dashboard.
 pub fn diff_added() -> Style {
     get().diff_added
 }
 
-/// Lines a diff removes, in transcripts.
+/// Lines a diff removes, in transcripts and the diff of the dashboard.
 pub fn diff_removed() -> Style {
     get().diff_removed
 }

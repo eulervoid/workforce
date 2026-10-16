@@ -267,6 +267,9 @@ pub struct Wanted {
 pub enum Detail {
     Item(ItemId),
     Session(SessionId),
+    /// The work of an item against its target, read from git by the loop rather than taken
+    /// with the snapshot.
+    Diff(ItemId),
     Agent(AgentId),
     /// A flag of `wf status` that is not about an item.
     Flag(Flag),
@@ -534,6 +537,7 @@ impl InView {
                     id,
                 })
             }
+            Detail::Diff(_) => None,
             // Gone once fixed.
             Detail::Flag(flag) => flagged.contains(&flag).then(|| InView::Flag {
                 text: render::flag_detail_for(&flag, Some(usize::from(width).min(100))),

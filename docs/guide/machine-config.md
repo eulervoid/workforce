@@ -247,7 +247,7 @@ priority.p1 = "bold yellow"
 | `attention` | `yellow` | what waits on you |
 | `live` | `blue` | live sessions |
 | `code` | `blue` | inline code |
-| `diff_added`, `diff_removed` | `green`, `red` | lines of diffs in transcripts |
+| `diff_added`, `diff_removed` | `green`, `red` | lines of diffs in transcripts and in the diff of the dashboard |
 | `state.draft` … `state.cancelled` | `dim`, `green`, `blue`, `yellow`, `magenta`, `brightblack` | items in each state |
 | `readiness.blocked`, `readiness.stranded` | `red`, `bold red` | ready and claimed items look like `state.open` and `state.active` |
 | `priority.p0` … `priority.p3` | `bold red`, `yellow`, `normal`, `dim` | priorities |

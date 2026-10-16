@@ -256,7 +256,7 @@ fn done(
                 item.short()
             ))
         }
-        Effect::ShowDiff { item } => {
+        Effect::PageDiff { item } => {
             let git = repository()?;
             let commit = work_commit(workspace, &git, item)?;
             let target = target(workspace);

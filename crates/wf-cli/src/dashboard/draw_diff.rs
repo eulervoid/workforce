@@ -1,0 +1,170 @@
+//! How the diff detail looks: a header for each file, then its hunks, each line with its numbers
+//! on both sides and in the colour of what it does.
+
+use ratatui::Frame;
+use ratatui::layout::Rect;
+use ratatui::style::Style;
+use ratatui::text::{Line, Span};
+use ratatui::widgets::Paragraph;
+use wf_vcs::diff::{Content, DiffLine, FileChange, FileDiff};
+
+use super::diff::{self, DiffPane, DiffRow};
+use super::draw::{KeysAt, Themed, accent, draw_position, padded, selection_bar, themed};
+use crate::dashboard::app::App;
+use crate::theme;
+
+/// How many columns a tab in a line takes.
+const TAB: &str = "    ";
+
+/// Draws the diff of `pane` in `area`; returns the first row it drew and the row of the cursor.
+pub fn draw_diff(frame: &mut Frame, app: &App, pane: &DiffPane, area: Rect) -> (usize, usize) {
+    let note = match &pane.work {
+        None => Some(" reading the diff…".to_owned()),
+        Some(Err(error)) => Some(format!(" {error}")),
+        Some(Ok(work)) if work.files.is_empty() => Some(" the work changes no files".to_owned()),
+        Some(Ok(_)) => None,
+    };
+    if let Some(note) = note {
+        frame.render_widget(
+            Paragraph::new(Line::from(note).themed(theme::text_dimmed())),
+            area,
+        );
+        return (0, 0);
+    }
+    let rows = pane.rows();
+    let height = usize::from(area.height);
+    let (top, cursor) = diff::placed(&rows, pane.top, pane.cursor, height);
+    let files = pane.files();
+    let numbers = number_width(files);
+    let width = usize::from(padded(area).width);
+    let accent = accent(app, KeysAt::Detail);
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .skip(top)
+        .take(height)
+        .map(|(index, row)| {
+            let marker = if index == cursor {
+                selection_bar(accent)
+            } else {
+                Span::raw(" ")
+            };
+            let mut spans = vec![marker];
+            spans.extend(row_spans(pane, *row, numbers, width.saturating_sub(1)));
+            Line::from(spans)
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(lines), padded(area));
+    draw_position(
+        frame,
+        area,
+        top,
+        rows.len().saturating_sub(height),
+        app.base,
+    );
+    (top, cursor)
+}
+
+/// How many columns the widest line number of `files` takes.
+fn number_width(files: &[FileDiff]) -> usize {
+    let widest = files
+        .iter()
+        .filter_map(|file| match &file.content {
+            Content::Text(hunks) => hunks.last()?.lines.last().map(|line| {
+                line.old_number()
+                    .unwrap_or_default()
+                    .max(line.new_number().unwrap_or_default())
+            }),
+            Content::Binary => None,
+        })
+        .max()
+        .unwrap_or_default();
+    widest.max(1).to_string().len()
+}
+
+/// What a row shows, right of the cursor's column, in `room` columns.
+fn row_spans(pane: &DiffPane, row: DiffRow, numbers: usize, room: usize) -> Vec<Span<'static>> {
+    let files = pane.files();
+    match row {
+        DiffRow::Blank => Vec::new(),
+        DiffRow::File(index) => {
+            let file = &files[index];
+            file_header(file, pane.folded.contains(&file.path), room)
+        }
+        DiffRow::Note(index) => {
+            let note = match (&files[index].content, &files[index].change) {
+                (Content::Binary, _) => "binary, not shown",
+                (Content::Text(_), FileChange::Renamed { .. }) => "renamed, no lines changed",
+                (Content::Text(_), _) => "no lines changed, only its mode",
+            };
+            vec![themed(format!("  {note}"), theme::text_dimmed())]
+        }
+        DiffRow::Hunk { file, hunk } => {
+            let Content::Text(hunks) = &files[file].content else {
+                return Vec::new();
+            };
+            let heading = &hunks[hunk].heading;
+            let gap = " ".repeat(numbers * 2 + 1);
+            vec![themed(format!("{gap} ⋯ {heading}"), theme::text_dimmed())]
+        }
+        DiffRow::Line { file, hunk, line } => {
+            let Content::Text(hunks) = &files[file].content else {
+                return Vec::new();
+            };
+            line_spans(&hunks[hunk].lines[line], numbers)
+        }
+    }
+}
+
+/// `▾ src/lib.rs  +12 −3`, with where a file renamed came from; `▸` while it is folded.
+fn file_header(file: &FileDiff, folded: bool, room: usize) -> Vec<Span<'static>> {
+    let (added, removed) = file.counts();
+    let what = match &file.change {
+        FileChange::Added => " (new)".to_owned(),
+        FileChange::Deleted => " (deleted)".to_owned(),
+        FileChange::Modified => String::new(),
+        FileChange::Renamed { from } => format!(" (from {from})"),
+    };
+    let counts = format!("+{added} −{removed}");
+    let mut spans = vec![
+        themed(file.path.clone(), theme::text_bold()),
+        themed(what, theme::text_dimmed()),
+    ];
+    let used: usize = spans.iter().map(Span::width).sum::<usize>() + 2;
+    let padding = room
+        .saturating_sub(used + counts.chars().count() + 1)
+        .max(2);
+    spans.push(Span::raw(" ".repeat(padding)));
+    spans.push(themed(format!("+{added}"), theme::diff_added()));
+    spans.push(Span::raw(" "));
+    spans.push(themed(format!("−{removed}"), theme::diff_removed()));
+    let chevron = if folded { "▸ " } else { "▾ " };
+    let mut header = vec![themed(chevron, theme::text_dimmed())];
+    header.extend(spans);
+    header
+}
+
+/// ` 12  13 +text`: the numbers on both sides, dim, then the line in the colour of what it does.
+fn line_spans(line: &DiffLine, numbers: usize) -> Vec<Span<'static>> {
+    let number = |number: Option<u32>| match number {
+        Some(number) => format!("{number:>numbers$}"),
+        None => " ".repeat(numbers),
+    };
+    let style = match line {
+        DiffLine::Context { .. } => Style::default(),
+        DiffLine::Added { .. } => Style::from(theme::diff_added()),
+        DiffLine::Removed { .. } => Style::from(theme::diff_removed()),
+    };
+    let text = line.text().replace('\t', TAB);
+    vec![
+        themed(
+            format!(
+                "{} {} ",
+                number(line.old_number()),
+                number(line.new_number())
+            ),
+            theme::text_dimmed(),
+        ),
+        Span::styled(format!("{}{text}", line.marker()), style),
+    ]
+}

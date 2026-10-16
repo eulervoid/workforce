@@ -623,11 +623,11 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(press(&mut app, KeyCode::Char('v')), None);
     insta::assert_snapshot!(screen(&mut app, 60, 8));
-    assert_eq!(
-        press(&mut app, KeyCode::Char('D')),
-        Some(Effect::ShowDiff { item: archive })
-    );
-    assert!(app.prompt.is_some(), "the verdict is still asked for");
+    assert_eq!(press(&mut app, KeyCode::Char('D')), None);
+    assert!(app.prompt.is_none(), "the diff takes the keys");
+    assert_eq!(app.wanted().detail, Some(Detail::Diff(archive)));
+    // The verdict is asked for again from the diff.
+    press(&mut app, KeyCode::Char('v'));
     assert_eq!(
         press(&mut app, KeyCode::Char('a')),
         Some(Effect::Approve { item: archive })
@@ -1312,13 +1312,18 @@ fn the_list_behind_an_open_detail_takes_no_keys() {
     press(&mut app, KeyCode::Right);
     assert_eq!(app.path().len(), 1);
     assert!(!screen(&mut app, 60, 16).contains("coder › coder"));
-    // So is a session opened from the Now tab.
+    // A session opened from the Now tab goes one further, to the diff of its item, and no
+    // further.
     press(&mut app, KeyCode::Char('1'));
     app.refresh(snapshot());
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Right);
     press(&mut app, KeyCode::Right);
-    assert_eq!(app.path().len(), 1);
+    assert!(matches!(
+        app.path()[..],
+        [Detail::Session(_), Detail::Diff(_)]
+    ));
+    press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Esc);
     assert_eq!(app.path(), Vec::new());
     // The grouping and filters of the items stay as they are under an item, while the keys of
@@ -2012,11 +2017,10 @@ fn a_click_on_an_item_id_an_agent_or_a_session_opens_it_and_esc_comes_back() {
 fn a_click_on_a_commit_shows_the_diff_of_its_item() {
     let mut app = app_with_links();
     let (column, row) = find(&mut app, 60, 24, "a8d49484");
+    assert_eq!(app.click(column, row), None);
     assert_eq!(
-        app.click(column, row),
-        Some(Effect::ShowDiff {
-            item: ItemId::from_bytes([2; 32])
-        })
+        app.wanted().detail,
+        Some(Detail::Diff(ItemId::from_bytes([2; 32])))
     );
 }
 
@@ -2069,10 +2073,9 @@ fn a_click_on_a_key_hint_does_what_its_key_does() {
     assert!(matches!(app.prompt, Some(Prompt::Verdict { item }) if item == archive));
     press(&mut app, KeyCode::Esc);
     let (column, row) = find(&mut app, 60, 24, "D diff");
-    assert_eq!(
-        app.click(column, row),
-        Some(Effect::ShowDiff { item: archive })
-    );
+    assert_eq!(app.click(column, row), None);
+    assert_eq!(app.wanted().detail, Some(Detail::Diff(archive)));
+    press(&mut app, KeyCode::Esc);
     // `j/k` names two keys, and the space between two hints is none.
     let selected = app.now.selection.get().cloned();
     let (column, row) = find(&mut app, 60, 24, "j/k move");
@@ -2795,4 +2798,103 @@ fn the_terminals_background_and_no_text_paint_nothing() {
     for (x, y) in [(x + 35, y), (59, 0)] {
         assert_eq!(buffer[(x, y)], ratatui::buffer::Cell::EMPTY);
     }
+}
+
+/// A diff of two files: one changed in two places, one added.
+const DIFF: &str = "\
+diff --git a/src/lib.rs b/src/lib.rs
+index 1111111..2222222 100644
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -1,3 +1,3 @@ mod config;
+ use std::io;
+-fn parse() {}
++fn parse_lazily() {}
+ fn main() {}
+@@ -20,2 +20,3 @@ fn main() {}
+ // the end
++// really
+ }
+diff --git a/README.md b/README.md
+new file mode 100644
+--- /dev/null
++++ b/README.md
+@@ -0,0 +1,2 @@
++# wf
++\tIndented.
+";
+
+fn work_commit() -> wf_core::session::CommitId {
+    wf_core::session::CommitId::Git("a8d4948400000000000000000000000000000000".parse().unwrap())
+}
+
+/// The app with the diff of the archive item open from its review, read already.
+fn diff_app() -> App {
+    let mut app = app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('D'));
+    assert_eq!(app.wanted().detail, Some(Detail::Diff(archive)));
+    app.diff.as_mut().unwrap().read(Ok(super::diff::ItemWork {
+        commit: work_commit(),
+        files: wf_vcs::diff::parse(DIFF),
+    }));
+    app
+}
+
+#[test]
+fn d_opens_the_diff_of_a_review_with_files_hunks_and_numbered_lines() {
+    let mut app = diff_app();
+    insta::assert_snapshot!(screen(&mut app, 60, 24));
+}
+
+#[test]
+fn the_cursor_moves_over_files_and_lines_and_enter_folds_a_file() {
+    let mut app = diff_app();
+    let cursor_line = |app: &mut App| {
+        screen(app, 60, 24)
+            .lines()
+            .find(|line| line.contains('▎'))
+            .unwrap_or_default()
+            .to_owned()
+    };
+    assert!(cursor_line(&mut app).contains("src/lib.rs"));
+    // The heading of a hunk is passed over.
+    press(&mut app, KeyCode::Char('j'));
+    assert!(cursor_line(&mut app).contains("use std::io;"));
+    press(&mut app, KeyCode::Char(']'));
+    assert!(cursor_line(&mut app).contains("README.md"));
+    press(&mut app, KeyCode::Char('['));
+    assert!(cursor_line(&mut app).contains("src/lib.rs"));
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Enter);
+    let folded = screen(&mut app, 60, 24);
+    assert!(cursor_line(&mut app).contains("src/lib.rs"), "{folded}");
+    assert!(!folded.contains("use std::io;"), "{folded}");
+    press(&mut app, KeyCode::Char('G'));
+    assert!(cursor_line(&mut app).contains("Indented."));
+    // `i` goes to the item, esc back to the diff.
+    press(&mut app, KeyCode::Char('i'));
+    assert!(matches!(app.path().last(), Some(Detail::Item(_))));
+    press(&mut app, KeyCode::Esc);
+    assert!(matches!(app.path().last(), Some(Detail::Diff(_))));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('p')),
+        Some(Effect::PageDiff {
+            item: ItemId::from_bytes([3; 32])
+        })
+    );
+}
+
+#[test]
+fn the_wheel_scrolls_the_diff_and_takes_the_cursor_along() {
+    let mut app = diff_app();
+    screen(&mut app, 60, 12);
+    app.wheel(30, Wheel::Down);
+    app.wheel(30, Wheel::Down);
+    let shown = screen(&mut app, 60, 12);
+    assert!(!shown.contains("src/lib.rs"), "{shown}");
+    let cursor = shown.lines().find(|line| line.contains('▎'));
+    assert!(cursor.is_some(), "the cursor is on screen: {shown}");
 }

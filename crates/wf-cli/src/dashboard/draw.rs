@@ -15,6 +15,7 @@ use super::app::{
     AgentRow, App, Choice, Clickable, ClickableList, Drawn, Hovered, ListTop, Opened, Prompt,
     Request, Row, STRIP, Scroll, Spot, Starter, Status, Tab, Target,
 };
+use super::draw_diff;
 use super::links;
 use super::snapshot::{
     AgentInfo, InView, ItemRef, MovedBack, Place, SessionInfo, SessionStatus, Waiting,
@@ -28,12 +29,15 @@ use crate::transcript::{self, Format, Now, Transcript, Usage};
 use wf_core::stats::ProjectStats;
 
 /// `text` in a style of the theme.
-fn themed<'a>(text: impl Into<std::borrow::Cow<'a, str>>, style: anstyle::Style) -> Span<'a> {
+pub(super) fn themed<'a>(
+    text: impl Into<std::borrow::Cow<'a, str>>,
+    style: anstyle::Style,
+) -> Span<'a> {
     Span::styled(text, Style::from(style))
 }
 
 /// A style of the theme on top of what is styled already, as `Stylize` puts its own.
-trait Themed: Styled<Item = Self> + Sized {
+pub(super) trait Themed: Styled<Item = Self> + Sized {
     fn themed(self, style: anstyle::Style) -> Self {
         let style = self.style().patch(Style::from(style));
         self.set_style(style)
@@ -75,7 +79,7 @@ pub(super) fn ansi_text(text: &str) -> Text<'static> {
 
 /// The place on screen the keys go to, which the accent marks.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum KeysAt {
+pub(super) enum KeysAt {
     /// The list of the tab: its selection. The log has none, so nothing marks it.
     List,
     /// A detail: the last part of its breadcrumb.
@@ -110,7 +114,7 @@ impl KeysAt {
 
 /// The accent of `place`: full while it has the keys and the terminal pane is focused, dimmed
 /// otherwise.
-fn accent(app: &App, place: KeysAt) -> Color {
+pub(super) fn accent(app: &App, place: KeysAt) -> Color {
     if app.terminal_focused && KeysAt::of(app) == place {
         theme::accent().into()
     } else {
@@ -120,7 +124,7 @@ fn accent(app: &App, place: KeysAt) -> Color {
 
 /// The bar left of a selection in `accent`, on the background of the selection: white while the
 /// accent is full, in the dimmed accent itself otherwise, so only the dimmed background shows.
-fn selection_bar(accent: Color) -> Span<'static> {
+pub(super) fn selection_bar(accent: Color) -> Span<'static> {
     let style = if accent == Color::from(theme::accent()) {
         Style::from(theme::on_accent())
     } else {
@@ -389,10 +393,12 @@ const KEYS: &[(&str, &str)] = &[
     ("", "a click on allow asks for a second"),
     ("r R", "answer a blocker here, in $EDITOR"),
     ("ctrl+g", "carry a comment or answer to $EDITOR"),
-    ("v D", "review, show the diff"),
+    ("v D", "review, open the diff"),
+    ("] [ enter", "diff: next, previous file, fold one"),
+    ("p", "diff: in git's pager, as `wf item diff`"),
     ("s x", "start a session, stop one"),
     ("m c e", "move, comment on, edit an item"),
-    ("i f", "a session's item, full transcript"),
+    ("i f l", "item, full transcript, diff"),
     ("o / F", "items: grouping, filter, readiness"),
     ("q", "quit"),
     ("tmux", "focus-events on: dims when unfocused"),
@@ -652,17 +658,16 @@ fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
         Tab::Items => draw_split(frame, app, area, items_lines),
         Tab::Log => {
             let mut spots = Vec::new();
-            let text = match app.in_view() {
+            let shown = match app.in_view() {
                 Some(opened) => draw_detail(frame, app, opened, area, &mut spots),
-                None => draw_log(frame, app, area, &mut spots),
+                None => draw_log(frame, app, area, &mut spots).map(Shown::Text),
             };
             Drawn {
-                text,
                 clickable: Clickable {
                     spots,
                     ..Clickable::default()
                 },
-                ..Drawn::default()
+                ..shown_detail(shown)
             }
         }
         Tab::Agents => draw_split(frame, app, area, agents_lines),
@@ -683,13 +688,13 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
         let mut drawn = match in_view {
             Some(opened) => {
                 let mut spots = Vec::new();
+                let shown = draw_detail(frame, app, opened, area, &mut spots);
                 Drawn {
-                    text: draw_detail(frame, app, opened, area, &mut spots),
                     clickable: Clickable {
                         spots,
                         ..Clickable::default()
                     },
-                    ..Drawn::default()
+                    ..shown_detail(shown)
                 }
             }
             None => {
@@ -720,8 +725,8 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
     let (list_top, list) = draw_list(frame, app, list_lines, list, &mut spots);
     let rule_text: Vec<Line> = (0..rule.height).map(|_| Line::from("│")).collect();
     frame.render_widget(Paragraph::new(rule_text).themed(theme::divider()), rule);
+    let shown = in_view.and_then(|opened| draw_detail(frame, app, opened, detail, &mut spots));
     Drawn {
-        text: in_view.and_then(|opened| draw_detail(frame, app, opened, detail, &mut spots)),
         list_top: Some(list_top),
         clickable: Clickable {
             list: Some(list),
@@ -729,7 +734,7 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
             spots,
             ..Clickable::default()
         },
-        ..Drawn::default()
+        ..shown_detail(shown)
     }
 }
 
@@ -915,7 +920,13 @@ fn draw_indicator(frame: &mut Frame, row: Rect, text: &str, base: Style) -> Rect
 /// Draws where a scrolled text `area` high is, at the right end of its last row, as neovim's
 /// ruler shows it: `Top`, `Bot`, or how far down as a percentage. Nothing when all of the text
 /// is on screen, as for a list that fits.
-fn draw_position(frame: &mut Frame, area: Rect, top: usize, last_top: usize, base: Style) {
+pub(super) fn draw_position(
+    frame: &mut Frame,
+    area: Rect,
+    top: usize,
+    last_top: usize,
+    base: Style,
+) {
     if last_top == 0 || area.height == 0 {
         return;
     }
@@ -924,7 +935,7 @@ fn draw_position(frame: &mut Frame, area: Rect, top: usize, last_top: usize, bas
 }
 
 /// `area` without its last column, which keeps text off the right edge and out of the corner.
-fn padded(area: Rect) -> Rect {
+pub(super) fn padded(area: Rect) -> Rect {
     Rect {
         width: area.width.saturating_sub(1),
         ..area
@@ -1513,7 +1524,30 @@ fn items_lines(app: &App, width: u16) -> ListText {
     list
 }
 
-/// Draws a detail under its breadcrumb; returns the scroll it was drawn at, and adds its links to
+/// Where a detail was drawn.
+enum Shown {
+    /// A text, at this scroll.
+    Text(Scroll),
+    /// A diff, from this row, with the cursor on that one.
+    Diff { top: usize, cursor: usize },
+}
+
+/// What drawing showed of a detail, for the rest of what was drawn to go with.
+fn shown_detail(shown: Option<Shown>) -> Drawn {
+    match shown {
+        Some(Shown::Text(scroll)) => Drawn {
+            text: Some(scroll),
+            ..Drawn::default()
+        },
+        Some(Shown::Diff { top, cursor }) => Drawn {
+            diff: Some((top, cursor)),
+            ..Drawn::default()
+        },
+        None => Drawn::default(),
+    }
+}
+
+/// Draws a detail under its breadcrumb; returns where it was drawn, and adds its links to
 /// `spots`.
 fn draw_detail(
     frame: &mut Frame,
@@ -1521,7 +1555,7 @@ fn draw_detail(
     opened: Opened,
     area: Rect,
     spots: &mut Vec<Spot>,
-) -> Option<Scroll> {
+) -> Option<Shown> {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     // The same margin as the lists.
     let body = Rect {
@@ -1578,6 +1612,12 @@ fn draw_detail(
             let scroll = draw_session(frame, app, session, opened.scroll, body, spots);
             (scroll, Some(session.item.id))
         }
+        // Code is no text with links in it.
+        Detail::Diff(id) => {
+            let pane = app.diff.as_ref().filter(|pane| pane.item == *id)?;
+            let (top, cursor) = draw_diff::draw_diff(frame, app, pane, body);
+            return Some(Shown::Diff { top, cursor });
+        }
     };
     spots.extend(links::find(
         frame.buffer_mut(),
@@ -1586,7 +1626,7 @@ fn draw_detail(
         Some(&opened.detail),
         &app.snapshot.links,
     ));
-    Some(scroll)
+    Some(Shown::Text(scroll))
 }
 
 /// Draws a session's transcript, with its permission request under it; returns the scroll it was
@@ -1692,6 +1732,21 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
             }
             Detail::Agent(agent) => crumbs.push((vec![Span::raw(agent.name.to_string())], depth)),
             Detail::Flag(flag) => crumbs.push((vec![Span::raw(flag.heading())], depth)),
+            Detail::Diff(item) => {
+                // A diff is of an item: named, unless the way here went through it.
+                let name = format!("#{}", item.short());
+                let through_item = path[..index].iter().any(|before| match before {
+                    Detail::Item(before) | Detail::Diff(before) => before == item,
+                    Detail::Session(session) => app
+                        .session_info(*session)
+                        .is_some_and(|session| session.item.id == *item),
+                    Detail::Agent(_) | Detail::Flag(_) => false,
+                });
+                if !through_item {
+                    crumbs.push((vec![Span::raw(name)], None));
+                }
+                crumbs.push((vec![Span::raw("diff")], depth));
+            }
             Detail::Session(id) => {
                 let Some(session) = app.session_info(*id) else {
                     crumbs.push((vec![Span::raw(id.short())], depth));
@@ -1976,7 +2031,15 @@ fn hints(app: &App) -> Vec<&'static str> {
     // A detail kept while the list has the keys takes none.
     let opened = app.stack().last().filter(|_| !app.list_has_keys());
     let navigation: &[&str] = match (app.tab, opened.map(|opened| &opened.detail)) {
-        (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full"],
+        (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full", "l diff"],
+        (_, Some(Detail::Diff(_))) => &[
+            "esc back",
+            "j/k move",
+            "]/[ file",
+            "enter fold",
+            "i item",
+            "p pager",
+        ],
         (_, Some(Detail::Item(_))) if item_session => &["esc back", "j/k scroll", "enter session"],
         (_, Some(Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_))) => {
             &["esc back", "j/k scroll"]
@@ -1991,7 +2054,7 @@ fn hints(app: &App) -> Vec<&'static str> {
     let followed = match (app.tab, opened) {
         (_, Some(opened)) => match opened.detail {
             Detail::Session(_) => Some(opened.scroll),
-            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) => None,
+            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) | Detail::Diff(_) => None,
         },
         (Tab::Log, None) => Some(app.log.scroll),
         (Tab::Now | Tab::Items | Tab::Agents, None) => None,
