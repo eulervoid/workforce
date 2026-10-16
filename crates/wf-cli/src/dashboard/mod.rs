@@ -338,12 +338,12 @@ impl Feed {
                 Some(git) => git,
                 None => self.git.insert(commands::repository()?),
             };
-            let commit = commands::work_commit(workspace, git, item)?;
+            let work = commands::item_work(workspace, git, item)?;
+            let commit = work.shown();
             if pane.commit() == Some(commit) {
                 return Ok(None);
             }
-            let target = commands::target(workspace);
-            let files = wf_vcs::VcsAdapter::file_diffs(git, &target, commit)?;
+            let files = wf_vcs::VcsAdapter::file_diffs(git, &work)?;
             Ok(Some(ItemWork { commit, files }))
         };
         match read() {

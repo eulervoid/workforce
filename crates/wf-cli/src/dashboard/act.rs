@@ -17,7 +17,7 @@ use wf_harness::Permission;
 
 use super::app::{Choice, Effect, Starter, Written};
 use super::diff::LineComment;
-use crate::commands::{edit_in_editor, repository, target, work_commit};
+use crate::commands::{edit_in_editor, item_work, repository};
 use crate::draft::Draft;
 use crate::workspace::{self, Workspace};
 
@@ -289,10 +289,9 @@ fn done(
 
         Effect::PageDiff { item } => {
             let git = repository()?;
-            let commit = work_commit(workspace, &git, item)?;
-            let target = target(workspace);
+            let work = item_work(workspace, &git, item)?;
             suspended(terminal, || -> anyhow::Result<()> {
-                wf_vcs::VcsAdapter::show_diff(&git, &target, commit, &[])?;
+                wf_vcs::VcsAdapter::show_diff(&git, &work, &[])?;
                 // A short diff is printed without a pager: give it time to be read.
                 print!("\npress any key to go back to the dashboard");
                 std::io::stdout().flush()?;
