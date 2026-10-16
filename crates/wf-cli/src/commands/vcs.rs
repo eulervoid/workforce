@@ -16,8 +16,12 @@ struct DiffView {
     commit: String,
     /// The merge that brought the work into the target, whose diff it is once there is one.
     merge: Option<String>,
-    diff: String,
+    /// What the work changes; `None` while the branch has no commits ahead of the target, empty
+    /// when its commits change nothing.
+    diff: Option<String>,
 }
+
+const NO_COMMITS: &str = "the agent has not made any commits";
 
 /// The repository of the workforce here: the directory of its `.workforce.toml`.
 pub(crate) fn repository() -> anyhow::Result<wf_vcs::GitCli> {
@@ -80,9 +84,12 @@ pub(super) fn diff(
 ) -> anyhow::Result<()> {
     let git = repository()?;
     let work = item_work(workspace, &git, id)?;
+    let has_commits = wf_vcs::VcsAdapter::has_commits(&git, &work)?;
     match mode {
-        Mode::Interactive => Ok(wf_vcs::VcsAdapter::show_diff(&git, &work, git_args)?),
-        Mode::Scripted => {
+        Mode::Interactive if has_commits => {
+            Ok(wf_vcs::VcsAdapter::show_diff(&git, &work, git_args)?)
+        }
+        Mode::Interactive | Mode::Scripted => {
             let view = DiffView {
                 item: id.to_base32(),
                 commit: work.commit().to_string(),
@@ -90,9 +97,16 @@ pub(super) fn diff(
                     wf_vcs::Work::Unmerged { .. } => None,
                     wf_vcs::Work::Merged { merge, .. } => Some(merge.to_string()),
                 },
-                diff: wf_vcs::VcsAdapter::diff(&git, &work, git_args)?,
+                diff: if has_commits {
+                    Some(wf_vcs::VcsAdapter::diff(&git, &work, git_args)?)
+                } else {
+                    None
+                },
             };
-            emit(json, &view, |view| view.diff.clone())
+            emit(json, &view, |view| match &view.diff {
+                Some(diff) => diff.clone(),
+                None => format!("{NO_COMMITS}\n"),
+            })
         }
     }
 }
