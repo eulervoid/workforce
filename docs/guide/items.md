@@ -93,11 +93,22 @@ wf item list --ready             # what can be worked on now
 wf item list --ready --for ada   # what agent ada would be given on this machine
 wf item list --blocked           # waiting on dependencies; --stranded: a dependency was cancelled
 wf item list --state draft,open --label parser --group-by priority
+wf item list --state done --sort merged   # what went into the target last, at the bottom
 wf item show k3f7                # the item, its comments, links, review and history
 wf mentions @ada/grace           # where someone is mentioned
 ```
 
 `--group-by` takes `state`, `readiness`, `label`, `type`, `lane` or `priority`.
+
+`--sort` orders the items within each group, and `--json` lists them in that order:
+
+- `priority`, the default: `P0` first and items without a priority last, then by creation
+- `created`: the oldest first
+- `merged`: in the order their work went into the target, by the latest merge; items not merged
+  come after them, by priority
+
+Archived items, with `--archived`, come after the live ones in every order, by when they were
+archived.
 
 ## Comments
 

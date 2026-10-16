@@ -40,7 +40,7 @@ Piped, plain `wf` prints the help instead; `wf log --follow` prints the event st
 | Tab | What it shows |
 |---|---|
 | `1 Now` | **Waiting on you**: permission requests (`?`), blockers (`⧗`), reviews (`◎`), and other entries of `wf inbox` (`•`). **Working**: live sessions (`◆`) and parked ones (`◇`), each with what it is doing right now and how much of its context it has used. **Needs attention**: the flags of `wf status`, such as stranded items. The tab label counts what waits on you |
-| `2 Items` | the live items, grouped by state (drafts first), lane, priority or type, with their steps and priority |
+| `2 Items` | the live items, grouped by state (drafts first), lane, priority or type, sorted by priority, creation or merge as `wf item list --sort` does, with their steps and priority |
 | `3 Agents` | this week's numbers, and each agent with its load and its live and latest sessions |
 | `4 Log` | the event stream, as `wf log --follow` prints it |
 
@@ -81,7 +81,7 @@ session that is open.
 | `e` | edit the item in `$EDITOR` |
 | `i` | on a session or a diff: open its item |
 | `f` | on a session: the full transcript, without the abridged tool output |
-| `o` / `F` / `/` | on the Items tab: grouping, readiness filter (ready, blocked, stranded), filter by title or the start of an id (`#` optional) |
+| `o` / `O` / `F` / `/` | on the Items tab: grouping, order, readiness filter (ready, blocked, stranded), filter by title or the start of an id (`#` optional) |
 | `/` | on the Log tab: filter the events |
 | `ctrl+g` | carry what you are typing in the footer to `$EDITOR` |
 | `q`, `ctrl+c` | quit |
