@@ -80,7 +80,7 @@ session that is open.
 | `e` | edit the item in `$EDITOR` |
 | `i` | on a session or a diff: open its item |
 | `f` | on a session: the full transcript, without the abridged tool output |
-| `o` / `F` / `/` | on the Items tab: grouping, readiness filter (ready, blocked, stranded), title filter |
+| `o` / `F` / `/` | on the Items tab: grouping, readiness filter (ready, blocked, stranded), filter by title or the start of an id (`#` optional) |
 | `/` | on the Log tab: filter the events |
 | `ctrl+g` | carry what you are typing in the footer to `$EDITOR` |
 | `q`, `ctrl+c` | quit |

@@ -12,7 +12,7 @@ use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
 use wf_core::event::{CommentKind, LineAnchor};
 use wf_core::graph::Readiness;
-use wf_core::id::{CommentId, ItemId, SessionId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::item::ItemState;
 use wf_core::name::AgentName;
@@ -1068,9 +1068,11 @@ impl App {
     }
 
     /// The groups of the Items tab with the items that pass its filters; empty groups are left
-    /// out.
+    /// out. The text filter passes an item whose title contains it or whose id starts with it,
+    /// as `wf item` commands resolve an id, with or without a leading `#`.
     pub fn item_groups(&self) -> Vec<(&str, Vec<&ItemRow>)> {
         let filter = self.items.filter.to_lowercase();
+        let id_prefix = filter.strip_prefix('#').unwrap_or(&filter);
         self.snapshot
             .items
             .iter()
@@ -1079,7 +1081,10 @@ impl App {
                     .items
                     .iter()
                     .filter(|item| self.items.readiness.accepts(item.readiness))
-                    .filter(|item| item.title.to_lowercase().contains(&filter))
+                    .filter(|item| {
+                        item.title.to_lowercase().contains(&filter)
+                            || item.id.to_base32().starts_with(id_prefix)
+                    })
                     .collect();
                 (group.name.as_str(), items)
             })

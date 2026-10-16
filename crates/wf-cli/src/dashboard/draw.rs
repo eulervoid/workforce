@@ -404,7 +404,7 @@ const KEYS: &[(&str, &str)] = &[
     ("s x", "start a session, stop one"),
     ("m c e", "move, comment on, edit an item"),
     ("i f l", "item, full transcript, diff"),
-    ("o / F", "items: grouping, filter, readiness"),
+    ("o / F", "items: grouping, title or id, readiness"),
     ("q", "quit"),
     ("tmux", "focus-events on: dims when unfocused"),
 ];
