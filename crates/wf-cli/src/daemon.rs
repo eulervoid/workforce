@@ -56,7 +56,7 @@ fn status(data: &DataDir) -> DaemonStatus {
 fn render_status(status: &DaemonStatus) -> String {
     match (status.running, status.pid) {
         (true, Some(pid)) => format!(
-            "the daemon runs (pid {pid}); it logs to {}\n",
+            "the daemon runs (pid {pid}); it logs to {}, shown by `wf daemon log`\n",
             status.log.display()
         ),
         (true, None) => format!(
@@ -113,14 +113,14 @@ fn start(json: bool, args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
     while !answers(&data.daemon_socket()) {
         if let Some(exit) = child.try_wait()? {
             bail!(
-                "the daemon stopped as it started ({exit}); the end of {}:\n{}",
+                "the daemon stopped as it started ({exit}); the end of {} (all of it in `wf daemon log`):\n{}",
                 log_path.display(),
                 tail(&log_path, 20)
             );
         }
         if Instant::now() > deadline {
             bail!(
-                "the daemon did not answer within {}s; see {}",
+                "the daemon did not answer within {}s; see {} or `wf daemon log`",
                 START_WAIT.as_secs(),
                 log_path.display()
             );

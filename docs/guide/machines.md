@@ -71,11 +71,12 @@ wf members                       # members with their roles and machines
 ```sh
 wf daemon start                  # in the background
 wf daemon status                 # whether it runs, and where it logs
+wf daemon log                    # its log, in a pager
 wf daemon stop                   # stops it and its sessions
 wf daemon run                    # in this terminal, until interrupted
 ```
 
-The daemon logs to `~/.local/share/workforce/daemon.log`; `WF_LOG` takes a `tracing` filter, such as
+The daemon logs to `~/.local/share/workforce/daemon.log`, which `wf daemon log` shows; `WF_LOG` takes a `tracing` filter, such as
 `WF_LOG=debug`. To run it as a service, have a systemd user unit or a launchd agent run `wf daemon
 run`, which stays in the foreground and stops on SIGTERM.
 
