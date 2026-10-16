@@ -746,6 +746,27 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
 }
 
 #[test]
+fn the_items_filter_matches_the_start_of_an_id_with_or_without_a_hash() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    app.refresh(with_items());
+    for filter in ["aeaqca", "#AEAQ"] {
+        press(&mut app, KeyCode::Char('/'));
+        for character in filter.chars() {
+            press(&mut app, KeyCode::Char(character));
+        }
+        press(&mut app, KeyCode::Enter);
+        let titles: Vec<&str> = app
+            .item_groups()
+            .into_iter()
+            .flat_map(|(_, items)| items.into_iter().map(|item| item.title.as_str()))
+            .collect();
+        assert_eq!(titles, ["Parse config lazily"], "filtered by {filter}");
+        press(&mut app, KeyCode::Esc);
+    }
+}
+
+#[test]
 fn an_item_row_shows_its_priority_in_the_style_of_wf_item_list() {
     let mut app = app();
     press(&mut app, KeyCode::Char('2'));
