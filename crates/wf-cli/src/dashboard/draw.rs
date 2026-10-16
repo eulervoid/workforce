@@ -4,7 +4,7 @@ use ansi_to_tui::IntoText;
 use ratatui::Frame;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Color, Style, Styled, Stylize};
+use ratatui::style::{Color, Modifier, Style, Styled, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
 use wf_core::graph::Readiness;
@@ -422,22 +422,35 @@ fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Style) {
         })
         .collect();
     let height = (lines.len() as u16 + 2).min(body.height);
+    // The borders, and a space between the longest line and the right one.
+    let width = lines.iter().map(Line::width).max().unwrap_or_default() as u16 + 3;
     let area = Rect {
         x: body.x + 1,
         y: body.y,
-        width: body.width.saturating_sub(2).min(52),
+        width: width.min(body.width.saturating_sub(2)),
         height,
     };
+    // The title is drawn over the border, and without this would take on its dim.
+    let undimmed = Style::new().remove_modifier(Modifier::DIM);
+    let mut title = vec![themed("─", theme::divider())];
+    title.extend(
+        highlight(
+            vec![Span::raw("keys")],
+            Style::from(theme::text_bold()),
+            accent,
+        )
+        .into_iter()
+        .map(|span| {
+            let style = undimmed.patch(span.style);
+            span.style(style)
+        }),
+    );
     clear(frame, area, base);
     frame.render_widget(
         Paragraph::new(lines).block(
             Block::bordered()
                 .border_style(Style::from(theme::divider()))
-                .title(Line::from(highlight(
-                    vec![Span::raw("keys")],
-                    Style::from(theme::text_bold()),
-                    accent,
-                ))),
+                .title(Line::from(title)),
         ),
         area,
     );
