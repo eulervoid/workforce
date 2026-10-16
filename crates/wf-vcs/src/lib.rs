@@ -1,6 +1,7 @@
 //! The version control the work happens in: one branch and worktree per item, and the merge of
 //! reviewed work into the target branch. Git is the only system, called as the `git` CLI.
 
+pub mod diff;
 mod git;
 pub mod signing;
 
@@ -190,6 +191,13 @@ pub trait VcsAdapter {
     /// What `commit` changes relative to where it left `target`: `git diff <target>...<commit>`,
     /// with `args` added, such as `--stat` or `-- src/`.
     fn diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<String, VcsError>;
+
+    /// The same diff as data: the files it changes, their hunks and their lines, whatever the
+    /// git config says about how a diff looks.
+    fn file_diffs(&self, target: &str, commit: CommitId) -> Result<Vec<diff::FileDiff>, VcsError> {
+        let args = diff::ARGS.map(String::from);
+        Ok(diff::parse(&self.diff(target, commit, &args)?))
+    }
 
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
     /// apply as for `git diff`.
