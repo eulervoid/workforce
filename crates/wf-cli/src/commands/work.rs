@@ -88,7 +88,13 @@ impl Sources for Here<'_> {
     fn diff(&self, target: &str, commit: CommitId) -> String {
         self.git
             .as_ref()
-            .and_then(|git| wf_vcs::VcsAdapter::diff(git, target, commit, &[]).ok())
+            .and_then(|git| {
+                let work = wf_vcs::Work::Unmerged {
+                    target: target.to_owned(),
+                    commit,
+                };
+                wf_vcs::VcsAdapter::diff(git, &work, &[]).ok()
+            })
             .unwrap_or_default()
     }
 }

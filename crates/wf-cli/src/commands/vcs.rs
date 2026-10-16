@@ -14,6 +14,8 @@ use crate::workspace::{self, Workspace};
 struct DiffView {
     item: String,
     commit: String,
+    /// The merge that brought the work into the target, whose diff it is once there is one.
+    merge: Option<String>,
     diff: String,
 }
 
@@ -26,37 +28,39 @@ pub(crate) fn repository() -> anyhow::Result<wf_vcs::GitCli> {
     Ok(wf_vcs::GitCli::open(repository)?)
 }
 
-/// The latest commit of the work on an item: the head of its branch, or after the branch is
-/// gone, what was submitted. A merged item says where its work went.
-pub(crate) fn work_commit(
+/// The work on an item: once merged, the merge that brought it into the target; before, the head
+/// of its branch, or after the branch is gone, what was submitted.
+pub(crate) fn item_work(
     workspace: &Workspace,
     git: &wf_vcs::GitCli,
     id: ItemId,
-) -> anyhow::Result<wf_core::session::CommitId> {
+) -> anyhow::Result<wf_vcs::Work> {
+    let submission = workspace.state().submission(id);
+    if let (Some(ReviewStatus::Merged { commit: merge }), Some((Some(commit), _))) =
+        (workspace.state().review_status(id), submission)
+    {
+        return Ok(wf_vcs::Work::Merged { merge, commit });
+    }
+    let unmerged = |commit| wf_vcs::Work::Unmerged {
+        target: target(workspace),
+        commit,
+    };
     match wf_vcs::VcsAdapter::branch_head(git, &wf_vcs::item_branch(id)) {
-        Ok(commit) => return Ok(commit),
+        Ok(commit) => return Ok(unmerged(commit)),
         Err(wf_vcs::VcsError::NoBranch(_)) => {}
         Err(error) => return Err(error.into()),
     }
-    match (
-        workspace.state().review_status(id),
-        workspace.state().submission(id),
-    ) {
-        (Some(wf_core::review::ReviewStatus::Merged { commit }), _) => bail!(
-            "the work of #{} was merged as {}",
-            id.short(),
-            &commit.to_string()[..8]
-        ),
-        (_, Some((Some(commit), _))) => Ok(commit),
-        (_, Some((None, _))) => bail!(
+    match submission {
+        Some((Some(commit), _)) => Ok(unmerged(commit)),
+        Some((None, _)) => bail!(
             "#{} was submitted without commits, there is no work to show",
             id.short()
         ),
-        (_, None) => bail!("#{} has no work yet", id.short()),
+        None => bail!("#{} has no work yet", id.short()),
     }
 }
 
-pub(crate) fn target(workspace: &Workspace) -> String {
+fn target(workspace: &Workspace) -> String {
     workspace
         .state()
         .policy()
@@ -75,17 +79,18 @@ pub(super) fn diff(
     git_args: &[String],
 ) -> anyhow::Result<()> {
     let git = repository()?;
-    let commit = work_commit(workspace, &git, id)?;
-    let target = target(workspace);
+    let work = item_work(workspace, &git, id)?;
     match mode {
-        Mode::Interactive => Ok(wf_vcs::VcsAdapter::show_diff(
-            &git, &target, commit, git_args,
-        )?),
+        Mode::Interactive => Ok(wf_vcs::VcsAdapter::show_diff(&git, &work, git_args)?),
         Mode::Scripted => {
             let view = DiffView {
                 item: id.to_base32(),
-                commit: commit.to_string(),
-                diff: wf_vcs::VcsAdapter::diff(&git, &target, commit, git_args)?,
+                commit: work.commit().to_string(),
+                merge: match &work {
+                    wf_vcs::Work::Unmerged { .. } => None,
+                    wf_vcs::Work::Merged { merge, .. } => Some(merge.to_string()),
+                },
+                diff: wf_vcs::VcsAdapter::diff(&git, &work, git_args)?,
             };
             emit(json, &view, |view| view.diff.clone())
         }
@@ -117,7 +122,7 @@ pub(super) fn checkout(
         });
     }
     let id = choose_item(workspace, mode, item, Scope::Live)?;
-    let commit = work_commit(workspace, &git, id)?;
+    let commit = item_work(workspace, &git, id)?.commit();
     wf_vcs::VcsAdapter::checkout_detached(&git, commit)?;
     let view = CheckoutView {
         item: Some(id.to_base32()),

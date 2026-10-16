@@ -13,7 +13,7 @@ mod work;
 
 pub(crate) use item::{Scope, choose_item, sorted_views};
 pub(crate) use review::review;
-pub(crate) use vcs::{repository, target, work_commit};
+pub(crate) use vcs::{item_work, repository};
 
 use std::path::Path;
 

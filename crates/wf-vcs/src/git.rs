@@ -5,9 +5,19 @@ use std::process::{Command, Output};
 
 use wf_core::session::{CommitId, GitOid};
 
-use crate::{CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Rebase, VcsAdapter, VcsError};
+use crate::{
+    CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Rebase, VcsAdapter, VcsError, Work,
+};
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
+
+/// The revisions `git diff` compares to show `work`.
+fn diff_revisions(work: &Work) -> Vec<String> {
+    match work {
+        Work::Unmerged { target, commit } => vec![format!("refs/heads/{target}...{commit}")],
+        Work::Merged { merge, .. } => vec![format!("{merge}^1"), merge.to_string()],
+    }
+}
 
 /// A git repository, driven through the `git` command.
 #[derive(Clone, Debug)]
@@ -491,30 +501,31 @@ impl VcsAdapter for GitCli {
             })
     }
 
-    fn diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<String, VcsError> {
-        let range = format!("refs/heads/{target}...{commit}");
+    fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError> {
+        let revisions = diff_revisions(work);
         let finished = Self::run_in(
             &self.repository,
-            ["diff", range.as_str()]
+            ["diff"]
                 .into_iter()
+                .chain(revisions.iter().map(String::as_str))
                 .chain(args.iter().map(String::as_str)),
         )?;
         if finished.success {
             Ok(finished.stdout)
         } else {
             Err(VcsError::Git {
-                command: format!("diff {range} {}", args.join(" ")),
+                command: format!("diff {} {}", revisions.join(" "), args.join(" ")),
                 stderr: finished.stderr.trim().to_string(),
             })
         }
     }
 
-    fn show_diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<(), VcsError> {
-        let range = format!("refs/heads/{target}...{commit}");
+    fn show_diff(&self, work: &Work, args: &[String]) -> Result<(), VcsError> {
+        let revisions = diff_revisions(work);
         // The user's environment stays as it is, so the pager, colors and locale are theirs.
         let status = git()
             .arg("diff")
-            .arg(&range)
+            .args(&revisions)
             .args(args)
             .current_dir(&self.repository)
             .env_remove("GIT_DIR")
@@ -526,7 +537,7 @@ impl VcsAdapter for GitCli {
             Ok(())
         } else {
             Err(VcsError::Git {
-                command: format!("diff {range} {}", args.join(" ")),
+                command: format!("diff {} {}", revisions.join(" "), args.join(" ")),
                 stderr: format!("exited with {status}"),
             })
         }
@@ -842,6 +853,14 @@ mod tests {
         }
     }
 
+    /// The work on `commit` before it is merged into `main`.
+    fn unmerged(commit: CommitId) -> Work {
+        Work::Unmerged {
+            target: "main".into(),
+            commit,
+        }
+    }
+
     fn git_in(directory: &Path, args: &[&str]) -> String {
         let output = Command::new("git")
             .args(args)
@@ -1091,11 +1110,40 @@ mod tests {
         let main = repo.directory();
         repo.write(&main, "other.txt", "elsewhere\n");
         repo.commit(&main, "unrelated");
-        let diff = repo.git.diff("main", commit, &[]).unwrap();
+        let work = unmerged(commit);
+        let diff = repo.git.diff(&work, &[]).unwrap();
         assert!(diff.contains("+four"), "{diff}");
         assert!(!diff.contains("elsewhere"), "{diff}");
-        let stat = repo.git.diff("main", commit, &["--stat".into()]).unwrap();
+        let stat = repo.git.diff(&work, &["--stat".into()]).unwrap();
         assert!(stat.contains("file.txt | 1 +"), "{stat}");
+    }
+
+    #[test]
+    fn the_diff_of_merged_work_is_what_the_merge_brought_in_after_the_target_moved_on() {
+        let repo = TestRepo::new();
+        let commit = repo.work("wf/k3f9", "file.txt", "one\ntwo\nthree\nfour\n");
+        let main = repo.directory();
+        repo.write(&main, "before.txt", "already there\n");
+        repo.commit(&main, "before the merge");
+        let MergeOutcome::Merged { commit: merge } = repo
+            .git
+            .merge("main", commit, "Merge #k3f9", &CommitSigning::AsConfigured)
+            .unwrap()
+        else {
+            panic!("expected a merge");
+        };
+        repo.write(&main, "after.txt", "later\n");
+        repo.commit(&main, "after the merge");
+        assert_eq!(repo.git.diff(&unmerged(commit), &[]).unwrap(), "");
+
+        let work = Work::Merged { merge, commit };
+        let diff = repo.git.diff(&work, &[]).unwrap();
+        assert!(diff.contains("+four"), "{diff}");
+        assert!(!diff.contains("already there"), "{diff}");
+        assert!(!diff.contains("later"), "{diff}");
+        let files = repo.git.file_diffs(&work).unwrap();
+        assert_eq!(files.len(), 1, "{files:?}");
+        assert_eq!(files[0].path, "file.txt");
     }
 
     #[test]
@@ -1110,7 +1158,7 @@ mod tests {
             git_in(&main, &["config", key, value]);
         }
         let commit = repo.work("wf/k3f9", "file.txt", "one\n2\nthree\nfour\n");
-        let files = repo.git.file_diffs("main", commit).unwrap();
+        let files = repo.git.file_diffs(&unmerged(commit)).unwrap();
         assert_eq!(files.len(), 1, "{files:?}");
         assert_eq!(files[0].path, "file.txt");
         assert_eq!(files[0].counts(), (2, 1));

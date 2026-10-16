@@ -16,7 +16,8 @@ use super::app::ListTop;
 /// The work of an item as git read it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemWork {
-    /// The commit whose diff it is: the head of the item's branch.
+    /// The commit whose files the diff shows: the head of the item's branch, or once merged,
+    /// the merge.
     pub commit: CommitId,
     pub files: Vec<FileDiff>,
 }

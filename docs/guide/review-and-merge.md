@@ -44,6 +44,10 @@ wf item checkout -               # and back to where it was
 cd $(wf item path k3f7)          # or go to the item's worktree
 ```
 
+`wf item diff` shows what the work changes since it left the target. Once the item is merged, it shows
+what the merge brought into the target, however far the target moved since, and `wf item checkout`
+still checks out the work itself.
+
 Then give a verdict:
 
 ```sh

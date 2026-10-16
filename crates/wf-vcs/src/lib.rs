@@ -98,6 +98,33 @@ pub enum VcsError {
     DirtyCheckout(PathBuf),
 }
 
+/// The work on an item, as far as git can show it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Work {
+    /// Not merged yet: `commit` changes the target from where it left it, `<target>...<commit>`.
+    Unmerged { target: String, commit: CommitId },
+    /// Merged as `merge`, whose first parent is the target: what it brought in is
+    /// `<merge>^1 <merge>`, however far the target moved since. `commit` is the merged work.
+    Merged { merge: CommitId, commit: CommitId },
+}
+
+impl Work {
+    /// The latest commit of the work itself, the one to check out.
+    pub fn commit(&self) -> CommitId {
+        match self {
+            Work::Unmerged { commit, .. } | Work::Merged { commit, .. } => *commit,
+        }
+    }
+
+    /// The commit whose files the diff of the work shows on its new side.
+    pub fn shown(&self) -> CommitId {
+        match self {
+            Work::Unmerged { commit, .. } => *commit,
+            Work::Merged { merge, .. } => *merge,
+        }
+    }
+}
+
 /// What happened when reviewed work was merged into the target branch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeOutcome {
@@ -188,20 +215,20 @@ pub trait VcsAdapter {
     /// How many commits `commit` has that `target` does not.
     fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError>;
 
-    /// What `commit` changes relative to where it left `target`: `git diff <target>...<commit>`,
-    /// with `args` added, such as `--stat` or `-- src/`.
-    fn diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<String, VcsError>;
+    /// What `work` changes, as [`Work`] says, with `args` added to `git diff`, such as `--stat`
+    /// or `-- src/`.
+    fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError>;
 
     /// The same diff as data: the files it changes, their hunks and their lines, whatever the
     /// git config says about how a diff looks.
-    fn file_diffs(&self, target: &str, commit: CommitId) -> Result<Vec<diff::FileDiff>, VcsError> {
+    fn file_diffs(&self, work: &Work) -> Result<Vec<diff::FileDiff>, VcsError> {
         let args = diff::ARGS.map(String::from);
-        Ok(diff::parse(&self.diff(target, commit, &args)?))
+        Ok(diff::parse(&self.diff(work, &args)?))
     }
 
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
     /// apply as for `git diff`.
-    fn show_diff(&self, target: &str, commit: CommitId, args: &[String]) -> Result<(), VcsError>;
+    fn show_diff(&self, work: &Work, args: &[String]) -> Result<(), VcsError>;
 
     /// Checks `commit` out, detached, in the main checkout, which has to be clean.
     fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError>;

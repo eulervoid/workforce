@@ -1996,6 +1996,37 @@ wf work release --note later
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn the_work_of_a_merged_item_is_what_its_merge_brought_in() {
+    let script = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
+    let repository = &world.wf.repository;
+    let merge = git(repository, &["rev-parse", "main"]);
+    std::fs::write(repository.join("later.txt"), "later\n").unwrap();
+    git(repository, &["add", "later.txt"]);
+    git(repository, &["commit", "-q", "-m", "later"]);
+
+    let diff = world.wf.json(&["item", "diff", short(&item)]);
+    assert_eq!(diff["commit"], session["commit"], "{diff}");
+    assert_eq!(diff["merge"], merge.as_str(), "{diff}");
+    let text = diff["diff"].as_str().unwrap();
+    assert!(text.contains("+hi"), "{diff}");
+    assert!(!text.contains("later"), "{diff}");
+
+    let checkout = world.wf.json(&["item", "checkout", short(&item)]);
+    assert_eq!(checkout["commit"], session["commit"]);
+    world.wf.run(&["item", "checkout", "-"]);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn log_follow_prints_events_as_they_arrive() {
     let world =
         World::new("say hello\nwf comment {item} \"halfway there\"\nwf work release --note done\n")
