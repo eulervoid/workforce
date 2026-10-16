@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use wf_vcs::diff::{Content, DiffLine, FileChange, FileDiff};
 
-use super::diff::{self, DiffPane, DiffRow, Shown};
+use super::diff::{self, Changes, DiffPane, DiffRow, Shown};
 use super::draw::{KeysAt, Themed, accent, draw_position, padded, selection_bar, themed};
 use crate::dashboard::app::App;
 use crate::theme;
@@ -21,8 +21,13 @@ pub fn draw_diff(frame: &mut Frame, app: &App, pane: &DiffPane, area: Rect) -> (
     let note = match &pane.work {
         None => Some(" reading the diff…".to_owned()),
         Some(Err(error)) => Some(format!(" {error}")),
-        Some(Ok(work)) if work.files.is_empty() => Some(" the work changes no files".to_owned()),
-        Some(Ok(_)) => None,
+        Some(Ok(work)) => match &work.changes {
+            Changes::NoCommits => Some(" the agent has not made any commits".to_owned()),
+            Changes::Files(files) if files.is_empty() => {
+                Some(" the work changes no files".to_owned())
+            }
+            Changes::Files(_) => None,
+        },
     };
     if let Some(note) = note {
         frame.render_widget(

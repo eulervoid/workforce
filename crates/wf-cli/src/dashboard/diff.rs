@@ -19,7 +19,16 @@ pub struct ItemWork {
     /// The commit whose files the diff shows: the head of the item's branch, or once merged,
     /// the merge.
     pub commit: CommitId,
-    pub files: Vec<FileDiff>,
+    pub changes: Changes,
+}
+
+/// What the work changes against its target.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Changes {
+    /// The branch has no commits ahead of the target yet.
+    NoCommits,
+    /// The files its commits change; none when they change nothing.
+    Files(Vec<FileDiff>),
 }
 
 /// How many columns the text of a comment is wrapped to under the lines it is about, whatever the
@@ -176,8 +185,16 @@ impl DiffPane {
 
     pub fn files(&self) -> &[FileDiff] {
         match &self.work {
-            Some(Ok(work)) => &work.files,
-            Some(Err(_)) | None => &[],
+            Some(Ok(ItemWork {
+                changes: Changes::Files(files),
+                ..
+            })) => files,
+            Some(Ok(ItemWork {
+                changes: Changes::NoCommits,
+                ..
+            }))
+            | Some(Err(_))
+            | None => &[],
         }
     }
 

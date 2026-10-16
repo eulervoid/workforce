@@ -215,6 +215,15 @@ pub trait VcsAdapter {
     /// How many commits `commit` has that `target` does not.
     fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError>;
 
+    /// Whether `work` has commits of its own: merged work has; unmerged work once its commit is
+    /// ahead of the target, which a branch just started is not.
+    fn has_commits(&self, work: &Work) -> Result<bool, VcsError> {
+        match work {
+            Work::Unmerged { target, commit } => Ok(self.commits_ahead(target, *commit)? > 0),
+            Work::Merged { .. } => Ok(true),
+        }
+    }
+
     /// What `work` changes, as [`Work`] says, with `args` added to `git diff`, such as `--stat`
     /// or `-- src/`.
     fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError>;

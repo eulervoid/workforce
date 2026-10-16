@@ -24,7 +24,7 @@ use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
 
 use self::app::{App, Effect, Wheel};
-use self::diff::ItemWork;
+use self::diff::{Changes, ItemWork};
 use self::snapshot::{Detail, InView, Snapshot, Sources};
 use crate::transcript::Format;
 use crate::workspace::{self, Workspace};
@@ -343,8 +343,12 @@ impl Feed {
             if pane.commit() == Some(commit) {
                 return Ok(None);
             }
-            let files = wf_vcs::VcsAdapter::file_diffs(git, &work)?;
-            Ok(Some(ItemWork { commit, files }))
+            let changes = if wf_vcs::VcsAdapter::has_commits(git, &work)? {
+                Changes::Files(wf_vcs::VcsAdapter::file_diffs(git, &work)?)
+            } else {
+                Changes::NoCommits
+            };
+            Ok(Some(ItemWork { commit, changes }))
         };
         match read() {
             Ok(None) => {}
