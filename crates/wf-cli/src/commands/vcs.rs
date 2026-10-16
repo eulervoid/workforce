@@ -86,9 +86,12 @@ pub(super) fn diff(
     let work = item_work(workspace, &git, id)?;
     let has_commits = wf_vcs::VcsAdapter::has_commits(&git, &work)?;
     match mode {
-        Mode::Interactive if has_commits => {
-            Ok(wf_vcs::VcsAdapter::show_diff(&git, &work, git_args)?)
-        }
+        Mode::Interactive if has_commits => Ok(wf_vcs::VcsAdapter::show_diff(
+            &git,
+            &work,
+            git_args,
+            wf_vcs::Pager::AsConfigured,
+        )?),
         Mode::Interactive | Mode::Scripted => {
             let view = DiffView {
                 item: id.to_base32(),

@@ -6,10 +6,20 @@ use std::process::{Command, Output};
 use wf_core::session::{CommitId, GitOid};
 
 use crate::{
-    CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Rebase, VcsAdapter, VcsError, Work,
+    CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Pager, Rebase, VcsAdapter, VcsError,
+    Work,
 };
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
+
+/// `LESS` for a `less` that stays open on a diff shorter than the screen: the principal's `less`
+/// without `F`, which quits at once then, or git's default `FRX` without it when it is not set.
+fn less_staying_open(less: Option<&str>) -> String {
+    match less {
+        Some(less) => less.replace('F', ""),
+        None => "RX".to_owned(),
+    }
+}
 
 /// The revisions `git diff` compares to show `work`.
 fn diff_revisions(work: &Work) -> Vec<String> {
@@ -520,10 +530,18 @@ impl VcsAdapter for GitCli {
         }
     }
 
-    fn show_diff(&self, work: &Work, args: &[String]) -> Result<(), VcsError> {
+    fn show_diff(&self, work: &Work, args: &[String], pager: Pager) -> Result<(), VcsError> {
         let revisions = diff_revisions(work);
-        // The user's environment stays as it is, so the pager, colors and locale are theirs.
-        let status = git()
+        // The principal's environment stays as it is, so the pager, colors and locale are theirs.
+        let mut command = git();
+        match pager {
+            Pager::AsConfigured => {}
+            Pager::StaysOpen => {
+                let less = std::env::var("LESS").ok();
+                command.env("LESS", less_staying_open(less.as_deref()));
+            }
+        }
+        let status = command
             .arg("diff")
             .args(&revisions)
             .args(args)
@@ -807,6 +825,13 @@ mod tests {
     struct TestRepo {
         root: tempfile::TempDir,
         git: GitCli,
+    }
+
+    #[test]
+    fn less_staying_open_drops_quitting_on_one_screen() {
+        assert_eq!(less_staying_open(None), "RX");
+        assert_eq!(less_staying_open(Some("FRSX")), "RSX");
+        assert_eq!(less_staying_open(Some("-R -i")), "-R -i");
     }
 
     /// While other threads run short commands with piped output, which on macOS create pipes

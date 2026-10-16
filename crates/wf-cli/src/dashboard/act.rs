@@ -1,11 +1,8 @@
 //! Carrying out what the keys of the dashboard ask of the workforce: the same events the commands
 //! write, without their output, which would draw over the dashboard.
 
-use std::io::Write;
-
 use anyhow::{anyhow, bail};
 use ratatui::DefaultTerminal;
-use ratatui::crossterm::event::{self, Event as TerminalEvent, KeyEventKind};
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use wf_core::event::{Comment, CommentKind, EventBody, ItemEdited, ItemMoved, Review};
@@ -290,19 +287,9 @@ fn done(
         Effect::PageDiff { item } => {
             let git = repository()?;
             let work = item_work(workspace, &git, item)?;
-            suspended(terminal, || -> anyhow::Result<()> {
-                wf_vcs::VcsAdapter::show_diff(&git, &work, &[])?;
-                // A short diff is printed without a pager: give it time to be read.
-                print!("\npress any key to go back to the dashboard");
-                std::io::stdout().flush()?;
-                enable_raw_mode()?;
-                loop {
-                    if let TerminalEvent::Key(key) = event::read()?
-                        && key.kind == KeyEventKind::Press
-                    {
-                        return Ok(());
-                    }
-                }
+            // The pager stays open on a short diff too, so quitting it goes back to the dashboard.
+            suspended(terminal, || {
+                wf_vcs::VcsAdapter::show_diff(&git, &work, &[], wf_vcs::Pager::StaysOpen)
             })??;
             Ok(String::new())
         }

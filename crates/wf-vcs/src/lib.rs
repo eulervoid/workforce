@@ -125,6 +125,15 @@ impl Work {
     }
 }
 
+/// How the pager of a diff git writes to the terminal behaves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Pager {
+    /// As the principal's git and `LESS` config say, which may quit at once on a short diff.
+    AsConfigured,
+    /// `less` stays open however short the diff is, so it is left only by quitting it.
+    StaysOpen,
+}
+
 /// What happened when reviewed work was merged into the target branch.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeOutcome {
@@ -236,8 +245,8 @@ pub trait VcsAdapter {
     }
 
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
-    /// apply as for `git diff`.
-    fn show_diff(&self, work: &Work, args: &[String]) -> Result<(), VcsError>;
+    /// apply as for `git diff`, except where `pager` says otherwise.
+    fn show_diff(&self, work: &Work, args: &[String], pager: Pager) -> Result<(), VcsError>;
 
     /// Checks `commit` out, detached, in the main checkout, which has to be clean.
     fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError>;
