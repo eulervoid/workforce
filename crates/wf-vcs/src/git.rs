@@ -1121,7 +1121,7 @@ mod tests {
             .lines
             .iter()
             .filter(|line| line.marker() == '+')
-            .map(|line| (line.new(), line.text()))
+            .map(|line| (line.new_number(), line.text()))
             .collect();
         assert_eq!(added, [(Some(2), "2"), (Some(4), "four")]);
     }

@@ -84,7 +84,7 @@ impl DiffLine {
     }
 
     /// Its number before the change; `None` for a line added.
-    pub fn old(&self) -> Option<u32> {
+    pub fn old_number(&self) -> Option<u32> {
         match self {
             DiffLine::Context { old, .. } | DiffLine::Removed { old, .. } => Some(*old),
             DiffLine::Added { .. } => None,
@@ -92,7 +92,7 @@ impl DiffLine {
     }
 
     /// Its number after the change; `None` for a line removed.
-    pub fn new(&self) -> Option<u32> {
+    pub fn new_number(&self) -> Option<u32> {
         match self {
             DiffLine::Context { new, .. } | DiffLine::Added { new, .. } => Some(*new),
             DiffLine::Removed { .. } => None,
@@ -421,7 +421,7 @@ index 1111111..2222222 100644
         let numbers: Vec<_> = hunks[0]
             .lines
             .iter()
-            .map(|line| (line.marker(), line.old(), line.new(), line.text()))
+            .map(|line| (line.marker(), line.old_number(), line.new_number(), line.text()))
             .collect();
         assert_eq!(
             numbers,
@@ -520,6 +520,6 @@ diff --git a/a.txt b/a.txt
         assert_eq!(hunks.len(), 2);
         // The empty line is context, as `diff.suppressBlankEmpty` writes it.
         assert_eq!(hunks[0].lines.len(), 3);
-        assert_eq!(hunks[1].lines[0].old(), Some(9));
+        assert_eq!(hunks[1].lines[0].old_number(), Some(9));
     }
 }
