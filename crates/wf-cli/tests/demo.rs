@@ -118,6 +118,33 @@ fn an_agent_without_a_name_gets_a_free_one() {
 }
 
 #[test]
+fn items_are_listed_by_priority_creation_or_merge() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo"]);
+    wf.add(&["--title", "Later", "--priority", "P3"]);
+    wf.add(&["--title", "Urgent", "--priority", "P0"]);
+    wf.add(&["--title", "Soon", "--priority", "P1", "--draft"]);
+    let sorted = |order: &str| titles(&wf.json(&["item", "list", "--sort", order]));
+    assert_eq!(sorted("priority"), ["Urgent", "Soon", "Later"]);
+    assert_eq!(
+        titles(&wf.json(&["item", "list"])),
+        sorted("priority"),
+        "by priority unless asked"
+    );
+    assert_eq!(sorted("created"), ["Later", "Urgent", "Soon"]);
+    // Nothing is merged, so all come by priority.
+    assert_eq!(sorted("merged"), ["Urgent", "Soon", "Later"]);
+    let by_state = wf.json(&["item", "list", "--group-by", "state", "--sort", "created"]);
+    assert_eq!(titles(&by_state[0]["items"]), ["Soon"]);
+    assert_eq!(titles(&by_state[1]["items"]), ["Later", "Urgent"]);
+    let listed = wf.run(&["item", "list", "--sort", "created"]);
+    assert!(
+        listed.find("Later").unwrap() < listed.find("Urgent").unwrap(),
+        "{listed}"
+    );
+}
+
+#[test]
 fn the_demo_script_works_end_to_end() {
     let wf = Sandbox::new();
 

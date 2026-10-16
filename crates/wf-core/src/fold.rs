@@ -362,6 +362,7 @@ impl State {
                         Merge {
                             reviewed: merged.reviewed,
                             commit: merged.commit,
+                            stamp,
                         },
                     );
                 }

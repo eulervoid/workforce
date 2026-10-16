@@ -756,6 +756,23 @@ pub struct ItemListArgs {
     /// Show the items in groups.
     #[arg(long, value_enum)]
     pub group_by: Option<ItemGrouping>,
+    /// The order of the items, within each group.
+    #[arg(long, value_enum, default_value_t = ItemOrder::Priority)]
+    pub sort: ItemOrder,
+}
+
+/// What `wf item list --sort` orders by. Archived items come after the live ones, by when they
+/// were archived.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, ValueEnum)]
+pub enum ItemOrder {
+    /// By priority, `P0` first and items without one last, then by creation.
+    #[default]
+    Priority,
+    /// By creation, the oldest first.
+    Created,
+    /// In the order their work went into the target, by the latest merge; items not merged
+    /// after them, by priority.
+    Merged,
 }
 
 /// What `wf item list --group-by` groups by.

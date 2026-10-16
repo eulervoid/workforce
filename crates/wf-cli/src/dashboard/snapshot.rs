@@ -16,7 +16,7 @@ use wf_core::stats::{AgentStats, ProjectStats};
 use wf_daemon::proto::HeldPermission;
 
 use super::diff::{LineComment, PostedComment};
-use crate::cli::ItemGrouping;
+use crate::cli::{ItemGrouping, ItemOrder};
 use crate::commands::sorted_views;
 use crate::transcript::Format;
 use crate::view::Flag;
@@ -263,10 +263,17 @@ pub enum InView {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Wanted {
     pub detail: Option<Detail>,
-    /// The items, grouped so.
-    pub items: Option<ItemGrouping>,
+    /// The items, listed so.
+    pub items: Option<ItemListing>,
     /// The agents and the stats.
     pub agents: bool,
+}
+
+/// How the items are listed: `wf item list --group-by --sort`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ItemListing {
+    pub grouping: ItemGrouping,
+    pub order: ItemOrder,
 }
 
 /// What a detail shows.
@@ -348,7 +355,7 @@ impl Snapshot {
             },
             items: wanted
                 .items
-                .map(|grouping| item_groups(state, &graph, grouping))
+                .map(|listing| item_groups(state, &graph, listing))
                 .unwrap_or_default(),
             links: Links::take(state),
         }
@@ -624,13 +631,13 @@ fn agents(
 fn item_groups(
     state: &State,
     graph: &wf_core::graph::DependencyGraph,
-    grouping: ItemGrouping,
+    listing: ItemListing,
 ) -> Vec<ItemGroup> {
-    let entries: Vec<_> = sorted_views(state, false)
+    let entries: Vec<_> = sorted_views(state, false, listing.order)
         .into_iter()
         .map(|view| (view, view::summary(state, graph, view)))
         .collect();
-    view::group_items(grouping, entries)
+    view::group_items(listing.grouping, entries)
         .into_iter()
         .map(|group| ItemGroup {
             name: group.group,
