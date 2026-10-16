@@ -115,6 +115,30 @@ fn work_without_a_level_has_no_status_until_it_is_merged() {
 }
 
 #[test]
+fn the_latest_merge_is_the_one_recorded_last() {
+    let mut scene = Scene::new();
+    let item = scene.apply(create("task", "plain")).id().into();
+    let latest_merge = |state: &State| {
+        let Some(crate::item::ItemView::Live(live)) = state.item(item) else {
+            panic!("the item is live");
+        };
+        live.latest_merge()
+            .map(|merge| (merge.commit, merge.merged_at()))
+    };
+    assert_eq!(latest_merge(&scene.state), None);
+    let first = scene.apply(merged(item, commit(1), commit(9)));
+    assert_eq!(
+        latest_merge(&scene.state),
+        Some((commit(9), first.content.hlc))
+    );
+    let second = scene.apply(merged(item, commit(2), commit(8)));
+    assert_eq!(
+        latest_merge(&scene.state),
+        Some((commit(8), second.content.hlc))
+    );
+}
+
+#[test]
 fn a_level_is_walked_one_approval_at_a_time() {
     let mut scene = Scene::new();
     let item = scene.submitted("critical");

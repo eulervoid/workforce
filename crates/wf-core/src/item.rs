@@ -215,6 +215,14 @@ pub struct Merge {
     pub reviewed: CommitId,
     /// The merge commit on the target branch.
     pub commit: CommitId,
+    pub(crate) stamp: Stamp,
+}
+
+impl Merge {
+    /// When the merge was recorded.
+    pub fn merged_at(&self) -> Hlc {
+        self.stamp.hlc
+    }
 }
 
 /// Where a reference or mention was written.
@@ -362,6 +370,11 @@ impl Item {
 
     pub fn merges(&self) -> &BTreeMap<EventId, Merge> {
         &self.merges
+    }
+
+    /// The latest merge of the item's work into the target branch, if any.
+    pub fn latest_merge(&self) -> Option<&Merge> {
+        self.merges.values().max_by_key(|merge| merge.stamp)
     }
 
     /// The lane the item is routed to: its own, else its type's.
