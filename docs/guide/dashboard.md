@@ -89,6 +89,10 @@ session that is open.
 Answering a blocker posts a comment that resolves it. Requesting changes in a review writes one change
 request per line you write, then the verdict; the item goes back to the agent.
 
+`p` keeps `less` open however short the diff is, so quitting it goes straight back to the
+dashboard: it runs without the `F` of your `LESS`, or with `LESS=RX` when you have not set it. A
+pager other than less has to stay open on its own, or a short diff closes at once.
+
 ### Comments on lines
 
 In the diff, select lines with `v` and `j`/`k` or a drag, then `c` comments on them and `r` requests a
