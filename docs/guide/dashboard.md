@@ -47,8 +47,9 @@ Piped, plain `wf` prints the help instead; `wf log --follow` prints the event st
 Each tab is a list with a detail. From 120 columns the detail sits right of the list and follows the
 selection; narrower, `enter` opens it and `esc` goes back. An item's detail shows its body, steps,
 comments and history; a session's detail is its live transcript; one further right is the diff of the
-item's work against the target, as `wf item diff` computes it: a header for each file with what it adds
-and removes, then its hunks, each line with its numbers before and after.
+item's work, as `wf item diff` computes it, against the target or, once merged, as its merge brought
+it in: a header for each file with what it adds and removes, then its hunks, each line with its
+numbers before and after.
 
 ### Keys
 
