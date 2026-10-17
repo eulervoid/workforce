@@ -1093,7 +1093,7 @@ pub fn agents(agents: &[AgentView]) -> String {
         return "no agents defined\n".to_string();
     }
     let mut table = table(&[
-        "theme::agent()",
+        "AGENT",
         "HARNESS",
         "MODEL",
         "CAPABILITIES",
@@ -1119,7 +1119,7 @@ pub fn devices(devices: &[DeviceView]) -> String {
     let mut table = table(&[
         "DEVICE",
         "NAME",
-        "theme::principal()",
+        "PRINCIPAL",
         "HARDWARE",
         "SESSIONS",
         "LAST_SEEN",
@@ -1213,9 +1213,10 @@ pub fn status(view: &StatusView) -> String {
     );
     let _ = writeln!(
         out,
-        "items: {} ready, {} waiting, {} archived",
-        view.ready_items, view.waiting_on_you, view.archived_items,
+        "items: {} ready, {} archived",
+        view.ready_items, view.archived_items,
     );
+    let _ = writeln!(out, "waiting on you: {}", view.waiting_on_you);
     for line in &view.after_failures {
         let _ = writeln!(out, "waits for you: {line}");
     }
@@ -1244,15 +1245,7 @@ pub fn sessions(sessions: &[SessionView]) -> String {
         return "no sessions\n".to_string();
     }
     let mut table = table(&[
-        "SESSION",
-        "theme::agent()",
-        "MODEL",
-        "ITEM",
-        "TITLE",
-        "STEPS",
-        "ROLE",
-        "STATUS",
-        "STARTED",
+        "SESSION", "AGENT", "MODEL", "ITEM", "TITLE", "STEPS", "ROLE", "STATUS", "STARTED",
     ]);
     for session in sessions {
         table.add_row([
@@ -1330,6 +1323,13 @@ pub fn inbox(entries: &[InboxEntryView]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_device_table_prints_its_real_headers() {
+        let header = devices(&[]);
+        assert!(header.contains("PRINCIPAL"), "{header}");
+        assert!(!header.contains("theme::"), "{header}");
+    }
 
     #[test]
     fn an_item_that_references_this_one_several_times_is_listed_once() {

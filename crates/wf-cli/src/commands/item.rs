@@ -622,6 +622,7 @@ fn edit(
             &Done {
                 message: "nothing changed".into(),
                 event: None,
+                session: None,
                 item: Some(id.to_base32()),
             },
             |done| format!("{}\n", done.message),
@@ -674,6 +675,7 @@ fn check(json: bool, workspace: &mut Workspace, args: ItemCheckArgs) -> anyhow::
                 &Done {
                     message: format!("nothing changed: {} already {verb}", labels.join(", ")),
                     event: None,
+                    session: None,
                     item: Some(id.to_base32()),
                 },
                 |done| format!("{}\n", done.message),

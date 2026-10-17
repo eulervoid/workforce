@@ -117,6 +117,7 @@ fn end(
         &Done {
             message: format!("{verb} #{}", item.short()),
             event: None,
+            session: None,
             item: Some(item.to_base32()),
         },
         |done| format!("{}\n", done.message),

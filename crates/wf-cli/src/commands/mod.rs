@@ -85,6 +85,8 @@ pub struct Done {
     pub message: String,
     /// The event the command wrote; `None` when it wrote none.
     pub event: Option<String>,
+    /// The session the command started; `None` when it started none.
+    pub session: Option<String>,
     pub item: Option<String>,
 }
 
@@ -94,6 +96,7 @@ fn done(json: bool, message: String, event: &Event, item: Option<ItemId>) -> any
         &Done {
             message,
             event: Some(event.id().to_string()),
+            session: None,
             item: item.map(|id| id.to_base32()),
         },
         |done| format!("{}\n", done.message),

@@ -291,7 +291,7 @@ fn sign_commits(world: &World) {
 
 fn start_session(world: &World, item: &str) -> String {
     let started = world.wf(&["session", "start", short(item), "--agent", "coder"]);
-    started["event"].as_str().unwrap().to_string()
+    started["session"].as_str().unwrap().to_string()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -307,7 +307,7 @@ async fn manual_start_uses_the_policy_agent_unless_overridden() {
     std::fs::write(&path, format!("default_agent = \"coder\"\n{policy}")).unwrap();
     world.wf.run(&["policy", "apply", path.to_str().unwrap()]);
     let started = world.wf(&["session", "start", short(&item)]);
-    let session = world.wf(&["session", "show", started["event"].as_str().unwrap()]);
+    let session = world.wf(&["session", "show", started["session"].as_str().unwrap()]);
     assert!(
         session["agent"].as_str().unwrap().contains("coder"),
         "{session}"
@@ -315,7 +315,7 @@ async fn manual_start_uses_the_policy_agent_unless_overridden() {
 
     let other_item = world.wf.add(&["--title", "Override agent"]);
     let started = world.wf(&["session", "start", short(&other_item), "-a", "other"]);
-    let session = world.wf(&["session", "show", started["event"].as_str().unwrap()]);
+    let session = world.wf(&["session", "show", started["session"].as_str().unwrap()]);
     assert!(
         session["agent"].as_str().unwrap().contains("other"),
         "{session}"
