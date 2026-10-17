@@ -156,7 +156,9 @@ impl<S: EventStore> Replica<S> {
     /// Validates an event and persists whatever it changed: itself, events it released from the
     /// pending set, or its own place in the pending set.
     pub fn receive(&mut self, event: Event) -> Result<Received, ReceiveError> {
-        let received = self.state.receive(event.clone(), Trust::Untrusted)?;
+        let received = self
+            .state
+            .receive_at(event.clone(), Trust::Untrusted, now_ms())?;
         self.persist(&event, &received)?;
         Ok(received)
     }
@@ -188,7 +190,11 @@ impl<S: EventStore> Replica<S> {
         let mut released: Vec<EventId> = Vec::new();
         let mut rejected = 0;
         for event in events {
-            match self.state.receive(event.clone(), trust) {
+            let result = match trust {
+                Trust::Untrusted => self.state.receive_at(event.clone(), trust, now_ms()),
+                Trust::Stored => self.state.receive(event.clone(), trust),
+            };
+            match result {
                 Ok(received) => {
                     released.extend(received.applied.iter().map(Event::id));
                     released.extend(received.rejected.iter().map(|(id, _)| *id));
@@ -303,7 +309,13 @@ impl<S: EventStore> Replica<S> {
             builder = builder.depending_on(bound.invite);
         }
         let event = builder.sign(signer, body)?;
-        self.receive(event.clone())?;
+        // The builder's floor may lie beyond this device's clock (stored events, peers admitted
+        // under an earlier clock), so the tolerance of `receive_at` must not judge own events.
+        let received = self
+            .state
+            .receive(event.clone(), Trust::Untrusted)
+            .map_err(ReceiveError::from)?;
+        self.persist(&event, &received).map_err(ReceiveError::from)?;
         Ok(event)
     }
 
@@ -398,4 +410,12 @@ fn load_snapshot<S: EventStore>(store: &S) -> Result<Option<State>, StoreError> 
         Some(last) => store.log_id(last)?.is_some_and(|id| state.contains(&id)),
     };
     Ok(consistent.then_some(state))
+}
+
+fn now_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| {
+            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
+        })
 }

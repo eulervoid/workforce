@@ -1,5 +1,5 @@
 use crate::event::{Event, EventBody, EventBuilder, Genesis, ItemRef};
-use crate::hlc::Hlc;
+use crate::hlc::{HLC_TOLERANCE_MS, Hlc};
 use crate::id::{EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceSigner, PrincipalSigner, Signed};
 use crate::item::ItemState;
@@ -32,7 +32,7 @@ fn tampered_events_are_rejected() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let mut event = fixture.author(&state, 0, 5_000, create("task", "x"));
-    event.content.hlc = Hlc::next_after(event.content.hlc, 9_999);
+    event.content.hlc = Hlc::next_after(event.content.hlc, 9_999).unwrap();
     assert_eq!(receive(&mut state, event), Err(Invalid::BadSignature));
 }
 
@@ -282,7 +282,7 @@ fn a_forked_feed_is_admitted_on_both_branches_and_flagged() {
         content.seq = first.content.seq;
         content.prev = first.content.prev;
         content.deps = first.content.deps.clone();
-        content.hlc = Hlc::next_after(first.content.hlc, 9_000);
+        content.hlc = Hlc::next_after(first.content.hlc, 9_000).unwrap();
     });
     assert_eq!(
         receive(&mut state, branch.clone()),
@@ -312,7 +312,7 @@ fn hlc_must_follow_everything_the_event_depends_on() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let event = forged(&fixture, &state, |content| {
-        content.hlc = Hlc::next_after(Hlc::ZERO, 1)
+        content.hlc = Hlc::next_after(Hlc::ZERO, 1).unwrap()
     });
     assert_eq!(receive(&mut state, event), Err(Invalid::HlcNotAfterParents));
 }
@@ -546,4 +546,117 @@ fn authors_are_checked_against_the_workforce_id() {
     assert_eq!(event.content.seq, 2);
     assert_eq!(event.content.prev, Some(fixture.genesis.id()));
     assert_eq!(event.content.deps, vec![fixture.genesis.id()]);
+}
+
+fn with_hlc(fixture: &Fixture, state: &State, wall_ms: u64, counter: u32) -> Event {
+    forged(fixture, state, |content| {
+        content.hlc = serde_json::from_value(serde_json::json!({
+            "wall_ms": wall_ms,
+            "counter": counter,
+        }))
+        .unwrap();
+    })
+}
+
+#[test]
+fn a_clock_at_its_maximum_is_refused() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let wall = with_hlc(&fixture, &state, u64::MAX, 0);
+    assert_eq!(receive(&mut state, wall), Err(Invalid::HlcAtMaximum));
+    let counter = with_hlc(&fixture, &state, 6_000, u32::MAX);
+    assert_eq!(receive(&mut state, counter), Err(Invalid::HlcAtMaximum));
+}
+
+#[test]
+fn a_far_future_event_is_refused_until_the_clock_catches_up() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let now_ms = 10_000;
+    let ahead = with_hlc(&fixture, &state, now_ms + HLC_TOLERANCE_MS + 1, 0);
+    assert_eq!(
+        state
+            .receive_at(ahead.clone(), Trust::Untrusted, now_ms)
+            .err(),
+        Some(Invalid::HlcInFuture)
+    );
+    assert_eq!(state.event_count(), 1);
+    assert_eq!(state.pending_events().count(), 0);
+    let later = now_ms + 2;
+    assert!(state.receive_at(ahead, Trust::Untrusted, later).is_ok());
+}
+
+#[test]
+fn an_event_within_the_tolerance_is_admitted() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let now_ms = 10_000;
+    let edge = with_hlc(&fixture, &state, now_ms + HLC_TOLERANCE_MS, 0);
+    assert!(state.receive_at(edge, Trust::Untrusted, now_ms).is_ok());
+}
+
+#[test]
+fn a_replica_far_ahead_cannot_be_asked_for_a_successor_past_the_end_of_time() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let last = with_hlc(&fixture, &state, u64::MAX - 1, u32::MAX - 1);
+    state.receive(last, Trust::Untrusted).unwrap();
+    let device = fixture.devices[0].key();
+    let actor = Actor::Principal(fixture.founder.key());
+    assert_eq!(
+        state.builder(device, actor, 5_000).err(),
+        Some(crate::state::BuildError::ClockExhausted)
+    );
+}
+
+#[test]
+fn a_far_future_event_is_refused_before_it_can_wait_for_its_parent() {
+    let fixture = Fixture::new(1);
+    let mut author = fixture.state();
+    let now_ms = 10_000;
+    let future_ms = now_ms + HLC_TOLERANCE_MS + 10;
+    let parent = fixture.apply(&mut author, 0, future_ms, create("task", "a"));
+    let child = fixture.apply(&mut author, 0, future_ms + 1, create("task", "b"));
+
+    let mut state = fixture.state();
+    assert_eq!(
+        state
+            .receive_at(child.clone(), Trust::Untrusted, now_ms)
+            .err(),
+        Some(Invalid::HlcInFuture)
+    );
+    assert_eq!(state.pending_events().count(), 0);
+    assert_eq!(
+        state
+            .receive_at(parent.clone(), Trust::Untrusted, now_ms)
+            .err(),
+        Some(Invalid::HlcInFuture)
+    );
+
+    // Once the clock has caught up both are offered again and applied.
+    let later = future_ms + 1;
+    assert!(state.receive_at(parent, Trust::Untrusted, later).is_ok());
+    assert!(state.receive_at(child, Trust::Untrusted, later).is_ok());
+    assert_eq!(state, author);
+}
+
+#[test]
+fn a_released_event_is_not_judged_by_the_clock_again() {
+    let fixture = Fixture::new(1);
+    let mut author = fixture.state();
+    let wall_ms = 2 * HLC_TOLERANCE_MS;
+    let parent = fixture.apply(&mut author, 0, 1_000, create("task", "a"));
+    let child = fixture.apply(&mut author, 0, wall_ms, create("task", "b"));
+
+    let mut state = fixture.state();
+    assert_eq!(
+        state
+            .receive_at(child, Trust::Untrusted, wall_ms)
+            .map(|received| received.disposition),
+        Ok(Disposition::Pending)
+    );
+    // The receiver's clock went backwards between the two arrivals.
+    let received = state.receive_at(parent, Trust::Untrusted, 0).unwrap();
+    assert_eq!(received.applied.len(), 2);
+    assert!(received.rejected.is_empty());
 }

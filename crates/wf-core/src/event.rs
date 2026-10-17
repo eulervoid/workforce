@@ -816,7 +816,8 @@ impl EventBuilder {
             seq: 1,
             prev: None,
             deps: Vec::new(),
-            hlc: Hlc::next_after(Hlc::ZERO, now_ms),
+            hlc: Hlc::next_after(Hlc::ZERO, now_ms.min(u64::MAX - 1))
+                .expect("a clock below the maximum has a successor of ZERO"),
         }
     }
 
@@ -1093,7 +1094,7 @@ mod tests {
     #[test]
     fn tampering_breaks_the_signature() {
         let mut event = genesis_event();
-        event.content.hlc = Hlc::next_after(event.content.hlc, 5_000);
+        event.content.hlc = Hlc::next_after(event.content.hlc, 5_000).unwrap();
         assert!(event.verify_signature().is_err());
     }
 

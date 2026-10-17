@@ -326,6 +326,8 @@ pub enum BuildError {
     NoWorkforce,
     #[error("the history of this fork is still arriving; run `wf sync`")]
     HistoryIncomplete,
+    #[error("the hybrid logical clock is used up: a past event is too far ahead for a successor")]
+    ClockExhausted,
 }
 
 /// What happened to the submitted event.
@@ -698,7 +700,7 @@ impl State {
             seq: head.map_or(1, |head| head.seq + 1),
             prev: head.map(|head| head.id),
             deps: self.heads.iter().copied().collect(),
-            hlc: Hlc::next_after(floor, now_ms),
+            hlc: Hlc::next_after(floor, now_ms).ok_or(BuildError::ClockExhausted)?,
         })
     }
 }
