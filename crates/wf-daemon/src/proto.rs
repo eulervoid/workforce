@@ -23,7 +23,7 @@ use wf_net::frame::MAX_FRAME_LEN;
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 14;
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -56,8 +56,11 @@ pub struct Credential {
 pub enum HelloReply {
     /// `device` is the device the daemon signs as, so that a client knows it without reading
     /// the device key, which agents are not let to. `caller` is whom the connection acts for.
+    /// `pid` is the process that answers, so that stopping the daemon never signals a process
+    /// the socket did not vouch for.
     Ready {
         version: u32,
+        pid: u32,
         device: DeviceKey,
         caller: Caller,
     },

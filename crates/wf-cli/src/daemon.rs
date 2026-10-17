@@ -131,12 +131,12 @@ fn start(json: bool, args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
 }
 
 fn stop(json: bool, data: &DataDir) -> anyhow::Result<()> {
-    let Some(pid) = running_pid(data) else {
-        if answers(&data.daemon_socket()) {
-            bail!("the daemon runs in a terminal; interrupt it there");
-        }
+    // The socket names the process: a pid file left by a crash may name any other.
+    let Some(client) = data.connect_daemon()? else {
         return emit(json, &status(data), render_status);
     };
+    let pid = client.pid();
+    drop(client);
     rustix::process::kill_process(pid_of(pid)?, Signal::TERM)
         .with_context(|| format!("stopping the daemon (pid {pid})"))?;
     let deadline = Instant::now() + STOP_WAIT;
