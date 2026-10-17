@@ -247,6 +247,17 @@ mod supervision {
     }
 
     #[test]
+    fn a_blocker_mentioning_two_waits_on_the_one_written_first() {
+        let (fixture, mut state, task) = with_task();
+        fixture.apply(&mut state, 0, 2_001, define_agent("coder"));
+        fixture.apply(&mut state, 0, 2_002, blocker(task, "@coder, or else @ada?"));
+        assert_eq!(
+            waits_on(&state, task),
+            [WaitsOn::Agent(agent(&fixture, "coder"))],
+        );
+    }
+
+    #[test]
     fn a_supervisor_takes_blockers_on_items_it_did_not_work_on() {
         let (fixture, mut state, task) = with_task();
         fixture.apply(&mut state, 0, 2_001, define_agent("coder"));
