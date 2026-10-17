@@ -9,7 +9,7 @@ use wf_core::event::{Comment, CommentKind, EventBody, ItemEdited, ItemMoved, Rev
 use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::item::{ItemState, ItemView};
 use wf_core::name::AgentName;
-use wf_core::session::Verdict;
+use wf_core::session::{CommitId, Verdict};
 use wf_harness::Permission;
 
 use super::app::{Choice, Effect, Starter, Written};
@@ -34,6 +34,12 @@ pub enum Outcome {
         comment: LineComment,
         replacing: Option<usize>,
     },
+    /// The first `posted` drafts of the review of `item` were posted, then it failed with `error`.
+    ReviewFailed {
+        item: ItemId,
+        posted: usize,
+        error: anyhow::Error,
+    },
     /// The review of `item` was sent with the comments on lines drafted for it, as `what` says.
     Reviewed { item: ItemId, what: String },
 }
@@ -47,17 +53,22 @@ pub fn carry_out(
     match effect {
         Effect::ChooseStart { item } => Ok(Outcome::Choose(starters(workspace, item)?)),
         Effect::ChooseState { item } => Ok(Outcome::Choose(states(workspace, item)?)),
-        Effect::Approve { item, comments } => {
-            post_line_comments(workspace, item, &comments)?;
-            verdict(workspace, item, Verdict::Approve)?;
-            Ok(Outcome::Reviewed {
-                item,
-                what: format!("approved #{}{}", item.short(), with(&comments)),
+        Effect::Approve {
+            item,
+            reviewed,
+            comments,
+        } => {
+            let commit = submitted(workspace, item, reviewed)?;
+            let sent = send_review(workspace, item, commit, &comments, &[], Verdict::Approve);
+            reviewed_or_failed(sent, item, || {
+                format!("approved #{}{}", item.short(), with(&comments))
             })
         }
-        Effect::RequestChanges { item, comments } => {
-            request_changes(workspace, terminal, item, &comments)
-        }
+        Effect::RequestChanges {
+            item,
+            reviewed,
+            comments,
+        } => request_changes(workspace, terminal, item, reviewed, &comments),
         Effect::LineCommentInEditor {
             item,
             mut comment,
@@ -304,8 +315,10 @@ fn request_changes(
     workspace: &mut Workspace,
     terminal: &mut DefaultTerminal,
     item: ItemId,
+    reviewed: Option<CommitId>,
     comments: &[LineComment],
 ) -> anyhow::Result<Outcome> {
+    let commit = submitted(workspace, item, reviewed)?;
     let on_lines = comments
         .iter()
         .filter(|comment| comment.kind == CommentKind::ChangeRequest)
@@ -329,29 +342,83 @@ fn request_changes(
             ));
         }
     }
-    post_line_comments(workspace, item, comments)?;
-    for change in &changes {
-        workspace.author(EventBody::Commented(Comment {
-            kind: CommentKind::ChangeRequest,
-            ..Comment::plain(item, change.as_str())
-        }))?;
-    }
-    let count = changes.len() + on_lines;
-    verdict(workspace, item, Verdict::RequestChanges)?;
-    let plain = comments.len() - on_lines;
-    let also = if plain > 0 {
-        format!(" and {plain} comment{}", plural(plain))
-    } else {
-        String::new()
-    };
-    Ok(Outcome::Reviewed {
+    let sent = send_review(
+        workspace,
         item,
-        what: format!(
+        commit,
+        comments,
+        &changes,
+        Verdict::RequestChanges,
+    );
+    let count = changes.len() + on_lines;
+    let plain = comments.len() - on_lines;
+    reviewed_or_failed(sent, item, || {
+        let also = if plain > 0 {
+            format!(" and {plain} comment{}", plural(plain))
+        } else {
+            String::new()
+        };
+        format!(
             "requested {count} change{} on #{}{also}",
             plural(count),
             item.short()
-        ),
+        )
     })
+}
+
+/// A review that failed after `posted` of its drafts were posted.
+struct Unsent {
+    posted: usize,
+    error: anyhow::Error,
+}
+
+fn reviewed_or_failed(
+    sent: Result<(), Unsent>,
+    item: ItemId,
+    what: impl FnOnce() -> String,
+) -> anyhow::Result<Outcome> {
+    match sent {
+        Ok(()) => Ok(Outcome::Reviewed { item, what: what() }),
+        Err(Unsent { posted: 0, error }) => Err(error),
+        Err(Unsent { posted, error }) => Ok(Outcome::ReviewFailed {
+            item,
+            posted,
+            error,
+        }),
+    }
+}
+
+/// Posts the drafted comments on lines and the `changes` as change requests, then gives the
+/// verdict on `commit`.
+fn send_review(
+    workspace: &mut Workspace,
+    item: ItemId,
+    commit: Option<CommitId>,
+    comments: &[LineComment],
+    changes: &[String],
+    verdict: Verdict,
+) -> Result<(), Unsent> {
+    let mut posted = 0;
+    let mut send = || -> anyhow::Result<()> {
+        for comment in comments {
+            post_line_comment(workspace, item, comment.clone())?;
+            posted += 1;
+        }
+        for change in changes {
+            workspace.author(EventBody::Commented(Comment {
+                kind: CommentKind::ChangeRequest,
+                ..Comment::plain(item, change.as_str())
+            }))?;
+        }
+        workspace.author(EventBody::Reviewed(Review {
+            item,
+            commit,
+            verdict,
+            because: None,
+        }))?;
+        Ok(())
+    };
+    send().map_err(|error| Unsent { posted, error })
 }
 
 fn plural(count: usize) -> &'static str {
@@ -364,17 +431,6 @@ fn with(comments: &[LineComment]) -> String {
         0 => String::new(),
         count => format!(" with {count} comment{} on lines", plural(count)),
     }
-}
-
-fn post_line_comments(
-    workspace: &mut Workspace,
-    item: ItemId,
-    comments: &[LineComment],
-) -> anyhow::Result<()> {
-    for comment in comments {
-        post_line_comment(workspace, item, comment.clone())?;
-    }
-    Ok(())
 }
 
 fn post_line_comment(
@@ -414,18 +470,23 @@ fn resolve(
     Ok(format!("resolved {}", blocker.short()))
 }
 
-fn verdict(workspace: &mut Workspace, item: ItemId, verdict: Verdict) -> anyhow::Result<()> {
+/// The commit the work of `item` was submitted as, if it is what the principal `reviewed`.
+fn submitted(
+    workspace: &Workspace,
+    item: ItemId,
+    reviewed: Option<CommitId>,
+) -> anyhow::Result<Option<CommitId>> {
     let (commit, _) = workspace
         .state()
         .submission(item)
         .ok_or_else(|| anyhow!("#{} has no submitted work to review", item.short()))?;
-    workspace.author(EventBody::Reviewed(Review {
-        item,
-        commit,
-        verdict,
-        because: None,
-    }))?;
-    Ok(())
+    if commit != reviewed {
+        bail!(
+            "#{} was submitted again or its branch moved since you looked; look at the diff again",
+            item.short()
+        );
+    }
+    Ok(commit)
 }
 
 /// The text of a blocker, quoted, for reading it while answering.

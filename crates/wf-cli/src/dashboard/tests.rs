@@ -684,6 +684,7 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
         press(&mut app, KeyCode::Char('a')),
         Some(Effect::Approve {
             item: archive,
+            reviewed: None,
             comments: Vec::new()
         })
     );
@@ -692,6 +693,7 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
         press(&mut app, KeyCode::Char('r')),
         Some(Effect::RequestChanges {
             item: archive,
+            reviewed: None,
             comments: Vec::new()
         })
     );
@@ -3251,6 +3253,7 @@ fn a_change_request_on_selected_lines_is_a_draft_under_them_until_the_verdict_se
         press(&mut app, KeyCode::Char('r')),
         Some(Effect::RequestChanges {
             item: archive,
+            reviewed: Some(work_commit()),
             comments: drafts
         })
     );
@@ -3409,4 +3412,31 @@ fn a_selection_key_that_does_not_move_keeps_the_details_beside_the_list() {
     assert_eq!(app.stack(), &opened);
     press(&mut app, KeyCode::Char('j'));
     assert!(app.stack().is_empty());
+}
+
+#[test]
+fn a_verdict_carries_the_commit_the_diff_on_screen_shows() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('R'));
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('a')),
+        Some(Effect::Approve { reviewed, .. }) if reviewed == Some(work_commit())
+    ));
+    // Work without commits is reviewed as submitted without a commit.
+    app.diff_on_top_mut()
+        .unwrap()
+        .read(Ok(super::diff::ItemWork {
+            commit: work_commit(),
+            changes: super::diff::Changes::NoCommits,
+        }));
+    press(&mut app, KeyCode::Char('R'));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('a')),
+        Some(Effect::Approve {
+            item: archive,
+            reviewed: None,
+            comments: Vec::new()
+        })
+    );
 }
