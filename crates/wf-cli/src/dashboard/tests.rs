@@ -3091,6 +3091,33 @@ fn i_in_a_diff_or_session_opened_from_its_item_goes_back_to_the_item() {
 }
 
 #[test]
+fn i_in_a_diff_below_an_item_and_its_session_goes_back_to_the_item() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    let parse = ItemId::from_bytes([1; 32]);
+    let mut snapshot = with_items();
+    snapshot.in_view = Some(InView::Item {
+        id: parse,
+        text: String::new(),
+        session: Some(SessionId::from_bytes([11; 32])),
+    });
+    app.refresh(snapshot);
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Enter);
+    let mut snapshot = with_items();
+    snapshot.in_view = Some(InView::Session(snapshot.working[0].clone()));
+    app.refresh(snapshot);
+    press(&mut app, KeyCode::Enter);
+    assert!(matches!(
+        app.path()[..],
+        [Detail::Item(_), Detail::Session(_), Detail::Diff(_)]
+    ));
+    press(&mut app, KeyCode::Char('i'));
+    assert_eq!(app.path(), [Detail::Item(parse)]);
+}
+
+#[test]
 fn i_in_a_diff_opened_from_a_session_replaces_it_with_the_item() {
     let mut app = app();
     app.refresh(snapshot());

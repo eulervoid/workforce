@@ -1489,14 +1489,17 @@ impl App {
         });
     }
 
-    /// `i` in a diff or session of `item`: the item stands left of it, so back to the item right
-    /// below on the stack (as `h` would, keeping its scroll), else the item in place of the
-    /// diff or session.
+    /// `i` in a diff or session of `item`: the item stands left of it, so back to the nearest
+    /// `item` lower on the stack (as `h` would, keeping its scroll), else the item in place of
+    /// the diff or session.
     fn open_item_of_top(&mut self, item: ItemId) {
         let stack = self.stack_mut();
-        let below = stack.len().checked_sub(2).map(|index| &stack[index]);
-        if below.is_some_and(|opened| opened.detail == Detail::Item(item)) {
-            stack.pop();
+        let lower = stack.len().saturating_sub(1);
+        if let Some(index) = stack[..lower]
+            .iter()
+            .rposition(|opened| opened.detail == Detail::Item(item))
+        {
+            stack.truncate(index + 1);
             return;
         }
         stack.pop();
