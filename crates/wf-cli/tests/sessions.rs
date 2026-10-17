@@ -84,7 +84,14 @@ impl World {
             let path = wf.root.path().join(format!("script-{name}.txt"));
             std::fs::write(&path, script).unwrap();
             let harness = format!("fake-{name}");
-            wf.run(&["agent", "add", name, "--harness", &harness]);
+            wf.run(&[
+                "agent",
+                "add",
+                name,
+                "--harness",
+                &harness,
+                "--harness-unknown-here",
+            ]);
             scripts.insert(harness, path);
         }
         std::fs::write(wf.root.path().join("config.toml"), SANDBOX_OFF).unwrap();
@@ -1154,9 +1161,14 @@ async fn sessions_need_a_known_agent_and_harness() {
         .wf
         .fail(&["session", "start", short(&item), "--agent", "ghost"]);
     assert!(message.contains("not an agent"), "{message}");
-    world
-        .wf
-        .run(&["agent", "add", "odd", "--harness", "unheard-of"]);
+    world.wf.run(&[
+        "agent",
+        "add",
+        "odd",
+        "--harness",
+        "unheard-of",
+        "--harness-unknown-here",
+    ]);
     let message = world
         .wf
         .fail(&["session", "start", short(&item), "--agent", "odd"]);

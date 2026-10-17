@@ -13,6 +13,45 @@ use crate::commands::emit;
 /// The harnesses wf knows how to start, in the order they are offered.
 const KNOWN: &[&str] = &["claude-code", "opencode", "codex", "gemini-cli"];
 
+/// Whether this machine can start `harness`: wf knows it by name.
+pub fn is_startable(harness: &str) -> bool {
+    wf_harness::command_for(harness).is_some()
+}
+
+/// What `wf agent add` and `edit` make of a harness name.
+///
+/// A name this machine cannot start is refused unless `allow_unknown_here` says that another
+/// member's machine may know it, in which case the returned warning is what to tell the principal.
+pub fn check_startable(
+    harness: &HarnessName,
+    allow_unknown_here: bool,
+) -> anyhow::Result<Option<String>> {
+    if is_startable(harness.as_str()) {
+        return Ok(None);
+    }
+    let closest = KNOWN
+        .iter()
+        .max_by(|left, right| {
+            strsim::jaro_winkler(harness.as_str(), left)
+                .total_cmp(&strsim::jaro_winkler(harness.as_str(), right))
+        })
+        .expect("wf knows harnesses");
+    let known = KNOWN
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    if allow_unknown_here {
+        return Ok(Some(format!(
+            "this machine cannot start the harness `{harness}`; wf knows {known}"
+        )));
+    }
+    bail!(
+        "this machine cannot start the harness `{harness}`; did you mean `{closest}`? wf knows {known}; \
+         `--harness-unknown-here` defines it anyway, for a machine that does know it"
+    )
+}
+
 fn is_executable(path: &Path) -> bool {
     use std::os::unix::fs::PermissionsExt;
     path.metadata()

@@ -1104,7 +1104,11 @@ pub fn agents(agents: &[AgentView]) -> String {
     for agent in agents {
         table.add_row([
             agent.id.clone(),
-            agent.harness.clone(),
+            if agent.harness_startable_here {
+                agent.harness.clone()
+            } else {
+                format!("{} (not startable here)", agent.harness)
+            },
             agent.model.clone().unwrap_or_else(|| "default".to_string()),
             agent.capabilities.join(", "),
             agent.lanes.join(", "),

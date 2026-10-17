@@ -41,6 +41,7 @@ pulldown-cmark = "0.13"
 rand.workspace = true
 similar = "3.2"
 textwrap = "0.16"
+strsim = "0.11"
 cliclack = "0.5"
 ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 # Only for its `anstyle` feature: ratatui styles from the theme's `anstyle` styles.

@@ -2589,6 +2589,7 @@ fn coder_detail(hosted_here: bool) -> crate::view::AgentDetail {
         definition: crate::view::AgentView {
             id: "@ada/coder".to_owned(),
             harness: "claude-code".to_owned(),
+            harness_startable_here: true,
             model: Some("opus".to_owned()),
             capabilities: vec!["rust".to_owned(), "review".to_owned()],
             lanes: vec!["default".to_owned()],
