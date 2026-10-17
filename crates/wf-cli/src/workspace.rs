@@ -133,6 +133,9 @@ impl Workspace {
         {
             data.remember_repository(&id, repository);
         }
+        if refold {
+            data.require_no_daemon("refolding the log")?;
+        }
         // With a daemon, only the daemon reads the device key: agents are not let to.
         if !refold && let Some(mut client) = data.connect_daemon()? {
             let device = client.device();

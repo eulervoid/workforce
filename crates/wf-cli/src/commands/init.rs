@@ -39,6 +39,7 @@ pub(super) fn init(
     if workspace::find_workforce(cwd).is_ok() {
         bail!("this directory already belongs to a workforce ({WORKFORCE_FILE})");
     }
+    data.require_no_daemon("creating a workforce")?;
     let path = std::env::var_os("PATH").unwrap_or_default();
     let harnesses = harness::detect(&path);
     let (name, setups) = match (args.interactive, mode) {
