@@ -3,7 +3,8 @@
 //! offer two models. `FAKE_AGENT_REOPENS` set to `resume` or `load` offers that way back into a
 //! session; a load first replays an earlier message. `FAKE_AGENT_DESCRIPTORS` names a file it
 //! writes the descriptors it holds to when it starts, one per line. `FAKE_AGENT_SILENT` set makes
-//! it never answer a prompt, nor say anything while it does not.
+//! it never answer a prompt, nor say anything while it does not. `FAKE_AGENT_HANG` set makes it
+//! wait on a prompt until it is cancelled, and then end the turn as cancelled.
 
 use std::io::{BufRead, Write};
 
@@ -63,6 +64,7 @@ fn main() {
     }
     let reopens = std::env::var("FAKE_AGENT_REOPENS").unwrap_or_default();
     let silent = std::env::var_os("FAKE_AGENT_SILENT").is_some();
+    let hang = std::env::var_os("FAKE_AGENT_HANG").is_some();
     let mut lines = std::io::stdin().lock().lines();
     while let Some(Ok(line)) = lines.next() {
         let request: Value = serde_json::from_str(&line).unwrap();
@@ -89,6 +91,17 @@ fn main() {
                 "result": {"configOptions": config_options(request["params"]["value"].as_str().unwrap())},
             })),
             Some("session/prompt") if silent => {}
+            Some("session/prompt") if hang => {
+                for line in lines.by_ref() {
+                    let message: Value = serde_json::from_str(&line.unwrap()).unwrap();
+                    if message["method"] == "session/cancel" {
+                        break;
+                    }
+                }
+                send(json!({
+                    "jsonrpc": "2.0", "id": id, "result": {"stopReason": "cancelled"},
+                }));
+            }
             Some("session/prompt") => {
                 eprintln!("fake agent got a prompt");
                 chunk("Working on it. ");
