@@ -809,9 +809,14 @@ async fn an_agent_on_an_unknown_harness_is_one_machine_fault_and_no_start_attemp
     let world = World::new("turn\n").await;
     world.wf.add(&["--title", "First"]);
     world.wf.add(&["--title", "Second"]);
-    world
-        .wf
-        .run(&["agent", "edit", "coder", "--harness", "claud-code"]);
+    world.wf.run(&[
+        "agent",
+        "edit",
+        "coder",
+        "--harness",
+        "claud-code",
+        "--harness-unknown-here",
+    ]);
     world.automate("coder", "default");
     tokio::time::sleep(Duration::from_secs(1)).await;
     assert!(world.sessions().is_empty(), "{:?}", world.sessions());
@@ -830,9 +835,14 @@ async fn an_agent_on_an_unknown_harness_is_one_machine_fault_and_no_start_attemp
         "{entries:?}"
     );
 
-    world
-        .wf
-        .run(&["agent", "edit", "coder", "--harness", "fake-coder"]);
+    world.wf.run(&[
+        "agent",
+        "edit",
+        "coder",
+        "--harness",
+        "fake-coder",
+        "--harness-unknown-here",
+    ]);
     world
         .wait("the fault to clear and a session to start", |world| {
             !world.sessions().is_empty()
