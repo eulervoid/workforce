@@ -47,6 +47,8 @@ pub enum SessionError {
     UnknownHarness(HarnessName),
     #[error("the workforce has no policy yet")]
     NoPolicy,
+    #[error("the workforce has no repository to submit the work to")]
+    NoRepository,
     #[error("there is no item #{}", .0.short())]
     UnknownItem(ItemId),
     #[error("#{} is archived", .0.short())]
@@ -124,6 +126,7 @@ impl SessionError {
             )
             | Self::NotBound
             | Self::NoPolicy
+            | Self::NoRepository
             | Self::UnknownAgent(_)
             | Self::UnknownHarness(_)
             | Self::UnknownItem(_)
@@ -374,6 +377,12 @@ impl Daemon {
         actor: Actor,
         body: EventBody,
     ) -> Result<Event, SessionError> {
+        if self.write_fails(&body) {
+            return Err(SessionError::Io {
+                path: PathBuf::from("the log"),
+                source: std::io::Error::other("write failed on purpose"),
+            });
+        }
         let signer = self.signer().clone();
         let now_ms = crate::now_ms();
         Ok(loaded

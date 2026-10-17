@@ -3,9 +3,10 @@
 use std::sync::Arc;
 
 use wf_core::event::{Comment, EventBody, ItemMoved, SessionEnded};
-use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
+use wf_core::hlc::Hlc;
+use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
-use wf_core::item::ItemState;
+use wf_core::item::{ItemState, ItemView};
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
 use wf_core::session::{CommitId, EndReason};
 use wf_core::state::State;
@@ -38,6 +39,63 @@ impl Daemon {
         )
         .await?;
         Ok(())
+    }
+
+    /// Moves `item` to `to` for the session that is ending, unless it is there already.
+    #[allow(clippy::too_many_arguments)]
+    async fn move_item_once(
+        &self,
+        loaded: &Loaded,
+        state: &State,
+        principal: wf_core::identity::PrincipalKey,
+        item: ItemId,
+        to: ItemState,
+        because: Option<CommentId>,
+        session: SessionId,
+    ) -> Result<(), SessionError> {
+        if state.live_state(item) == Some(to) {
+            return Ok(());
+        }
+        self.move_item(loaded, principal, item, to, because, Some(session))
+            .await
+    }
+
+    /// The comment `actor` wrote on `item` with this `note` since `since`, when the session
+    /// started, if an earlier try of the end did. A daemon comment carries no session, so only
+    /// the time keeps one of an earlier session with the same text from counting.
+    async fn written_note(
+        &self,
+        loaded: &Loaded,
+        state: &State,
+        item: ItemId,
+        since: Hlc,
+        actor: &Actor,
+        note: &str,
+    ) -> Result<Option<CommentId>, SessionError> {
+        let Some(ItemView::Live(live)) = state.item(item) else {
+            return Ok(None);
+        };
+        let candidates: Vec<CommentId> = live
+            .comments()
+            .iter()
+            .filter(|(_, comment)| &comment.by == actor && comment.at > since)
+            .map(|(id, _)| *id)
+            .collect();
+        let note = note.to_string();
+        let found = loaded
+            .storage
+            .with(move |replica| {
+                candidates.into_iter().find(|id| {
+                    let event = wf_store::EventStore::event(replica.store(), &EventId::from(*id));
+                    matches!(
+                        event,
+                        Ok(Some(event))
+                            if matches!(&event.content.body, EventBody::Commented(written) if written.text == note)
+                    )
+                })
+            })
+            .await?;
+        Ok(found)
     }
 
     /// Ends a live session of this machine and applies what follows to its item. Ending one that
@@ -94,34 +152,37 @@ impl Daemon {
                 because: None,
             }))
             .map_err(|violation| SessionError::Authoring(violation.into()))?;
-        // The comment comes first: once the session has ended it can no longer write.
+        // The comment comes first: once the session has ended it can no longer write. A retry
+        // after a failed write finds what an earlier try wrote and goes on from there.
         let because = match note {
-            Some(note) => {
-                let written = self
-                    .author(
-                        loaded,
-                        actor.clone(),
-                        EventBody::Commented(Comment::plain(item, note)),
-                    )
-                    .await?;
-                Some(CommentId::from(written.id()))
-            }
+            Some(note) => match self
+                .written_note(loaded, &state, item, folded.started().hlc, &actor, &note)
+                .await?
+            {
+                Some(written) => Some(written),
+                None => {
+                    let written = self
+                        .author(
+                            loaded,
+                            actor.clone(),
+                            EventBody::Commented(Comment::plain(item, note)),
+                        )
+                        .await?;
+                    Some(CommentId::from(written.id()))
+                }
+            },
             None => None,
         };
         // The item moves while the session still holds it, so that it is never ready in between.
+        // A move that could not be written is tried again with the whole end, which is not
+        // written before it; one that is refused does not hold up the end.
         let effect = match state.after_end(session, reason) {
             None | Some(AfterEnd::Nothing) => Ok(None),
             Some(AfterEnd::MoveTo(to)) => self
-                .move_item(loaded, principal, item, to, because, Some(session))
+                .move_item_once(loaded, &state, principal, item, to, because, session)
                 .await
                 .map(|()| None),
-            Some(AfterEnd::MergeThenDone { wait_in }) => {
-                let EndReason::Submitted {
-                    commit: Some(commit),
-                } = reason
-                else {
-                    unreachable!("only submitted work with commits is merged");
-                };
+            Some(AfterEnd::MergeThenDone { commit, wait_in }) => {
                 // Reserved before the move, which wakes the dispatcher: none of its retries may
                 // merge the item before the session's first attempt.
                 let first_attempt = loaded.merges.reserve(MergeRequest {
@@ -132,13 +193,18 @@ impl Daemon {
                 });
                 match wait_in {
                     Some(to) => self
-                        .move_item(loaded, principal, item, to, because, Some(session))
+                        .move_item_once(loaded, &state, principal, item, to, because, session)
                         .await
                         .map(|()| Some(first_attempt)),
                     None => Ok(Some(first_attempt)),
                 }
             }
         };
+        if let Err(error) = &effect
+            && error.is_failed_write()
+        {
+            return effect.map(|_| ());
+        }
         self.author(
             loaded,
             actor,
@@ -216,9 +282,9 @@ impl Daemon {
         item: ItemId,
         committer: String,
     ) -> Result<(), SessionError> {
-        let Some(repository) = self.repository_of(workforce) else {
-            return Ok(());
-        };
+        let repository = self
+            .repository_of(workforce)
+            .ok_or(SessionError::NoRepository)?;
         let target = target_of(state)?;
         let worktree = item_worktree(&self.workforce_directory(workforce), item);
         let signing = self.machine_config()?.commits.agent_signing.signing();
@@ -245,9 +311,9 @@ impl Daemon {
         state: &State,
         item: ItemId,
     ) -> Result<Option<CommitId>, SessionError> {
-        let Some(repository) = self.repository_of(workforce) else {
-            return Ok(None);
-        };
+        let repository = self
+            .repository_of(workforce)
+            .ok_or(SessionError::NoRepository)?;
         let target = target_of(state)?;
         let branch = item_branch(item);
         let commit = blocking(move || {

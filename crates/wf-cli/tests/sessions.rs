@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
+use wf_core::event::EventBody;
 use wf_core::name::HarnessName;
 use wf_daemon::{Config, Daemon};
 use wf_harness::AcpAgentConfig;
@@ -1367,6 +1368,128 @@ async fn submitting_without_commits_finishes_the_item_and_leaves_no_branch() {
     assert_eq!(session["status"], "submitted");
     assert_eq!(world.item(&item)["state"], "done");
     assert!(git(&world.wf.repository, &["branch", "--list", "wf/*"]).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ending_a_session_whose_note_is_written_already_does_not_write_it_again() {
+    // The note is written already, as an earlier try that failed at the end of the session
+    // leaves it: ending the session does not write it again.
+    let script = "\
+wf comment {item} \"Nothing to change\"
+wf work submit --note \"Nothing to change\"
+";
+    let world = World::new(script).await;
+    let item = world
+        .wf
+        .add(&["--title", "Check the parser", "--review", "none"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+    assert_eq!(world.item(&item)["state"], "done");
+    assert_eq!(
+        comments_with(&world, &item, "comment", "Nothing to change").len(),
+        1,
+        "{}",
+        world.item(&item)
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_daemon_note_of_an_earlier_session_with_the_same_text_does_not_count_for_the_next() {
+    // Both sessions give up with the same text, written as the daemon, which carries no
+    // session: the second still writes its own.
+    let world = World::new("").await;
+    let item = world.wf.add(&["--title", "Idle"]);
+    for expected in 1..=2 {
+        start_session(&world, &item);
+        world
+            .wait("the session to give up", |world| {
+                let gave_up = |text: &str| text.starts_with("Gave up");
+                comments(&world.item(&item))
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|note| note["text"].as_str().is_some_and(gave_up))
+                    .count()
+                    == expected
+            })
+            .await;
+        world
+            .wait("the session to end", |world| {
+                world.sessions().iter().all(|s| s["status"] != "live")
+            })
+            .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ending_a_session_whose_item_is_in_the_target_state_already_still_ends_it() {
+    // The item is done before the session submits: the move that follows is skipped.
+    let script = "\
+wf item done {item}
+wf work submit --note \"Already done\"
+";
+    let world = World::new(script).await;
+    let item = world
+        .wf
+        .add(&["--title", "Check the parser", "--review", "none"]);
+    start_session(&world, &item);
+    world
+        .wait("the session to end", |world| {
+            world.sessions().iter().all(|s| s["status"] != "live")
+        })
+        .await;
+    assert_eq!(world.item(&item)["state"], "done");
+}
+
+/// An agent that submits twice once the write is armed: the second submission is the retry of
+/// the first when that failed.
+const SUBMIT_TWICE_WHEN_ARMED: &str = "\
+sh while [ ! -e \"$(git rev-parse --git-common-dir)/armed\" ]; do sleep 0.1; done
+wf work submit --note \"Nothing to change\"
+wf work submit --note \"Nothing to change\"
+";
+
+async fn submit_with_a_failing_write(failing: fn(&EventBody) -> bool) -> (World, String) {
+    let world = World::new(SUBMIT_TWICE_WHEN_ARMED).await;
+    let item = world
+        .wf
+        .add(&["--title", "Check the parser", "--review", "none"]);
+    start_session(&world, &item);
+    world.daemon.fail_next_write(failing);
+    std::fs::write(world.wf.repository.join(".git/armed"), "").unwrap();
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+    (world, item)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_submission_whose_end_failed_to_be_written_is_finished_by_the_retry() {
+    // The note and the move are written, then the end is not: the retry writes neither again.
+    let (world, item) =
+        submit_with_a_failing_write(|body| matches!(body, EventBody::SessionEnded(_))).await;
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "done", "{shown}");
+    assert_eq!(
+        comments_with(&world, &item, "comment", "Nothing to change").len(),
+        1,
+        "{shown}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_submission_whose_move_failed_to_be_written_is_finished_by_the_retry() {
+    // The move fails before the end is written: the session stays live, and the retry writes
+    // the move and the end, and the note only once.
+    let (world, item) =
+        submit_with_a_failing_write(|body| matches!(body, EventBody::ItemMoved(_))).await;
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "done", "{shown}");
+    assert_eq!(
+        comments_with(&world, &item, "comment", "Nothing to change").len(),
+        1,
+        "{shown}"
+    );
 }
 
 const COMMIT_AND_SUBMIT: &str = "\
