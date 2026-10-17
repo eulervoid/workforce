@@ -3468,3 +3468,69 @@ fn drafts_that_were_posted_before_a_failure_are_not_drafts_any_more() {
         .collect();
     assert_eq!(left, ["three"]);
 }
+
+#[test]
+fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faults() {
+    use super::snapshot::{Sources, Wanted};
+    use wf_core::testing::*;
+    use wf_daemon::{HarnessAtFault, MachineFaults, OutOfSpace};
+
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let mut events = Vec::new();
+    let mut apply = |state: &mut wf_core::state::State, body| {
+        let event = fixture.author(state, 0, 2_000, body);
+        state
+            .receive(event.clone(), wf_core::state::Trust::Untrusted)
+            .unwrap();
+        events.push(event.clone());
+        event
+    };
+    let item: ItemId = apply(&mut state, create("task", "Held")).id().into();
+    apply(&mut state, blocker(item, "which database?"));
+    let faults = MachineFaults {
+        out_of_space: Some(OutOfSpace {
+            since_ms: 1_000,
+            what: "the event log".to_owned(),
+        }),
+        harnesses: [(
+            "claude".parse().unwrap(),
+            HarnessAtFault {
+                fault: wf_core::session::HarnessFault::LoginLapsed,
+                since_ms: 1_000,
+                last_ms: 1_000,
+                what: "not logged in".to_owned(),
+            },
+        )]
+        .into(),
+    };
+    let sources = Sources {
+        state: &state,
+        events: &events,
+        own: fixture.devices[0].key(),
+        now_ms: 3_000,
+        detail_width: 80,
+    };
+    let snapshot = Snapshot::take(
+        &sources,
+        &[],
+        &faults,
+        &Default::default(),
+        Wanted::default(),
+    );
+    let in_inbox = crate::view::inbox_views(&state, &[], &faults).len();
+    assert_eq!(snapshot.waiting.len(), in_inbox);
+    assert_eq!(snapshot.waiting.len(), 3);
+    let titles: Vec<&str> = snapshot
+        .waiting
+        .iter()
+        .filter_map(|entry| match entry {
+            Waiting::MachineFault { title, .. } => Some(title.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        titles,
+        ["The disk is full", "The login of claude has lapsed"]
+    );
+}

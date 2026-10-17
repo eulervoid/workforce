@@ -1194,6 +1194,11 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             let more = Line::from(format!("  {kind}: {what}")).themed(theme::text_dimmed());
             row.lines(first, None, vec![more])
         }
+        Waiting::MachineFault { title, what } => {
+            let first = vec![themed("! ", theme::attention()), Span::raw(title.clone())];
+            let more = Line::from(format!("  {what}")).themed(theme::text_dimmed());
+            row.lines(first, None, vec![more])
+        }
     }
 }
 
@@ -1734,7 +1739,8 @@ fn draw_session(
             Waiting::Permission { .. }
             | Waiting::Blocker { .. }
             | Waiting::Review { .. }
-            | Waiting::Notice { .. } => None,
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => None,
         })
         .collect();
     let transcript = app.transcripts.get(&session.id);
@@ -2074,7 +2080,7 @@ fn hints(app: &App) -> Vec<&'static str> {
             // In the diff, `v` selects lines.
             Waiting::Review { .. } if app.diff_has_keys() => &["R review"],
             Waiting::Review { .. } => &["v review", "D diff"],
-            Waiting::Notice { .. } => &[],
+            Waiting::Notice { .. } | Waiting::MachineFault { .. } => &[],
         };
         for key in keys {
             if !acts.contains(key) {

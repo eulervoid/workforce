@@ -166,14 +166,24 @@ pub enum Waiting {
         kind: InboxKind,
         what: String,
     },
+    /// Something wrong with the machine: what it is and what the principal does about it.
+    MachineFault { title: String, what: String },
 }
 
 /// What tells an entry that waits apart from the others, across refreshes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum WaitingKey {
-    Permission { session: SessionId, since_ms: u64 },
+    Permission {
+        session: SessionId,
+        since_ms: u64,
+    },
     Blocker(CommentId),
-    Item { item: ItemId, kind: InboxKind },
+    Item {
+        item: ItemId,
+        kind: InboxKind,
+    },
+    /// The title tells machine faults apart: the machine has one of each.
+    MachineFault(String),
 }
 
 impl Waiting {
@@ -194,6 +204,7 @@ impl Waiting {
                 item: item.id,
                 kind: *kind,
             },
+            Waiting::MachineFault { title, .. } => WaitingKey::MachineFault(title.clone()),
         }
     }
 }
@@ -326,6 +337,7 @@ impl Snapshot {
     pub fn take(
         sources: &Sources,
         held: &[HeldPermission],
+        machine_faults: &wf_daemon::MachineFaults,
         last_seen: &crate::devices::LastSeen,
         wanted: Wanted,
     ) -> Self {
@@ -336,10 +348,9 @@ impl Snapshot {
             now_ms,
             detail_width: _,
         } = *sources;
-        let waiting = waiting(state, events, held);
+        let waiting = waiting(state, events, held, machine_faults);
         let context = view::StatusContext {
-            // Only `flagged` is used below, which no machine fault changes; `next` is not shown.
-            machine_faults: &wf_daemon::MachineFaults::default(),
+            machine_faults,
             own: Some(own),
             last_seen,
             daemon: true,
@@ -419,7 +430,12 @@ fn who(state: &State, actor: &Actor) -> String {
     }
 }
 
-fn waiting(state: &State, events: &[Event], held: &[HeldPermission]) -> Vec<Waiting> {
+fn waiting(
+    state: &State,
+    events: &[Event],
+    held: &[HeldPermission],
+    machine_faults: &wf_daemon::MachineFaults,
+) -> Vec<Waiting> {
     let mut waiting: Vec<Waiting> = held
         .iter()
         .map(|request| {
@@ -472,6 +488,14 @@ fn waiting(state: &State, events: &[Event], held: &[HeldPermission]) -> Vec<Wait
             }
         });
     }
+    waiting.extend(
+        view::machine_fault_views(machine_faults)
+            .into_iter()
+            .map(|fault| Waiting::MachineFault {
+                title: fault.title,
+                what: fault.what,
+            }),
+    );
     waiting
 }
 

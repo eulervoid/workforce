@@ -560,7 +560,10 @@ impl Waiting {
                 session: *session,
                 since_ms: *since_ms,
             }),
-            Waiting::Blocker { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
+            Waiting::Blocker { .. }
+            | Waiting::Review { .. }
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => None,
         }
     }
 }
@@ -1176,12 +1179,14 @@ impl App {
     /// The detail of a row of the Now tab, if it has one.
     pub fn detail_of(&self, row: &Row) -> Option<Detail> {
         match row {
-            Row::Waiting(key) => Some(match self.waiting(key)? {
-                Waiting::Permission { session, .. } => Detail::Session(*session),
+            Row::Waiting(key) => match self.waiting(key)? {
+                Waiting::Permission { session, .. } => Some(Detail::Session(*session)),
                 Waiting::Blocker { item, .. }
                 | Waiting::Review { item, .. }
-                | Waiting::Notice { item, .. } => Detail::Item(item.id),
-            }),
+                | Waiting::Notice { item, .. } => Some(Detail::Item(item.id)),
+                // The row says all there is to say.
+                Waiting::MachineFault { .. } => None,
+            },
             Row::Session(session) => Some(Detail::Session(*session)),
             // A flag about an item shows in the item's notice box.
             Row::Flag(flag) => Some(
@@ -1310,6 +1315,7 @@ impl App {
             Waiting::Blocker { item, .. }
             | Waiting::Review { item, .. }
             | Waiting::Notice { item, .. } => Some(item),
+            Waiting::MachineFault { .. } => None,
         });
         let listed = snapshot
             .items
@@ -1393,7 +1399,9 @@ impl App {
             Some(Detail::Item(id)) => waiting
                 .filter(|entry| match entry {
                     Waiting::Blocker { item, .. } | Waiting::Review { item, .. } => item.id == id,
-                    Waiting::Permission { .. } | Waiting::Notice { .. } => false,
+                    Waiting::Permission { .. }
+                    | Waiting::Notice { .. }
+                    | Waiting::MachineFault { .. } => false,
                 })
                 .collect(),
             // A diff is looked at to review it.
@@ -1402,7 +1410,8 @@ impl App {
                     Waiting::Review { item, .. } => item.id == id,
                     Waiting::Permission { .. }
                     | Waiting::Blocker { .. }
-                    | Waiting::Notice { .. } => false,
+                    | Waiting::Notice { .. }
+                    | Waiting::MachineFault { .. } => false,
                 })
                 .collect(),
             Some(Detail::Agent(_) | Detail::Flag(_)) | None => Vec::new(),
@@ -1461,7 +1470,10 @@ impl App {
     fn item_with_work(&self) -> Option<ItemId> {
         let review = self.subjects().into_iter().find_map(|entry| match entry {
             Waiting::Review { item, .. } => Some(item.id),
-            Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => None,
+            Waiting::Permission { .. }
+            | Waiting::Blocker { .. }
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => None,
         });
         review.or_else(|| self.item_subject())
     }
@@ -1972,11 +1984,17 @@ impl App {
         let permission = subjects.iter().find_map(|entry| entry.request());
         let blocker = subjects.iter().find_map(|entry| match entry {
             Waiting::Blocker { item, comment, .. } => Some((item.id, *comment)),
-            Waiting::Permission { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
+            Waiting::Permission { .. }
+            | Waiting::Review { .. }
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => None,
         });
         let review = subjects.iter().find_map(|entry| match entry {
             Waiting::Review { item, .. } => Some(item.id),
-            Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => None,
+            Waiting::Permission { .. }
+            | Waiting::Blocker { .. }
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => None,
         });
         match key.code {
             KeyCode::Char('a') => permission.map(|request| Effect::Permit {
@@ -2348,7 +2366,10 @@ impl App {
     fn review_waits(&self, item: ItemId) -> bool {
         self.snapshot.waiting.iter().any(|entry| match entry {
             Waiting::Review { item: reviewed, .. } => reviewed.id == item,
-            Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => false,
+            Waiting::Permission { .. }
+            | Waiting::Blocker { .. }
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => false,
         })
     }
 
@@ -2372,7 +2393,8 @@ impl App {
                 Waiting::Review { .. }
                 | Waiting::Permission { .. }
                 | Waiting::Blocker { .. }
-                | Waiting::Notice { .. } => None,
+                | Waiting::Notice { .. }
+                | Waiting::MachineFault { .. } => None,
             })
         })
     }

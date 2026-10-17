@@ -59,7 +59,7 @@ pub fn inbox_views(
 
 /// One entry for each thing wrong with the machine, however many sessions it ended: what it is
 /// and what the principal does about it.
-fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
+pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
     let entry = |title: String, what: String| InboxEntryView {
         kind: InboxKind::MachineFault,
         item: None,

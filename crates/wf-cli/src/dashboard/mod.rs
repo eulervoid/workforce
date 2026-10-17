@@ -395,9 +395,16 @@ impl Feed {
 
     fn snapshot(&self, workspace: &Workspace, app: &App) -> anyhow::Result<Snapshot> {
         let held = workspace.held_permissions()?;
+        let machine_faults = workspace.machine_faults()?;
         let last_seen = workspace.last_seen()?;
         let sources = self.sources(workspace, app);
-        Ok(Snapshot::take(&sources, &held, &last_seen, app.wanted()))
+        Ok(Snapshot::take(
+            &sources,
+            &held,
+            &machine_faults,
+            &last_seen,
+            app.wanted(),
+        ))
     }
 
     /// What the detail on screen shows, read against what the snapshot on screen flags.
