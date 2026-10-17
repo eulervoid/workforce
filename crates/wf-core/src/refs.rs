@@ -4,7 +4,6 @@
 //! principal depends on the whole state, so resolution happens at query time in `State`.
 //! Bump [`PARSER_VERSION`] whenever parsing changes; snapshots from older parsers are discarded.
 
-
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
@@ -88,10 +87,10 @@ fn scan(text: &str, tokens: &mut Vec<Token>) {
                 '#' => parse_item_ref(rest),
                 _ => parse_mention(rest),
             };
-            if let Some(token) = token {
-                if !tokens.contains(&token) {
-                    tokens.push(token);
-                }
+            if let Some(token) = token
+                && !tokens.contains(&token)
+            {
+                tokens.push(token);
             }
             index += 1 + rest[..consumed].chars().count();
         } else {
