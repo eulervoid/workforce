@@ -12,8 +12,8 @@ use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
-    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll,
-    Split, Starter, Status, Tab, Target, Wheel,
+    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Request, Row, STATUS_LASTS_MS,
+    Scroll, Split, Starter, Status, Tab, Target, Wheel,
 };
 use super::draw;
 use super::snapshot::{
@@ -521,7 +521,7 @@ fn a_permission_request_is_answered_where_it_is_listed() {
     assert_eq!(
         press(&mut app, KeyCode::Char('a')),
         Some(Effect::Permit {
-            session: coder,
+            request: coders_request(),
             answer: Permission::Allow
         })
     );
@@ -534,7 +534,7 @@ fn a_permission_request_is_answered_where_it_is_listed() {
     assert_eq!(
         press(&mut app, KeyCode::Char('d')),
         Some(Effect::Permit {
-            session: coder,
+            request: coders_request(),
             answer: Permission::Deny
         })
     );
@@ -684,6 +684,7 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
         press(&mut app, KeyCode::Char('a')),
         Some(Effect::Approve {
             item: archive,
+            reviewed: None,
             comments: Vec::new()
         })
     );
@@ -692,6 +693,7 @@ fn a_review_asks_for_the_verdict_and_offers_the_diff_first() {
         press(&mut app, KeyCode::Char('r')),
         Some(Effect::RequestChanges {
             item: archive,
+            reviewed: None,
             comments: Vec::new()
         })
     );
@@ -1225,7 +1227,7 @@ fn the_agents_tab_lists_each_agent_with_its_sessions() {
     assert_eq!(
         press(&mut app, KeyCode::Char('a')),
         Some(Effect::Permit {
-            session: SessionId::from_bytes([11; 32]),
+            request: coders_request(),
             answer: Permission::Allow
         })
     );
@@ -2294,9 +2296,17 @@ fn a_link_under_the_pointer_is_underlined_and_its_tip_shows() {
     );
 }
 
+/// The permission request of the coder in the snapshot.
+fn coders_request() -> Request {
+    Request {
+        session: SessionId::from_bytes([11; 32]),
+        since_ms: NOW_MS - 5_000,
+    }
+}
+
 fn permit(answer: Permission) -> Option<Effect> {
     Some(Effect::Permit {
-        session: SessionId::from_bytes([11; 32]),
+        request: coders_request(),
         answer,
     })
 }
@@ -3243,6 +3253,7 @@ fn a_change_request_on_selected_lines_is_a_draft_under_them_until_the_verdict_se
         press(&mut app, KeyCode::Char('r')),
         Some(Effect::RequestChanges {
             item: archive,
+            reviewed: Some(work_commit()),
             comments: drafts
         })
     );
@@ -3401,4 +3412,59 @@ fn a_selection_key_that_does_not_move_keeps_the_details_beside_the_list() {
     assert_eq!(app.stack(), &opened);
     press(&mut app, KeyCode::Char('j'));
     assert!(app.stack().is_empty());
+}
+
+#[test]
+fn a_verdict_carries_the_commit_the_diff_on_screen_shows() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('R'));
+    assert!(matches!(
+        press(&mut app, KeyCode::Char('a')),
+        Some(Effect::Approve { reviewed, .. }) if reviewed == Some(work_commit())
+    ));
+    // Work without commits is reviewed as submitted without a commit.
+    app.diff_on_top_mut()
+        .unwrap()
+        .read(Ok(super::diff::ItemWork {
+            commit: work_commit(),
+            changes: super::diff::Changes::NoCommits,
+        }));
+    press(&mut app, KeyCode::Char('R'));
+    assert_eq!(
+        press(&mut app, KeyCode::Char('a')),
+        Some(Effect::Approve {
+            item: archive,
+            reviewed: None,
+            comments: Vec::new()
+        })
+    );
+}
+
+#[test]
+fn drafts_that_were_posted_before_a_failure_are_not_drafts_any_more() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    let draft = |text: &str| super::diff::LineComment {
+        kind: wf_core::event::CommentKind::Plain,
+        lines: wf_core::event::LineAnchor {
+            commit: work_commit(),
+            path: "src/lib.rs".to_owned(),
+            side: wf_core::event::DiffSide::New,
+            first: 1,
+            last: 1,
+            quote: String::new(),
+        },
+        text: text.to_owned(),
+    };
+    for text in ["one", "two", "three"] {
+        app.drafted(archive, draft(text), None);
+    }
+    app.drafts_posted(archive, 2);
+    let left: Vec<&str> = app
+        .drafts(archive)
+        .iter()
+        .map(|draft| draft.text.as_str())
+        .collect();
+    assert_eq!(left, ["three"]);
 }

@@ -16,9 +16,10 @@ use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::item::ItemState;
 use wf_core::name::AgentName;
+use wf_core::session::CommitId;
 use wf_harness::{Permission, TranscriptEntry};
 
-use super::diff::{DiffPane, LineComment};
+use super::diff::{Changes, DiffPane, LineComment};
 use super::draw;
 use super::snapshot::{
     Detail, InView, ItemListing, ItemRow, MovedBack, SessionInfo, SessionStatus, Snapshot, Waiting,
@@ -105,9 +106,10 @@ impl Tab {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Quit,
-    /// Answers the oldest permission request of a session.
+    /// Answers a permission request, which the daemon refuses once it is not the oldest of its
+    /// session.
     Permit {
-        session: SessionId,
+        request: Request,
         answer: Permission,
     },
     /// A comment that resolves a blocker.
@@ -122,15 +124,19 @@ pub enum Effect {
         blocker: CommentId,
         text: String,
     },
-    /// Posts the comments on lines of the review, then approves.
+    /// Posts the comments on lines of the review, then approves the work as of `reviewed`, which
+    /// is refused when that is not what was submitted.
     Approve {
         item: ItemId,
+        reviewed: Option<CommitId>,
         comments: Vec<LineComment>,
     },
     /// Posts the comments on lines of the review, then requests the changes. Without a change
-    /// request among them, writes the change requests in `$EDITOR` first, one per line.
+    /// request among them, writes the change requests in `$EDITOR` first, one per line. Refused
+    /// like [`Effect::Approve`] when `reviewed` is not what was submitted.
     RequestChanges {
         item: ItemId,
+        reviewed: Option<CommitId>,
         comments: Vec<LineComment>,
     },
     /// Posts a comment about lines of the diff, while no review waits.
@@ -1776,7 +1782,7 @@ impl App {
             Target::Allow(request) => {
                 if unconfirmed.is_some_and(|unconfirmed| self.confirms(unconfirmed, request)) {
                     return Some(Effect::Permit {
-                        session: request.session,
+                        request,
                         answer: Permission::Allow,
                     });
                 }
@@ -1787,7 +1793,7 @@ impl App {
                 None
             }
             Target::Deny(request) => Some(Effect::Permit {
-                session: request.session,
+                request,
                 answer: Permission::Deny,
             }),
         }
@@ -1963,10 +1969,7 @@ impl App {
     /// The keys that act on what waits, on items and on sessions, for whatever is on screen.
     fn act(&mut self, key: KeyEvent) -> Option<Effect> {
         let subjects = self.subjects();
-        let permission = subjects.iter().find_map(|entry| match entry {
-            Waiting::Permission { session, .. } => Some(*session),
-            Waiting::Blocker { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
-        });
+        let permission = subjects.iter().find_map(|entry| entry.request());
         let blocker = subjects.iter().find_map(|entry| match entry {
             Waiting::Blocker { item, comment, .. } => Some((item.id, *comment)),
             Waiting::Permission { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
@@ -1976,12 +1979,12 @@ impl App {
             Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => None,
         });
         match key.code {
-            KeyCode::Char('a') => permission.map(|session| Effect::Permit {
-                session,
+            KeyCode::Char('a') => permission.map(|request| Effect::Permit {
+                request,
                 answer: Permission::Allow,
             }),
-            KeyCode::Char('d') => permission.map(|session| Effect::Permit {
-                session,
+            KeyCode::Char('d') => permission.map(|request| Effect::Permit {
+                request,
                 answer: Permission::Deny,
             }),
             KeyCode::Char('r') => {
@@ -2127,11 +2130,27 @@ impl App {
                         });
                         return (None, None);
                     }
-                    (None, Some(Effect::Approve { item, comments }))
+                    let reviewed = self.reviewed_commit(item);
+                    (
+                        None,
+                        Some(Effect::Approve {
+                            item,
+                            reviewed,
+                            comments,
+                        }),
+                    )
                 }
                 KeyCode::Char('r') => {
                     let comments = self.drafts(item).to_vec();
-                    (None, Some(Effect::RequestChanges { item, comments }))
+                    let reviewed = self.reviewed_commit(item);
+                    (
+                        None,
+                        Some(Effect::RequestChanges {
+                            item,
+                            reviewed,
+                            comments,
+                        }),
+                    )
                 }
                 // The diff is looked at before deciding.
                 KeyCode::Char('D') => {
@@ -2333,6 +2352,31 @@ impl App {
         })
     }
 
+    /// The commit of `item` the principal looks at when giving a verdict: the one the diff on
+    /// screen shows (none for work without commits), or without a diff read, the one the review
+    /// waiting in the inbox is of.
+    fn reviewed_commit(&self, item: ItemId) -> Option<CommitId> {
+        let shown = self.diffs.get(&item).and_then(|pane| match &pane.work {
+            Some(Ok(work)) => Some(match work.changes {
+                Changes::NoCommits => None,
+                Changes::Files(_) => Some(work.commit),
+            }),
+            Some(Err(_)) | None => None,
+        });
+        shown.unwrap_or_else(|| {
+            self.snapshot.waiting.iter().find_map(|entry| match entry {
+                Waiting::Review {
+                    item: waiting,
+                    commit,
+                } if waiting.id == item => *commit,
+                Waiting::Review { .. }
+                | Waiting::Permission { .. }
+                | Waiting::Blocker { .. }
+                | Waiting::Notice { .. } => None,
+            })
+        })
+    }
+
     /// The comments on lines of the review of `item` being written.
     pub fn drafts(&self, item: ItemId) -> &[LineComment] {
         self.diffs
@@ -2352,6 +2396,14 @@ impl App {
     pub fn reviewed(&mut self, item: ItemId) {
         if let Some(pane) = self.diffs.get_mut(&item) {
             pane.drafts.clear();
+        }
+    }
+
+    /// The first `posted` drafts of the review of `item` were posted, but the verdict was not
+    /// given: they are not drafts any more, and the rest still are.
+    pub fn drafts_posted(&mut self, item: ItemId, posted: usize) {
+        if let Some(pane) = self.diffs.get_mut(&item) {
+            pane.drafts.drain(..posted.min(pane.drafts.len()));
         }
     }
 

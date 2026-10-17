@@ -246,6 +246,14 @@ fn handle(
                     app.reviewed(item);
                     app.did(what, workspace::now_ms());
                 }
+                Ok(act::Outcome::ReviewFailed {
+                    item,
+                    posted,
+                    error,
+                }) => {
+                    app.drafts_posted(item, posted);
+                    app.action_failed(&error, workspace::now_ms());
+                }
                 Err(error) => app.action_failed(&error, workspace::now_ms()),
             }
             // Show what the action changed right away.
