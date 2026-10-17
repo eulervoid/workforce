@@ -608,3 +608,55 @@ fn a_replica_far_ahead_cannot_be_asked_for_a_successor_past_the_end_of_time() {
         Some(crate::state::BuildError::ClockExhausted)
     );
 }
+
+#[test]
+fn a_far_future_event_is_refused_before_it_can_wait_for_its_parent() {
+    let fixture = Fixture::new(1);
+    let mut author = fixture.state();
+    let now_ms = 10_000;
+    let future_ms = now_ms + HLC_TOLERANCE_MS + 10;
+    let parent = fixture.apply(&mut author, 0, future_ms, create("task", "a"));
+    let child = fixture.apply(&mut author, 0, future_ms + 1, create("task", "b"));
+
+    let mut state = fixture.state();
+    assert_eq!(
+        state
+            .receive_at(child.clone(), Trust::Untrusted, now_ms)
+            .err(),
+        Some(Invalid::HlcInFuture)
+    );
+    assert_eq!(state.pending_events().count(), 0);
+    assert_eq!(
+        state
+            .receive_at(parent.clone(), Trust::Untrusted, now_ms)
+            .err(),
+        Some(Invalid::HlcInFuture)
+    );
+
+    // Once the clock has caught up both are offered again and applied.
+    let later = future_ms + 1;
+    assert!(state.receive_at(parent, Trust::Untrusted, later).is_ok());
+    assert!(state.receive_at(child, Trust::Untrusted, later).is_ok());
+    assert_eq!(state, author);
+}
+
+#[test]
+fn a_released_event_is_not_judged_by_the_clock_again() {
+    let fixture = Fixture::new(1);
+    let mut author = fixture.state();
+    let wall_ms = 2 * HLC_TOLERANCE_MS;
+    let parent = fixture.apply(&mut author, 0, 1_000, create("task", "a"));
+    let child = fixture.apply(&mut author, 0, wall_ms, create("task", "b"));
+
+    let mut state = fixture.state();
+    assert_eq!(
+        state
+            .receive_at(child, Trust::Untrusted, wall_ms)
+            .map(|received| received.disposition),
+        Ok(Disposition::Pending)
+    );
+    // The receiver's clock went backwards between the two arrivals.
+    let received = state.receive_at(parent, Trust::Untrusted, 0).unwrap();
+    assert_eq!(received.applied.len(), 2);
+    assert!(received.rejected.is_empty());
+}

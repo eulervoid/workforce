@@ -362,6 +362,11 @@ impl State {
         if trust == Trust::Untrusted && event.verify_signature().is_err() {
             return Err(Invalid::BadSignature);
         }
+        // Before anything can park the event, so the descendants of a refused event are refused
+        // too. Released events were checked when they arrived and are not judged by a later clock.
+        if trust == Trust::Untrusted && event.content.hlc.wall_ms() > latest_wall_ms {
+            return Err(Invalid::HlcInFuture);
+        }
 
         let Some(workforce) = &self.workforce else {
             return match (&content.body, content.workforce) {
@@ -416,7 +421,7 @@ impl State {
         }
 
         self.check_feed(event)?;
-        self.check_hlc(event, latest_wall_ms)?;
+        self.check_hlc(event)?;
         match &content.body {
             EventBody::DeviceBound(_) => self.check_binding(event)?,
             EventBody::Genesis(_)
@@ -469,7 +474,7 @@ impl State {
         }
     }
 
-    fn check_hlc(&self, event: &Event, latest_wall_ms: u64) -> Result<(), Invalid> {
+    fn check_hlc(&self, event: &Event) -> Result<(), Invalid> {
         let hlc = event.content.hlc;
         if !hlc.is_admissible() {
             return Err(Invalid::HlcAtMaximum);
@@ -479,8 +484,6 @@ impl State {
             .all(|parent| self.known[&parent].hlc < event.content.hlc);
         if !follows_all {
             Err(Invalid::HlcNotAfterParents)
-        } else if hlc.wall_ms() > latest_wall_ms {
-            Err(Invalid::HlcInFuture)
         } else {
             Ok(())
         }
