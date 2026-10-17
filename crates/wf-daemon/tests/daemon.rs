@@ -22,13 +22,21 @@ struct Running {
 }
 
 /// Ends the test process on a panic in any task or thread, as the daemon binary stops: a
-/// panicking task would otherwise go unnoticed, as only the tasks it serves would stop.
+/// panicking task would otherwise go unnoticed, as only the tasks it serves would stop. The
+/// hook is process-wide and tests run in parallel, so it is installed once, with a watcher
+/// thread that outlives every test runtime.
 fn fail_on_panic() {
-    let mut panics = wf_daemon::watch_panics();
-    tokio::spawn(async move {
-        let report = panics.first().await;
-        eprintln!("the daemon panicked: {report}");
-        std::process::exit(101);
+    static INSTALLED: std::sync::Once = std::sync::Once::new();
+    INSTALLED.call_once(|| {
+        let mut panics = wf_daemon::watch_panics();
+        std::thread::spawn(move || {
+            let runtime = tokio::runtime::Builder::new_current_thread()
+                .build()
+                .unwrap();
+            let report = runtime.block_on(panics.first());
+            eprintln!("the daemon panicked: {report}");
+            std::process::exit(101);
+        });
     });
 }
 
