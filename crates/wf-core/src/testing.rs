@@ -4,9 +4,9 @@ use crate::autonomy::Autonomy;
 use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::event::{
-    AgentDefined, Change, Comment, CommentKind, DeviceBound, Event, EventBody, EventBuilder,
-    ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemMoved,
-    ItemRef, Link, PolicySet, SessionEnded, SessionStarted, WrittenState,
+    AgentDefined, BoundPolicySet, Change, Comment, CommentKind, DeviceBound, Event, EventBody,
+    EventBuilder, ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated, ItemEdited,
+    ItemLinked, ItemMoved, ItemRef, Link, SessionEnded, SessionStarted, WrittenState,
 };
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
@@ -255,11 +255,11 @@ impl Fixture {
             )
             .expect("state has a genesis")
             .hlc();
-        EventBody::PolicySet(
+        EventBody::BoundPolicySet(
             Signed::sign(
                 signer,
                 Some(self.workforce()),
-                PolicySet {
+                BoundPolicySet {
                     policy: source.into(),
                     hlc,
                 },

@@ -298,6 +298,7 @@ impl State {
                 | EventBody::Merged(_)
                 | EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
+                | EventBody::BoundPolicySet(_)
                 | EventBody::AgentDefined(_)
                 | EventBody::AgentRemoved(_)
                 | EventBody::InviteCreated(_)
@@ -337,6 +338,7 @@ impl State {
             EventBody::Merged(merged) => Some(merged.item),
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)
+            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)

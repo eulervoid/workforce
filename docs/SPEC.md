@@ -285,7 +285,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | Tag | Body | Payload |
 |---|---|---|
 | 1 | `Genesis` | `Signed<Genesis>`: `name`, `founder: MemberSeed`, `members: Vec<MemberSeed>`, `policy` (TOML text), `forked_from: Option<ForkPoint{workforce, heads}>` |
-| 2 | `PolicySet` | `Signed<PolicySet>`: `policy` (TOML text, verbatim) |
+| 2 | `PolicySet` | `Signed<PolicySet>`: `policy` (TOML text, verbatim); not bound to its event, no longer authored (see tag 28) |
 | 3 | `AgentDefined` | `name`, `harness`, `model: Option`, `capabilities`, `lanes`, `autonomy{start, nudges, park_timeout, max_duration: Option, permissions}`, `instructions: Option` |
 | 4 | `InviteCreated` | `Signed<InviteCreated>`: `kind` (`Device`), `invite: InviteKey`, `expires_ms` |
 | 5 | `DeviceBound` | `invite: EventId`, `proof` by the invite key |
@@ -305,6 +305,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 23 | `Merged` | `item`, `reviewed`, `commit` |
 | 24 | retired | (`Report`, now a comment) |
 | 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
+| 28 | `BoundPolicySet` | `Signed<BoundPolicySet>`: `policy`, and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
 
 * `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.
 * `MemberSeed` = `principal`, `handle`, `devices`, `previous: Vec<PrincipalKey>` (keys the member
@@ -353,8 +354,11 @@ device signature; workforce; all parents known; `prev` is the author's `seq - 1`
 parent's and neither part at its maximum; the author is a bound device and the actor belongs to its
 principal (a `DeviceBound` as the author's first event, with its invite among its deps and a valid
 proof, binds it); an agent actor is a defined agent and its session belongs to that agent on that
-device; authority bodies carry a valid principal signature (an owner's for `PolicySet` and
-`ForkAnnounced`, the actor's own principal's for `InviteCreated`); genesis is signed by its founder
+device; authority bodies carry a valid principal signature of the event's actor (an owner's for
+`BoundPolicySet`, `PolicySet` and `ForkAnnounced`, a member's for `InviteCreated`); a
+`BoundPolicySet` names the `hlc` of its own event; an unbound `PolicySet` (tag 2, written before the
+bound tag existed) is still admitted, so stored logs keep loading, but is refused when a
+`BoundPolicySet` is in its causal past, since it could only be a replayed old policy; genesis is signed by its founder
 from a founder device, with unique principals, handles and devices; referenced items, sessions and
 agents exist; no item links to itself.
 
@@ -366,8 +370,10 @@ agents exist; no item links to itself.
   check depends on the receiver's clock, so it is the one admission rule that is not a function of
   the causal past; the maxima above are, and are refused for good. Replay from the local store
   applies no tolerance.
-* Events with missing parents wait in a **pending set** (at most 10,000; events waiting on a fork's
-  history are exempt) and are applied when their parents arrive. Any arrival order and duplication
+* Events with missing parents wait in a **pending set** (at most 10,000, including events waiting
+  on a fork's history, which first need a bound device of their actor's principal, or a
+  `DeviceBound` at `seq` 1; a device bound only later is refused, and sync offers its events again once
+  the history is complete; history events need consistent `seq`/`prev`) and are applied when their parents arrive. Any arrival order and duplication
   give the same state, tested with generated event sets and a simulation of 1,000 sync schedules.
 
 **Authoring checks** (`check_policy` and `check_actor`, run by the author before signing; peers do

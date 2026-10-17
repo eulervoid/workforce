@@ -392,11 +392,11 @@ fn policy_changes_need_a_valid_principal_signature_for_this_workforce() {
     let mut state = fixture.state();
 
     let other_workforce = WorkforceId::from(EventId::of(b"elsewhere"));
-    let replayed = EventBody::PolicySet(
+    let replayed = EventBody::BoundPolicySet(
         Signed::sign(
             &fixture.founder,
             Some(other_workforce),
-            crate::event::PolicySet {
+            crate::event::BoundPolicySet {
                 policy: crate::policy::DEFAULT_POLICY_TOML.into(),
                 hlc: state
                     .builder(fixture.devices[0].key(), fixture.founder_actor(), 5_000)
@@ -440,12 +440,13 @@ fn an_old_signed_policy_cannot_be_written_into_a_new_event() {
     let old_event = fixture.apply(&mut state, 0, 5_000, old);
     let newer = fixture.policy_set(&state, 0, 5_100, &fixture.founder, &newer_source);
     fixture.apply(&mut state, 0, 5_100, newer);
-    let EventBody::PolicySet(signed) = &old_event.content.body else {
+    let EventBody::BoundPolicySet(signed) = &old_event.content.body else {
         panic!("a policy was written")
     };
 
     // Another device of the owner writes the signed statement into an event with a newer stamp.
-    let by_owner_device = fixture.author(&state, 1, 5_200, EventBody::PolicySet(signed.clone()));
+    let by_owner_device =
+        fixture.author(&state, 1, 5_200, EventBody::BoundPolicySet(signed.clone()));
     assert_eq!(
         receive(&mut state, by_owner_device),
         Err(Invalid::PolicyNotForThisEvent)
@@ -459,13 +460,61 @@ fn an_old_signed_policy_cannot_be_written_into_a_new_event() {
             5_200,
         )
         .unwrap()
-        .sign(&fixture.member_device, EventBody::PolicySet(signed.clone()))
+        .sign(
+            &fixture.member_device,
+            EventBody::BoundPolicySet(signed.clone()),
+        )
         .unwrap();
     assert_eq!(
         receive(&mut state, member_event),
         Err(Invalid::ActorMismatch)
     );
     assert_eq!(state.policy().unwrap().source, newer_source);
+}
+
+#[test]
+fn an_unbound_policy_is_refused_once_a_bound_one_precedes_it() {
+    let fixture = Fixture::new(2);
+    let mut state = fixture.state();
+    let unbound = |source: &str| {
+        EventBody::PolicySet(
+            Signed::sign(
+                &fixture.founder,
+                Some(fixture.workforce()),
+                crate::event::PolicySet {
+                    policy: source.into(),
+                },
+            )
+            .unwrap(),
+        )
+    };
+    let before = format!("{}\n# before\n", crate::policy::DEFAULT_POLICY_TOML);
+    let event = fixture.author(&state, 0, 5_000, unbound(&before));
+    assert_eq!(receive(&mut state, event), Ok(Disposition::Applied));
+
+    let bound = fixture.author(
+        &state,
+        0,
+        5_100,
+        fixture.policy_set(
+            &state,
+            0,
+            5_100,
+            &fixture.founder,
+            crate::policy::DEFAULT_POLICY_TOML,
+        ),
+    );
+    assert_eq!(receive(&mut state, bound), Ok(Disposition::Applied));
+
+    let replay = fixture.author(&state, 1, 5_200, unbound(&before));
+    assert_eq!(
+        receive(&mut state, replay),
+        Err(Invalid::UnboundPolicyAfterBound)
+    );
+    assert_eq!(
+        state.policy().unwrap().source,
+        crate::policy::DEFAULT_POLICY_TOML
+    );
 }
 
 /// A policy written by a newer version, with a recovery step this version does not know.

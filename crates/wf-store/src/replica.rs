@@ -312,7 +312,7 @@ impl<S: EventStore> Replica<S> {
             builder = builder.depending_on(bound.invite);
         }
         // The signer chose the hlc of a policy before the event existed.
-        if let EventBody::PolicySet(signed) = &body {
+        if let EventBody::BoundPolicySet(signed) = &body {
             let hlc = signed.statement.hlc;
             if hlc.wall_ms() > now_ms.saturating_add(HLC_TOLERANCE_MS) {
                 return Err(AuthorError::PolicyHlcInFuture);
@@ -326,7 +326,8 @@ impl<S: EventStore> Replica<S> {
             .state
             .receive(event.clone(), Trust::Untrusted)
             .map_err(ReceiveError::from)?;
-        self.persist(&event, &received).map_err(ReceiveError::from)?;
+        self.persist(&event, &received)
+            .map_err(ReceiveError::from)?;
         Ok(event)
     }
 

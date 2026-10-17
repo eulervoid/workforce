@@ -173,6 +173,7 @@ impl State {
                 content.body,
                 EventBody::Genesis(_)
                     | EventBody::PolicySet(_)
+                    | EventBody::BoundPolicySet(_)
                     | EventBody::InviteCreated(_)
                     | EventBody::DeviceBound(_)
                     | EventBody::ForkAnnounced(_)
@@ -252,11 +253,11 @@ impl State {
                 }
             }
             EventBody::PolicySet(signed) => {
-                let source = &signed.statement.policy;
-                workforce.policy_source.set(source.clone(), stamp);
-                if let Ok(policy) = PolicyDoc::parse(source) {
-                    workforce.policy.set(policy, stamp);
-                }
+                workforce.set_policy(signed.statement.policy.clone(), stamp);
+            }
+            EventBody::BoundPolicySet(signed) => {
+                self.bound_policies.insert(id);
+                workforce.set_policy(signed.statement.policy.clone(), stamp);
             }
             EventBody::AgentDefined(_) | EventBody::AgentRemoved(_)
                 if origin == Origin::History

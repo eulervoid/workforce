@@ -98,6 +98,8 @@ pub enum Invalid {
     NotOwner(PrincipalKey),
     #[error("the policy was signed for another event: its hlc is not the hlc of the event")]
     PolicyNotForThisEvent,
+    #[error("the policy is not bound to its event, but a policy that is bound precedes it")]
+    UnboundPolicyAfterBound,
     #[error("principal signature is invalid")]
     BadPrincipalSignature,
     #[error("unknown item {0}")]
@@ -437,6 +439,7 @@ impl State {
             EventBody::DeviceBound(_) => self.check_binding(event)?,
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)
+            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)
@@ -597,6 +600,19 @@ impl State {
         match &event.content.body {
             EventBody::Genesis(_) => Err(Invalid::DuplicateGenesis),
             EventBody::PolicySet(signed) => {
+                self.check_signed_by_actor(signed, event, trust, Role::Owner)?;
+                // Nothing binds this policy to its event, so once a bound policy is in the
+                // event's past, an old one could be written into a new event to roll it back.
+                if self
+                    .bound_policies
+                    .iter()
+                    .any(|bound| self.in_causal_past(event, *bound))
+                {
+                    return Err(Invalid::UnboundPolicyAfterBound);
+                }
+                Ok(())
+            }
+            EventBody::BoundPolicySet(signed) => {
                 self.check_signed_by_actor(signed, event, trust, Role::Owner)?;
                 if signed.statement.hlc != event.content.hlc {
                     return Err(Invalid::PolicyNotForThisEvent);
@@ -804,6 +820,7 @@ impl State {
                 }
                 EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
+                | EventBody::BoundPolicySet(_)
                 | EventBody::AgentDefined(_)
                 | EventBody::AgentRemoved(_)
                 | EventBody::InviteCreated(_)
@@ -834,6 +851,7 @@ impl State {
         match body {
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)
+            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)
@@ -1025,7 +1043,10 @@ impl State {
         };
 
         match body {
-            EventBody::Genesis(_) | EventBody::PolicySet(_) | EventBody::Unknown { .. } => Ok(()),
+            EventBody::Genesis(_)
+            | EventBody::PolicySet(_)
+            | EventBody::BoundPolicySet(_)
+            | EventBody::Unknown { .. } => Ok(()),
             EventBody::Commented(comment) => {
                 if comment.text.trim().is_empty() && comment.resolves.is_empty() {
                     return Err(PolicyViolation::EmptyComment);

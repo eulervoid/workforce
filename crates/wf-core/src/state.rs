@@ -289,6 +289,15 @@ impl Workforce {
     pub(crate) fn canonical(&self, principal: &PrincipalKey) -> PrincipalKey {
         self.aliases.get(principal).copied().unwrap_or(*principal)
     }
+
+    /// Takes `source` as the policy if `stamp` is the latest; it runs only if this version can
+    /// read it.
+    pub(crate) fn set_policy(&mut self, source: String, stamp: Stamp) {
+        self.policy_source.set(source.clone(), stamp);
+        if let Ok(policy) = PolicyDoc::parse(&source) {
+            self.policy.set(policy, stamp);
+        }
+    }
 }
 
 /// What a pending event waits for before it can be admitted.
@@ -355,6 +364,9 @@ pub struct State {
     pub(crate) workforce: Option<Workforce>,
     pub(crate) feeds: BTreeMap<DeviceKey, Feed>,
     pub(crate) known: BTreeMap<EventId, Known>,
+    /// The policies that are bound to their event, to refuse an unbound one that follows them.
+    #[serde(default)]
+    pub(crate) bound_policies: BTreeSet<EventId>,
     /// Events that some applied event names as its `prev`.
     pub(crate) extended: BTreeSet<EventId>,
     pub(crate) heads: BTreeSet<EventId>,

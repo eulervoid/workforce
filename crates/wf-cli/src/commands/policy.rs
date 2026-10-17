@@ -1,7 +1,7 @@
 //! `wf policy`: showing and changing the policy of the workforce.
 
 use anyhow::Context;
-use wf_core::event::{EventBody, PolicySet};
+use wf_core::event::{BoundPolicySet, EventBody};
 use wf_core::identity::Signed;
 use wf_core::policy::Policy;
 
@@ -58,11 +58,11 @@ fn apply_policy(json: bool, workspace: &mut Workspace, source: String) -> anyhow
     let statement = Signed::sign(
         &principal,
         Some(workforce),
-        PolicySet {
+        BoundPolicySet {
             policy: source,
             hlc,
         },
     )?;
-    let event = workspace.author(EventBody::PolicySet(statement))?;
+    let event = workspace.author(EventBody::BoundPolicySet(statement))?;
     done(json, "policy replaced".to_string(), &event, None)
 }

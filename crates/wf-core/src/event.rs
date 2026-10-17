@@ -51,8 +51,16 @@ pub struct Genesis {
     pub forked_from: Option<ForkPoint>,
 }
 
+/// A policy as written before it was bound to its event (tag 2). Still decoded and folded, but
+/// no new one is authored: see [`BoundPolicySet`].
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicySet {
+    /// Policy TOML, stored verbatim.
+    pub policy: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BoundPolicySet {
     /// Policy TOML, stored verbatim.
     pub policy: String,
     /// The `hlc` of the event that carries the policy. The signature covers only the workforce
@@ -576,6 +584,7 @@ pub struct Merged {
 pub enum EventBody {
     Genesis(Signed<Genesis>),
     PolicySet(Signed<PolicySet>),
+    BoundPolicySet(Signed<BoundPolicySet>),
     AgentDefined(AgentDefined),
     AgentRemoved(AgentRemoved),
     InviteCreated(Signed<InviteCreated>),
@@ -632,6 +641,8 @@ mod tag {
     /// `Comment` of kind `CheckFailure`. Peers that predate it carry it as `Unknown` instead of
     /// failing to decode the event; they do not show it as a change request.
     pub const COMMENT_CHECK_FAILURE: u16 = 27;
+    /// `PolicySet` as written once it carried the hlc of its event; tag 2 is the unbound one.
+    pub const BOUND_POLICY_SET: u16 = 28;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -647,6 +658,7 @@ impl EventBody {
         match self {
             EventBody::Genesis(_) => "Genesis",
             EventBody::PolicySet(_) => "PolicySet",
+            EventBody::BoundPolicySet(_) => "BoundPolicySet",
             EventBody::AgentDefined(_) => "AgentDefined",
             EventBody::AgentRemoved(_) => "AgentRemoved",
             EventBody::InviteCreated(_) => "InviteCreated",
@@ -677,6 +689,7 @@ impl EventBody {
         match self {
             EventBody::Genesis(body) => body.serialize(serializer),
             EventBody::PolicySet(body) => body.serialize(serializer),
+            EventBody::BoundPolicySet(body) => body.serialize(serializer),
             EventBody::AgentDefined(body) => body.serialize(serializer),
             EventBody::AgentRemoved(body) => body.serialize(serializer),
             EventBody::InviteCreated(body) => body.serialize(serializer),
@@ -702,6 +715,7 @@ impl EventBody {
         let (tag, payload) = match self {
             EventBody::Genesis(body) => (tag::GENESIS, encoding::encode(body)?),
             EventBody::PolicySet(body) => (tag::POLICY_SET, encoding::encode(body)?),
+            EventBody::BoundPolicySet(body) => (tag::BOUND_POLICY_SET, encoding::encode(body)?),
             EventBody::AgentDefined(body) => (tag::AGENT_DEFINED, encoding::encode(body)?),
             EventBody::AgentRemoved(body) => (tag::AGENT_REMOVED, encoding::encode(body)?),
             EventBody::InviteCreated(body) => (tag::INVITE_CREATED, encoding::encode(body)?),
@@ -729,6 +743,7 @@ impl EventBody {
         Ok(match tagged.tag {
             tag::GENESIS => EventBody::Genesis(encoding::decode(payload)?),
             tag::POLICY_SET => EventBody::PolicySet(encoding::decode(payload)?),
+            tag::BOUND_POLICY_SET => EventBody::BoundPolicySet(encoding::decode(payload)?),
             tag::AGENT_DEFINED => EventBody::AgentDefined(encoding::decode(payload)?),
             tag::AGENT_REMOVED => EventBody::AgentRemoved(encoding::decode(payload)?),
             tag::INVITE_CREATED => EventBody::InviteCreated(encoding::decode(payload)?),
