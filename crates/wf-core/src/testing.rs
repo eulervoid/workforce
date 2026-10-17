@@ -453,3 +453,10 @@ pub fn merged(item: ItemId, reviewed: CommitId, commit: CommitId) -> EventBody {
         commit,
     })
 }
+
+pub fn check_failure(item: ItemId, text: &str) -> EventBody {
+    EventBody::Commented(Comment {
+        kind: CommentKind::CheckFailure,
+        ..Comment::plain(item, text)
+    })
+}

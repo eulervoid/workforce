@@ -356,6 +356,9 @@ impl Comment {
     }
 
     fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        if self.kind == CommentKind::CheckFailure {
+            return Ok((tag::COMMENT_CHECK_FAILURE, encoding::encode(self)?));
+        }
         match self.lines {
             Some(_) => Ok((tag::COMMENT_ON_LINES, encoding::encode(self)?)),
             None => Ok((
@@ -374,14 +377,28 @@ impl Comment {
     /// One without lines would encode to other bytes than were signed.
     fn on_lines(payload: &[u8]) -> Result<Self, EncodingError> {
         let comment: Comment = encoding::decode(payload)?;
-        match comment.lines {
-            Some(_) => Ok(comment),
-            None => Err(EncodingError::malformed()),
+        match (comment.kind, &comment.lines) {
+            (CommentKind::CheckFailure, _) | (_, None) => Err(EncodingError::malformed()),
+            (_, Some(_)) => Ok(comment),
+        }
+    }
+
+    /// A check failure under any other tag would encode to other bytes than were signed.
+    fn check_failure(payload: &[u8]) -> Result<Self, EncodingError> {
+        let comment: Comment = encoding::decode(payload)?;
+        match comment.kind {
+            CommentKind::CheckFailure => Ok(comment),
+            CommentKind::Plain | CommentKind::Blocker | CommentKind::ChangeRequest => {
+                Err(EncodingError::malformed())
+            }
         }
     }
 
     fn without_lines(payload: &[u8]) -> Result<Self, EncodingError> {
         let old: CommentWithoutLines = encoding::decode(payload)?;
+        if old.kind == CommentKind::CheckFailure {
+            return Err(EncodingError::malformed());
+        }
         Ok(Comment {
             item: old.item,
             text: old.text,
@@ -451,14 +468,27 @@ pub enum CommentKind {
     Blocker,
     /// The work has to do this before it is submitted.
     ChangeRequest,
+    /// A change request the daemon's check runner wrote because a check of the item's merge
+    /// result failed. Counted by [`State::failed_check_runs`](crate::state::State), and otherwise
+    /// a change request.
+    CheckFailure,
 }
 
 impl CommentKind {
+    /// Whether the comment asks the work to change before it is submitted: a change request,
+    /// whoever wrote it.
+    pub fn is_change_request(self) -> bool {
+        match self {
+            CommentKind::ChangeRequest | CommentKind::CheckFailure => true,
+            CommentKind::Plain | CommentKind::Blocker => false,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             CommentKind::Plain => "comment",
             CommentKind::Blocker => "blocker",
-            CommentKind::ChangeRequest => "change_request",
+            CommentKind::ChangeRequest | CommentKind::CheckFailure => "change_request",
         }
     }
 }
@@ -595,6 +625,9 @@ mod tag {
     pub const SESSION_ENDED: u16 = 25;
     /// `Comment` about lines of a diff; one that is not is still written as `COMMENT`.
     pub const COMMENT_ON_LINES: u16 = 26;
+    /// `Comment` of kind `CheckFailure`. Peers that predate it carry it as `Unknown` instead of
+    /// failing to decode the event; they do not show it as a change request.
+    pub const COMMENT_CHECK_FAILURE: u16 = 27;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -709,6 +742,7 @@ impl EventBody {
             tag::ITEM_UNARCHIVED => EventBody::ItemUnarchived(encoding::decode(payload)?),
             tag::COMMENT => EventBody::Commented(Comment::without_lines(payload)?),
             tag::COMMENT_ON_LINES => EventBody::Commented(Comment::on_lines(payload)?),
+            tag::COMMENT_CHECK_FAILURE => EventBody::Commented(Comment::check_failure(payload)?),
             tag::SESSION_STARTED => EventBody::SessionStarted(encoding::decode(payload)?),
             tag::SESSION_ENDED_WITHOUT_COMMENT => {
                 EventBody::SessionEnded(SessionEnded::without_comment(payload)?)
@@ -1043,6 +1077,38 @@ mod tests {
                 ..comment
             })
             .unwrap(),
+        };
+        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
+    }
+
+    #[test]
+    fn a_check_failure_round_trips_under_its_own_tag_that_older_peers_carry_unknown() {
+        let failure = Comment {
+            kind: CommentKind::CheckFailure,
+            ..Comment::plain(ItemId::from_bytes([1; 32]), "cargo test failed")
+        };
+        let body = EventBody::Commented(failure.clone());
+        let bytes = encoding::encode(&body).unwrap();
+        assert_eq!(bytes[0], tag::COMMENT_CHECK_FAILURE as u8);
+        assert_eq!(encoding::decode::<EventBody>(&bytes).unwrap(), body);
+        // What a peer that predates the tag does with it: carry it and write it back unchanged.
+        let tagged: TaggedBody = encoding::decode(&bytes).unwrap();
+        let carried = EventBody::Unknown {
+            tag: tagged.tag,
+            payload: tagged.payload,
+        };
+        assert_eq!(encoding::encode(&carried).unwrap(), bytes);
+        // The kind belongs to the tag: under the others it would re-encode to other bytes.
+        for other in [tag::COMMENT, tag::COMMENT_ON_LINES] {
+            let forged = TaggedBody {
+                tag: other,
+                payload: encoding::encode(&failure).unwrap(),
+            };
+            assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
+        }
+        let forged = TaggedBody {
+            tag: tag::COMMENT_CHECK_FAILURE,
+            payload: encoding::encode(&Comment::plain(failure.item, "x")).unwrap(),
         };
         assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
     }

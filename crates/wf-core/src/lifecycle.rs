@@ -220,8 +220,9 @@ impl State {
     }
 
     /// How many check runs on the merge result of `item` failed since the principal last acted on
-    /// it. A failed run is told as change requests by the daemon, one per failed check, after the
-    /// submission whose merge was checked; the submissions they follow are counted.
+    /// it. A failed run is told as check failures by the daemon, one per failed check, after the
+    /// submission whose merge was checked; the submissions they follow are counted. A check
+    /// failure before any submission belongs to no run.
     pub fn failed_check_runs(&self, item: ItemId) -> usize {
         let Some(ItemView::Live(live)) = self.item(item) else {
             return 0;
@@ -250,11 +251,10 @@ impl State {
             .comments()
             .values()
             .filter(|comment| {
-                comment.kind == CommentKind::ChangeRequest
-                    && matches!(comment.by, Actor::Daemon(_))
+                comment.kind == CommentKind::CheckFailure
                     && since.is_none_or(|since| comment.at > since)
             })
-            .map(|comment| {
+            .filter_map(|comment| {
                 submissions
                     .iter()
                     .filter(|submitted| **submitted < comment.at)

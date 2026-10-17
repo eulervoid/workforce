@@ -3,7 +3,7 @@
 use anyhow::{anyhow, bail};
 use wf_core::event::{Change, Comment, CommentKind, EventBody};
 use wf_core::id::{CommentId, HashId, ItemId};
-use wf_core::item::ItemView;
+use wf_core::item::{Item, ItemView};
 use wf_core::lifecycle::Finish;
 use wf_core::refs::{self, Mention, Token};
 use wf_core::session::SessionRole;
@@ -163,12 +163,7 @@ fn comments_to_resolve(
         if !flag {
             continue;
         }
-        let open: Vec<CommentId> = live
-            .open_comments()
-            .into_iter()
-            .filter(|(_, comment)| comment.kind == wanted)
-            .map(|(id, _)| id)
-            .collect();
+        let open = open_of_kind(live, wanted);
         if open.is_empty() {
             bail!(
                 "#{} has no open {}s",
@@ -181,6 +176,18 @@ fn comments_to_resolve(
     resolves.sort();
     resolves.dedup();
     Ok(resolves)
+}
+
+/// The open comments of the kind asked for. A check failure is a change request.
+fn open_of_kind(item: &Item, wanted: CommentKind) -> Vec<CommentId> {
+    item.open_comments()
+        .into_iter()
+        .filter(|(_, comment)| {
+            comment.kind == wanted
+                || (wanted.is_change_request() && comment.kind.is_change_request())
+        })
+        .map(|(id, _)| id)
+        .collect()
 }
 
 pub(super) fn mentions(json: bool, workspace: &Workspace, target: &str) -> anyhow::Result<()> {
@@ -205,4 +212,33 @@ pub(super) fn mentions(json: bool, workspace: &Workspace, target: &str) -> anyho
             .collect(),
     };
     emit(json, &mentions, render::mentions)
+}
+
+#[cfg(test)]
+mod tests {
+    use wf_core::testing::*;
+
+    use super::*;
+
+    #[test]
+    fn resolving_change_requests_takes_check_failures_too_and_no_blockers() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let task: ItemId = fixture
+            .apply(&mut state, 0, 2_000, create("task", "work"))
+            .id()
+            .into();
+        let change = fixture.apply(&mut state, 0, 2_001, change_request(task, "rename"));
+        let failure = fixture.apply(&mut state, 0, 2_002, check_failure(task, "cargo test"));
+        fixture.apply(&mut state, 0, 2_003, blocker(task, "which one?"));
+        let Some(ItemView::Live(item)) = state.item(task) else {
+            unreachable!("the item is live")
+        };
+        let mut expected = vec![CommentId::from(change.id()), CommentId::from(failure.id())];
+        expected.sort();
+        let mut open = open_of_kind(item, CommentKind::ChangeRequest);
+        open.sort();
+        assert_eq!(open, expected);
+        assert_eq!(open_of_kind(item, CommentKind::Blocker).len(), 1);
+    }
 }

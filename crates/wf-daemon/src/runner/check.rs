@@ -261,7 +261,7 @@ impl Daemon {
         match state.after_failed_checks(item) {
             AfterFailedChecks::BackToWork { to } => {
                 for failed in &by_work {
-                    comment(CommentKind::ChangeRequest, failed.told(target)).await?;
+                    comment(CommentKind::CheckFailure, failed.told(target)).await?;
                 }
                 if !not_by_work.is_empty() {
                     let told: Vec<_> = not_by_work

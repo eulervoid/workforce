@@ -340,8 +340,12 @@ impl Scene {
 
     /// Submits the item and has its review send it back with an open change request.
     fn send_back(&mut self, item: ItemId) {
+        self.send_back_with(item, change_request(item, "add a test"));
+    }
+
+    fn send_back_with(&mut self, item: ItemId, open_comment: EventBody) {
         self.work(item, EndReason::Submitted { commit: None });
-        self.apply(change_request(item, "add a test"));
+        self.apply(open_comment);
         self.apply(verdict(item, None, Verdict::RequestChanges));
     }
 }
@@ -439,4 +443,17 @@ fn priority_goes_before_how_far_the_work_got() {
         crate::item::Priority::P0,
     ));
     assert_eq!(scene.offered(), ["urgent", "sent back"]);
+}
+
+#[test]
+fn work_sent_back_with_an_open_check_failure_goes_before_older_untouched_work() {
+    let mut scene = Scene::new();
+    scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
+    scene.apply(create_reviewed("task", "untouched", "standard"));
+    let sent_back: ItemId = scene
+        .apply(create_reviewed("task", "sent back", "standard"))
+        .id()
+        .into();
+    scene.send_back_with(sent_back, check_failure(sent_back, "cargo test"));
+    assert_eq!(scene.offered(), ["sent back", "untouched"]);
 }

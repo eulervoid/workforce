@@ -440,7 +440,7 @@ impl Scene {
             },
         ));
         for check in 0..checks {
-            let failed = self.apply_by_daemon(change_request(item, &format!("check {check}")));
+            let failed = self.apply_by_daemon(check_failure(item, &format!("check {check}")));
             // The agent fixes each before it submits again.
             let fixed = resolving(item, "fixed", &[failed.id().into()]);
             self.apply_by_daemon(fixed);
@@ -485,7 +485,18 @@ fn change_requests_of_others_are_not_failed_checks() {
     scene.submit_and_fail_checks(task, 0);
     let principal = scene.apply(change_request(task, "rename it"));
     scene.apply(resolving(task, "done", &[principal.id().into()]));
+    scene.apply_by_daemon(change_request(task, "from the daemon, but not a check"));
     assert_eq!(scene.state.failed_check_runs(task), 0);
+}
+
+#[test]
+fn check_failures_before_any_submission_are_not_counted() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    scene.apply_by_daemon(check_failure(task, "early"));
+    assert_eq!(scene.state.failed_check_runs(task), 0);
+    scene.submit_and_fail_checks(task, 1);
+    assert_eq!(scene.state.failed_check_runs(task), 1);
 }
 
 #[test]
