@@ -823,3 +823,22 @@ fn the_recovery_level_of_an_item_is_a_register_that_falls_back_to_its_type() {
     fixture.apply(&mut state, 0, 2_002, edit(task, level(None)));
     assert_eq!(levels(&state), (None, Some("standard".to_string())));
 }
+
+#[test]
+fn an_item_needs_a_title_when_created_and_when_edited() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "a")));
+    assert_eq!(
+        state.check_policy(&create("task", "  ")),
+        Err(crate::validate::PolicyViolation::EmptyTitle)
+    );
+    assert_eq!(
+        state.check_policy(&edit(task, Change::Title(" \t".into()))),
+        Err(crate::validate::PolicyViolation::EmptyTitle)
+    );
+    assert_eq!(
+        state.check_policy(&edit(task, Change::Title("b".into()))),
+        Ok(())
+    );
+}
