@@ -3259,3 +3259,66 @@ fn comments_in_the_log_show_under_their_lines_or_as_outdated_under_their_file() 
     }));
     insta::assert_snapshot!(screen(&mut app, 80, 24));
 }
+
+#[test]
+fn a_refresh_clears_only_the_failure_of_reading_the_workforce() {
+    let mut app = app();
+    app.refresh_failed(&anyhow::anyhow!("daemon gone"));
+    app.refresh(snapshot());
+    assert!(matches!(app.status, Some(Status::RefreshFailed(_))));
+    app.refreshed();
+    assert_eq!(app.status, None);
+    // A transcript that could not be read stays for the next refresh to find, until a key.
+    app.transcript_failed(&anyhow::anyhow!("malformed line"));
+    app.refreshed();
+    app.refresh(snapshot());
+    assert!(matches!(app.status, Some(Status::TranscriptFailed { .. })));
+    assert!(screen(&mut app, 60, 16).contains("error: malformed line"));
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.status, None);
+}
+
+#[test]
+fn a_failure_of_a_refresh_does_not_replace_the_failure_of_an_action() {
+    let mut app = app();
+    app.action_failed(&anyhow::anyhow!("no such item"), NOW_MS);
+    app.refresh_failed(&anyhow::anyhow!("daemon gone"));
+    app.transcript_failed(&anyhow::anyhow!("malformed line"));
+    assert!(matches!(app.status, Some(Status::ActionFailed { .. })));
+}
+
+#[test]
+fn keys_ignore_what_is_in_view_for_another_detail() {
+    let mut app = app();
+    let parse = ItemId::from_bytes([1; 32]);
+    let spans = ItemId::from_bytes([2; 32]);
+    let session = SessionId::from_bytes([11; 32]);
+    app.open_item(spans);
+    // The snapshot still has the item that was open before.
+    let mut snapshot = snapshot();
+    snapshot.in_view = Some(InView::Item {
+        id: parse,
+        text: "previous\n".to_owned(),
+        session: Some(session),
+    });
+    app.refresh(snapshot);
+    assert_eq!(app.in_view_of(&Detail::Item(spans)), None);
+    press(&mut app, KeyCode::Char('l'));
+    assert_eq!(app.wanted().detail, Some(Detail::Diff(spans)));
+}
+
+#[test]
+fn a_selection_key_that_does_not_move_keeps_the_details_beside_the_list() {
+    let mut app = app();
+    app.resize(130, 24);
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Esc);
+    assert!(app.list_has_keys());
+    let opened = app.stack().clone();
+    assert!(!opened.is_empty());
+    // At the top, k goes nowhere.
+    press(&mut app, KeyCode::Char('k'));
+    assert_eq!(app.stack(), &opened);
+    press(&mut app, KeyCode::Char('j'));
+    assert!(app.stack().is_empty());
+}

@@ -126,10 +126,13 @@ fn event_loop(
         }
         if refreshed.elapsed() >= REFRESH_EVERY {
             refreshed = Instant::now();
-            if let Err(error) = feed.refresh(workspace, &mut app) {
-                app.refresh_failed(&error);
-                draw = true;
-                continue;
+            match feed.refresh(workspace, &mut app) {
+                Ok(()) => app.refreshed(),
+                Err(error) => {
+                    app.refresh_failed(&error);
+                    draw = true;
+                    continue;
+                }
             }
         } else if !changed {
             let now_wanted = app.wanted();
@@ -246,8 +249,9 @@ fn handle(
                 Err(error) => app.action_failed(&error, workspace::now_ms()),
             }
             // Show what the action changed right away.
-            if let Err(error) = feed.refresh(workspace, app) {
-                app.refresh_failed(&error);
+            match feed.refresh(workspace, app) {
+                Ok(()) => app.refreshed(),
+                Err(error) => app.refresh_failed(&error),
             }
             Handled::Changed
         }
@@ -330,10 +334,10 @@ impl Feed {
                 Ok(written) => {
                     app.transcribed(session, &written.entries);
                     if let Some(error) = written.malformed {
-                        app.refresh_failed(&error);
+                        app.transcript_failed(&error);
                     }
                 }
-                Err(error) => app.refresh_failed(&error),
+                Err(error) => app.transcript_failed(&error),
             }
         }
     }
