@@ -27,7 +27,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tokio::net::UnixListener;
-use wf_core::event::{DeviceProfile, Event};
+use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceSigner;
 use wf_core::invite::InviteCode;
@@ -253,6 +253,8 @@ pub struct Daemon {
     halted: tokio::sync::watch::Sender<bool>,
     /// What is wrong with this machine, as what failed said.
     faults: faults::Faults,
+    /// For the tests: the next write of an event this matches fails once.
+    failing_write: Mutex<Option<fn(&EventBody) -> bool>>,
 }
 
 impl Daemon {
@@ -275,6 +277,7 @@ impl Daemon {
             failed: Mutex::new(Default::default()),
             halted: tokio::sync::watch::Sender::new(false),
             faults: faults::Faults::default(),
+            failing_write: Mutex::new(None),
         });
         daemon.load_stored_workforces();
         tokio::spawn(rescan(Arc::downgrade(&daemon)));
@@ -299,6 +302,23 @@ impl Daemon {
     #[doc(hidden)]
     pub fn write_failed(&self, what: &str, error: &std::io::Error) -> bool {
         self.faults.note_space(what, error)
+    }
+
+    /// Has the next write of an event that `matching` accepts fail once, as a write fails on a
+    /// full disk. For the tests, which cannot fill a disk.
+    #[doc(hidden)]
+    pub fn fail_next_write(&self, matching: fn(&EventBody) -> bool) {
+        *self.failing_write.lock().unwrap() = Some(matching);
+    }
+
+    /// Whether a write of `body` is the one to fail, which is the case only once.
+    pub(crate) fn write_fails(&self, body: &EventBody) -> bool {
+        let mut failing = self.failing_write.lock().unwrap();
+        if failing.is_some_and(|matching| matching(body)) {
+            *failing = None;
+            return true;
+        }
+        false
     }
 
     /// Completes once the daemon halts.

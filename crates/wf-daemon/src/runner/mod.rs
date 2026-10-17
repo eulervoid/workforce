@@ -377,6 +377,12 @@ impl Daemon {
         actor: Actor,
         body: EventBody,
     ) -> Result<Event, SessionError> {
+        if self.write_fails(&body) {
+            return Err(SessionError::Io {
+                path: PathBuf::from("the log"),
+                source: std::io::Error::other("write failed on purpose"),
+            });
+        }
         let signer = self.signer().clone();
         let now_ms = crate::now_ms();
         Ok(loaded

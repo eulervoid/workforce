@@ -8,6 +8,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde_json::Value;
+use wf_core::event::EventBody;
 use wf_core::name::HarnessName;
 use wf_daemon::{Config, Daemon};
 use wf_harness::AcpAgentConfig;
@@ -1439,6 +1440,56 @@ wf work submit --note \"Already done\"
         })
         .await;
     assert_eq!(world.item(&item)["state"], "done");
+}
+
+/// An agent that submits twice once the write is armed: the second submission is the retry of
+/// the first when that failed.
+const SUBMIT_TWICE_WHEN_ARMED: &str = "\
+sh while [ ! -e \"$(git rev-parse --git-common-dir)/armed\" ]; do sleep 0.1; done
+wf work submit --note \"Nothing to change\"
+wf work submit --note \"Nothing to change\"
+";
+
+async fn submit_with_a_failing_write(failing: fn(&EventBody) -> bool) -> (World, String) {
+    let world = World::new(SUBMIT_TWICE_WHEN_ARMED).await;
+    let item = world
+        .wf
+        .add(&["--title", "Check the parser", "--review", "none"]);
+    start_session(&world, &item);
+    world.daemon.fail_next_write(failing);
+    std::fs::write(world.wf.repository.join(".git/armed"), "").unwrap();
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+    (world, item)
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_submission_whose_end_failed_to_be_written_is_finished_by_the_retry() {
+    // The note and the move are written, then the end is not: the retry writes neither again.
+    let (world, item) =
+        submit_with_a_failing_write(|body| matches!(body, EventBody::SessionEnded(_))).await;
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "done", "{shown}");
+    assert_eq!(
+        comments_with(&world, &item, "comment", "Nothing to change").len(),
+        1,
+        "{shown}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_submission_whose_move_failed_to_be_written_is_finished_by_the_retry() {
+    // The move fails before the end is written: the session stays live, and the retry writes
+    // the move and the end, and the note only once.
+    let (world, item) =
+        submit_with_a_failing_write(|body| matches!(body, EventBody::ItemMoved(_))).await;
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "done", "{shown}");
+    assert_eq!(
+        comments_with(&world, &item, "comment", "Nothing to change").len(),
+        1,
+        "{shown}"
+    );
 }
 
 const COMMIT_AND_SUBMIT: &str = "\
