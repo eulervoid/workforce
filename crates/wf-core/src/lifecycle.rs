@@ -95,9 +95,11 @@ pub enum AfterEnd {
     /// The item stays where it is.
     Nothing,
     MoveTo(ItemState),
-    /// The work needs no review: move the item to `wait_in` while the merge waits for its turn,
-    /// as a merge that may succeed later does, then merge it and move the item to `done`.
+    /// The work needs no review: move the item to `wait_in` while the merge of `commit` waits
+    /// for its turn, as a merge that may succeed later does, then merge it and move the item to
+    /// `done`.
     MergeThenDone {
+        commit: CommitId,
         wait_in: Option<ItemState>,
     },
 }
@@ -309,8 +311,9 @@ impl State {
         Some(match reason {
             EndReason::Submitted { commit } => match (self.needs_review(item), commit) {
                 (true, _) => move_to(used(ItemState::Review)),
-                (false, Some(_)) => match used(ItemState::Done) {
+                (false, Some(commit)) => match used(ItemState::Done) {
                     Some(_) => AfterEnd::MergeThenDone {
+                        commit,
                         wait_in: self.after_failed_merge(item, MergeFailure::Transient),
                     },
                     None => AfterEnd::Nothing,

@@ -83,6 +83,7 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     assert_eq!(
         after(&scene, session, submitted),
         AfterEnd::MergeThenDone {
+            commit: commit(),
             wait_in: Some(ItemState::Review)
         }
     );
