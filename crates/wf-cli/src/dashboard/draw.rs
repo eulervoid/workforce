@@ -1623,13 +1623,11 @@ fn draw_detail(
         ..body
     };
     spots.extend(draw_breadcrumb(frame, app, title));
-    let in_view = app.snapshot.in_view.as_ref();
+    let in_view = app.in_view_of(&opened.detail);
     // Until the snapshot has caught up with what was opened, the detail stays empty.
     let (scroll, item) = match &opened.detail {
         Detail::Item(id) => {
-            let Some(InView::Item { text, .. }) = in_view
-                .filter(|shown| matches!(shown, InView::Item { id: shown, .. } if shown == id))
-            else {
+            let Some(InView::Item { text, .. }) = in_view else {
                 return None;
             };
             let text = ansi_text(text);
@@ -1638,10 +1636,8 @@ fn draw_detail(
                 Some(*id),
             )
         }
-        Detail::Agent(id) => {
-            let Some(InView::Agent { text, .. }) = in_view
-                .filter(|shown| matches!(shown, InView::Agent { id: shown, .. } if shown == id))
-            else {
+        Detail::Agent(_) => {
+            let Some(InView::Agent { text, .. }) = in_view else {
                 return None;
             };
             let text = ansi_text(text);
@@ -1650,10 +1646,8 @@ fn draw_detail(
                 None,
             )
         }
-        Detail::Flag(flag) => {
-            let Some(InView::Flag { text, .. }) = in_view
-                .filter(|shown| matches!(shown, InView::Flag { flag: shown, .. } if shown == flag))
-            else {
+        Detail::Flag(_) => {
+            let Some(InView::Flag { text, .. }) = in_view else {
                 return None;
             };
             let text = ansi_text(text);
@@ -1662,10 +1656,8 @@ fn draw_detail(
                 None,
             )
         }
-        Detail::Session(id) => {
-            let Some(InView::Session(session)) =
-                in_view.filter(|shown| matches!(shown, InView::Session(shown) if shown.id == *id))
-            else {
+        Detail::Session(_) => {
+            let Some(InView::Session(session)) = in_view else {
                 return None;
             };
             let scroll = draw_session(frame, app, session, opened.scroll, body, spots);
@@ -1995,7 +1987,11 @@ fn latest_line(app: &App) -> Line<'static> {
         Some(Status::Done { what, .. }) => {
             return Line::from(format!(" ✓ {what}")).style(theme::success());
         }
-        Some(Status::ActionFailed { error, .. } | Status::RefreshFailed(error)) => {
+        Some(
+            Status::ActionFailed { error, .. }
+            | Status::RefreshFailed(error)
+            | Status::TranscriptFailed { error, .. },
+        ) => {
             let first = error.lines().next().unwrap_or_default();
             return Line::from(format!(" error: {first}")).style(theme::error());
         }
@@ -2086,15 +2082,15 @@ fn hints(app: &App) -> Vec<&'static str> {
             }
         }
     }
+    // A detail kept while the list has the keys takes none.
+    let opened = app.stack().last().filter(|_| !app.list_has_keys());
     let item_session = matches!(
-        &app.snapshot.in_view,
+        opened.and_then(|opened| app.in_view_of(&opened.detail)),
         Some(InView::Item {
             session: Some(_),
             ..
         })
     );
-    // A detail kept while the list has the keys takes none.
-    let opened = app.stack().last().filter(|_| !app.list_has_keys());
     let navigation: &[&str] = match (app.tab, opened.map(|opened| &opened.detail)) {
         (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full", "l diff"],
         (_, Some(Detail::Diff(_))) => match app.diff_on_top() {

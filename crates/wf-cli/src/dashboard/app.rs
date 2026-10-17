@@ -309,10 +309,10 @@ impl<Key: Clone + PartialEq> Selection<Key> {
         self.selected = rows.get(self.index).cloned();
     }
 
-    /// What the keys of a list do to its selection, a page being `page` rows; `false` for a key
-    /// it does not take.
-    fn key(&mut self, rows: &[Key], key: KeyEvent, page: usize) -> bool {
+    /// What the keys of a list do to its selection, a page being `page` rows.
+    fn key(&mut self, rows: &[Key], key: KeyEvent, page: usize) -> Navigated {
         self.update(rows);
+        let before = self.index;
         let last = rows.len().saturating_sub(1);
         self.index = match key.code {
             KeyCode::Down | KeyCode::Char('j') => (self.index + 1).min(last),
@@ -321,10 +321,14 @@ impl<Key: Clone + PartialEq> Selection<Key> {
             KeyCode::PageUp => self.index.saturating_sub(page),
             KeyCode::Char('g') => 0,
             KeyCode::Char('G') => last,
-            _ => return false,
+            _ => return Navigated::Unused,
         };
         self.selected = rows.get(self.index).cloned();
-        true
+        if self.index == before {
+            Navigated::Stayed
+        } else {
+            Navigated::Moved
+        }
     }
 
     /// Selects the row at `index` of `rows`; `None` when there is none.
@@ -339,6 +343,16 @@ impl<Key: Clone + PartialEq> Selection<Key> {
         self.index = index;
         Some(picked)
     }
+}
+
+/// What a key did to the selection of a list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Navigated {
+    /// The key is not one of navigation.
+    Unused,
+    /// A navigation key, with the selection at the end of the list it goes towards.
+    Stayed,
+    Moved,
 }
 
 /// One of the two panes of a tab: its list, and the detail opened from it.
@@ -809,8 +823,11 @@ pub enum Status {
     Done { what: String, at_ms: u64 },
     /// Why an action failed, said at `at_ms`, until the next key or [`STATUS_LASTS_MS`] later.
     ActionFailed { error: String, at_ms: u64 },
-    /// Why the workforce could not be read, until it can again.
+    /// Why the workforce could not be read, until a refresh succeeds.
     RefreshFailed(String),
+    /// Why a transcript could not be read, said at `at_ms`, until the next key or
+    /// [`STATUS_LASTS_MS`] later: a transcript is read once, so nothing says when it is fine again.
+    TranscriptFailed { error: String, at_ms: u64 },
 }
 
 pub struct App {
@@ -907,13 +924,20 @@ impl App {
         self.snapshot = snapshot;
         self.take_posted();
         match self.status {
-            Some(Status::RefreshFailed(_)) => self.status = None,
-            Some(Status::Done { at_ms, .. } | Status::ActionFailed { at_ms, .. })
-                if self.snapshot.now_ms >= at_ms + STATUS_LASTS_MS =>
-            {
+            Some(
+                Status::Done { at_ms, .. }
+                | Status::ActionFailed { at_ms, .. }
+                | Status::TranscriptFailed { at_ms, .. },
+            ) if self.snapshot.now_ms >= at_ms + STATUS_LASTS_MS => {
                 self.status = None;
             }
-            Some(Status::Done { .. } | Status::ActionFailed { .. }) | None => {}
+            Some(
+                Status::Done { .. }
+                | Status::ActionFailed { .. }
+                | Status::RefreshFailed(_)
+                | Status::TranscriptFailed { .. },
+            )
+            | None => {}
         }
         // A first click on allow lapses after its time, or with its request.
         if let Some(unconfirmed) = self.unconfirmed_allow
@@ -952,8 +976,30 @@ impl App {
         }
     }
 
+    /// Says why the workforce could not be read, unless an action's failure is still unseen.
     pub fn refresh_failed(&mut self, error: &anyhow::Error) {
-        self.status = Some(Status::RefreshFailed(format!("{error:#}")));
+        self.fail_quietly(Status::RefreshFailed(format!("{error:#}")));
+    }
+
+    /// Says why a transcript could not be read, unless an action's failure is still unseen.
+    pub fn transcript_failed(&mut self, error: &anyhow::Error) {
+        self.fail_quietly(Status::TranscriptFailed {
+            error: format!("{error:#}"),
+            at_ms: self.snapshot.now_ms,
+        });
+    }
+
+    fn fail_quietly(&mut self, failure: Status) {
+        if !matches!(self.status, Some(Status::ActionFailed { .. })) {
+            self.status = Some(failure);
+        }
+    }
+
+    /// The workforce was read: what failed to read it is no longer true.
+    pub fn refreshed(&mut self) {
+        if matches!(self.status, Some(Status::RefreshFailed(_))) {
+            self.status = None;
+        }
     }
 
     /// Says why an action failed, at `now_ms`.
@@ -1484,7 +1530,9 @@ impl App {
         self.moved_back.clear();
         if matches!(
             self.status,
-            Some(Status::Done { .. } | Status::ActionFailed { .. })
+            Some(
+                Status::Done { .. } | Status::ActionFailed { .. } | Status::TranscriptFailed { .. }
+            )
         ) {
             self.status = None;
         }
@@ -2145,9 +2193,21 @@ impl App {
         }
     }
 
+    /// What the snapshot has read for `detail`; nothing while it still shows another detail.
+    pub fn in_view_of(&self, detail: &Detail) -> Option<&InView> {
+        self.snapshot
+            .in_view
+            .as_ref()
+            .filter(|in_view| in_view.is_of(detail))
+    }
+
     /// The keys of the open detail.
     fn detail_key(&mut self, key: KeyEvent) -> Option<Effect> {
-        let item_session = match &self.snapshot.in_view {
+        let item_session = match self
+            .stack()
+            .last()
+            .and_then(|opened| self.in_view_of(&opened.detail))
+        {
             Some(InView::Item { session, .. }) => *session,
             Some(
                 InView::Session(_)
@@ -2349,11 +2409,12 @@ impl App {
         None
     }
 
-    /// Moves the selection of the list on screen as `key` asks; `false` for a key that does not
-    /// move it. The details opened before give way to the selection's.
+    /// Moves the selection of the list on screen as `key` asks; `false` for a key that is not
+    /// one of navigation. The details opened before give way to the selection's, but only when it
+    /// moved.
     fn move_selection(&mut self, key: KeyEvent) -> bool {
         let page = self.page();
-        let moved = match self.tab {
+        let navigated = match self.tab {
             Tab::Now => {
                 let rows = self.now_rows();
                 self.now.selection.key(&rows, key, page)
@@ -2366,16 +2427,16 @@ impl App {
                 let rows = self.agent_rows();
                 self.agents.selection.key(&rows, key, page)
             }
-            Tab::Log => false,
+            Tab::Log => Navigated::Unused,
         };
-        if moved {
+        if navigated == Navigated::Moved {
             self.stack_mut().clear();
             // A list scrolled away from the selection comes back to show it.
             if let Some(panes) = self.panes_mut() {
                 panes.list_top = panes.list_top.follow_selection();
             }
         }
-        moved
+        navigated != Navigated::Unused
     }
 
     /// The keys of the list on screen, besides those that move its selection.

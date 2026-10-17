@@ -259,6 +259,27 @@ pub enum InView {
     },
 }
 
+impl InView {
+    /// Whether this is what `detail` shows.
+    pub fn is_of(&self, detail: &Detail) -> bool {
+        match (self, detail) {
+            (Self::Item { id, .. }, Detail::Item(wanted)) => id == wanted,
+            (Self::Session(session), Detail::Session(wanted)) => session.id == *wanted,
+            (Self::Diff { id, .. }, Detail::Diff(wanted)) => id == wanted,
+            (Self::Agent { id, .. }, Detail::Agent(wanted)) => id == wanted,
+            (Self::Flag { flag, .. }, Detail::Flag(wanted)) => flag == wanted,
+            (
+                Self::Item { .. }
+                | Self::Session(_)
+                | Self::Diff { .. }
+                | Self::Agent { .. }
+                | Self::Flag { .. },
+                _,
+            ) => false,
+        }
+    }
+}
+
 /// What the dashboard asks the workspace about, besides what it always shows.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Wanted {
