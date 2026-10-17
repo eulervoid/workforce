@@ -133,7 +133,7 @@ impl Daemon {
         }
         let record = AgentSessionRecord::read(&record_path(&setup.transcripts, session))
             .ok_or(NotResumed::NoRecord)?;
-        let worktree = self.session_directory(workforce, item, role);
+        let worktree = self.session_directory(workforce, item, session, role);
         if !worktree.is_dir() {
             return Err(NotResumed::NoDirectory(worktree));
         }
