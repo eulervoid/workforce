@@ -327,15 +327,7 @@ impl Simulation {
                         1 => policy_without_open_tasks(),
                         _ => crate::policy::DEFAULT_POLICY_TOML.to_string(),
                     };
-                    // The clock that `submit_event` will read after counting up.
-                    #[allow(clippy::manual_div_ceil)]
-                    let body = self.fixture.policy_set(
-                        &self.replicas[device],
-                        device,
-                        (self.clock + 1) / 2,
-                        &self.fixture.founder,
-                        &source,
-                    );
+                    let body = self.fixture.policy_set(&self.fixture.founder, &source);
                     self.submit(device, body);
                 }
                 _ => self.sync(usize::from(first) % DEVICES, device),

@@ -226,7 +226,7 @@ mod actors {
             check(&fixture, &state, 0, session, &define_agent("rogue")),
             Err(PolicyViolation::AgentCannotWrite("AgentDefined"))
         );
-        let policy = fixture.policy_set(&state, 0, 3_002, &fixture.founder, "");
+        let policy = fixture.policy_set(&fixture.founder, "");
         assert_eq!(
             check(&fixture, &state, 0, session, &policy),
             Err(PolicyViolation::AgentCannotWrite("PolicySet"))

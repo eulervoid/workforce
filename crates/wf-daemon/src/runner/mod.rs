@@ -121,7 +121,6 @@ impl SessionError {
                 AuthorError::Receive(ReceiveError::Invalid(_))
                 | AuthorError::Build(_)
                 | AuthorError::Policy(_)
-                | AuthorError::PolicyHlcInFuture
                 | AuthorError::OwnFeedEquivocated
                 | AuthorError::Sign(_),
             )
