@@ -285,12 +285,13 @@ impl Daemon {
         self.device.key()
     }
 
-    /// Stops the harness of every session without ending the sessions, and the daemon's
+    /// Stops the harness of every session and judge without ending the sessions, and the daemon's
     /// background tasks, so that the next daemon resumes the sessions. Waits until the harnesses
     /// are closed.
     pub async fn halt(&self) {
         self.halted.send_replace(true);
         self.runners.halt().await;
+        self.judges.close().await;
     }
 
     /// Takes `error` as the error of a write of the daemon that failed: whether it says the disk
