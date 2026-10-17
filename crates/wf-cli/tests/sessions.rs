@@ -1393,6 +1393,54 @@ wf work submit --note \"Nothing to change\"
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn a_daemon_note_of_an_earlier_session_with_the_same_text_does_not_count_for_the_next() {
+    // Both sessions give up with the same text, written as the daemon, which carries no
+    // session: the second still writes its own.
+    let world = World::new("").await;
+    let item = world.wf.add(&["--title", "Idle"]);
+    for expected in 1..=2 {
+        start_session(&world, &item);
+        world
+            .wait("the session to give up", |world| {
+                let gave_up = |text: &str| text.starts_with("Gave up");
+                comments(&world.item(&item))
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .filter(|note| note["text"].as_str().is_some_and(gave_up))
+                    .count()
+                    == expected
+            })
+            .await;
+        world
+            .wait("the session to end", |world| {
+                world.sessions().iter().all(|s| s["status"] != "live")
+            })
+            .await;
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn ending_a_session_whose_item_is_in_the_target_state_already_still_ends_it() {
+    // The item is done before the session submits: the move that follows is skipped.
+    let script = "\
+wf item done {item}
+wf work submit --note \"Already done\"
+";
+    let world = World::new(script).await;
+    let item = world
+        .wf
+        .add(&["--title", "Check the parser", "--review", "none"]);
+    start_session(&world, &item);
+    world
+        .wait("the session to end", |world| {
+            world.sessions().iter().all(|s| s["status"] != "live")
+        })
+        .await;
+    assert_eq!(world.item(&item)["state"], "done");
+}
+
 const COMMIT_AND_SUBMIT: &str = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
 wf work submit

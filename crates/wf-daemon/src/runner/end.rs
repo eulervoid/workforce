@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use wf_core::event::{Comment, EventBody, ItemMoved, SessionEnded};
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
+use wf_core::hlc::Hlc;
 use wf_core::identity::Actor;
 use wf_core::item::{ItemState, ItemView};
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
@@ -59,12 +60,15 @@ impl Daemon {
             .await
     }
 
-    /// The comment `actor` wrote on `item` with this `note`, if an earlier try of the end did.
+    /// The comment `actor` wrote on `item` with this `note` since `since`, when the session
+    /// started, if an earlier try of the end did. A daemon comment carries no session, so only
+    /// the time keeps one of an earlier session with the same text from counting.
     async fn written_note(
         &self,
         loaded: &Loaded,
         state: &State,
         item: ItemId,
+        since: Hlc,
         actor: &Actor,
         note: &str,
     ) -> Result<Option<CommentId>, SessionError> {
@@ -74,7 +78,7 @@ impl Daemon {
         let candidates: Vec<CommentId> = live
             .comments()
             .iter()
-            .filter(|(_, comment)| &comment.by == actor)
+            .filter(|(_, comment)| &comment.by == actor && comment.at > since)
             .map(|(id, _)| *id)
             .collect();
         let note = note.to_string();
@@ -152,7 +156,7 @@ impl Daemon {
         // after a failed write finds what an earlier try wrote and goes on from there.
         let because = match note {
             Some(note) => match self
-                .written_note(loaded, &state, item, &actor, &note)
+                .written_note(loaded, &state, item, folded.started().hlc, &actor, &note)
                 .await?
             {
                 Some(written) => Some(written),
