@@ -672,7 +672,6 @@ impl State {
         Ok(builder)
     }
 
-    /// Starts an event authored by `author` on top of everything this state has seen.
     /// The `hlc` of the next event written on this state at `now_ms`, for a statement that has to
     /// name it before the event is built. Every applied event is a head or precedes one, so the
     /// heads give the same floor as the builder's.
@@ -687,6 +686,7 @@ impl State {
         Hlc::next_after(floor, now_ms).ok_or(BuildError::ClockExhausted)
     }
 
+    /// Starts an event authored by `author` on top of everything this state has seen.
     pub fn builder(
         &self,
         author: DeviceKey,
