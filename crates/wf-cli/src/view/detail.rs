@@ -136,7 +136,9 @@ impl From<CommentKind> for CommentKindView {
         match kind {
             CommentKind::Plain => CommentKindView::Comment,
             CommentKind::Blocker => CommentKindView::Blocker,
-            CommentKind::ChangeRequest | CommentKind::CheckFailure => CommentKindView::ChangeRequest,
+            CommentKind::ChangeRequest | CommentKind::CheckFailure => {
+                CommentKindView::ChangeRequest
+            }
         }
     }
 }
@@ -860,6 +862,14 @@ mod tests {
             unreachable!("the item is live")
         };
         item_detail(state, item, &[]).flags
+    }
+
+    #[test]
+    fn a_check_failure_is_shown_as_a_change_request() {
+        assert_eq!(
+            CommentKindView::from(CommentKind::CheckFailure),
+            CommentKindView::ChangeRequest
+        );
     }
 
     #[test]

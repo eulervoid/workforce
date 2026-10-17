@@ -119,3 +119,14 @@ fn item_stats_count_rounds_and_the_time_to_done() {
     // From the first session to done, and still for the archived item.
     assert_eq!(state.item_stats(item).unwrap().lead_ms, Some(4 * HOUR));
 }
+
+#[test]
+fn check_failures_count_as_change_requests() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let item = item_id(&fixture.apply(&mut state, 0, HOUR, create("task", "work")));
+    fixture.apply(&mut state, 0, 2 * HOUR, change_request(item, "rename"));
+    fixture.apply(&mut state, 0, 2 * HOUR, check_failure(item, "cargo test"));
+    assert_eq!(state.item_stats(item).unwrap().change_requests, 2);
+    assert_eq!(state.project_stats(3 * HOUR).change_requests, 2);
+}

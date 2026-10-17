@@ -706,6 +706,38 @@ mod tests {
     }
 
     #[test]
+    fn a_check_failure_is_listed_among_the_open_change_requests() {
+        use crate::testing::*;
+
+        struct Texts;
+        impl Sources for Texts {
+            fn text(&self, _: CommentId) -> Option<String> {
+                Some("cargo test failed".into())
+            }
+            fn branch(&self, _: ItemId) -> String {
+                String::new()
+            }
+            fn diff(&self, _: &str, _: CommitId) -> String {
+                String::new()
+            }
+        }
+
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let task: ItemId = fixture
+            .apply(&mut state, 0, 2_000, create("task", "work"))
+            .id()
+            .into();
+        fixture.apply(&mut state, 0, 2_001, check_failure(task, "cargo test"));
+        let Some(ItemView::Live(item)) = state.item(task) else {
+            unreachable!("the item is live")
+        };
+        let open = open_change_requests(&state, item, &Texts);
+        assert_eq!(open.len(), 1);
+        assert_eq!(open[0].text, "cargo test failed");
+    }
+
+    #[test]
     fn the_work_brief_names_the_agent_the_item_the_branch_and_the_commands() {
         let brief = WorkBrief {
             agent: "coder".into(),

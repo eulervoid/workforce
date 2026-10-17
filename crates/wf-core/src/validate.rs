@@ -238,9 +238,9 @@ pub enum PolicyViolation {
 
 /// Whether the item has an open comment of the kind.
 fn has_open(item: &crate::item::Item, kind: CommentKind) -> bool {
-    item.open_comments()
-        .iter()
-        .any(|(_, comment)| comment.kind == kind || (kind.is_change_request() && comment.kind.is_change_request()))
+    item.open_comments().iter().any(|(_, comment)| {
+        comment.kind == kind || (kind.is_change_request() && comment.kind.is_change_request())
+    })
 }
 
 enum Admission {

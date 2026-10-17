@@ -752,3 +752,38 @@ fn change_requests_hold_up_approval_and_the_next_submission() {
     scene.apply(resolving(item, "added one", &[change]));
     assert_eq!(scene.state.check_policy(&submit), Ok(()));
 }
+
+#[test]
+fn check_failures_hold_up_approval_and_the_next_submission_like_change_requests() {
+    let mut scene = Scene::new();
+    let item = scene.submitted("standard");
+    let failure: crate::id::CommentId = scene.apply(check_failure(item, "cargo test")).id().into();
+    assert_eq!(
+        scene
+            .state
+            .check_policy(&verdict(item, commit(1), Verdict::Approve)),
+        Err(PolicyViolation::OpenChangeRequests(item))
+    );
+    assert_eq!(
+        scene
+            .state
+            .check_policy(&verdict(item, commit(1), Verdict::RequestChanges)),
+        Ok(())
+    );
+    scene.apply(verdict(item, commit(1), Verdict::RequestChanges));
+    scene.apply(moved(item, ItemState::Open));
+
+    let session: SessionId = scene.apply(start_session("coder", item)).id().into();
+    let submit = end_session(
+        session,
+        EndReason::Submitted {
+            commit: Some(commit(2)),
+        },
+    );
+    assert_eq!(
+        scene.state.check_policy(&submit),
+        Err(PolicyViolation::OpenChangeRequests(item))
+    );
+    scene.apply(resolving(item, "fixed", &[failure]));
+    assert_eq!(scene.state.check_policy(&submit), Ok(()));
+}
