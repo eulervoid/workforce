@@ -2,7 +2,6 @@
 
 use serde::Serialize;
 
-use crate::event::CommentKind;
 use crate::id::ItemId;
 use crate::identity::AgentId;
 use crate::item::{Item, ItemState};
@@ -113,7 +112,7 @@ impl State {
                 stats.change_requests += item
                     .comments()
                     .values()
-                    .filter(|comment| comment.kind == CommentKind::ChangeRequest)
+                    .filter(|comment| comment.kind.is_change_request())
                     .count();
             }
         }
@@ -146,7 +145,7 @@ impl State {
             change_requests: item
                 .comments()
                 .values()
-                .filter(|comment| comment.kind == CommentKind::ChangeRequest)
+                .filter(|comment| comment.kind.is_change_request())
                 .count(),
             ..ItemStats::default()
         };

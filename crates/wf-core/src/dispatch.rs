@@ -5,7 +5,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
 use crate::autonomy::StartMode;
-use crate::event::{CommentKind, DeviceProfile};
+use crate::event::DeviceProfile;
 use crate::identity::{AgentId, DeviceKey};
 use crate::item::Item;
 use crate::name::Requirement;
@@ -92,7 +92,7 @@ impl State {
         let changes_open = item
             .comments()
             .values()
-            .any(|comment| comment.kind == CommentKind::ChangeRequest && comment.is_open());
+            .any(|comment| comment.kind.is_change_request() && comment.is_open());
         if changes_open && self.review_status(item.id()) == Some(ReviewStatus::ChangesRequested) {
             return Progress::SentBack;
         }

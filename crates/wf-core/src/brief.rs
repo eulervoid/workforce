@@ -187,7 +187,7 @@ fn open_change_requests(state: &State, item: &Item, sources: &impl Sources) -> V
     let mut open: Vec<_> = item
         .comments()
         .iter()
-        .filter(|(_, comment)| comment.kind == CommentKind::ChangeRequest && comment.is_open())
+        .filter(|(_, comment)| comment.kind.is_change_request() && comment.is_open())
         .collect();
     open.sort_by_key(|(id, comment)| (comment.at, **id));
     open.into_iter()

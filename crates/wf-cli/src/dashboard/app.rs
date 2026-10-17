@@ -2017,7 +2017,7 @@ impl App {
                     let comments = self.drafts(item).to_vec();
                     if comments
                         .iter()
-                        .any(|comment| comment.kind == CommentKind::ChangeRequest)
+                        .any(|comment| comment.kind.is_change_request())
                     {
                         self.status = Some(Status::ActionFailed {
                             error: "the review has change requests: request changes, or drop them \

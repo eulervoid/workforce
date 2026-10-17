@@ -166,7 +166,10 @@ fn comments_to_resolve(
         let open: Vec<CommentId> = live
             .open_comments()
             .into_iter()
-            .filter(|(_, comment)| comment.kind == wanted)
+            .filter(|(_, comment)| {
+                comment.kind == wanted
+                    || (wanted.is_change_request() && comment.kind.is_change_request())
+            })
             .map(|(id, _)| id)
             .collect();
         if open.is_empty() {

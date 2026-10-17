@@ -136,7 +136,7 @@ impl From<CommentKind> for CommentKindView {
         match kind {
             CommentKind::Plain => CommentKindView::Comment,
             CommentKind::Blocker => CommentKindView::Blocker,
-            CommentKind::ChangeRequest => CommentKindView::ChangeRequest,
+            CommentKind::ChangeRequest | CommentKind::CheckFailure => CommentKindView::ChangeRequest,
         }
     }
 }

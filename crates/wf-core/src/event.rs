@@ -451,14 +451,27 @@ pub enum CommentKind {
     Blocker,
     /// The work has to do this before it is submitted.
     ChangeRequest,
+    /// A change request the daemon's check runner wrote because a check of the item's merge
+    /// result failed. Counted by [`State::failed_check_runs`](crate::state::State), and otherwise
+    /// a change request.
+    CheckFailure,
 }
 
 impl CommentKind {
+    /// Whether the comment asks the work to change before it is submitted: a change request,
+    /// whoever wrote it.
+    pub fn is_change_request(self) -> bool {
+        match self {
+            CommentKind::ChangeRequest | CommentKind::CheckFailure => true,
+            CommentKind::Plain | CommentKind::Blocker => false,
+        }
+    }
+
     pub fn name(self) -> &'static str {
         match self {
             CommentKind::Plain => "comment",
             CommentKind::Blocker => "blocker",
-            CommentKind::ChangeRequest => "change_request",
+            CommentKind::ChangeRequest | CommentKind::CheckFailure => "change_request",
         }
     }
 }
