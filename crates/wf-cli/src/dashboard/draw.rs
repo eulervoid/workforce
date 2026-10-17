@@ -551,8 +551,8 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
 }
 
 /// What of the typed text shows in `width` cells, and the cell the cursor is in. `tui-input`
-/// scrolls in terminal cells, so the text is skipped by width: a wide character that straddles
-/// the edge is skipped whole, and the cursor moves with it.
+/// scrolls in terminal cells, so the text is skipped by width, and the cursor moves by the cells
+/// actually skipped.
 fn visible_input(input: &Input, width: usize) -> (String, u16) {
     let scroll = input.visual_scroll(width);
     let mut skipped = 0;
@@ -2142,4 +2142,28 @@ fn hints(app: &App) -> Vec<&'static str> {
     hints.extend(acts);
     hints.push("? keys");
     hints
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_characters_are_skipped_by_cells_and_the_cursor_follows() {
+        // 13 cells; in 3 cells the scroll is 10 cells, which is 5 characters. Skipping 10
+        // characters would drop everything.
+        let input = Input::new("日本語日本語a".to_owned());
+        assert_eq!(input.visual_scroll(3), 10);
+        let (typed, cursor) = visible_input(&input, 3);
+        assert_eq!(typed, "語a");
+        assert_eq!(cursor, 3);
+    }
+
+    #[test]
+    fn narrow_text_is_skipped_by_cells_as_characters() {
+        let input = Input::new("abcdefgh".to_owned());
+        let (typed, cursor) = visible_input(&input, 4);
+        assert_eq!(typed, "efgh");
+        assert_eq!(cursor, 4);
+    }
 }
