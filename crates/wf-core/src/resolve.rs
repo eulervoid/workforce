@@ -189,7 +189,7 @@ impl Resolver<'_> {
     }
 }
 
-fn tokens_of(item: &Item) -> impl Iterator<Item = (WrittenIn, &BTreeSet<Token>)> {
+fn tokens_of(item: &Item) -> impl Iterator<Item = (WrittenIn, &Vec<Token>)> {
     std::iter::once((WrittenIn::Body, item.body_tokens())).chain(
         item.comments()
             .iter()

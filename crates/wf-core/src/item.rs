@@ -145,7 +145,7 @@ impl<'de> Deserialize<'de> for ItemState {
     }
 }
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use crate::body::{Body, StepId};
 use crate::crdt::{AddWinsSet, Lww, Stamp};
@@ -167,7 +167,7 @@ pub struct Comment {
     pub at: Hlc,
     /// The step it is about. It may no longer exist in the body.
     pub step: Option<StepId>,
-    pub tokens: BTreeSet<Token>,
+    pub tokens: Vec<Token>,
     /// The earliest comment that resolved this blocker or change request.
     pub(crate) resolved: Option<Resolved>,
 }
@@ -299,7 +299,7 @@ impl Item {
         })
     }
 
-    pub fn body_tokens(&self) -> &BTreeSet<Token> {
+    pub fn body_tokens(&self) -> &Vec<Token> {
         self.body.value().tokens()
     }
 

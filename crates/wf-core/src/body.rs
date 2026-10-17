@@ -83,7 +83,7 @@ pub struct Step<'a> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Body {
     parts: Vec<BodyPart>,
-    tokens: BTreeSet<Token>,
+    tokens: Vec<Token>,
 }
 
 impl Body {
@@ -148,7 +148,7 @@ impl Body {
     fn from_parts(parts: Vec<BodyPart>) -> Self {
         let mut body = Self {
             parts,
-            tokens: BTreeSet::new(),
+            tokens: Vec::new(),
         };
         body.tokens = refs::parse(&body.render());
         body
@@ -159,7 +159,7 @@ impl Body {
     }
 
     /// The tokens do not depend on which steps are done.
-    pub fn tokens(&self) -> &BTreeSet<Token> {
+    pub fn tokens(&self) -> &Vec<Token> {
         &self.tokens
     }
 

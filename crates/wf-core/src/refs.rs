@@ -4,14 +4,13 @@
 //! principal depends on the whole state, so resolution happens at query time in `State`.
 //! Bump [`PARSER_VERSION`] whenever parsing changes; snapshots from older parsers are discarded.
 
-use std::collections::BTreeSet;
 
 use pulldown_cmark::{Event, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
 use crate::id::MIN_PREFIX_LEN;
 
-pub const PARSER_VERSION: u16 = 5;
+pub const PARSER_VERSION: u16 = 6;
 
 /// `@ada` or `@ada/coder`, as written.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -45,8 +44,8 @@ pub enum Token {
     Mention(Mention),
 }
 
-pub fn parse(markdown: &str) -> BTreeSet<Token> {
-    let mut tokens = BTreeSet::new();
+pub fn parse(markdown: &str) -> Vec<Token> {
+    let mut tokens = Vec::new();
     let mut prose = String::new();
     let mut code_block_depth = 0usize;
 
@@ -77,7 +76,7 @@ fn is_base32(character: char) -> bool {
     character.is_ascii_lowercase() || ('2'..='7').contains(&character)
 }
 
-fn scan(text: &str, tokens: &mut BTreeSet<Token>) {
+fn scan(text: &str, tokens: &mut Vec<Token>) {
     let characters: Vec<(usize, char)> = text.char_indices().collect();
     let mut index = 0;
     while index < characters.len() {
@@ -90,7 +89,9 @@ fn scan(text: &str, tokens: &mut BTreeSet<Token>) {
                 _ => parse_mention(rest),
             };
             if let Some(token) = token {
-                tokens.insert(token);
+                if !tokens.contains(&token) {
+                    tokens.push(token);
+                }
             }
             index += 1 + rest[..consumed].chars().count();
         } else {
@@ -184,7 +185,7 @@ mod tests {
         let tokens = parse("see #q7x2, @coder please keep it small. cc @ada/reviewer");
         assert_eq!(
             tokens,
-            BTreeSet::from([
+            Vec::from([
                 item("q7x2"),
                 short("coder"),
                 Token::Mention(Mention::Agent {
@@ -199,7 +200,7 @@ mod tests {
     fn finds_comment_refs() {
         assert_eq!(
             parse("as #k3f7a2/c7f2 says, see #k3f7a2/ and #k3f7a2/c7"),
-            BTreeSet::from([
+            Vec::from([
                 Token::CommentRef {
                     item: "k3f7a2".into(),
                     comment: "c7f2".into()
@@ -211,21 +212,21 @@ mod tests {
 
     #[test]
     fn three_segments_are_not_a_mention() {
-        assert_eq!(parse("@ada/coder/s4k2 is stuck"), BTreeSet::new());
+        assert_eq!(parse("@ada/coder/s4k2 is stuck"), Vec::new());
     }
 
     #[test]
     fn skips_code() {
         let text =
             "inline `#abcd @nobody` and\n\n```\n#efgh @ghost\n```\n\n    #ijkl\n\nreal #mnop";
-        assert_eq!(parse(text), BTreeSet::from([item("mnop")]));
+        assert_eq!(parse(text), Vec::from([item("mnop")]));
     }
 
     #[test]
     fn ignores_non_tokens() {
         let text = "#ab too short, #abc1 bad digits, mail me@example.com, \
                     https://example.com/#anchor, @-bad, @/x, #";
-        assert_eq!(parse(text), BTreeSet::new());
+        assert_eq!(parse(text), Vec::new());
     }
 
     #[test]
@@ -233,26 +234,34 @@ mod tests {
         let text = "# Heading #abcd\n\n- list **@coder**\n- [link #efgh](http://x)\n> quote #mnop";
         assert_eq!(
             parse(text),
-            BTreeSet::from([item("abcd"), short("coder"), item("efgh"), item("mnop")])
+            Vec::from([item("abcd"), short("coder"), item("efgh"), item("mnop")])
         );
     }
 
     #[test]
     fn a_ref_at_the_start_of_a_line_is_not_a_heading() {
-        assert_eq!(parse("#k3f7a2"), BTreeSet::from([item("k3f7a2")]));
+        assert_eq!(parse("#k3f7a2"), Vec::from([item("k3f7a2")]));
     }
 
     #[test]
     fn trims_trailing_separators() {
         assert_eq!(
             parse("(@ada/) and @coder-"),
-            BTreeSet::from([short("ada"), short("coder")])
+            Vec::from([short("ada"), short("coder")])
         );
     }
 
     #[test]
     fn too_many_segments_is_plain_text() {
-        assert_eq!(parse("@a/b/c/d"), BTreeSet::new());
+        assert_eq!(parse("@a/b/c/d"), Vec::new());
+    }
+
+    #[test]
+    fn tokens_keep_the_order_of_the_text() {
+        assert_eq!(
+            parse("@zoe then @ada, @zoe"),
+            Vec::from([short("zoe"), short("ada")])
+        );
     }
 
     #[test]
