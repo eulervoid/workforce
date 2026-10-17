@@ -79,12 +79,11 @@ pub(super) async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, Str
                 store: replica.store(),
                 diff,
             };
-            Brief::of(replica.state(), session, &sources)
-                .map(|brief| brief.render())
-                .unwrap_or_default()
+            Brief::of(replica.state(), session, &sources).map(|brief| brief.render())
         })
         .await
-        .map_err(|_| "the workforce could not be read".to_string())
+        .map_err(|_| "the workforce could not be read".to_string())?
+        .ok_or_else(|| "the item is archived or the session is not known".to_string())
 }
 
 /// What to say when a parked session can go on: what others wrote on the item since the session's

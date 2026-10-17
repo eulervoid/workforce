@@ -47,6 +47,8 @@ pub enum SessionError {
     UnknownHarness(HarnessName),
     #[error("the workforce has no policy yet")]
     NoPolicy,
+    #[error("the workforce has no repository to submit the work to")]
+    NoRepository,
     #[error("there is no item #{}", .0.short())]
     UnknownItem(ItemId),
     #[error("#{} is archived", .0.short())]
@@ -124,6 +126,7 @@ impl SessionError {
             )
             | Self::NotBound
             | Self::NoPolicy
+            | Self::NoRepository
             | Self::UnknownAgent(_)
             | Self::UnknownHarness(_)
             | Self::UnknownItem(_)

@@ -389,7 +389,7 @@ impl State {
     }
 
     /// The state of a live item; `None` for an archived one.
-    fn live_state(&self, item: ItemId) -> Option<ItemState> {
+    pub fn live_state(&self, item: ItemId) -> Option<ItemState> {
         let policy = &self.policy()?.policy;
         match self.item(item)? {
             ItemView::Live(item) => Some(item.state(policy)),
