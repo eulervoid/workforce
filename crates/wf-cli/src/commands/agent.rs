@@ -69,6 +69,8 @@ pub(super) fn agent(
             if workspace.state().agent(&name, principal).is_some() {
                 bail!("agent `{name}` already exists; use `wf agent edit`");
             }
+            let warning =
+                crate::harness::check_startable(&args.harness, args.harness_unknown_here)?;
             let autonomy = args.autonomy.applied_to(Autonomy::default());
             let start = autonomy.start;
             let event = workspace.author(EventBody::AgentDefined(AgentDefined {
@@ -81,6 +83,7 @@ pub(super) fn agent(
                 instructions: args.instructions.and_then(instructions),
             }))?;
             let message = format!("defined agent {name}");
+            let message = warned(message, warning);
             let message = hosting_note(workspace, &name, start, message)?;
             done(json, message, &event, None)
         }
@@ -121,6 +124,12 @@ pub(super) fn agent(
                     anyhow!("there is no agent `{}`; {}", args.name, OneOf::new(yours))
                 })?
                 .clone();
+            let warning = match &args.harness {
+                Some(harness) => {
+                    crate::harness::check_startable(harness, args.harness_unknown_here)?
+                }
+                None => None,
+            };
             let autonomy = args.autonomy.applied_to(current.autonomy);
             let start = autonomy.start;
             let event = workspace.author(EventBody::AgentDefined(AgentDefined {
@@ -144,9 +153,18 @@ pub(super) fn agent(
                 },
             }))?;
             let message = format!("updated agent {}", args.name);
+            let message = warned(message, warning);
             let message = hosting_note(workspace, &args.name, start, message)?;
             done(json, message, &event, None)
         }
+    }
+}
+
+/// `message`, followed by the warning about the harness when there is one.
+fn warned(message: String, warning: Option<String>) -> String {
+    match warning {
+        Some(warning) => format!("{message}\nwarning: {warning}"),
+        None => message,
     }
 }
 

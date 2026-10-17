@@ -519,6 +519,10 @@ pub struct AgentAddArgs {
     /// The program that runs the agent: `claude-code`, `opencode`, `codex` or `gemini-cli`.
     #[arg(long)]
     pub harness: HarnessName,
+    /// Define the harness although this machine cannot start it, because another member's
+    /// machine can.
+    #[arg(long)]
+    pub harness_unknown_here: bool,
     /// The model the harness runs, as `wf harness models` lists them. Defaults to the
     /// harness's own choice.
     #[arg(long)]
@@ -579,6 +583,10 @@ pub struct AgentEditArgs {
     /// The program that runs the agent.
     #[arg(long)]
     pub harness: Option<HarnessName>,
+    /// Define the harness although this machine cannot start it, because another member's
+    /// machine can.
+    #[arg(long)]
+    pub harness_unknown_here: bool,
     /// The model the harness runs, as `wf harness models` lists them.
     #[arg(long)]
     pub model: Option<String>,

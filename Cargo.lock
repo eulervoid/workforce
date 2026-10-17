@@ -5988,6 +5988,7 @@ dependencies = [
  "serde",
  "serde_json",
  "similar 3.2.0",
+ "strsim",
  "tempfile",
  "terminal_size",
  "textwrap",

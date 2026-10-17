@@ -8,6 +8,7 @@ expression: "Envelope::new(view::agent_views(&scenario.state))"
     {
       "id": "@ada/coder",
       "harness": "opencode",
+      "harness_startable_here": true,
       "model": null,
       "capabilities": [],
       "lanes": [],

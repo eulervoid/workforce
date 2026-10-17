@@ -33,6 +33,8 @@ fn role_name(role: SessionRole) -> &'static str {
 pub struct AgentView {
     pub id: String,
     pub harness: String,
+    /// This machine can start the harness; another member's machine may still.
+    pub harness_startable_here: bool,
     pub model: Option<String>,
     pub capabilities: Vec<String>,
     pub lanes: Vec<String>,
@@ -55,6 +57,7 @@ pub(super) fn agent_view(state: &State, id: &AgentId, definition: &AgentDefiniti
     AgentView {
         id: mention_label(state, &MentionTarget::Agent(id.clone())),
         harness: definition.harness.to_string(),
+        harness_startable_here: crate::harness::is_startable(definition.harness.as_str()),
         model: definition.model.clone(),
         capabilities: definition
             .capabilities
