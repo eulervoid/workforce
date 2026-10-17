@@ -128,5 +128,4 @@ fn check_failures_count_as_change_requests() {
     fixture.apply(&mut state, 0, 2 * HOUR, change_request(item, "rename"));
     fixture.apply(&mut state, 0, 2 * HOUR, check_failure(item, "cargo test"));
     assert_eq!(state.item_stats(item).unwrap().change_requests, 2);
-    assert_eq!(state.project_stats(3 * HOUR).change_requests, 2);
 }

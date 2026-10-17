@@ -787,3 +787,13 @@ fn check_failures_hold_up_approval_and_the_next_submission_like_change_requests(
     scene.apply(resolving(item, "fixed", &[failure]));
     assert_eq!(scene.state.check_policy(&submit), Ok(()));
 }
+
+#[test]
+fn check_failures_of_merged_work_count_as_change_requests_of_the_project() {
+    let mut scene = Scene::new();
+    let item = scene.submitted("standard");
+    scene.apply(change_request(item, "rename"));
+    scene.apply(check_failure(item, "cargo test"));
+    scene.apply(merged(item, commit(1), commit(9)));
+    assert_eq!(scene.state.project_stats(0).change_requests, 2);
+}
