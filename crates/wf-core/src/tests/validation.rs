@@ -427,6 +427,47 @@ fn policy_changes_need_a_valid_principal_signature_for_this_workforce() {
     assert_eq!(receive(&mut state, valid), Ok(Disposition::Applied));
 }
 
+#[test]
+fn an_old_signed_policy_cannot_be_written_into_a_new_event() {
+    let fixture = Fixture::new(2);
+    let mut state = fixture.state();
+    let old_source = format!("{}\n# the old policy\n", crate::policy::DEFAULT_POLICY_TOML);
+    let newer_source = format!(
+        "{}\n# the newer policy\n",
+        crate::policy::DEFAULT_POLICY_TOML
+    );
+    let old = fixture.policy_set(&state, 0, 5_000, &fixture.founder, &old_source);
+    let old_event = fixture.apply(&mut state, 0, 5_000, old);
+    let newer = fixture.policy_set(&state, 0, 5_100, &fixture.founder, &newer_source);
+    fixture.apply(&mut state, 0, 5_100, newer);
+    let EventBody::PolicySet(signed) = &old_event.content.body else {
+        panic!("a policy was written")
+    };
+
+    // Another device of the owner writes the signed statement into an event with a newer stamp.
+    let by_owner_device = fixture.author(&state, 1, 5_200, EventBody::PolicySet(signed.clone()));
+    assert_eq!(
+        receive(&mut state, by_owner_device),
+        Err(Invalid::PolicyNotForThisEvent)
+    );
+
+    // A member's device cannot carry the owner's statement at all.
+    let member_event = state
+        .builder(
+            fixture.member_device.key(),
+            Actor::Principal(fixture.member.key()),
+            5_200,
+        )
+        .unwrap()
+        .sign(&fixture.member_device, EventBody::PolicySet(signed.clone()))
+        .unwrap();
+    assert_eq!(
+        receive(&mut state, member_event),
+        Err(Invalid::ActorMismatch)
+    );
+    assert_eq!(state.policy().unwrap().source, newer_source);
+}
+
 /// A policy written by a newer version, with a recovery step this version does not know.
 fn newer_policy() -> String {
     crate::policy::DEFAULT_POLICY_TOML.replace(

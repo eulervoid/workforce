@@ -673,6 +673,20 @@ impl State {
     }
 
     /// Starts an event authored by `author` on top of everything this state has seen.
+    /// The `hlc` of the next event written on this state at `now_ms`, for a statement that has to
+    /// name it before the event is built. Every applied event is a head or precedes one, so the
+    /// heads give the same floor as the builder's.
+    pub fn next_hlc(&self, now_ms: u64) -> Result<Hlc, BuildError> {
+        let floor = self
+            .heads
+            .iter()
+            .filter_map(|id| self.known.get(id))
+            .map(|known| known.hlc)
+            .max()
+            .unwrap_or(Hlc::ZERO);
+        Hlc::next_after(floor, now_ms).ok_or(BuildError::ClockExhausted)
+    }
+
     pub fn builder(
         &self,
         author: DeviceKey,

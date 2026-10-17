@@ -8,7 +8,7 @@ use crate::event::{
     ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated, ItemEdited, ItemLinked, ItemMoved,
     ItemRef, Link, PolicySet, SessionEnded, SessionStarted, WrittenState,
 };
-use crate::id::{CommentId, ItemId, SessionId, WorkforceId};
+use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
     Actor, AgentId, DeviceSigner, InviteSigner, MemberSeed, PrincipalSigner, Signed,
 };
@@ -137,6 +137,22 @@ impl Fixture {
     /// A fork of `parent` made on device 0, leaving device 1 out. The founder is `founder`, a new
     /// principal key when it differs from the one of this fixture.
     pub fn fork(&self, parent: &State, founder: &PrincipalSigner, now_ms: u64) -> Event {
+        self.fork_at(
+            parent,
+            parent.heads().iter().copied().collect(),
+            founder,
+            now_ms,
+        )
+    }
+
+    /// Like [`Fixture::fork`], at `heads` instead of the heads of `parent`.
+    pub fn fork_at(
+        &self,
+        parent: &State,
+        heads: Vec<EventId>,
+        founder: &PrincipalSigner,
+        now_ms: u64,
+    ) -> Event {
         let old = self.founder.key();
         let genesis = Genesis {
             name: "demo (fork)".into(),
@@ -159,7 +175,7 @@ impl Fixture {
             policy: DEFAULT_POLICY_TOML.into(),
             forked_from: Some(ForkPoint {
                 workforce: self.workforce(),
-                heads: parent.heads().iter().copied().collect(),
+                heads,
             }),
         };
         let body = EventBody::Genesis(Signed::sign(founder, None, genesis).unwrap());

@@ -331,7 +331,7 @@ impl Simulation {
                     let body = self.fixture.policy_set(
                         &self.replicas[device],
                         device,
-                        (self.clock + 1) / 2,
+                        (self.clock + 1).div_ceil(2),
                         &self.fixture.founder,
                         &source,
                     );

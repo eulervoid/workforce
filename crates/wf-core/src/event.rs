@@ -850,6 +850,13 @@ impl EventBuilder {
         self.hlc
     }
 
+    /// Gives the event the `hlc` a statement in its body already names. Admission refuses it when
+    /// it does not come after the parents of the event.
+    pub fn with_hlc(mut self, hlc: Hlc) -> Self {
+        self.hlc = hlc;
+        self
+    }
+
     /// The first event of a new workforce.
     pub fn genesis(author: DeviceKey, actor: Actor, now_ms: u64) -> Self {
         Self {
