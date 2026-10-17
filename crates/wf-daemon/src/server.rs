@@ -86,7 +86,11 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         return encode_failed(message);
     }
     let opened = match request.call {
-        Call::Follow(_) | Call::Join { .. } => daemon.follow(request.workforce),
+        Call::Join { ref code, .. } => match check_invite(code, request.workforce) {
+            Ok(_) => daemon.follow(request.workforce),
+            Err(message) => return encode_failed(message),
+        },
+        Call::Follow(_) => daemon.follow(request.workforce),
         Call::State
         | Call::Event(_)
         | Call::Events { .. }
@@ -109,6 +113,18 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         Ok(reply) => reply,
         Err(message) => encode_failed(message),
     }
+}
+
+/// The invite `code` names, if it is a valid one for `workforce`. Checked before the workforce
+/// is created, so a bad join leaves nothing behind.
+fn check_invite(code: &str, workforce: WorkforceId) -> Result<InviteCode, String> {
+    let code: InviteCode = code
+        .parse()
+        .map_err(|error: InviteCodeError| wf_core::error_chain(&error))?;
+    if code.workforce != workforce {
+        return Err("the invite is for another workforce".to_string());
+    }
+    Ok(code)
 }
 
 /// Refuses what a session may not do, before anything is opened for it. A session acts in its
@@ -245,12 +261,7 @@ async fn call(
             reply(())
         }
         Call::Join { code, profile } => {
-            let code: InviteCode = code
-                .parse()
-                .map_err(|error: InviteCodeError| wf_core::error_chain(&error))?;
-            if code.workforce != workforce {
-                return Err("the invite is for another workforce".to_string());
-            }
+            let code = check_invite(&code, workforce)?;
             daemon
                 .join(loaded, &code, profile)
                 .await

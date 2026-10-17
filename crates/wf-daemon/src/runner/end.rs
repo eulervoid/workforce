@@ -218,7 +218,7 @@ impl Daemon {
         let Some(repository) = self.repository_of(workforce) else {
             return Ok(());
         };
-        let target = target_of(state);
+        let target = target_of(state)?;
         let worktree = item_worktree(&self.workforce_directory(workforce), item);
         let signing = self.machine_config()?.commits.agent_signing.signing();
         let onto = target.clone();
@@ -247,7 +247,7 @@ impl Daemon {
         let Some(repository) = self.repository_of(workforce) else {
             return Ok(None);
         };
-        let target = target_of(state);
+        let target = target_of(state)?;
         let branch = item_branch(item);
         let commit = blocking(move || {
             let git = GitCli::open(&repository)?;
@@ -260,12 +260,7 @@ impl Daemon {
 }
 
 /// The branch that work merges into, as the policy says.
-fn target_of(state: &State) -> String {
-    state
-        .policy()
-        .expect("a workforce has a policy")
-        .policy
-        .merge
-        .target
-        .clone()
+fn target_of(state: &State) -> Result<String, SessionError> {
+    let config = state.policy().ok_or(SessionError::NoPolicy)?;
+    Ok(config.policy.merge.target.clone())
 }

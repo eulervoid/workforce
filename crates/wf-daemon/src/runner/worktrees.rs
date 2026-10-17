@@ -89,7 +89,11 @@ impl Daemon {
         let Ok(state) = self.snapshot(loaded).await else {
             return;
         };
-        let policy = &state.policy().expect("a workforce has a policy").policy;
+        // Without a policy, which a workforce taken in from another device lacks at first, no
+        // item is known to be unfinished, so nothing can be told stray.
+        let Some(policy) = state.policy().map(|config| &config.policy) else {
+            return;
+        };
         let workforce_directory = self.workforce_directory(workforce);
         let mut kept = self.busy_directories(workforce, &state);
         for view in state.items() {
