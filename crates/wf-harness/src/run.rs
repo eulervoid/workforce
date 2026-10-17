@@ -435,6 +435,9 @@ impl Conversation {
                     }
                     let _ = ready.send((session_id.clone(), current));
                     while let Some(turn) = incoming.recv().await {
+                        // A cancel asked for while no turn ran, or too late for the last one,
+                        // is not meant for this turn.
+                        cancelled_turn.mark_unchanged();
                         said.lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .clear();
@@ -547,7 +550,7 @@ impl Conversation {
 
     /// Asks the agent to stop the turn that is running, and answers a permission request it
     /// waits on with `cancelled`. The turn then ends with [`StopReason::Cancelled`]. A cancel
-    /// that comes before the turn has reached the agent still cancels it.
+    /// that comes while no turn runs cancels nothing.
     pub fn cancel(&self) -> CancelHandle {
         CancelHandle(Arc::clone(&self.cancel))
     }

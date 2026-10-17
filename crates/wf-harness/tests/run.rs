@@ -410,3 +410,51 @@ async fn waiting_on_a_permission_is_not_silence() {
     assert!(said.contains("permission: yes"), "{said}");
     conversation.close().await.unwrap();
 }
+
+async fn start_fake_agent(hang: bool) -> (tempfile::TempDir, Conversation) {
+    let directory = tempfile::tempdir().unwrap();
+    let mut agent =
+        agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"));
+    if hang {
+        agent = agent.env("FAKE_AGENT_HANG", "1");
+    }
+    let conversation = Conversation::start(Launch {
+        agent,
+        opening: Opening::New,
+        model: None,
+        directory: directory.path().to_path_buf(),
+        permissions: Arc::new(Permission::Allow),
+        transcript: SharedBuffer::default(),
+        silence_limit: SILENCE_LIMIT,
+    })
+    .await
+    .unwrap();
+    (directory, conversation)
+}
+
+#[tokio::test]
+async fn a_cancel_during_a_turn_ends_it() {
+    let (_directory, mut conversation) = start_fake_agent(true).await;
+    let cancel = conversation.cancel();
+    let canceller = tokio::spawn(async move {
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        cancel.cancel();
+    });
+    let stop_reason = tokio::time::timeout(Duration::from_secs(10), conversation.prompt("hang"))
+        .await
+        .expect("the turn ends")
+        .unwrap();
+    assert!(matches!(stop_reason, StopReason::Cancelled));
+    canceller.await.unwrap();
+    let _ = conversation.close().await;
+}
+
+#[tokio::test]
+async fn a_cancel_between_turns_does_not_cancel_the_next_turn() {
+    let (_directory, mut conversation) = start_fake_agent(false).await;
+    conversation.cancel().cancel();
+    let (stop_reason, said) = conversation.reply("do the thing").await.unwrap();
+    assert!(matches!(stop_reason, StopReason::EndTurn));
+    assert!(said.contains("permission: yes"), "{said}");
+    conversation.close().await.unwrap();
+}
