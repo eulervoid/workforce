@@ -4,7 +4,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use wf_core::id::{HashId, ItemId, WorkforceId};
+use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::item::ItemView;
 use wf_core::session::SessionRole;
 use wf_core::state::State;
@@ -16,16 +16,28 @@ use crate::{Daemon, Loaded, caches};
 impl Daemon {
     /// Removes the directory an ended session ran in, unless it is the worktree of the item,
     /// which later sessions continue: there only a rebase stopped by a refused submission is
-    /// given up.
+    /// given up, and not while another session of the item is live.
     pub(super) async fn discard_session_directory(
         &self,
         workforce: WorkforceId,
+        loaded: &Loaded,
         item: ItemId,
+        session: SessionId,
         role: SessionRole,
     ) {
-        let directory = self.session_directory(workforce, item, role);
+        let directory = self.session_directory(workforce, item, session, role);
         let removed = match role {
-            SessionRole::Work => return self.abort_stopped_rebase(workforce, item).await,
+            SessionRole::Work => {
+                let another_live = self.snapshot(loaded).await.map_or(true, |state| {
+                    state
+                        .live_sessions()
+                        .any(|live| live.item() == item && live.id() != session)
+                });
+                if !another_live {
+                    self.abort_stopped_rebase(workforce, item).await;
+                }
+                return;
+            }
             SessionRole::Review { commit: Some(_) } => {
                 let Some(repository) = self.repository_of(workforce) else {
                     return;
@@ -78,7 +90,9 @@ impl Daemon {
         state
             .live_sessions()
             .filter(|session| session.device() == self.device())
-            .map(|session| self.session_directory(workforce, session.item(), session.role()))
+            .map(|session| {
+                self.session_directory(workforce, session.item(), session.id(), session.role())
+            })
             .collect()
     }
 

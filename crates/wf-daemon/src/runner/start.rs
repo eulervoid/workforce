@@ -10,10 +10,10 @@ use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::name::AgentName;
-use wf_core::session::{CommitId, MachineFault, SessionRole};
+use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::{AgentDefinition, State};
 use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
-use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_name, item_worktree, worktrees};
+use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_worktree, session_directory};
 
 use super::drive::run_session;
 use super::{Begin, Run, SessionError, blocking, ensure_unclaimed};
@@ -61,32 +61,6 @@ pub(super) fn git_identity(
 }
 
 impl Daemon {
-    /// The empty directory a supervise or diagnose session runs in. One session of each runs per
-    /// item.
-    pub(super) fn empty_directory(
-        &self,
-        workforce: WorkforceId,
-        item: ItemId,
-        purpose: &str,
-    ) -> PathBuf {
-        worktrees(&self.workforce_directory(workforce))
-            .join(format!("{}-{purpose}", item_name(item)))
-    }
-
-    /// Where a review session looks at a commit of an item.
-    pub(super) fn review_worktree(
-        &self,
-        workforce: WorkforceId,
-        item: ItemId,
-        commit: Option<CommitId>,
-    ) -> PathBuf {
-        let suffix = commit.map_or("answer".to_string(), |commit| {
-            commit.to_string()[..8].into()
-        });
-        worktrees(&self.workforce_directory(workforce))
-            .join(format!("{}-{suffix}", item_name(item)))
-    }
-
     /// What it takes to run `agent` on `item` in `role`, as the state and the machine config say:
     /// checked before a session is written, so that a session that cannot run is not started.
     pub(super) fn setup(
@@ -144,19 +118,15 @@ impl Daemon {
         })
     }
 
-    /// The worktree or directory a session of `role` on `item` runs in.
+    /// The worktree or directory `session` of `role` on `item` runs in.
     pub(super) fn session_directory(
         &self,
         workforce: WorkforceId,
         item: ItemId,
+        session: SessionId,
         role: SessionRole,
     ) -> PathBuf {
-        match role {
-            SessionRole::Work => item_worktree(&self.workforce_directory(workforce), item),
-            SessionRole::Review { commit } => self.review_worktree(workforce, item, commit),
-            SessionRole::Supervise => self.empty_directory(workforce, item, "supervise"),
-            SessionRole::Diagnose => self.empty_directory(workforce, item, "diagnose"),
-        }
+        session_directory(&self.workforce_directory(workforce), item, session, role)
     }
 
     /// Starts a session of `agent` on `item`, and a task that runs the harness. A work session
@@ -188,10 +158,9 @@ impl Daemon {
         if role == SessionRole::Work {
             ensure_unclaimed(&state, item)?;
         }
-        let worktree = self.session_directory(workforce, item, role);
-        let path = worktree.clone();
         let repository = match role {
             SessionRole::Work => {
+                let path = item_worktree(&self.workforce_directory(workforce), item);
                 let (branch, target) = (item_branch(item), setup.target.clone());
                 blocking(move || {
                     let git = GitCli::open(&repository)?;
@@ -200,26 +169,11 @@ impl Daemon {
                 })
                 .await??
             }
-            SessionRole::Review { commit } => {
+            // The directory of the others is named after the session, which is known once it is
+            // written.
+            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => {
                 blocking(move || {
-                    let git = GitCli::open(&repository)?;
-                    // A look at the same commit by an earlier review may have left its checkout.
-                    let _ = git.remove_worktree(&path);
-                    let _ = std::fs::remove_dir_all(&path);
-                    match commit {
-                        Some(commit) => git.detached_worktree(&path, commit)?,
-                        None => std::fs::create_dir_all(&path)?,
-                    }
-                    Ok::<_, VcsError>(git.repository().to_path_buf())
-                })
-                .await??
-            }
-            SessionRole::Supervise | SessionRole::Diagnose => {
-                blocking(move || {
-                    let git = GitCli::open(&repository)?;
-                    let _ = std::fs::remove_dir_all(&path);
-                    std::fs::create_dir_all(&path)?;
-                    Ok::<_, VcsError>(git.repository().to_path_buf())
+                    Ok::<_, VcsError>(GitCli::open(&repository)?.repository().to_path_buf())
                 })
                 .await??
             }
@@ -240,7 +194,26 @@ impl Daemon {
         let session = SessionId::from(started.id());
         // Once the session is in the log, a failure to set it up ends it: otherwise it would hold
         // the item and a slot until the next daemon starts.
+        let worktree = self.session_directory(workforce, item, session, role);
         let prepared = async {
+            match role {
+                SessionRole::Work => {}
+                SessionRole::Review {
+                    commit: Some(commit),
+                } => {
+                    let (path, repository) = (worktree.clone(), repository.clone());
+                    blocking(move || GitCli::open(&repository)?.detached_worktree(&path, commit))
+                        .await??;
+                }
+                SessionRole::Review { commit: None }
+                | SessionRole::Supervise
+                | SessionRole::Diagnose => {
+                    std::fs::create_dir_all(&worktree).map_err(|source| SessionError::Io {
+                        path: worktree.clone(),
+                        source,
+                    })?;
+                }
+            }
             let state = self.snapshot(loaded).await?;
             if let Some((item, to)) = state.start_move(session) {
                 self.move_item(loaded, setup.principal, item, to, None, Some(session))

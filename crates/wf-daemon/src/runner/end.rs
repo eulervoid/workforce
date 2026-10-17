@@ -163,7 +163,8 @@ impl Daemon {
         let running = self.runners.is_running(session);
         self.runners.stop(session, how);
         if !running {
-            self.discard_session_directory(workforce, item, role).await;
+            self.discard_session_directory(workforce, loaded, item, session, role)
+                .await;
         }
         if matches!(reason, EndReason::Submitted { commit: None }) {
             self.discard_branch(workforce, item).await;

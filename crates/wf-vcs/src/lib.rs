@@ -7,8 +7,8 @@ pub mod signing;
 
 use std::path::{Path, PathBuf};
 
-use wf_core::id::{HashId, ItemId};
-use wf_core::session::{CommitId, GitOid};
+use wf_core::id::{HashId, ItemId, SessionId};
+use wf_core::session::{CommitId, GitOid, SessionRole};
 
 pub use git::GitCli;
 
@@ -76,6 +76,28 @@ pub fn worktrees(workforce_directory: &Path) -> PathBuf {
 /// The worktree of the work on an item.
 pub fn item_worktree(workforce_directory: &Path, item: ItemId) -> PathBuf {
     worktrees(workforce_directory).join(item_name(item))
+}
+
+/// The worktree or directory `session` of `role` on `item` runs in. Work sessions share the
+/// worktree of the item; every other session has a directory of its own, so that cleaning up
+/// after one cannot remove what the next on the same item uses.
+pub fn session_directory(
+    workforce_directory: &Path,
+    item: ItemId,
+    session: SessionId,
+    role: SessionRole,
+) -> PathBuf {
+    let purpose = match role {
+        SessionRole::Work => return item_worktree(workforce_directory, item),
+        SessionRole::Review { .. } => "review",
+        SessionRole::Supervise => "supervise",
+        SessionRole::Diagnose => "diagnose",
+    };
+    worktrees(workforce_directory).join(format!(
+        "{}-{purpose}-{}",
+        item_name(item),
+        session.short()
+    ))
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -301,4 +323,34 @@ pub trait VcsAdapter {
     /// Gives up the rebase stopped in `worktree`, if one is, which checks the branch out again
     /// as it was before the rebase.
     fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn sessions_other_than_work_have_directories_of_their_own() {
+        let workforce = Path::new("/workforce");
+        let item = ItemId::from_bytes([1; 32]);
+        let (first, second) = (
+            SessionId::from_bytes([2; 32]),
+            SessionId::from_bytes([3; 32]),
+        );
+        let commit = Some(CommitId::Git(GitOid::from_bytes([4; 20])));
+        for role in [
+            SessionRole::Review { commit },
+            SessionRole::Review { commit: None },
+            SessionRole::Supervise,
+            SessionRole::Diagnose,
+        ] {
+            let directory = session_directory(workforce, item, first, role);
+            assert_ne!(directory, session_directory(workforce, item, second, role));
+            assert_ne!(directory, item_worktree(workforce, item));
+        }
+        assert_eq!(
+            session_directory(workforce, item, first, SessionRole::Work),
+            session_directory(workforce, item, second, SessionRole::Work),
+        );
+    }
 }
