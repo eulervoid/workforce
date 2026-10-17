@@ -316,3 +316,33 @@ fn a_comment_on_lines_needs_lines_from_1_the_last_after_the_first() {
         })
     );
 }
+
+#[test]
+fn a_comment_resolving_what_its_author_has_not_seen_is_refused() {
+    let fixture = Fixture::new(2);
+    let mut state = fixture.state();
+    let mut other = fixture.state();
+    let created = fixture.author(&state, 0, 2_000, create("task", "Parse durations"));
+    let task: ItemId = created.id().into();
+    state.receive(created.clone(), Trust::Stored).unwrap();
+    other.receive(created, Trust::Stored).unwrap();
+    let question = comment_id(&fixture.apply(&mut state, 0, 2_001, blocker(task, "which crate?")));
+    // Device 1 writes without having seen the blocker.
+    let unseen = fixture.author(&other, 1, 2_002, resolving(task, "answered", &[question]));
+    let error = state.receive(unseen, Trust::Stored).unwrap_err();
+    assert!(matches!(
+        error,
+        crate::validate::Invalid::ResolvesOutsideCausalPast(id) if id == question
+    ));
+    assert_eq!(open(&state, task), [question]);
+
+    // Once the author has seen it, the comment resolves it, also through later events.
+    fixture.apply(&mut state, 1, 2_003, comment(task, "a remark"));
+    fixture.apply(
+        &mut state,
+        1,
+        2_004,
+        resolving(task, "answered", &[question]),
+    );
+    assert!(open(&state, task).is_empty());
+}
