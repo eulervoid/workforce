@@ -2,6 +2,11 @@
 //!
 //! The encoding is postcard: deterministic as long as no hash maps are serialized. Keep
 //! all encoding in this module so format changes are deliberate and caught by golden tests.
+//!
+//! Stored events are never rewritten, so every body must decode from the bytes any earlier
+//! version wrote. `event/golden_bodies.txt` holds one event per body tag as it was first written.
+//! It is only ever appended to: a new tag adds a line, an old line never changes. A body whose
+//! layout changes takes a new tag and keeps decoding the old one.
 
 use serde::{Serialize, de::DeserializeOwned};
 
