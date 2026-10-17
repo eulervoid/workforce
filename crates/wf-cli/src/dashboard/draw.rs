@@ -7,6 +7,7 @@ use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Styled, Stylize};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Clear, Paragraph, Wrap};
+use tui_input::Input;
 use wf_core::graph::Readiness;
 use wf_core::id::HashId;
 use wf_daemon::machine_config::Background;
@@ -542,14 +543,32 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
         area
     };
     let width = usize::from(area.width).saturating_sub(label_width + 1);
-    let scroll = input.visual_scroll(width);
-    label.push(Span::raw(
-        input.value().chars().skip(scroll).collect::<String>(),
-    ));
+    let (typed, cursor) = visible_input(input, width);
+    label.push(Span::raw(typed));
     let line = Line::from(label);
     frame.render_widget(Paragraph::new(line), area);
-    let cursor = (input.visual_cursor().max(scroll) - scroll) as u16;
     frame.set_cursor_position((area.x + label_width as u16 + cursor, area.y));
+}
+
+/// What of the typed text shows in `width` cells, and the cell the cursor is in. `tui-input`
+/// scrolls in terminal cells, so the text is skipped by width, and the cursor moves by the cells
+/// actually skipped.
+fn visible_input(input: &Input, width: usize) -> (String, u16) {
+    let scroll = input.visual_scroll(width);
+    let mut skipped = 0;
+    let mut characters = input.value().chars();
+    let mut rest = characters.clone();
+    while skipped < scroll {
+        let Some(character) = characters.next() else {
+            break;
+        };
+        skipped += textwrap::core::display_width(character.encode_utf8(&mut [0; 4]));
+        rest = characters.clone();
+    }
+    (
+        rest.collect(),
+        input.visual_cursor().saturating_sub(skipped) as u16,
+    )
 }
 
 /// Draws a question answered with keys: the accent covers the whole line, so the keys read as
@@ -2123,4 +2142,28 @@ fn hints(app: &App) -> Vec<&'static str> {
     hints.extend(acts);
     hints.push("? keys");
     hints
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn wide_characters_are_skipped_by_cells_and_the_cursor_follows() {
+        // 13 cells; in 3 cells the scroll is 10 cells, which is 5 characters. Skipping 10
+        // characters would drop everything.
+        let input = Input::new("日本語日本語a".to_owned());
+        assert_eq!(input.visual_scroll(3), 10);
+        let (typed, cursor) = visible_input(&input, 3);
+        assert_eq!(typed, "語a");
+        assert_eq!(cursor, 3);
+    }
+
+    #[test]
+    fn narrow_text_is_skipped_by_cells_as_characters() {
+        let input = Input::new("abcdefgh".to_owned());
+        let (typed, cursor) = visible_input(&input, 4);
+        assert_eq!(typed, "efgh");
+        assert_eq!(cursor, 4);
+    }
 }

@@ -8,8 +8,8 @@ use jiff::tz::TimeZone;
 use ratatui::crossterm::event::{Event as TerminalEvent, KeyCode, KeyEvent, KeyModifiers};
 use ratatui::layout::{Position, Rect};
 use ratatui::style::Style;
-use tui_input::Input;
 use tui_input::backend::crossterm::EventHandler;
+use tui_input::{Input, InputRequest};
 use wf_core::event::{CommentKind, LineAnchor};
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
@@ -1440,6 +1440,40 @@ impl App {
             scroll: detail.start(),
             detail,
         });
+    }
+
+    /// Pasted text: it goes into the prompt that is open, where a line break is a space as the
+    /// prompts are one line; with none open, it is ignored rather than taken for keys. Whether
+    /// there was a prompt to take it.
+    pub fn paste(&mut self, text: &str) -> bool {
+        let Some(
+            Prompt::Filter { input, .. }
+            | Prompt::Answer { input, .. }
+            | Prompt::Comment { input, .. }
+            | Prompt::LineComment { input, .. },
+        ) = &mut self.prompt
+        else {
+            return false;
+        };
+        for character in text.replace("\r\n", "\n").chars() {
+            let character = if matches!(character, '\n' | '\r') {
+                ' '
+            } else {
+                character
+            };
+            input.handle(InputRequest::InsertChar(character));
+        }
+        if let Some(Prompt::Filter { list, input }) = &self.prompt {
+            let text = input.value().to_owned();
+            match list {
+                Filtered::Items => self.items.filter = text,
+                Filtered::Log => {
+                    self.log.scroll = Scroll::END;
+                    self.log.filter = text;
+                }
+            }
+        }
+        true
     }
 
     pub fn key(&mut self, key: KeyEvent) -> Option<Effect> {
