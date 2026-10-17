@@ -388,6 +388,7 @@ mod tests {
                     access: Access {
                         worktree: &worktree,
                         repository: self.git.repository(),
+                        branch: None,
                         socket: Path::new("/nonexistent/daemon.sock"),
                         data_dir: self.root.path(),
                         machine_config: None,

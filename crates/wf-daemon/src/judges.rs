@@ -168,6 +168,7 @@ impl WorkforceJudges {
             &machine_config.sandbox_of(agent),
             &directory,
             &directory,
+            None,
             &settings,
             command,
         )

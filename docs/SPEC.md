@@ -1093,7 +1093,8 @@ The daemon runs every harness in **Fence**, with a profile it writes per session
 template. Without Fence installed, sessions fail; there is no silent fallback. `kind = "off"` runs
 agents with the principal's privileges, and then `allow` is treated as `ask`.
 
-* **Write:** the session's directory, the repository's `.git` (where its commits go), temporary files,
+* **Write:** the session's directory, the parts of the repository's `.git` that commits need (`objects`, remote and tag refs, the
+  session's own branch, the admin directory of its own worktree), temporary files,
   `~/.cache` and the caches and state of agent tools and package managers, the daemon's socket, and
   `allow_write`. Not `.env*` or key files.
 * **Network:** model APIs, git hosts and package registries, plus `allow_domains`; cloud metadata and
@@ -1106,6 +1107,8 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
     principal, or turn its sandbox off;
   * writing `.git/config`, `.git/hooks`, the worktree's `.git` file and the `commondir` it leads to,
     and git's own config, with which git would run the agent's code outside the sandbox;
+  * writing the target branch, any other item's branch, `packed-refs`, `HEAD` and the admin
+    directories of other worktrees, with which an agent would move the target past review and checks;
   * reading SSH and GPG keys and the credentials of clouds, registries and docker.
 
 `wf` in a session reads no key: the daemon signs what it writes.

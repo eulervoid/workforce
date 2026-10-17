@@ -216,6 +216,7 @@ impl<'a> Machine<'a> {
                 access: Access {
                     worktree: directory,
                     repository,
+                    branch: None,
                     socket,
                     data_dir,
                     machine_config: Some(config_path),

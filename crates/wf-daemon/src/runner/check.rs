@@ -164,6 +164,7 @@ impl Daemon {
                     access: crate::sandbox::Access {
                         worktree: &worktree,
                         repository,
+                        branch: None,
                         socket: &self.config.socket,
                         data_dir: &self.config.data_dir,
                         machine_config: self.config.machine_config.as_deref(),
