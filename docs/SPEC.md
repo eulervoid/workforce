@@ -1105,8 +1105,8 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
   * reading or writing the device key, principal keys, the principal token and the machine config,
     with which an agent could sign as the device or the principal, have the daemon act for the
     principal, or turn its sandbox off;
-  * writing `.git/config`, `.git/hooks`, the worktree's `.git` file and the `commondir` it leads to,
-    and git's own config, with which git would run the agent's code outside the sandbox;
+  * writing `.git/config`, `.git/hooks`, the worktree's `.git` file, the `commondir` it leads to and the
+    worktree's `config.worktree`, and git's own config, with which git would run the agent's code outside the sandbox;
   * writing the target branch, any other item's branch, `packed-refs`, `HEAD` and the admin
     directories of other worktrees, with which an agent would move the target past review and checks;
   * reading SSH and GPG keys and the credentials of clouds, registries and docker.

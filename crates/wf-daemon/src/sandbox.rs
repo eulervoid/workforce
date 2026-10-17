@@ -93,6 +93,7 @@ fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
         git_directory.join("config"),
         git_directory.join("hooks"),
         git_directory.join("worktrees").join("*").join("commondir"),
+        git_directory.join("worktrees").join("*").join("config.worktree"),
         access.worktree.join(".git"),
         PathBuf::from("~/.config/git"),
     ];
@@ -449,6 +450,7 @@ mod tests {
             "/work/repo/.git/config",
             "/work/repo/.git/hooks/pre-commit",
             "/work/repo/.git/worktrees/k3f9/commondir",
+            "/work/repo/.git/worktrees/k3f9/config.worktree",
             "/home/ada/.local/share/workforce/w1/worktrees/k3f9/.git",
             "~/.config/git/config",
         ] {
