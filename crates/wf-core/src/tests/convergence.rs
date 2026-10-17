@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use proptest::prelude::*;
 
 use crate::crdt::SetChange;
-use crate::event::{Change, Event, EventBody};
+use crate::event::{Change, CommentKind, Event, EventBody};
 use crate::id::{EventId, ItemId};
 use crate::identity::{DeviceSigner, InviteSigner};
 use crate::item::{ItemState, ItemView, Priority};
@@ -374,8 +374,19 @@ impl Simulation {
                 let Some((submitted, _)) = self.replicas[device].submission(item) else {
                     return;
                 };
-                let kind = [Verdict::RequestChanges, Verdict::Approve, Verdict::Escalate]
-                    [usize::from(second) % 3];
+                // Only some verdicts are valid at a time: ask for changes when there are requests.
+                let changes_requested = match self.replicas[device].item(item) {
+                    Some(ItemView::Live(live)) => live
+                        .open_comments()
+                        .iter()
+                        .any(|(_, comment)| comment.kind == CommentKind::ChangeRequest),
+                    _ => return,
+                };
+                let kind = match (changes_requested, second % 4) {
+                    (_, 0) => Verdict::Escalate,
+                    (true, _) => Verdict::RequestChanges,
+                    (false, _) => Verdict::Approve,
+                };
                 self.submit(device, verdict(item, submitted, kind));
             }
             (19, _) if second % 2 == 0 && device == 0 => {
