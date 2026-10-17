@@ -602,3 +602,30 @@ fn own_events_are_not_judged_by_the_clock_after_it_went_back() {
     }
     assert_eq!(replica.state().event_count(), 3);
 }
+
+#[test]
+fn a_stored_pending_event_that_admission_refuses_is_dropped_on_open() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let foreign = Fixture::new(2);
+    {
+        let mut replica = new_replica(&directory, &fixture);
+        add(&mut replica, &fixture, 1);
+        replica
+            .store()
+            .commit(Commit {
+                append: &[],
+                pending: PendingChange::Update {
+                    put: std::slice::from_ref(&foreign.genesis),
+                    remove: &[],
+                },
+                snapshot: SnapshotChange::Keep,
+            })
+            .unwrap();
+        assert_eq!(replica.store().pending().unwrap().len(), 1);
+    }
+    let reopened = Replica::open(open(&directory), fixture.workforce()).unwrap();
+    assert!(reopened.store().pending().unwrap().is_empty());
+    assert_eq!(reopened.state().pending_events().count(), 0);
+    assert_eq!(reopened.store().log_since(0).unwrap().len(), 2);
+}

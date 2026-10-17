@@ -122,11 +122,12 @@ impl<S: EventStore> Replica<S> {
             failed_write: None,
         };
         for event in replica.store.pending()? {
-            let received = replica
-                .state
-                .receive(event.clone(), Trust::Stored)
-                .map_err(|error| StoreError::Inconsistent(wf_core::error_chain(&error)))?;
-            replica.persist(&event, &received)?;
+            // Admission may refuse what an earlier version parked unchecked; such an event is
+            // dropped from the pending set rather than failing the open.
+            match replica.state.receive(event.clone(), Trust::Stored) {
+                Ok(received) => replica.persist(&event, &received)?,
+                Err(_) => replica.drop_pending(&event)?,
+            }
         }
         let needs_snapshot = replayed >= SNAPSHOT_INTERVAL || (!from_snapshot && replayed > 0);
         if needs_snapshot {
@@ -329,6 +330,19 @@ impl<S: EventStore> Replica<S> {
         self.persist(&event, &received)
             .map_err(ReceiveError::from)?;
         Ok(event)
+    }
+
+    fn drop_pending(&mut self, event: &Event) -> Result<(), StoreError> {
+        let result = self.store.commit(Commit {
+            append: &[],
+            pending: PendingChange::Update {
+                put: &[],
+                remove: &[event.id()],
+            },
+            snapshot: SnapshotChange::Keep,
+        });
+        self.note_failed_write(&result);
+        result
     }
 
     fn persist(&mut self, submitted: &Event, received: &Received) -> Result<(), StoreError> {
