@@ -10,7 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
-use wf_core::name::HarnessName;
+use wf_core::name::{AgentName, HarnessName};
 use wf_core::session::{HarnessFault, MachineFault};
 
 /// What is wrong with this machine now.
@@ -37,7 +37,8 @@ pub struct OutOfSpace {
 }
 
 /// A harness whose sessions cannot run. Its agents are started again every
-/// [`RETRY_HARNESS`]; the first turn it answers shows that it is fine again.
+/// [`RETRY_HARNESS`]; the first turn it answers shows that it is fine again. Unless no command is
+/// known for it: then they wait until there is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessAtFault {
     pub fault: HarnessFault,
@@ -106,6 +107,50 @@ impl Faults {
         }
     }
 
+    /// Makes the harnesses that no command is known for, with the agents that use each, the
+    /// unknown ones at fault: logs when one starts and when one clears, and nothing in between.
+    pub(crate) fn sync_unknown_harnesses(&self, unknown: BTreeMap<HarnessName, Vec<AgentName>>) {
+        let now_ms = crate::now_ms();
+        let mut faults = self.lock();
+        let cleared: Vec<_> = faults
+            .harnesses
+            .iter()
+            .filter(|(harness, at_fault)| {
+                at_fault.fault == HarnessFault::Unknown && !unknown.contains_key(*harness)
+            })
+            .map(|(harness, _)| harness.clone())
+            .collect();
+        for harness in cleared {
+            tracing::info!("{harness} is known again");
+            faults.harnesses.remove(&harness);
+        }
+        for (harness, agents) in unknown {
+            let names: Vec<_> = agents.iter().map(ToString::to_string).collect();
+            let what = format!("used by {}", names.join(", "));
+            match faults.harnesses.get_mut(&harness) {
+                Some(known) if known.fault == HarnessFault::Unknown => {
+                    known.last_ms = now_ms;
+                    known.what = what;
+                }
+                Some(_) | None => {
+                    tracing::warn!(
+                        "{harness} is not a harness wf knows how to start; its agents do not \
+                         start: {what}"
+                    );
+                    faults.harnesses.insert(
+                        harness,
+                        HarnessAtFault {
+                            fault: HarnessFault::Unknown,
+                            since_ms: now_ms,
+                            last_ms: now_ms,
+                            what,
+                        },
+                    );
+                }
+            }
+        }
+    }
+
     /// Forgets what was wrong with `harness`: it has answered a turn.
     pub(crate) fn harness_answered(&self, harness: &HarnessName) {
         if self.lock().harnesses.remove(harness).is_some() {
@@ -121,16 +166,17 @@ impl Faults {
             .map(|_| MachineFault::NoSpace)
     }
 
-    /// Whether an agent of `harness` is to wait before it is started: while the disk is full, and
-    /// for [`RETRY_HARNESS`] after a session of the harness failed for a fault of it.
+    /// Whether an agent of `harness` is to wait before it is started: while the disk is full, for
+    /// as long as no command is known for the harness, and for [`RETRY_HARNESS`] after a session
+    /// of the harness failed for another fault of it.
     pub(crate) fn holds(&self, harness: &HarnessName, now_ms: u64) -> bool {
         let faults = self.lock();
         let retry_ms = u64::try_from(RETRY_HARNESS.as_millis()).unwrap_or(u64::MAX);
         faults.out_of_space.is_some()
-            || faults
-                .harnesses
-                .get(harness)
-                .is_some_and(|fault| now_ms.saturating_sub(fault.last_ms) < retry_ms)
+            || faults.harnesses.get(harness).is_some_and(|at_fault| {
+                at_fault.fault == HarnessFault::Unknown
+                    || now_ms.saturating_sub(at_fault.last_ms) < retry_ms
+            })
     }
 
     pub(crate) fn current(&self) -> MachineFaults {
@@ -219,6 +265,24 @@ mod tests {
         faults.check_space(directory.path());
         assert!(faults.current().is_empty());
         assert!(!directory.path().join(PROBE_FILE).exists());
+    }
+
+    #[test]
+    fn an_unknown_harness_is_held_until_a_command_is_known() {
+        let faults = Faults::default();
+        let typo = HarnessName::new("claud-code").unwrap();
+        let betty = AgentName::new("betty").unwrap();
+        let unknown = BTreeMap::from([(typo.clone(), vec![betty])]);
+        faults.sync_unknown_harnesses(unknown.clone());
+        let first = faults.current().harnesses[&typo].clone();
+        assert_eq!(first.fault, HarnessFault::Unknown);
+        assert_eq!(first.what, "used by betty");
+        faults.sync_unknown_harnesses(unknown);
+        assert_eq!(faults.current().harnesses[&typo].since_ms, first.since_ms);
+        assert!(faults.holds(&typo, first.last_ms + 10 * RETRY_HARNESS.as_millis() as u64));
+
+        faults.sync_unknown_harnesses(BTreeMap::new());
+        assert!(faults.current().is_empty());
     }
 
     #[test]

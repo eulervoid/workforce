@@ -1,11 +1,12 @@
 //! The dispatcher: queues what is ready to merge and starts agents on what they may take.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use wf_core::id::{HashId, ItemId, WorkforceId};
 use wf_core::item::ItemState;
-use wf_core::name::AgentName;
+use wf_core::name::{AgentName, HarnessName};
 use wf_core::review::PendingMerge;
 use wf_core::session::SessionRole;
 
@@ -113,8 +114,18 @@ async fn dispatch_once(
     // An agent whose session would fail for what is wrong with the machine waits until it is
     // fine, or until it is time to try again whether it is.
     let now_ms = crate::now_ms();
-    let agents: Vec<_> = state
-        .auto_agents(device)
+    let auto_agents = state.auto_agents(device);
+    let mut unknown: BTreeMap<HarnessName, Vec<AgentName>> = BTreeMap::new();
+    for (agent, definition) in &auto_agents {
+        if daemon.harness_command(&definition.harness).is_none() {
+            unknown
+                .entry(definition.harness.clone())
+                .or_default()
+                .push(agent.name.clone());
+        }
+    }
+    daemon.faults.sync_unknown_harnesses(unknown);
+    let agents: Vec<_> = auto_agents
         .into_iter()
         .filter(|(_, definition)| !daemon.faults.holds(&definition.harness, now_ms))
         .map(|(agent, _)| agent)

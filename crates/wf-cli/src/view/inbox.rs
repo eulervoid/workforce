@@ -90,6 +90,13 @@ fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
                 format!("The login of {harness} has lapsed"),
                 format!("log in to {harness} again on this machine"),
             ),
+            HarnessFault::Unknown => (
+                format!("{harness} is not a harness wf knows how to start"),
+                format!(
+                    "give its agents a known harness with `wf agent edit <name> --harness …`, or \
+                     add a command for {harness} to the machine config"
+                ),
+            ),
             HarnessFault::Unreachable => (
                 format!("{harness} cannot be reached"),
                 format!("check that {harness} is installed and starts on this machine"),
@@ -98,7 +105,12 @@ fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
         entry(
             title,
             format!(
-                "{todo}; its agents are tried again every {retried}. Since {}: {}",
+                "{todo}; {}. Since {}: {}",
+                match fault.fault {
+                    HarnessFault::Unknown => "its agents do not start until then".to_string(),
+                    HarnessFault::LoginLapsed | HarnessFault::Unreachable =>
+                        format!("its agents are tried again every {retried}"),
+                },
                 since(fault.since_ms),
                 fault.what
             ),

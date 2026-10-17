@@ -317,6 +317,7 @@ impl Snapshot {
         } = *sources;
         let waiting = waiting(state, events, held);
         let context = view::StatusContext {
+            machine_faults: &wf_daemon::MachineFaults::default(),
             own: Some(own),
             last_seen,
             daemon: true,
