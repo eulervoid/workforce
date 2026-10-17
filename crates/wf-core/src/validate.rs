@@ -23,7 +23,8 @@ use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, TypeName};
 use crate::policy::Field;
 use crate::session::{SessionRole, Verdict};
 use crate::state::{
-    Disposition, ForkState, MAX_PENDING, Origin, PendingOn, Received, State, Trust,
+    Disposition, ForkState, MAX_PENDING, MAX_PENDING_BINDINGS, Origin, PendingOn, Received, State,
+    Trust,
 };
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -341,6 +342,14 @@ impl State {
                         received.rejected.push((id, Invalid::PendingFull));
                         continue;
                     }
+                    let is_binding = matches!(event.content.body, EventBody::DeviceBound(_));
+                    if is_binding && self.pending_bindings() >= MAX_PENDING_BINDINGS {
+                        if is_submitted {
+                            return Err(Invalid::PendingFull);
+                        }
+                        received.rejected.push((id, Invalid::PendingFull));
+                        continue;
+                    }
                     self.pending.insert(waiting, id, event);
                     if is_submitted {
                         received.disposition = Disposition::Pending;
@@ -352,6 +361,14 @@ impl State {
             }
         }
         Ok(received)
+    }
+
+    fn pending_bindings(&self) -> usize {
+        self.pending
+            .events
+            .values()
+            .filter(|pending| matches!(pending.content.body, EventBody::DeviceBound(_)))
+            .count()
     }
 
     fn admit(

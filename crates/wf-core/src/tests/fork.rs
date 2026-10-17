@@ -4,8 +4,8 @@ use crate::id::WorkforceId;
 use crate::identity::{Actor, DeviceSigner};
 use crate::identity::{PrincipalSigner, Signed};
 use crate::item::ItemState;
-use crate::state::MAX_PENDING;
 use crate::state::{Disposition, State, Trust};
+use crate::state::{MAX_PENDING, MAX_PENDING_BINDINGS};
 use crate::testing::*;
 use crate::validate::Invalid;
 
@@ -522,4 +522,50 @@ fn a_history_head_with_an_impossible_feed_position_is_refused() {
         assert_eq!(state.receive(head, Trust::Untrusted).unwrap_err(), expected);
         assert!(state.history_incomplete());
     }
+}
+
+#[test]
+fn fresh_keys_cannot_fill_the_pending_events_with_bindings() {
+    let scenario = scenario(false);
+    let mut state = child(&scenario);
+    let actor = scenario.fixture.founder_actor();
+    let invite = crate::id::EventId::of(b"invite");
+    let binding = |state: &State, index: usize| {
+        let stranger = DeviceSigner::from_bytes(&[index as u8 + 1; 32]).unwrap();
+        let proof = scenario
+            .fixture
+            .invite(&scenario.parent, 4_000, 99_000)
+            .1
+            .prove(scenario.fixture.workforce(), invite, stranger.key())
+            .unwrap();
+        forged_for(
+            state,
+            &stranger,
+            actor.clone(),
+            1,
+            EventBody::DeviceBound(crate::event::DeviceBound { invite, proof }),
+        )
+    };
+    for index in 0..MAX_PENDING_BINDINGS {
+        let received = state
+            .receive(binding(&state, 100 + index), Trust::Untrusted)
+            .unwrap();
+        assert_eq!(received.disposition, Disposition::Pending);
+    }
+    assert_eq!(
+        state
+            .receive(
+                binding(&state, 100 + MAX_PENDING_BINDINGS),
+                Trust::Untrusted
+            )
+            .unwrap_err(),
+        Invalid::PendingFull
+    );
+    // Events of bound devices still have room.
+    let device = &scenario.fixture.devices[0];
+    let event = forged_for(&state, device, actor.clone(), 1, create("task", "legit"));
+    assert_eq!(
+        state.receive(event, Trust::Untrusted).unwrap().disposition,
+        Disposition::Pending
+    );
 }

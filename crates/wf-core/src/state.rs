@@ -20,6 +20,11 @@ use crate::validate::Invalid;
 /// Events that wait for missing parents are capped so a malformed `deps` cannot grow memory forever.
 pub const MAX_PENDING: usize = 10_000;
 
+/// A binding can be parked while a fork takes in its history without anything vouching for its
+/// key yet, so any fresh keypair can park one. Their number is capped far below `MAX_PENDING`,
+/// leaving the rest of the pending events to the devices that are bound.
+pub const MAX_PENDING_BINDINGS: usize = 64;
+
 /// Whether an event's signatures still need checking. The store only holds verified events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trust {
