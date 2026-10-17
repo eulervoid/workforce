@@ -580,6 +580,49 @@ fn a_blocker_is_answered_in_the_footer() {
 }
 
 #[test]
+fn pasted_text_goes_into_the_prompt_with_line_breaks_as_spaces() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('r'));
+    assert!(app.paste("a\nx\r\ny"));
+    // Nothing of it ran as keys: the prompt is open and nothing was answered.
+    assert!(app.prompt.is_some());
+    assert_eq!(
+        press(&mut app, KeyCode::Enter),
+        Some(Effect::Resolve {
+            item: ItemId::from_bytes([2; 32]),
+            blocker: CommentId::from_bytes([21; 32]),
+            text: "a x y".to_owned(),
+        })
+    );
+}
+
+#[test]
+fn pasted_text_without_a_prompt_is_ignored() {
+    let mut app = app();
+    assert!(!app.paste("a\nx\ny\n"));
+    assert!(app.prompt.is_none());
+}
+
+#[test]
+fn a_prompt_scrolls_by_cell_width_and_keeps_the_cursor_in_place() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('r'));
+    app.paste("日本語日本語日本語日本語日本語日本語日本語日本語日本語日本語end");
+    let screen = screen(&mut app, 40, 8);
+    let footer = screen
+        .lines()
+        .rev()
+        .find(|line| line.contains("end"))
+        .unwrap();
+    // The end shows whole, and its start is cut at a character, not in the middle of one.
+    // (The test backend prints a blank after each wide character.)
+    let shown: String = footer.chars().filter(|c| !c.is_whitespace()).collect();
+    assert!(shown.contains("日本語日本語日本語end"), "{footer}");
+}
+
+#[test]
 fn ctrl_g_carries_what_is_typed_into_the_editor() {
     use ratatui::crossterm::event::KeyModifiers;
     let ctrl_g = KeyEvent::new(KeyCode::Char('g'), KeyModifiers::CONTROL);

@@ -16,8 +16,9 @@ use std::time::{Duration, Instant};
 
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
-    self, DisableFocusChange, DisableMouseCapture, EnableFocusChange, Event as TerminalEvent,
-    KeyEventKind, MouseButton, MouseEvent, MouseEventKind,
+    self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
+    EnableFocusChange, Event as TerminalEvent, KeyEventKind, MouseButton, MouseEvent,
+    MouseEventKind,
 };
 use ratatui::crossterm::execute;
 use wf_core::event::Event;
@@ -57,17 +58,23 @@ pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()
 /// scrolls what is under the pointer, rather than the wheel sending arrow keys; and every move of
 /// the pointer, so a link under it stands out. A move costs a frame only when it goes onto or off
 /// a link or button. And whether the terminal pane is focused, so the accent dims while it is
-/// not; tmux passes that on only with `set -g focus-events on`.
+/// not; tmux passes that on only with `set -g focus-events on`. And pasted text as one event, so
+/// its line breaks are not taken for the Enter key.
 pub(super) fn start_reports() -> std::io::Result<()> {
     let mut stdout = std::io::stdout();
     // Presses, releases and moves (1003), in the SGR encoding (1006).
     stdout.write_all(b"\x1b[?1003h\x1b[?1006h")?;
-    execute!(stdout, EnableFocusChange)
+    execute!(stdout, EnableFocusChange, EnableBracketedPaste)
 }
 
 /// Stops the reports [`start_reports`] asked for.
 pub(super) fn stop_reports() -> std::io::Result<()> {
-    execute!(std::io::stdout(), DisableMouseCapture, DisableFocusChange)
+    execute!(
+        std::io::stdout(),
+        DisableMouseCapture,
+        DisableFocusChange,
+        DisableBracketedPaste
+    )
 }
 
 /// What an event from the terminal came to.
@@ -203,6 +210,13 @@ fn handle(
         TerminalEvent::FocusGained | TerminalEvent::FocusLost => {
             let focused = matches!(event, TerminalEvent::FocusGained);
             return if app.terminal_focus(focused) {
+                Handled::Moved
+            } else {
+                Handled::Ignored
+            };
+        }
+        TerminalEvent::Paste(text) => {
+            return if app.paste(&text) {
                 Handled::Moved
             } else {
                 Handled::Ignored
