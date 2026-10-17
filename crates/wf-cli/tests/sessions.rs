@@ -1369,6 +1369,30 @@ async fn submitting_without_commits_finishes_the_item_and_leaves_no_branch() {
     assert!(git(&world.wf.repository, &["branch", "--list", "wf/*"]).is_empty());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn ending_a_session_whose_note_is_written_already_does_not_write_it_again() {
+    // The note is written already, as an earlier try that failed at the end of the session
+    // leaves it: ending the session does not write it again.
+    let script = "\
+wf comment {item} \"Nothing to change\"
+wf work submit --note \"Nothing to change\"
+";
+    let world = World::new(script).await;
+    let item = world
+        .wf
+        .add(&["--title", "Check the parser", "--review", "none"]);
+    start_session(&world, &item);
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+    assert_eq!(world.item(&item)["state"], "done");
+    assert_eq!(
+        comments_with(&world, &item, "comment", "Nothing to change").len(),
+        1,
+        "{}",
+        world.item(&item)
+    );
+}
+
 const COMMIT_AND_SUBMIT: &str = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
 wf work submit
