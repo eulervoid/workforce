@@ -37,6 +37,8 @@ pub enum PolicyError {
         type_name: TypeName,
         target: TypeName,
     },
+    #[error("type `{type_name}` is in the unknown lane `{lane}`")]
+    UnknownLane { type_name: TypeName, lane: LaneName },
     #[error("review level `{0}` is defined twice")]
     DuplicateReviewLevel(ReviewLevelName),
     #[error("`default` is not a review level: it resets an item to the level of its type")]
@@ -362,6 +364,12 @@ impl Policy {
                     state: config.initial,
                 });
             }
+            if !self.lanes.contains_key(&config.lane) {
+                return Err(PolicyError::UnknownLane {
+                    type_name: name.clone(),
+                    lane: config.lane.clone(),
+                });
+            }
             if config.uses(ItemState::Active) && !config.uses(ItemState::Open) {
                 return Err(PolicyError::ActiveWithoutOpen(name.clone()));
             }
@@ -661,6 +669,19 @@ mod tests {
         assert_eq!(
             Policy::parse(&source),
             Err(PolicyError::ActiveWithoutOpen(type_name("bug")))
+        );
+    }
+
+    #[test]
+    fn rejects_an_unknown_lane() {
+        let source =
+            with_custom("[types.bug]\nlane = \"ghost\"\ninitial = \"open\"\nstates = [\"open\"]\n");
+        assert_eq!(
+            Policy::parse(&source),
+            Err(PolicyError::UnknownLane {
+                type_name: type_name("bug"),
+                lane: LaneName::new("ghost").unwrap()
+            })
         );
     }
 
