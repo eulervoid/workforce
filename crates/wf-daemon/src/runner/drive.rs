@@ -12,7 +12,7 @@ use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
-use wf_vcs::{GitCli, VcsAdapter};
+use wf_vcs::{GitCli, StoppedRebase, VcsAdapter};
 
 use super::brief::{brief, restarted, resumed};
 use super::resume::AgentSessionRecord;
@@ -476,15 +476,19 @@ async fn nudge(run: &Run) -> String {
                 .await
                 .ok()
                 .and_then(Result::ok)
-                .flatten()
+                .unwrap_or(StoppedRebase::NotStopped)
         }
-        SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
+        SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => {
+            StoppedRebase::NotStopped
+        }
     };
     match stopped {
-        Some(paths) if !paths.is_empty() => {
+        StoppedRebase::Conflict { paths } => {
             wf_core::brief::rebase_nudge(run.item, &run.target, &paths)
         }
-        Some(_) | None => wf_core::brief::nudge(run.item, run.role),
+        StoppedRebase::Stopped | StoppedRebase::NotStopped => {
+            wf_core::brief::nudge(run.item, run.role)
+        }
     }
 }
 
