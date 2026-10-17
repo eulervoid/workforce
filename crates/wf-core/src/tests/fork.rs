@@ -1,11 +1,9 @@
 use crate::event::{Change, EVENT_VERSION, Event, EventBody, EventContent};
 use crate::hlc::Hlc;
 use crate::id::WorkforceId;
-use crate::identity::{Actor, DeviceSigner};
-use crate::identity::{PrincipalSigner, Signed};
+use crate::identity::{Actor, DeviceSigner, PrincipalSigner, Signed};
 use crate::item::ItemState;
-use crate::state::{Disposition, State, Trust};
-use crate::state::{MAX_PENDING, MAX_PENDING_BINDINGS};
+use crate::state::{Disposition, MAX_PENDING, MAX_PENDING_BINDINGS, State, Trust};
 use crate::testing::*;
 use crate::validate::Invalid;
 
