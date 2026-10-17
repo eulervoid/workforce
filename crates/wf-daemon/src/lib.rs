@@ -230,6 +230,9 @@ impl HistorySource for ParentHistory {
     }
 }
 
+/// Which writes of events a test has fail.
+type WriteMatcher = fn(&EventBody) -> bool;
+
 pub struct Daemon {
     config: Config,
     device: DeviceSigner,
@@ -254,7 +257,7 @@ pub struct Daemon {
     /// What is wrong with this machine, as what failed said.
     faults: faults::Faults,
     /// For the tests: the next write of an event this matches fails once.
-    failing_write: Mutex<Option<fn(&EventBody) -> bool>>,
+    failing_write: Mutex<Option<WriteMatcher>>,
 }
 
 impl Daemon {
@@ -307,7 +310,7 @@ impl Daemon {
     /// Has the next write of an event that `matching` accepts fail once, as a write fails on a
     /// full disk. For the tests, which cannot fill a disk.
     #[doc(hidden)]
-    pub fn fail_next_write(&self, matching: fn(&EventBody) -> bool) {
+    pub fn fail_next_write(&self, matching: WriteMatcher) {
         *self.failing_write.lock().unwrap() = Some(matching);
     }
 
