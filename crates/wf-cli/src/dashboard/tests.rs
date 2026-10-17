@@ -3440,3 +3440,31 @@ fn a_verdict_carries_the_commit_the_diff_on_screen_shows() {
         })
     );
 }
+
+#[test]
+fn drafts_that_were_posted_before_a_failure_are_not_drafts_any_more() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    let draft = |text: &str| super::diff::LineComment {
+        kind: wf_core::event::CommentKind::Plain,
+        lines: wf_core::event::LineAnchor {
+            commit: work_commit(),
+            path: "src/lib.rs".to_owned(),
+            side: wf_core::event::DiffSide::New,
+            first: 1,
+            last: 1,
+            quote: String::new(),
+        },
+        text: text.to_owned(),
+    };
+    for text in ["one", "two", "three"] {
+        app.drafted(archive, draft(text), None);
+    }
+    app.drafts_posted(archive, 2);
+    let left: Vec<&str> = app
+        .drafts(archive)
+        .iter()
+        .map(|draft| draft.text.as_str())
+        .collect();
+    assert_eq!(left, ["three"]);
+}

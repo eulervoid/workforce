@@ -10,6 +10,7 @@ use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::item::{ItemState, ItemView};
 use wf_core::name::AgentName;
 use wf_core::session::{CommitId, Verdict};
+use wf_core::state::State;
 use wf_harness::Permission;
 
 use super::app::{Choice, Effect, Starter, Written};
@@ -58,7 +59,7 @@ pub fn carry_out(
             reviewed,
             comments,
         } => {
-            let commit = submitted(workspace, item, reviewed)?;
+            let commit = submitted(workspace.state(), item, reviewed)?;
             let sent = send_review(workspace, item, commit, &comments, &[], Verdict::Approve);
             reviewed_or_failed(sent, item, || {
                 format!("approved #{}{}", item.short(), with(&comments))
@@ -318,7 +319,7 @@ fn request_changes(
     reviewed: Option<CommitId>,
     comments: &[LineComment],
 ) -> anyhow::Result<Outcome> {
-    let commit = submitted(workspace, item, reviewed)?;
+    let commit = submitted(workspace.state(), item, reviewed)?;
     let on_lines = comments
         .iter()
         .filter(|comment| comment.kind == CommentKind::ChangeRequest)
@@ -472,12 +473,11 @@ fn resolve(
 
 /// The commit the work of `item` was submitted as, if it is what the principal `reviewed`.
 fn submitted(
-    workspace: &Workspace,
+    state: &State,
     item: ItemId,
     reviewed: Option<CommitId>,
 ) -> anyhow::Result<Option<CommitId>> {
-    let (commit, _) = workspace
-        .state()
+    let (commit, _) = state
         .submission(item)
         .ok_or_else(|| anyhow!("#{} has no submitted work to review", item.short()))?;
     if commit != reviewed {
@@ -531,6 +531,9 @@ fn suspended<T>(terminal: &mut DefaultTerminal, run: impl FnOnce() -> T) -> anyh
 
 #[cfg(test)]
 mod tests {
+    use wf_core::session::EndReason;
+    use wf_core::testing::*;
+
     use super::*;
 
     #[test]
@@ -538,5 +541,39 @@ mod tests {
         let text = format!("Use humantime.\n\n{SCISSORS}\n> Which crate?\n");
         assert_eq!(above_scissors(&text), "Use humantime.");
         assert_eq!(above_scissors(&format!("\n{SCISSORS}\n> Which?")), "");
+    }
+
+    #[test]
+    fn a_verdict_is_only_for_the_submission_that_was_looked_at() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let apply = |state: &mut State, body| fixture.apply(state, 0, 1_000, body);
+        apply(&mut state, define_agent("coder"));
+        let item = apply(&mut state, create("task", "Work")).id().into();
+        assert!(submitted(&state, item, None).is_err(), "nothing submitted");
+
+        let session = apply(&mut state, start_session("coder", item)).id().into();
+        let submitted_commit =
+            CommitId::Git("a8d4948400000000000000000000000000000000".parse().unwrap());
+        apply(
+            &mut state,
+            end_session(
+                session,
+                EndReason::Submitted {
+                    commit: Some(submitted_commit),
+                },
+            ),
+        );
+        assert_eq!(
+            submitted(&state, item, Some(submitted_commit)).unwrap(),
+            Some(submitted_commit)
+        );
+        let moved_on = CommitId::Git("b8d4948400000000000000000000000000000000".parse().unwrap());
+        let refused = submitted(&state, item, Some(moved_on)).unwrap_err();
+        assert!(
+            refused.to_string().contains("look at the diff again"),
+            "{refused}"
+        );
+        assert!(submitted(&state, item, None).is_err());
     }
 }
