@@ -321,12 +321,19 @@ impl GitCli {
             return Ok(None);
         }
         let range = format!("{commit}..{head}");
-        let listed = self.succeed(["rev-list", "--parents", "--ancestry-path", &range])?;
-        // Newest first, so the last merge listed is the one that brought it in.
-        let merge = listed.lines().rev().find_map(|line| {
+        let listed = self.succeed([
+            "rev-list",
+            "--first-parent",
+            "--ancestry-path",
+            "--parents",
+            &range,
+        ])?;
+        // Oldest first-parent commit after `commit`: when its first parent is `commit`, the
+        // target fast-forwarded over it; otherwise it is the merge that brought `commit` in.
+        let merge = listed.lines().next_back().and_then(|line| {
             let mut ids = line.split_whitespace();
-            let merge = ids.next()?;
-            ids.any(|parent| parent == commit).then_some(merge)
+            let oldest = ids.next()?;
+            (ids.next() != Some(commit.as_str())).then_some(oldest)
         });
         self.oid("rev-list", merge.unwrap_or(&commit)).map(Some)
     }
@@ -604,25 +611,27 @@ impl VcsAdapter for GitCli {
             "merge-tree",
             "--write-tree",
             "--name-only",
+            "-z",
             &base.to_string(),
             &commit.to_string(),
         ])?;
-        let mut lines = merged.stdout.lines();
+        // With `-z` every field ends in NUL and paths come as they are, not C-quoted: the tree,
+        // the conflicted paths, an empty field, then the informational messages.
+        let mut fields = merged.stdout.split('\0');
+        let tree = fields.next().unwrap_or_default().trim();
         if !merged.success {
-            if merged.stdout.trim().is_empty() {
+            if tree.is_empty() {
                 return Err(VcsError::Git {
                     command: "merge-tree --write-tree".into(),
                     stderr: merged.stderr.trim().to_string(),
                 });
             }
-            lines.next();
-            let paths = lines
-                .take_while(|line| !line.is_empty())
+            let paths = fields
+                .take_while(|field| !field.is_empty())
                 .map(str::to_string)
                 .collect();
             return Ok(MergeTree::Conflict { paths });
         }
-        let tree = lines.next().unwrap_or_default().trim();
         let tree = tree.parse().map_err(|_| VcsError::UnexpectedOutput {
             command: "merge-tree --write-tree".into(),
             output: tree.into(),
@@ -1433,6 +1442,85 @@ mod tests {
             }
         );
         assert_eq!(repo.main(), before);
+    }
+
+    #[test]
+    fn work_fast_forwarded_into_the_target_is_itself_what_landed() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "a.txt", "a\n");
+        let main = repo.directory();
+        git_in(&main, &["merge", "--quiet", "--ff-only", "wf/k3f9"]);
+        repo.write(&main, "b.txt", "b\n");
+        let later = repo.commit(&main, "later work on main");
+        assert_eq!(
+            repo.git.merge_tree("main", work).unwrap(),
+            MergeTree::Landed { commit: work }
+        );
+        assert_eq!(repo.main(), later);
+    }
+
+    #[test]
+    fn a_dependent_branch_merged_later_does_not_replace_the_merge_that_landed() {
+        let repo = TestRepo::new();
+        let work = repo.work("wf/k3f9", "a.txt", "a\n");
+        let MergeOutcome::Merged { commit: first } = repo
+            .git
+            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
+            .unwrap()
+        else {
+            panic!("expected a merge");
+        };
+        let dependent_path = repo.worktree_path("wf/dependent");
+        git_in(
+            &repo.directory(),
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "wf/dependent",
+                dependent_path.to_str().unwrap(),
+                &work.to_string(),
+            ],
+        );
+        repo.write(&dependent_path, "d.txt", "d\n");
+        let dependent = repo.commit(&dependent_path, "dependent work");
+        let MergeOutcome::Merged { commit: second } = repo
+            .git
+            .merge(
+                "main",
+                dependent,
+                "Merge #dependent",
+                &CommitSigning::AsConfigured,
+            )
+            .unwrap()
+        else {
+            panic!("expected a merge");
+        };
+        assert_ne!(first, second);
+        assert_eq!(
+            repo.git.merge_tree("main", work).unwrap(),
+            MergeTree::Landed { commit: first }
+        );
+    }
+
+    #[test]
+    fn conflicting_paths_are_reported_as_they_are_named() {
+        let repo = TestRepo::new();
+        let name = "\u{e4} b.txt";
+        let base = repo.directory();
+        repo.write(&base, name, "one\n");
+        repo.commit(&base, "add the file");
+        let work = repo.work("wf/k3f9", name, "work\n");
+        let main = repo.directory();
+        repo.write(&main, name, "main\n");
+        repo.commit(&main, "conflicting change");
+        assert_eq!(
+            repo.git.merge_tree("main", work).unwrap(),
+            MergeTree::Conflict {
+                paths: vec![name.into()]
+            }
+        );
     }
 
     /// Rebases `wf/k3f9` onto `main` as the agent `@ada/coder`, without signing.
