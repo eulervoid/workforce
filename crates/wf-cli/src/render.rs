@@ -1093,7 +1093,7 @@ pub fn agents(agents: &[AgentView]) -> String {
         return "no agents defined\n".to_string();
     }
     let mut table = table(&[
-        "theme::agent()",
+        "AGENT",
         "HARNESS",
         "MODEL",
         "CAPABILITIES",
@@ -1119,7 +1119,7 @@ pub fn devices(devices: &[DeviceView]) -> String {
     let mut table = table(&[
         "DEVICE",
         "NAME",
-        "theme::principal()",
+        "PRINCIPAL",
         "HARDWARE",
         "SESSIONS",
         "LAST_SEEN",
@@ -1213,9 +1213,10 @@ pub fn status(view: &StatusView) -> String {
     );
     let _ = writeln!(
         out,
-        "items: {} ready, {} waiting, {} archived",
-        view.ready_items, view.waiting_on_you, view.archived_items,
+        "items: {} ready, {} archived",
+        view.ready_items, view.archived_items,
     );
+    let _ = writeln!(out, "waiting on you: {}", view.waiting_on_you);
     for line in &view.after_failures {
         let _ = writeln!(out, "waits for you: {line}");
     }
@@ -1244,15 +1245,7 @@ pub fn sessions(sessions: &[SessionView]) -> String {
         return "no sessions\n".to_string();
     }
     let mut table = table(&[
-        "SESSION",
-        "theme::agent()",
-        "MODEL",
-        "ITEM",
-        "TITLE",
-        "STEPS",
-        "ROLE",
-        "STATUS",
-        "STARTED",
+        "SESSION", "AGENT", "MODEL", "ITEM", "TITLE", "STEPS", "ROLE", "STATUS", "STARTED",
     ]);
     for session in sessions {
         table.add_row([
@@ -1330,6 +1323,45 @@ pub fn inbox(entries: &[InboxEntryView]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_device_table_prints_its_real_headers() {
+        let header = devices(&[]);
+        assert!(header.contains("PRINCIPAL"), "{header}");
+        assert!(!header.contains("theme::"), "{header}");
+    }
+
+    #[test]
+    fn status_prints_what_waits_on_the_principal_apart_from_items() {
+        let view = StatusView {
+            name: "demo".to_string(),
+            id: "abc".to_string(),
+            members: vec!["@eulervoid (owner)".to_string()],
+            agents: 1,
+            events: 10,
+            pending: 0,
+            heads: 1,
+            archived_items: 3,
+            forked_from: None,
+            devices: Vec::new(),
+            daemon: true,
+            ready_items: 6,
+            live_sessions: 2,
+            parked_sessions: 0,
+            after_failures: Vec::new(),
+            waiting_on_you: 2,
+            flagged: Vec::new(),
+            next: None,
+            refolded: false,
+            caches: None,
+        };
+        let output = status(&view);
+        let lines: Vec<&str> = output.lines().collect();
+        assert!(lines.contains(&"items: 6 ready, 3 archived"), "{output}");
+        assert!(lines.contains(&"waiting on you: 2"), "{output}");
+        let items_line = lines.iter().find(|line| line.starts_with("items:")).unwrap();
+        assert!(!items_line.contains("waiting"), "{output}");
+    }
 
     #[test]
     fn an_item_that_references_this_one_several_times_is_listed_once() {

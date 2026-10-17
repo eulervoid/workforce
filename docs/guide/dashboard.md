@@ -173,7 +173,8 @@ events: 1274  heads: 1  pending: 0  agents: 4
 devices: namioka (this)
 daemon: running
 sessions: 2 live, 0 parked
-items: 6 ready, 2 waiting, 3 archived
+items: 6 ready, 3 archived
+waiting on you: 2
 next: 2 waiting on you: `wf inbox`
 ```
 
