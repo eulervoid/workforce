@@ -56,7 +56,6 @@ pub fn pick(what: &str, choices: Vec<Choice>) -> anyhow::Result<String> {
 /// otherwise print it directly. Also prints directly if the pager cannot be started.
 pub fn page(text: &str) -> anyhow::Result<()> {
     use std::io::Write;
-    use std::process::{Command, Stdio};
 
     let fits = terminal_size::terminal_size()
         .is_none_or(|(_, height)| text.lines().count() < usize::from(height.0));
@@ -64,15 +63,11 @@ pub fn page(text: &str) -> anyhow::Result<()> {
         anstream::print!("{text}");
         return Ok(());
     }
-    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
-    let mut words = pager.split_whitespace();
-    let child = words.next().and_then(|program| {
-        Command::new(program)
-            .args(words)
-            .stdin(Stdio::piped())
-            .spawn()
-            .ok()
-    });
+    let pager = crate::commands::command_line_from_environment(&["PAGER"], "less -R");
+    let child = crate::commands::shell_command(&pager, &[])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+        .ok();
     let Some(mut child) = child else {
         anstream::print!("{text}");
         return Ok(());

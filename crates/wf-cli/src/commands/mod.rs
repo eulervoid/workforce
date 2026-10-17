@@ -245,21 +245,110 @@ fn handle_from_environment() -> Handle {
         .unwrap_or_else(|| Handle::new("me").expect("a valid handle"))
 }
 
+/// The command line of the first of `names` that is set and not empty, else `default`.
+pub(crate) fn command_line_from_environment(names: &[&str], default: &str) -> String {
+    names
+        .iter()
+        .find_map(|name| {
+            std::env::var(name)
+                .ok()
+                .filter(|value| !value.trim().is_empty())
+        })
+        .unwrap_or_else(|| default.to_string())
+}
+
+/// Run `command_line` as git runs its editor and pager: through the shell, with `arguments`
+/// appended, so quoting and paths with spaces work.
+pub(crate) fn shell_command(command_line: &str, arguments: &[&Path]) -> std::process::Command {
+    let mut command = std::process::Command::new("sh");
+    command
+        .arg("-c")
+        .arg(format!("{command_line} \"$@\""))
+        .arg("sh")
+        .args(arguments);
+    command
+}
+
 pub(crate) fn edit_in_editor(initial: &str, suffix: &str) -> anyhow::Result<String> {
-    let editor = std::env::var("VISUAL")
-        .or_else(|_| std::env::var("EDITOR"))
-        .unwrap_or_else(|_| "vi".to_string());
+    let editor = command_line_from_environment(&["VISUAL", "EDITOR"], "vi");
     let file = tempfile::Builder::new().suffix(suffix).tempfile()?;
     std::fs::write(file.path(), initial)?;
-    let mut words = editor.split_whitespace();
-    let program = words.next().context("$EDITOR is empty")?;
-    let status = std::process::Command::new(program)
-        .args(words)
-        .arg(file.path())
+    let status = shell_command(&editor, &[file.path()])
         .status()
         .with_context(|| format!("starting editor `{editor}`"))?;
     if !status.success() {
         bail!("editor `{editor}` failed; nothing was changed");
     }
     Ok(std::fs::read_to_string(file.path())?)
+}
+
+const ERROR_MARKER: &str = "wf-error:";
+
+/// Edit `initial` in the editor until `parse` accepts it. When it does not, the editor reopens
+/// with the text and the error as a comment (`#` for TOML, `<!-- -->` for markdown). Leaving the
+/// text as it was shown gives up with the error.
+pub(crate) fn edit_until_valid<T>(
+    initial: &str,
+    suffix: &str,
+    parse: impl Fn(&str) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let mut shown = initial.to_string();
+    loop {
+        let edited = edit_in_editor(&shown, suffix)?;
+        let text = edited
+            .lines()
+            .filter(|line| !line.contains(ERROR_MARKER))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let text = if edited.ends_with('\n') {
+            text + "\n"
+        } else {
+            text
+        };
+        let error = match parse(&text) {
+            Ok(value) => return Ok(value),
+            Err(error) => error,
+        };
+        if edited == shown && shown != initial {
+            return Err(error.context("the text is still invalid; nothing was changed"));
+        }
+        let message = format!("{error:#}");
+        let comment = if suffix == ".toml" {
+            message
+                .lines()
+                .map(|line| format!("# {ERROR_MARKER} {line}\n"))
+                .collect::<String>()
+        } else {
+            format!(
+                "<!-- {ERROR_MARKER} {} -->\n",
+                message.replace('\n', " ").replace("-->", "--")
+            )
+        };
+        let mut next = text;
+        if !next.ends_with('\n') {
+            next.push('\n');
+        }
+        shown = next + &comment;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn empty_variables_fall_back() {
+        assert_eq!(
+            command_line_from_environment(&["WF_TEST_UNSET_A", "WF_TEST_UNSET_B"], "vi"),
+            "vi"
+        );
+    }
+
+    #[test]
+    fn commands_run_through_the_shell_with_the_argument_appended() {
+        let output = shell_command("printf '%s|' --flag", &[Path::new("a file")])
+            .output()
+            .unwrap();
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "--flag|a file|");
+    }
 }
