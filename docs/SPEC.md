@@ -999,9 +999,13 @@ An agent's `permissions` decide its harness's requests: `deny` refuses, `allow` 
 without a sandbox it is treated as `ask`), and `ask` passes the request through a chain of
 **deciders**, in the machine config's order, until one allows or denies:
 
-* **`rules`** (built in): a command that only runs `wf item|comment|work|review|inbox|status|log|
-  search|mentions`, or asks any `wf` command for `--help`, alone or joined by `;` or `&&`, optionally
-  piped into `head`, `tail`, `grep`, `rg`, `wc`, `sort`, `uniq`, `cut` or `jq`. Nothing that changes
+* **`rules`** (built in): a command that only runs `wf item show|list|check|path`, `wf comment|work|
+  review|inbox|status|log|mentions`, or asks any `wf` command for `--help`, alone or joined by `;` or
+  `&&`, optionally piped into `head`, `tail`, `grep`, `rg`, `wc`, `sort`, `uniq`, `cut` or `jq`. A
+  filter takes only flags from a short list per filter and, for `grep`, `rg` and `jq`, one pattern or
+  program: no file, and no flag that reads, writes or runs (`-o`, `-f`, `--pre`, `-r`, `-e`; a jq
+  program that imports or reads the environment). `wf item checkout` and `wf item diff` are not
+  among them. Nothing that changes
   devices, agents, policy or permissions, so an agent cannot widen its own rights. Whatever it does not
   fully understand it passes on.
 * **`hook`**: a program, run without a shell in the session's directory, gets the request as JSON

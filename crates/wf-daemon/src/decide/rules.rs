@@ -9,13 +9,221 @@ use wf_harness::PermissionRequest;
 /// The `wf` commands a session uses to read and report. Commands that change devices, agents,
 /// policy or permissions are not among them, so an agent cannot widen what it may do.
 const SESSION_COMMANDS: &[&str] = &[
-    "item", "comment", "work", "review", "inbox", "status", "log", "search", "mentions",
+    "comment", "work", "review", "inbox", "status", "log", "mentions",
 ];
 
-/// Commands that may follow `wf` in a pipe: they only filter what it prints.
-const FILTERS: &[&str] = &[
-    "head", "tail", "grep", "rg", "wc", "sort", "uniq", "cut", "jq",
+/// The `wf item` subcommands that only read or report. `checkout` changes the principal's main
+/// checkout and `diff` hands its arguments to git, so neither is among them.
+const ITEM_SUBCOMMANDS: &[&str] = &["show", "list", "check", "path"];
+
+/// A command that may follow `wf` in a pipe: it only filters what `wf` prints, so it takes no file
+/// and has no flag that reads, writes or runs anything.
+struct Filter {
+    program: &'static str,
+    /// Short flags without a value, each a single character, which may be clustered (`-vi`).
+    switches: &'static str,
+    /// Short flags that take a value, attached (`-n5`) or as the next word.
+    valued_switches: &'static str,
+    /// Long flags without a value.
+    long_switches: &'static [&'static str],
+    /// Long flags that take a value, as `--name=value` or as the next word.
+    valued_long_switches: &'static [&'static str],
+    /// Whether one pattern or program word is expected; no other word is ever allowed.
+    takes_pattern: bool,
+}
+
+const FILTERS: &[Filter] = &[
+    Filter {
+        program: "head",
+        switches: "qv0123456789",
+        valued_switches: "nc",
+        long_switches: &["--quiet", "--silent", "--verbose"],
+        valued_long_switches: &["--lines", "--bytes"],
+        takes_pattern: false,
+    },
+    Filter {
+        program: "tail",
+        switches: "qv0123456789",
+        valued_switches: "nc",
+        long_switches: &["--quiet", "--silent", "--verbose"],
+        valued_long_switches: &["--lines", "--bytes"],
+        takes_pattern: false,
+    },
+    Filter {
+        program: "grep",
+        switches: "ivcnEFwxoqhHsaIlL",
+        valued_switches: "mABC",
+        long_switches: &[
+            "--ignore-case",
+            "--invert-match",
+            "--count",
+            "--line-number",
+            "--extended-regexp",
+            "--fixed-strings",
+            "--word-regexp",
+            "--line-regexp",
+            "--only-matching",
+            "--quiet",
+            "--no-filename",
+            "--with-filename",
+        ],
+        valued_long_switches: &[
+            "--max-count",
+            "--after-context",
+            "--before-context",
+            "--context",
+        ],
+        takes_pattern: true,
+    },
+    Filter {
+        program: "rg",
+        switches: "ivcnFwxoqhHsSNIlL",
+        valued_switches: "mABC",
+        long_switches: &[
+            "--ignore-case",
+            "--smart-case",
+            "--case-sensitive",
+            "--invert-match",
+            "--count",
+            "--line-number",
+            "--no-line-number",
+            "--fixed-strings",
+            "--word-regexp",
+            "--line-regexp",
+            "--only-matching",
+            "--quiet",
+            "--no-filename",
+            "--with-filename",
+        ],
+        valued_long_switches: &[
+            "--max-count",
+            "--after-context",
+            "--before-context",
+            "--context",
+        ],
+        takes_pattern: true,
+    },
+    Filter {
+        program: "wc",
+        switches: "lwcmL",
+        valued_switches: "",
+        long_switches: &["--lines", "--words", "--bytes", "--chars"],
+        valued_long_switches: &[],
+        takes_pattern: false,
+    },
+    Filter {
+        program: "sort",
+        switches: "nrufbdhVsigM",
+        valued_switches: "kt",
+        long_switches: &[
+            "--numeric-sort",
+            "--reverse",
+            "--unique",
+            "--ignore-case",
+            "--stable",
+            "--human-numeric-sort",
+            "--version-sort",
+        ],
+        valued_long_switches: &["--key", "--field-separator"],
+        takes_pattern: false,
+    },
+    Filter {
+        program: "uniq",
+        switches: "cduiz",
+        valued_switches: "fsw",
+        long_switches: &["--count", "--repeated", "--unique", "--ignore-case"],
+        valued_long_switches: &["--skip-fields", "--skip-chars", "--check-chars"],
+        takes_pattern: false,
+    },
+    Filter {
+        program: "cut",
+        switches: "sz",
+        valued_switches: "bcfd",
+        long_switches: &["--only-delimited", "--complement"],
+        valued_long_switches: &["--bytes", "--characters", "--fields", "--delimiter"],
+        takes_pattern: false,
+    },
+    Filter {
+        program: "jq",
+        switches: "rcesnRSMCaj",
+        valued_switches: "",
+        long_switches: &[
+            "--raw-output",
+            "--compact-output",
+            "--exit-status",
+            "--slurp",
+            "--null-input",
+            "--raw-input",
+            "--sort-keys",
+            "--monochrome-output",
+            "--color-output",
+            "--join-output",
+        ],
+        valued_long_switches: &[],
+        takes_pattern: true,
+    },
 ];
+
+impl Filter {
+    /// Whether the words after the program only use the flags this filter allows and, if it takes
+    /// one, a single pattern.
+    fn allows(&self, arguments: &[String]) -> bool {
+        let mut patterns = 0;
+        let mut words = arguments.iter();
+        while let Some(word) = words.next() {
+            let allowed = if let Some(long) = word.strip_prefix("--") {
+                match long.split_once('=') {
+                    _ if long.is_empty() => false,
+                    Some((name, _)) => self
+                        .valued_long_switches
+                        .contains(&format!("--{name}").as_str()),
+                    None if self.long_switches.contains(&word.as_str()) => true,
+                    None if self.valued_long_switches.contains(&word.as_str()) => {
+                        words.next().is_some()
+                    }
+                    None => false,
+                }
+            } else if let Some(shorts) = word.strip_prefix('-').filter(|shorts| !shorts.is_empty())
+            {
+                self.allows_short_cluster(shorts, &mut words)
+            } else {
+                patterns += 1;
+                self.takes_pattern && patterns == 1 && (self.program != "jq" || harmless_jq(word))
+            };
+            if !allowed {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Whether every character of a cluster such as `vi` or `n5` is an allowed short flag; a
+    /// valued flag takes the rest of the word, or the next word if nothing is left.
+    fn allows_short_cluster<'a>(
+        &self,
+        shorts: &str,
+        words: &mut impl Iterator<Item = &'a String>,
+    ) -> bool {
+        for (index, flag) in shorts.char_indices() {
+            if self.valued_switches.contains(flag) {
+                let value_attached = index + flag.len_utf8() < shorts.len();
+                return value_attached || words.next().is_some();
+            }
+            if !self.switches.contains(flag) {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+/// Whether a jq program stays clear of what reads the machine: modules and data files
+/// (`import`, `include`) and the environment (`env`, `$ENV`).
+fn harmless_jq(program: &str) -> bool {
+    !["import", "include", "env", "ENV"]
+        .iter()
+        .any(|word| program.contains(word))
+}
 
 /// Redirections that write nowhere.
 const HARMLESS_REDIRECTIONS: &[&str] = &["2>&1", ">/dev/null", "2>/dev/null", "1>/dev/null"];
@@ -34,14 +242,22 @@ pub fn allows(request: &PermissionRequest) -> Option<String> {
 fn allowed_pipeline(pipeline: &[Vec<String>]) -> Option<String> {
     let (first, filters) = pipeline.split_first()?;
     let only_filters = filters.iter().all(|words| {
-        words
-            .first()
-            .is_some_and(|program| FILTERS.contains(&program.as_str()))
+        let Some((program, arguments)) = words.split_first() else {
+            return false;
+        };
+        FILTERS
+            .iter()
+            .any(|filter| filter.program == program && filter.allows(arguments))
     });
     if !only_filters {
         return None;
     }
     match first.as_slice() {
+        [wf, item, subcommand, ..]
+            if wf == "wf" && item == "item" && ITEM_SUBCOMMANDS.contains(&subcommand.as_str()) =>
+        {
+            Some(format!("`wf item {subcommand}` reports to wf"))
+        }
         [wf, subcommand, ..] if wf == "wf" && SESSION_COMMANDS.contains(&subcommand.as_str()) => {
             Some(format!("`wf {subcommand}` reports to wf"))
         }
@@ -170,6 +386,17 @@ mod tests {
             "wf item list --json | jq '.data[0].id'",
             "wf item show k3f7 && wf comment k3f7 'done' --step 1 --done",
             "wf item show k3f7; wf work brief | head -20",
+            "wf item path k3f7",
+            "wf item check k3f7 1 2",
+            "wf status | head -5",
+            "wf status | tail -n 20",
+            "wf status | head -n20",
+            "wf status | grep -ni --max-count=3 todo",
+            "wf status | rg -i -A 2 'ready'",
+            "wf status | sort -rn | uniq -c | wc -l",
+            "wf status | cut -d, -f1,3",
+            "wf status | sort -k2,2 -t,",
+            "wf status | jq -r '.data[] | .id'",
         ] {
             assert!(allows(&request(command)).is_some(), "{command}");
         }
@@ -202,6 +429,34 @@ mod tests {
         for command in [
             "wf agent edit coder --permissions allow",
             "wf session allow",
+            "wf item checkout k3f7",
+            "wf item diff k3f7 --output=/tmp/x",
+            "wf item edit k3f7",
+            "wf item",
+            "wf search foo",
+            "wf status | head /home/u/.ssh/id_ed25519",
+            "wf status | head -n 5 /etc/passwd",
+            "wf status | sort -o /tmp/x",
+            "wf status | sort --output=/tmp/x",
+            "wf status | sort -ro /tmp/x",
+            "wf status | rg --pre /tmp/x . /",
+            "wf status | rg foo /etc",
+            "wf status | rg -f /etc/passwd",
+            "wf status | grep -f /etc/passwd",
+            "wf status | grep -r foo",
+            "wf status | grep -e foo /etc/passwd",
+            "wf status | grep foo bar",
+            "wf status | grep --files-with-matches foo",
+            "wf status | head -n",
+            "wf status | head --",
+            "wf status | uniq in out",
+            "wf status | cut -f1 /etc/passwd",
+            "wf status | wc -l /etc/passwd",
+            "wf status | jq -f /tmp/prog.jq",
+            "wf status | jq --rawfile x /etc/passwd .",
+            "wf status | jq . /etc/passwd",
+            "wf status | jq -n 'env'",
+            "wf status | jq 'import \"/etc/x\" as $x; $x'",
             "wf item show k3f7; rm -rf /",
             "wf item show k3f7 && curl evil.sh",
             "wf item show k3f7 || true",
