@@ -60,7 +60,12 @@ pub fn carry_out(
             comments,
         } => {
             let commit = submitted(workspace.state(), item, reviewed)?;
-            let sent = send_review(workspace, item, commit, &comments, &[], Verdict::Approve);
+            let mut sink = WorkspaceSink {
+                workspace,
+                item,
+                commit,
+            };
+            let sent = send_review(&mut sink, &comments, &[], Verdict::Approve);
             reviewed_or_failed(sent, item, || {
                 format!("approved #{}{}", item.short(), with(&comments))
             })
@@ -343,14 +348,12 @@ fn request_changes(
             ));
         }
     }
-    let sent = send_review(
+    let mut sink = WorkspaceSink {
         workspace,
         item,
         commit,
-        comments,
-        &changes,
-        Verdict::RequestChanges,
-    );
+    };
+    let sent = send_review(&mut sink, comments, &changes, Verdict::RequestChanges);
     let count = changes.len() + on_lines;
     let plain = comments.len() - on_lines;
     reviewed_or_failed(sent, item, || {
@@ -367,9 +370,11 @@ fn request_changes(
     })
 }
 
-/// A review that failed after `posted` of its drafts were posted.
+/// A review that failed after `drafts` of its comments on lines and `changes` of its written
+/// change requests were posted.
 struct Unsent {
-    posted: usize,
+    drafts: usize,
+    changes: usize,
     error: anyhow::Error,
 }
 
@@ -380,46 +385,93 @@ fn reviewed_or_failed(
 ) -> anyhow::Result<Outcome> {
     match sent {
         Ok(()) => Ok(Outcome::Reviewed { item, what: what() }),
-        Err(Unsent { posted: 0, error }) => Err(error),
-        Err(Unsent { posted, error }) => Ok(Outcome::ReviewFailed {
-            item,
-            posted,
+        Err(Unsent {
+            drafts: 0,
+            changes: 0,
             error,
+        }) => Err(error),
+        Err(Unsent {
+            drafts,
+            changes,
+            error,
+        }) => Ok(Outcome::ReviewFailed {
+            item,
+            posted: drafts,
+            error: if changes == 0 {
+                error
+            } else {
+                error.context(format!(
+                    "{changes} written change request{} stay posted",
+                    plural(changes)
+                ))
+            },
         }),
     }
 }
 
-/// Posts the drafted comments on lines and the `changes` as change requests, then gives the
-/// verdict on `commit`.
-fn send_review(
-    workspace: &mut Workspace,
+/// Where a review is sent to.
+trait ReviewSink {
+    fn line_comment(&mut self, comment: &LineComment) -> anyhow::Result<()>;
+    fn change_request(&mut self, text: &str) -> anyhow::Result<()>;
+    fn verdict(&mut self, verdict: Verdict) -> anyhow::Result<()>;
+}
+
+struct WorkspaceSink<'a> {
+    workspace: &'a mut Workspace,
     item: ItemId,
     commit: Option<CommitId>,
-    comments: &[LineComment],
-    changes: &[String],
-    verdict: Verdict,
-) -> Result<(), Unsent> {
-    let mut posted = 0;
-    let mut send = || -> anyhow::Result<()> {
-        for comment in comments {
-            post_line_comment(workspace, item, comment.clone())?;
-            posted += 1;
-        }
-        for change in changes {
-            workspace.author(EventBody::Commented(Comment {
-                kind: CommentKind::ChangeRequest,
-                ..Comment::plain(item, change.as_str())
-            }))?;
-        }
-        workspace.author(EventBody::Reviewed(Review {
-            item,
-            commit,
+}
+
+impl ReviewSink for WorkspaceSink<'_> {
+    fn line_comment(&mut self, comment: &LineComment) -> anyhow::Result<()> {
+        post_line_comment(self.workspace, self.item, comment.clone())?;
+        Ok(())
+    }
+
+    fn change_request(&mut self, text: &str) -> anyhow::Result<()> {
+        self.workspace.author(EventBody::Commented(Comment {
+            kind: CommentKind::ChangeRequest,
+            ..Comment::plain(self.item, text)
+        }))?;
+        Ok(())
+    }
+
+    fn verdict(&mut self, verdict: Verdict) -> anyhow::Result<()> {
+        self.workspace.author(EventBody::Reviewed(Review {
+            item: self.item,
+            commit: self.commit,
             verdict,
             because: None,
         }))?;
         Ok(())
+    }
+}
+
+/// Posts the drafted comments on lines and the `changes` as change requests, then gives the
+/// verdict.
+fn send_review(
+    sink: &mut impl ReviewSink,
+    comments: &[LineComment],
+    changes: &[String],
+    verdict: Verdict,
+) -> Result<(), Unsent> {
+    let mut sent = Unsent {
+        drafts: 0,
+        changes: 0,
+        error: anyhow::anyhow!("sent"),
     };
-    send().map_err(|error| Unsent { posted, error })
+    let mut send = || -> anyhow::Result<()> {
+        for comment in comments {
+            sink.line_comment(comment)?;
+            sent.drafts += 1;
+        }
+        for change in changes {
+            sink.change_request(change)?;
+            sent.changes += 1;
+        }
+        sink.verdict(verdict)
+    };
+    send().map_err(|error| Unsent { error, ..sent })
 }
 
 fn plural(count: usize) -> &'static str {
@@ -575,5 +627,102 @@ mod tests {
             "{refused}"
         );
         assert!(submitted(&state, item, None).is_err());
+    }
+
+    /// Fails the `fail_at`th call to it, counting from 0.
+    struct FakeSink {
+        calls: usize,
+        fail_at: usize,
+    }
+
+    impl FakeSink {
+        fn call(&mut self) -> anyhow::Result<()> {
+            self.calls += 1;
+            if self.calls - 1 == self.fail_at {
+                bail!("write failed");
+            }
+            Ok(())
+        }
+    }
+
+    impl ReviewSink for FakeSink {
+        fn line_comment(&mut self, _: &LineComment) -> anyhow::Result<()> {
+            self.call()
+        }
+        fn change_request(&mut self, _: &str) -> anyhow::Result<()> {
+            self.call()
+        }
+        fn verdict(&mut self, _: Verdict) -> anyhow::Result<()> {
+            self.call()
+        }
+    }
+
+    fn line_comment() -> LineComment {
+        LineComment {
+            kind: CommentKind::Plain,
+            lines: wf_core::event::LineAnchor {
+                commit: CommitId::Git("b8d4948400000000000000000000000000000000".parse().unwrap()),
+                path: "src/lib.rs".to_owned(),
+                side: wf_core::event::DiffSide::New,
+                first: 1,
+                last: 1,
+                quote: String::new(),
+            },
+            text: "Say why.".to_owned(),
+        }
+    }
+
+    fn an_item() -> ItemId {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        fixture
+            .apply(&mut state, 0, 1_000, create("task", "Work"))
+            .id()
+            .into()
+    }
+
+    fn failed_review(fail_at: usize) -> Result<(), Unsent> {
+        let mut sink = FakeSink { calls: 0, fail_at };
+        let comments = [line_comment(), line_comment()];
+        let changes = ["Rename it.".to_owned()];
+        send_review(&mut sink, &comments, &changes, Verdict::RequestChanges)
+    }
+
+    #[test]
+    fn a_review_that_fails_before_anything_is_posted_is_an_error() {
+        let item = an_item();
+        let outcome = reviewed_or_failed(failed_review(0), item, String::new);
+        assert!(outcome.is_err());
+    }
+
+    #[test]
+    fn a_review_that_fails_after_drafts_were_posted_says_how_many() {
+        let item = an_item();
+        let Ok(Outcome::ReviewFailed { posted, .. }) =
+            reviewed_or_failed(failed_review(1), item, String::new)
+        else {
+            panic!("expected ReviewFailed");
+        };
+        assert_eq!(posted, 1);
+    }
+
+    #[test]
+    fn a_review_that_fails_at_the_verdict_leaves_the_posted_change_requests_named() {
+        let item = an_item();
+        let Ok(Outcome::ReviewFailed { posted, error, .. }) =
+            reviewed_or_failed(failed_review(3), item, String::new)
+        else {
+            panic!("expected ReviewFailed");
+        };
+        assert_eq!(posted, 2);
+        assert!(format!("{error:#}").contains("1 written change request stay posted"));
+    }
+
+    #[test]
+    fn a_review_that_goes_through_is_reviewed() {
+        let item = an_item();
+        let sent = failed_review(usize::MAX);
+        let outcome = reviewed_or_failed(sent, item, || "approved".to_owned()).unwrap();
+        assert!(matches!(outcome, Outcome::Reviewed { .. }));
     }
 }
