@@ -341,11 +341,12 @@ impl Workspace {
     pub fn answer_permission(
         &mut self,
         session: SessionId,
+        since_ms: u64,
         answer: Permission,
     ) -> anyhow::Result<HeldPermission> {
         let workforce = self.workforce;
         let (client, _) = self.daemon("answer permission requests")?;
-        Ok(client.answer_permission(workforce, session, answer)?)
+        Ok(client.answer_permission(workforce, session, since_ms, answer)?)
     }
 
     /// Ends the session this process works in, which runs in the daemon.

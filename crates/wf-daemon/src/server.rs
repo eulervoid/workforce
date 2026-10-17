@@ -302,10 +302,14 @@ async fn call(
             reply(session)
         }
         Call::Permissions => reply(daemon.held.list(workforce)),
-        Call::AnswerPermission { session, answer } => daemon
+        Call::AnswerPermission {
+            session,
+            since_ms,
+            answer,
+        } => daemon
             .held
-            .answer(session, answer)
-            .ok_or_else(|| "that session is not waiting for an answer".to_string())
+            .answer(session, since_ms, answer)
+            .map_err(|refused| refused.to_string())
             .and_then(reply),
         Call::EndSession { finish } => {
             let Caller::Session { session, .. } = caller else {
@@ -354,6 +358,7 @@ mod tests {
         let principals = [
             Call::AnswerPermission {
                 session,
+                since_ms: 0,
                 answer: Permission::Allow,
             },
             Call::StopSession(session),

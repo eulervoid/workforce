@@ -12,8 +12,8 @@ use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
-    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Row, STATUS_LASTS_MS, Scroll,
-    Split, Starter, Status, Tab, Target, Wheel,
+    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Request, Row, STATUS_LASTS_MS,
+    Scroll, Split, Starter, Status, Tab, Target, Wheel,
 };
 use super::draw;
 use super::snapshot::{
@@ -521,7 +521,7 @@ fn a_permission_request_is_answered_where_it_is_listed() {
     assert_eq!(
         press(&mut app, KeyCode::Char('a')),
         Some(Effect::Permit {
-            session: coder,
+            request: coders_request(),
             answer: Permission::Allow
         })
     );
@@ -534,7 +534,7 @@ fn a_permission_request_is_answered_where_it_is_listed() {
     assert_eq!(
         press(&mut app, KeyCode::Char('d')),
         Some(Effect::Permit {
-            session: coder,
+            request: coders_request(),
             answer: Permission::Deny
         })
     );
@@ -1225,7 +1225,7 @@ fn the_agents_tab_lists_each_agent_with_its_sessions() {
     assert_eq!(
         press(&mut app, KeyCode::Char('a')),
         Some(Effect::Permit {
-            session: SessionId::from_bytes([11; 32]),
+            request: coders_request(),
             answer: Permission::Allow
         })
     );
@@ -2294,9 +2294,17 @@ fn a_link_under_the_pointer_is_underlined_and_its_tip_shows() {
     );
 }
 
+/// The permission request of the coder in the snapshot.
+fn coders_request() -> Request {
+    Request {
+        session: SessionId::from_bytes([11; 32]),
+        since_ms: NOW_MS - 5_000,
+    }
+}
+
 fn permit(answer: Permission) -> Option<Effect> {
     Some(Effect::Permit {
-        session: SessionId::from_bytes([11; 32]),
+        request: coders_request(),
         answer,
     })
 }

@@ -236,8 +236,8 @@ fn done(
             workspace.author(EventBody::ItemEdited(ItemEdited { item, changes }))?;
             Ok(format!("edited #{}", item.short()))
         }
-        Effect::Permit { session, answer } => {
-            let held = workspace.answer_permission(session, answer)?;
+        Effect::Permit { request, answer } => {
+            let held = workspace.answer_permission(request.session, request.since_ms, answer)?;
             let verb = match answer {
                 Permission::Allow => "allowed",
                 Permission::Deny => "denied",

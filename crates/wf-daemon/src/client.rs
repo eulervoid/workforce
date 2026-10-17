@@ -232,14 +232,23 @@ impl DaemonClient {
         self.call(workforce, Call::MachineFaults)
     }
 
-    /// Answers the oldest request of a session, and says which it was.
+    /// Answers the oldest request of a session, if it is the one held since `since_ms`, and says
+    /// which it was.
     pub fn answer_permission(
         &mut self,
         workforce: WorkforceId,
         session: SessionId,
+        since_ms: u64,
         answer: Permission,
     ) -> Result<HeldPermission, ClientError> {
-        self.call(workforce, Call::AnswerPermission { session, answer })
+        self.call(
+            workforce,
+            Call::AnswerPermission {
+                session,
+                since_ms,
+                answer,
+            },
+        )
     }
 
     pub fn last_seen(

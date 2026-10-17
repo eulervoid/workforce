@@ -80,7 +80,14 @@ fn answer(
     answer: Permission,
 ) -> anyhow::Result<()> {
     let id = choose_session(workspace, mode, session, Which::Permission)?;
-    let held = workspace.answer_permission(id, answer)?;
+    let oldest = workspace
+        .held_permissions()?
+        .into_iter()
+        .filter(|held| held.session == id)
+        .map(|held| held.since_ms)
+        .min()
+        .ok_or_else(|| anyhow!("that session is not waiting for an answer"))?;
+    let held = workspace.answer_permission(id, oldest, answer)?;
     let verb = match answer {
         Permission::Allow => "allowed",
         Permission::Deny => "denied",

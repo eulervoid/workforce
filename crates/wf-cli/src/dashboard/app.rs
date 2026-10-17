@@ -105,9 +105,10 @@ impl Tab {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Effect {
     Quit,
-    /// Answers the oldest permission request of a session.
+    /// Answers a permission request, which the daemon refuses once it is not the oldest of its
+    /// session.
     Permit {
-        session: SessionId,
+        request: Request,
         answer: Permission,
     },
     /// A comment that resolves a blocker.
@@ -1776,7 +1777,7 @@ impl App {
             Target::Allow(request) => {
                 if unconfirmed.is_some_and(|unconfirmed| self.confirms(unconfirmed, request)) {
                     return Some(Effect::Permit {
-                        session: request.session,
+                        request,
                         answer: Permission::Allow,
                     });
                 }
@@ -1787,7 +1788,7 @@ impl App {
                 None
             }
             Target::Deny(request) => Some(Effect::Permit {
-                session: request.session,
+                request,
                 answer: Permission::Deny,
             }),
         }
@@ -1963,10 +1964,7 @@ impl App {
     /// The keys that act on what waits, on items and on sessions, for whatever is on screen.
     fn act(&mut self, key: KeyEvent) -> Option<Effect> {
         let subjects = self.subjects();
-        let permission = subjects.iter().find_map(|entry| match entry {
-            Waiting::Permission { session, .. } => Some(*session),
-            Waiting::Blocker { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
-        });
+        let permission = subjects.iter().find_map(|entry| entry.request());
         let blocker = subjects.iter().find_map(|entry| match entry {
             Waiting::Blocker { item, comment, .. } => Some((item.id, *comment)),
             Waiting::Permission { .. } | Waiting::Review { .. } | Waiting::Notice { .. } => None,
@@ -1976,12 +1974,12 @@ impl App {
             Waiting::Permission { .. } | Waiting::Blocker { .. } | Waiting::Notice { .. } => None,
         });
         match key.code {
-            KeyCode::Char('a') => permission.map(|session| Effect::Permit {
-                session,
+            KeyCode::Char('a') => permission.map(|request| Effect::Permit {
+                request,
                 answer: Permission::Allow,
             }),
-            KeyCode::Char('d') => permission.map(|session| Effect::Permit {
-                session,
+            KeyCode::Char('d') => permission.map(|request| Effect::Permit {
+                request,
                 answer: Permission::Deny,
             }),
             KeyCode::Char('r') => {

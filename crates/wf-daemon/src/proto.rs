@@ -127,10 +127,11 @@ pub enum Call {
     /// The permission requests that sessions of this machine wait to have answered, as
     /// `Vec<HeldPermission>`.
     Permissions,
-    /// Answers the oldest permission request of a session; answered with that
-    /// `HeldPermission`.
+    /// Answers the oldest permission request of a session, which must be the one held since
+    /// `since_ms` ([`HeldPermission::since_ms`]); answered with that `HeldPermission`.
     AnswerPermission {
         session: SessionId,
+        since_ms: u64,
         answer: Permission,
     },
     /// What is wrong with the machine, as [`MachineFaults`](crate::MachineFaults): that the

@@ -2482,7 +2482,7 @@ hang
         because: None,
     });
     assert!(client.author(workforce, finish).is_err());
-    let answer = client.answer_permission(workforce, session, wf_harness::Permission::Allow);
+    let answer = client.answer_permission(workforce, session, 0, wf_harness::Permission::Allow);
     assert!(
         matches!(&answer, Err(ClientError::Failed(message)) if message.contains("only the principal")),
         "{:?}",
