@@ -902,6 +902,24 @@ fn the_daemon_starts_in_the_background_and_stops() {
     assert!(error.contains("already runs"), "{error}");
     sandbox.add(&["--title", "Written through the daemon"]);
 
+    let elsewhere = sandbox.root.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    let init = common::output(
+        sandbox
+            .command(&["init", "--name", "second"])
+            .current_dir(&elsewhere),
+    );
+    assert!(!init.status.success());
+    let error = String::from_utf8_lossy(&init.stderr);
+    assert!(error.contains("wf daemon stop"), "{error}");
+    let error = sandbox.fail(&["status", "--refold"]);
+    assert!(error.contains("wf daemon stop"), "{error}");
+
+    // A pid file left by a crash names some other process; stop signals the daemon's own.
+    let pid_file =
+        std::path::Path::new(started["log"].as_str().unwrap()).with_file_name("daemon.pid");
+    std::fs::write(&pid_file, std::process::id().to_string()).unwrap();
+    assert_eq!(sandbox.json(&["daemon", "status"])["pid"], started["pid"]);
     let after = sandbox.json(&["daemon", "stop"]);
     assert_eq!(after["running"], false);
     let log = std::fs::read_to_string(started["log"].as_str().unwrap()).unwrap();

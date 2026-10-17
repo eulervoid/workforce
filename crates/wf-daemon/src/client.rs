@@ -60,7 +60,10 @@ impl DaemonClient {
         };
         match handshake(&mut stream, token)? {
             HelloReply::Ready {
-                pid, device, caller, ..
+                pid,
+                device,
+                caller,
+                ..
             } => Ok(Some(Self {
                 stream,
                 pid,

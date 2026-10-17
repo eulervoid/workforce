@@ -109,6 +109,9 @@ pub enum Replicated {
 impl Workspace {
     /// Uses the daemon when one is running, and opens the store otherwise.
     pub fn open(data: DataDir, start: &Path, refold: bool) -> anyhow::Result<Self> {
+        if refold {
+            data.require_no_daemon("refolding the log")?;
+        }
         // A session may run in an empty directory, without a workforce file to find.
         let (file, id) = match std::env::var(WORKFORCE_VARIABLE) {
             Ok(id) => (
@@ -132,9 +135,6 @@ impl Workspace {
             .filter(|directory| directory.join(".git").is_dir())
         {
             data.remember_repository(&id, repository);
-        }
-        if refold {
-            data.require_no_daemon("refolding the log")?;
         }
         // With a daemon, only the daemon reads the device key: agents are not let to.
         if !refold && let Some(mut client) = data.connect_daemon()? {
@@ -324,9 +324,7 @@ impl Workspace {
     pub fn held_permissions(&self) -> anyhow::Result<Vec<HeldPermission>> {
         match &self.source {
             Source::Local(..) => Ok(Vec::new()),
-            Source::Daemon { client, .. } => {
-                Ok(client.borrow_mut().permissions(self.workforce)?)
-            }
+            Source::Daemon { client, .. } => Ok(client.borrow_mut().permissions(self.workforce)?),
         }
     }
 

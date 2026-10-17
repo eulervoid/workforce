@@ -165,6 +165,35 @@ async fn policy_violations_come_back_as_errors() {
 }
 
 #[tokio::test]
+async fn the_daemon_says_its_own_pid() {
+    let running = start().await;
+    let socket = running.socket.clone();
+    let pid = blocking(move || connect(&socket).pid()).await;
+    assert_eq!(pid, std::process::id());
+    drop(running.daemon);
+}
+
+#[tokio::test]
+async fn reads_of_a_workforce_the_daemon_lacks_are_errors() {
+    let running = start().await;
+    let socket = running.socket.clone();
+    let unknown = wf_core::id::WorkforceId::from(wf_core::id::EventId::of(b"unknown"));
+    let (permissions, faults, last_seen) = blocking(move || {
+        let mut client = connect(&socket);
+        (
+            client.permissions(unknown).map(drop),
+            client.machine_faults(unknown).map(drop),
+            client.last_seen(unknown).map(drop),
+        )
+    })
+    .await;
+    for result in [permissions, faults, last_seen] {
+        assert!(matches!(result, Err(ClientError::Failed(_))), "{result:?}");
+    }
+    drop(running.daemon);
+}
+
+#[tokio::test]
 async fn a_client_of_another_build_is_refused() {
     let running = start().await;
     let socket = running.socket.clone();
