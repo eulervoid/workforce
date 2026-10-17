@@ -44,6 +44,8 @@ pub enum SessionError {
     UnknownAgent(AgentName),
     #[error("harness `{0}` is not one wf knows how to start; see `wf agent list`")]
     UnknownHarness(HarnessName),
+    #[error("the workforce has no policy yet")]
+    NoPolicy,
     #[error("there is no item #{}", .0.short())]
     UnknownItem(ItemId),
     #[error("#{} is archived", .0.short())]
@@ -120,6 +122,7 @@ impl SessionError {
                 | AuthorError::Sign(_),
             )
             | Self::NotBound
+            | Self::NoPolicy
             | Self::UnknownAgent(_)
             | Self::UnknownHarness(_)
             | Self::UnknownItem(_)

@@ -115,7 +115,7 @@ impl Daemon {
             }
             SandboxConfig::Fence(_) | SandboxConfig::Off {} => {}
         }
-        let policy = &state.policy().expect("a workforce has a policy").policy;
+        let policy = &state.policy().ok_or(SessionError::NoPolicy)?.policy;
         let item_context = match state.item(item).ok_or(SessionError::UnknownItem(item))? {
             ItemView::Live(live) => ItemContext {
                 id: item.to_base32(),

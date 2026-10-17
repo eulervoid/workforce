@@ -39,8 +39,13 @@ pub fn watch_panics() -> Panics {
 impl Panics {
     /// Completes with the report of the first panic.
     pub async fn first(&mut self) -> String {
-        match self.0.wait_for(Option::is_some).await {
-            Ok(first) => first.clone().unwrap_or_default(),
+        let first = self
+            .0
+            .wait_for(Option::is_some)
+            .await
+            .map(|first| first.clone().unwrap_or_default());
+        match first {
+            Ok(report) => report,
             // The hook holds the sender for as long as it is installed.
             Err(_) => std::future::pending().await,
         }

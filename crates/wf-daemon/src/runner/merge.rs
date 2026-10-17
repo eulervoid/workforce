@@ -249,7 +249,7 @@ impl Daemon {
         let ItemView::Live(live) = state.item(item).ok_or(SessionError::UnknownItem(item))? else {
             return Err(SessionError::Archived(item));
         };
-        let policy = &state.policy().expect("a workforce has a policy").policy;
+        let policy = &state.policy().ok_or(SessionError::NoPolicy)?.policy;
         // Another request finished this merge already, or the item was finished otherwise.
         if live.state(policy) == ItemState::Done {
             return Ok(MergeEnd::Handled);

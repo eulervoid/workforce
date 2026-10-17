@@ -21,7 +21,19 @@ struct Running {
     shutdown: tokio::sync::oneshot::Sender<()>,
 }
 
+/// Ends the test process on a panic in any task or thread, as the daemon binary stops: a
+/// panicking task would otherwise go unnoticed, as only the tasks it serves would stop.
+fn fail_on_panic() {
+    let mut panics = wf_daemon::watch_panics();
+    tokio::spawn(async move {
+        let report = panics.first().await;
+        eprintln!("the daemon panicked: {report}");
+        std::process::exit(101);
+    });
+}
+
 async fn start() -> Running {
+    fail_on_panic();
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);
     let store_directory = directory.path().join(fixture.workforce().to_string());
@@ -574,4 +586,61 @@ async fn a_log_longer_than_a_page_arrives_whole_and_in_order() {
     let events = blocking(move || connect(&socket).events(workforce).unwrap()).await;
     assert_eq!(events, expected);
     assert!(events.len() > 2 * EVENTS_PER_PAGE);
+}
+
+#[tokio::test]
+async fn a_daemon_starts_with_an_empty_store_in_its_data_directory() {
+    fail_on_panic();
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let store_directory = directory.path().join(fixture.workforce().to_string());
+    std::fs::create_dir_all(&store_directory).unwrap();
+    drop(RedbStore::open(store_directory.join(STORE_FILE)).unwrap());
+    let daemon = Daemon::start(
+        Config {
+            data_dir: directory.path().to_path_buf(),
+            socket: directory.path().join("daemon.sock"),
+            network: Network::Direct,
+            harnesses: Default::default(),
+            machine_config: None,
+            wf_binary: None,
+        },
+        fixture.devices[0].clone(),
+    )
+    .await
+    .unwrap();
+    // The tasks that need the policy run at once; give them time to panic.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    drop(daemon);
+}
+
+#[tokio::test]
+async fn a_join_with_an_invite_for_another_workforce_leaves_no_store_behind() {
+    use wf_core::event::DeviceProfile;
+    use wf_core::identity::InviteSigner;
+    use wf_core::invite::InviteCode;
+
+    let running = start().await;
+    let socket = running.socket.clone();
+    let own = running.fixture.workforce();
+    let other = Fixture::new(2).workforce();
+    let code = InviteCode::new(
+        own,
+        running.fixture.genesis.id(),
+        &InviteSigner::generate([7; 32]),
+        vec![running.daemon.device()],
+    );
+    let data_dir = socket.parent().unwrap().to_path_buf();
+    let result = blocking(move || {
+        let profile = DeviceProfile {
+            name: "vm".into(),
+            hardware: "test".into(),
+            agents: Default::default(),
+            max_sessions: 1,
+        };
+        connect(&socket).join(other, &code, profile)
+    })
+    .await;
+    assert!(result.is_err());
+    assert!(!data_dir.join(other.to_string()).exists());
 }
