@@ -3042,10 +3042,10 @@ fn the_cursor_moves_over_files_and_lines_and_enter_folds_a_file() {
     assert!(!folded.contains("use std::io;"), "{folded}");
     press(&mut app, KeyCode::Char('G'));
     assert!(cursor_line(&mut app).contains("Indented."));
-    // `i` goes to the item, esc back to the diff.
+    // `i` goes to the item, `D` back to the diff.
     press(&mut app, KeyCode::Char('i'));
     assert!(matches!(app.path().last(), Some(Detail::Item(_))));
-    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('D'));
     assert!(matches!(app.path().last(), Some(Detail::Diff(_))));
     assert_eq!(
         press(&mut app, KeyCode::Char('p')),
@@ -3053,6 +3053,59 @@ fn the_cursor_moves_over_files_and_lines_and_enter_folds_a_file() {
             item: ItemId::from_bytes([3; 32])
         })
     );
+}
+
+#[test]
+fn i_in_a_diff_opened_from_the_list_replaces_it_with_its_item() {
+    let mut app = diff_app();
+    press(&mut app, KeyCode::Char('i'));
+    assert_eq!(app.path(), [Detail::Item(ItemId::from_bytes([3; 32]))]);
+}
+
+#[test]
+fn i_in_a_diff_or_session_opened_from_its_item_goes_back_to_the_item() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('2'));
+    let parse = ItemId::from_bytes([1; 32]);
+    let coder = SessionId::from_bytes([11; 32]);
+    let mut snapshot = with_items();
+    snapshot.in_view = Some(InView::Item {
+        id: parse,
+        text: (1..=40).map(|line| format!("line {line}\n")).collect(),
+        session: Some(coder),
+    });
+    app.refresh(snapshot);
+    press(&mut app, KeyCode::Char('G'));
+    press(&mut app, KeyCode::Enter);
+    let item_scroll = app.stack().last().unwrap().scroll.clone();
+    press(&mut app, KeyCode::Enter);
+    assert_eq!(app.path(), [Detail::Item(parse), Detail::Session(coder)]);
+    press(&mut app, KeyCode::Char('i'));
+    assert_eq!(app.path(), [Detail::Item(parse)]);
+    assert_eq!(app.stack().last().unwrap().scroll, item_scroll);
+    // The diff, opened from the item.
+    press(&mut app, KeyCode::Char('D'));
+    assert_eq!(app.path(), [Detail::Item(parse), Detail::Diff(parse)]);
+    press(&mut app, KeyCode::Char('i'));
+    assert_eq!(app.path(), [Detail::Item(parse)]);
+}
+
+#[test]
+fn i_in_a_diff_opened_from_a_session_replaces_it_with_the_item() {
+    let mut app = app();
+    app.refresh(snapshot());
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Right);
+    press(&mut app, KeyCode::Right);
+    assert!(matches!(
+        app.path()[..],
+        [Detail::Session(_), Detail::Diff(_)]
+    ));
+    press(&mut app, KeyCode::Char('i'));
+    assert!(matches!(
+        app.path()[..],
+        [Detail::Session(_), Detail::Item(_)]
+    ));
 }
 
 #[test]

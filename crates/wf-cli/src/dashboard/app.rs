@@ -1489,6 +1489,20 @@ impl App {
         });
     }
 
+    /// `i` in a diff or session of `item`: the item stands left of it, so back to the item right
+    /// below on the stack (as `h` would, keeping its scroll), else the item in place of the
+    /// diff or session.
+    fn open_item_of_top(&mut self, item: ItemId) {
+        let stack = self.stack_mut();
+        let below = stack.len().checked_sub(2).map(|index| &stack[index]);
+        if below.is_some_and(|opened| opened.detail == Detail::Item(item)) {
+            stack.pop();
+            return;
+        }
+        stack.pop();
+        self.open(Detail::Item(item));
+    }
+
     /// Pasted text: it goes into the prompt that is open, where a line break is a space as the
     /// prompts are one line; with none open, it is ignored rather than taken for keys. Whether
     /// there was a prompt to take it.
@@ -2267,7 +2281,7 @@ impl App {
             }
             (KeyCode::Char('i'), Detail::Session(_)) => {
                 if let Some(item) = item_of_session {
-                    self.open(Detail::Item(item));
+                    self.open_item_of_top(item);
                 }
             }
             (KeyCode::Char('f'), Detail::Session(_)) => {
@@ -2354,7 +2368,7 @@ impl App {
     fn diff_key(&mut self, item: ItemId, key: KeyEvent) -> Option<Effect> {
         let page = self.page();
         match key.code {
-            KeyCode::Char('i') => self.open(Detail::Item(item)),
+            KeyCode::Char('i') => self.open_item_of_top(item),
             KeyCode::Char('R') => {
                 if self.review_waits(item) {
                     self.prompt = Some(Prompt::Verdict { item });
