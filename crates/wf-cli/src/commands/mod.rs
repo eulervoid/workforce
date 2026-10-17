@@ -122,13 +122,13 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
+            let machine_faults = workspace.machine_faults()?;
             let waiting_on_you = view::inbox_views(
                 workspace.state(),
                 &workspace.held_permissions()?,
-                &workspace.machine_faults()?,
+                &machine_faults,
             )
             .len();
-            let machine_faults = workspace.machine_faults();
             let context = view::StatusContext {
                 machine_faults: &machine_faults,
                 own: Some(workspace.device_key()),
