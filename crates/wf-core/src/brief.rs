@@ -615,7 +615,8 @@ pub fn rebase_nudge(item: ItemId, target: &str, paths: &[String]) -> String {
     format!(
         "Your submission rebases the branch onto {target}, and the rebase is stopped at a commit \
          that conflicts in {}. Resolve the conflicts in these files, then submit again: the daemon \
-         stages the text files whose conflict markers you removed and goes on with the rebase, which may stop at a later commit. Stage a binary file, or a file one side deleted, \
+         stages the text files whose conflict markers you removed and goes on with the rebase, \
+         which may stop at a later commit. Stage a binary file, or a file one side deleted, \
          yourself with `git add` or `git rm` once it is as it should be.\n\n{}",
         paths.join(", "),
         nudge(item, SessionRole::Work)

@@ -1740,21 +1740,41 @@ mod tests {
     }
 
     #[test]
-    fn a_conflict_is_found_whichever_rebase_backend_the_config_names() {
+    fn a_rebase_stopped_with_the_apply_backend_is_found_and_aborted() {
         let repo = TestRepo::new();
         let worktree = repo.worktree_path("wf/k3f9");
-        repo.work("wf/k3f9", "file.txt", "one\nTWO\n");
+        let work = repo.work("wf/k3f9", "file.txt", "one\nTWO\n");
         let main = repo.directory();
         repo.write(&main, "file.txt", "one\n2\n");
         repo.commit(&main, "conflicting change");
-        git_in(&repo.directory(), &["config", "rebase.backend", "apply"]);
-        let conflict = Rebase::Conflict {
-            paths: vec!["file.txt".into()],
-        };
-        assert_eq!(rebase(&repo), conflict);
-        assert!(repo.git.stopped_rebase(&worktree).unwrap() != StoppedRebase::NotStopped,);
-        repo.write(&worktree, "file.txt", "one\nTWO\n");
-        assert_eq!(rebase(&repo), Rebase::Rebased);
+        let output = Command::new("git")
+            .current_dir(&worktree)
+            .args(["-c", "rebase.backend=apply", "rebase", "main"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let rebase_apply = git_in(
+            &worktree,
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "rebase-apply",
+            ],
+        );
+        assert!(Path::new(rebase_apply.trim()).is_dir());
+        assert_eq!(
+            repo.git.stopped_rebase(&worktree).unwrap(),
+            StoppedRebase::Conflict {
+                paths: vec!["file.txt".into()],
+            }
+        );
+        repo.git.abort_rebase(&worktree).unwrap();
+        assert_eq!(
+            repo.git.stopped_rebase(&worktree).unwrap(),
+            StoppedRebase::NotStopped
+        );
+        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
     }
 
     #[test]
