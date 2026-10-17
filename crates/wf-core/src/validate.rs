@@ -13,6 +13,7 @@ use crate::event::{
     AgentDefined, Change, CommentKind, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated,
     ItemEdited, ItemLinked, ItemMoved, Link,
 };
+use crate::hlc::HLC_TOLERANCE_MS;
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
 use crate::item::ItemState;
@@ -71,6 +72,10 @@ pub enum Invalid {
     PrevMismatch { author: DeviceKey },
     #[error("hlc is not greater than the hlc of the events it follows")]
     HlcNotAfterParents,
+    #[error("hlc has a wall time or counter at its maximum")]
+    HlcAtMaximum,
+    #[error("hlc is more than {tolerance_ms} ms ahead of this device's clock; it is refused for now and accepted when offered again once the clock has caught up", tolerance_ms = HLC_TOLERANCE_MS)]
+    HlcInFuture,
     #[error("device {0} is not bound to a member")]
     UnknownDevice(DeviceKey),
     #[error("the actor is not the principal of the signing device")]
@@ -247,7 +252,31 @@ impl State {
     ///
     /// Events may arrive in any order and any number of times. Errors are about the submitted
     /// event only; previously pending events that become invalid are reported in `rejected`.
+    ///
+    /// This checks no clock against the device's own, only that no `hlc` is at its maximum; replay
+    /// from the store and tests use it. Events from peers go through [`State::receive_at`].
     pub fn receive(&mut self, event: Event, trust: Trust) -> Result<Received, Invalid> {
+        self.receive_from(event, trust, u64::MAX)
+    }
+
+    /// Like [`State::receive`], and refuses events whose `hlc` is more than [`HLC_TOLERANCE_MS`]
+    /// ahead of `now_ms`. Such an event is neither stored nor pending: nothing in the state wakes
+    /// it when time passes, so it is offered again by sync once the clock has caught up.
+    pub fn receive_at(
+        &mut self,
+        event: Event,
+        trust: Trust,
+        now_ms: u64,
+    ) -> Result<Received, Invalid> {
+        self.receive_from(event, trust, now_ms.saturating_add(HLC_TOLERANCE_MS))
+    }
+
+    fn receive_from(
+        &mut self,
+        event: Event,
+        trust: Trust,
+        latest_wall_ms: u64,
+    ) -> Result<Received, Invalid> {
         let mut received = Received {
             disposition: Disposition::Duplicate,
             applied: Vec::new(),
@@ -261,7 +290,7 @@ impl State {
         while let Some((event, trust)) = queue.pop_front() {
             let id = event.id();
             let is_submitted = id == submitted;
-            match self.admit(&event, trust) {
+            match self.admit(&event, trust, latest_wall_ms) {
                 Ok(Admission::Apply(origin)) => {
                     let is_genesis = origin == Origin::Own
                         && matches!(event.content.body, EventBody::Genesis(_));
@@ -317,7 +346,12 @@ impl State {
         Ok(received)
     }
 
-    fn admit(&self, event: &Event, trust: Trust) -> Result<Admission, Invalid> {
+    fn admit(
+        &self,
+        event: &Event,
+        trust: Trust,
+        latest_wall_ms: u64,
+    ) -> Result<Admission, Invalid> {
         let content = &event.content;
         if self.known.contains_key(&event.id()) {
             return Ok(Admission::Duplicate);
@@ -382,7 +416,7 @@ impl State {
         }
 
         self.check_feed(event)?;
-        self.check_hlc(event)?;
+        self.check_hlc(event, latest_wall_ms)?;
         match &content.body {
             EventBody::DeviceBound(_) => self.check_binding(event)?,
             EventBody::Genesis(_)
@@ -435,14 +469,20 @@ impl State {
         }
     }
 
-    fn check_hlc(&self, event: &Event) -> Result<(), Invalid> {
+    fn check_hlc(&self, event: &Event, latest_wall_ms: u64) -> Result<(), Invalid> {
+        let hlc = event.content.hlc;
+        if !hlc.is_admissible() {
+            return Err(Invalid::HlcAtMaximum);
+        }
         let follows_all = event
             .causal_parents()
             .all(|parent| self.known[&parent].hlc < event.content.hlc);
-        if follows_all {
-            Ok(())
-        } else {
+        if !follows_all {
             Err(Invalid::HlcNotAfterParents)
+        } else if hlc.wall_ms() > latest_wall_ms {
+            Err(Invalid::HlcInFuture)
+        } else {
+            Ok(())
         }
     }
 

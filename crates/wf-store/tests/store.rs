@@ -247,7 +247,7 @@ fn invalid_events_are_refused_and_not_stored() {
     let fixture = Fixture::new(1);
     let mut replica = new_replica(&directory, &fixture);
     let mut forged = fixture.author(replica.state(), 0, 2_000, create("task", "a"));
-    forged.content.hlc = wf_core::hlc::Hlc::next_after(forged.content.hlc, 99_999);
+    forged.content.hlc = wf_core::hlc::Hlc::next_after(forged.content.hlc, 99_999).unwrap();
     assert!(replica.receive(forged).is_err());
     assert_eq!(replica.store().log_since(0).unwrap().len(), 1);
 

@@ -136,7 +136,7 @@ mod tests {
 
     fn stamp(wall: u8) -> Stamp {
         Stamp {
-            hlc: Hlc::next_after(Hlc::ZERO, u64::from(wall)),
+            hlc: Hlc::next_after(Hlc::ZERO, u64::from(wall)).unwrap(),
             id: EventId::of(&[wall]),
         }
     }

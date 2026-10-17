@@ -233,6 +233,10 @@ struct EventContent {
 ```
 
 * `hlc` is greater than that of `prev` and every dep, so `(hlc, EventId)` extends causal order.
+  The next clock is `max(now, floor)` with the counter incremented; a full counter carries into
+  `wall_ms` (checked arithmetic). No admitted `hlc` has `wall_ms == u64::MAX` or
+  `counter == u32::MAX`, so every admitted event has a successor. A device whose floor leaves no
+  successor refuses to author (`ClockExhausted`) instead of overflowing.
 * `deps` records events, not item relations: those (`depends_on`, `supersedes`) are links in bodies.
 * **Unknown body tags** are stored, relayed and ignored by the fold, so newer peers can add bodies.
 * **Equivocation:** two events with the same `(author, seq)` prove misbehaviour, or a machine
@@ -346,7 +350,7 @@ in two kinds.
 
 **Admission** (`State::receive`, every peer; depends only on the event's causal past): version;
 device signature; workforce; all parents known; `prev` is the author's `seq - 1`; `hlc` above every
-parent's; the author is a bound device and the actor belongs to its principal (a `DeviceBound` as
+parent's and neither part at its maximum; the author is a bound device and the actor belongs to its principal (a `DeviceBound` as
 the author's first event, with its invite among its deps and a valid proof, binds it); an agent
 actor is a defined agent and its session belongs to that agent on that device; authority bodies carry
 a valid principal signature (an owner's for `PolicySet` and `ForkAnnounced`, the actor's own
@@ -354,6 +358,12 @@ principal's for `InviteCreated`); genesis is signed by its founder from a founde
 principals, handles and devices; referenced items, sessions and agents exist; no item links to
 itself.
 
+* **Clock tolerance:** a peer's event whose `hlc.wall_ms` is more than one hour ahead of the
+  receiving device's clock (`State::receive_at` takes `now_ms`; wf-core reads no clock) is
+  **refused, not pending**: it is not stored, and nothing wakes it as time passes. Sync offers it
+  again, and it is admitted once the clock has caught up. This check depends on the receiver's
+  clock, so it is the one admission rule that is not a function of the causal past; the maxima
+  above are, and are refused for good. Replay from the local store applies no tolerance.
 * Events with missing parents wait in a **pending set** (at most 10,000; events waiting on a fork's
   history are exempt) and are applied when their parents arrive. Any arrival order and duplication
   give the same state, tested with generated event sets and a simulation of 1,000 sync schedules.

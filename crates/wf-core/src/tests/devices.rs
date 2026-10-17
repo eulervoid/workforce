@@ -141,7 +141,7 @@ fn binding_rules() {
         let mut after = state.clone();
         receive(&mut after, first.clone()).unwrap();
         let mut content = fixture.bind(&after, &vm, &invite, &secret, 2_002).content;
-        content.hlc = Hlc::next_after(first.content.hlc, 2_002);
+        content.hlc = Hlc::next_after(first.content.hlc, 2_002).unwrap();
         (after, Event::sign_content(content, &vm).unwrap())
     };
     let (mut after, second) = late_with_prev;
