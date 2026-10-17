@@ -14,6 +14,7 @@ mod worktrees;
 pub(crate) use dispatch::run_dispatcher;
 pub(crate) use merge::{MergeQueue, run_merger};
 pub use resume::session_model;
+pub(crate) use start::sandboxed_in;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};

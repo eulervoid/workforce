@@ -17,6 +17,9 @@ use crate::decide::{AgentDeciders, DeciderRequest, Outcome, read_answer};
 /// How long an agent has to answer one request.
 const ANSWER_WITHIN: Duration = Duration::from_secs(120);
 
+/// How long a judge has to start.
+const START_WITHIN: Duration = Duration::from_secs(180);
+
 struct Judge {
     conversation: Conversation,
     prompts: u32,
@@ -38,6 +41,24 @@ impl Judges {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
         Arc::clone(sessions.entry((workforce, agent.clone())).or_default())
+    }
+
+    /// Closes every judge, waiting for the ones that answer a request to finish; a request that
+    /// asks a closed judge starts a new one.
+    pub(crate) async fn close(&self) {
+        let slots: Vec<Slot> = std::mem::take(
+            &mut *self
+                .sessions
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner()),
+        )
+        .into_values()
+        .collect();
+        for slot in slots {
+            if let Some(judge) = slot.lock().await.take() {
+                let _ = judge.conversation.close().await;
+            }
+        }
     }
 }
 
@@ -79,12 +100,23 @@ impl WorkforceJudges {
             let _ = old.conversation.close().await;
         }
         if judge.is_none() {
-            *judge = Some(self.start(&daemon, agent).await?);
+            let started = tokio::select! {
+                started = self.start(&daemon, agent) => started?,
+                () = daemon.until_halted() => return Err("the daemon is stopping".to_string()),
+            };
+            *judge = Some(started);
         }
         let live = judge.as_mut().expect("started above");
         live.prompts += 1;
         let prompt = prompt(request);
-        match tokio::time::timeout(ANSWER_WITHIN, live.conversation.reply(prompt)).await {
+        let reply = tokio::select! {
+            reply = tokio::time::timeout(ANSWER_WITHIN, live.conversation.reply(prompt)) => reply,
+            () = daemon.until_halted() => {
+                *judge = None;
+                return Err("the daemon is stopping".to_string());
+            }
+        };
+        match reply {
             Ok(Ok((_, said))) => Ok(answer_in(&said)),
             Ok(Err(error)) => {
                 *judge = None;
@@ -117,15 +149,8 @@ impl WorkforceJudges {
         let command = daemon
             .harness_command(&definition.harness)
             .ok_or_else(|| format!("wf does not know the harness `{}`", definition.harness))?;
-        let environment = daemon
-            .machine_config()
-            .map_err(|error| error.to_string())?
-            .environment_of(agent);
-        let command = crate::environment::confine(
-            command,
-            &environment,
-            crate::environment::daemon_variables(),
-        );
+        let machine_config = daemon.machine_config().map_err(|error| error.to_string())?;
+        let environment = machine_config.environment_of(agent);
         let workforce = daemon.workforce_directory(self.workforce);
         let directory = workforce.join("judges").join(agent.as_str());
         let transcripts = workforce.join("transcripts");
@@ -133,28 +158,65 @@ impl WorkforceJudges {
             std::fs::create_dir_all(path)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
         }
+        // Judges read text the requesting agent controls, so they run in the sandbox of their agent,
+        // working in their own directory.
+        let settings = workforce
+            .join("sandbox")
+            .join(format!("judge-{agent}.json"));
+        let command = crate::runner::sandboxed_in(
+            daemon,
+            &machine_config.sandbox_of(agent),
+            &directory,
+            &directory,
+            &settings,
+            command,
+        )
+        .map_err(|problem| format!("the sandbox could not be set up: {problem}"))?;
+        let command = crate::environment::confine(
+            command,
+            &environment,
+            crate::environment::daemon_variables(),
+        );
         let transcript_path = transcripts.join(format!("judge-{agent}.jsonl"));
         let transcript = std::fs::OpenOptions::new()
             .create(true)
             .append(true)
             .open(&transcript_path)
             .map_err(|error| format!("{}: {error}", transcript_path.display()))?;
-        let conversation = Conversation::start(Launch {
-            agent: command,
-            opening: Opening::New,
-            model: definition.model.clone(),
-            directory,
-            // A judge only reads what it is given; whatever it asks to do is refused.
-            permissions: Arc::new(Permission::Deny),
-            transcript,
-            silence_limit: crate::runner::SILENCE_LIMIT,
-        })
-        .await
-        .map_err(|error| format!("its session does not start: {error}"))?;
+        let conversation = start_within(
+            START_WITHIN,
+            Launch {
+                agent: command,
+                opening: Opening::New,
+                model: definition.model.clone(),
+                directory,
+                // A judge only reads what it is given; whatever it asks to do is refused.
+                permissions: Arc::new(Permission::Deny),
+                transcript,
+                silence_limit: crate::runner::SILENCE_LIMIT,
+            },
+        )
+        .await?;
         Ok(Judge {
             conversation,
             prompts: 0,
         })
+    }
+}
+
+/// The conversation of `launch`, or why it did not start within `limit`. A harness that hangs at
+/// start is dropped, which stops it.
+async fn start_within<W: std::io::Write + Send + 'static>(
+    limit: Duration,
+    launch: Launch<W>,
+) -> Result<Conversation, String> {
+    match tokio::time::timeout(limit, Conversation::start(launch)).await {
+        Ok(Ok(conversation)) => Ok(conversation),
+        Ok(Err(error)) => Err(format!("its session does not start: {error}")),
+        Err(_) => Err(format!(
+            "its session did not start within {}",
+            humantime::format_duration(limit)
+        )),
     }
 }
 
@@ -194,6 +256,23 @@ fn answer_in(said: &str) -> Outcome {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_judge_whose_harness_never_answers_the_start_does_not_hold_the_request() {
+        let launch = Launch {
+            agent: wf_harness::AcpAgentConfig::new("sleep").arg("60"),
+            opening: Opening::New,
+            model: None,
+            directory: std::env::temp_dir(),
+            permissions: Arc::new(Permission::Deny),
+            transcript: std::io::sink(),
+            silence_limit: Duration::from_secs(60),
+        };
+        let started = std::time::Instant::now();
+        let outcome = start_within(Duration::from_millis(200), launch).await;
+        assert!(outcome.is_err_and(|why| why.contains("did not start within")));
+        assert!(started.elapsed() < Duration::from_secs(10));
+    }
 
     #[test]
     fn the_answer_is_found_in_what_the_agent_says() {

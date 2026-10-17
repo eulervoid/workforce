@@ -28,22 +28,44 @@ pub(super) fn sandboxed(
     run: &Run,
     agent: AcpAgentConfig,
 ) -> Result<AcpAgentConfig, String> {
-    let config = match &run.sandbox {
-        SandboxConfig::Fence(config) => config,
-        SandboxConfig::Off {} => return Ok(agent),
-    };
-    let access = crate::sandbox::Access {
-        worktree: &run.worktree,
-        repository: &run.repository,
-        socket: &daemon.config.socket,
-        data_dir: &daemon.config.data_dir,
-        machine_config: daemon.config.machine_config.as_deref(),
-    };
     let settings = daemon
         .workforce_directory(run.workforce)
         .join("sandbox")
         .join(format!("{}.json", run.session));
-    crate::sandbox::wrap(config, &access, &agent, &settings).map_err(|error| error.to_string())
+    sandboxed_in(
+        daemon,
+        &run.sandbox,
+        &run.worktree,
+        &run.repository,
+        &settings,
+        agent,
+    )
+}
+
+/// `agent` in `sandbox`, working in `worktree`; Fence's settings are written to `settings`.
+pub(crate) fn sandboxed_in(
+    daemon: &Daemon,
+    sandbox: &SandboxConfig,
+    worktree: &std::path::Path,
+    repository: &std::path::Path,
+    settings: &std::path::Path,
+    agent: AcpAgentConfig,
+) -> Result<AcpAgentConfig, String> {
+    let config = match sandbox {
+        SandboxConfig::Fence(_) if !crate::sandbox::fence_installed() => {
+            return Err("Fence is not installed".to_string());
+        }
+        SandboxConfig::Fence(config) => config,
+        SandboxConfig::Off {} => return Ok(agent),
+    };
+    let access = crate::sandbox::Access {
+        worktree,
+        repository,
+        socket: &daemon.config.socket,
+        data_dir: &daemon.config.data_dir,
+        machine_config: daemon.config.machine_config.as_deref(),
+    };
+    crate::sandbox::wrap(config, &access, &agent, settings).map_err(|error| error.to_string())
 }
 
 /// The name an agent of `principal` commits under: `@principal/agent`, as it is named everywhere
