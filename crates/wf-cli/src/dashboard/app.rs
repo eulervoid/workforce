@@ -350,8 +350,9 @@ impl<Key: Clone + PartialEq> Selection<Key> {
 enum Navigated {
     /// The key is not one of navigation.
     Unused,
-    /// A navigation key, with the selection at the end of the list it goes towards.
+    /// A navigation key that left the selection where it was.
     Stayed,
+    /// A navigation key that changed the selection.
     Moved,
 }
 
