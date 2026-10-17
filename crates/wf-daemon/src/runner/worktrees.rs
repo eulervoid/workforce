@@ -16,7 +16,7 @@ use crate::{Daemon, Loaded, caches};
 impl Daemon {
     /// Removes the directory an ended session ran in, unless it is the worktree of the item,
     /// which later sessions continue: there only a rebase stopped by a refused submission is
-    /// given up, and not while another session of the item is live.
+    /// given up, and not while another work session of the item is live.
     pub(super) async fn discard_session_directory(
         &self,
         workforce: WorkforceId,
@@ -29,9 +29,13 @@ impl Daemon {
         let removed = match role {
             SessionRole::Work => {
                 let another_live = self.snapshot(loaded).await.map_or(true, |state| {
-                    state
-                        .live_sessions()
-                        .any(|live| live.item() == item && live.id() != session)
+                    another_work_session_live(
+                        state
+                            .live_sessions()
+                            .map(|live| (live.item(), live.id(), live.role())),
+                        item,
+                        session,
+                    )
                 });
                 if !another_live {
                     self.abort_stopped_rebase(workforce, item).await;
@@ -186,5 +190,58 @@ impl Daemon {
             }
         })
         .await;
+    }
+}
+
+/// Whether a live session other than `session` works in the worktree of `item`: only work
+/// sessions do, every other role runs in a directory of its own.
+fn another_work_session_live(
+    live: impl IntoIterator<Item = (ItemId, SessionId, SessionRole)>,
+    item: ItemId,
+    session: SessionId,
+) -> bool {
+    live.into_iter().any(|(live_item, live_session, role)| {
+        live_item == item
+            && live_session != session
+            && match role {
+                SessionRole::Work => true,
+                SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => {
+                    false
+                }
+            }
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_another_live_work_session_keeps_the_item_worktree_in_use() {
+        let item = ItemId::from_bytes([1; 32]);
+        let other_item = ItemId::from_bytes([2; 32]);
+        let ended = SessionId::from_bytes([3; 32]);
+        let other = SessionId::from_bytes([4; 32]);
+        let review = (item, other, SessionRole::Review { commit: None });
+        let supervise = (item, other, SessionRole::Supervise);
+        let diagnose = (item, other, SessionRole::Diagnose);
+        for live in [review, supervise, diagnose] {
+            assert!(!another_work_session_live([live], item, ended));
+        }
+        assert!(another_work_session_live(
+            [review, (item, other, SessionRole::Work)],
+            item,
+            ended
+        ));
+        assert!(!another_work_session_live(
+            [(item, ended, SessionRole::Work)],
+            item,
+            ended
+        ));
+        assert!(!another_work_session_live(
+            [(other_item, other, SessionRole::Work)],
+            item,
+            ended
+        ));
     }
 }
