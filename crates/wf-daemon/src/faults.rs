@@ -10,6 +10,7 @@ use std::sync::Mutex;
 use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
+use wf_core::id::WorkforceId;
 use wf_core::name::{AgentName, HarnessName};
 use wf_core::session::{HarnessFault, MachineFault};
 
@@ -61,7 +62,12 @@ const PROBE_FILE: &str = ".space-probe";
 const PROBE_BYTES: usize = 64 * 1024;
 
 #[derive(Default)]
-pub(crate) struct Faults(Mutex<MachineFaults>);
+pub(crate) struct Faults {
+    machine: Mutex<MachineFaults>,
+    /// The agents each workforce has on a harness that no command is known for. The machine is
+    /// at fault for a harness for as long as any workforce has one; locked before `machine`.
+    unknown: Mutex<BTreeMap<WorkforceId, BTreeMap<HarnessName, Vec<AgentName>>>>,
+}
 
 impl Faults {
     /// Remembers that `what` could not be written if `error` says the disk is full; the first
@@ -107,16 +113,33 @@ impl Faults {
         }
     }
 
-    /// Makes the harnesses that no command is known for, with the agents that use each, the
-    /// unknown ones at fault: logs when one starts and when one clears, and nothing in between.
-    pub(crate) fn sync_unknown_harnesses(&self, unknown: BTreeMap<HarnessName, Vec<AgentName>>) {
+    /// Records the harnesses that no command is known for in `workforce`, with the agents that
+    /// use each, replacing what it recorded before; the unknown ones are at fault. Logs when one
+    /// starts and when one clears, and nothing in between. Other workforces' agents stay.
+    pub(crate) fn sync_unknown_harnesses(
+        &self,
+        workforce: WorkforceId,
+        unknown: BTreeMap<HarnessName, Vec<AgentName>>,
+    ) {
+        let mut by_workforce = self.unknown.lock().unwrap_or_else(|p| p.into_inner());
+        if unknown.is_empty() {
+            by_workforce.remove(&workforce);
+        } else {
+            by_workforce.insert(workforce, unknown);
+        }
+        let mut all: BTreeMap<&HarnessName, Vec<String>> = BTreeMap::new();
+        for agents in by_workforce.values().flat_map(BTreeMap::iter) {
+            all.entry(agents.0)
+                .or_default()
+                .extend(agents.1.iter().map(ToString::to_string));
+        }
         let now_ms = crate::now_ms();
         let mut faults = self.lock();
         let cleared: Vec<_> = faults
             .harnesses
             .iter()
             .filter(|(harness, at_fault)| {
-                at_fault.fault == HarnessFault::Unknown && !unknown.contains_key(*harness)
+                at_fault.fault == HarnessFault::Unknown && !all.contains_key(*harness)
             })
             .map(|(harness, _)| harness.clone())
             .collect();
@@ -124,10 +147,11 @@ impl Faults {
             tracing::info!("{harness} is known again");
             faults.harnesses.remove(&harness);
         }
-        for (harness, agents) in unknown {
-            let names: Vec<_> = agents.iter().map(ToString::to_string).collect();
+        for (harness, mut names) in all {
+            names.sort();
+            names.dedup();
             let what = format!("used by {}", names.join(", "));
-            match faults.harnesses.get_mut(&harness) {
+            match faults.harnesses.get_mut(harness) {
                 Some(known) if known.fault == HarnessFault::Unknown => {
                     known.last_ms = now_ms;
                     known.what = what;
@@ -138,7 +162,7 @@ impl Faults {
                          start: {what}"
                     );
                     faults.harnesses.insert(
-                        harness,
+                        harness.clone(),
                         HarnessAtFault {
                             fault: HarnessFault::Unknown,
                             since_ms: now_ms,
@@ -198,7 +222,7 @@ impl Faults {
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, MachineFaults> {
-        self.0
+        self.machine
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
@@ -273,15 +297,44 @@ mod tests {
         let typo = HarnessName::new("claud-code").unwrap();
         let betty = AgentName::new("betty").unwrap();
         let unknown = BTreeMap::from([(typo.clone(), vec![betty])]);
-        faults.sync_unknown_harnesses(unknown.clone());
+        let workforce = WorkforceId::from(wf_core::id::EventId::of(b"one"));
+        faults.sync_unknown_harnesses(workforce, unknown.clone());
         let first = faults.current().harnesses[&typo].clone();
         assert_eq!(first.fault, HarnessFault::Unknown);
         assert_eq!(first.what, "used by betty");
-        faults.sync_unknown_harnesses(unknown);
+        faults.sync_unknown_harnesses(workforce, unknown);
         assert_eq!(faults.current().harnesses[&typo].since_ms, first.since_ms);
         assert!(faults.holds(&typo, first.last_ms + 10 * RETRY_HARNESS.as_millis() as u64));
 
-        faults.sync_unknown_harnesses(BTreeMap::new());
+        faults.sync_unknown_harnesses(workforce, BTreeMap::new());
+        assert!(faults.current().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_harness_stays_at_fault_while_another_workforce_still_uses_it() {
+        let faults = Faults::default();
+        let typo = HarnessName::new("claud-code").unwrap();
+        let (first, second) = (
+            WorkforceId::from(wf_core::id::EventId::of(b"one")),
+            WorkforceId::from(wf_core::id::EventId::of(b"two")),
+        );
+        let used_by =
+            |name: &str| BTreeMap::from([(typo.clone(), vec![AgentName::new(name).unwrap()])]);
+        faults.sync_unknown_harnesses(first, used_by("betty"));
+        let since_ms = faults.current().harnesses[&typo].since_ms;
+        faults.sync_unknown_harnesses(second, used_by("carl"));
+        faults.sync_unknown_harnesses(first, used_by("betty"));
+        faults.sync_unknown_harnesses(second, used_by("carl"));
+        let at_fault = faults.current().harnesses[&typo].clone();
+        assert_eq!(
+            at_fault.since_ms, since_ms,
+            "one workforce's pass does not reset it"
+        );
+        assert_eq!(at_fault.what, "used by betty, carl");
+
+        faults.sync_unknown_harnesses(first, BTreeMap::new());
+        assert_eq!(faults.current().harnesses[&typo].what, "used by carl");
+        faults.sync_unknown_harnesses(second, BTreeMap::new());
         assert!(faults.current().is_empty());
     }
 

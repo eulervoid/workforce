@@ -419,17 +419,22 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
     let auto_agents = state
         .agents()
         .any(|(_, definition)| definition.autonomy.start == StartMode::Auto);
-    let starts_here = |device, startable_only: bool| {
+    let harness_unknown = |harness: &wf_core::name::HarnessName| {
+        machine_faults
+            .harnesses
+            .get(harness)
+            .is_some_and(|at_fault| at_fault.fault == HarnessFault::Unknown)
+    };
+    // Whether an auto agent of this device with an unknown harness (or with a known one) has
+    // something to take.
+    let takes_here = |device, unknown: bool| {
         state.auto_agents(device).iter().any(|(agent, definition)| {
-            let startable = machine_faults
-                .harnesses
-                .get(&definition.harness)
-                .is_none_or(|at_fault| at_fault.fault != HarnessFault::Unknown);
-            (startable || !startable_only) && !state.dispatchable(device, agent).is_empty()
+            harness_unknown(&definition.harness) == unknown
+                && !state.dispatchable(device, agent).is_empty()
         })
     };
-    let an_agent_starts_here = own.is_some_and(|device| starts_here(device, true));
-    let unknown_harness_stops_them = own.is_some_and(|device| starts_here(device, false));
+    let an_agent_starts_here = own.is_some_and(|device| takes_here(device, false));
+    let unknown_harness_stops_some = own.is_some_and(|device| takes_here(device, true));
     let next = if state.agents().next().is_none() {
         Some("add an agent: `wf agent add`".to_string())
     } else if !daemon && auto_agents {
@@ -442,7 +447,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         Some("add an item: `wf item add`".to_string())
     } else if !an_agent_starts_here {
         let items = if ready_items == 1 { "item" } else { "items" };
-        if unknown_harness_stops_them {
+        if unknown_harness_stops_some {
             Some(format!(
                 "{ready_items} ready {items}, but the harness of every agent that could take them is unknown: `wf agent edit <name> --harness …`"
             ))
@@ -451,6 +456,11 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
                 "{ready_items} ready {items}, but no agent starts on its own: `wf agent edit <name> --start auto`"
             ))
         }
+    } else if unknown_harness_stops_some {
+        Some(
+            "some agents that could take ready items have an unknown harness: `wf agent edit <name> --harness …`"
+                .to_string(),
+        )
     } else {
         None
     };
@@ -604,6 +614,61 @@ mod tests {
             next_with(&fixture, &state, &faults).as_deref(),
             Some(
                 "1 ready item, but the harness of every agent that could take them is unknown: `wf agent edit <name> --harness …`"
+            )
+        );
+    }
+
+    #[test]
+    fn ready_items_are_pointed_out_when_only_some_agents_have_an_unknown_harness() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let defined = |name: &str, harness: &str| {
+            EventBody::AgentDefined(AgentDefined {
+                name: AgentName::new(name).unwrap(),
+                harness: HarnessName::new(harness).unwrap(),
+                model: None,
+                instructions: None,
+                capabilities: vec![],
+                lanes: vec![LaneName::new("default").unwrap()],
+                autonomy: Autonomy {
+                    start: StartMode::Auto,
+                    ..Autonomy::default()
+                },
+            })
+        };
+        fixture.apply(&mut state, 0, 2_000, defined("coder", "opencode"));
+        fixture.apply(&mut state, 0, 2_500, defined("tester", "claud-code"));
+        fixture.apply(
+            &mut state,
+            0,
+            3_000,
+            EventBody::DeviceProfile(DeviceProfile {
+                name: "laptop".into(),
+                hardware: String::new(),
+                agents: BTreeMap::from([
+                    (AgentName::new("coder").unwrap(), 1),
+                    (AgentName::new("tester").unwrap(), 1),
+                ]),
+                max_sessions: 2,
+            }),
+        );
+        fixture.apply(&mut state, 0, 4_000, create("task", "first"));
+        let faults = MachineFaults {
+            harnesses: BTreeMap::from([(
+                HarnessName::new("claud-code").unwrap(),
+                wf_daemon::HarnessAtFault {
+                    fault: HarnessFault::Unknown,
+                    since_ms: 0,
+                    last_ms: 0,
+                    what: "used by tester".to_string(),
+                },
+            )]),
+            ..MachineFaults::default()
+        };
+        assert_eq!(
+            next_with(&fixture, &state, &faults).as_deref(),
+            Some(
+                "some agents that could take ready items have an unknown harness: `wf agent edit <name> --harness …`"
             )
         );
     }

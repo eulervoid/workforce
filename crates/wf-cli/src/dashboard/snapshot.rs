@@ -317,6 +317,7 @@ impl Snapshot {
         } = *sources;
         let waiting = waiting(state, events, held);
         let context = view::StatusContext {
+            // Only `flagged` is used below, which no machine fault changes; `next` is not shown.
             machine_faults: &wf_daemon::MachineFaults::default(),
             own: Some(own),
             last_seen,
