@@ -6,7 +6,7 @@
 //! re-check them, because a concurrent policy change would make acceptance depend on arrival
 //! order; the fold keeps such events, and an item can end up in a state its type no longer uses.
 
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 
 use crate::body::{Body, BodyError, StepId};
 use crate::event::{
@@ -99,6 +99,8 @@ pub enum Invalid {
     SessionMismatch(SessionId),
     #[error("an item cannot depend on itself")]
     SelfDependency,
+    #[error("{0} is not a comment of the item in the causal past of the event")]
+    ResolvesOutsideCausalPast(CommentId),
     #[error("too many events are waiting for missing parents")]
     PendingFull,
 }
@@ -578,9 +580,20 @@ impl State {
             | EventBody::Merged(crate::event::Merged { item, .. }) => known_item(item),
             EventBody::ItemEdited(ItemEdited { item, .. })
             | EventBody::ItemMoved(ItemMoved { item, .. })
-            | EventBody::Commented(crate::event::Comment { item, .. })
             | EventBody::ItemArchived(crate::event::ItemRef { item })
             | EventBody::ItemUnarchived(crate::event::ItemRef { item }) => known_item(item),
+            EventBody::Commented(comment) => {
+                known_item(&comment.item)?;
+                // Whether the comment is already folded here must not decide whether it resolves:
+                // only what the author had seen does.
+                comment.resolves.iter().try_for_each(|resolved| {
+                    if self.in_causal_past(event, EventId::from(*resolved)) {
+                        Ok(())
+                    } else {
+                        Err(Invalid::ResolvesOutsideCausalPast(*resolved))
+                    }
+                })
+            }
             EventBody::ItemLinked(ItemLinked { item, link }) => {
                 known_item(item)?;
                 let target = match link {
@@ -595,6 +608,28 @@ impl State {
                 Ok(())
             }
         }
+    }
+
+    /// Whether `target` is one of the causal parents of the event or one of their ancestors.
+    fn in_causal_past(&self, event: &Event, target: EventId) -> bool {
+        let Some(floor) = self.known.get(&target).map(|known| known.hlc) else {
+            return false;
+        };
+        let mut seen = BTreeSet::new();
+        let mut pending: Vec<EventId> = event.causal_parents().collect();
+        while let Some(id) = pending.pop() {
+            if id == target {
+                return true;
+            }
+            // An ancestor has a smaller hlc than the events after it.
+            if let Some(known) = self.known.get(&id)
+                && known.hlc > floor
+                && seen.insert(id)
+            {
+                pending.extend(known.parents.iter().copied());
+            }
+        }
+        false
     }
 
     fn admit_genesis(&self, event: &Event, trust: Trust) -> Result<(), Invalid> {

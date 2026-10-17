@@ -28,6 +28,7 @@ impl State {
             id,
             Known {
                 hlc: content.hlc,
+                parents: event.causal_parents().collect(),
                 author: content.author,
                 seq: content.seq,
             },
@@ -332,15 +333,9 @@ impl State {
                 if let Some(item) = workforce.items.get_mut(&review.item) {
                     item.touch(stamp, &content.actor);
                     // Requesting changes sends the work back: the item is open for the next
-                    // session, in the same event.
-                    if review.verdict == Verdict::RequestChanges
-                        && workforce
-                            .policy
-                            .value()
-                            .policy
-                            .type_config(item.item_type())
-                            .is_some_and(|config| config.uses(ItemState::Open))
-                    {
+                    // session, in the same event. Whether the type still uses `open` is not
+                    // asked: a concurrent policy change must not decide the outcome.
+                    if review.verdict == Verdict::RequestChanges {
                         item.state.set(Some(ItemState::Open.into()), stamp);
                     }
                     item.verdicts.insert(
