@@ -759,7 +759,11 @@ default for tasks).
   submission starts the level over; what was reviewed is what gets merged.
 * **Verdicts** (`wf review <item>`; in a review session it also ends the session `Reviewed`) name the
   commit and are refused on any other one:
-  * `Approve` moves on to the next step; refused while a change request is open.
+  * `Approve` moves on to the next step; refused while a change request is open. A principal step is
+    satisfied only by a principal's verdict; a principal's `Approve` may also stand in for an agent step.
+    An agent verdict that cannot satisfy the current step (an `Approve` or `Escalate` on a principal
+    step, as from review sessions started concurrently on two devices) is ignored, not counted for a
+    later step.
   * `RequestChanges` needs an open change request (written first, one comment each) and moves the item
     back to its open state in the same event. The next work session continues the branch and resolves
     them; a resolution the reviewer does not accept gets a new change request.

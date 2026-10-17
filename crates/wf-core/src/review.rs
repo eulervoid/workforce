@@ -5,7 +5,7 @@ use std::collections::BTreeSet;
 
 use crate::crdt::Stamp;
 use crate::id::ItemId;
-use crate::identity::{AgentId, DeviceKey};
+use crate::identity::{Actor, AgentId, DeviceKey};
 use crate::item::{Item, ItemState, ItemView};
 use crate::name::Requirement;
 use crate::policy::ReviewStep;
@@ -89,13 +89,21 @@ impl State {
             if index >= steps.len() {
                 break;
             }
-            match verdict.verdict {
-                Verdict::Approve => index += 1,
-                Verdict::RequestChanges => return Some(ReviewStatus::ChangesRequested),
-                Verdict::Escalate => {
+            let by_agent = matches!(verdict.by, Actor::Agent { .. });
+            let by_principal = matches!(verdict.by, Actor::Principal(_));
+            match (verdict.verdict, steps[index].clone()) {
+                // A principal decides in place of any step, an agent only for an agent step.
+                (Verdict::Approve, ReviewStep::Agent { .. }) if by_agent || by_principal => {
+                    index += 1;
+                }
+                (Verdict::Approve, ReviewStep::Principal) if by_principal => index += 1,
+                (Verdict::RequestChanges, _) => return Some(ReviewStatus::ChangesRequested),
+                (Verdict::Escalate, ReviewStep::Agent { .. }) if by_agent => {
                     index += 1;
                     steps.insert(index, ReviewStep::Principal);
                 }
+                // Such as an agent verdict on a principal step: it counts for no step.
+                (Verdict::Approve | Verdict::Escalate, _) => {}
             }
         }
         Some(match steps.get(index) {

@@ -67,6 +67,24 @@ impl Scene {
         ));
     }
 
+    /// A verdict given by `reviewer` from a review session of `commit(1)`, which it then ends.
+    fn agent_verdict(&mut self, item: ItemId, verdict_given: Verdict) {
+        let session: SessionId = self
+            .apply(start_review("reviewer", item, commit(1)))
+            .id()
+            .into();
+        self.clock += 1;
+        let actor = self.fixture.agent_actor("reviewer", session);
+        let body = verdict(item, commit(1), verdict_given);
+        let event = self
+            .fixture
+            .author_as(&self.state, 0, actor, self.clock, body);
+        self.state
+            .receive(event, crate::state::Trust::Untrusted)
+            .expect("the verdict is valid");
+        self.apply(end_session(session, EndReason::Reviewed));
+    }
+
     fn status(&self, item: ItemId) -> Option<ReviewStatus> {
         self.state.review_status(item)
     }
@@ -163,7 +181,7 @@ fn a_level_is_walked_one_approval_at_a_time() {
 fn escalating_puts_a_human_step_right_after_the_current_one() {
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
-    scene.apply(verdict(item, commit(1), Verdict::Escalate));
+    scene.agent_verdict(item, Verdict::Escalate);
     assert_eq!(scene.status(item), Some(awaiting_human()));
     scene.apply(verdict(item, commit(1), Verdict::Approve));
     assert_eq!(
@@ -174,7 +192,7 @@ fn escalating_puts_a_human_step_right_after_the_current_one() {
     );
 
     let item = scene.submitted("critical");
-    scene.apply(verdict(item, commit(1), Verdict::Escalate));
+    scene.agent_verdict(item, Verdict::Escalate);
     scene.apply(verdict(item, commit(1), Verdict::Approve));
     assert_eq!(
         scene.status(item),
@@ -188,6 +206,51 @@ fn escalating_puts_a_human_step_right_after_the_current_one() {
             commit: Some(commit(1))
         })
     );
+}
+
+#[test]
+fn agent_approvals_do_not_satisfy_a_principal_step() {
+    let mut scene = Scene::new();
+    let item = scene.submitted("critical");
+    scene.agent_verdict(item, Verdict::Approve);
+    scene.agent_verdict(item, Verdict::Approve);
+    assert_eq!(
+        scene.status(item),
+        Some(awaiting_human()),
+        "the second agent approval is ignored, it does not stand in for the principal"
+    );
+    scene.apply(verdict(item, commit(1), Verdict::Approve));
+    assert_eq!(
+        scene.status(item),
+        Some(ReviewStatus::Approved {
+            commit: Some(commit(1))
+        })
+    );
+}
+
+#[test]
+fn an_agent_verdict_after_an_escalation_does_not_pass_the_principal_step() {
+    let mut scene = Scene::new();
+    let item = scene.submitted("standard");
+    scene.agent_verdict(item, Verdict::Escalate);
+    scene.agent_verdict(item, Verdict::Approve);
+    scene.agent_verdict(item, Verdict::Escalate);
+    assert_eq!(scene.status(item), Some(awaiting_human()));
+    scene.apply(verdict(item, commit(1), Verdict::Approve));
+    assert_eq!(
+        scene.status(item),
+        Some(ReviewStatus::Approved {
+            commit: Some(commit(1))
+        })
+    );
+}
+
+#[test]
+fn a_principal_approval_stands_in_for_an_agent_step() {
+    let mut scene = Scene::new();
+    let item = scene.submitted("critical");
+    scene.apply(verdict(item, commit(1), Verdict::Approve));
+    assert_eq!(scene.status(item), Some(awaiting_human()));
 }
 
 #[test]
