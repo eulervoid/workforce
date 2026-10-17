@@ -6,8 +6,8 @@ use std::process::{Command, Output};
 use wf_core::session::{CommitId, GitOid};
 
 use crate::{
-    CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Pager, Rebase, VcsAdapter, VcsError,
-    Work,
+    CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Pager, Rebase, StoppedRebase,
+    VcsAdapter, VcsError, Work,
 };
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
@@ -712,10 +712,12 @@ impl VcsAdapter for GitCli {
             args.extend(["-c".to_string(), format!("{key}={value}")]);
         }
         match self.stopped_rebase(worktree)? {
-            Some(paths) => {
-                let unresolved: Vec<String> = paths
+            StoppedRebase::Conflict { .. } | StoppedRebase::Stopped => {
+                let unresolved: Vec<String> = self
+                    .conflicts(worktree)?
                     .into_iter()
-                    .filter(|path| has_conflict_markers(&worktree.join(path)))
+                    .filter(|conflict| !conflict.is_resolved_in(worktree))
+                    .map(|conflict| conflict.path)
                     .collect();
                 if !unresolved.is_empty() {
                     return Ok(Rebase::Conflict { paths: unresolved });
@@ -723,7 +725,7 @@ impl VcsAdapter for GitCli {
                 self.succeed_in(worktree, [OsStr::new("add"), OsStr::new("--update")])?;
                 args.extend(["rebase", "--continue"].map(str::to_string));
             }
-            None => {
+            StoppedRebase::NotStopped => {
                 if !self.branch_exists(target)? {
                     return Err(VcsError::NoBranch(target.into()));
                 }
@@ -745,6 +747,9 @@ impl VcsAdapter for GitCli {
                 args.extend(
                     [
                         "rebase",
+                        // The apply backend, which a principal's config may choose, leaves
+                        // `rebase-apply` and conflicts that read differently.
+                        "--merge",
                         "--no-autosquash",
                         "--no-autostash",
                         "--no-update-refs",
@@ -764,66 +769,118 @@ impl VcsAdapter for GitCli {
             return Ok(Rebase::Rebased);
         }
         match self.stopped_rebase(worktree)? {
-            Some(paths) if !paths.is_empty() => Ok(Rebase::Conflict { paths }),
+            StoppedRebase::Conflict { paths } => Ok(Rebase::Conflict { paths }),
             // Git refused before it began, or stopped for something other than a conflict.
-            Some(_) | None => Err(VcsError::Git {
+            StoppedRebase::Stopped | StoppedRebase::NotStopped => Err(VcsError::Git {
                 command: "rebase".into(),
                 stderr: rebased.stderr.trim().to_string(),
             }),
         }
     }
 
-    fn stopped_rebase(&self, worktree: &Path) -> Result<Option<Vec<String>>, VcsError> {
-        let state = self.succeed_in(
-            worktree,
-            [
-                OsStr::new("rev-parse"),
-                OsStr::new("--path-format=absolute"),
-                OsStr::new("--git-path"),
-                OsStr::new("rebase-merge"),
-            ],
-        )?;
-        if !Path::new(state.trim()).is_dir() {
-            return Ok(None);
+    fn stopped_rebase(&self, worktree: &Path) -> Result<StoppedRebase, VcsError> {
+        let mut stopped = false;
+        for state in ["rebase-merge", "rebase-apply"] {
+            let directory = self.succeed_in(
+                worktree,
+                [
+                    OsStr::new("rev-parse"),
+                    OsStr::new("--path-format=absolute"),
+                    OsStr::new("--git-path"),
+                    OsStr::new(state),
+                ],
+            )?;
+            stopped |= Path::new(directory.trim()).is_dir();
         }
-        self.unmerged_paths(worktree).map(Some)
+        if !stopped {
+            return Ok(StoppedRebase::NotStopped);
+        }
+        let paths: Vec<String> = self
+            .conflicts(worktree)?
+            .into_iter()
+            .map(|conflict| conflict.path)
+            .collect();
+        Ok(if paths.is_empty() {
+            StoppedRebase::Stopped
+        } else {
+            StoppedRebase::Conflict { paths }
+        })
     }
 
     fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError> {
-        if self.stopped_rebase(worktree)?.is_some() {
+        if self.stopped_rebase(worktree)? != StoppedRebase::NotStopped {
             self.succeed_in(worktree, [OsStr::new("rebase"), OsStr::new("--abort")])?;
         }
         Ok(())
     }
 }
 
-/// Whether the file at `path` still has the lines git marks a conflict with. A file that is gone
-/// has none: the conflict was resolved by deleting it.
-fn has_conflict_markers(path: &Path) -> bool {
-    let Ok(text) = std::fs::read(path) else {
-        return false;
-    };
+/// A file the index still has unmerged, with the sides the rebase could not combine.
+struct Conflict {
+    path: String,
+    /// The target has a version of the file (index stage 2).
+    in_target: bool,
+    /// The rebased commit has a version of the file (index stage 3). When only one of the two
+    /// has, the other deleted it.
+    in_commit: bool,
+}
+
+impl Conflict {
+    /// Whether the file in `worktree` is resolved though the index still has it unmerged. Only a
+    /// text file with both sides is: git leaves markers in it, and once they are gone it has been
+    /// edited. A binary file or a file one side deleted holds no markers either way, so its
+    /// content says nothing; it is resolved when it is staged, and then it is not unmerged.
+    fn is_resolved_in(&self, worktree: &Path) -> bool {
+        if !(self.in_target && self.in_commit) {
+            return false;
+        }
+        match std::fs::read(worktree.join(&self.path)) {
+            Ok(text) => !text.contains(&0) && !has_conflict_markers(&text),
+            Err(_) => false,
+        }
+    }
+}
+
+/// Whether `text` has the lines git marks a conflict with.
+fn has_conflict_markers(text: &[u8]) -> bool {
     text.split(|byte| *byte == b'\n')
         .any(|line| line.starts_with(b"<<<<<<<") || line.starts_with(b">>>>>>>"))
 }
 
 impl GitCli {
-    /// The files in conflict in `worktree`, relative to it.
-    fn unmerged_paths(&self, worktree: &Path) -> Result<Vec<String>, VcsError> {
+    /// The files the index has unmerged in `worktree`, relative to it.
+    fn conflicts(&self, worktree: &Path) -> Result<Vec<Conflict>, VcsError> {
         let listing = self.succeed_in(
             worktree,
             [
-                OsStr::new("diff"),
-                OsStr::new("--name-only"),
-                OsStr::new("--diff-filter=U"),
+                OsStr::new("ls-files"),
+                OsStr::new("--unmerged"),
                 OsStr::new("-z"),
             ],
         )?;
-        Ok(listing
-            .split('\0')
-            .filter(|path| !path.is_empty())
-            .map(str::to_string)
-            .collect())
+        // Each entry reads `<mode> <object> <stage>\t<path>`: stage 2 is the target's version,
+        // stage 3 the rebased commit's.
+        let mut conflicts: Vec<Conflict> = Vec::new();
+        for entry in listing.split('\0').filter(|entry| !entry.is_empty()) {
+            let Some((meta, path)) = entry.split_once('\t') else {
+                return Err(VcsError::UnexpectedOutput {
+                    command: "ls-files".into(),
+                    output: entry.into(),
+                });
+            };
+            let stage = meta.rsplit(' ').next().unwrap_or_default();
+            if conflicts.last().is_none_or(|last| last.path != path) {
+                conflicts.push(Conflict {
+                    path: path.to_string(),
+                    in_target: false,
+                    in_commit: false,
+                });
+            }
+            let last = conflicts.last_mut().expect("pushed above");
+            last.in_target |= stage == "2";
+            last.in_commit |= stage == "3";
+        }
+        Ok(conflicts)
     }
 }
 
@@ -1577,13 +1634,18 @@ mod tests {
         assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
         assert_eq!(
             repo.git.stopped_rebase(&worktree).unwrap(),
-            Some(vec!["file.txt".to_string()])
+            StoppedRebase::Conflict {
+                paths: vec!["file.txt".to_string()]
+            }
         );
         // Nothing resolved yet: the same files are named again.
         assert_eq!(rebase(&repo), conflict);
         // Given up, the branch is checked out as it was; the next rebase stops at the same place.
         repo.git.abort_rebase(&worktree).unwrap();
-        assert_eq!(repo.git.stopped_rebase(&worktree).unwrap(), None);
+        assert_eq!(
+            repo.git.stopped_rebase(&worktree).unwrap(),
+            StoppedRebase::NotStopped
+        );
         assert_eq!(git_in(&worktree, &["rev-parse", "HEAD"]), work.to_string());
         repo.git.abort_rebase(&worktree).unwrap();
         assert_eq!(rebase(&repo), conflict);
@@ -1593,7 +1655,10 @@ mod tests {
         assert_eq!(rebase(&repo), conflict);
         repo.write(&worktree, "file.txt", "one\nTWO\nTHREE\n");
         assert_eq!(rebase(&repo), Rebase::Rebased);
-        assert_eq!(repo.git.stopped_rebase(&worktree).unwrap(), None);
+        assert_eq!(
+            repo.git.stopped_rebase(&worktree).unwrap(),
+            StoppedRebase::NotStopped
+        );
         let head = repo.git.branch_head("wf/k3f9").unwrap();
         assert_eq!(repo.git.commits_ahead("main", head).unwrap(), 2);
         assert_eq!(
@@ -1604,6 +1669,112 @@ mod tests {
             std::fs::read_to_string(worktree.join("file.txt")).unwrap(),
             "one\nTWO\nTHREE\n"
         );
+    }
+
+    /// Leaves `wf/k3f9` rebased onto a `main` that conflicts in `name`, which is binary or deleted.
+    fn conflict_in(repo: &TestRepo, name: &str, work: &[u8], main_side: Option<&[u8]>) {
+        let base = repo.directory();
+        std::fs::write(base.join(name), b"\0base").unwrap();
+        repo.commit(&base, "add the file");
+        let worktree = repo.worktree_path("wf/k3f9");
+        repo.git
+            .prepare_worktree("wf/k3f9", &worktree, "main")
+            .unwrap();
+        std::fs::write(worktree.join(name), work).unwrap();
+        git_in(&worktree, &["add", name]);
+        git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
+        match main_side {
+            Some(bytes) => std::fs::write(base.join(name), bytes).unwrap(),
+            None => std::fs::remove_file(base.join(name)).unwrap(),
+        }
+        git_in(&base, &["add", "-A", name]);
+        git_in(&base, &["commit", "--quiet", "-m", "main side"]);
+    }
+
+    #[test]
+    fn a_binary_conflict_stays_a_conflict_until_it_is_staged() {
+        let repo = TestRepo::new();
+        conflict_in(&repo, "img.bin", b"\0work", Some(b"\0main"));
+        let worktree = repo.worktree_path("wf/k3f9");
+        let conflict = Rebase::Conflict {
+            paths: vec!["img.bin".into()],
+        };
+        assert_eq!(rebase(&repo), conflict);
+        // The worktree holds the target's version without markers; that is not a resolution.
+        assert_eq!(rebase(&repo), conflict);
+        std::fs::write(worktree.join("img.bin"), b"\0work").unwrap();
+        git_in(&worktree, &["add", "img.bin"]);
+        assert_eq!(rebase(&repo), Rebase::Rebased);
+        assert_eq!(std::fs::read(worktree.join("img.bin")).unwrap(), b"\0work");
+    }
+
+    #[test]
+    fn a_modify_delete_conflict_stays_a_conflict_until_it_is_staged() {
+        for deleted_by_main in [true, false] {
+            let repo = TestRepo::new();
+            if deleted_by_main {
+                conflict_in(&repo, "gone.txt", b"work\n", None);
+            } else {
+                // The branch deletes the file the target modified.
+                let base = repo.directory();
+                std::fs::write(base.join("gone.txt"), "base\n").unwrap();
+                repo.commit(&base, "add the file");
+                let worktree = repo.worktree_path("wf/k3f9");
+                repo.git
+                    .prepare_worktree("wf/k3f9", &worktree, "main")
+                    .unwrap();
+                git_in(&worktree, &["rm", "--quiet", "gone.txt"]);
+                git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
+                std::fs::write(base.join("gone.txt"), "main\n").unwrap();
+                repo.commit(&base, "main side");
+            }
+            let worktree = repo.worktree_path("wf/k3f9");
+            let conflict = Rebase::Conflict {
+                paths: vec!["gone.txt".into()],
+            };
+            assert_eq!(rebase(&repo), conflict);
+            assert_eq!(rebase(&repo), conflict);
+            git_in(&worktree, &["rm", "--quiet", "--force", "gone.txt"]);
+            assert_eq!(rebase(&repo), Rebase::Rebased);
+        }
+    }
+
+    #[test]
+    fn a_rebase_stopped_with_the_apply_backend_is_found_and_aborted() {
+        let repo = TestRepo::new();
+        let worktree = repo.worktree_path("wf/k3f9");
+        let work = repo.work("wf/k3f9", "file.txt", "one\nTWO\n");
+        let main = repo.directory();
+        repo.write(&main, "file.txt", "one\n2\n");
+        repo.commit(&main, "conflicting change");
+        let output = Command::new("git")
+            .current_dir(&worktree)
+            .args(["-c", "rebase.backend=apply", "rebase", "main"])
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let rebase_apply = git_in(
+            &worktree,
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "rebase-apply",
+            ],
+        );
+        assert!(Path::new(rebase_apply.trim()).is_dir());
+        assert_eq!(
+            repo.git.stopped_rebase(&worktree).unwrap(),
+            StoppedRebase::Conflict {
+                paths: vec!["file.txt".into()],
+            }
+        );
+        repo.git.abort_rebase(&worktree).unwrap();
+        assert_eq!(
+            repo.git.stopped_rebase(&worktree).unwrap(),
+            StoppedRebase::NotStopped
+        );
+        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
     }
 
     #[test]

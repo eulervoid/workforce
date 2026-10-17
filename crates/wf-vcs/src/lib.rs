@@ -196,6 +196,18 @@ pub enum Rebase {
     DirtyCheckout(DirtyCheckout),
 }
 
+/// Whether a rebase is stopped in a worktree.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StoppedRebase {
+    NotStopped,
+    /// Stopped at a commit that conflicts in these files, relative to the worktree.
+    Conflict {
+        paths: Vec<String>,
+    },
+    /// Stopped, but not at a conflict.
+    Stopped,
+}
+
 /// A worktree with uncommitted changes to tracked files.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirtyCheckout {
@@ -307,8 +319,10 @@ pub trait VcsAdapter {
 
     /// Rebases the branch checked out in `worktree` onto `target`, the rewritten commits signed as
     /// `signing` says and committed by `committer`. A rebase stopped there earlier is not begun
-    /// again: the conflicting files are staged once they have no conflict markers left, and the
-    /// rebase goes on.
+    /// again: the conflicting files are staged once they are resolved, and the rebase goes on. A
+    /// text file with content from both sides is resolved when no conflict markers are left in
+    /// it; any other conflict (binary, or a file one side deleted) only when the index says so,
+    /// that is, when whoever works there has staged the outcome with `git add` or `git rm`.
     fn rebase(
         &self,
         worktree: &Path,
@@ -317,8 +331,8 @@ pub trait VcsAdapter {
         committer: &str,
     ) -> Result<Rebase, VcsError>;
 
-    /// The files in conflict when a rebase is stopped in `worktree`; `None` when none is.
-    fn stopped_rebase(&self, worktree: &Path) -> Result<Option<Vec<String>>, VcsError>;
+    /// Whether a rebase is stopped in `worktree`, and at which files.
+    fn stopped_rebase(&self, worktree: &Path) -> Result<StoppedRebase, VcsError>;
 
     /// Gives up the rebase stopped in `worktree`, if one is, which checks the branch out again
     /// as it was before the rebase.
