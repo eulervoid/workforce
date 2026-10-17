@@ -14,7 +14,7 @@ use wf_harness::Permission;
 
 use super::app::{Choice, Effect, Starter, Written};
 use super::diff::LineComment;
-use crate::commands::{edit_in_editor, item_work, repository};
+use crate::commands::{edit_in_editor, edit_until_valid, item_work, repository};
 use crate::draft::Draft;
 use crate::workspace::{self, Workspace};
 
@@ -223,8 +223,9 @@ fn done(
                 Draft::of(live)
             };
             let markdown = draft.to_markdown()?;
-            let edited = suspended(terminal, || edit_in_editor(&markdown, ".md"))??;
-            let draft = Draft::from_markdown(&edited)?;
+            let draft = suspended(terminal, || {
+                edit_until_valid(&markdown, ".md", Draft::from_markdown)
+            })??;
             let changes = match workspace.state().item(item) {
                 Some(ItemView::Live(live)) => draft.changes(live),
                 Some(ItemView::Archived(_)) | None => bail!("#{} is gone", item.short()),

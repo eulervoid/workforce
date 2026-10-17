@@ -292,19 +292,33 @@ pub(crate) fn edit_until_valid<T>(
     suffix: &str,
     parse: impl Fn(&str) -> anyhow::Result<T>,
 ) -> anyhow::Result<T> {
+    edit_until_valid_with(
+        |shown| edit_in_editor(shown, suffix),
+        initial,
+        suffix,
+        parse,
+    )
+}
+
+fn edit_until_valid_with<T>(
+    mut edit: impl FnMut(&str) -> anyhow::Result<String>,
+    initial: &str,
+    suffix: &str,
+    parse: impl Fn(&str) -> anyhow::Result<T>,
+) -> anyhow::Result<T> {
+    let toml_marker = format!("# {ERROR_MARKER}");
+    let markdown_marker = format!("<!-- {ERROR_MARKER}");
     let mut shown = initial.to_string();
     loop {
-        let edited = edit_in_editor(&shown, suffix)?;
-        let text = edited
+        let edited = edit(&shown)?;
+        let mut text = edited
             .lines()
-            .filter(|line| !line.contains(ERROR_MARKER))
+            .filter(|line| !line.starts_with(&toml_marker) && !line.starts_with(&markdown_marker))
             .collect::<Vec<_>>()
             .join("\n");
-        let text = if edited.ends_with('\n') {
-            text + "\n"
-        } else {
-            text
-        };
+        if edited.ends_with('\n') {
+            text.push('\n');
+        }
         let error = match parse(&text) {
             Ok(value) => return Ok(value),
             Err(error) => error,
@@ -316,19 +330,18 @@ pub(crate) fn edit_until_valid<T>(
         let comment = if suffix == ".toml" {
             message
                 .lines()
-                .map(|line| format!("# {ERROR_MARKER} {line}\n"))
+                .map(|line| format!("{toml_marker} {line}\n"))
                 .collect::<String>()
         } else {
             format!(
-                "<!-- {ERROR_MARKER} {} -->\n",
+                "{markdown_marker} {} -->\n",
                 message.replace('\n', " ").replace("-->", "--")
             )
         };
-        let mut next = text;
-        if !next.ends_with('\n') {
-            next.push('\n');
+        if !text.ends_with('\n') {
+            text.push('\n');
         }
-        shown = next + &comment;
+        shown = text + &comment;
     }
 }
 
@@ -350,5 +363,71 @@ mod tests {
             .output()
             .unwrap();
         assert_eq!(String::from_utf8_lossy(&output.stdout), "--flag|a file|");
+    }
+
+    type Shown = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
+
+    fn scripted(edits: &[&str]) -> (Shown, impl FnMut(&str) -> anyhow::Result<String>) {
+        let shown: Shown = std::rc::Rc::default();
+        let mut edits = edits
+            .iter()
+            .map(|edit| edit.to_string())
+            .collect::<Vec<_>>();
+        edits.reverse();
+        let record = std::rc::Rc::clone(&shown);
+        let edit = move |text: &str| {
+            record.borrow_mut().push(text.to_string());
+            Ok(edits.pop().expect("an edit left"))
+        };
+        (shown, edit)
+    }
+
+    fn parse_number(text: &str) -> anyhow::Result<u32> {
+        text.trim()
+            .parse()
+            .map_err(|_| anyhow::anyhow!("not a number"))
+    }
+
+    #[test]
+    fn invalid_text_reopens_with_the_error_as_a_comment() {
+        let (shown, edit) = scripted(&["abc\n", "42\n# wf-error: not a number\n"]);
+        let value = edit_until_valid_with(edit, "1\n", ".toml", parse_number).unwrap();
+        assert_eq!(value, 42);
+        assert_eq!(shown.borrow()[1], "abc\n# wf-error: not a number\n");
+    }
+
+    #[test]
+    fn markdown_gets_a_single_line_comment() {
+        let (shown, edit) = scripted(&["abc\n", "7\n"]);
+        edit_until_valid_with(edit, "1\n", ".md", parse_number).unwrap();
+        assert_eq!(shown.borrow()[1], "abc\n<!-- wf-error: not a number -->\n");
+    }
+
+    #[test]
+    fn leaving_invalid_text_unchanged_gives_up() {
+        let (_, edit) = scripted(&["abc\n", "abc\n# wf-error: not a number\n"]);
+        let error = edit_until_valid_with(edit, "1\n", ".toml", parse_number).unwrap_err();
+        assert!(format!("{error:#}").contains("still invalid"));
+    }
+
+    #[test]
+    fn only_the_appended_comment_lines_are_removed() {
+        let (_, edit) = scripted(&["x\n"]);
+        let kept = std::cell::RefCell::new(String::new());
+        edit_until_valid_with(edit, "1\n", ".md", |text| {
+            *kept.borrow_mut() = text.to_string();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(*kept.borrow(), "x\n");
+
+        let (_, edit) =
+            scripted(&["mentions wf-error: here\n<!-- wf-error: old -->\n# wf-error: old\n"]);
+        edit_until_valid_with(edit, "1\n", ".md", |text| {
+            *kept.borrow_mut() = text.to_string();
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(*kept.borrow(), "mentions wf-error: here\n");
     }
 }
