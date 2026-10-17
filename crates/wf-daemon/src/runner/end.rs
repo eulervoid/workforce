@@ -3,8 +3,8 @@
 use std::sync::Arc;
 
 use wf_core::event::{Comment, EventBody, ItemMoved, SessionEnded};
-use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::hlc::Hlc;
+use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{ItemState, ItemView};
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
