@@ -6,11 +6,12 @@ use std::collections::BTreeSet;
 use proptest::prelude::*;
 
 use crate::crdt::SetChange;
-use crate::event::{Change, Event, EventBody};
+use crate::event::{Change, CommentKind, Event, EventBody};
 use crate::id::{EventId, ItemId};
-use crate::item::{ItemView, Priority};
+use crate::identity::{DeviceSigner, InviteSigner};
+use crate::item::{ItemState, ItemView, Priority};
 use crate::name::{Label, Requirement};
-use crate::session::EndReason;
+use crate::session::{CommitId, EndReason, Verdict};
 use crate::state::{Disposition, State, Trust};
 use crate::testing::*;
 
@@ -22,8 +23,28 @@ const CUSTOM_POLICY: &str = concat!(
      states = [\"open\", \"done\"]\n"
 );
 
+/// The default policy, except that tasks never use `open`: a request for changes meets it or
+/// not, depending on which policy a replica has folded.
+fn policy_without_open_tasks() -> String {
+    let default = crate::policy::DEFAULT_POLICY_TOML;
+    let with_open = "initial = \"open\"\nstates = [\"draft\", \"open\", \"active\", \"review\", \"done\", \"cancelled\"]";
+    assert!(default.contains(with_open));
+    default.replace(
+        with_open,
+        "initial = \"draft\"\nstates = [\"draft\", \"active\", \"review\", \"done\", \"cancelled\"]",
+    )
+}
+
+fn commit(byte: u8) -> CommitId {
+    let text: String = std::iter::repeat_n(format!("{byte:02x}"), 20).collect();
+    CommitId::Git(text.parse().unwrap())
+}
+
 struct Simulation {
     fixture: Fixture,
+    /// Devices that are not bound yet, and the invites that can bind them.
+    joiners: Vec<DeviceSigner>,
+    invites: Vec<(Event, InviteSigner)>,
     replicas: Vec<State>,
     authored: Vec<Event>,
     clock: u64,
@@ -33,9 +54,14 @@ impl Simulation {
     fn new() -> Self {
         let fixture = Fixture::new(DEVICES);
         let replicas = (0..DEVICES).map(|_| fixture.state()).collect();
+        let joiners = (0..2)
+            .map(|index| DeviceSigner::from_bytes(&[200 + index; 32]).unwrap())
+            .collect();
         Self {
             authored: vec![fixture.genesis.clone()],
             fixture,
+            joiners,
+            invites: Vec::new(),
             replicas,
             clock: 2_000,
         }
@@ -50,14 +76,29 @@ impl Simulation {
     }
 
     fn submit(&mut self, device: usize, body: EventBody) {
+        self.submit_event(device, body);
+    }
+
+    /// Writes the event on the replica if the policy lets it, and returns its id.
+    fn submit_event(&mut self, device: usize, body: EventBody) -> Option<EventId> {
         if self.replicas[device].check_policy(&body).is_err() {
-            return;
+            return None;
         }
         // Wall clocks of different devices drift: sometimes the clock does not advance at all.
         self.clock += 1;
         let event = self
             .fixture
             .author(&self.replicas[device], device, self.clock / 2, body);
+        self.replicas[device]
+            .receive(event.clone(), Trust::Stored)
+            .expect("an event authored on a valid view is valid");
+        let id = event.id();
+        self.authored.push(event);
+        Some(id)
+    }
+
+    /// Takes in an event that is valid whatever the policy says, as an invite or a binding.
+    fn receive_unchecked(&mut self, device: usize, event: Event) {
         self.replicas[device]
             .receive(event.clone(), Trust::Stored)
             .expect("an event authored on a valid view is valid");
@@ -100,7 +141,7 @@ impl Simulation {
             "cancelled",
         ];
         let label = Label::new(format!("l{}", second % 3)).unwrap();
-        match (operation % 15, item) {
+        match (operation % 20, item) {
             (0 | 1, _) => {
                 let kind = types[usize::from(first) % types.len()];
                 let body = match other {
@@ -257,8 +298,14 @@ impl Simulation {
                     .collect();
                 if !live.is_empty() {
                     let session = live[usize::from(first) % live.len()];
-                    let reason = [EndReason::Released, EndReason::Failed, EndReason::Cancelled]
-                        [usize::from(first) % 3];
+                    let reason = [
+                        EndReason::Released,
+                        EndReason::Failed,
+                        EndReason::Cancelled,
+                        EndReason::Submitted {
+                            commit: Some(commit(first % 2)),
+                        },
+                    ][usize::from(first) % 4];
                     self.submit(device, end_session(session, reason));
                 }
             }
@@ -275,16 +322,104 @@ impl Simulation {
             (14, _) => match second % 3 {
                 0 => self.submit(device, define_agent("coder")),
                 1 => {
-                    let source = if first % 2 == 0 {
-                        CUSTOM_POLICY
-                    } else {
-                        crate::policy::DEFAULT_POLICY_TOML
+                    let source = match first % 3 {
+                        0 => CUSTOM_POLICY.to_string(),
+                        1 => policy_without_open_tasks(),
+                        _ => crate::policy::DEFAULT_POLICY_TOML.to_string(),
                     };
-                    let body = self.fixture.policy_set(&self.fixture.founder, source);
+                    let body = self.fixture.policy_set(&self.fixture.founder, &source);
                     self.submit(device, body);
                 }
                 _ => self.sync(usize::from(first) % DEVICES, device),
             },
+            (15, Some(item)) => {
+                let body = if second % 2 == 0 {
+                    blocker(item, &format!("blocked {second}"))
+                } else {
+                    change_request(item, &format!("change {second}"))
+                };
+                self.submit(device, body);
+            }
+            (16, Some(item)) => {
+                let open: Vec<_> = match self.replicas[device].item(item) {
+                    Some(ItemView::Live(live)) => {
+                        live.open_comments().into_iter().map(|(id, _)| id).collect()
+                    }
+                    _ => return,
+                };
+                if !open.is_empty() {
+                    let target = open[usize::from(first) % open.len()];
+                    self.submit(device, resolving(item, "done", &[target]));
+                }
+            }
+            (17, Some(item)) => {
+                // As the daemon writes a submission: the item moves to review, then the session ends.
+                let coder = crate::name::AgentName::new("coder").unwrap();
+                if self.replicas[device]
+                    .agent(&coder, self.fixture.founder.key())
+                    .is_none()
+                {
+                    return;
+                }
+                let Some(session) = self.submit_event(device, start_session("coder", item)) else {
+                    return;
+                };
+                self.submit(device, moved(item, ItemState::Review));
+                let ended = EndReason::Submitted {
+                    commit: Some(commit(second % 2)),
+                };
+                self.submit(device, end_session(session.into(), ended));
+            }
+            (18, Some(item)) => {
+                let Some((submitted, _)) = self.replicas[device].submission(item) else {
+                    return;
+                };
+                // Only some verdicts are valid at a time: ask for changes when there are requests.
+                let changes_requested = match self.replicas[device].item(item) {
+                    Some(ItemView::Live(live)) => live
+                        .open_comments()
+                        .iter()
+                        .any(|(_, comment)| comment.kind == CommentKind::ChangeRequest),
+                    _ => return,
+                };
+                let kind = match (changes_requested, second % 4) {
+                    (_, 0) => Verdict::Escalate,
+                    (true, _) => Verdict::RequestChanges,
+                    (false, _) => Verdict::Approve,
+                };
+                self.submit(device, verdict(item, submitted, kind));
+            }
+            (19, _) if second % 2 == 0 && device == 0 => {
+                let (invite, secret) =
+                    self.fixture
+                        .invite(&self.replicas[0], self.clock / 2, 99_000);
+                self.clock += 1;
+                self.receive_unchecked(0, invite.clone());
+                self.invites.push((invite, secret));
+            }
+            (19, _) => {
+                // Devices redeem invites on whichever replica knows them: concurrently, one
+                // device may be bound twice, and one invite may bind two devices.
+                let joiner = &self.joiners[usize::from(first) % self.joiners.len()];
+                let known: Vec<_> = self
+                    .invites
+                    .iter()
+                    .filter(|(invite, _)| self.replicas[device].contains(&invite.id()))
+                    .collect();
+                if known.is_empty() || self.replicas[device].principal_of(&joiner.key()).is_some() {
+                    return;
+                }
+                let (invite, secret) = known[usize::from(second) % known.len()];
+                self.clock += 1;
+                let bound = self.fixture.bind(
+                    &self.replicas[device],
+                    joiner,
+                    invite,
+                    secret,
+                    self.clock / 2,
+                );
+                self.receive_unchecked(device, bound);
+            }
             _ => {}
         }
         if operation % 16 == 15 {
@@ -417,7 +552,7 @@ fn the_generator_exercises_real_histories() {
         seed ^= seed << 17;
         (seed >> 24) as u8
     };
-    for _ in 0..600 {
+    for _ in 0..3000 {
         let operation = (next(), next(), next(), next());
         simulation.step(operation);
     }
@@ -474,6 +609,27 @@ fn the_generator_exercises_real_histories() {
             && state.sessions().any(|session| !session.is_live()),
         "{} sessions",
         state.sessions().count()
+    );
+    let count = |matches: fn(&EventBody) -> bool| {
+        simulation
+            .authored
+            .iter()
+            .filter(|event| matches(&event.content.body))
+            .count()
+    };
+    let reviews = count(|body| matches!(body, EventBody::Reviewed(_)));
+    let requests = count(
+        |body| matches!(body, EventBody::Reviewed(review) if review.verdict == Verdict::RequestChanges),
+    );
+    let resolving =
+        count(|body| matches!(body, EventBody::Commented(comment) if !comment.resolves.is_empty()));
+    let bindings = count(|body| matches!(body, EventBody::DeviceBound(_)));
+    let submissions = count(
+        |body| matches!(body, EventBody::SessionEnded(ended) if matches!(ended.reason, EndReason::Submitted { .. })),
+    );
+    assert!(
+        requests > 0 && reviews > requests && resolving > 0 && bindings > 0 && submissions > 0,
+        "{reviews} reviews, {requests} requesting changes, {resolving} resolving, {bindings} bindings, {submissions} submissions"
     );
     eprintln!(
         "events={} items={} archived={} ignored_edges={}",

@@ -162,9 +162,11 @@ impl Feed {
 }
 
 /// What is remembered about every applied event: enough to check the events that follow it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct Known {
     pub(crate) hlc: Hlc,
+    /// The causal parents of the event, to tell what is in the causal past of a later one.
+    pub(crate) parents: Vec<EventId>,
     pub(crate) author: DeviceKey,
     pub(crate) seq: u64,
 }
