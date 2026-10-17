@@ -136,6 +136,8 @@ fn git_writable(access: &Access<'_>, git_directory: &Path) -> Vec<PathBuf> {
     let mut paths = vec![
         git_directory.join("objects"),
         git_directory.join("refs/remotes"),
+        // Git appends a reflog entry for every remote-tracking ref a fetch updates.
+        git_directory.join("logs/refs/remotes"),
         git_directory.join("refs/tags"),
         git_directory.join("FETCH_HEAD"),
     ];
@@ -412,6 +414,7 @@ mod tests {
             "/work/repo/.git/refs/heads/wf/k3f9.lock",
             "/work/repo/.git/logs/refs/heads/wf/k3f9",
             "/work/repo/.git/refs/remotes/origin/main",
+            "/work/repo/.git/logs/refs/remotes/origin/main",
             "/work/repo/.git/worktrees/k3f9/index",
             "/work/repo/.git/worktrees/k3f9/HEAD",
             "/run/wf/daemon.sock",
