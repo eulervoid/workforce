@@ -1332,6 +1332,38 @@ mod tests {
     }
 
     #[test]
+    fn status_prints_what_waits_on_the_principal_apart_from_items() {
+        let view = StatusView {
+            name: "demo".to_string(),
+            id: "abc".to_string(),
+            members: vec!["@eulervoid (owner)".to_string()],
+            agents: 1,
+            events: 10,
+            pending: 0,
+            heads: 1,
+            archived_items: 3,
+            forked_from: None,
+            devices: Vec::new(),
+            daemon: true,
+            ready_items: 6,
+            live_sessions: 2,
+            parked_sessions: 0,
+            after_failures: Vec::new(),
+            waiting_on_you: 2,
+            flagged: Vec::new(),
+            next: None,
+            refolded: false,
+            caches: None,
+        };
+        let output = status(&view);
+        let lines: Vec<&str> = output.lines().collect();
+        assert!(lines.contains(&"items: 6 ready, 3 archived"), "{output}");
+        assert!(lines.contains(&"waiting on you: 2"), "{output}");
+        let items_line = lines.iter().find(|line| line.starts_with("items:")).unwrap();
+        assert!(!items_line.contains("waiting"), "{output}");
+    }
+
+    #[test]
     fn an_item_that_references_this_one_several_times_is_listed_once() {
         use wf_core::id::{CommentId, HashId, ItemId};
         use wf_core::item::ItemView;
