@@ -117,6 +117,7 @@ fn events_and_status() {
         Envelope::new(view::status(
             &scenario.state,
             view::StatusContext {
+                machine_faults: &Default::default(),
                 own: None,
                 last_seen: &Default::default(),
                 daemon: false,

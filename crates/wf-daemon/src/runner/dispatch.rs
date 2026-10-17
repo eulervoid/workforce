@@ -1,13 +1,16 @@
 //! The dispatcher: queues what is ready to merge and starts agents on what they may take.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use wf_core::id::{HashId, ItemId, WorkforceId};
+use wf_core::identity::DeviceKey;
 use wf_core::item::ItemState;
-use wf_core::name::AgentName;
+use wf_core::name::{AgentName, HarnessName};
 use wf_core::review::PendingMerge;
 use wf_core::session::SessionRole;
+use wf_core::state::State;
 
 use super::merge::{Attempt, MergeRequest};
 use crate::notify::Notifier;
@@ -31,6 +34,20 @@ pub(crate) async fn run_dispatcher(
     workforce: WorkforceId,
     loaded: Arc<Loaded>,
 ) {
+    dispatch_loop(&daemon, workforce, &loaded).await;
+    // Its agents are not looked at any more, so they cannot be what a harness is at fault for.
+    if let Some(strong) = daemon.upgrade() {
+        strong
+            .faults
+            .sync_unknown_harnesses(workforce, BTreeMap::new());
+    }
+}
+
+async fn dispatch_loop(
+    daemon: &std::sync::Weak<Daemon>,
+    workforce: WorkforceId,
+    loaded: &Arc<Loaded>,
+) {
     let mut heads = loaded.storage.watch_heads();
     let mut failed = FailedStarts::new();
     let mut notifier = match daemon.upgrade() {
@@ -45,9 +62,9 @@ pub(crate) async fn run_dispatcher(
             return;
         }
         strong.faults.check_space(&strong.config.data_dir);
-        dispatch_once(&strong, workforce, &loaded, &mut failed).await;
+        dispatch_once(&strong, workforce, loaded, &mut failed).await;
         notifier
-            .announce(&strong, &loaded, &loaded.merges.waiting())
+            .announce(&strong, loaded, &loaded.merges.waiting())
             .await;
         let halted = async { strong.until_halted().await };
         tokio::select! {
@@ -75,10 +92,14 @@ async fn dispatch_once(
     failed: &mut FailedStarts,
 ) {
     failed.retain(|_, at| at.elapsed() < RETRY_FAILED_START);
+    let device = daemon.device();
     let Some(repository) = daemon.repository_of(workforce) else {
+        // Nothing starts without one, but what is wrong with the harnesses is still told.
+        if let Ok(state) = daemon.snapshot(loaded).await {
+            sync_unknown_harnesses(daemon, workforce, &state, device);
+        }
         return;
     };
-    let device = daemon.device();
     let Ok(mut state) = daemon.snapshot(loaded).await else {
         return;
     };
@@ -113,8 +134,9 @@ async fn dispatch_once(
     // An agent whose session would fail for what is wrong with the machine waits until it is
     // fine, or until it is time to try again whether it is.
     let now_ms = crate::now_ms();
-    let agents: Vec<_> = state
-        .auto_agents(device)
+    let auto_agents = state.auto_agents(device);
+    sync_unknown_harnesses(daemon, workforce, &state, device);
+    let agents: Vec<_> = auto_agents
         .into_iter()
         .filter(|(_, definition)| !daemon.faults.holds(&definition.harness, now_ms))
         .map(|(agent, _)| agent)
@@ -178,4 +200,24 @@ async fn dispatch_once(
             state = fresh;
         }
     }
+}
+
+/// Makes the harnesses that no command is known for, among the auto agents of `workforce` on
+/// this device, machine faults.
+fn sync_unknown_harnesses(
+    daemon: &Daemon,
+    workforce: WorkforceId,
+    state: &State,
+    device: DeviceKey,
+) {
+    let mut unknown: BTreeMap<HarnessName, Vec<AgentName>> = BTreeMap::new();
+    for (agent, definition) in state.auto_agents(device) {
+        if daemon.harness_command(&definition.harness).is_none() {
+            unknown
+                .entry(definition.harness.clone())
+                .or_default()
+                .push(agent.name.clone());
+        }
+    }
+    daemon.faults.sync_unknown_harnesses(workforce, unknown);
 }

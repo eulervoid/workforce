@@ -805,6 +805,53 @@ async fn a_harness_that_does_not_start_ends_the_session_for_the_machine() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn an_agent_on_an_unknown_harness_is_one_machine_fault_and_no_start_attempt() {
+    let world = World::new("turn\n").await;
+    world.wf.add(&["--title", "First"]);
+    world.wf.add(&["--title", "Second"]);
+    world.wf.run(&[
+        "agent",
+        "edit",
+        "coder",
+        "--harness",
+        "claud-code",
+        "--harness-unknown-here",
+    ]);
+    world.automate("coder", "default");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(world.sessions().is_empty(), "{:?}", world.sessions());
+    let entries = inbox(&world);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["kind"], "machine_fault");
+    assert_eq!(
+        entries[0]["title"],
+        "claud-code is not a harness wf knows how to start"
+    );
+    assert!(
+        entries[0]["what"]
+            .as_str()
+            .unwrap()
+            .contains("used by coder"),
+        "{entries:?}"
+    );
+
+    world.wf.run(&[
+        "agent",
+        "edit",
+        "coder",
+        "--harness",
+        "fake-coder",
+        "--harness-unknown-here",
+    ]);
+    world
+        .wait("the fault to clear and a session to start", |world| {
+            !world.sessions().is_empty()
+        })
+        .await;
+    assert!(inbox(&world).is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_lapsed_login_ends_sessions_for_the_machine_and_the_inbox_says_so_once() {
     let world = World::new("login\n").await;
     // Without a recovery level, one failure would leave the item to the principal.

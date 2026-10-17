@@ -128,7 +128,9 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 &workspace.machine_faults(),
             )
             .len();
+            let machine_faults = workspace.machine_faults();
             let context = view::StatusContext {
+                machine_faults: &machine_faults,
                 own: Some(workspace.device_key()),
                 last_seen: &workspace.last_seen(),
                 daemon: workspace.follows_daemon(),

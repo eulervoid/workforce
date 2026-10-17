@@ -154,6 +154,8 @@ pub enum MachineFault {
     NoSpace,
     /// The harness could not be started.
     HarnessUnreachable,
+    /// No command is known that starts the harness.
+    HarnessUnknown,
 }
 
 impl MachineFault {
@@ -162,6 +164,7 @@ impl MachineFault {
             MachineFault::LoginLapsed => "login_lapsed",
             MachineFault::NoSpace => "no_space",
             MachineFault::HarnessUnreachable => "harness_unreachable",
+            MachineFault::HarnessUnknown => "harness_unknown",
         }
     }
 }
@@ -173,6 +176,8 @@ pub enum HarnessFault {
     LoginLapsed,
     /// The harness could not be started.
     Unreachable,
+    /// No command is known that starts the harness: neither the machine config nor wf has one.
+    Unknown,
 }
 
 impl From<HarnessFault> for MachineFault {
@@ -180,6 +185,7 @@ impl From<HarnessFault> for MachineFault {
         match fault {
             HarnessFault::LoginLapsed => MachineFault::LoginLapsed,
             HarnessFault::Unreachable => MachineFault::HarnessUnreachable,
+            HarnessFault::Unknown => MachineFault::HarnessUnknown,
         }
     }
 }
