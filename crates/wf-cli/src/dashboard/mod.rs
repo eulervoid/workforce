@@ -101,7 +101,7 @@ fn event_loop(
     }
     feed.read_transcripts(workspace, &mut app);
     feed.read_diff(workspace, &mut app);
-    let snapshot = feed.snapshot(workspace, &app);
+    let snapshot = feed.snapshot(workspace, &app)?;
     app.refresh(snapshot);
     let mut refreshed = Instant::now();
     let mut draw = true;
@@ -150,7 +150,7 @@ fn event_loop(
         draw = true;
         feed.read_transcripts(workspace, &mut app);
         feed.read_diff(workspace, &mut app);
-        let snapshot = feed.snapshot(workspace, &app);
+        let snapshot = feed.snapshot(workspace, &app)?;
         app.refresh(snapshot);
     }
 }
@@ -381,11 +381,11 @@ impl Feed {
         }
     }
 
-    fn snapshot(&self, workspace: &Workspace, app: &App) -> Snapshot {
-        let held = workspace.held_permissions();
-        let last_seen = workspace.last_seen();
+    fn snapshot(&self, workspace: &Workspace, app: &App) -> anyhow::Result<Snapshot> {
+        let held = workspace.held_permissions()?;
+        let last_seen = workspace.last_seen()?;
         let sources = self.sources(workspace, app);
-        Snapshot::take(&sources, &held, &last_seen, app.wanted())
+        Ok(Snapshot::take(&sources, &held, &last_seen, app.wanted()))
     }
 
     /// What the detail on screen shows, read against what the snapshot on screen flags.

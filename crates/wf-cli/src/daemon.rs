@@ -43,13 +43,37 @@ struct DaemonStatus {
 }
 
 fn status(data: &DataDir) -> DaemonStatus {
-    let socket = data.daemon_socket();
-    let running = answers(&socket);
+    let (running, pid) = match daemon_process(data) {
+        DaemonProcess::Stopped => (false, None),
+        DaemonProcess::Running { pid } => (true, pid),
+    };
     DaemonStatus {
         running,
-        pid: running.then(|| running_pid(data)).flatten(),
-        socket,
+        pid,
+        socket: data.daemon_socket(),
         log: data.daemon_log(),
+    }
+}
+
+/// Whether a daemon answers on the socket, and which process it says it is.
+enum DaemonProcess {
+    Stopped,
+    Running { pid: Option<u32> },
+}
+
+/// The pid comes from the handshake. A daemon whose handshake this build cannot complete (it
+/// speaks another protocol version, or does not know our token) still answers on the socket, so
+/// its pid file, which it wrote itself, is read in the handshake's place.
+fn daemon_process(data: &DataDir) -> DaemonProcess {
+    match data.connect_daemon() {
+        Ok(Some(client)) => DaemonProcess::Running {
+            pid: Some(client.pid()),
+        },
+        Ok(None) => DaemonProcess::Stopped,
+        Err(_) if answers(&data.daemon_socket()) => DaemonProcess::Running {
+            pid: running_pid(data),
+        },
+        Err(_) => DaemonProcess::Stopped,
     }
 }
 
@@ -131,11 +155,15 @@ fn start(json: bool, args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
 }
 
 fn stop(json: bool, data: &DataDir) -> anyhow::Result<()> {
-    let Some(pid) = running_pid(data) else {
-        if answers(&data.daemon_socket()) {
-            bail!("the daemon runs in a terminal; interrupt it there");
-        }
-        return emit(json, &status(data), render_status);
+    // The socket names the process: a pid file left by a crash may name any other.
+    let pid = match daemon_process(data) {
+        DaemonProcess::Stopped => return emit(json, &status(data), render_status),
+        DaemonProcess::Running { pid: Some(pid) } => pid,
+        DaemonProcess::Running { pid: None } => bail!(
+            "a daemon answers on {} but does not say which process it is; \
+             stop it by its process id, or from the terminal it runs in",
+            data.daemon_socket().display()
+        ),
     };
     rustix::process::kill_process(pid_of(pid)?, Signal::TERM)
         .with_context(|| format!("stopping the daemon (pid {pid})"))?;

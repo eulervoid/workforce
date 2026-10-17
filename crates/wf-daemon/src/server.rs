@@ -45,6 +45,7 @@ async fn converse(daemon: &Arc<Daemon>, stream: &mut UnixStream) -> Result<(), F
         stream,
         &HelloReply::Ready {
             version: PROTOCOL_VERSION,
+            pid: std::process::id(),
             device: daemon.device(),
             caller,
         },

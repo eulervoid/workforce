@@ -36,6 +36,7 @@ pub enum ClientError {
 
 pub struct DaemonClient {
     stream: UnixStream,
+    pid: u32,
     device: DeviceKey,
     caller: Caller,
 }
@@ -58,8 +59,14 @@ impl DaemonClient {
             Err(error) => return Err(ProtoError::from(error).into()),
         };
         match handshake(&mut stream, token)? {
-            HelloReply::Ready { device, caller, .. } => Ok(Some(Self {
+            HelloReply::Ready {
+                pid,
+                device,
+                caller,
+                ..
+            } => Ok(Some(Self {
                 stream,
+                pid,
                 device,
                 caller,
             })),
@@ -70,6 +77,11 @@ impl DaemonClient {
             }
             .into()),
         }
+    }
+
+    /// The process id of the daemon, as it said itself over the socket.
+    pub fn pid(&self) -> u32 {
+        self.pid
     }
 
     /// The device the daemon signs as: this machine's.

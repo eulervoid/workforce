@@ -60,6 +60,15 @@ impl DataDir {
         Ok(DaemonClient::connect(&self.daemon_socket(), token)?)
     }
 
+    /// Fails while a daemon listens: what only a process that owns the stores may do, `what`,
+    /// is not done behind its back.
+    pub fn require_no_daemon(&self, what: &str) -> anyhow::Result<()> {
+        if self.connect_daemon()?.is_some() {
+            bail!("the daemon owns the stores, so {what} needs it stopped first: `wf daemon stop`");
+        }
+        Ok(())
+    }
+
     /// The process id of the daemon of this machine, while it runs.
     pub fn daemon_pid(&self) -> PathBuf {
         self.root.join("daemon.pid")

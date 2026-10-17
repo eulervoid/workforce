@@ -109,6 +109,9 @@ pub enum Replicated {
 impl Workspace {
     /// Uses the daemon when one is running, and opens the store otherwise.
     pub fn open(data: DataDir, start: &Path, refold: bool) -> anyhow::Result<Self> {
+        if refold {
+            data.require_no_daemon("refolding the log")?;
+        }
         // A session may run in an empty directory, without a workforce file to find.
         let (file, id) = match std::env::var(WORKFORCE_VARIABLE) {
             Ok(id) => (
@@ -221,14 +224,14 @@ impl Workspace {
     }
 
     /// When devices were last heard from. Only a running daemon knows.
-    pub fn last_seen(&self) -> crate::devices::LastSeen {
+    pub fn last_seen(&self) -> anyhow::Result<crate::devices::LastSeen> {
         match &self.source {
-            Source::Local(..) => crate::devices::LastSeen::new(),
-            Source::Daemon { client, .. } => client
+            Source::Local(..) => Ok(crate::devices::LastSeen::new()),
+            Source::Daemon { client, .. } => Ok(client
                 .borrow_mut()
-                .last_seen(self.workforce)
-                .map(|seen| seen.into_iter().collect())
-                .unwrap_or_default(),
+                .last_seen(self.workforce)?
+                .into_iter()
+                .collect()),
         }
     }
 
@@ -318,24 +321,20 @@ impl Workspace {
     }
 
     /// The permission requests that wait for the principal. Only a running daemon holds any.
-    pub fn held_permissions(&self) -> Vec<HeldPermission> {
+    pub fn held_permissions(&self) -> anyhow::Result<Vec<HeldPermission>> {
         match &self.source {
-            Source::Local(..) => Vec::new(),
-            Source::Daemon { client, .. } => client
-                .borrow_mut()
-                .permissions(self.workforce)
-                .unwrap_or_default(),
+            Source::Local(..) => Ok(Vec::new()),
+            Source::Daemon { client, .. } => Ok(client.borrow_mut().permissions(self.workforce)?),
         }
     }
 
     /// What is wrong with the machine, as the daemon learnt it; nothing without a daemon.
-    pub fn machine_faults(&self) -> MachineFaults {
+    pub fn machine_faults(&self) -> anyhow::Result<MachineFaults> {
         match &self.source {
-            Source::Local(..) => MachineFaults::default(),
-            Source::Daemon { client, .. } => client
-                .borrow_mut()
-                .machine_faults(self.workforce)
-                .unwrap_or_default(),
+            Source::Local(..) => Ok(MachineFaults::default()),
+            Source::Daemon { client, .. } => {
+                Ok(client.borrow_mut().machine_faults(self.workforce)?)
+            }
         }
     }
 

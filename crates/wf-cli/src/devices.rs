@@ -115,7 +115,7 @@ pub fn device(json: bool, command: DeviceCommand, workspace: &mut Workspace) -> 
             let views = device_views(
                 workspace.state(),
                 workspace.device_key(),
-                &workspace.last_seen(),
+                &workspace.last_seen()?,
             );
             emit(json, &views, |views| render::devices(views))
         }

@@ -122,17 +122,17 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
+            let machine_faults = workspace.machine_faults()?;
             let waiting_on_you = view::inbox_views(
                 workspace.state(),
-                &workspace.held_permissions(),
-                &workspace.machine_faults(),
+                &workspace.held_permissions()?,
+                &machine_faults,
             )
             .len();
-            let machine_faults = workspace.machine_faults();
             let context = view::StatusContext {
                 machine_faults: &machine_faults,
                 own: Some(workspace.device_key()),
-                last_seen: &workspace.last_seen(),
+                last_seen: &workspace.last_seen()?,
                 daemon: workspace.follows_daemon(),
                 waiting_on_you,
                 refolded: refold,
@@ -163,8 +163,8 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 Command::Inbox => {
                     let views = view::inbox_views(
                         workspace.state(),
-                        &workspace.held_permissions(),
-                        &workspace.machine_faults(),
+                        &workspace.held_permissions()?,
+                        &workspace.machine_faults()?,
                     );
                     emit(json, &views, |views| render::inbox(views))
                 }

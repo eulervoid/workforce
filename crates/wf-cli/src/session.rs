@@ -124,7 +124,7 @@ fn pick_session(workspace: &Workspace, mode: Mode, which: Which) -> anyhow::Resu
     }
     let state = workspace.state();
     let permissions = match which {
-        Which::Permission => workspace.held_permissions(),
+        Which::Permission => workspace.held_permissions()?,
         Which::LocalLive | Which::Transcript | Which::Any => Vec::new(),
     };
     let eligible: std::collections::HashSet<String> = state
