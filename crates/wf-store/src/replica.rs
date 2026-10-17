@@ -309,7 +309,13 @@ impl<S: EventStore> Replica<S> {
             builder = builder.depending_on(bound.invite);
         }
         let event = builder.sign(signer, body)?;
-        self.receive(event.clone())?;
+        // The builder's floor may lie beyond this device's clock (stored events, peers admitted
+        // under an earlier clock), so the tolerance of `receive_at` must not judge own events.
+        let received = self
+            .state
+            .receive(event.clone(), Trust::Untrusted)
+            .map_err(ReceiveError::from)?;
+        self.persist(&event, &received).map_err(ReceiveError::from)?;
         Ok(event)
     }
 

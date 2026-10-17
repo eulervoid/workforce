@@ -482,10 +482,10 @@ impl State {
         let follows_all = event
             .causal_parents()
             .all(|parent| self.known[&parent].hlc < event.content.hlc);
-        if !follows_all {
-            Err(Invalid::HlcNotAfterParents)
-        } else {
+        if follows_all {
             Ok(())
+        } else {
+            Err(Invalid::HlcNotAfterParents)
         }
     }
 

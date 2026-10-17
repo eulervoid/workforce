@@ -578,3 +578,27 @@ fn a_failed_write_marks_the_replica_for_reopening() {
     assert!(replica.failed_write().is_some());
     assert_eq!(replica.store().log_len().unwrap(), 1);
 }
+
+#[test]
+fn own_events_are_not_judged_by_the_clock_after_it_went_back() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let mut replica = new_replica(&directory, &fixture);
+    let ten_hours_ms = 10 * 60 * 60 * 1_000;
+    let far_ahead = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as u64
+        + ten_hours_ms;
+    for now in [far_ahead, 2_000] {
+        replica
+            .author(
+                &fixture.devices[0],
+                fixture.founder_actor(),
+                now,
+                create("task", "a"),
+            )
+            .unwrap();
+    }
+    assert_eq!(replica.state().event_count(), 3);
+}
