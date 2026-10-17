@@ -55,6 +55,10 @@ pub struct Genesis {
 pub struct PolicySet {
     /// Policy TOML, stored verbatim.
     pub policy: String,
+    /// The `hlc` of the event that carries the policy. The signature covers only the workforce
+    /// and this statement, so without it any member's device could write an old signed policy
+    /// into a new event and let it win by its newer stamp.
+    pub hlc: Hlc,
 }
 
 /// Defines or redefines an agent of the acting principal. The name is the identity.
@@ -841,6 +845,18 @@ pub struct EventBuilder {
 }
 
 impl EventBuilder {
+    /// The `hlc` the event will have, for statements that must name it.
+    pub fn hlc(&self) -> Hlc {
+        self.hlc
+    }
+
+    /// Gives the event the `hlc` a statement in its body already names. Admission refuses it when
+    /// it does not come after the parents of the event.
+    pub fn with_hlc(mut self, hlc: Hlc) -> Self {
+        self.hlc = hlc;
+        self
+    }
+
     /// The first event of a new workforce.
     pub fn genesis(author: DeviceKey, actor: Actor, now_ms: u64) -> Self {
         Self {

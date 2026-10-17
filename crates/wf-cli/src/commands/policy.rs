@@ -7,7 +7,7 @@ use wf_core::policy::Policy;
 
 use super::{done, edit_until_valid, emit};
 use crate::cli::*;
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, now_ms};
 
 pub(super) fn policy(
     json: bool,
@@ -53,7 +53,16 @@ fn apply_policy(json: bool, workspace: &mut Workspace, source: String) -> anyhow
         .state()
         .workforce_id()
         .expect("a workforce has an id");
-    let statement = Signed::sign(&principal, Some(workforce), PolicySet { policy: source })?;
+    // The signature binds the policy to the event that carries it.
+    let hlc = workspace.state().next_hlc(now_ms())?;
+    let statement = Signed::sign(
+        &principal,
+        Some(workforce),
+        PolicySet {
+            policy: source,
+            hlc,
+        },
+    )?;
     let event = workspace.author(EventBody::PolicySet(statement))?;
     done(json, "policy replaced".to_string(), &event, None)
 }
