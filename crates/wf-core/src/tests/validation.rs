@@ -372,7 +372,13 @@ fn a_member_may_write_items_but_not_policy() {
 
     let policy = build(
         &state,
-        fixture.policy_set(&fixture.member, crate::policy::DEFAULT_POLICY_TOML),
+        fixture.policy_set(
+            &state,
+            0,
+            5_001,
+            &fixture.member,
+            crate::policy::DEFAULT_POLICY_TOML,
+        ),
     );
     assert_eq!(
         receive(&mut state, policy),
@@ -392,6 +398,10 @@ fn policy_changes_need_a_valid_principal_signature_for_this_workforce() {
             Some(other_workforce),
             crate::event::PolicySet {
                 policy: crate::policy::DEFAULT_POLICY_TOML.into(),
+                hlc: state
+                    .builder(fixture.devices[0].key(), fixture.founder_actor(), 5_000)
+                    .unwrap()
+                    .hlc(),
             },
         )
         .unwrap(),
@@ -406,7 +416,13 @@ fn policy_changes_need_a_valid_principal_signature_for_this_workforce() {
         &state,
         0,
         5_001,
-        fixture.policy_set(&fixture.founder, crate::policy::DEFAULT_POLICY_TOML),
+        fixture.policy_set(
+            &state,
+            0,
+            5_001,
+            &fixture.founder,
+            crate::policy::DEFAULT_POLICY_TOML,
+        ),
     );
     assert_eq!(receive(&mut state, valid), Ok(Disposition::Applied));
 }
@@ -428,7 +444,7 @@ fn a_policy_this_version_cannot_read_is_flagged_and_the_last_readable_one_kept()
         &state,
         0,
         5_000,
-        fixture.policy_set(&fixture.founder, &readable),
+        fixture.policy_set(&state, 0, 5_000, &fixture.founder, &readable),
     );
     assert_eq!(receive(&mut state, first), Ok(Disposition::Applied));
 
@@ -436,7 +452,7 @@ fn a_policy_this_version_cannot_read_is_flagged_and_the_last_readable_one_kept()
         &state,
         0,
         5_001,
-        fixture.policy_set(&fixture.founder, &newer_policy()),
+        fixture.policy_set(&state, 0, 5_001, &fixture.founder, &newer_policy()),
     );
     assert_eq!(receive(&mut state, newer), Ok(Disposition::Applied));
     assert!(matches!(
@@ -449,7 +465,13 @@ fn a_policy_this_version_cannot_read_is_flagged_and_the_last_readable_one_kept()
         &state,
         0,
         5_002,
-        fixture.policy_set(&fixture.founder, crate::policy::DEFAULT_POLICY_TOML),
+        fixture.policy_set(
+            &state,
+            0,
+            5_002,
+            &fixture.founder,
+            crate::policy::DEFAULT_POLICY_TOML,
+        ),
     );
     assert_eq!(receive(&mut state, fixed), Ok(Disposition::Applied));
     assert_eq!(state.unreadable_policy(), None);

@@ -221,13 +221,31 @@ impl Fixture {
             .unwrap()
     }
 
-    pub fn policy_set(&self, signer: &PrincipalSigner, source: &str) -> EventBody {
+    /// A policy signed by `signer` for the event that `device` would write next on `state` at
+    /// `now_ms`.
+    pub fn policy_set(
+        &self,
+        state: &State,
+        device: usize,
+        now_ms: u64,
+        signer: &PrincipalSigner,
+        source: &str,
+    ) -> EventBody {
+        let hlc = state
+            .builder(
+                self.devices[device].key(),
+                Actor::Principal(signer.key()),
+                now_ms,
+            )
+            .expect("state has a genesis")
+            .hlc();
         EventBody::PolicySet(
             Signed::sign(
                 signer,
                 Some(self.workforce()),
                 PolicySet {
                     policy: source.into(),
+                    hlc,
                 },
             )
             .unwrap(),
