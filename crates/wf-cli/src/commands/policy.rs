@@ -5,7 +5,7 @@ use wf_core::event::{EventBody, PolicySet};
 use wf_core::identity::Signed;
 use wf_core::policy::Policy;
 
-use super::{done, edit_in_editor, emit};
+use super::{done, edit_until_valid, emit};
 use crate::cli::*;
 use crate::workspace::Workspace;
 
@@ -34,7 +34,10 @@ pub(super) fn policy(
             apply_policy(json, workspace, source)
         }
         PolicyCommand::Edit => {
-            let edited = edit_in_editor(&current, ".toml")?;
+            let edited = edit_until_valid(&current, ".toml", |source| {
+                Policy::parse_new(source)?;
+                Ok(source.to_string())
+            })?;
             if edited == current {
                 return emit(json, &"policy unchanged", |message| format!("{message}\n"));
             }

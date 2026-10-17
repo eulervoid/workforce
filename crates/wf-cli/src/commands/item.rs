@@ -15,7 +15,7 @@ use wf_core::validate::OneOf;
 
 use super::comment::comment_why;
 use super::vcs::{checkout, diff, path};
-use super::{Done, done, edit_in_editor, emit, emit_paged};
+use super::{Done, done, edit_until_valid, emit, emit_paged};
 use crate::cli::*;
 use crate::draft::{Draft, NewItemDraft};
 use crate::interactive::{self, Choice, Mode};
@@ -169,7 +169,7 @@ pub(super) fn item(
             }
             if wants_editor {
                 new_item =
-                    NewItemDraft::from_markdown(&edit_in_editor(&new_item.to_markdown()?, ".md")?)?;
+                    edit_until_valid(&new_item.to_markdown()?, ".md", NewItemDraft::from_markdown)?;
             }
             let draft = new_item.draft;
             let initial = workspace
@@ -612,7 +612,7 @@ fn edit(
             draft.requires.remove(requirement);
         }
         if wants_editor {
-            draft = Draft::from_markdown(&edit_in_editor(&draft.to_markdown()?, ".md")?)?;
+            draft = edit_until_valid(&draft.to_markdown()?, ".md", Draft::from_markdown)?;
         }
         draft.changes(item)
     };

@@ -55,34 +55,36 @@ pub fn pick(what: &str, choices: Vec<Choice>) -> anyhow::Result<String> {
 /// Print `text` through `$PAGER` (`less -R` by default) if it is taller than the terminal,
 /// otherwise print it directly. Also prints directly if the pager cannot be started.
 pub fn page(text: &str) -> anyhow::Result<()> {
-    use std::io::Write;
-    use std::process::{Command, Stdio};
-
     let fits = terminal_size::terminal_size()
         .is_none_or(|(_, height)| text.lines().count() < usize::from(height.0));
     if fits {
         anstream::print!("{text}");
         return Ok(());
     }
-    let pager = std::env::var("PAGER").unwrap_or_else(|_| "less -R".to_string());
-    let mut words = pager.split_whitespace();
-    let child = words.next().and_then(|program| {
-        Command::new(program)
-            .args(words)
-            .stdin(Stdio::piped())
-            .spawn()
-            .ok()
-    });
-    let Some(mut child) = child else {
+    let pager = crate::commands::command_line_from_environment(&["PAGER"], "less -R");
+    if !page_through(&pager, text)? {
         anstream::print!("{text}");
-        return Ok(());
+    }
+    Ok(())
+}
+
+/// Shows `text` in `pager`, run through the shell. `false` if the shell could not find or run
+/// the pager, so nothing was shown.
+fn page_through(pager: &str, text: &str) -> anyhow::Result<bool> {
+    use std::io::Write;
+
+    let Ok(mut child) = crate::commands::shell_command(pager, &[])
+        .stdin(std::process::Stdio::piped())
+        .spawn()
+    else {
+        return Ok(false);
     };
     if let Some(mut stdin) = child.stdin.take() {
         // The reader quitting early closes the pipe; that is not an error.
         let _ = stdin.write_all(text.as_bytes());
     }
-    child.wait()?;
-    Ok(())
+    // The shell's "not found" and "not executable" statuses.
+    Ok(!matches!(child.wait()?.code(), Some(126 | 127)))
 }
 
 /// An agent that `wf init -i` defines.
@@ -216,4 +218,19 @@ fn ask_model(harness: &str, agent: &wf_core::name::AgentName) -> anyhow::Result<
         select = select.item(Some(model.value), label, "");
     }
     Ok(select.interact()?)
+}
+
+#[cfg(test)]
+mod pager_tests {
+    use super::*;
+
+    #[test]
+    fn a_missing_pager_shows_nothing() {
+        assert!(!page_through("wf-no-such-pager-program", "text").unwrap());
+    }
+
+    #[test]
+    fn a_working_pager_shows_the_text() {
+        assert!(page_through("cat >/dev/null", "text").unwrap());
+    }
 }
