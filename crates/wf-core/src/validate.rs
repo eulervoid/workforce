@@ -224,6 +224,8 @@ pub enum PolicyViolation {
     NoChangeRequests(ItemId),
     #[error("{0} is not a comment of this item")]
     UnknownComment(CommentId),
+    #[error("an item needs a title")]
+    EmptyTitle,
     #[error("a comment needs text unless it resolves something")]
     EmptyComment,
     #[error("lines {first} to {last} are no lines: they count from 1, the last after the first")]
@@ -1056,6 +1058,9 @@ impl State {
             EventBody::ItemCreated(created) => {
                 let type_name = &created.item_type;
                 let config = type_of(type_name)?;
+                if created.title.trim().is_empty() {
+                    return Err(PolicyViolation::EmptyTitle);
+                }
                 if let Some(state) = created.state.as_ref().map(|written| written.state()) {
                     let draft = config.uses(ItemState::Draft);
                     if state != config.initial && !(draft && state == ItemState::Draft) {
@@ -1091,7 +1096,11 @@ impl State {
                 let type_name = item.item_type();
                 for change in &edited.changes {
                     match change {
-                        Change::Title(_) => {}
+                        Change::Title(title) => {
+                            if title.trim().is_empty() {
+                                return Err(PolicyViolation::EmptyTitle);
+                            }
+                        }
                         Change::Body(text) => {
                             Body::parse(text)?;
                         }

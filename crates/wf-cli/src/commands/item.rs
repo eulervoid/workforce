@@ -181,9 +181,6 @@ pub(super) fn item(
                 .state
                 .or(initial)
                 .with_context(|| format!("there is no item type `{}`", new_item.item_type))?;
-            if draft.title.trim().is_empty() {
-                bail!("the title is empty; nothing was created");
-            }
             if let Some(recovery) = &draft.recovery {
                 let policy = &workspace
                     .state()
