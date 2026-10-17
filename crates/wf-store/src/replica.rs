@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use wf_core::event::{Event, EventBody, EventError};
+use wf_core::hlc::HLC_TOLERANCE_MS;
 use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner};
 use wf_core::refs::PARSER_VERSION;
@@ -31,6 +32,8 @@ pub enum AuthorError {
     Build(#[from] BuildError),
     #[error(transparent)]
     Policy(#[from] PolicyViolation),
+    #[error("the policy names an hlc too far ahead of this device's clock")]
+    PolicyHlcInFuture,
     #[error(
         "another event was written under this device's key; join the workforce again as a new device"
     )]
@@ -307,6 +310,14 @@ impl<S: EventStore> Replica<S> {
         let mut builder = self.state.builder(signer.key(), actor, now_ms)?;
         if let EventBody::DeviceBound(bound) = &body {
             builder = builder.depending_on(bound.invite);
+        }
+        // The signer chose the hlc of a policy before the event existed.
+        if let EventBody::PolicySet(signed) = &body {
+            let hlc = signed.statement.hlc;
+            if hlc.wall_ms() > now_ms.saturating_add(HLC_TOLERANCE_MS) {
+                return Err(AuthorError::PolicyHlcInFuture);
+            }
+            builder = builder.with_hlc(hlc);
         }
         let event = builder.sign(signer, body)?;
         // The builder's floor may lie beyond this device's clock (stored events, peers admitted

@@ -102,7 +102,8 @@ fn a_log_with_the_old_state_names_folds_to_the_same_items() {
 
     // The old default policy, as it is in the log, reads as the current one.
     let old_policy = include_str!("old_default_policy.toml");
-    apply(&mut state, fixture.policy_set(&fixture.founder, old_policy));
+    let old = fixture.policy_set(&state, 0, 2_900, &fixture.founder, old_policy);
+    fixture.apply(&mut state, 0, 2_900, old);
     let current = crate::policy::Policy::default_policy();
     for (name, config) in &state.policy().unwrap().policy.types {
         let mut states = current.types[name].states.clone();
@@ -293,12 +294,8 @@ fn an_item_keeps_a_state_its_type_stops_using() {
         r#"states = ["draft", "open", "active", "review", "done", "cancelled"]"#,
         r#"states = ["open", "active", "review", "done", "cancelled"]"#,
     );
-    fixture.apply(
-        &mut state,
-        0,
-        2_002,
-        fixture.policy_set(&fixture.founder, &shrunk),
-    );
+    let shrinking = fixture.policy_set(&state, 0, 2_002, &fixture.founder, &shrunk);
+    fixture.apply(&mut state, 0, 2_002, shrinking);
     assert_eq!(state_of(&state, task), ItemState::Draft);
     assert!(matches!(
         state.check_policy(&moved(task, ItemState::Draft)),

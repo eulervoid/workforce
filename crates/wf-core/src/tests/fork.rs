@@ -1,7 +1,10 @@
-use crate::event::{Change, Event, EventBody};
+use crate::event::{Change, EVENT_VERSION, Event, EventBody, EventContent};
+use crate::hlc::Hlc;
 use crate::id::WorkforceId;
+use crate::identity::{Actor, DeviceSigner};
 use crate::identity::{PrincipalSigner, Signed};
 use crate::item::ItemState;
+use crate::state::MAX_PENDING;
 use crate::state::{Disposition, State, Trust};
 use crate::testing::*;
 use crate::validate::Invalid;
@@ -364,4 +367,159 @@ fn nothing_can_be_written_until_the_history_has_arrived() {
             .builder(device.key(), scenario.fixture.founder_actor(), 20_000)
             .is_ok()
     );
+}
+
+/// An event of the fork written by `signer` that claims a place in a feed it has no history in.
+fn forged_for(
+    state: &State,
+    signer: &DeviceSigner,
+    actor: Actor,
+    seq: u64,
+    body: EventBody,
+) -> Event {
+    let content = EventContent {
+        v: EVENT_VERSION,
+        workforce: state.workforce_id(),
+        author: signer.key(),
+        actor,
+        seq,
+        prev: (seq > 1).then(|| crate::id::EventId::of(&seq.to_le_bytes())),
+        deps: vec![],
+        hlc: Hlc::next_after(Hlc::ZERO, 20_000 + seq).unwrap(),
+        body,
+    };
+    Event::sign_content(content, signer).unwrap()
+}
+
+#[test]
+fn keys_that_are_not_bound_cannot_park_events_while_history_is_taken_in() {
+    let scenario = scenario(false);
+    let mut state = child(&scenario);
+    let stranger = DeviceSigner::from_bytes(&[77; 32]).unwrap();
+    let actor = scenario.fixture.founder_actor();
+
+    let unbound = forged_for(&state, &stranger, actor.clone(), 1, create("task", "spam"));
+    assert_eq!(
+        state.receive(unbound, Trust::Untrusted).unwrap_err(),
+        Invalid::UnknownDevice(stranger.key())
+    );
+    let wrong_actor = forged_for(
+        &state,
+        &scenario.fixture.devices[0],
+        Actor::Principal(scenario.fixture.member.key()),
+        2,
+        create("task", "as someone else"),
+    );
+    assert_eq!(
+        state.receive(wrong_actor, Trust::Untrusted).unwrap_err(),
+        Invalid::ActorMismatch
+    );
+    assert_eq!(state.pending_events().count(), 0);
+
+    // A binding is a device's first event; later events of a device that is not bound wait for
+    // nothing.
+    let proof = scenario
+        .fixture
+        .invite(&scenario.parent, 4_000, 99_000)
+        .1
+        .prove(
+            scenario.fixture.workforce(),
+            crate::id::EventId::of(b"invite"),
+            stranger.key(),
+        )
+        .unwrap();
+    let late_binding = forged_for(
+        &state,
+        &stranger,
+        actor,
+        2,
+        EventBody::DeviceBound(crate::event::DeviceBound {
+            invite: crate::id::EventId::of(b"invite"),
+            proof,
+        }),
+    );
+    assert_eq!(
+        state.receive(late_binding, Trust::Untrusted).unwrap_err(),
+        Invalid::BindingNotFirst
+    );
+}
+
+#[test]
+fn events_waiting_for_history_count_against_the_pending_cap() {
+    let scenario = scenario(false);
+    let mut state = child(&scenario);
+    let device = &scenario.fixture.devices[0];
+    let actor = scenario.fixture.founder_actor();
+    for seq in 1..=MAX_PENDING as u64 {
+        let event = forged_for(&state, device, actor.clone(), seq, create("task", "wait"));
+        let received = state.receive(event, Trust::Stored).unwrap();
+        assert_eq!(received.disposition, Disposition::Pending);
+    }
+    let one_more = forged_for(
+        &state,
+        device,
+        actor,
+        MAX_PENDING as u64 + 1,
+        create("task", "one too many"),
+    );
+    assert_eq!(
+        state.receive(one_more, Trust::Stored).unwrap_err(),
+        Invalid::PendingFull
+    );
+}
+
+#[test]
+fn a_history_head_with_an_impossible_feed_position_is_refused() {
+    let scenario = scenario(false);
+    let device = &scenario.fixture.devices[0];
+    let actor = scenario.fixture.founder_actor();
+    let workforce = Some(scenario.fixture.workforce());
+    let malformed = |seq: u64, prev: Option<crate::id::EventId>| {
+        let content = EventContent {
+            v: EVENT_VERSION,
+            workforce,
+            author: device.key(),
+            actor: actor.clone(),
+            seq,
+            prev,
+            deps: vec![],
+            hlc: Hlc::next_after(Hlc::ZERO, 8_000).unwrap(),
+            body: create("task", "malformed"),
+        };
+        Event::sign_content(content, device).unwrap()
+    };
+    let somewhere = Some(crate::id::EventId::of(b"somewhere"));
+    for (head, expected) in [
+        (
+            malformed(0, somewhere),
+            Invalid::UnexpectedSeq {
+                author: device.key(),
+                expected: 1,
+                got: 0,
+            },
+        ),
+        (
+            malformed(1, somewhere),
+            Invalid::PrevMismatch {
+                author: device.key(),
+            },
+        ),
+        (
+            malformed(5, None),
+            Invalid::PrevMismatch {
+                author: device.key(),
+            },
+        ),
+    ] {
+        let genesis = scenario.fixture.fork_at(
+            &scenario.parent,
+            vec![head.id()],
+            &scenario.fixture.founder,
+            9_000,
+        );
+        let mut state = State::new();
+        state.receive(genesis, Trust::Untrusted).unwrap();
+        assert_eq!(state.receive(head, Trust::Untrusted).unwrap_err(), expected);
+        assert!(state.history_incomplete());
+    }
 }
