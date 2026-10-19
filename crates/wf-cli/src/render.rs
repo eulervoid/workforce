@@ -75,7 +75,6 @@ fn readiness_icon(readiness: Readiness) -> &'static str {
 }
 
 /// `2026-10-09 21:42` in the local time zone; text that is not a timestamp is kept as it is.
-
 fn short_time(timestamp: &str) -> String {
     local_time(timestamp, "%Y-%m-%d %H:%M")
 }
