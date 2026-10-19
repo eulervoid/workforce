@@ -171,21 +171,15 @@ pub struct LogTab {
 /// The lines of the Log tab that pass its filter, parsed for drawing.
 #[derive(Clone, Debug, Default)]
 pub struct ShownLog {
-    /// The revision of the lines and the filter these were made for; `None` before the first.
-    made_for: Option<(u64, String)>,
+    /// The revision of the lines, the filter and the width these were made for; `None` before the
+    /// first.
+    made_for: Option<(u64, String, usize)>,
     lines: Vec<Line<'static>>,
-    /// The width of the widest of them.
-    widest: usize,
 }
 
 impl ShownLog {
     pub fn lines(&self) -> &[Line<'static>] {
         &self.lines
-    }
-
-    /// Whether none of the lines is wider than `width` columns, so that none wraps.
-    pub fn fits(&self, width: usize) -> bool {
-        self.widest <= width
     }
 }
 
@@ -529,18 +523,26 @@ impl App {
         self.log.revision += 1;
     }
 
-    /// Parses the lines of the Log tab that pass its filter, unless that was done for these lines
-    /// and this filter already.
+    /// Parses the lines of the Log tab that pass its filter, and breaks those wider than the tab
+    /// into rows, unless that was done for these lines, this filter and this window already.
     pub fn lay_out_log(&mut self) {
-        let made_for = (self.log.revision, self.log.filter.clone());
-        if self.log.shown.made_for.as_ref() == Some(&made_for) {
+        // The tab is the window less the margin on its left and the column kept off its right.
+        let width = usize::from(self.width.saturating_sub(2)).max(1);
+        if let Some((revision, filter, made_width)) = &self.log.shown.made_for
+            && *revision == self.log.revision
+            && filter == &self.log.filter
+            && *made_width == width
+        {
             return;
         }
         let text: String = self.log_lines().map(String::as_str).collect();
-        let lines = draw::ansi_text(&text).lines;
+        let lines = draw::ansi_text(&text)
+            .lines
+            .into_iter()
+            .flat_map(|line| draw::break_line(line, width))
+            .collect();
         self.log.shown = ShownLog {
-            made_for: Some(made_for),
-            widest: lines.iter().map(Line::width).max().unwrap_or(0),
+            made_for: Some((self.log.revision, self.log.filter.clone(), width)),
             lines,
         };
     }

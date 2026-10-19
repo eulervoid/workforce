@@ -244,13 +244,7 @@ pub(super) fn draw_log(
         frame.render_widget(Paragraph::new(empty).themed(theme::text_dimmed()), area);
         return None;
     }
-    // Lines were wrapped to the window when taken in, so they rarely wrap again.
-    let scroll = if shown.fits(usize::from(padded(area).width)) {
-        draw_lines(frame, shown.lines(), &[], app.log.scroll, area, app.base)
-    } else {
-        let text = Text::from(shown.lines().to_vec());
-        draw_scrolled(frame, text, app.log.scroll, area, app.base)
-    };
+    let scroll = draw_lines(frame, shown.lines(), &[], app.log.scroll, area, app.base);
     spots.extend(links::find(
         frame.buffer_mut(),
         area,

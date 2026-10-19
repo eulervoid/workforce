@@ -453,3 +453,47 @@ mod tests {
         assert_eq!(cursor, 4);
     }
 }
+
+/// `line` wrapped into rows of at most `width` columns, each character keeping its style.
+pub(super) fn break_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if line.width() <= width {
+        return vec![line];
+    }
+    let styled: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|span| {
+            span.content
+                .chars()
+                .map(|character| (character, span.style))
+        })
+        .collect();
+    let plain: String = styled.iter().map(|(character, _)| character).collect();
+    let mut rest = styled.into_iter().peekable();
+    textwrap::wrap(
+        &plain,
+        textwrap::Options::new(width)
+            .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit)
+            .word_separator(textwrap::WordSeparator::AsciiSpace),
+    )
+    .iter()
+    .map(|row| {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for character in row.chars() {
+            // The whitespace the wrap dropped between rows has no place in the next one.
+            let (kept, style) = loop {
+                match rest.next() {
+                    Some((kept, style)) if kept == character => break (kept, style),
+                    Some(_) => {}
+                    None => break (character, Style::new()),
+                }
+            };
+            match spans.last_mut() {
+                Some(last) if last.style == style => last.content.to_mut().push(kept),
+                _ => spans.push(Span::styled(kept.to_string(), style)),
+            }
+        }
+        Line::from(spans).style(line.style)
+    })
+    .collect()
+}
