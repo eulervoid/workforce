@@ -56,6 +56,17 @@ it says which device and how long ago it answered. The dashboard asks again ever
 the diff is on screen, and when the machine cannot be reached it keeps the last diff, with its age and
 the reason. Only what is committed shows from another machine, not what its agent has yet to commit.
 
+### When the daemon restarts
+
+After `wf daemon restart` the dashboard stays open. While the daemon is down the status line says it
+is restarting, and the dashboard connects again on every refresh until the daemon answers.
+
+A daemon of a newer build speaks a newer protocol than the `wf` that is open. If the `wf` executable
+was rebuilt since the dashboard started, the dashboard restores the terminal and runs it with the same
+arguments, so the rebuilt `wf` takes over in the same terminal. If it was not, the status line says to
+rebuild wf and start it again. A daemon older than the dashboard needs `wf daemon restart`. Only the
+dashboard does this; other commands fail at once with the mismatch.
+
 ### Keys
 
 `?` shows them all. The keys that act work on the selected entry of the Now tab, or on the item or
