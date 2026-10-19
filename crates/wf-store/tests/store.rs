@@ -214,7 +214,8 @@ fn a_snapshot_of_the_previous_format_is_discarded_and_refolded() {
     let replica = Replica::open(store, fixture.workforce()).unwrap();
     assert_eq!(replica.state(), &expected);
     let rewritten = replica.store().snapshot().unwrap().unwrap();
-    let ((format, _), _) = postcard::take_from_bytes::<(u32, u16)>(&rewritten).unwrap();
+    let (format, _, _) =
+        wf_core::encoding::decode::<(u32, u16, wf_core::state::State)>(&rewritten).unwrap();
     assert_ne!(
         format, PREVIOUS_FORMAT,
         "refolding writes a snapshot of the current format"

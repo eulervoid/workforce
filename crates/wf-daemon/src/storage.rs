@@ -3,19 +3,17 @@
 //! keeps writes ordered.
 
 use std::collections::BTreeSet;
+use std::path::PathBuf;
 use std::sync::mpsc;
 
-use iroh::Signature;
 use tokio::sync::{oneshot, watch};
 use wf_core::event::Event;
-use wf_core::id::EventId;
-use wf_core::identity::DeviceKey;
+use wf_core::id::{EventId, WorkforceId};
+use wf_core::identity::{DeviceKey, Signature};
 use wf_core::invite::JoinRefusal;
-use wf_core::sync::Versions;
-use wf_store::{RedbStore, Replica, StoreError};
-
-use crate::log::{LogError, ReceiveSummary, SyncLog};
-use crate::replica;
+use wf_core::sync::{BatchReceived, Versions};
+use wf_net::{LogError, SyncLog};
+use wf_store::{HistorySource, RedbStore, Replica, StoreError};
 
 type Job = Box<dyn FnOnce(&mut Replica<RedbStore>) + Send>;
 
@@ -25,7 +23,7 @@ pub struct StorageClosed;
 
 impl From<StorageClosed> for LogError {
     fn from(error: StorageClosed) -> Self {
-        LogError(Box::new(error))
+        LogError::new(error)
     }
 }
 
@@ -37,11 +35,34 @@ pub struct StorageHandle {
 }
 
 impl StorageHandle {
-    /// Starts the task. `reopen` opens the replica again after a write failed, when what the
-    /// replica holds in memory may be ahead of the log; it is told the failed write, with its
-    /// causes. If that fails too, or a job panics, the task ends and
-    /// [`StorageHandle::is_closed`] turns true.
-    pub fn spawn(
+    /// Opens the store at `path` as a replica of `workforce` and starts the task that owns it.
+    ///
+    /// `history` gives the replica, each time it is opened, where to look for the history of the
+    /// workforce it was forked from. After a write failed, what the replica holds in memory may
+    /// be ahead of the log, so the task opens it again; `on_write_failure` is told the failed
+    /// write, with its causes, and the error if opening again fails too. If that happens, or a
+    /// job panics, the task ends and [`StorageHandle::is_closed`] turns true.
+    pub fn open(
+        path: PathBuf,
+        workforce: WorkforceId,
+        history: impl Fn() -> Option<Box<dyn HistorySource>> + Send + 'static,
+        on_write_failure: impl Fn(&(dyn std::error::Error + 'static)) + Send + 'static,
+    ) -> Result<Self, StoreError> {
+        let open = move || {
+            let mut replica = Replica::open(RedbStore::open(&path)?, workforce)?;
+            if let Some(source) = history() {
+                replica.set_history_source(source);
+            }
+            Ok(replica)
+        };
+        let replica = open()?;
+        Ok(Self::spawn(replica, move |failed| {
+            on_write_failure(&std::io::Error::other(failed.to_owned()));
+            open().inspect_err(|error| on_write_failure(error))
+        }))
+    }
+
+    fn spawn(
         replica: Replica<RedbStore>,
         reopen: impl Fn(&str) -> Result<Replica<RedbStore>, StoreError> + Send + 'static,
     ) -> Self {
@@ -117,32 +138,32 @@ impl StorageHandle {
 
 impl SyncLog for StorageHandle {
     async fn versions(&self) -> Result<Versions, LogError> {
-        Ok(self.with(|replica| replica::versions(replica)).await?)
+        Ok(self.with(|replica| replica.versions()).await?)
     }
 
     async fn events_after(&self, theirs: &Versions) -> Result<Vec<Event>, LogError> {
         let theirs = theirs.clone();
-        self.with(move |replica| replica::events_after(replica, &theirs))
+        self.with(move |replica| replica.events_after(&theirs))
             .await?
-            .map_err(LogError::from)
+            .map_err(LogError::new)
     }
 
     async fn events_by_id(&self, ids: &[EventId]) -> Result<Vec<Event>, LogError> {
         let ids = ids.to_vec();
-        self.with(move |replica| replica::events_by_id(replica, &ids))
+        self.with(move |replica| replica.events_by_id(&ids))
             .await?
-            .map_err(LogError::from)
+            .map_err(LogError::new)
     }
 
-    async fn receive(&self, events: Vec<Event>) -> Result<ReceiveSummary, LogError> {
-        self.with(move |replica| replica::receive(replica, events))
+    async fn receive(&self, events: Vec<Event>) -> Result<BatchReceived, LogError> {
+        self.with(move |replica| replica.receive_batch(events))
             .await?
-            .map_err(LogError::from)
+            .map_err(LogError::new)
     }
 
     async fn is_bound(&self, device: DeviceKey) -> Result<bool, LogError> {
         Ok(self
-            .with(move |replica| replica::is_bound(replica, device))
+            .with(move |replica| replica.state().principal_of(&device).is_some())
             .await?)
     }
 
@@ -154,12 +175,19 @@ impl SyncLog for StorageHandle {
         now_ms: u64,
     ) -> Result<Result<(), JoinRefusal>, LogError> {
         Ok(self
-            .with(move |replica| replica::check_join(replica, invite, device, proof, now_ms))
+            .with(move |replica| replica.state().check_join(&invite, device, &proof, now_ms))
             .await?)
     }
 
-    async fn missing(&self) -> Result<Vec<EventId>, LogError> {
-        self.with(replica::missing).await?.map_err(LogError::from)
+    async fn fill_history(&self) -> Result<(), LogError> {
+        self.with(|replica| replica.fill_history())
+            .await?
+            .map(drop)
+            .map_err(LogError::new)
+    }
+
+    async fn missing_parents(&self) -> Result<Vec<EventId>, LogError> {
+        Ok(self.with(|replica| replica.missing_parents()).await?)
     }
 }
 

@@ -1,6 +1,6 @@
 //! Gossip on `heads`: after a write and every minute each device announces a digest of its
 //! heads on a topic of the workforce. Messages carry hashes only, never events: a device whose
-//! digest differs syncs with the announcer over `wf/sync/1`. Hearing from a device is also
+//! digest differs syncs with the announcer over `wf/sync/2`. Hearing from a device is also
 //! what "last seen" is made of.
 
 use std::collections::BTreeSet;

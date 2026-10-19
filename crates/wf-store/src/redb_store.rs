@@ -75,11 +75,6 @@ impl RedbStore {
         transaction.commit()?;
         Ok(())
     }
-
-    pub fn event_count(&self) -> Result<u64, StoreError> {
-        let transaction = self.database.begin_read()?;
-        Ok(transaction.open_table(EVENTS)?.len()?)
-    }
 }
 
 fn decode_all<'a>(

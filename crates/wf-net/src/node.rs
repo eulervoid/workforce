@@ -25,7 +25,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FORBIDDEN: u32 = 403;
 const NOT_SERVED: u32 = 404;
-const FAILED: u32 = 500;
+pub(crate) const FAILED: u32 = 500;
 const DONE: u32 = 0;
 
 /// The error of some other layer, kept as the source of a [`NetError`].

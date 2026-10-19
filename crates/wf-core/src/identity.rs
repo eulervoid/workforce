@@ -6,7 +6,8 @@
 use std::fmt;
 use std::str::FromStr;
 
-use iroh_base::{PublicKey, SecretKey, Signature};
+pub use iroh_base::Signature;
+use iroh_base::{PublicKey, SecretKey};
 use serde::{Deserialize, Serialize};
 
 use crate::id::{EventId, SessionId, WorkforceId};

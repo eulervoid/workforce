@@ -71,18 +71,18 @@ wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine,
                                             ├─ wf-vcs: worktrees, rebase, merge (the only crate that runs git)
                                             └─ iroh endpoint, started once a second device exists
                                                  ├─ wf/join/1   invites
-                                                 ├─ wf/sync/1   feed sync
+                                                 ├─ wf/sync/2   feed sync
                                                  └─ iroh-gossip heads
 ```
 
 | Crate | Role |
 |---|---|
 | `wf-core` | events, encoding, identity, admission, fold, items, policy, sessions, lifecycle, recovery, briefs. Pure: no IO, no async, no clock or randomness except through parameters |
-| `wf-store` | the redb event store, snapshots, the `Replica` (store plus state) |
+| `wf-store` | the redb event store, snapshots, the `Replica` (store plus state), the questions a sync peer asks of it, binding a device to a workforce |
 | `wf-net` | sync, join and gossip over generic streams and a `SyncLog` trait, so convergence is tested in memory; iroh only carries them |
 | `wf-vcs` | git |
 | `wf-harness` | the ACP client |
-| `wf-daemon` | socket, runner, machine config, sandbox, deciders, network |
+| `wf-daemon` | socket, runner, machine config, sandbox, deciders, the storage task that owns each replica and serves it to the network |
 | `wf-cli` | the `wf` binary: commands, views, the dashboard |
 
 **The daemon owns the store when it runs.** redb is single-process. The CLI reads and writes through
@@ -1186,10 +1186,10 @@ mDNS for LAN-only use.
 
 ### Sync
 
-* **`wf/sync/1`**: the initiator opens a workforce; both sides exchange version vectors
+* **`wf/sync/2`**: the initiator opens a workforce; both sides exchange version vectors
   `{author → (max seq, tips)}` (tips for equivocated feeds); each streams what the other lacks, in
   `(hlc, id)` order, 256 events per frame; then missing parents and wanted history are fetched by id.
-  One side writes at a time, with a 30 s idle timeout per frame.
+  One side writes at a time, with a 30 s idle timeout per frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`), so mismatched peers refuse at the handshake.
 * **Gossip** on a topic derived from the workforce id announces a digest of each device's heads after
   writes and every 60 s; a digest that differs from its own makes a device sync with that peer. One
   task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes. Presence ("last
@@ -1207,7 +1207,7 @@ mDNS for LAN-only use.
 | Need | Piece |
 |---|---|
 | connectivity, NAT traversal, relays, encryption | `iroh` endpoint, dialed by `EndpointId` |
-| announce heads | `iroh-gossip` (digests only; events go over `wf/sync/1`) |
+| announce heads | `iroh-gossip` (digests only; events go over `wf/sync/2`) |
 | large artifacts (*Planned*: bundles, transcripts) | `iroh-blobs` |
 
 **Not iroh-docs:** it is a mutable key-value store, not a log. Each `(author, key)` keeps only its
@@ -1215,7 +1215,7 @@ latest value by wall clock, and a write removes the author's older entries under
 could erase its own events on every replica. That breaks the append-only log, equivocation evidence
 and admission against the causal past. Its namespace secret is a bearer credential shared by every
 writer. A state-based model on it would be simpler but gives up history, offline authorization and
-causal conflict resolution (P3, P4, P6, P9), while removing only `wf/sync/1`. We write sync ourselves,
+causal conflict resolution (P3, P4, P6, P9), while removing only `wf/sync/2`. We write sync ourselves,
 which also keeps the log independent of transport. Keep the shape compatible with Willow ideas (author
 as subspace, `kind/id` as path) in case that matures.
 

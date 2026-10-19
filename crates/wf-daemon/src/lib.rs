@@ -21,6 +21,7 @@ pub mod proto;
 mod runner;
 mod sandbox;
 mod server;
+mod storage;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -32,7 +33,6 @@ use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceSigner;
 use wf_core::invite::InviteCode;
-use wf_net::replica::bind_device;
 use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
@@ -41,7 +41,7 @@ pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS};
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, ensure_unclaimed, session_model};
-pub use wf_net::{StorageClosed, StorageHandle};
+pub use storage::{StorageClosed, StorageHandle};
 
 /// The file in the directory of a workforce that says where its repository is on this machine.
 pub const REPOSITORY_FILE: &str = "repository";
@@ -405,30 +405,21 @@ impl Daemon {
         if !path.is_file() {
             return Err(DaemonError::UnknownWorkforce(id));
         }
-        let open = {
-            let daemon = Arc::downgrade(self);
-            move || {
-                let mut replica = Replica::open(RedbStore::open(path.clone())?, id)?;
-                replica.set_history_source(Box::new(ParentHistory(daemon.clone())));
-                Ok(replica)
-            }
-        };
         // Every write to the log goes through the storage task, so it is where a full disk is
         // noticed, whoever wrote: a session, the principal, an agent, the merge task or a peer.
-        let reopen = {
+        let history = {
             let daemon = Arc::downgrade(self);
-            let open = open.clone();
-            move |failed: &str| {
-                let space = |error: &(dyn std::error::Error + 'static)| {
-                    if let Some(daemon) = daemon.upgrade() {
-                        daemon.faults.note_space("the event log", error);
-                    }
-                };
-                space(&std::io::Error::other(failed.to_owned()));
-                open().inspect_err(|error| space(error))
+            move || Some(Box::new(ParentHistory(daemon.clone())) as Box<dyn HistorySource>)
+        };
+        let note_space = {
+            let daemon = Arc::downgrade(self);
+            move |error: &(dyn std::error::Error + 'static)| {
+                if let Some(daemon) = daemon.upgrade() {
+                    daemon.faults.note_space("the event log", error);
+                }
             }
         };
-        let storage = StorageHandle::spawn(open()?, reopen);
+        let storage = StorageHandle::open(path, id, history, note_space)?;
         // With the network on, serve at once: a device may sync a fork right after it was made.
         if let Some(node) = self.node.get() {
             node.serve(id, storage.clone());
@@ -537,7 +528,7 @@ impl Daemon {
                 move || async move {
                     storage
                         .with(move |replica| {
-                            bind_device(replica, &signer, invite, proof, profile, now_ms())
+                            replica.bind_device(&signer, invite, proof, profile, now_ms())
                         })
                         .await?
                         .map_err(Into::into)

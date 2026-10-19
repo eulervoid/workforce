@@ -6,6 +6,7 @@ use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner};
 use wf_core::refs::PARSER_VERSION;
 use wf_core::state::{BuildError, Disposition, Received, State, Trust};
+use wf_core::sync::BatchReceived;
 use wf_core::validate::{Invalid, PolicyViolation};
 
 use crate::history::HistorySource;
@@ -52,13 +53,6 @@ pub enum ForkError {
     Store(#[from] StoreError),
     #[error("the history this fork was made from is not complete here")]
     HistoryIncomplete,
-}
-
-/// What a batch of received events did.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BatchReceived {
-    pub applied: usize,
-    pub rejected: usize,
 }
 
 /// A local replica: the durable log plus the state folded from it.
@@ -221,21 +215,7 @@ impl<S: EventStore> Replica<S> {
                 rejected,
             });
         }
-        let due = self.snapshot_due();
-        let snapshot = due.then(|| self.snapshot()).transpose()?;
-        self.store.commit(Commit {
-            append: &applied,
-            pending: PendingChange::Update {
-                put: &parked,
-                remove: &released,
-            },
-            snapshot: snapshot
-                .as_deref()
-                .map_or(SnapshotChange::Keep, SnapshotChange::Replace),
-        })?;
-        if snapshot.is_some() {
-            self.snapshot_event_count = self.state.event_count();
-        }
+        self.commit_received(&applied, &parked, &released)?;
         Ok(BatchReceived {
             applied: applied_count,
             rejected,
@@ -368,13 +348,23 @@ impl<S: EventStore> Replica<S> {
         let parked_events = [submitted.clone()];
         let put: &[Event] = if parked { &parked_events } else { &[] };
 
-        let due = self.snapshot_due();
-        let snapshot = due.then(|| self.snapshot()).transpose()?;
+        self.commit_received(&received.applied, put, &released)
+    }
+
+    /// Persists events the state took in: the applied ones are appended, `parked` joins the
+    /// pending set and `released` leaves it, with a snapshot when one is due.
+    fn commit_received(
+        &mut self,
+        applied: &[Event],
+        parked: &[Event],
+        released: &[EventId],
+    ) -> Result<(), StoreError> {
+        let snapshot = self.snapshot_due().then(|| self.snapshot()).transpose()?;
         self.store.commit(Commit {
-            append: &received.applied,
+            append: applied,
             pending: PendingChange::Update {
-                put,
-                remove: &released,
+                put: parked,
+                remove: released,
             },
             snapshot: snapshot
                 .as_deref()
@@ -417,15 +407,13 @@ fn load_snapshot<S: EventStore>(store: &S) -> Result<Option<State>, StoreError> 
     let Some(stored) = store.snapshot()? else {
         return Ok(None);
     };
-    let Ok(((format, parser), rest)) = postcard::take_from_bytes::<(u32, u16)>(&stored) else {
+    let Ok((format, parser, state)) = wf_core::encoding::decode::<(u32, u16, State)>(&stored)
+    else {
         return Ok(None);
     };
     if format != SNAPSHOT_FORMAT || parser != PARSER_VERSION {
         return Ok(None);
     }
-    let Ok(state) = postcard::from_bytes::<State>(rest) else {
-        return Ok(None);
-    };
     let position = state.event_count() as u64;
     if position > store.log_len()? {
         return Ok(None);

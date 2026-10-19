@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex, MutexGuard};
 use wf_core::event::Event;
 use wf_core::id::EventId;
 use wf_core::identity::DeviceKey;
+use wf_core::identity::Signature;
 use wf_core::invite::JoinRefusal;
-use wf_core::sync::Versions;
-use wf_net::{LogError, ReceiveSummary, Signature, SyncLog, replica};
+use wf_core::sync::{BatchReceived, Versions};
+use wf_net::{LogError, SyncLog};
 use wf_store::{EventStore, Replica};
 
 /// A replica the tests reach into directly while the sync protocol runs against it.
@@ -33,23 +34,23 @@ impl<S: EventStore> SharedReplica<S> {
 
 impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
     async fn versions(&self) -> Result<Versions, LogError> {
-        Ok(replica::versions(&self.lock()))
+        Ok(self.lock().versions())
     }
 
     async fn events_after(&self, theirs: &Versions) -> Result<Vec<Event>, LogError> {
-        Ok(replica::events_after(&self.lock(), theirs)?)
+        self.lock().events_after(theirs).map_err(LogError::new)
     }
 
     async fn events_by_id(&self, ids: &[EventId]) -> Result<Vec<Event>, LogError> {
-        Ok(replica::events_by_id(&self.lock(), ids)?)
+        self.lock().events_by_id(ids).map_err(LogError::new)
     }
 
-    async fn receive(&self, events: Vec<Event>) -> Result<ReceiveSummary, LogError> {
-        Ok(replica::receive(&mut self.lock(), events)?)
+    async fn receive(&self, events: Vec<Event>) -> Result<BatchReceived, LogError> {
+        self.lock().receive_batch(events).map_err(LogError::new)
     }
 
     async fn is_bound(&self, device: DeviceKey) -> Result<bool, LogError> {
-        Ok(replica::is_bound(&self.lock(), device))
+        Ok(self.lock().state().principal_of(&device).is_some())
     }
 
     async fn check_join(
@@ -59,16 +60,17 @@ impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
         proof: Signature,
         now_ms: u64,
     ) -> Result<Result<(), JoinRefusal>, LogError> {
-        Ok(replica::check_join(
-            &self.lock(),
-            invite,
-            device,
-            proof,
-            now_ms,
-        ))
+        Ok(self
+            .lock()
+            .state()
+            .check_join(&invite, device, &proof, now_ms))
     }
 
-    async fn missing(&self) -> Result<Vec<EventId>, LogError> {
-        Ok(replica::missing(&mut self.lock())?)
+    async fn fill_history(&self) -> Result<(), LogError> {
+        self.lock().fill_history().map(drop).map_err(LogError::new)
+    }
+
+    async fn missing_parents(&self) -> Result<Vec<EventId>, LogError> {
+        Ok(self.lock().missing_parents())
     }
 }
