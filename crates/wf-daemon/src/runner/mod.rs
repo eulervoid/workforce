@@ -349,6 +349,18 @@ impl Daemon {
         loaded.storage.with(|replica| replica.state().clone()).await
     }
 
+    /// Runs `read` on the state where it lives, so that only its answer is copied out.
+    pub(crate) async fn read<T: Send + 'static>(
+        &self,
+        loaded: &Loaded,
+        read: impl FnOnce(&State) -> T + Send + 'static,
+    ) -> Result<T, StorageClosed> {
+        loaded
+            .storage
+            .with(move |replica| read(replica.state()))
+            .await
+    }
+
     /// The config of this machine, read anew so that edits apply to the next session.
     pub(crate) fn machine_config(&self) -> Result<MachineConfig, MachineConfigError> {
         match &self.config.machine_config {
