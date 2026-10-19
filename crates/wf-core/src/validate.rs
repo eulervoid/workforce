@@ -8,6 +8,8 @@
 
 use std::collections::{BTreeSet, VecDeque};
 
+use serde::Serialize;
+
 use crate::body::{Body, BodyError, StepId};
 use crate::event::{
     AgentDefined, Change, CommentKind, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated,
@@ -15,13 +17,14 @@ use crate::event::{
 };
 use crate::hlc::HLC_TOLERANCE_MS;
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
-use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role};
+use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role, Signed};
 use crate::item::ItemState;
 use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, TypeName};
 use crate::policy::Field;
 use crate::session::{SessionRole, Verdict};
 use crate::state::{
-    Disposition, ForkState, MAX_PENDING, Origin, PendingOn, Received, State, Trust,
+    Disposition, ForkState, MAX_PENDING, MAX_PENDING_BINDINGS, Origin, PendingOn, Received, State,
+    Trust,
 };
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -94,6 +97,8 @@ pub enum Invalid {
     BadInviteProof,
     #[error("{0} is not an owner")]
     NotOwner(PrincipalKey),
+    #[error("the policy was signed for another event: its hlc is not the hlc of the event")]
+    PolicyNotForThisEvent,
     #[error("principal signature is invalid")]
     BadPrincipalSignature,
     #[error("unknown item {0}")]
@@ -328,9 +333,15 @@ impl State {
                     }
                 }
                 Ok(Admission::Wait(waiting)) => {
-                    // Events that wait for the history of a fork are signed by bound devices and
-                    // end when the history is complete, so they are not capped.
-                    if waiting != PendingOn::History && self.pending.events.len() >= MAX_PENDING {
+                    if self.pending.events.len() >= MAX_PENDING {
+                        if is_submitted {
+                            return Err(Invalid::PendingFull);
+                        }
+                        received.rejected.push((id, Invalid::PendingFull));
+                        continue;
+                    }
+                    let is_binding = matches!(event.content.body, EventBody::DeviceBound(_));
+                    if is_binding && self.pending_bindings() >= MAX_PENDING_BINDINGS {
                         if is_submitted {
                             return Err(Invalid::PendingFull);
                         }
@@ -348,6 +359,14 @@ impl State {
             }
         }
         Ok(received)
+    }
+
+    fn pending_bindings(&self) -> usize {
+        self.pending
+            .events
+            .values()
+            .filter(|pending| matches!(pending.content.body, EventBody::DeviceBound(_)))
+            .count()
     }
 
     fn admit(
@@ -395,6 +414,10 @@ impl State {
             .and_then(ForkState::wanted)
             .is_some_and(|wanted| wanted.contains(&event.id()))
         {
+            Self::check_feed_shape(event)?;
+            if !content.hlc.is_admissible() {
+                return Err(Invalid::HlcAtMaximum);
+            }
             return Ok(Admission::Apply(Origin::History));
         }
         if matches!(content.body, EventBody::Genesis(_)) {
@@ -414,6 +437,7 @@ impl State {
         // What the devices of a fork write waits until the history it continues has been folded:
         // their feeds and the items they touch are in it.
         if self.history_incomplete() {
+            self.check_may_wait_for_history(event)?;
             return Ok(Admission::Wait(PendingOn::History));
         }
 
@@ -430,6 +454,7 @@ impl State {
             EventBody::DeviceBound(_) => self.check_binding(event)?,
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)
+            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)
@@ -452,20 +477,54 @@ impl State {
         Ok(Admission::Apply(Origin::Own))
     }
 
-    /// `prev` is empty exactly at seq 1, and otherwise an event of the same author with the
-    /// previous seq. Nothing else about the feed is checked: equivocated feeds are admitted.
-    fn check_feed(&self, event: &Event) -> Result<(), Invalid> {
+    /// What can be checked about the feed position of an event without any other event: `seq`
+    /// counts from 1 and `prev` is empty exactly at seq 1. The history of a fork gets no more.
+    fn check_feed_shape(event: &Event) -> Result<(), Invalid> {
         let content = &event.content;
-        let author = content.author;
         if content.seq == 0 {
             return Err(Invalid::UnexpectedSeq {
-                author,
+                author: content.author,
                 expected: 1,
                 got: 0,
             });
         }
+        if content.prev.is_none() != (content.seq == 1) {
+            return Err(Invalid::PrevMismatch {
+                author: content.author,
+            });
+        }
+        Ok(())
+    }
+
+    /// What is known about a device without the history of a fork, so that unbound keys cannot
+    /// fill the pending events: a bound device writes as its principal, and a new device starts
+    /// with its binding.
+    fn check_may_wait_for_history(&self, event: &Event) -> Result<(), Invalid> {
+        let content = &event.content;
+        if matches!(content.body, EventBody::DeviceBound(_)) {
+            return if content.seq == 1 {
+                Ok(())
+            } else {
+                Err(Invalid::BindingNotFirst)
+            };
+        }
+        let principal = self
+            .principal_of(&content.author)
+            .ok_or(Invalid::UnknownDevice(content.author))?;
+        if content.actor.principal() != principal {
+            return Err(Invalid::ActorMismatch);
+        }
+        Ok(())
+    }
+
+    /// `prev` is empty exactly at seq 1, and otherwise an event of the same author with the
+    /// previous seq. Nothing else about the feed is checked: equivocated feeds are admitted.
+    fn check_feed(&self, event: &Event) -> Result<(), Invalid> {
+        Self::check_feed_shape(event)?;
+        let content = &event.content;
+        let author = content.author;
         let prev_is_valid = match content.prev {
-            None => content.seq == 1,
+            None => true,
             Some(prev) => self
                 .known
                 .get(&prev)
@@ -556,47 +615,25 @@ impl State {
         match &event.content.body {
             EventBody::Genesis(_) => Err(Invalid::DuplicateGenesis),
             EventBody::PolicySet(signed) => {
-                let owner = workforce
-                    .members
-                    .get(&signed.signer)
-                    .is_some_and(|member| member.role == Role::Owner);
-                if !owner {
-                    return Err(Invalid::NotOwner(signed.signer));
-                }
-                if trust == Trust::Untrusted && signed.verify(Some(workforce.id)).is_err() {
-                    return Err(Invalid::BadPrincipalSignature);
+                self.check_signed_by_actor(signed, event, trust, Role::Owner)?;
+                // Not bound to its event, so it could be an old policy written into a new
+                // event; the fold lets any bound policy beat it.
+                Ok(())
+            }
+            EventBody::BoundPolicySet(signed) => {
+                self.check_signed_by_actor(signed, event, trust, Role::Owner)?;
+                if signed.statement.hlc != event.content.hlc {
+                    return Err(Invalid::PolicyNotForThisEvent);
                 }
                 // A policy this version cannot read is still admitted: a newer version may have
                 // written it. The workforce keeps running on the last policy it could read.
                 Ok(())
             }
             EventBody::InviteCreated(signed) => {
-                if !workforce.members.contains_key(&signed.signer) {
-                    return Err(Invalid::NotAMember(signed.signer));
-                }
-                if signed.signer != event.content.actor.principal() {
-                    return Err(Invalid::ActorMismatch);
-                }
-                if trust == Trust::Untrusted && signed.verify(Some(workforce.id)).is_err() {
-                    return Err(Invalid::BadPrincipalSignature);
-                }
-                Ok(())
+                self.check_signed_by_actor(signed, event, trust, Role::Member)
             }
             EventBody::ForkAnnounced(signed) => {
-                let owner = workforce
-                    .members
-                    .get(&signed.signer)
-                    .is_some_and(|member| member.role == Role::Owner);
-                if !owner {
-                    return Err(Invalid::NotOwner(signed.signer));
-                }
-                if signed.signer != event.content.actor.principal() {
-                    return Err(Invalid::ActorMismatch);
-                }
-                if trust == Trust::Untrusted && signed.verify(Some(workforce.id)).is_err() {
-                    return Err(Invalid::BadPrincipalSignature);
-                }
-                Ok(())
+                self.check_signed_by_actor(signed, event, trust, Role::Owner)
             }
             EventBody::AgentDefined(AgentDefined { .. })
             | EventBody::AgentRemoved(_)
@@ -653,6 +690,33 @@ impl State {
                 Ok(())
             }
         }
+    }
+
+    /// A statement signed by a principal who holds at least `role` and is the actor of the event
+    /// that carries it, for this workforce.
+    fn check_signed_by_actor<T: Serialize>(
+        &self,
+        signed: &Signed<T>,
+        event: &Event,
+        trust: Trust,
+        role: Role,
+    ) -> Result<(), Invalid> {
+        let workforce = self.workforce.as_ref().expect("checked by the caller");
+        let member = workforce
+            .members
+            .get(&signed.signer)
+            .ok_or(Invalid::NotAMember(signed.signer))?;
+        // `Owner` sorts before `Member`.
+        if member.role > role {
+            return Err(Invalid::NotOwner(signed.signer));
+        }
+        if signed.signer != event.content.actor.principal() {
+            return Err(Invalid::ActorMismatch);
+        }
+        if trust == Trust::Untrusted && signed.verify(Some(workforce.id)).is_err() {
+            return Err(Invalid::BadPrincipalSignature);
+        }
+        Ok(())
     }
 
     /// Whether `target` is one of the causal parents of the event or one of their ancestors.
@@ -764,6 +828,7 @@ impl State {
                 }
                 EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
+                | EventBody::BoundPolicySet(_)
                 | EventBody::AgentDefined(_)
                 | EventBody::AgentRemoved(_)
                 | EventBody::InviteCreated(_)
@@ -794,6 +859,7 @@ impl State {
         match body {
             EventBody::Genesis(_)
             | EventBody::PolicySet(_)
+            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)
@@ -896,7 +962,7 @@ impl State {
         if supervises || !worked_on {
             return false;
         }
-        let policy = &workforce.policy.value().policy;
+        let policy = &workforce.running_policy().policy;
         // `None` ranks below every level, so removing the review lowers it.
         let rank = |level: Option<&ReviewLevelName>| {
             level.and_then(|name| policy.review_rank(name).map(|rank| rank + 1))
@@ -923,7 +989,7 @@ impl State {
         let Some(workforce) = &self.workforce else {
             return Ok(());
         };
-        let policy = &workforce.policy.value().policy;
+        let policy = &workforce.running_policy().policy;
         let known_lane = |lane: &LaneName| {
             if policy.lanes.contains_key(lane) {
                 Ok(())
@@ -985,7 +1051,10 @@ impl State {
         };
 
         match body {
-            EventBody::Genesis(_) | EventBody::PolicySet(_) | EventBody::Unknown { .. } => Ok(()),
+            EventBody::Genesis(_)
+            | EventBody::PolicySet(_)
+            | EventBody::BoundPolicySet(_)
+            | EventBody::Unknown { .. } => Ok(()),
             EventBody::Commented(comment) => {
                 if comment.text.trim().is_empty() && comment.resolves.is_empty() {
                     return Err(PolicyViolation::EmptyComment);

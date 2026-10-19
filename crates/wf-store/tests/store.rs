@@ -192,6 +192,36 @@ fn unusable_snapshots_are_discarded_and_refolded() {
 }
 
 #[test]
+fn a_snapshot_of_the_previous_format_is_discarded_and_refolded() {
+    const PREVIOUS_FORMAT: u32 = 10;
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let expected = {
+        let mut replica = new_replica(&directory, &fixture);
+        add(&mut replica, &fixture, 10);
+        replica.state().clone()
+    };
+    let previous =
+        wf_core::encoding::encode(&(PREVIOUS_FORMAT, wf_core::refs::PARSER_VERSION, &expected))
+            .unwrap();
+    let store = open(&directory);
+    store
+        .commit(Commit {
+            snapshot: SnapshotChange::Replace(&previous),
+            ..Commit::default()
+        })
+        .unwrap();
+    let replica = Replica::open(store, fixture.workforce()).unwrap();
+    assert_eq!(replica.state(), &expected);
+    let rewritten = replica.store().snapshot().unwrap().unwrap();
+    let ((format, _), _) = postcard::take_from_bytes::<(u32, u16)>(&rewritten).unwrap();
+    assert_ne!(
+        format, PREVIOUS_FORMAT,
+        "refolding writes a snapshot of the current format"
+    );
+}
+
+#[test]
 fn out_of_order_events_are_parked_and_survive_restarts() {
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);
@@ -601,4 +631,31 @@ fn own_events_are_not_judged_by_the_clock_after_it_went_back() {
             .unwrap();
     }
     assert_eq!(replica.state().event_count(), 3);
+}
+
+#[test]
+fn a_stored_pending_event_that_admission_refuses_is_dropped_on_open() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let foreign = Fixture::new(2);
+    {
+        let mut replica = new_replica(&directory, &fixture);
+        add(&mut replica, &fixture, 1);
+        replica
+            .store()
+            .commit(Commit {
+                append: &[],
+                pending: PendingChange::Update {
+                    put: std::slice::from_ref(&foreign.genesis),
+                    remove: &[],
+                },
+                snapshot: SnapshotChange::Keep,
+            })
+            .unwrap();
+        assert_eq!(replica.store().pending().unwrap().len(), 1);
+    }
+    let reopened = Replica::open(open(&directory), fixture.workforce()).unwrap();
+    assert!(reopened.store().pending().unwrap().is_empty());
+    assert_eq!(reopened.state().pending_events().count(), 0);
+    assert_eq!(reopened.store().log_since(0).unwrap().len(), 2);
 }

@@ -1,6 +1,7 @@
 use std::collections::BTreeSet;
 
 use wf_core::event::{Event, EventBody, EventError};
+use wf_core::hlc::HLC_TOLERANCE_MS;
 use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::{Actor, DeviceSigner};
 use wf_core::refs::PARSER_VERSION;
@@ -15,7 +16,7 @@ pub const SNAPSHOT_INTERVAL: usize = 256;
 
 /// Bumped whenever the serialized shape of [`State`] changes. Snapshots are a cache: a mismatch
 /// discards the snapshot and refolds from the log.
-const SNAPSHOT_FORMAT: u32 = 9;
+const SNAPSHOT_FORMAT: u32 = 11;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
@@ -31,6 +32,8 @@ pub enum AuthorError {
     Build(#[from] BuildError),
     #[error(transparent)]
     Policy(#[from] PolicyViolation),
+    #[error("the policy names an hlc too far ahead of this device's clock")]
+    PolicyHlcInFuture,
     #[error(
         "another event was written under this device's key; join the workforce again as a new device"
     )]
@@ -119,11 +122,12 @@ impl<S: EventStore> Replica<S> {
             failed_write: None,
         };
         for event in replica.store.pending()? {
-            let received = replica
-                .state
-                .receive(event.clone(), Trust::Stored)
-                .map_err(|error| StoreError::Inconsistent(wf_core::error_chain(&error)))?;
-            replica.persist(&event, &received)?;
+            // Admission may refuse what an earlier version parked unchecked; such an event is
+            // dropped from the pending set rather than failing the open.
+            match replica.state.receive(event.clone(), Trust::Stored) {
+                Ok(received) => replica.persist(&event, &received)?,
+                Err(_) => replica.drop_pending(&event)?,
+            }
         }
         let needs_snapshot = replayed >= SNAPSHOT_INTERVAL || (!from_snapshot && replayed > 0);
         if needs_snapshot {
@@ -308,6 +312,14 @@ impl<S: EventStore> Replica<S> {
         if let EventBody::DeviceBound(bound) = &body {
             builder = builder.depending_on(bound.invite);
         }
+        // The signer chose the hlc of a policy before the event existed.
+        if let EventBody::BoundPolicySet(signed) = &body {
+            let hlc = signed.statement.hlc;
+            if hlc.wall_ms() > now_ms.saturating_add(HLC_TOLERANCE_MS) {
+                return Err(AuthorError::PolicyHlcInFuture);
+            }
+            builder = builder.with_hlc(hlc);
+        }
         let event = builder.sign(signer, body)?;
         // The builder's floor may lie beyond this device's clock (stored events, peers admitted
         // under an earlier clock), so the tolerance of `receive_at` must not judge own events.
@@ -317,6 +329,19 @@ impl<S: EventStore> Replica<S> {
             .map_err(ReceiveError::from)?;
         self.persist(&event, &received).map_err(ReceiveError::from)?;
         Ok(event)
+    }
+
+    fn drop_pending(&mut self, event: &Event) -> Result<(), StoreError> {
+        let result = self.store.commit(Commit {
+            append: &[],
+            pending: PendingChange::Update {
+                put: &[],
+                remove: &[event.id()],
+            },
+            snapshot: SnapshotChange::Keep,
+        });
+        self.note_failed_write(&result);
+        result
     }
 
     fn persist(&mut self, submitted: &Event, received: &Received) -> Result<(), StoreError> {

@@ -20,6 +20,11 @@ use crate::validate::Invalid;
 /// Events that wait for missing parents are capped so a malformed `deps` cannot grow memory forever.
 pub const MAX_PENDING: usize = 10_000;
 
+/// A binding can be parked while a fork takes in its history without anything vouching for its
+/// key yet, so any fresh keypair can park one. Their number is capped far below `MAX_PENDING`,
+/// leaving the rest of the pending events to the devices that are bound.
+pub const MAX_PENDING_BINDINGS: usize = 64;
+
 /// Whether an event's signatures still need checking. The store only holds verified events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Trust {
@@ -275,10 +280,14 @@ pub(crate) struct Workforce {
     pub(crate) aliases: BTreeMap<PrincipalKey, PrincipalKey>,
     pub(crate) announcements: BTreeMap<EventId, Announcement>,
     pub(crate) profiles: BTreeMap<DeviceKey, Lww<DeviceProfile>>,
-    /// The policy as the latest genesis or policy event set it.
+    /// The policy as the latest genesis or unbound policy event set it.
     pub(crate) policy_source: Lww<String>,
-    /// The latest policy this version can read, which the workforce runs on.
+    /// The latest unbound policy this version can read.
     pub(crate) policy: Lww<PolicyDoc>,
+    /// The policy as the latest bound policy event set it, once there is one.
+    pub(crate) bound_policy_source: Option<Lww<String>>,
+    /// The latest bound policy this version can read, once there is one.
+    pub(crate) bound_policy: Option<Lww<PolicyDoc>>,
     /// `None` once removed, so events of its sessions stay valid in any order.
     pub(crate) agents: BTreeMap<AgentId, Lww<Option<AgentDefinition>>>,
     pub(crate) items: BTreeMap<ItemId, Item>,
@@ -289,6 +298,59 @@ impl Workforce {
     pub(crate) fn canonical(&self, principal: &PrincipalKey) -> PrincipalKey {
         self.aliases.get(principal).copied().unwrap_or(*principal)
     }
+
+    /// Records `source` in the register of its kind. A bound policy beats every unbound one
+    /// whatever their stamps, so a replayed old unbound policy cannot roll a bound one back; the
+    /// registers are kept apart so that this holds even when a bound policy cannot be read.
+    /// Within a register the latest `stamp` wins, and only a readable policy is run.
+    pub(crate) fn set_policy(&mut self, source: String, stamp: Stamp, binding: PolicyBinding) {
+        let parsed = PolicyDoc::parse(&source).ok();
+        match binding {
+            PolicyBinding::Unbound => {
+                self.policy_source.set(source, stamp);
+                if let Some(policy) = parsed {
+                    self.policy.set(policy, stamp);
+                }
+            }
+            PolicyBinding::Bound => {
+                set_optional(&mut self.bound_policy_source, source, stamp);
+                if let Some(policy) = parsed {
+                    set_optional(&mut self.bound_policy, policy, stamp);
+                }
+            }
+        }
+    }
+
+    /// The policy the workforce runs on: the latest readable bound one, else the unbound one.
+    pub(crate) fn running_policy(&self) -> &PolicyDoc {
+        self.bound_policy
+            .as_ref()
+            .map_or_else(|| self.policy.value(), Lww::value)
+    }
+
+    /// The source of the policy the workforce set last, readable or not.
+    pub(crate) fn latest_policy_source(&self) -> &str {
+        self.bound_policy_source
+            .as_ref()
+            .unwrap_or(&self.policy_source)
+            .value()
+    }
+}
+
+fn set_optional<T>(register: &mut Option<Lww<T>>, value: T, stamp: Stamp) {
+    match register {
+        Some(current) => {
+            current.set(value, stamp);
+        }
+        None => *register = Some(Lww::new(value, stamp)),
+    }
+}
+
+/// Whether a policy event names its own `hlc`, which keeps it from being replayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PolicyBinding {
+    Unbound,
+    Bound,
 }
 
 /// What a pending event waits for before it can be admitted.
@@ -397,15 +459,15 @@ impl State {
     pub fn policy(&self) -> Option<&PolicyDoc> {
         self.workforce
             .as_ref()
-            .map(|workforce| workforce.policy.value())
+            .map(Workforce::running_policy)
     }
 
     /// Why this version cannot read the policy the workforce set last, if it cannot. The
     /// workforce then runs on [`State::policy`], the last one it could read, or the default.
     pub fn unreadable_policy(&self) -> Option<PolicyError> {
         let workforce = self.workforce.as_ref()?;
-        let latest = workforce.policy_source.value();
-        if *latest == workforce.policy.value().source {
+        let latest = workforce.latest_policy_source();
+        if latest == workforce.running_policy().source {
             return None;
         }
         Policy::parse(latest).err()
@@ -670,6 +732,20 @@ impl State {
         builder.workforce = None;
         builder.deps = Vec::new();
         Ok(builder)
+    }
+
+    /// The `hlc` of the next event written on this state at `now_ms`, for a statement that has to
+    /// name it before the event is built. Every applied event is a head or precedes one, so the
+    /// heads give the same floor as the builder's.
+    pub fn next_hlc(&self, now_ms: u64) -> Result<Hlc, BuildError> {
+        let floor = self
+            .heads
+            .iter()
+            .filter_map(|id| self.known.get(id))
+            .map(|known| known.hlc)
+            .max()
+            .unwrap_or(Hlc::ZERO);
+        Hlc::next_after(floor, now_ms).ok_or(BuildError::ClockExhausted)
     }
 
     /// Starts an event authored by `author` on top of everything this state has seen.

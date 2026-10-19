@@ -12,7 +12,7 @@ use crate::refs;
 use crate::session::{Ended, Session, Verdict};
 use crate::state::{
     AgentDefinition, Announcement, Binding, Feed, FeedHead, ForkState, Invite, Known, Member,
-    Neighbours, Origin, PolicyDoc, State, Workforce,
+    Neighbours, Origin, PolicyBinding, PolicyDoc, State, Workforce,
 };
 
 impl State {
@@ -88,6 +88,8 @@ impl State {
                 devices,
                 policy_source: Lww::new(genesis.policy.clone(), stamp),
                 policy: Lww::new(policy, stamp),
+                bound_policy_source: None,
+                bound_policy: None,
                 agents: BTreeMap::new(),
                 items: BTreeMap::new(),
                 sessions: BTreeMap::new(),
@@ -173,6 +175,7 @@ impl State {
                 content.body,
                 EventBody::Genesis(_)
                     | EventBody::PolicySet(_)
+                    | EventBody::BoundPolicySet(_)
                     | EventBody::InviteCreated(_)
                     | EventBody::DeviceBound(_)
                     | EventBody::ForkAnnounced(_)
@@ -252,11 +255,14 @@ impl State {
                 }
             }
             EventBody::PolicySet(signed) => {
-                let source = &signed.statement.policy;
-                workforce.policy_source.set(source.clone(), stamp);
-                if let Ok(policy) = PolicyDoc::parse(source) {
-                    workforce.policy.set(policy, stamp);
-                }
+                workforce.set_policy(
+                    signed.statement.policy.clone(),
+                    stamp,
+                    PolicyBinding::Unbound,
+                );
+            }
+            EventBody::BoundPolicySet(signed) => {
+                workforce.set_policy(signed.statement.policy.clone(), stamp, PolicyBinding::Bound);
             }
             EventBody::AgentDefined(_) | EventBody::AgentRemoved(_)
                 if origin == Origin::History
