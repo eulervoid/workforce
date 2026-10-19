@@ -188,8 +188,24 @@ fn device_diff(
     diff: DeviceDiff,
 ) -> anyhow::Result<()> {
     let label = crate::view::device_label(workspace.state(), device);
+    let (view, text) = device_view(id, device, &label, diff)?;
+    emit(json, &view, |_| text)
+}
+
+/// What `wf item diff` shows of the diff read from `device`, called `label`: the data for
+/// `--json` and the text.
+fn device_view(
+    id: ItemId,
+    device: DeviceKey,
+    label: &str,
+    diff: DeviceDiff,
+) -> anyhow::Result<(DiffView, String)> {
     match diff {
         DeviceDiff::Work(work) => {
+            let text = format!(
+                "committed on {label}, against {}\n{}",
+                work.target, work.committed
+            );
             let view = DiffView {
                 item: id.to_base32(),
                 device: Some(device.to_string()),
@@ -197,10 +213,7 @@ fn device_diff(
                 merge: None,
                 diff: Some(work.committed),
             };
-            emit(json, &view, |view| {
-                let diff = view.diff.as_deref().unwrap_or_default();
-                format!("committed on {label}, against {}\n{diff}", work.target)
-            })
+            Ok((view, text))
         }
         DeviceDiff::Unreachable(reason) => {
             bail!(
@@ -303,6 +316,47 @@ mod tests {
 
     fn commit() -> CommitId {
         CommitId::Git("a8d4948400000000000000000000000000000000".parse().unwrap())
+    }
+
+    #[test]
+    fn the_diff_of_a_device_is_shown_with_the_device_and_its_commit() {
+        let id = ItemId::from_bytes([2; 32]);
+        let work = Work {
+            target: "main".to_owned(),
+            head: commit(),
+            committed: "diff --git a/f b/f\n".to_owned(),
+        };
+        let (view, text) = device_view(id, device(), "laptop", DeviceDiff::Work(work)).unwrap();
+        assert_eq!(view.device, Some(device().to_string()));
+        assert_eq!(view.commit, commit().to_string());
+        assert_eq!(view.merge, None);
+        assert_eq!(view.diff.as_deref(), Some("diff --git a/f b/f\n"));
+        assert_eq!(
+            text,
+            "committed on laptop, against main\ndiff --git a/f b/f\n"
+        );
+        let json = serde_json::to_value(&view).unwrap();
+        assert_eq!(json["device"], device().to_string());
+        assert_eq!(json["diff"], "diff --git a/f b/f\n");
+    }
+
+    #[test]
+    fn an_unreachable_device_is_an_error_naming_it_not_a_missing_branch() {
+        let id = ItemId::from_bytes([2; 32]);
+        let error = device_view(
+            id,
+            device(),
+            "laptop",
+            DeviceDiff::Unreachable("timed out".to_owned()),
+        )
+        .map(|_| ())
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("runs on laptop, which cannot be reached: timed out"),
+            "{error}"
+        );
+        assert!(!error.contains("missing"), "{error}");
     }
 
     #[test]

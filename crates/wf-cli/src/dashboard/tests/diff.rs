@@ -474,3 +474,17 @@ fn a_device_that_cannot_be_reached_before_any_diff_was_read_is_said_so() {
     let shown = screen(&mut app, 100, 24);
     assert!(shown.contains("cannot be reached: timed out"), "{shown}");
 }
+
+#[test]
+fn a_device_asked_is_not_asked_again_within_the_interval_even_when_unreachable() {
+    use crate::dashboard::AskedDevices;
+
+    let item = ItemId::from_bytes([3; 32]);
+    let mut asked = AskedDevices::default();
+    assert!(asked.due(item));
+    asked.asked(item);
+    assert!(!asked.due(item));
+    assert!(asked.due(ItemId::from_bytes([4; 32])));
+    asked.forget(item);
+    assert!(asked.due(item));
+}

@@ -287,7 +287,29 @@ struct Feed {
     /// What the snapshot on screen was taken from.
     taken: Option<Taken>,
     /// When each diff was last asked of the device of its session.
-    asked_devices: HashMap<ItemId, Instant>,
+    asked_devices: AskedDevices,
+}
+
+/// When each diff was last asked of the device of its session, however that came out, so a
+/// device that cannot be reached is not waited for on every tick.
+#[derive(Default)]
+struct AskedDevices(HashMap<ItemId, Instant>);
+
+impl AskedDevices {
+    fn due(&self, item: ItemId) -> bool {
+        self.0
+            .get(&item)
+            .is_none_or(|asked| asked.elapsed() >= ASK_DEVICE_EVERY)
+    }
+
+    fn asked(&mut self, item: ItemId) {
+        self.0.insert(item, Instant::now());
+    }
+
+    /// The diff is read here again, so nothing holds it back.
+    fn forget(&mut self, item: ItemId) {
+        self.0.remove(&item);
+    }
 }
 
 impl Feed {
@@ -301,7 +323,7 @@ impl Feed {
             readers: HashMap::new(),
             git: None,
             taken: None,
-            asked_devices: HashMap::new(),
+            asked_devices: AskedDevices::default(),
         })
     }
 
@@ -378,12 +400,7 @@ impl Feed {
         let Some(pane) = app.diffs.get_mut(&item) else {
             return;
         };
-        if pane.device().is_some()
-            && self
-                .asked_devices
-                .get(&item)
-                .is_some_and(|asked| asked.elapsed() < ASK_DEVICE_EVERY)
-        {
+        if !self.asked_devices.due(item) {
             return;
         }
         let mut read = || -> anyhow::Result<()> {
@@ -394,6 +411,7 @@ impl Feed {
             let now_ms = wf_store::now_ms();
             match commands::item_diff(workspace, git, item, pane.commit())? {
                 ItemDiff::Local(work) => {
+                    self.asked_devices.forget(item);
                     let commit = work.shown();
                     if pane.commit() == Some(commit) && pane.device().is_none() {
                         return Ok(());
@@ -406,7 +424,7 @@ impl Feed {
                     pane.read(Ok(ItemWork { commit, changes }));
                 }
                 ItemDiff::Device { device, diff } => {
-                    self.asked_devices.insert(item, Instant::now());
+                    self.asked_devices.asked(item);
                     match diff {
                         DeviceDiff::Work(work) => {
                             let changes = Changes::Files(wf_vcs::diff::parse(&work.committed));
