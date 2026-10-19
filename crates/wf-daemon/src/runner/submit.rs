@@ -73,7 +73,7 @@ impl SubmissionChecks {
     }
 
     /// The commit whose checks of `session` passed.
-    fn passed(&self, session: SessionId) -> Option<CommitId> {
+    pub(super) fn passed(&self, session: SessionId) -> Option<CommitId> {
         match self.lock().get(&session) {
             Some(Checks::Passed { commit }) => Some(*commit),
             Some(Checks::Running { .. } | Checks::Failed { .. }) | None => None,

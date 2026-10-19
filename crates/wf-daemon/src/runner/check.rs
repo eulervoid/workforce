@@ -377,6 +377,17 @@ mod tests {
     }
 
     #[test]
+    fn checks_at_submission_run_in_the_sandbox_of_agents_whatever_checks_get_at_the_merge() {
+        let mut config = MachineConfig::default();
+        config.check.sandbox = Some(SandboxConfig::Off {});
+        assert_eq!(
+            CheckStage::Submission.sandbox(&config),
+            &SandboxConfig::default()
+        );
+        assert_eq!(CheckStage::Merge.sandbox(&config), &SandboxConfig::Off {});
+    }
+
+    #[test]
     fn a_pass_is_kept_for_its_tree_command_and_sandbox_only() {
         let directory = tempfile::tempdir().unwrap();
         let passed = PassedChecks {

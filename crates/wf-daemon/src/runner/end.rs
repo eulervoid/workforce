@@ -131,8 +131,12 @@ impl Daemon {
             SessionEnd::Finish(Finish::Submit { .. }) => {
                 // Checks that passed on the head are not run again, nor is the branch rebased
                 // under them.
-                let head = self.submitted_commit(workforce, &state, item).await?;
-                let checked = head.is_some_and(|head| self.submission_checked(session, head));
+                let checked = match self.submissions.passed(session) {
+                    Some(passed) => {
+                        self.submitted_commit(workforce, &state, item).await? == Some(passed)
+                    }
+                    None => false,
+                };
                 if state.rebases_at_submit(session) && !checked {
                     let agent = folded.agent();
                     let committer = git_identity(&state, agent.principal, &agent.name)?;
