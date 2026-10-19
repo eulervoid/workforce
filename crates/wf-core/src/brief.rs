@@ -6,7 +6,7 @@ use std::fmt::Write;
 use crate::event::CommentKind;
 use crate::id::{CommentId, HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::{Item, ItemView};
+use crate::item::{Comment, Item, ItemView};
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, SessionRole};
@@ -158,6 +158,97 @@ pub fn speaker(state: &State, actor: &Actor) -> String {
             format!("{}/{}", state.principal_label(&agent.principal), agent.name)
         }
     }
+}
+
+/// What to say to a session whose wait is over: what others wrote on its item since the
+/// session's last blocker, and what finished dependencies left.
+pub fn resumed_text(state: &State, session: SessionId, sources: &impl Sources) -> String {
+    let mut text = String::from("What you were waiting for is resolved.");
+    let Some(folded) = state.session(session) else {
+        text.push_str("\nContinue.");
+        return text;
+    };
+    let item = folded.item();
+    if let Some(ItemView::Live(live)) = state.item(item) {
+        let asked = live
+            .comments()
+            .values()
+            .filter(|comment| comment.session() == Some(session))
+            .filter(|comment| comment.kind == CommentKind::Blocker)
+            .map(|comment| comment.at)
+            .max();
+        if let Some(asked) = asked {
+            written_since(state, live, session, sources, |comment| comment.at > asked)
+                .for_each(|line| text.push_str(&line));
+        }
+    }
+    let graph = state.dependency_graph();
+    for dependency in graph.depends_on(item) {
+        let Some(ItemView::Live(dependency)) = state.item(dependency) else {
+            continue;
+        };
+        if let Some(note) = last_comment(dependency, sources) {
+            text.push_str(&format!(
+                "\n- #{} {}: {note}",
+                HashId::short(&dependency.id()),
+                dependency.title()
+            ));
+        }
+    }
+    text.push_str("\nContinue.");
+    text
+}
+
+/// What to say to a session the daemon resumed after a restart: that it was, and what others
+/// wrote on its item since the session was last prompted, at `prompted_ms`.
+pub fn restarted_text(
+    state: &State,
+    session: SessionId,
+    prompted_ms: u64,
+    sources: &impl Sources,
+) -> String {
+    let mut text = String::from(
+        "wf restarted while you were working, and resumed this conversation. A command you ran \
+         may not have finished; check before you go on.",
+    );
+    let item = state.session(session).map(|folded| folded.item());
+    if let Some(ItemView::Live(live)) = item.and_then(|item| state.item(item)) {
+        let lines: Vec<_> = written_since(state, live, session, sources, |comment| {
+            comment.at.wall_ms() > prompted_ms
+        })
+        .collect();
+        if !lines.is_empty() {
+            text.push_str("\nWritten on the item since:");
+        }
+        lines.iter().for_each(|line| text.push_str(line));
+    }
+    text.push_str("\n`wf work brief` shows the item as it is now. Continue.");
+    text
+}
+
+/// The comments on `item` that `keep` selects and `session` did not write, oldest first, each as
+/// a line of a list.
+fn written_since<'a>(
+    state: &'a State,
+    item: &'a Item,
+    session: SessionId,
+    sources: &'a impl Sources,
+    keep: impl Fn(&Comment) -> bool + 'a,
+) -> impl Iterator<Item = String> + 'a {
+    let mut since: Vec<_> = item
+        .comments()
+        .iter()
+        .filter(|(_, comment)| keep(comment) && comment.session() != Some(session))
+        .collect();
+    since.sort_by_key(|(id, comment)| (comment.at, **id));
+    since.into_iter().filter_map(move |(id, comment)| {
+        let written = sources.text(*id)?;
+        Some(format!(
+            "\n- {}: {}",
+            speaker(state, &comment.by),
+            written.trim()
+        ))
+    })
 }
 
 /// Everything said on the item, oldest first.

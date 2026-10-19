@@ -1,6 +1,7 @@
 //! Sessions and agents, as `wf session list` and `wf agent list` show them.
 
 use serde::Serialize;
+use wf_core::graph::DependencyGraph;
 use wf_core::id::{HashId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::item::ItemView;
@@ -89,25 +90,6 @@ pub struct SessionView {
     pub steps: Option<StepsView>,
 }
 
-/// Whether `session` is a live work session whose item waits on a dependency or on an open
-/// blocker, such as its own question.
-pub(crate) fn is_parked(
-    state: &State,
-    graph: &wf_core::graph::DependencyGraph,
-    session: &wf_core::session::Session,
-) -> bool {
-    let blocked = match state.item(session.item()) {
-        Some(ItemView::Live(item)) => item.has_open_blocker(),
-        Some(ItemView::Archived(_)) | None => false,
-    };
-    session.is_live()
-        && session.role() == SessionRole::Work
-        && (blocked
-            || !state
-                .unfinished_dependencies(graph, session.item())
-                .is_empty())
-}
-
 /// Live sessions first, then the others, each the newest first. `model_of` tells the model a
 /// session runs with, where this machine knows it.
 pub fn session_views(
@@ -126,7 +108,7 @@ pub fn session_views(
 /// One session, as `wf session list` shows it, running with `model` where that is known.
 pub(super) fn session_view(
     state: &State,
-    graph: &wf_core::graph::DependencyGraph,
+    graph: &DependencyGraph,
     session: &Session,
     model: Option<String>,
 ) -> SessionView {
@@ -145,7 +127,7 @@ pub(super) fn session_view(
         Some(ItemView::Live(item)) => steps_view(&item.body()),
         Some(ItemView::Archived(_)) | None => None,
     };
-    let parked = is_parked(state, graph, session);
+    let parked = state.session_waits(session.id(), graph);
     SessionView {
         id: session.id().to_base32(),
         agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),

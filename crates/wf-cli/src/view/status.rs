@@ -14,7 +14,6 @@ use wf_core::session::HarnessFault;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
 
-use super::session::is_parked;
 use super::{device_label, timestamp_ms};
 
 #[derive(Serialize)]
@@ -388,7 +387,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         .collect();
     let parked_sessions = live
         .iter()
-        .filter(|session| is_parked(state, &graph, session))
+        .filter(|session| state.session_waits(session.id(), &graph))
         .count();
     let after_failures: Vec<String> = state
         .inbox()

@@ -6,9 +6,11 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::event::CommentKind;
-use crate::id::{ItemId, SessionId};
+use crate::graph::DependencyGraph;
+use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::{ItemState, ItemView};
+use crate::item::{Item, ItemState, ItemView};
+use crate::policy::Policy;
 use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole};
 use crate::state::State;
 
@@ -102,6 +104,55 @@ pub enum AfterEnd {
         commit: CommitId,
         wait_in: Option<ItemState>,
     },
+}
+
+/// A work session cannot start on an item that a live session holds.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("#{} already has a live session, {holder}; stop it first", .item.short())]
+pub struct ItemClaimed {
+    pub item: ItemId,
+    /// The session that holds the item, as [`State::actor_label`] names it.
+    pub holder: String,
+}
+
+/// What a session that continues after the daemon restarted is told first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resume {
+    /// The session was working: the daemon restarted under it.
+    AfterRestart,
+    /// The session's last turn asked a blocker, so it was parked when the daemon stopped, even if
+    /// the blocker is answered by now.
+    AfterWait,
+}
+
+/// What to do for a request to merge the reviewed work of an item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergePlan {
+    /// The item is done: another request finished the merge, or the item was finished otherwise.
+    Nothing,
+    /// The commit is in the target branch already, as when the daemon stopped before it moved
+    /// the item: move the item to `done`.
+    MoveToDone,
+    /// Merge the commit into the target branch, clean up the branch and move the item to `done`.
+    Merge,
+}
+
+impl MergePlan {
+    /// What the daemon does for a request to merge `commit`, the commit that was reviewed, of
+    /// `item`.
+    pub fn of(item: &Item, policy: &Policy, commit: CommitId) -> MergePlan {
+        if item.state(policy) == ItemState::Done {
+            MergePlan::Nothing
+        } else if item
+            .merges()
+            .values()
+            .any(|merged| merged.reviewed == commit)
+        {
+            MergePlan::MoveToDone
+        } else {
+            MergePlan::Merge
+        }
+    }
 }
 
 /// What to do when a turn of a session has ended.
@@ -360,20 +411,64 @@ impl State {
         if let Some(fault) = machine_fault {
             return TurnOutcome::MachineFault(fault);
         }
-        let blocked_by_comment = match self.item(item) {
-            Some(ItemView::Live(live)) => live.has_open_blocker(),
-            Some(ItemView::Archived(_)) | None => false,
-        };
-        let waits_on_dependency = !self
-            .unfinished_dependencies(&self.dependency_graph(), item)
-            .is_empty();
-        if working && (blocked_by_comment || waits_on_dependency) {
+        if self.session_waits(session, &self.dependency_graph()) {
             return TurnOutcome::Park;
         }
         if nudges_used > nudges_allowed {
             TurnOutcome::GiveUp
         } else {
             TurnOutcome::Continue
+        }
+    }
+
+    /// Whether `session` is a live work session whose item waits on a dependency or on an open
+    /// blocker, such as the session's own question. The runner parks such a session after its
+    /// turn, and the dashboards show it as parked. `graph` is the dependency graph of this state,
+    /// which callers asking about many sessions build once.
+    pub fn session_waits(&self, session: SessionId, graph: &DependencyGraph) -> bool {
+        let Some(folded) = self.session(session) else {
+            return false;
+        };
+        if !folded.is_live() || folded.role() != SessionRole::Work {
+            return false;
+        }
+        let item = folded.item();
+        let blocked_by_comment = match self.item(item) {
+            Some(ItemView::Live(live)) => live.has_open_blocker(),
+            Some(ItemView::Archived(_)) | None => false,
+        };
+        blocked_by_comment || !self.unfinished_dependencies(graph, item).is_empty()
+    }
+
+    /// Refuses a work session on `item` while a live one holds it.
+    pub fn ensure_unclaimed(&self, item: ItemId) -> Result<(), ItemClaimed> {
+        match self.claim(item) {
+            Some(holder) => Err(ItemClaimed {
+                item,
+                holder: self.actor_label(&holder.actor()),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// What `session` is told first after a restart of the daemon, which last prompted it at
+    /// `prompted_ms`, in milliseconds since the epoch.
+    pub fn resume_after_restart(&self, session: SessionId, prompted_ms: u64) -> Resume {
+        let Some(folded) = self.session(session) else {
+            return Resume::AfterRestart;
+        };
+        let asked = match self.item(folded.item()) {
+            Some(ItemView::Live(item)) => item.comments().values().any(|comment| {
+                comment.session() == Some(session)
+                    && comment.kind == CommentKind::Blocker
+                    && comment.at.wall_ms() >= prompted_ms
+            }),
+            Some(ItemView::Archived(_)) | None => false,
+        };
+        if asked {
+            Resume::AfterWait
+        } else {
+            Resume::AfterRestart
         }
     }
 

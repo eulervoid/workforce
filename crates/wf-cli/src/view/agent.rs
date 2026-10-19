@@ -59,7 +59,6 @@ pub fn agent_detail(
             })
         })
         .collect();
-    let graph = state.dependency_graph();
     let mut sessions: Vec<&Session> = state
         .sessions()
         .filter(|session| session.agent() == agent)
@@ -67,6 +66,7 @@ pub fn agent_detail(
     sessions.sort_by_key(|session| (!session.is_live(), std::cmp::Reverse(session.started())));
     let live = sessions.iter().filter(|session| session.is_live()).count();
     let shown = sessions.len().min(live + ENDED_SESSIONS_SHOWN);
+    let graph = state.dependency_graph();
     Some(AgentDetail {
         definition: agent_view(state, agent, definition),
         hosts,

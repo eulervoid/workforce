@@ -16,7 +16,7 @@ use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
 use wf_vcs::{GitCli, VcsError, item_branch, item_worktree, session_directory};
 
 use super::drive::run_session;
-use super::{Begin, Run, SessionError, blocking, ensure_unclaimed};
+use super::{Begin, Run, SessionError, blocking};
 use crate::decide::{AgentContext, DeciderRequest, Deciding, ItemContext};
 use crate::machine_config::{EnvironmentConfig, SandboxConfig};
 use crate::{Daemon, Loaded};
@@ -181,7 +181,7 @@ impl Daemon {
         let state = self.snapshot(loaded).await?;
         let setup = self.setup(&state, workforce, agent, item, role)?;
         if role == SessionRole::Work {
-            ensure_unclaimed(&state, item)?;
+            state.ensure_unclaimed(item)?;
         }
         let git = match role {
             SessionRole::Work => {

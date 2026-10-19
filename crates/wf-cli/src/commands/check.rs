@@ -213,8 +213,8 @@ impl<'a> Machine<'a> {
                 config,
                 settings,
                 git_config,
-            } => Confinement::Agents {
-                access: Access {
+            } => Confinement::for_checks(
+                Access {
                     worktree: directory,
                     repository,
                     branch: None,
@@ -222,11 +222,10 @@ impl<'a> Machine<'a> {
                     data_dir,
                     machine_config: Some(config_path),
                 },
-                sandbox: config.check_sandbox(),
-                environment: &config.environment,
+                config,
                 settings,
                 git_config,
-            },
+            ),
         }
     }
 

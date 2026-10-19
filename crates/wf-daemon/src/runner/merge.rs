@@ -9,7 +9,7 @@ use wf_core::event::{Comment, EventBody, Merged};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{ItemState, ItemView};
-use wf_core::lifecycle::MergeFailure;
+use wf_core::lifecycle::{MergeFailure, MergePlan};
 use wf_core::policy::MergeMode;
 use wf_core::review::PendingMerge;
 use wf_core::session::CommitId;
@@ -248,8 +248,8 @@ impl Daemon {
             return Err(SessionError::Archived(item));
         };
         let policy = &state.policy().ok_or(SessionError::NoPolicy)?.policy;
-        // Another request finished this merge already, or the item was finished otherwise.
-        if live.state(policy) == ItemState::Done {
+        let plan = MergePlan::of(live, policy, commit);
+        if plan == MergePlan::Nothing {
             return Ok(MergeEnd::Handled);
         }
         // Queued while an earlier merge of the item ran, which sent it back to work or left it
@@ -259,12 +259,7 @@ impl Daemon {
             return Ok(MergeEnd::Handled);
         }
         let principal = self.principal_of_device(&state)?;
-        // Merged by a request that did not get to move the item, as when the daemon stopped.
-        if live
-            .merges()
-            .values()
-            .any(|merged| merged.reviewed == commit)
-        {
+        if plan == MergePlan::MoveToDone {
             self.move_item(
                 loaded,
                 principal,
