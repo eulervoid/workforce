@@ -3024,3 +3024,44 @@ wf review --approve
     assert!(!inbox.contains("review of"), "{inbox}");
     std::fs::write(world.wf.data.join("again"), "").unwrap();
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_principal_review_that_stopped_merging_stays_in_the_inbox_as_stale_until_it_merges_again()
+{
+    let coder = "\
+sh echo branch > file.txt && git add file.txt && git commit -q -m branch
+wf work submit
+";
+    let reviewer = "wf review --approve\n";
+    let world = review_world(coder, reviewer).await;
+    let item = world
+        .wf
+        .add(&["--title", "Change the file", "--review", "critical"]);
+    world
+        .wait("the review in the inbox", |world| {
+            world.wf.run(&["inbox"]).contains("review of")
+        })
+        .await;
+    // The daemon checks the principal step when it is offered; a comment makes it check again.
+    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    let repository = &world.wf.repository;
+    std::fs::write(repository.join("file.txt"), "main\n").unwrap();
+    git_in(repository, &["commit", "--quiet", "-am", "main moves on"]);
+    world.wf.run(&["comment", short(&item), "main moved"]);
+    world
+        .wait("the stale review", |world| {
+            world.wf.run(&["inbox"]).contains("Stale since")
+        })
+        .await;
+    assert_eq!(world.item(&item)["state"], "review");
+    assert!(world.wf.run(&["inbox"]).contains("review of"));
+    git_in(repository, &["reset", "--quiet", "--hard", "HEAD~1"]);
+    world.wf.run(&["comment", short(&item), "main moved back"]);
+    world
+        .wait("the stale marker to clear", |world| {
+            !world.wf.run(&["inbox"]).contains("Stale since")
+        })
+        .await;
+    assert!(world.wf.run(&["inbox"]).contains("review of"));
+    assert!(!comments_with(&world, &item, "comment", "Merges into main again").is_empty());
+}

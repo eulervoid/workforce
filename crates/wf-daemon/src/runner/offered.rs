@@ -14,15 +14,30 @@ use wf_vcs::{GitCli, MergeTree};
 use super::{SessionError, blocking};
 use crate::{Daemon, Loaded};
 
-/// The reviews the daemon has checked against the target: by item and commit.
-pub(super) type CheckedReviews = BTreeSet<(ItemId, CommitId)>;
+/// What the daemon remembers of checking offered reviews against the target. It lives in memory:
+/// a restarted daemon cannot tell which principal reviews it already offered, so its first pass
+/// keeps the ones that conflict in the inbox as stale instead of sending them back to work.
+pub(super) struct CheckedReviews {
+    seen: BTreeSet<(ItemId, CommitId)>,
+    first_pass: bool,
+}
+
+impl CheckedReviews {
+    pub(super) fn new() -> Self {
+        Self {
+            seen: BTreeSet::new(),
+            first_pass: true,
+        }
+    }
+}
 
 impl Daemon {
     /// Checks that the work of every offered review merges into the target. What does not merge
     /// the first time it is offered goes back to work with a change request that names the files.
     /// What merged then and stopped merging while a principal waits to review it stays in the
     /// inbox, with the change request to say so since when; an agent step has no one waiting yet,
-    /// so that goes back to work as well.
+    /// so that goes back to work as well. Once such work merges again, the daemon resolves that
+    /// change request. After a restart, the first pass counts every principal step as offered.
     pub(super) async fn check_offered_reviews(
         &self,
         loaded: &Loaded,
@@ -38,7 +53,8 @@ impl Daemon {
         };
         let principal = self.principal_of_device(&state)?;
         let offered = state.offered_reviews();
-        checked.retain(|(item, commit)| {
+        let after_restart = std::mem::take(&mut checked.first_pass);
+        checked.seen.retain(|(item, commit)| {
             offered
                 .iter()
                 .any(|(offered, offered_commit, _)| offered == item && offered_commit == commit)
@@ -50,7 +66,20 @@ impl Daemon {
             };
             let paths = match merges {
                 Ok(MergeTree::Landed { .. } | MergeTree::Clean { .. }) => {
-                    checked.insert((item, commit));
+                    checked.seen.insert((item, commit));
+                    if let Some((_, submitted)) = state.submission(item)
+                        && let Some(stale) = state.stale_since(item, submitted.hlc)
+                    {
+                        self.author(
+                            loaded,
+                            Actor::Daemon(principal),
+                            EventBody::Commented(Commented {
+                                resolves: vec![stale.comment],
+                                ..Commented::plain(item, format!("Merges into {target} again."))
+                            }),
+                        )
+                        .await?;
+                    }
                     continue;
                 }
                 Ok(MergeTree::Conflict { paths }) => paths,
@@ -63,9 +92,9 @@ impl Daemon {
                     continue;
                 }
             };
-            let first_offer = checked.insert((item, commit));
+            let first_offer = checked.seen.insert((item, commit));
             let stale = match step {
-                ReviewStep::Principal if !first_offer => {
+                ReviewStep::Principal if after_restart || !first_offer => {
                     let Some((_, submitted)) = state.submission(item) else {
                         continue;
                     };

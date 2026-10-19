@@ -343,7 +343,11 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
                 vec![Line::from(more).themed(theme::text_dimmed())],
             )
         }
-        InboxEntry::Review { item, commit } => {
+        InboxEntry::Review {
+            item,
+            commit,
+            stale,
+        } => {
             let mut first = vec![themed("◎ ", theme::attention())];
             first.push(themed(format!("#{}", item.id.short()), theme::id()));
             first.push(Span::raw(" review"));
@@ -351,7 +355,18 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
                 first.push(Span::raw(format!(" {}", commit.short())).themed(theme::text_dimmed()));
             }
             first.push(Span::raw(format!("  {}", item.title)));
-            row.lines(first, row.keys("v").map(Line::from), Vec::new())
+            let more = stale
+                .iter()
+                .map(|stale| {
+                    let since = jiff::Timestamp::from_millisecond(
+                        i64::try_from(stale.since_ms).unwrap_or(i64::MAX),
+                    )
+                    .map_or_else(|_| stale.since_ms.to_string(), |at| at.to_string());
+                    Line::from(format!("  stale since {since}: it no longer merges"))
+                        .themed(theme::text_dimmed())
+                })
+                .collect();
+            row.lines(first, row.keys("v").map(Line::from), more)
         }
         InboxEntry::Notice { item, kind, what } => {
             let mut first = vec![themed("• ", theme::attention())];
