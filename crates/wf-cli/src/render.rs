@@ -634,7 +634,7 @@ pub fn item_stats_list(views: &[ItemStatsView]) -> String {
             view.stats.change_requests.to_string(),
             view.stats
                 .lead_ms
-                .map_or_else(|| paint(theme::text_dimmed(), "-"), duration),
+                .map_or_else(|| paint(theme::text_dimmed(), "-"), crate::text::duration),
             view.item.title.clone(),
         ]);
     }
@@ -652,19 +652,9 @@ pub fn item_stats(stats: &ItemStats) -> String {
         count(stats.change_requests, "change request", "change requests"),
     ];
     if let Some(lead) = stats.lead_ms {
-        parts.push(format!("{} to done", duration(lead)));
+        parts.push(format!("{} to done", crate::text::duration(lead)));
     }
     parts.join(" · ")
-}
-
-/// `14m`, `3h05m`, `2d`.
-pub fn duration(millis: u64) -> String {
-    let minutes = millis / 60_000;
-    match minutes {
-        0..60 => format!("{minutes}m"),
-        60..1440 => format!("{}h{:02}m", minutes / 60, minutes % 60),
-        _ => format!("{}d", minutes / 1440),
-    }
 }
 
 pub fn agent_detail(detail: &AgentDetail) -> String {
@@ -758,7 +748,7 @@ pub fn agent_detail_for(
             format!("{} failed", stats.failed),
         ];
         if let Some(median) = stats.median_duration_ms {
-            counts.push(format!("median {}", duration(median)));
+            counts.push(format!("median {}", crate::text::duration(median)));
         }
         line(String::new(), "");
         line(
@@ -834,7 +824,7 @@ fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -
             |_| timestamp.to_string(),
             |time| {
                 let millis = now.as_millisecond().saturating_sub(time.as_millisecond());
-                duration(u64::try_from(millis).unwrap_or(0))
+                crate::text::duration(u64::try_from(millis).unwrap_or(0))
             },
         )
     };

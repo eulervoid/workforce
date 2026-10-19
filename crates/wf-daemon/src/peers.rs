@@ -84,7 +84,7 @@ pub struct Presence(Arc<Mutex<BTreeMap<DeviceKey, u64>>>);
 
 impl Presence {
     pub fn saw(&self, device: DeviceKey) {
-        let now = crate::now_ms();
+        let now = wf_store::now_ms();
         self.0
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())

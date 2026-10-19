@@ -172,10 +172,13 @@ impl SyncLog for StorageHandle {
         invite: EventId,
         device: DeviceKey,
         proof: Signature,
-        now_ms: u64,
     ) -> Result<Result<(), JoinRefusal>, LogError> {
         Ok(self
-            .with(move |replica| replica.state().check_join(&invite, device, &proof, now_ms))
+            .with(move |replica| {
+                replica
+                    .state()
+                    .check_join(&invite, device, &proof, wf_store::now_ms())
+            })
             .await?)
     }
 

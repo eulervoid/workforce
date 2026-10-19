@@ -11,6 +11,7 @@ use wf_harness::{Decider, Decision, Permission};
 use super::{
     Asked, Block, Outcome, PlanEntry, PlanStatus, Prompter, StopReason, Thinking, ToolCall,
 };
+use crate::text::{cut, display_width};
 use crate::theme;
 
 /// Lines kept from the start and the end of long tool output: the tail holds the errors.
@@ -195,7 +196,7 @@ impl Layout {
         }
         let padding = self
             .width
-            .saturating_sub(left_width + width_of(right))
+            .saturating_sub(left_width + display_width(right))
             .max(2);
         format!(
             "{left}{}{}\n",
@@ -210,7 +211,7 @@ impl Layout {
         text.lines()
             .flat_map(|line| {
                 let line = line.trim_end();
-                if width_of(line) <= room {
+                if display_width(line) <= room {
                     vec![line.to_owned()]
                 } else if wrap {
                     let options = textwrap::Options::new(room).break_words(true);
@@ -277,7 +278,7 @@ impl Layout {
         );
         self.spread(
             &left,
-            width_of(speaker) + 2 + width_of(&time),
+            display_width(speaker) + 2 + display_width(&time),
             right,
             theme::text_dimmed(),
         )
@@ -400,7 +401,7 @@ impl Layout {
         let elapsed = elapsed.map(duration).unwrap_or_default();
         self.spread(
             &left,
-            MARGIN + 2 + width_of(&text),
+            MARGIN + 2 + display_width(&text),
             &elapsed,
             theme::text_dimmed(),
         )
@@ -420,7 +421,7 @@ impl Layout {
         let elapsed = elapsed.map(duration).unwrap_or_default();
         self.spread(
             &self.styled(text, style),
-            width_of(text),
+            display_width(text),
             &elapsed,
             theme::text_dimmed(),
         )
@@ -470,11 +471,11 @@ impl Layout {
             suffix.push(verdict.clone());
         }
         let suffix = suffix.join("  ");
-        let indent = MARGIN + width_of(glyph) + 1 + width_of(name) + 2;
+        let indent = MARGIN + display_width(glyph) + 1 + display_width(name) + 2;
         let reserved = [&suffix, right]
             .iter()
             .filter(|text| !text.is_empty())
-            .map(|text| width_of(text) + 2)
+            .map(|text| display_width(text) + 2)
             .sum::<usize>();
         let room = self.width.saturating_sub(indent + reserved).max(10);
         let mut lines = match self.verbosity {
@@ -495,7 +496,7 @@ impl Layout {
             self.styled(glyph, glyph_style),
             self.styled(name, theme::text_bold())
         );
-        let mut left_width = indent + width_of(&first);
+        let mut left_width = indent + display_width(&first);
         if !suffix.is_empty() {
             let suffix_style = match &verdict {
                 Some((_, Permission::Deny)) => theme::error(),
@@ -503,7 +504,7 @@ impl Layout {
             };
             left.push_str("  ");
             left.push_str(&self.styled(&suffix, suffix_style));
-            left_width += 2 + width_of(&suffix);
+            left_width += 2 + display_width(&suffix);
         }
         let mut out = self.spread(&left, left_width, right, right_style);
         for line in lines {
@@ -700,25 +701,6 @@ enum Line {
     Hidden(usize),
 }
 
-fn width_of(text: &str) -> usize {
-    textwrap::core::display_width(text)
-}
-
-/// `text` cut to `room` columns, ending in `…` when anything was cut.
-fn cut(text: &str, room: usize) -> String {
-    if width_of(text) <= room {
-        return text.to_owned();
-    }
-    let mut kept = String::new();
-    for character in text.chars() {
-        if width_of(&kept) + width_of(&character.to_string()) + 1 > room {
-            break;
-        }
-        kept.push(character);
-    }
-    format!("{}…", kept.trim_end())
-}
-
 fn has_reason(asked: &Asked) -> bool {
     matches!(
         asked,
@@ -817,17 +799,8 @@ fn unfenced(text: &str) -> &str {
     body.strip_suffix("```").unwrap_or(body)
 }
 
-/// `0.4s`, `2m05s` or `1h03m`.
 fn duration(elapsed: SignedDuration) -> String {
-    let millis = elapsed.as_millis().max(0);
-    let seconds = millis / 1000;
-    if seconds < 60 {
-        format!("{}.{}s", seconds, millis % 1000 / 100)
-    } else if seconds < 3600 {
-        format!("{}m{:02}s", seconds / 60, seconds % 60)
-    } else {
-        format!("{}h{:02}m", seconds / 3600, seconds % 3600 / 60)
-    }
+    crate::text::duration(u64::try_from(elapsed.as_millis()).unwrap_or_default())
 }
 
 pub(super) fn paragraph_boundary(text: &str) -> Option<usize> {

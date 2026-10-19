@@ -81,7 +81,7 @@ impl Faults {
             let what = format!("{what}: {}", wf_core::error_chain(error));
             tracing::warn!("the disk is full; nothing moves until there is space: {what}");
             faults.out_of_space = Some(OutOfSpace {
-                since_ms: crate::now_ms(),
+                since_ms: wf_store::now_ms(),
                 what,
             });
         }
@@ -90,7 +90,7 @@ impl Faults {
 
     /// Remembers that a session of `harness` failed for `fault`, as `what` says.
     pub(crate) fn note_harness(&self, harness: &HarnessName, fault: HarnessFault, what: String) {
-        let now_ms = crate::now_ms();
+        let now_ms = wf_store::now_ms();
         let mut faults = self.lock();
         match faults.harnesses.get_mut(harness) {
             Some(known) if known.fault == fault => known.last_ms = now_ms,
@@ -133,7 +133,7 @@ impl Faults {
                 .or_default()
                 .extend(agents.1.iter().map(ToString::to_string));
         }
-        let now_ms = crate::now_ms();
+        let now_ms = wf_store::now_ms();
         let mut faults = self.lock();
         let cleared: Vec<_> = faults
             .harnesses

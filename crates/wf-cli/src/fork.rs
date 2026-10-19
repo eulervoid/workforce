@@ -215,7 +215,7 @@ pub fn fork(
         .fork_genesis_builder(
             own_device,
             Actor::Principal(founder_key.key()),
-            workspace::now_ms(),
+            wf_store::now_ms(),
         )
         .context("the workforce has no genesis")?
         .sign(

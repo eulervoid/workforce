@@ -10,5 +10,5 @@ mod store;
 pub use binding::{BindError, DeviceBinding};
 pub use history::{HistorySource, history_behind};
 pub use redb_store::RedbStore;
-pub use replica::{AuthorError, ForkError, ReceiveError, Replica, SNAPSHOT_INTERVAL};
+pub use replica::{AuthorError, ForkError, ReceiveError, Replica, SNAPSHOT_INTERVAL, now_ms};
 pub use store::{Commit, EventStore, PendingChange, SnapshotChange, StoreError};

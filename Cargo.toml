@@ -38,6 +38,7 @@ toml = "0.9"
 tokio = { version = "1", features = ["io-util", "macros", "rt", "rt-multi-thread", "signal", "sync", "time", "net"] }
 data-encoding = "2"
 humantime = "2"
+humantime-serde = "1"
 tracing = "0.1"
 
 [profile.dev]

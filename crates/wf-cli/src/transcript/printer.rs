@@ -455,7 +455,7 @@ mod tests {
         );
         assert_eq!(
             output,
-            "brief  00:00                    13 lines\n  Do it\n\ncoder  00:00\n  Done.\n\nfinished                           1m05s\n"
+            "brief  00:00                    13 lines\n  Do it\n\ncoder  00:00\n  Done.\n\nfinished                              1m\n"
         );
     }
 

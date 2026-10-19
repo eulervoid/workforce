@@ -24,7 +24,8 @@ use super::snapshot::{
 use super::snapshot::{Detail, ItemRow};
 use super::transcript_lines::TranscriptLines;
 use crate::cli::{ItemGrouping, ItemOrder};
-use crate::render::{self, duration};
+use crate::render;
+use crate::text::{duration, prefix_within};
 use crate::theme;
 use crate::transcript::{self, Format, Now, Transcript, Usage};
 use wf_core::stats::ProjectStats;
@@ -1105,14 +1106,7 @@ fn cut_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Span<'static>> {
             kept.push(span);
             continue;
         }
-        let mut text = String::new();
-        for character in span.content.chars() {
-            let next = textwrap::core::display_width(&format!("{text}{character}"));
-            if next > left {
-                break;
-            }
-            text.push(character);
-        }
+        let text = prefix_within(&span.content, left);
         kept.push(Span::styled(format!("{}…", text.trim_end()), span.style));
         break;
     }

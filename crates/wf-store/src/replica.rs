@@ -425,7 +425,8 @@ fn load_snapshot<S: EventStore>(store: &S) -> Result<Option<State>, StoreError> 
     Ok(consistent.then_some(state))
 }
 
-fn now_ms() -> u64 {
+/// Milliseconds of wall time since the Unix epoch.
+pub fn now_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |elapsed| {

@@ -20,6 +20,32 @@ pub enum FrameError {
     Closed,
 }
 
+/// The length prefix of a frame of `length` bytes.
+fn length_prefix(length: usize) -> Result<[u8; 4], FrameError> {
+    u32::try_from(length)
+        .ok()
+        .filter(|length| *length <= MAX_FRAME_LEN)
+        .map(u32::to_be_bytes)
+        .ok_or(FrameError::TooLarge(length as u64))
+}
+
+/// How many bytes follow a length prefix.
+fn body_length(prefix: [u8; 4]) -> Result<usize, FrameError> {
+    let length = u32::from_be_bytes(prefix);
+    if length > MAX_FRAME_LEN {
+        return Err(FrameError::TooLarge(u64::from(length)));
+    }
+    Ok(length as usize)
+}
+
+/// A stream ending where a length prefix should start is the peer closing it.
+fn closed_at_prefix(error: std::io::Error) -> FrameError {
+    match error.kind() {
+        std::io::ErrorKind::UnexpectedEof => FrameError::Closed,
+        _ => error.into(),
+    }
+}
+
 pub async fn write_frame<W, T>(writer: &mut W, message: &T) -> Result<(), FrameError>
 where
     W: AsyncWrite + Unpin,
@@ -33,11 +59,7 @@ pub async fn write_encoded_frame<W>(writer: &mut W, bytes: &[u8]) -> Result<(), 
 where
     W: AsyncWrite + Unpin,
 {
-    let length = u32::try_from(bytes.len())
-        .ok()
-        .filter(|length| *length <= MAX_FRAME_LEN)
-        .ok_or(FrameError::TooLarge(bytes.len() as u64))?;
-    writer.write_all(&length.to_be_bytes()).await?;
+    writer.write_all(&length_prefix(bytes.len())?).await?;
     writer.write_all(bytes).await?;
     writer.flush().await?;
     Ok(())
@@ -48,21 +70,43 @@ where
     R: AsyncRead + Unpin,
     T: DeserializeOwned,
 {
-    let mut length = [0u8; 4];
-    match reader.read_exact(&mut length).await {
-        Ok(_) => {}
-        Err(error) if error.kind() == std::io::ErrorKind::UnexpectedEof => {
-            return Err(FrameError::Closed);
-        }
-        Err(error) => return Err(error.into()),
-    }
-    let length = u32::from_be_bytes(length);
-    if length > MAX_FRAME_LEN {
-        return Err(FrameError::TooLarge(u64::from(length)));
-    }
-    let mut bytes = vec![0u8; length as usize];
+    let mut prefix = [0u8; 4];
+    reader
+        .read_exact(&mut prefix)
+        .await
+        .map_err(closed_at_prefix)?;
+    let mut bytes = vec![0u8; body_length(prefix)?];
     reader.read_exact(&mut bytes).await?;
     Ok(encoding::decode(&bytes)?)
+}
+
+/// The same frames over blocking streams, for the CLI's socket to the daemon.
+pub mod blocking {
+    use std::io::{Read, Write};
+
+    use super::{
+        DeserializeOwned, FrameError, Serialize, body_length, closed_at_prefix, encoding,
+        length_prefix,
+    };
+
+    pub fn write_frame<W: Write, T: Serialize>(
+        writer: &mut W,
+        message: &T,
+    ) -> Result<(), FrameError> {
+        let bytes = encoding::encode(message)?;
+        writer.write_all(&length_prefix(bytes.len())?)?;
+        writer.write_all(&bytes)?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    pub fn read_frame<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, FrameError> {
+        let mut prefix = [0u8; 4];
+        reader.read_exact(&mut prefix).map_err(closed_at_prefix)?;
+        let mut bytes = vec![0u8; body_length(prefix)?];
+        reader.read_exact(&mut bytes)?;
+        Ok(encoding::decode(&bytes)?)
+    }
 }
 
 #[cfg(test)]
@@ -85,6 +129,32 @@ mod tests {
         drop(left);
         let result: Result<Vec<u32>, _> = read_frame(&mut right).await;
         assert!(matches!(result, Err(FrameError::Closed)));
+    }
+
+    #[test]
+    fn blocking_frames_are_the_same_bytes_as_async_ones() {
+        let mut written = Vec::new();
+        blocking::write_frame(&mut written, &vec![1u32, 2, 3]).unwrap();
+        let read: Vec<u32> = blocking::read_frame(&mut written.as_slice()).unwrap();
+        assert_eq!(read, [1, 2, 3]);
+
+        let mut async_written = Vec::new();
+        written_by_async(&mut async_written);
+        assert_eq!(written, async_written);
+
+        let result: Result<Vec<u32>, _> = blocking::read_frame(&mut [].as_slice());
+        assert!(matches!(result, Err(FrameError::Closed)));
+        let oversized = (MAX_FRAME_LEN + 1).to_be_bytes();
+        let result: Result<Vec<u32>, _> = blocking::read_frame(&mut oversized.as_slice());
+        assert!(matches!(result, Err(FrameError::TooLarge(_))));
+    }
+
+    fn written_by_async(written: &mut Vec<u8>) {
+        tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(write_frame(written, &vec![1u32, 2, 3]))
+            .unwrap();
     }
 
     #[tokio::test]

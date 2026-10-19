@@ -19,7 +19,7 @@ use wf_core::identity::DeviceKey;
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_harness::Permission;
-use wf_net::frame::MAX_FRAME_LEN;
+use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
@@ -34,8 +34,8 @@ pub enum ProtoError {
     Io(#[from] std::io::Error),
     #[error("message does not decode")]
     Encoding(#[from] encoding::EncodingError),
-    #[error("frame of {0} bytes is too large")]
-    TooLarge(u64),
+    #[error(transparent)]
+    Frame(#[from] FrameError),
     #[error("the daemon speaks protocol {daemon}, this build speaks {client}; restart the daemon")]
     VersionMismatch { daemon: u32, client: u32 },
 }
@@ -167,25 +167,9 @@ pub fn write_message<W: Write, T: Serialize>(
     writer: &mut W,
     message: &T,
 ) -> Result<(), ProtoError> {
-    let bytes = encoding::encode(message)?;
-    let length = u32::try_from(bytes.len())
-        .ok()
-        .filter(|length| *length <= MAX_FRAME_LEN)
-        .ok_or(ProtoError::TooLarge(bytes.len() as u64))?;
-    writer.write_all(&length.to_be_bytes())?;
-    writer.write_all(&bytes)?;
-    writer.flush()?;
-    Ok(())
+    Ok(frame::write_frame(writer, message)?)
 }
 
 pub fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, ProtoError> {
-    let mut length = [0u8; 4];
-    reader.read_exact(&mut length)?;
-    let length = u32::from_be_bytes(length);
-    if length > MAX_FRAME_LEN {
-        return Err(ProtoError::TooLarge(u64::from(length)));
-    }
-    let mut bytes = vec![0u8; length as usize];
-    reader.read_exact(&mut bytes)?;
-    Ok(encoding::decode(&bytes)?)
+    Ok(frame::read_frame(reader)?)
 }

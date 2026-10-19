@@ -1015,7 +1015,7 @@ mod forking {
             .author(
                 &device,
                 actor.clone(),
-                wf_cli::workspace::now_ms(),
+                wf_store::now_ms(),
                 EventBody::InviteCreated(
                     Signed::sign(
                         &principal,
@@ -1035,7 +1035,7 @@ mod forking {
             .author(
                 &second,
                 actor.clone(),
-                wf_cli::workspace::now_ms(),
+                wf_store::now_ms(),
                 EventBody::DeviceBound(DeviceBound {
                     invite: invite.id(),
                     proof,
@@ -1046,7 +1046,7 @@ mod forking {
             .author(
                 &second,
                 actor,
-                wf_cli::workspace::now_ms(),
+                wf_store::now_ms(),
                 EventBody::DeviceProfile(DeviceProfile {
                     name: name.into(),
                     hardware: "test".into(),

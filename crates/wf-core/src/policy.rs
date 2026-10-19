@@ -171,34 +171,13 @@ pub struct CheckConfig {
     /// The program and its arguments, run without a shell.
     pub run: Vec<String>,
     /// How long it may run before it is stopped, such as `"20m"`. A machine may allow less.
-    #[serde(default = "CheckConfig::default_timeout", with = "written_duration")]
+    #[serde(default = "CheckConfig::default_timeout", with = "humantime_serde")]
     pub timeout: Duration,
 }
 
 impl CheckConfig {
     fn default_timeout() -> Duration {
         Duration::from_secs(30 * 60)
-    }
-}
-
-/// A duration written as people do, such as `"30m"`, in TOML and postcard alike.
-mod written_duration {
-    use std::time::Duration;
-
-    use serde::{Deserialize, Deserializer, Serializer};
-
-    pub(super) fn serialize<S: Serializer>(
-        duration: &Duration,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error> {
-        serializer.collect_str(&humantime::format_duration(*duration))
-    }
-
-    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
-        deserializer: D,
-    ) -> Result<Duration, D::Error> {
-        let text = String::deserialize(deserializer)?;
-        humantime::parse_duration(&text).map_err(serde::de::Error::custom)
     }
 }
 

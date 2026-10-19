@@ -222,7 +222,7 @@ impl Confinement<'_> {
         if matches!(outcome, Outcome::TimedOut) {
             child.wait().await.map_err(io_error)?;
         }
-        let tail = tail(log).map_err(io_error)?;
+        let tail = tail(log, TAIL_LINES).map_err(io_error)?;
         Ok(CommandRun {
             outcome,
             tail,
@@ -277,9 +277,9 @@ impl Confinement<'_> {
     }
 }
 
-/// The last [`TAIL_LINES`] lines of the log.
-fn tail(log: &Path) -> std::io::Result<String> {
-    let mut file = std::fs::File::open(log)?;
+/// The last `lines` lines of the file at `path`, read from its last [`TAIL_BYTES`].
+pub fn tail(path: &Path, lines: usize) -> std::io::Result<String> {
+    let mut file = std::fs::File::open(path)?;
     let length = file.metadata()?.len();
     let start = length.saturating_sub(TAIL_BYTES);
     file.seek(SeekFrom::Start(start))?;
@@ -287,8 +287,8 @@ fn tail(log: &Path) -> std::io::Result<String> {
     file.read_to_end(&mut bytes)?;
     let text = String::from_utf8_lossy(&bytes);
     // Read from the middle of the log, the first line is only the end of one.
-    let lines: Vec<&str> = text.lines().skip(usize::from(start > 0)).collect();
-    Ok(lines[lines.len().saturating_sub(TAIL_LINES)..].join("\n"))
+    let all: Vec<&str> = text.lines().skip(usize::from(start > 0)).collect();
+    Ok(all[all.len().saturating_sub(lines)..].join("\n"))
 }
 
 #[cfg(test)]

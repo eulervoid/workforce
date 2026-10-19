@@ -60,14 +60,6 @@ pub fn remember_repository(
     data_dir::write_private(&path, text.as_bytes())
 }
 
-pub(crate) fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
     #[error("a daemon is already listening on {0}")]
@@ -135,7 +127,7 @@ async fn go_online_when_needed(
     let mut heads = storage.watch_heads();
     loop {
         let needed = storage
-            .with(move |replica| peers::needs_network(replica.state(), own, now_ms()))
+            .with(move |replica| peers::needs_network(replica.state(), own, wf_store::now_ms()))
             .await;
         match needed {
             Ok(true) => break,
@@ -528,7 +520,7 @@ impl Daemon {
                 move || async move {
                     storage
                         .with(move |replica| {
-                            replica.bind_device(&signer, invite, proof, profile, now_ms())
+                            replica.bind_device(&signer, invite, proof, profile, wf_store::now_ms())
                         })
                         .await?
                         .map_err(Into::into)

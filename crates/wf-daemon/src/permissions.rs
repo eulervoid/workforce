@@ -51,7 +51,7 @@ impl Held {
                 session,
                 what: what.to_string(),
                 passed,
-                since_ms: crate::now_ms(),
+                since_ms: wf_store::now_ms(),
             },
             reply,
         });

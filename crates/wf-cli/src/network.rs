@@ -209,7 +209,7 @@ pub fn invite_device(
         .state()
         .workforce_id()
         .context("the workforce has no genesis")?;
-    let now = crate::workspace::now_ms();
+    let now = wf_store::now_ms();
     let lifetime = u64::try_from(Duration::from(args.expires).as_millis()).unwrap_or(u64::MAX);
     let expires_ms = now.saturating_add(lifetime);
 
@@ -380,13 +380,7 @@ pub fn join(
                 move || async move {
                     storage
                         .with(move |replica| {
-                            replica.bind_device(
-                                &signer,
-                                invite,
-                                proof,
-                                profile,
-                                workspace::now_ms(),
-                            )
+                            replica.bind_device(&signer, invite, proof, profile, wf_store::now_ms())
                         })
                         .await?
                         .map_err(Into::into)
@@ -449,13 +443,14 @@ fn finish_join(
 
 /// The name of this machine, for the device profile.
 pub(crate) fn host_name() -> String {
-    std::env::var("HOSTNAME")
-        .ok()
-        .filter(|name| !name.trim().is_empty())
-        .or_else(|| {
-            let output = std::process::Command::new("hostname").output().ok()?;
-            let name = String::from_utf8(output.stdout).ok()?.trim().to_string();
-            (!name.is_empty()).then_some(name)
-        })
-        .unwrap_or_else(|| "this-machine".to_string())
+    let name = rustix::system::uname()
+        .nodename()
+        .to_string_lossy()
+        .trim()
+        .to_owned();
+    if name.is_empty() {
+        "this-machine".to_owned()
+    } else {
+        name
+    }
 }
