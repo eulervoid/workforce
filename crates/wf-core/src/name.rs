@@ -129,6 +129,20 @@ name_type!(
     /// A name from the policy `[lanes.*]` table.
     LaneName, "lane name", SLUG, is_slug_char
 );
+impl TypeName {
+    /// The type of items that record a decision, which can supersede one another.
+    pub fn decision() -> Self {
+        Self("decision".to_owned())
+    }
+}
+
+impl LaneName {
+    /// The lane of agents that supervise: they may lower a review level and answer blockers.
+    pub fn supervision() -> Self {
+        Self("supervision".to_owned())
+    }
+}
+
 name_type!(
     /// The harness an agent runs on, such as `claude-code`.
     HarnessName, "harness name", SLUG, is_slug_char

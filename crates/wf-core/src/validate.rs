@@ -946,7 +946,7 @@ impl State {
         let (Some(workforce), Actor::Agent { agent, .. }) = (&self.workforce, actor) else {
             return false;
         };
-        let supervision = LaneName::new("supervision").expect("a valid lane name");
+        let supervision = LaneName::supervision();
         let supervises = workforce
             .agents
             .get(agent)
@@ -1249,7 +1249,7 @@ impl State {
                     Link::Supersedes(target) => {
                         let both_decisions = [item, item_of(target)?]
                             .iter()
-                            .all(|candidate| candidate.item_type().as_str() == "decision");
+                            .all(|candidate| *candidate.item_type() == TypeName::decision());
                         if both_decisions {
                             Ok(())
                         } else {

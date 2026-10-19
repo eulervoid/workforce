@@ -437,7 +437,7 @@ pub fn define_supervisor(name: &str) -> EventBody {
     let EventBody::AgentDefined(mut defined) = define_agent(name) else {
         unreachable!("`define_agent` makes an `AgentDefined`")
     };
-    defined.lanes = vec![LaneName::new("supervision").unwrap()];
+    defined.lanes = vec![LaneName::supervision()];
     EventBody::AgentDefined(defined)
 }
 
