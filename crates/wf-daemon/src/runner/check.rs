@@ -149,7 +149,10 @@ impl Daemon {
             return Ok(Vec::new());
         }
         let config = self.machine_config()?;
-        let git = GitCli::open(repository)?;
+        let git = {
+            let repository = repository.to_path_buf();
+            blocking(move || GitCli::open(&repository)).await??
+        };
         let directory = self.workforce_directory(workforce);
         let (worktree, settings, git_config, logs) = (
             directory.join("check"),

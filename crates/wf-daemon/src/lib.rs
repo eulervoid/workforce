@@ -12,6 +12,7 @@ mod environment;
 mod faults;
 mod inherit;
 mod judges;
+mod keyed_locks;
 pub mod machine_config;
 mod notify;
 mod panics;
@@ -30,7 +31,7 @@ use std::sync::{Arc, Mutex};
 
 use tokio::net::UnixListener;
 use wf_core::event::{DeviceProfile, Event, EventBody};
-use wf_core::id::WorkforceId;
+use wf_core::id::{SessionId, WorkforceId};
 use wf_core::identity::DeviceSigner;
 use wf_core::invite::InviteCode;
 use wf_net::{NetError, Network, Node};
@@ -189,7 +190,7 @@ async fn rescan(daemon: std::sync::Weak<Daemon>) {
         if *daemon.halted.borrow() {
             return;
         }
-        daemon.load_stored_workforces();
+        daemon.load_stored_workforces().await;
     }
 }
 
@@ -230,8 +231,10 @@ pub struct Daemon {
     runners: runner::Runners,
     starting: runner::ItemLocks,
     /// Taken while a session ends, so that two ends of one session, such as the agent's submit
-    /// and a timeout, do not both act.
-    ending: tokio::sync::Mutex<()>,
+    /// and a timeout, do not both act; ends of other sessions do not wait.
+    ending: Arc<keyed_locks::KeyedLocks<SessionId>>,
+    /// Taken while a workforce is opened, because its store can be open only once.
+    opening: Arc<keyed_locks::KeyedLocks<WorkforceId>>,
     held: Arc<permissions::Held>,
     /// Whom each connection to the socket acts for.
     callers: caller::Callers,
@@ -259,7 +262,8 @@ impl Daemon {
             presence: Presence::default(),
             runners: runner::Runners::default(),
             starting: runner::ItemLocks::default(),
-            ending: tokio::sync::Mutex::new(()),
+            ending: Default::default(),
+            opening: Default::default(),
             held: Arc::default(),
             callers: caller::Callers::default(),
             judges: judges::Judges::default(),
@@ -269,7 +273,7 @@ impl Daemon {
             faults: faults::Faults::default(),
             failing_write: Mutex::new(None),
         });
-        daemon.load_stored_workforces();
+        daemon.load_stored_workforces().await;
         tokio::spawn(rescan(Arc::downgrade(&daemon)));
         Ok(daemon)
     }
@@ -337,7 +341,7 @@ impl Daemon {
             .cloned()
     }
 
-    fn load_stored_workforces(self: &Arc<Self>) {
+    async fn load_stored_workforces(self: &Arc<Self>) {
         let Ok(entries) = std::fs::read_dir(self.config.data_dir.root()) else {
             return;
         };
@@ -355,7 +359,7 @@ impl Daemon {
             if self.loaded_workforce(&id).is_some() {
                 continue;
             }
-            if let Err(error) = self.workforce(id) {
+            if let Err(error) = self.workforce(id).await {
                 let first_time = self
                     .failed
                     .lock()
@@ -381,17 +385,30 @@ impl Daemon {
     }
 
     /// The loaded workforce, opened from this machine's data directory on first use.
-    pub(crate) fn workforce(self: &Arc<Self>, id: WorkforceId) -> Result<Arc<Loaded>, DaemonError> {
-        let mut loaded = self
-            .loaded
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        match loaded.get(&id) {
-            Some(existing) if !existing.storage.is_closed() => return Ok(Arc::clone(existing)),
-            Some(_) => {
-                loaded.remove(&id);
-            }
-            None => {}
+    pub(crate) async fn workforce(
+        self: &Arc<Self>,
+        id: WorkforceId,
+    ) -> Result<Arc<Loaded>, DaemonError> {
+        if let Some(existing) = self.loaded_workforce(&id) {
+            return Ok(existing);
+        }
+        // The open runs as a task of its own, so a caller that gives up halfway cannot leave a
+        // finished open behind that nobody inserts, with the lock released.
+        let daemon = Arc::clone(self);
+        tokio::spawn(async move { daemon.open_workforce(id).await })
+            .await
+            .map_err(|error| DaemonError::Io {
+                path: self.config.data_dir.store(&id),
+                source: std::io::Error::other(error),
+            })?
+    }
+
+    async fn open_workforce(self: &Arc<Self>, id: WorkforceId) -> Result<Arc<Loaded>, DaemonError> {
+        // Opening folds the whole log, so it runs outside the `loaded` lock, which every lookup
+        // takes. A store can be open only once, so opens of one workforce wait for each other.
+        let _opening = self.opening.lock(id).await;
+        if let Some(existing) = self.loaded_workforce(&id) {
+            return Ok(existing);
         }
         let path = self.config.data_dir.store(&id);
         if !path.is_file() {
@@ -411,7 +428,13 @@ impl Daemon {
                 }
             }
         };
-        let storage = StorageHandle::open(path, id, history, note_space)?;
+        let storage =
+            tokio::task::spawn_blocking(move || StorageHandle::open(path, id, history, note_space))
+                .await
+                .map_err(|error| DaemonError::Io {
+                    path: self.config.data_dir.store(&id),
+                    source: std::io::Error::other(error),
+                })??;
         // With the network on, serve at once: a device may sync a fork right after it was made.
         if let Some(node) = self.node.get() {
             node.serve(id, storage.clone());
@@ -425,7 +448,10 @@ impl Daemon {
             storage,
             merges: runner::MergeQueue::default(),
         });
-        loaded.insert(id, Arc::clone(&entry));
+        self.loaded
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .insert(id, Arc::clone(&entry));
         tokio::spawn(runner::run_merger(
             Arc::downgrade(self),
             id,
@@ -456,14 +482,40 @@ impl Daemon {
 
     /// Like [`Daemon::workforce`], and creates the workforce empty when this machine does not
     /// have it yet, so it can be taken in from other devices.
-    pub(crate) fn follow(self: &Arc<Self>, id: WorkforceId) -> Result<Arc<Loaded>, DaemonError> {
+    pub(crate) async fn follow(
+        self: &Arc<Self>,
+        id: WorkforceId,
+    ) -> Result<Arc<Loaded>, DaemonError> {
         let directory = self.config.data_dir.workforce(&id);
-        std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
-            path: directory.clone(),
-            source,
-        })?;
-        drop(RedbStore::open(self.config.data_dir.store(&id))?);
-        self.workforce(id)
+        let store = self.config.data_dir.store(&id);
+        // A task of its own, like the open in `workforce`, so it finishes whatever the caller does.
+        let daemon = Arc::clone(self);
+        tokio::spawn(async move {
+            // Redb allows one open, so the pre-create waits for a concurrent `workforce` open.
+            let _opening = daemon.opening.lock(id).await;
+            if daemon.loaded_workforce(&id).is_none() {
+                tokio::task::spawn_blocking(move || {
+                    std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
+                        path: directory.clone(),
+                        source,
+                    })?;
+                    drop(RedbStore::open(store)?);
+                    Ok::<_, DaemonError>(())
+                })
+                .await
+                .map_err(|error| DaemonError::Io {
+                    path: daemon.config.data_dir.store(&id),
+                    source: std::io::Error::other(error),
+                })??;
+            }
+            Ok::<_, DaemonError>(())
+        })
+        .await
+        .map_err(|error| DaemonError::Io {
+            path: self.config.data_dir.store(&id),
+            source: std::io::Error::other(error),
+        })??;
+        self.workforce(id).await
     }
 
     /// Founds the fork that `genesis` starts from `parent`, which is a workforce of this daemon,
@@ -495,7 +547,7 @@ impl Daemon {
             let _ = std::fs::remove_file(&path);
             return Err(error.into());
         }
-        self.workforce(child)?;
+        self.workforce(child).await?;
         Ok(())
     }
 

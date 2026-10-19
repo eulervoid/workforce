@@ -99,7 +99,7 @@ async fn interrupt(
             () = daemon.until_halted() => return loaded,
         }
         // A store that failed a write may have been closed and opened again.
-        if let Ok(reopened) = daemon.workforce(run.workforce) {
+        if let Ok(reopened) = daemon.workforce(run.workforce).await {
             loaded = reopened;
         }
     }

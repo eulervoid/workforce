@@ -88,10 +88,10 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
     }
     let opened = match request.call {
         Call::Join { ref code, .. } => match check_invite(code, request.workforce) {
-            Ok(_) => daemon.follow(request.workforce),
+            Ok(_) => daemon.follow(request.workforce).await,
             Err(message) => return encode_failed(message),
         },
-        Call::Follow(_) => daemon.follow(request.workforce),
+        Call::Follow(_) => daemon.follow(request.workforce).await,
         Call::State
         | Call::Event(_)
         | Call::Events { .. }
@@ -104,7 +104,7 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::Permissions
         | Call::AnswerPermission { .. }
         | Call::LastSeen
-        | Call::MachineFaults => daemon.workforce(request.workforce),
+        | Call::MachineFaults => daemon.workforce(request.workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
