@@ -221,6 +221,7 @@ pub struct Node<L: SyncLog + Clone + 'static> {
     router: Router,
     registry: Registry<L>,
     gossip: iroh_gossip::Gossip,
+    signer: DeviceSigner,
     lookup: MemoryLookup,
     connect_timeout: Duration,
 }
@@ -268,6 +269,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             router,
             registry,
             gossip,
+            signer: device.clone(),
             lookup,
             connect_timeout,
         })
@@ -303,14 +305,25 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         workforce: &WorkforceId,
         peers: &[DeviceKey],
     ) -> Result<HeadsTopic, NetError> {
+        let log = self
+            .registry
+            .get(workforce)
+            .ok_or(NetError::NotServed(*workforce))?;
+        let topic = topic_id(workforce);
         let bootstrap = peers.iter().map(|peer| endpoint_id(*peer)).collect();
         let (sender, receiver) = self
             .gossip
-            .subscribe(topic_id(workforce), bootstrap)
+            .subscribe(topic, bootstrap)
             .await
             .map_err(|error| NetError::Gossip(error.into()))?
             .split();
-        Ok(HeadsTopic::new(sender, receiver, self.device()))
+        Ok(HeadsTopic::new(
+            topic,
+            sender,
+            receiver,
+            self.signer.clone(),
+            log,
+        ))
     }
 
     pub fn serve(&self, workforce: WorkforceId, log: L) {

@@ -16,6 +16,7 @@ use crate::name::{AgentName, Handle};
 const EVENT_DOMAIN: &[u8] = b"wf/event/1\0";
 const AUTHORITY_DOMAIN: &[u8] = b"wf/authority/1\0";
 const INVITE_DOMAIN: &[u8] = b"wf/invite/1\0";
+const HEADS_DOMAIN: &[u8] = b"wf/heads/1\0";
 
 #[derive(Debug, thiserror::Error)]
 pub enum KeyError {
@@ -176,6 +177,49 @@ impl DeviceKey {
         signature: &Signature,
     ) -> Result<(), KeyError> {
         self.verify(encoded_content, signature)
+    }
+}
+
+/// What a device says when it announces its heads on a topic.
+#[derive(Serialize)]
+struct HeadsPayload<'a> {
+    topic: &'a [u8; 32],
+    digest: &'a [u8; 32],
+    time: u64,
+}
+
+fn heads_message(topic: &[u8; 32], digest: &[u8; 32], time: u64) -> Result<Vec<u8>, KeyError> {
+    let mut message = HEADS_DOMAIN.to_vec();
+    message.extend(crate::encoding::encode(&HeadsPayload {
+        topic,
+        digest,
+        time,
+    })?);
+    Ok(message)
+}
+
+impl DeviceSigner {
+    /// Signs an announcement of heads on `topic` at `time` (seconds since the Unix epoch), so
+    /// that only this device can say it is online and it cannot be replayed on another topic.
+    pub fn sign_heads(
+        &self,
+        topic: &[u8; 32],
+        digest: &[u8; 32],
+        time: u64,
+    ) -> Result<Signature, KeyError> {
+        Ok(self.sign(&heads_message(topic, digest, time)?))
+    }
+}
+
+impl DeviceKey {
+    pub fn verify_heads(
+        &self,
+        topic: &[u8; 32],
+        digest: &[u8; 32],
+        time: u64,
+        signature: &Signature,
+    ) -> Result<(), KeyError> {
+        self.verify(&heads_message(topic, digest, time)?, signature)
     }
 }
 
