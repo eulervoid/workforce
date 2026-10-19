@@ -544,7 +544,7 @@ fn show(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Re
             })
         }
         ItemEntry::Live(item) => {
-            let events = workspace.events()?;
+            let events = workspace.item_events(id)?;
             let detail = view::item_detail(state, item, &events);
             emit_paged(json, mode, &detail, render::item_detail)
         }

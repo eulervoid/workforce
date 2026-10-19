@@ -7,7 +7,7 @@ use std::path::Path;
 use serde::de::DeserializeOwned;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::DeviceKey;
+use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::invite::InviteCode;
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
@@ -138,6 +138,24 @@ impl DaemonClient {
             }
             events.extend(page);
         }
+    }
+
+    /// The events that can show in the activity of `item`, in the order the daemon applied them.
+    pub fn item_events(
+        &mut self,
+        workforce: WorkforceId,
+        item: ItemId,
+    ) -> Result<Vec<Event>, ClientError> {
+        self.call(workforce, Call::ItemEvents(item))
+    }
+
+    /// The events that defined or removed `agent`, in the order the daemon applied them.
+    pub fn agent_events(
+        &mut self,
+        workforce: WorkforceId,
+        agent: AgentId,
+    ) -> Result<Vec<Event>, ClientError> {
+        self.call(workforce, Call::AgentEvents(agent))
     }
 
     /// Has the daemon author `body` as whom the connection acts for.

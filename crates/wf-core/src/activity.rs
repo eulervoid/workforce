@@ -327,6 +327,66 @@ impl State {
 }
 
 impl State {
+    /// Whether `event` can show in the [`activity`](Self::activity) of `item`: it is about the
+    /// item, moves one of its dependencies, links to it or mentions its id. Cheap, so that a
+    /// reader of the log can leave the rest out; the activity decides what shows.
+    pub fn can_be_activity_of(&self, item: ItemId, event: &Event) -> bool {
+        let mentions = |text: &str| text.contains(&item.to_base32()[..MIN_PREFIX_LEN]);
+        match &event.content.body {
+            EventBody::ItemCreated(created) => {
+                ItemId::from(event.id()) == item || mentions(&created.body)
+            }
+            EventBody::Commented(comment) => comment.item == item || mentions(&comment.text),
+            EventBody::ItemEdited(edited) => {
+                edited.item == item
+                    || edited.changes.iter().any(|change| match change {
+                        Change::Body(body) => mentions(body),
+                        Change::Title(_)
+                        | Change::Priority(_)
+                        | Change::Lane(_)
+                        | Change::Labels(_)
+                        | Change::Requires(_)
+                        | Change::ReviewLevel(_)
+                        | Change::StepDone { .. }
+                        | Change::RecoveryLevel(_) => false,
+                    })
+            }
+            EventBody::ItemMoved(moved) => {
+                moved.item == item
+                    || matches!(
+                        self.item(item),
+                        Some(ItemEntry::Live(live))
+                            if live.depends_on().values().any(|target| *target == moved.item)
+                    )
+            }
+            EventBody::ItemLinked(linked) => {
+                linked.item == item
+                    || match &linked.link {
+                        Link::DependsOn(SetChange::Add(target)) | Link::Supersedes(target) => {
+                            *target == item
+                        }
+                        Link::DependsOn(SetChange::Remove { value, .. }) => *value == item,
+                    }
+            }
+            EventBody::ItemArchived(_)
+            | EventBody::ItemUnarchived(_)
+            | EventBody::SessionStarted(_)
+            | EventBody::SessionEnded(_)
+            | EventBody::Reviewed(_)
+            | EventBody::Merged(_) => self.item_of(event) == Some(item),
+            EventBody::Genesis(_)
+            | EventBody::PolicySet(_)
+            | EventBody::BoundPolicySet(_)
+            | EventBody::AgentDefined(_)
+            | EventBody::AgentRemoved(_)
+            | EventBody::InviteCreated(_)
+            | EventBody::DeviceBound(_)
+            | EventBody::DeviceProfile(_)
+            | EventBody::ForkAnnounced(_)
+            | EventBody::Unknown { .. } => false,
+        }
+    }
+
     /// The item an event is about, if it is about one.
     pub fn item_of(&self, event: &Event) -> Option<ItemId> {
         match &event.content.body {

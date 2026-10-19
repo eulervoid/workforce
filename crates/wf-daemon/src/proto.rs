@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use wf_core::encoding;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::DeviceKey;
+use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_harness::Permission;
@@ -79,7 +79,7 @@ pub struct Request {
 /// Each call is answered with a [`Reply`] of the type its documentation names.
 ///
 /// A connection that acts for a session makes calls in the session's workforce only: the reads
-/// (`State`, `Event`, `Events`, `LastSeen`, `Permissions`, `MachineFaults`), `Author`, `SyncNow` and
+/// (`State`, `Event`, `Events`, `ItemEvents`, `AgentEvents`, `LastSeen`, `Permissions`, `MachineFaults`), `Author`, `SyncNow` and
 /// `EndSession`. `EndSession` is for sessions only; the other calls are for the principal only.
 #[derive(Serialize, Deserialize)]
 pub enum Call {
@@ -90,6 +90,12 @@ pub enum Call {
     /// A page of the log: up to [`EVENTS_PER_PAGE`] events in the order the daemon applied them,
     /// starting at position `from`, as `Vec<Event>`. An empty page is the end.
     Events { from: u64 },
+    /// The events of the log that can show in the activity of an item, in the order the daemon
+    /// applied them, as `Vec<Event>` ([`wf_core::state::State::can_be_activity_of`]).
+    ItemEvents(ItemId),
+    /// The events that defined or removed an agent, in the order the daemon applied them, as
+    /// `Vec<Event>`.
+    AgentEvents(AgentId),
     /// Checks the policy, signs with the device key of the daemon and stores the event, written
     /// by whom the connection acts for; answered with the `Event`.
     Author { body: Box<EventBody> },

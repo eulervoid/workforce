@@ -7,7 +7,7 @@ use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use wf_core::event::{Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, DeviceKey, DeviceSigner, PrincipalKey, PrincipalSigner};
+use wf_core::identity::{Actor, AgentId, DeviceKey, DeviceSigner, PrincipalKey, PrincipalSigner};
 use wf_core::lifecycle::Finish;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
@@ -303,6 +303,36 @@ impl Workspace {
         match &self.source {
             Source::Local(replica, _) => Ok(replica.store().log_since(0)?),
             Source::Daemon { client, .. } => Ok(client.borrow_mut().events(self.workforce)?),
+        }
+    }
+
+    /// The events that can show in the activity of `item`, in the order this machine applied them.
+    pub fn item_events(&self, item: ItemId) -> anyhow::Result<Vec<Event>> {
+        match &self.source {
+            Source::Local(replica, _) => Ok(replica
+                .store()
+                .log_since(0)?
+                .into_iter()
+                .filter(|event| replica.state().can_be_activity_of(item, event))
+                .collect()),
+            Source::Daemon { client, .. } => {
+                Ok(client.borrow_mut().item_events(self.workforce, item)?)
+            }
+        }
+    }
+
+    /// The events that defined or removed `agent`, in the order this machine applied them.
+    pub fn agent_events(&self, agent: &AgentId) -> anyhow::Result<Vec<Event>> {
+        match &self.source {
+            Source::Local(replica, _) => Ok(replica
+                .store()
+                .log_since(0)?
+                .into_iter()
+                .filter(|event| replica.state().agent_change(agent, event).is_some())
+                .collect()),
+            Source::Daemon { client, .. } => Ok(client
+                .borrow_mut()
+                .agent_events(self.workforce, agent.clone())?),
         }
     }
 
