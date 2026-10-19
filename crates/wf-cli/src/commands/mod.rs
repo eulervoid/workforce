@@ -260,10 +260,10 @@ pub(crate) fn command_line_from_environment(names: &[&str], default: &str) -> St
         .unwrap_or_else(|| default.to_string())
 }
 
-/// Run `command_line` as git runs its editor and pager: through the shell, with `arguments`
+/// Run `command_line` as git runs its editor and pager: through `/bin/sh` (git's default `SHELL_PATH`, so it works with any `PATH`), with `arguments`
 /// appended, so quoting and paths with spaces work.
 pub(crate) fn shell_command(command_line: &str, arguments: &[&Path]) -> std::process::Command {
-    let mut command = std::process::Command::new("sh");
+    let mut command = std::process::Command::new("/bin/sh");
     command
         .arg("-c")
         .arg(format!("{command_line} \"$@\""))
