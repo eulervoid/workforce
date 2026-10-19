@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use crate::crdt::Stamp;
 use crate::id::ItemId;
 use crate::identity::{Actor, AgentId, DeviceKey};
-use crate::item::{Item, ItemState, ItemView};
+use crate::item::{Item, ItemEntry, ItemState};
 use crate::name::Requirement;
 use crate::policy::ReviewStep;
 use crate::session::{CommitId, Outcome, SessionRole, Verdict};
@@ -55,7 +55,7 @@ impl State {
     /// needs no review and has not been merged.
     pub fn review_status(&self, item: ItemId) -> Option<ReviewStatus> {
         let policy = &self.policy()?.policy;
-        let ItemView::Live(live) = self.item(item)? else {
+        let ItemEntry::Live(live) = self.item(item)? else {
             return None;
         };
         let (commit, submitted) = self.submission(item)?;

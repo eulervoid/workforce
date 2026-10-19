@@ -15,7 +15,7 @@ use wf_core::name::{
 #[command(
     name = "wf",
     version,
-    about = "Coordination for coding agents and the humans who work with them\n\n\
+    about = "Coordination for coding agents and their principals\n\n\
              Plain `wf` at a terminal opens the dashboard: what waits on you, who works on what, \
              items and agents."
 )]

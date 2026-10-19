@@ -163,7 +163,7 @@ macro_rules! key_pair {
 }
 
 key_pair!(
-    /// Identifies the accountable person. Signs authority statements: genesis, policy, owners, invites.
+    /// Identifies the principal. Signs authority statements: genesis, policy, owners, invites.
     PrincipalKey, PrincipalSigner
 );
 key_pair!(

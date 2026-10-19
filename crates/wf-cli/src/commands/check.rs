@@ -176,8 +176,8 @@ enum Machine<'a> {
         data_dir: DataDir,
         config_path: PathBuf,
         config: Box<MachineConfig>,
-        /// Where Fence's settings are written.
-        settings: PathBuf,
+        /// Where Fence's sandbox profile is written.
+        profile_file: PathBuf,
         /// Where the git config the checks run with is written.
         git_config: PathBuf,
     },
@@ -197,7 +197,7 @@ impl<'a> Machine<'a> {
             data_dir: workspace.data.clone(),
             config_path,
             config,
-            settings: scratch.join("fence.json"),
+            profile_file: scratch.join("fence.json"),
             git_config: scratch.join("check.gitconfig"),
         })
     }
@@ -212,7 +212,7 @@ impl<'a> Machine<'a> {
                 data_dir,
                 config_path,
                 config,
-                settings,
+                profile_file,
                 git_config,
             } => Confinement::for_checks(
                 Access {
@@ -224,7 +224,7 @@ impl<'a> Machine<'a> {
                     machine_config: Some(config_path),
                 },
                 config,
-                settings,
+                profile_file,
                 git_config,
             ),
         }

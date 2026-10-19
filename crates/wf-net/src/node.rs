@@ -16,7 +16,7 @@ use wf_core::invite::{InviteCode, JoinRefusal};
 
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
-use crate::log::SyncLog;
+use crate::log::{LogError, SyncLog};
 use crate::sync::{IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
 /// Hole punching and address lookup can take a while.
@@ -53,6 +53,14 @@ pub enum NetError {
     NotServed(WorkforceId),
     #[error("{peer} refused the join: {reason}")]
     JoinRefused { peer: String, reason: JoinRefusal },
+    #[error("joining through {peer} failed: {source}")]
+    Join {
+        peer: String,
+        #[source]
+        source: SourceError,
+    },
+    #[error("could not sign the request to join")]
+    JoinProof(#[source] SourceError),
     #[error("could not write the events of the new device")]
     JoinAuthoring(#[source] SourceError),
 }
@@ -77,6 +85,13 @@ pub(crate) async fn linger(connection: &Connection) {
 #[derive(Debug, thiserror::Error)]
 #[error("timed out")]
 struct TimedOut;
+
+/// Closes a connection whose peer could not be checked because the log could not be read: the
+/// peer is not told that it is no member.
+fn close_unreadable(connection: &Connection, error: LogError) -> AcceptError {
+    connection.close(FAILED.into(), b"log unreadable");
+    AcceptError::from_err(error)
+}
 
 fn connect_error(peer: &str, source: impl Into<SourceError>) -> NetError {
     NetError::Connect {
@@ -131,14 +146,18 @@ impl<L: SyncLog + Clone> Registry<L> {
             .collect()
     }
 
-    /// Whether the device is bound in any workforce served here.
-    pub(crate) async fn is_member(&self, device: DeviceKey) -> bool {
+    /// Whether the device is bound in any workforce served here. A log that cannot be read
+    /// is an error, not a no, unless another log has the device.
+    pub(crate) async fn is_member(&self, device: DeviceKey) -> Result<bool, LogError> {
+        let mut unreadable = None;
         for log in self.logs() {
-            if log.is_bound(device).await.unwrap_or(false) {
-                return true;
+            match log.is_bound(device).await {
+                Ok(true) => return Ok(true),
+                Ok(false) => {}
+                Err(error) => unreadable = Some(error),
             }
         }
-        false
+        unreadable.map_or(Ok(false), Err)
     }
 }
 
@@ -153,9 +172,13 @@ impl<L> std::fmt::Debug for SyncHandler<L> {
 impl<L: SyncLog + Clone + 'static> ProtocolHandler for SyncHandler<L> {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         let remote = device_key(connection.remote_id());
-        if !self.0.is_member(remote).await {
-            connection.close(FORBIDDEN.into(), b"not a member");
-            return Ok(());
+        match self.0.is_member(remote).await {
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
         }
         let (mut send, mut recv) = connection
             .accept_bi()
@@ -168,9 +191,13 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for SyncHandler<L> {
             connection.close(NOT_SERVED.into(), b"workforce not served");
             return Ok(());
         };
-        if !log.is_bound(remote).await.unwrap_or(false) {
-            connection.close(FORBIDDEN.into(), b"not a member");
-            return Ok(());
+        match log.is_bound(remote).await {
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
         }
         let result = respond(tokio::io::join(&mut recv, &mut send), &log).await;
         match result {
@@ -201,13 +228,17 @@ impl<H: std::fmt::Debug, L> std::fmt::Debug for MembersOnly<H, L> {
 
 impl<H: ProtocolHandler, L: SyncLog + Clone + 'static> ProtocolHandler for MembersOnly<H, L> {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
-        if !self
+        match self
             .registry
             .is_member(device_key(connection.remote_id()))
             .await
         {
-            connection.close(FORBIDDEN.into(), b"not a member");
-            return Ok(());
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
         }
         self.inner.accept(connection).await
     }
@@ -391,7 +422,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .map_err(|error| connect_error(&name, error))?;
         let proof = code
             .prove(self.device())
-            .map_err(|error| NetError::JoinAuthoring(error.into()))?;
+            .map_err(|error| NetError::JoinProof(error.into()))?;
         let request = JoinRequest {
             workforce: code.workforce,
             invite: code.invite,
@@ -408,7 +439,10 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         let _ = send.finish();
         connection.close(DONE.into(), b"done");
         result.map_err(|failure| match failure {
-            JoinFailure::Net(source) => connect_error(&name, source),
+            JoinFailure::Net(source) => NetError::Join {
+                peer: name.clone(),
+                source,
+            },
             JoinFailure::Refused(reason) => NetError::JoinRefused {
                 peer: name.clone(),
                 reason,

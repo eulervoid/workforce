@@ -2,11 +2,11 @@
 
 use std::sync::Arc;
 
-use wf_core::event::{Comment, EventBody, ItemMoved, SessionEnded};
+use wf_core::event::{Commented, EventBody, ItemMoved, SessionEnded};
 use wf_core::hlc::Hlc;
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
-use wf_core::item::{ItemState, ItemView};
+use wf_core::item::{ItemEntry, ItemState};
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
 use wf_core::session::{CommitId, EndReason};
 use wf_core::state::State;
@@ -72,7 +72,7 @@ impl Daemon {
         actor: &Actor,
         note: &str,
     ) -> Result<Option<CommentId>, SessionError> {
-        let Some(ItemView::Live(live)) = state.item(item) else {
+        let Some(ItemEntry::Live(live)) = state.item(item) else {
             return Ok(None);
         };
         let candidates: Vec<CommentId> = live
@@ -143,7 +143,7 @@ impl Daemon {
             note,
         } = state
             .closing(session, &end, submitted)
-            .ok_or(SessionError::NotBound)?;
+            .ok_or(SessionError::UnknownSession(session))?;
         // A submission with open change requests is refused before anything is written.
         state
             .check_policy(&EventBody::SessionEnded(SessionEnded {
@@ -165,7 +165,7 @@ impl Daemon {
                         .author(
                             loaded,
                             actor.clone(),
-                            EventBody::Commented(Comment::plain(item, note)),
+                            EventBody::Commented(Commented::plain(item, note)),
                         )
                         .await?;
                     Some(CommentId::from(written.id()))

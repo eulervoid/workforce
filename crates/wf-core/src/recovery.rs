@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use crate::hlc::Hlc;
 use crate::id::{ItemId, SessionId};
 use crate::identity::{AgentId, DeviceKey};
-use crate::item::{Item, ItemView};
+use crate::item::{Item, ItemEntry};
 use crate::name::Requirement;
 use crate::policy::RecoveryStep;
 use crate::session::{Outcome, Session, SessionRole};
@@ -57,7 +57,7 @@ impl State {
     /// the next step of the level, and so does each diagnosis; after the last step the principal
     /// decides. The commit of a review role does not matter.
     pub fn recovery(&self, item: ItemId, role: SessionRole) -> Recovery {
-        let (Some(policy), Some(ItemView::Live(live))) = (
+        let (Some(policy), Some(ItemEntry::Live(live))) = (
             self.policy().map(|document| &document.policy),
             self.item(item),
         ) else {

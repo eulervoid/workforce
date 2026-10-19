@@ -9,7 +9,7 @@ use serde::Serialize;
 use wf_core::crdt::SetChange;
 use wf_core::event::{Change, EventBody, ItemCreated, ItemLinked, ItemMoved, ItemRef, Link};
 use wf_core::id::{HashId, ItemId};
-use wf_core::item::{Item, ItemState, ItemView, Merge, Priority};
+use wf_core::item::{Item, ItemEntry, ItemState, Merge, Priority};
 use wf_core::policy::Field;
 use wf_core::state::State;
 use wf_core::validate::OneOf;
@@ -26,16 +26,16 @@ use crate::workspace::Workspace;
 
 /// The items, the live ones in `order` and the archived ones after them by when they were
 /// archived.
-pub(crate) fn sorted_views(state: &State, scope: Scope, order: ItemOrder) -> Vec<ItemView<'_>> {
-    let mut views: Vec<ItemView<'_>> = state
+pub(crate) fn sorted_views(state: &State, scope: Scope, order: ItemOrder) -> Vec<ItemEntry<'_>> {
+    let mut views: Vec<ItemEntry<'_>> = state
         .items()
         .filter(|view| scope.includes(state, view))
         .collect();
     views.sort_by(|first, second| match (first, second) {
-        (ItemView::Live(first), ItemView::Live(second)) => compare_items(order, first, second),
-        (ItemView::Live(_), ItemView::Archived(_)) => Ordering::Less,
-        (ItemView::Archived(_), ItemView::Live(_)) => Ordering::Greater,
-        (ItemView::Archived(first), ItemView::Archived(second)) => {
+        (ItemEntry::Live(first), ItemEntry::Live(second)) => compare_items(order, first, second),
+        (ItemEntry::Live(_), ItemEntry::Archived(_)) => Ordering::Less,
+        (ItemEntry::Archived(_), ItemEntry::Live(_)) => Ordering::Greater,
+        (ItemEntry::Archived(first), ItemEntry::Archived(second)) => {
             (first.archived_at(), first.id()).cmp(&(second.archived_at(), second.id()))
         }
     });
@@ -79,14 +79,14 @@ pub(crate) enum Scope {
 }
 
 impl Scope {
-    fn includes(self, state: &State, view: &ItemView<'_>) -> bool {
+    fn includes(self, state: &State, view: &ItemEntry<'_>) -> bool {
         match (self, view) {
-            (Scope::Unclaimed, ItemView::Live(item)) => state.claim(item.id()).is_none(),
+            (Scope::Unclaimed, ItemEntry::Live(item)) => state.claim(item.id()).is_none(),
             (Scope::Any, _)
-            | (Scope::Live, ItemView::Live(_))
-            | (Scope::Archived, ItemView::Archived(_)) => true,
-            (Scope::Live | Scope::Unclaimed, ItemView::Archived(_))
-            | (Scope::Archived, ItemView::Live(_)) => false,
+            | (Scope::Live, ItemEntry::Live(_))
+            | (Scope::Archived, ItemEntry::Archived(_)) => true,
+            (Scope::Live | Scope::Unclaimed, ItemEntry::Archived(_))
+            | (Scope::Archived, ItemEntry::Live(_)) => false,
         }
     }
 }
@@ -403,7 +403,7 @@ fn move_items(
         let state = workspace.state();
         let policy = &state.policy().expect("a workforce has a policy").policy;
         for id in &ids {
-            let ItemView::Live(live) = state.item(*id).expect("resolved ids exist") else {
+            let ItemEntry::Live(live) = state.item(*id).expect("resolved ids exist") else {
                 bail!("#{} is archived; unarchive it first", id.short());
             };
             if live.state(policy) == to && live.unknown_state().is_none() {
@@ -527,10 +527,10 @@ struct ArchivedShown {
 fn show(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Result<()> {
     let state = workspace.state();
     match state.item(id).expect("resolved ids exist") {
-        ItemView::Archived(stub) => {
+        ItemEntry::Archived(stub) => {
             let graph = state.dependency_graph();
             let shown = ArchivedShown {
-                summary: view::summary(state, &graph, ItemView::Archived(stub)),
+                summary: view::summary(state, &graph, ItemEntry::Archived(stub)),
                 archived_at: view::timestamp(stub.archived_at()),
                 note: "archived: body and discussion load from the log on demand; `wf item unarchive` restores the item",
             };
@@ -543,7 +543,7 @@ fn show(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Re
                 )
             })
         }
-        ItemView::Live(item) => {
+        ItemEntry::Live(item) => {
             let events = workspace.events()?;
             let detail = view::item_detail(state, item, &events);
             emit_paged(json, mode, &detail, render::item_detail)
@@ -560,7 +560,7 @@ fn edit(
     let id = choose_item(workspace, mode, args.item.clone(), Scope::Live)?;
     let changes = {
         let state = workspace.state();
-        let ItemView::Live(item) = state.item(id).expect("resolved ids exist") else {
+        let ItemEntry::Live(item) = state.item(id).expect("resolved ids exist") else {
             bail!("#{} is archived; unarchive it to edit", id.short());
         };
         let current = Draft::of(item);
@@ -623,7 +623,7 @@ fn check(json: bool, workspace: &mut Workspace, args: ItemCheckArgs) -> anyhow::
     let id = workspace.resolve_item(&args.item)?;
     let ticked = !args.remove;
     let (changes, message) = {
-        let ItemView::Live(item) = workspace.state().item(id).expect("resolved ids exist") else {
+        let ItemEntry::Live(item) = workspace.state().item(id).expect("resolved ids exist") else {
             bail!("#{} is archived; unarchive it to edit", id.short());
         };
         let steps: Vec<_> = item.steps().collect();
@@ -805,8 +805,8 @@ fn remove_depends_on(
     target: ItemId,
 ) -> anyhow::Result<(Link, String)> {
     let removal = match workspace.state().item(id).expect("resolved ids exist") {
-        ItemView::Live(item) => item.depends_on().removal(&target),
-        ItemView::Archived(_) => bail!("#{} is archived; unarchive it first", id.short()),
+        ItemEntry::Live(item) => item.depends_on().removal(&target),
+        ItemEntry::Archived(_) => bail!("#{} is archived; unarchive it first", id.short()),
     };
     Ok((
         Link::DependsOn(removal),
@@ -824,7 +824,7 @@ fn supersedes(id: ItemId, target: ItemId) -> (Link, String) {
 fn pick_dependency(workspace: &Workspace, id: ItemId) -> anyhow::Result<ItemId> {
     let state = workspace.state();
     let graph = state.dependency_graph();
-    let ItemView::Live(item) = state.item(id).expect("resolved ids exist") else {
+    let ItemEntry::Live(item) = state.item(id).expect("resolved ids exist") else {
         bail!("#{} is archived; unarchive it first", id.short());
     };
     let choices = item

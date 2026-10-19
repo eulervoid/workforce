@@ -91,7 +91,8 @@ pub enum DaemonError {
     },
 }
 
-pub struct Config {
+/// What a daemon is started with: where it keeps its data and listens, and what it runs for agents.
+pub struct Launch {
     /// Holds one directory per workforce, named by its id.
     pub data_dir: DataDir,
     pub socket: PathBuf,
@@ -224,7 +225,7 @@ impl HistorySource for ParentHistory {
 type WriteMatcher = fn(&EventBody) -> bool;
 
 pub struct Daemon {
-    config: Config,
+    launch: Launch,
     device: DeviceSigner,
     /// Started when a workforce first needs the network, so that a workforce on one device never
     /// goes online.
@@ -255,12 +256,12 @@ pub struct Daemon {
 }
 
 impl Daemon {
-    pub async fn start(config: Config, device: DeviceSigner) -> Result<Arc<Self>, DaemonError> {
-        if let Some(binary) = &config.wf_binary {
-            install_wf(binary, &config.data_dir.bin())?;
+    pub async fn start(launch: Launch, device: DeviceSigner) -> Result<Arc<Self>, DaemonError> {
+        if let Some(binary) = &launch.wf_binary {
+            install_wf(binary, &launch.data_dir.bin())?;
         }
         let daemon = Arc::new(Self {
-            config,
+            launch,
             device,
             node: tokio::sync::OnceCell::new(),
             presence: Presence::default(),
@@ -328,17 +329,17 @@ impl Daemon {
 
     /// The directory with the daemon's copy of `wf`, if it made one.
     pub(crate) fn bin_dir(&self) -> Option<PathBuf> {
-        self.config
+        self.launch
             .wf_binary
             .as_ref()
-            .map(|_| self.config.data_dir.bin())
+            .map(|_| self.launch.data_dir.bin())
     }
 
     /// The network node of this machine, started on first use.
     pub async fn node(&self) -> Result<Arc<Node<StorageHandle>>, NetError> {
         self.node
             .get_or_try_init(|| async {
-                let node = Node::start(&self.device, self.config.network.clone()).await?;
+                let node = Node::start(&self.device, self.launch.network.clone()).await?;
                 tracing::info!("the network is on");
                 Ok(Arc::new(node))
             })
@@ -347,7 +348,7 @@ impl Daemon {
     }
 
     async fn load_stored_workforces(self: &Arc<Self>) {
-        let Ok(entries) = std::fs::read_dir(self.config.data_dir.root()) else {
+        let Ok(entries) = std::fs::read_dir(self.launch.data_dir.root()) else {
             return;
         };
         for entry in entries.flatten() {
@@ -358,7 +359,7 @@ impl Daemon {
             else {
                 continue;
             };
-            if !self.config.data_dir.store(&id).is_file() {
+            if !self.launch.data_dir.store(&id).is_file() {
                 continue;
             }
             if self.loaded_workforce(&id).is_some() {
@@ -371,7 +372,7 @@ impl Daemon {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .insert(id);
                 if first_time {
-                    let store = self.config.data_dir.store(&id);
+                    let store = self.launch.data_dir.store(&id);
                     let hint = if let DaemonError::Store(StoreError::Corrupt(_)) = &error {
                         format!(
                             "; move {} away, then `wf import` an export of the workforce, or join it again from another device",
@@ -403,7 +404,7 @@ impl Daemon {
         tokio::spawn(async move { daemon.open_workforce(id).await })
             .await
             .map_err(|error| DaemonError::Io {
-                path: self.config.data_dir.store(&id),
+                path: self.launch.data_dir.store(&id),
                 source: std::io::Error::other(error),
             })?
     }
@@ -415,7 +416,7 @@ impl Daemon {
         if let Some(existing) = self.loaded_workforce(&id) {
             return Ok(existing);
         }
-        let path = self.config.data_dir.store(&id);
+        let path = self.launch.data_dir.store(&id);
         if !path.is_file() {
             return Err(DaemonError::UnknownWorkforce(id));
         }
@@ -437,7 +438,7 @@ impl Daemon {
             tokio::task::spawn_blocking(move || StorageHandle::open(path, id, history, note_space))
                 .await
                 .map_err(|error| DaemonError::Io {
-                    path: self.config.data_dir.store(&id),
+                    path: self.launch.data_dir.store(&id),
                     source: std::io::Error::other(error),
                 })??;
         // With the network on, serve at once: a device may sync a fork right after it was made.
@@ -491,8 +492,8 @@ impl Daemon {
         self: &Arc<Self>,
         id: WorkforceId,
     ) -> Result<Arc<Loaded>, DaemonError> {
-        let directory = self.config.data_dir.workforce(&id);
-        let store = self.config.data_dir.store(&id);
+        let directory = self.launch.data_dir.workforce(&id);
+        let store = self.launch.data_dir.store(&id);
         // A task of its own, like the open in `workforce`, so it finishes whatever the caller does.
         let daemon = Arc::clone(self);
         tokio::spawn(async move {
@@ -509,7 +510,7 @@ impl Daemon {
                 })
                 .await
                 .map_err(|error| DaemonError::Io {
-                    path: daemon.config.data_dir.store(&id),
+                    path: daemon.launch.data_dir.store(&id),
                     source: std::io::Error::other(error),
                 })??;
             }
@@ -517,7 +518,7 @@ impl Daemon {
         })
         .await
         .map_err(|error| DaemonError::Io {
-            path: self.config.data_dir.store(&id),
+            path: self.launch.data_dir.store(&id),
             source: std::io::Error::other(error),
         })??;
         self.workforce(id).await
@@ -532,12 +533,12 @@ impl Daemon {
         genesis: Event,
     ) -> Result<(), DaemonError> {
         let child = WorkforceId::from(genesis.id());
-        let directory = self.config.data_dir.workforce(&child);
+        let directory = self.launch.data_dir.workforce(&child);
         std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
             path: directory.clone(),
             source,
         })?;
-        let path = self.config.data_dir.store(&child);
+        let path = self.launch.data_dir.store(&child);
         let created = {
             let path = path.clone();
             parent
@@ -619,7 +620,7 @@ impl Daemon {
                 }
             }
         }
-        let _ = std::fs::remove_file(&self.config.socket);
+        let _ = std::fs::remove_file(&self.launch.socket);
         Ok(())
     }
 
@@ -627,31 +628,31 @@ impl Daemon {
         use std::os::unix::fs::PermissionsExt;
 
         let socket_error = |source| DaemonError::Socket {
-            path: self.config.socket.clone(),
+            path: self.launch.socket.clone(),
             source,
         };
-        if let Some(parent) = self.config.socket.parent() {
+        if let Some(parent) = self.launch.socket.parent() {
             data_dir::create_private_directory(parent).map_err(socket_error)?;
         }
-        if self.config.socket.exists() {
-            if tokio::net::UnixStream::connect(&self.config.socket)
+        if self.launch.socket.exists() {
+            if tokio::net::UnixStream::connect(&self.launch.socket)
                 .await
                 .is_ok()
             {
-                return Err(DaemonError::AlreadyRunning(self.config.socket.clone()));
+                return Err(DaemonError::AlreadyRunning(self.launch.socket.clone()));
             }
-            let _ = std::fs::remove_file(&self.config.socket);
+            let _ = std::fs::remove_file(&self.launch.socket);
         }
         // After a running daemon would have answered, so its token stays; before the socket
         // takes connections, so a client finds this daemon's token.
         self.callers
-            .publish(&self.config.data_dir)
+            .publish(&self.launch.data_dir)
             .map_err(|source| DaemonError::Io {
-                path: self.config.data_dir.principal_token(),
+                path: self.launch.data_dir.principal_token(),
                 source,
             })?;
-        let listener = UnixListener::bind(&self.config.socket).map_err(socket_error)?;
-        std::fs::set_permissions(&self.config.socket, std::fs::Permissions::from_mode(0o600))
+        let listener = UnixListener::bind(&self.launch.socket).map_err(socket_error)?;
+        std::fs::set_permissions(&self.launch.socket, std::fs::Permissions::from_mode(0o600))
             .map_err(socket_error)?;
         Ok(listener)
     }

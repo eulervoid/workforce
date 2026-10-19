@@ -7,7 +7,7 @@ use serde::Serialize;
 use wf_core::activity::Entry;
 use wf_core::event::{Change, Event, EventBody, Link};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
-use wf_core::item::ItemView;
+use wf_core::item::ItemEntry;
 use wf_core::session::{EndReason, Verdict};
 use wf_core::state::State;
 
@@ -32,8 +32,8 @@ pub fn event_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<EventL
     let mut activities: HashMap<ItemId, Vec<Entry>> = HashMap::new();
     for event in new {
         let live = state.item_of(event).and_then(|id| match state.item(id) {
-            Some(ItemView::Live(item)) => Some(item),
-            Some(ItemView::Archived(_)) | None => None,
+            Some(ItemEntry::Live(item)) => Some(item),
+            Some(ItemEntry::Archived(_)) | None => None,
         });
         match live {
             Some(item) => {

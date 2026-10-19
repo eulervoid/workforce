@@ -1,4 +1,4 @@
-//! How much an agent does without a person: when it starts, how long it is left alone and what
+//! How much an agent does without its principal: when it starts, how long it is left alone and what
 //! it may do. Part of the agent definition, so only its principal can change it.
 
 use std::fmt;
@@ -19,7 +19,7 @@ pub enum StartMode {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PermissionMode {
     Allow,
-    /// Held for a person to answer.
+    /// Passed through the deciders; a request none of them answers is held for the principal.
     Ask,
     Deny,
 }
@@ -93,7 +93,7 @@ pub struct Autonomy {
 }
 
 impl Default for Autonomy {
-    /// Nothing starts without a person. Inside its sandbox an agent may do anything; a machine that
+    /// Nothing starts without the principal. Inside its sandbox an agent may do anything; a machine that
     /// runs agents without one asks instead.
     fn default() -> Self {
         Self {

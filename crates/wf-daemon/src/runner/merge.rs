@@ -5,10 +5,10 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
 use tokio::sync::Notify;
-use wf_core::event::{Comment, EventBody, Merged};
+use wf_core::event::{Commented, EventBody, Merged};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
-use wf_core::item::{ItemState, ItemView};
+use wf_core::item::{ItemEntry, ItemState};
 use wf_core::lifecycle::{MergeFailure, MergePlan};
 use wf_core::policy::MergeMode;
 use wf_core::review::PendingMerge;
@@ -244,7 +244,7 @@ impl Daemon {
             attempt,
         } = request;
         let state = self.snapshot(loaded).await?;
-        let ItemView::Live(live) = state.item(item).ok_or(SessionError::UnknownItem(item))? else {
+        let ItemEntry::Live(live) = state.item(item).ok_or(SessionError::UnknownItem(item))? else {
             return Err(SessionError::Archived(item));
         };
         let policy = &state.policy().ok_or(SessionError::NoPolicy)?.policy;
@@ -278,7 +278,7 @@ impl Daemon {
             self.author(
                 loaded,
                 Actor::Daemon(principal),
-                EventBody::Commented(Comment::plain(item, body)),
+                EventBody::Commented(Commented::plain(item, body)),
             )
         };
 
@@ -456,7 +456,7 @@ impl Daemon {
     /// The device's key as an SSH key file that `ssh-keygen` signs merges with, written beside the
     /// device key, readable only by its owner.
     fn device_signing_key(&self) -> Result<PathBuf, SessionError> {
-        let path = self.config.data_dir.device_ssh_key();
+        let path = self.launch.data_dir.device_ssh_key();
         let text = wf_vcs::signing::device_private_key(&self.device)?;
         if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
             return Ok(path);

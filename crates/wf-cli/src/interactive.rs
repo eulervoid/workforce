@@ -5,7 +5,7 @@ use std::io::IsTerminal;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Mode {
-    /// A person is at the terminal, so missing arguments can be asked for.
+    /// A terminal is attached, so missing arguments can be asked for.
     Interactive,
     Scripted,
 }

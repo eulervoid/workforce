@@ -208,7 +208,7 @@ impl From<CommentId> for EventId {
     }
 }
 
-/// Ids by their base32 text, for resolving a user supplied prefix like git does: unique match, at
+/// Ids by their base32 text, for resolving a prefix the principal typed like git does: unique match, at
 /// least [`MIN_PREFIX_LEN`] characters.
 pub struct PrefixIndex<T> {
     ids: std::collections::BTreeMap<String, T>,

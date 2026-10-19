@@ -153,14 +153,14 @@ impl WorkforceJudges {
         let environment = machine_config.environment_of(agent);
         let workforce = daemon.workforce_directory(self.workforce);
         let directory = workforce.join("judges").join(agent.as_str());
-        let transcripts = daemon.config.data_dir.transcripts(&self.workforce);
+        let transcripts = daemon.launch.data_dir.transcripts(&self.workforce);
         for path in [&directory, &transcripts] {
             std::fs::create_dir_all(path)
                 .map_err(|error| format!("{}: {error}", path.display()))?;
         }
         // Judges read text the requesting agent controls, so they run in the sandbox of their agent,
         // working in their own directory.
-        let settings = workforce
+        let profile_file = workforce
             .join("sandbox")
             .join(format!("judge-{agent}.json"));
         let command = crate::runner::sandboxed_in(
@@ -169,7 +169,7 @@ impl WorkforceJudges {
             &directory,
             &directory,
             None,
-            &settings,
+            &profile_file,
             command,
         )
         .map_err(|problem| format!("the sandbox could not be set up: {problem}"))?;

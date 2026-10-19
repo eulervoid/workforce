@@ -16,11 +16,6 @@ use wf_core::policy::CheckConfig;
 use wf_harness::Decider;
 use wf_vcs::CommitSigning;
 
-mod theme;
-pub use theme::{
-    Background, PriorityThemeConfig, ReadinessThemeConfig, StateThemeConfig, ThemeConfig,
-};
-
 #[derive(Debug, thiserror::Error)]
 pub enum MachineConfigError {
     #[error("{path}: {source}")]
@@ -59,9 +54,9 @@ pub struct MachineConfig {
     pub storage: Option<StorageConfig>,
     #[serde(default)]
     pub check: CheckRunConfig,
-    /// The colours of the CLI and the dashboard.
+    /// `[theme]` is the CLI's: the daemon accepts it and reads nothing from it.
     #[serde(default)]
-    pub theme: ThemeConfig,
+    theme: serde::de::IgnoredAny,
 }
 
 /// How the checks of the policy run on this machine: `[check]`.
@@ -562,28 +557,6 @@ fn read(path: &Path) -> Result<Option<String>, MachineConfigError> {
     }
 }
 
-impl ThemeConfig {
-    /// Reads only `[theme]` of the config at `path`, so a mistake elsewhere leaves the colours
-    /// alone; a missing file sets nothing.
-    pub fn load(path: &Path) -> Result<Self, MachineConfigError> {
-        /// The machine config, seen only for its theme.
-        #[derive(Deserialize)]
-        struct OnlyTheme {
-            #[serde(default)]
-            theme: ThemeConfig,
-        }
-        let Some(text) = read(path)? else {
-            return Ok(Self::default());
-        };
-        toml::from_str::<OnlyTheme>(&text)
-            .map(|config| config.theme)
-            .map_err(|source| MachineConfigError::Parse {
-                path: path.to_path_buf(),
-                source: Box::new(source),
-            })
-    }
-}
-
 enum ParseError {
     Toml(toml::de::Error),
     Invalid(String),
@@ -891,18 +864,5 @@ mod tests {
         ] {
             assert!(MachineConfig::parse(text).is_err(), "{text}");
         }
-    }
-
-    #[test]
-    fn the_theme_is_read_whatever_is_wrong_elsewhere() {
-        let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("config.toml");
-        std::fs::write(&path, "[notify]\ncommand = []\n\n[theme]\nid = \"red\"\n").unwrap();
-        assert!(MachineConfig::load(&path).is_err());
-        assert!(ThemeConfig::load(&path).unwrap().id.is_some());
-        assert_eq!(
-            ThemeConfig::load(&dir.path().join("missing.toml")).unwrap(),
-            ThemeConfig::default()
-        );
     }
 }

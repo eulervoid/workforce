@@ -41,6 +41,8 @@ pub enum JoinRefusal {
     BadProof,
     #[error("this device does not serve that workforce")]
     NotServed,
+    #[error("this device could not read its log")]
+    Unreadable,
 }
 
 #[derive(Serialize, Deserialize)]

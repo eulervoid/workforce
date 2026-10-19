@@ -2,7 +2,7 @@ use crate::crdt::SetChange;
 use crate::event::Change;
 use crate::graph::Readiness;
 use crate::id::{HashId, ItemId};
-use crate::item::{ItemState, ItemView, WrittenIn};
+use crate::item::{ItemEntry, ItemState, WrittenIn};
 use crate::name::Label;
 use crate::policy::DEFAULT_POLICY_TOML;
 use crate::refs::Mention;
@@ -156,7 +156,7 @@ fn only_open_items_are_ready() {
 }
 
 fn readiness(state: &State, item: ItemId) -> Option<Readiness> {
-    let ItemView::Live(live) = state.item(item).unwrap() else {
+    let ItemEntry::Live(live) = state.item(item).unwrap() else {
         panic!("live")
     };
     state.readiness(&state.dependency_graph(), live)
@@ -196,7 +196,7 @@ fn archiving_leaves_a_stub_and_keeps_dependencies_resolving() {
     fixture.apply(&mut state, 0, 2_003, moved(part, ItemState::Done));
     fixture.apply(&mut state, 0, 2_004, archive(part));
 
-    let ItemView::Archived(stub) = state.item(part).unwrap() else {
+    let ItemEntry::Archived(stub) = state.item(part).unwrap() else {
         panic!("archived items are stubs")
     };
     assert_eq!(stub.title(), "part");
@@ -207,7 +207,7 @@ fn archiving_leaves_a_stub_and_keeps_dependencies_resolving() {
     );
 
     fixture.apply(&mut state, 0, 2_005, unarchive(part));
-    assert!(matches!(state.item(part).unwrap(), ItemView::Live(_)));
+    assert!(matches!(state.item(part).unwrap(), ItemEntry::Live(_)));
 }
 
 #[test]
@@ -245,7 +245,7 @@ fn a_superseded_decision_keeps_its_state() {
     assert_eq!(state.check_policy(&supersedes(new, old)), Ok(()));
     fixture.apply(&mut state, 0, 2_003, supersedes(new, old));
     assert_eq!(state_of(&state, old), ItemState::Done);
-    let ItemView::Live(new_item) = state.item(new).unwrap() else {
+    let ItemEntry::Live(new_item) = state.item(new).unwrap() else {
         panic!()
     };
     assert_eq!(new_item.supersedes(), Some(old));
@@ -271,13 +271,13 @@ fn unknown_state_names_read_as_draft_and_are_flagged() {
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "crash")));
     fixture.apply(&mut state, 0, 2_001, moved_as_written(task, "triaged"));
     assert_eq!(state_of(&state, task), ItemState::Draft);
-    let ItemView::Live(item) = state.item(task).unwrap() else {
+    let ItemEntry::Live(item) = state.item(task).unwrap() else {
         panic!()
     };
     assert_eq!(item.unknown_state(), Some("triaged"));
     assert!(!ready_ids(&state).contains(&task));
     fixture.apply(&mut state, 0, 2_002, moved(task, ItemState::Open));
-    let ItemView::Live(item) = state.item(task).unwrap() else {
+    let ItemEntry::Live(item) = state.item(task).unwrap() else {
         panic!()
     };
     assert_eq!(item.unknown_state(), None);
@@ -426,7 +426,7 @@ fn concurrent_label_add_beats_remove() {
     let mut right = left.clone();
 
     let removal = {
-        let ItemView::Live(item) = left.item(task).unwrap() else {
+        let ItemEntry::Live(item) = left.item(task).unwrap() else {
             panic!()
         };
         item.labels().removal(&label)
@@ -448,7 +448,7 @@ fn concurrent_label_add_beats_remove() {
             .unwrap();
     }
     assert_eq!(left, right);
-    let ItemView::Live(item) = left.item(task).unwrap() else {
+    let ItemEntry::Live(item) = left.item(task).unwrap() else {
         panic!()
     };
     assert!(item.labels().contains(&label));
@@ -508,7 +508,7 @@ fn references_mentions_and_backlinks_resolve_against_the_state() {
         ),
     );
 
-    let ItemView::Live(task_item) = state.item(task).unwrap() else {
+    let ItemEntry::Live(task_item) = state.item(task).unwrap() else {
         panic!()
     };
     assert_eq!(
@@ -621,7 +621,7 @@ fn comment_references_resolve_among_the_comments_of_their_item() {
         Err(PrefixError::NotFound(_))
     ));
 
-    let ItemView::Live(other_item) = state.item(other).unwrap() else {
+    let ItemEntry::Live(other_item) = state.item(other).unwrap() else {
         panic!()
     };
     assert_eq!(
@@ -646,7 +646,7 @@ fn comment_references_resolve_among_the_comments_of_their_item() {
 }
 
 fn done_steps(state: &State, item: ItemId) -> Vec<bool> {
-    let ItemView::Live(item) = state.item(item).unwrap() else {
+    let ItemEntry::Live(item) = state.item(item).unwrap() else {
         panic!("live")
     };
     item.body().steps().map(|step| step.done).collect()
@@ -784,8 +784,8 @@ fn the_review_level_of_an_item_is_a_register() {
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "work")));
     let review = |item: &crate::item::Item| item.review_level().map(ToString::to_string);
     let item_of = |state: &State| match state.item(task).unwrap() {
-        ItemView::Live(item) => review(item),
-        ItemView::Archived(_) => panic!("live"),
+        ItemEntry::Live(item) => review(item),
+        ItemEntry::Archived(_) => panic!("live"),
     };
     assert_eq!(item_of(&state), None);
 
@@ -802,12 +802,12 @@ fn the_recovery_level_of_an_item_is_a_register_that_falls_back_to_its_type() {
     let mut state = fixture.state();
     let task = item_id(&fixture.apply(&mut state, 0, 2_000, create("task", "work")));
     let levels = |state: &State| match state.item(task).unwrap() {
-        ItemView::Live(item) => (
+        ItemEntry::Live(item) => (
             item.recovery_level().map(ToString::to_string),
             item.effective_recovery_level(&state.policy().unwrap().policy)
                 .map(ToString::to_string),
         ),
-        ItemView::Archived(_) => panic!("live"),
+        ItemEntry::Archived(_) => panic!("live"),
     };
     assert_eq!(levels(&state), (None, Some("standard".to_string())));
 

@@ -9,7 +9,7 @@ use crate::event::CommentKind;
 use crate::graph::DependencyGraph;
 use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::{Item, ItemState, ItemView};
+use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::Policy;
 use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole};
 use crate::state::State;
@@ -274,7 +274,7 @@ impl State {
     /// submission whose merge was checked; the submissions they follow are counted. A check
     /// failure before any submission belongs to no run.
     pub fn failed_check_runs(&self, item: ItemId) -> usize {
-        let Some(ItemView::Live(live)) = self.item(item) else {
+        let Some(ItemEntry::Live(live)) = self.item(item) else {
             return 0;
         };
         let since = live.principal_touched();
@@ -434,8 +434,8 @@ impl State {
         }
         let item = folded.item();
         let blocked_by_comment = match self.item(item) {
-            Some(ItemView::Live(live)) => live.has_open_blocker(),
-            Some(ItemView::Archived(_)) | None => false,
+            Some(ItemEntry::Live(live)) => live.has_open_blocker(),
+            Some(ItemEntry::Archived(_)) | None => false,
         };
         blocked_by_comment || !self.unfinished_dependencies(graph, item).is_empty()
     }
@@ -458,12 +458,12 @@ impl State {
             return Resume::AfterRestart;
         };
         let asked = match self.item(folded.item()) {
-            Some(ItemView::Live(item)) => item.comments().values().any(|comment| {
+            Some(ItemEntry::Live(item)) => item.comments().values().any(|comment| {
                 comment.session() == Some(session)
                     && comment.kind == CommentKind::Blocker
                     && comment.at.wall_ms() >= prompted_ms
             }),
-            Some(ItemView::Archived(_)) | None => false,
+            Some(ItemEntry::Archived(_)) | None => false,
         };
         if asked {
             Resume::AfterWait
@@ -476,15 +476,15 @@ impl State {
     pub fn live_state(&self, item: ItemId) -> Option<ItemState> {
         let policy = &self.policy()?.policy;
         match self.item(item)? {
-            ItemView::Live(item) => Some(item.state(policy)),
-            ItemView::Archived(_) => None,
+            ItemEntry::Live(item) => Some(item.state(policy)),
+            ItemEntry::Archived(_) => None,
         }
     }
 
     /// `state`, when the type of the live `item` uses it.
     pub(crate) fn state_if_used(&self, item: ItemId, state: ItemState) -> Option<ItemState> {
         let policy = &self.policy()?.policy;
-        let ItemView::Live(item) = self.item(item)? else {
+        let ItemEntry::Live(item) = self.item(item)? else {
             return None;
         };
         policy
@@ -498,8 +498,8 @@ impl State {
             return false;
         };
         match self.item(item) {
-            Some(ItemView::Live(item)) => item.needs_review(policy),
-            Some(ItemView::Archived(_)) | None => false,
+            Some(ItemEntry::Live(item)) => item.needs_review(policy),
+            Some(ItemEntry::Archived(_)) | None => false,
         }
     }
 }

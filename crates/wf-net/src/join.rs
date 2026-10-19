@@ -77,7 +77,7 @@ impl<L: SyncLog + Clone + 'static> JoinHandler<L> {
             .ok_or(JoinRefusal::NotServed)?;
         log.check_join(request.invite, joiner, request.proof)
             .await
-            .map_err(|_| JoinRefusal::NotServed)??;
+            .map_err(|_| JoinRefusal::Unreadable)??;
         if !self.reservations.reserve(request.invite, joiner) {
             return Err(JoinRefusal::Reserved);
         }

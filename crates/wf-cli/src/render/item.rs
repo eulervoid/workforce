@@ -557,7 +557,7 @@ mod tests {
     #[test]
     fn an_item_that_references_this_one_several_times_is_listed_once() {
         use wf_core::id::{CommentId, HashId, ItemId};
-        use wf_core::item::ItemView;
+        use wf_core::item::ItemEntry;
         use wf_core::testing::*;
 
         let fixture = Fixture::new(1);
@@ -592,7 +592,7 @@ mod tests {
             &[&format!("see #{}/{note}", target.short())],
         );
 
-        let ItemView::Live(item) = state.item(target).unwrap() else {
+        let ItemEntry::Live(item) = state.item(target).unwrap() else {
             panic!()
         };
         let detail = crate::view::item_detail(&state, item, &[]);
@@ -843,7 +843,7 @@ mod tests {
     fn merge_pending(earlier: &[&str], after: &[&str]) -> ItemDetail {
         use wf_core::id::{ItemId, SessionId};
         use wf_core::identity::Actor;
-        use wf_core::item::ItemView;
+        use wf_core::item::ItemEntry;
         use wf_core::session::{CommitId, EndReason, Verdict};
         use wf_core::testing::*;
 
@@ -909,7 +909,7 @@ mod tests {
         for text in after {
             apply(&mut state, daemon.clone(), comment(item, text));
         }
-        let ItemView::Live(live) = state.item(item).unwrap() else {
+        let ItemEntry::Live(live) = state.item(item).unwrap() else {
             panic!()
         };
         crate::view::item_detail(&state, live, &events)

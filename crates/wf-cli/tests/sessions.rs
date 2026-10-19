@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::Value;
 use wf_core::event::EventBody;
 use wf_core::name::HarnessName;
-use wf_daemon::{Config, Daemon};
+use wf_daemon::{Daemon, Launch};
 use wf_harness::AcpAgentConfig;
 use wf_net::Network;
 use wf_vcs::testing::{git_in, init_repository};
@@ -220,7 +220,7 @@ async fn start_daemon(
     }
     let socket = wf.root.path().join("run/workforce/daemon.sock");
     let daemon = Daemon::start(
-        Config {
+        Launch {
             data_dir: data.clone(),
             socket: socket.clone(),
             network: Network::Direct,
@@ -990,7 +990,7 @@ wf work submit
     let item = world.wf.add(&["--title", "Add hello"]);
     let file = world.wf.repository.join(".workforce.toml");
     let original = std::fs::read_to_string(&file).unwrap();
-    std::fs::write(&file, format!("{original}# edited by a person\n")).unwrap();
+    std::fs::write(&file, format!("{original}# edited by hand\n")).unwrap();
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
@@ -1014,7 +1014,7 @@ wf work submit
     assert!(
         std::fs::read_to_string(&file)
             .unwrap()
-            .ends_with("# edited by a person\n")
+            .ends_with("# edited by hand\n")
     );
 
     git_in(
@@ -1261,7 +1261,11 @@ wf work submit
         "parked sessions are live"
     );
     let inbox = inbox(&world);
-    assert_eq!(inbox.len(), 1, "no supervisor, so it waits on a person");
+    assert_eq!(
+        inbox.len(),
+        1,
+        "no supervisor, so it waits on the principal"
+    );
     assert_eq!(inbox[0]["kind"], "blocker");
 
     world.wf.run(&[
@@ -1529,7 +1533,7 @@ wf work submit
             .iter()
             .all(|session| session["status"] == "submitted")
     );
-    // What the daemon does by itself is not written in the name of the person.
+    // What the daemon does by itself is not written in the name of the principal.
     let log = world.wf.run(&["log"]);
     for kind in ["SessionStarted", "Merged", "ItemMoved"] {
         let lines: Vec<&str> = log.lines().filter(|line| line.contains(kind)).collect();
@@ -1672,7 +1676,7 @@ async fn a_diagnosis_comes_before_the_retry_and_the_principal_decides_after() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_supervisor_escalates_a_blocker_to_a_person() {
+async fn a_supervisor_escalates_a_blocker_to_the_principal() {
     let coder = "\
 wf comment {item} \"is this still wanted?\" --block
 turn
@@ -1931,7 +1935,7 @@ async fn approving_with_a_clean_checkout_tells_of_the_review_and_not_of_the_merg
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn an_escalated_review_goes_to_a_person() {
+async fn an_escalated_review_goes_to_the_principal() {
     let world = review_world(
         COMMIT_AND_SUBMIT,
         "wf review --escalate --note \"unsure\"\n",
@@ -2108,7 +2112,7 @@ fn inbox(world: &World) -> Vec<Value> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_permission_request_waits_in_the_inbox_until_a_person_answers() {
+async fn a_permission_request_waits_in_the_inbox_until_the_principal_answers() {
     let script = "\
 permission
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
@@ -2312,7 +2316,7 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_hook_of_the_machine_config_decides_before_a_person_is_asked() {
+async fn a_hook_of_the_machine_config_decides_before_the_principal_is_asked() {
     let script = "\
 permission
 say done
@@ -2452,7 +2456,7 @@ async fn stopping_a_session_that_waits_on_a_permission_answers_it_cancelled() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_inbox_lists_what_waits_on_a_person() {
+async fn the_inbox_lists_what_waits_on_the_principal() {
     let world = World::new("").await;
     assert!(inbox(&world).is_empty());
     let item = world.wf.add(&["--title", "Pick a database"]);
@@ -2556,7 +2560,7 @@ async fn an_item_with_a_live_session_is_not_started_twice() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_token_acts_for_the_session_and_never_for_the_principal() {
-    use wf_core::event::{Comment, EventBody, ItemMoved, Review};
+    use wf_core::event::{Commented, EventBody, ItemMoved, Reviewed};
     use wf_core::identity::Actor;
     use wf_core::item::ItemState;
     use wf_core::session::Verdict;
@@ -2593,7 +2597,7 @@ hang
     let comment = client
         .author(
             workforce,
-            EventBody::Commented(Comment::plain(item, "as the agent")),
+            EventBody::Commented(Commented::plain(item, "as the agent")),
         )
         .unwrap();
     assert!(
@@ -2601,7 +2605,7 @@ hang
         "{:?}",
         comment.content.actor
     );
-    let approve = EventBody::Reviewed(Review {
+    let approve = EventBody::Reviewed(Reviewed {
         item,
         commit: None,
         verdict: Verdict::Approve,

@@ -1980,7 +1980,7 @@ mod tests {
         let repo = TestRepo::new();
         let work = repo.work("wf/k3f9", "a.txt", "a\n");
         let main = repo.directory();
-        repo.write(&main, "file.txt", "edited by a person\n");
+        repo.write(&main, "file.txt", "edited by hand\n");
         let before = repo.main();
         let outcome = repo
             .git
@@ -1996,7 +1996,7 @@ mod tests {
         assert_eq!(repo.main(), before);
         assert_eq!(
             std::fs::read_to_string(main.join("file.txt")).unwrap(),
-            "edited by a person\n"
+            "edited by hand\n"
         );
     }
 

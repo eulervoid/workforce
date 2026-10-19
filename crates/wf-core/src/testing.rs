@@ -4,7 +4,7 @@ use crate::autonomy::Autonomy;
 use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::event::{
-    AgentDefined, BoundPolicySet, Change, Comment, CommentKind, DeviceBound, Event, EventBody,
+    AgentDefined, BoundPolicySet, Change, CommentKind, Commented, DeviceBound, Event, EventBody,
     EventBuilder, ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated, ItemEdited,
     ItemLinked, ItemMoved, ItemRef, Link, SessionEnded, SessionStarted, WrittenState,
 };
@@ -359,27 +359,27 @@ pub fn unarchive(item: ItemId) -> EventBody {
 }
 
 pub fn comment(item: ItemId, text: &str) -> EventBody {
-    EventBody::Commented(Comment::plain(item, text))
+    EventBody::Commented(Commented::plain(item, text))
 }
 
 pub fn blocker(item: ItemId, text: &str) -> EventBody {
-    EventBody::Commented(Comment {
+    EventBody::Commented(Commented {
         kind: CommentKind::Blocker,
-        ..Comment::plain(item, text)
+        ..Commented::plain(item, text)
     })
 }
 
 pub fn change_request(item: ItemId, text: &str) -> EventBody {
-    EventBody::Commented(Comment {
+    EventBody::Commented(Commented {
         kind: CommentKind::ChangeRequest,
-        ..Comment::plain(item, text)
+        ..Commented::plain(item, text)
     })
 }
 
 pub fn resolving(item: ItemId, text: &str, resolves: &[CommentId]) -> EventBody {
-    EventBody::Commented(Comment {
+    EventBody::Commented(Commented {
         resolves: resolves.to_vec(),
-        ..Comment::plain(item, text)
+        ..Commented::plain(item, text)
     })
 }
 
@@ -417,9 +417,9 @@ pub fn end_session(session: SessionId, reason: EndReason) -> EventBody {
 
 /// A comment about a step of the item's body: a report, when a session writes it.
 pub fn on_step(item: ItemId, text: &str, step: StepId) -> EventBody {
-    EventBody::Commented(Comment {
+    EventBody::Commented(Commented {
         step: Some(step),
-        ..Comment::plain(item, text)
+        ..Commented::plain(item, text)
     })
 }
 
@@ -472,7 +472,7 @@ pub fn start_review(agent: &str, item: ItemId, commit: impl Into<Option<CommitId
 }
 
 pub fn verdict(item: ItemId, commit: impl Into<Option<CommitId>>, verdict: Verdict) -> EventBody {
-    EventBody::Reviewed(crate::event::Review {
+    EventBody::Reviewed(crate::event::Reviewed {
         item,
         commit: commit.into(),
         verdict,
@@ -489,8 +489,8 @@ pub fn merged(item: ItemId, reviewed: CommitId, commit: CommitId) -> EventBody {
 }
 
 pub fn check_failure(item: ItemId, text: &str) -> EventBody {
-    EventBody::Commented(Comment {
+    EventBody::Commented(Commented {
         kind: CommentKind::CheckFailure,
-        ..Comment::plain(item, text)
+        ..Commented::plain(item, text)
     })
 }

@@ -38,19 +38,19 @@ pub(crate) fn fence_installed() -> bool {
         .any(|directory| directory.join("fence").is_file())
 }
 
-/// `agent`, started by Fence in the worktree. The settings Fence reads are written to `settings`.
+/// `agent`, started by Fence in the worktree. The sandbox profile Fence reads is written to `profile_file`.
 pub(crate) fn wrap(
     config: &FenceConfig,
     access: &Access<'_>,
     agent: &AcpAgentConfig,
-    settings: &Path,
+    profile_file: &Path,
 ) -> std::io::Result<AcpAgentConfig> {
-    if let Some(parent) = settings.parent() {
+    if let Some(parent) = profile_file.parent() {
         std::fs::create_dir_all(parent)?;
     }
     let admin_directory = admin_directory(access.worktree)?;
     std::fs::write(
-        settings,
+        profile_file,
         serde_json::to_vec_pretty(&profile(config, access, &admin_directory))?,
     )?;
     // Fence allows writes to "." of the directory it runs in, so it has to start in the worktree.
@@ -61,7 +61,7 @@ pub(crate) fn wrap(
         .arg(access.worktree.to_string_lossy())
         .arg("fence")
         .arg("--settings")
-        .arg(settings.to_string_lossy())
+        .arg(profile_file.to_string_lossy())
         .arg("--")
         .arg(agent.command().to_string_lossy())
         .args(agent.arguments())
@@ -89,7 +89,7 @@ fn parse_gitdir(contents: &str) -> Option<PathBuf> {
         .map(|path| PathBuf::from(path.trim()))
 }
 
-/// The settings Fence runs the agent with.
+/// The sandbox profile Fence runs the agent with.
 fn profile(config: &FenceConfig, access: &Access<'_>, admin_directory: &Path) -> serde_json::Value {
     let git_directory = access.repository.join(".git");
     let writable: Vec<PathBuf> = [access.worktree.to_path_buf(), access.socket.to_path_buf()]
@@ -405,7 +405,7 @@ mod tests {
     #[test]
     fn the_agent_starts_in_the_worktree_under_fence() {
         let directory = tempfile::tempdir().unwrap();
-        let settings = directory.path().join("sandbox/session.json");
+        let profile_file = directory.path().join("sandbox/session.json");
         let agent = AcpAgentConfig::new("claude-agent-acp")
             .arg("--flag")
             .env("WF_SESSION", "s1");
@@ -416,7 +416,7 @@ mod tests {
             worktree: &worktree,
             ..access()
         };
-        let wrapped = wrap(&config(), &access, &agent, &settings).unwrap();
+        let wrapped = wrap(&config(), &access, &agent, &profile_file).unwrap();
 
         assert_eq!(wrapped.command(), Path::new("sh"));
         assert_eq!(
@@ -425,7 +425,7 @@ mod tests {
                 worktree.to_str().unwrap(),
                 "fence",
                 "--settings",
-                settings.to_str().unwrap(),
+                profile_file.to_str().unwrap(),
                 "--",
                 "claude-agent-acp",
                 "--flag"
@@ -434,7 +434,7 @@ mod tests {
         assert_eq!(wrapped.environment()["WF_SESSION"], "s1");
 
         let written: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&settings).unwrap()).unwrap();
+            serde_json::from_slice(&std::fs::read(&profile_file).unwrap()).unwrap();
         assert_eq!(written, profile(&config(), &access, Path::new(ADMIN)));
     }
 

@@ -4,9 +4,9 @@
 use std::collections::HashMap;
 
 use wf_cli::view::{self, Envelope};
-use wf_core::event::{Change, Event, EventBody, Review, SessionEnded};
+use wf_core::event::{Change, Event, EventBody, Reviewed, SessionEnded};
 use wf_core::id::{EventId, HashId, ItemId};
-use wf_core::item::{ItemView, Priority};
+use wf_core::item::{ItemEntry, Priority};
 use wf_core::session::{CommitId, EndReason, Verdict};
 use wf_core::state::State;
 use wf_core::testing::*;
@@ -82,7 +82,7 @@ fn item_lists() {
 fn live_item_detail() {
     let scenario = scenario();
     let state = &scenario.state;
-    let ItemView::Live(item) = state.item(scenario.task).unwrap() else {
+    let ItemEntry::Live(item) = state.item(scenario.task).unwrap() else {
         panic!()
     };
     let events: Vec<_> = scenario.events.values().cloned().collect();
@@ -94,7 +94,7 @@ fn live_item_detail() {
 fn dependency_detail_shows_backlinks_and_dependents() {
     let scenario = scenario();
     let state = &scenario.state;
-    let ItemView::Live(item) = state.item(scenario.dependency).unwrap() else {
+    let ItemEntry::Live(item) = state.item(scenario.dependency).unwrap() else {
         panic!()
     };
     let events: Vec<_> = scenario.events.values().cloned().collect();
@@ -165,7 +165,7 @@ fn outcomes_in_the_log() {
     let why = apply(&mut state, comment(item, "needs a test")).id().into();
     apply(
         &mut state,
-        EventBody::Reviewed(Review {
+        EventBody::Reviewed(Reviewed {
             item,
             commit: Some(commit),
             verdict: Verdict::RequestChanges,

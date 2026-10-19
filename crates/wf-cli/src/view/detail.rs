@@ -12,7 +12,7 @@ use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::{InboxKind, Waiting};
-use wf_core::item::{Item, ItemState, ItemView, WrittenIn};
+use wf_core::item::{Item, ItemEntry, ItemState, WrittenIn};
 use wf_core::policy::{Field, ReviewStep};
 use wf_core::review::ReviewStatus;
 use wf_core::session::{CommitId, EndReason, SessionRole, Verdict};
@@ -795,7 +795,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         .collect();
 
     ItemDetail {
-        summary: summary(state, &graph, ItemView::Live(item)),
+        summary: summary(state, &graph, ItemEntry::Live(item)),
         body: body_parts(&item.body()),
         author: actor_view(state, item.author()),
         created: timestamp(item.created()),
@@ -855,7 +855,7 @@ mod tests {
         "the review waits for an agent step that no agent started on this workforce can take";
 
     fn flags(state: &State, item: ItemId) -> Vec<String> {
-        let ItemView::Live(item) = state.item(item).unwrap() else {
+        let ItemEntry::Live(item) = state.item(item).unwrap() else {
             unreachable!("the item is live")
         };
         item_detail(state, item, &[]).flags

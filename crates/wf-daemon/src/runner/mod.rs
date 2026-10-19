@@ -102,6 +102,8 @@ pub enum SessionError {
         #[source]
         source: std::io::Error,
     },
+    #[error("a background task did not finish: {0}")]
+    Task(#[from] tokio::task::JoinError),
 }
 
 impl SessionError {
@@ -138,7 +140,13 @@ impl SessionError {
             | Self::RebaseDirty { .. }
             | Self::MachineConfig(_)
             | Self::SigningKey(_)
-            | Self::Check(CommandError::Empty(_) | CommandError::Vcs(_) | CommandError::NoFence)
+            | Self::Task(_)
+            | Self::Check(
+                CommandError::Empty(_)
+                | CommandError::Vcs(_)
+                | CommandError::NoFence
+                | CommandError::Task(_),
+            )
             | Self::NoFence => false,
         }
     }
@@ -338,10 +346,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, SessionError> {
     tokio::task::spawn_blocking(job)
         .await
-        .map_err(|error| SessionError::Io {
-            path: PathBuf::new(),
-            source: std::io::Error::other(error),
-        })
+        .map_err(SessionError::Task)
 }
 
 impl Daemon {
@@ -363,7 +368,7 @@ impl Daemon {
 
     /// The config of this machine, read anew so that edits apply to the next session.
     pub(crate) fn machine_config(&self) -> Result<MachineConfig, MachineConfigError> {
-        match &self.config.machine_config {
+        match &self.launch.machine_config {
             Some(path) => MachineConfig::load(path),
             None => Ok(MachineConfig::default()),
         }
@@ -400,13 +405,13 @@ impl Daemon {
     }
 
     pub(crate) fn harness_command(&self, harness: &HarnessName) -> Option<AcpAgentConfig> {
-        self.config.harnesses.get(harness).cloned().or_else(|| {
+        self.launch.harnesses.get(harness).cloned().or_else(|| {
             wf_harness::KnownHarness::from_name(harness.as_str()).map(|known| known.command())
         })
     }
 
     pub(crate) fn workforce_directory(&self, workforce: WorkforceId) -> PathBuf {
-        self.config.data_dir.workforce(&workforce)
+        self.launch.data_dir.workforce(&workforce)
     }
 
     /// Where the repository of a workforce is on this machine, as the last `wf` run there said.

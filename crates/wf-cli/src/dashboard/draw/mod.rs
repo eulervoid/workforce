@@ -5,13 +5,13 @@ mod detail;
 mod lists;
 mod popups;
 
+use crate::theme::Background;
 use ansi_to_tui::IntoText;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::{Color, Style, Styled};
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Clear, Paragraph};
-use wf_daemon::machine_config::Background;
 
 use self::chrome::{
     counts_line, draw_header, draw_hints, draw_rule, draw_tip, draw_warning, latest_line,

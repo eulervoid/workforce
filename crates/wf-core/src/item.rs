@@ -199,7 +199,7 @@ impl Comment {
     }
 }
 
-/// A verdict on one commit of an item, by a review session or a person.
+/// A verdict on one commit of an item, by a review session or the principal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Review {
     pub commit: Option<CommitId>,
@@ -550,44 +550,44 @@ impl<'a> ArchivedStub<'a> {
 /// What a reader may see of an item. Archived items expose only a stub; their body, notes and
 /// history are loaded from the log on demand, so code cannot read them by accident.
 #[derive(Clone, Copy, Debug)]
-pub enum ItemView<'a> {
+pub enum ItemEntry<'a> {
     Live(&'a Item),
     Archived(ArchivedStub<'a>),
 }
 
-impl<'a> ItemView<'a> {
+impl<'a> ItemEntry<'a> {
     pub fn of(item: &'a Item) -> Self {
         match item.archived_at() {
-            Some(archived_at) => ItemView::Archived(ArchivedStub { item, archived_at }),
-            None => ItemView::Live(item),
+            Some(archived_at) => ItemEntry::Archived(ArchivedStub { item, archived_at }),
+            None => ItemEntry::Live(item),
         }
     }
 
     pub fn id(&self) -> ItemId {
         match self {
-            ItemView::Live(item) => item.id,
-            ItemView::Archived(stub) => stub.id(),
+            ItemEntry::Live(item) => item.id,
+            ItemEntry::Archived(stub) => stub.id(),
         }
     }
 
     pub fn item_type(&self) -> &'a TypeName {
         match self {
-            ItemView::Live(item) => &item.item_type,
-            ItemView::Archived(stub) => stub.item_type(),
+            ItemEntry::Live(item) => &item.item_type,
+            ItemEntry::Archived(stub) => stub.item_type(),
         }
     }
 
     pub fn title(&self) -> &'a str {
         match self {
-            ItemView::Live(item) => item.title.value(),
-            ItemView::Archived(stub) => stub.title(),
+            ItemEntry::Live(item) => item.title.value(),
+            ItemEntry::Archived(stub) => stub.title(),
         }
     }
 
     pub fn state(&self, policy: &Policy) -> ItemState {
         match self {
-            ItemView::Live(item) => item.state(policy),
-            ItemView::Archived(stub) => stub.state(policy),
+            ItemEntry::Live(item) => item.state(policy),
+            ItemEntry::Archived(stub) => stub.state(policy),
         }
     }
 }

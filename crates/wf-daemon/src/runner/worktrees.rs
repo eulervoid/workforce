@@ -6,7 +6,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
-use wf_core::item::ItemView;
+use wf_core::item::ItemEntry;
 use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::State;
 use wf_vcs::{GitCli, item_worktree, worktrees};
@@ -117,10 +117,10 @@ impl Daemon {
         let mut kept = self.busy_directories(workforce, &state);
         for view in state.items() {
             match view {
-                ItemView::Live(item) if !item.state(policy).is_terminal() => {
+                ItemEntry::Live(item) if !item.state(policy).is_terminal() => {
                     kept.insert(item_worktree(&workforce_directory, item.id()));
                 }
-                ItemView::Live(_) | ItemView::Archived(_) => {}
+                ItemEntry::Live(_) | ItemEntry::Archived(_) => {}
             }
         }
         let directory = worktrees(&workforce_directory);
@@ -185,7 +185,7 @@ impl Daemon {
             return;
         };
         let busy = self.busy_directories(workforce, &state);
-        let directory = self.config.data_dir.worktrees(&workforce);
+        let directory = self.launch.data_dir.worktrees(&workforce);
         let _ = blocking(move || {
             let measured = caches::measure(&directory, &storage.caches);
             for worktree in caches::over_budget(&measured, storage.budget.as_u64(), &busy) {
