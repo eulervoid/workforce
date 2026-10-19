@@ -49,7 +49,8 @@ const ASK_DEVICE_EVERY: Duration = Duration::from_secs(3);
 const BACKLOG: usize = 200;
 
 pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
-    let executable = Executable::start();
+    let executable = Executable::start()?;
+    let rebuilt = executable.path().to_path_buf();
     let mut terminal = ratatui::init();
     // A panic restores the terminal through ratatui's hook, which leaves the mouse and the focus
     // reported.
@@ -67,7 +68,7 @@ pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()
         Exit::Quit => Ok(()),
         Exit::RunRebuilt => {
             // Only returns when the executable could not be run.
-            let error = std::process::Command::new(std::env::current_exe()?)
+            let error = std::process::Command::new(rebuilt)
                 .args(std::env::args_os().skip(1))
                 .exec();
             Err(anyhow::Error::from(error).context("running the rebuilt wf"))
