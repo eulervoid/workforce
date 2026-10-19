@@ -221,8 +221,8 @@ async fn start_daemon(
     scripts: &BTreeMap<String, PathBuf>,
     reopens: &str,
 ) -> (Arc<Daemon>, tokio::sync::oneshot::Sender<()>) {
-    let data = wf_cli::data_dir::DataDir::new(wf.data.join("workforce"));
-    let device = data.device(false).unwrap().unwrap();
+    let data = wf_daemon::DataDir::new(wf.data.join("workforce"));
+    let device = data.device().unwrap().unwrap();
     let mut harnesses = BTreeMap::new();
     for (harness, script) in scripts {
         harnesses.insert(
@@ -242,7 +242,7 @@ async fn start_daemon(
     let socket = wf.root.path().join("run/workforce/daemon.sock");
     let daemon = Daemon::start(
         Config {
-            data_dir: data.root().to_path_buf(),
+            data_dir: data.clone(),
             socket: socket.clone(),
             network: Network::Direct,
             harnesses,
@@ -1116,7 +1116,7 @@ async fn a_session_left_live_by_an_earlier_daemon_is_interrupted_when_the_next_o
     let setup = World::without_daemon(&[("coder", "")]);
     let item = setup.wf.add(&["--title", "Orphaned"]);
     {
-        let data = wf_cli::data_dir::DataDir::new(setup.wf.data.join("workforce"));
+        let data = wf_daemon::DataDir::new(setup.wf.data.join("workforce"));
         let mut workspace =
             wf_cli::workspace::Workspace::open(data, &setup.wf.repository, false).unwrap();
         let id = workspace.resolve_item(short(&item)).unwrap();
@@ -2049,7 +2049,7 @@ wf review --approve
         use wf_core::item::ItemState;
         let socket = world.wf.root.path().join("run/workforce/daemon.sock");
         let (_, workforce) = wf_cli::workspace::find_workforce(repository).unwrap();
-        let token = wf_daemon::caller::read_principal_token(&world.wf.data.join("workforce"));
+        let token = wf_daemon::DataDir::new(world.wf.data.join("workforce")).read_principal_token();
         let mut client = wf_daemon::client::DaemonClient::connect(&socket, token)
             .unwrap()
             .expect("a daemon");

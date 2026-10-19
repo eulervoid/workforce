@@ -11,7 +11,7 @@ use wf_core::session::CommitId;
 use super::vcs::repository;
 use super::{Done, emit};
 use crate::cli::*;
-use crate::workspace::{self, Workspace};
+use crate::workspace::Workspace;
 
 pub(super) fn work(
     json: bool,
@@ -21,7 +21,7 @@ pub(super) fn work(
     let session = workspace.session().ok_or_else(|| {
         anyhow!(
             "`wf work` is for agents inside a session; {} is not set",
-            workspace::SESSION_VARIABLE
+            wf_daemon::caller::SESSION_VARIABLE
         )
     })?;
     match command {

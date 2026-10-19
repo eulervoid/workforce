@@ -248,14 +248,11 @@ fn wait_for_transcript(path: &Path) -> anyhow::Result<()> {
 }
 
 pub(crate) fn transcripts(workspace: &Workspace) -> std::path::PathBuf {
-    workspace
-        .data
-        .workforce(&workspace.workforce())
-        .join("transcripts")
+    workspace.data.transcripts(&workspace.workforce())
 }
 
 pub(crate) fn transcript_path(workspace: &Workspace, session: SessionId) -> std::path::PathBuf {
-    transcripts(workspace).join(format!("{session}.jsonl"))
+    workspace.data.transcript(&workspace.workforce(), session)
 }
 
 /// The model of a session as the daemon of this machine recorded it beside the transcript.

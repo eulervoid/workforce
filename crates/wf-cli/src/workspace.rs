@@ -17,7 +17,8 @@ use wf_daemon::proto::HeldPermission;
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
-use crate::data_dir::DataDir;
+use wf_daemon::DataDir;
+use wf_daemon::caller::{SESSION_VARIABLE, WORKFORCE_VARIABLE};
 
 pub const WORKFORCE_FILE: &str = ".workforce.toml";
 
@@ -26,10 +27,6 @@ pub const WORKFORCE_FILE: &str = ".workforce.toml";
 pub struct WorkforceFile {
     pub id: WorkforceId,
 }
-
-/// Set by the runner for the processes of an agent session: what they write is the session's.
-/// With a daemon, the daemon says whom a process acts for, from the token it presents.
-pub const SESSION_VARIABLE: &str = "WF_SESSION";
 
 fn agent_actor(state: &State, session: &str) -> anyhow::Result<Actor> {
     let id: SessionId = session
@@ -48,11 +45,6 @@ fn session_actor(state: &State, id: SessionId) -> anyhow::Result<Actor> {
 pub fn now_ms() -> u64 {
     u64::try_from(jiff::Timestamp::now().as_millisecond()).unwrap_or_default()
 }
-
-/// Set by the runner for the processes of a session: the workforce the session belongs to. The
-/// checkout of a session carries the workforce file as it was committed, which names an older
-/// workforce when this one was created after the commit.
-pub const WORKFORCE_VARIABLE: &str = "WF_WORKFORCE";
 
 /// Looks for `.workforce.toml` in `start` and its parents. Inside a session the workforce is the
 /// session's, whatever the file says.
@@ -78,7 +70,7 @@ pub fn find_workforce(start: &Path) -> anyhow::Result<(PathBuf, WorkforceId)> {
 pub fn store_path(data: &DataDir, id: &WorkforceId) -> anyhow::Result<PathBuf> {
     let directory = data.workforce(id);
     std::fs::create_dir_all(&directory)?;
-    Ok(directory.join("store.redb"))
+    Ok(data.store(id))
 }
 
 /// Where a command reads and writes the workforce: a running daemon, which owns the store, or
@@ -153,7 +145,7 @@ impl Workspace {
             );
         }
         let signer = data
-            .device(false)?
+            .device()?
             .ok_or_else(|| anyhow!("no device key; this machine has not joined the workforce"))?;
         let store = RedbStore::open(store_path(&data, &id)?)?;
         let replica = if refold {

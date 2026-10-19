@@ -278,6 +278,7 @@ mod tests {
     use std::os::unix::process::ExitStatusExt;
 
     use super::*;
+    use crate::DataDir;
 
     /// A repository with one commit, whose tree has `file.txt`, and a place for the worktree,
     /// the logs and the settings.
@@ -349,7 +350,7 @@ mod tests {
                         repository: self.git.repository(),
                         branch: None,
                         socket: Path::new("/nonexistent/daemon.sock"),
-                        data_dir: self.root.path(),
+                        data_dir: &DataDir::new(self.root.path().to_path_buf()),
                         machine_config: None,
                     },
                     sandbox,

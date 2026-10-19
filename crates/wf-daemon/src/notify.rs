@@ -140,9 +140,7 @@ fn load(path: &Path) -> Vec<InboxEntry> {
 /// Replaces the file in one step, so a crash leaves the old list or the new one.
 fn save(path: &Path, entries: &[InboxEntry]) -> std::io::Result<()> {
     let text = serde_json::to_string(entries).map_err(std::io::Error::other)?;
-    let temporary = path.with_extension(format!("json.{}", std::process::id()));
-    std::fs::write(&temporary, text)?;
-    std::fs::rename(temporary, path)
+    crate::data_dir::write_private(path, text.as_bytes())
 }
 
 /// Runs the notify command for `notice` in the background, without a shell. A command that fails

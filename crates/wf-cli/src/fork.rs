@@ -17,10 +17,10 @@ use wf_store::{RedbStore, Replica};
 
 use crate::cli::ForkArgs;
 use crate::commands::emit;
-use crate::data_dir::DataDir;
 use crate::network::{network_for, sync_devices};
 use crate::view::device_label;
 use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
+use wf_daemon::DataDir;
 
 /// The directory of a fork that is being made, removed again unless the fork is completed.
 struct Unfinished(Option<PathBuf>);
@@ -194,7 +194,7 @@ pub fn fork(
     };
     let device = workspace
         .data
-        .device(false)?
+        .device()?
         .context("no device key on this machine")?;
     let genesis_event = state
         .fork_genesis_builder(

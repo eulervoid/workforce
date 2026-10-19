@@ -124,7 +124,7 @@ impl Daemon {
             },
             ItemView::Archived(_) => return Err(SessionError::Archived(item)),
         };
-        let transcripts = self.workforce_directory(workforce).join("transcripts");
+        let transcripts = self.config.data_dir.transcripts(&workforce);
         Ok(Setup {
             workforce,
             principal,

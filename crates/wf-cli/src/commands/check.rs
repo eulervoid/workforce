@@ -7,6 +7,7 @@ use anyhow::{Context, bail};
 use serde::Serialize;
 use wf_core::name::CommandName;
 use wf_core::policy::CheckConfig;
+use wf_daemon::DataDir;
 use wf_daemon::command::{Access, CommandRun, Confinement, Outcome};
 use wf_daemon::machine_config::MachineConfig;
 
@@ -171,7 +172,7 @@ enum Machine<'a> {
         directory: &'a Path,
         repository: PathBuf,
         socket: PathBuf,
-        data_dir: PathBuf,
+        data_dir: DataDir,
         config_path: PathBuf,
         config: Box<MachineConfig>,
         /// Where Fence's settings are written.
@@ -192,7 +193,7 @@ impl<'a> Machine<'a> {
             directory,
             repository: wf_vcs::GitCli::open(directory)?.repository().to_path_buf(),
             socket: workspace.data.daemon_socket(),
-            data_dir: workspace.data.root().to_path_buf(),
+            data_dir: workspace.data.clone(),
             config_path,
             config,
             settings: scratch.join("fence.json"),

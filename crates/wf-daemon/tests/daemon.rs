@@ -3,12 +3,12 @@ use std::sync::Arc;
 
 use tempfile::TempDir;
 use wf_core::testing::*;
-use wf_daemon::caller::read_principal_token;
 use wf_daemon::client::{ClientError, DaemonClient};
+use wf_daemon::data_dir::STORE_FILE;
 use wf_daemon::proto::{
     Hello, HelloReply, PROTOCOL_VERSION, ProtoError, read_message, write_message,
 };
-use wf_daemon::{Config, Daemon, DaemonError, STORE_FILE};
+use wf_daemon::{Config, Daemon, DaemonError, DataDir};
 use wf_net::Network;
 use wf_store::{RedbStore, Replica};
 
@@ -65,7 +65,7 @@ async fn start() -> Running {
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
         Config {
-            data_dir: directory.path().to_path_buf(),
+            data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
@@ -102,7 +102,7 @@ async fn blocking<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -
 
 /// Connects as the principal, as the CLI does: the tests keep the socket in the data directory.
 fn connect(socket: &Path) -> DaemonClient {
-    let token = read_principal_token(socket.parent().unwrap());
+    let token = DataDir::new(socket.parent().unwrap().to_path_buf()).read_principal_token();
     DaemonClient::connect(socket, token)
         .unwrap()
         .expect("a daemon")
@@ -242,7 +242,7 @@ async fn a_second_daemon_on_the_same_socket_is_refused() {
     let workforce = running.fixture.workforce();
     let second = Daemon::start(
         Config {
-            data_dir: running._directory.path().to_path_buf(),
+            data_dir: DataDir::new(running._directory.path().to_path_buf()),
             socket: running.socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
@@ -283,7 +283,7 @@ async fn start_peer_as(
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
         Config {
-            data_dir: directory.path().to_path_buf(),
+            data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
@@ -485,7 +485,7 @@ async fn start_empty(
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
         Config {
-            data_dir: directory.path().to_path_buf(),
+            data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
@@ -601,7 +601,7 @@ async fn a_log_longer_than_a_page_arrives_whole_and_in_order() {
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
         Config {
-            data_dir: directory.path().to_path_buf(),
+            data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: socket.clone(),
             network: Network::Direct,
             harnesses: Default::default(),
@@ -635,7 +635,7 @@ async fn a_daemon_starts_with_an_empty_store_in_its_data_directory() {
     drop(RedbStore::open(store_directory.join(STORE_FILE)).unwrap());
     let daemon = Daemon::start(
         Config {
-            data_dir: directory.path().to_path_buf(),
+            data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: directory.path().join("daemon.sock"),
             network: Network::Direct,
             harnesses: Default::default(),

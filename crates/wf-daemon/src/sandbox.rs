@@ -13,6 +13,7 @@ use std::path::{Path, PathBuf};
 use serde_json::json;
 use wf_harness::AcpAgentConfig;
 
+use crate::data_dir::DataDir;
 use crate::machine_config::FenceConfig;
 
 /// What the agent is let to touch besides its worktree, and what of wf it must not.
@@ -26,7 +27,7 @@ pub struct Access<'a> {
     /// The socket of the daemon, which `wf` in the agent talks to.
     pub socket: &'a Path,
     /// wf's data directory, which holds the keys of the device and of the principals.
-    pub data_dir: &'a Path,
+    pub data_dir: &'a DataDir,
     /// The machine config, which says whether agents run in a sandbox at all.
     pub machine_config: Option<&'a Path>,
 }
@@ -99,10 +100,7 @@ fn profile(config: &FenceConfig, access: &Access<'_>, admin_directory: &Path) ->
 
     // With these an agent signs as the device or the principal, has the daemon act for the
     // principal, or turns its sandbox off.
-    let mut secrets = vec![
-        access.data_dir.join("keys"),
-        access.data_dir.join("*").join("principal.key"),
-    ];
+    let mut secrets = access.data_dir.secrets();
     secrets.extend(
         access
             .machine_config
@@ -367,7 +365,7 @@ mod tests {
             repository: Path::new("/work/repo"),
             branch: Some("wf/k3f9"),
             socket: Path::new("/run/wf/daemon.sock"),
-            data_dir: Path::new(DATA),
+            data_dir: Box::leak(Box::new(DataDir::new(PathBuf::from(DATA)))),
             machine_config: Some(Path::new("/home/ada/.config/workforce/config.toml")),
         }
     }

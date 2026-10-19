@@ -131,9 +131,9 @@ async fn drive(
     let mut agent = run
         .command
         .clone()
-        .env("WF_SESSION", run.session.to_string())
+        .env(crate::caller::SESSION_VARIABLE, run.session.to_string())
         .env(crate::caller::SESSION_TOKEN_VARIABLE, token.to_string())
-        .env("WF_WORKFORCE", run.workforce.to_string())
+        .env(crate::caller::WORKFORCE_VARIABLE, run.workforce.to_string())
         .env("PATH", path.to_string_lossy());
     for (name, value) in &run.git_environment {
         agent = agent.env(name, value);

@@ -1291,11 +1291,11 @@ fn steps_are_checked_and_unchecked_by_number() {
 
 mod work {
     use super::*;
-    use wf_cli::data_dir::DataDir;
     use wf_cli::workspace::Workspace;
     use wf_core::event::{EventBody, SessionStarted};
     use wf_core::name::AgentName;
     use wf_core::session::SessionRole;
+    use wf_daemon::DataDir;
 
     /// Starts a session of `coder` on the task the way the daemon will, and returns its id.
     fn start_session(wf: &Sandbox, task: &str) -> String {

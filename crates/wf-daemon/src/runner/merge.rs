@@ -461,29 +461,17 @@ impl Daemon {
     /// The device's key as an SSH key file that `ssh-keygen` signs merges with, written beside the
     /// device key, readable only by its owner.
     fn device_signing_key(&self) -> Result<PathBuf, SessionError> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-
-        let path = self.config.data_dir.join("keys").join("device-ssh");
+        let path = self.config.data_dir.device_ssh_key();
         let text = wf_vcs::signing::device_private_key(&self.device)?;
         if std::fs::read_to_string(&path).ok().as_deref() == Some(text.as_str()) {
             return Ok(path);
         }
-        let io = |source| SessionError::Io {
-            path: path.clone(),
-            source,
-        };
-        if let Some(directory) = path.parent() {
-            std::fs::create_dir_all(directory).map_err(io)?;
-        }
-        std::fs::OpenOptions::new()
-            .write(true)
-            .create(true)
-            .truncate(true)
-            .mode(0o600)
-            .open(&path)
-            .and_then(|mut file| file.write_all(text.as_bytes()))
-            .map_err(io)?;
+        crate::data_dir::write_private(&path, text.as_bytes()).map_err(|source| {
+            SessionError::Io {
+                path: path.clone(),
+                source,
+            }
+        })?;
         Ok(path)
     }
 }
