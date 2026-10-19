@@ -1921,6 +1921,41 @@ mod tests {
     }
 
     #[test]
+    fn imported_commits_survive_removing_the_agent_repository_and_a_gc_in_either_one() {
+        let repo = TestRepo::new();
+        let item = ItemId::from_bytes([7; 32]);
+        let path = repo.root.path().join("agent");
+        repo.git
+            .create_agent_repository(&path, &item_branch(item), repo.main())
+            .unwrap();
+        git_in(&path, &["config", "user.name", "Ada"]);
+        git_in(&path, &["config", "user.email", "ada@example.com"]);
+        git_in(&path, &["config", "commit.gpgsign", "false"]);
+        let first = commit_in(&path, "a.txt", "a\n");
+        let head = commit_in(&path, "b.txt", "b\n");
+        let main = repo.main();
+        repo.git
+            .import_commits(&path, item, "main", ImportMode::Submission)
+            .unwrap();
+
+        // Packed references and a gc in either repository change no reference of the other.
+        git_in(&path, &["pack-refs", "--all"]);
+        git_in(&path, &["gc", "--quiet", "--prune=now"]);
+        git_in(&repo.directory(), &["gc", "--quiet", "--prune=now"]);
+        assert_eq!(repo.main(), main);
+        assert_eq!(repo.git.branch_head(&item_branch(item)).unwrap(), head);
+
+        remove_agent_repository(&path).unwrap();
+        let principal = repo.directory();
+        git_in(&principal, &["fsck", "--strict"]);
+        git_in(
+            &principal,
+            &["cat-file", "-e", &format!("{first}^{{commit}}")],
+        );
+        assert_eq!(git_in(&principal, &["show", &format!("{head}:b.txt")]), "b");
+    }
+
+    #[test]
     fn the_branch_is_rebased_onto_the_target_once() {
         let repo = TestRepo::new();
         let (worktree, agent) = agent_repository(&repo);
