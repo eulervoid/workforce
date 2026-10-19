@@ -1,7 +1,6 @@
 //! The frame around the dashboard: the header, the footer with its key hints, the breadcrumb and the latest event.
 
 use ratatui::Frame;
-use ratatui::crossterm::event::KeyCode;
 use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
@@ -10,7 +9,13 @@ use wf_core::id::HashId;
 
 use super::lists::{age, cut_spans};
 use super::{KeysAt, Themed, accent, ansi_text, highlight_ends, themed};
-use crate::dashboard::app::{App, Request, Scroll, Spot, Status, Tab, Target};
+use crate::dashboard::app::{App, Scroll, Spot, Status, Tab, Target};
+use crate::dashboard::hint::{
+    ALLOW, ANSWER, ANSWER_IN_EDITOR, BACK, CHANGE, CHANGE_FILTER, CLEAR_FILTER, COMMENT, DENY,
+    DIFF, DROP, EDIT, EXTEND, FILE, FILTER, FOLD, FOLLOW, FULL, GROUP, Hint, ITEM, KEYS, MOVE,
+    OPEN, OPEN_DIFF, OPEN_SESSION, PAGER, READINESS, REVIEW, REVIEW_IN_DIFF, SCROLL, SELECT,
+    UNSELECT,
+};
 use crate::dashboard::snapshot::Detail;
 use crate::dashboard::snapshot::{InView, MovedBack, SessionInfo, Waiting};
 use crate::theme;
@@ -348,22 +353,22 @@ pub(super) fn latest_line(app: &App) -> Line<'static> {
     }
 }
 
-/// Draws the keys that work on what is on screen; returns them as buttons, but for `j/k`.
+/// Draws the hints of the keys that work on what is on screen, which a click presses.
 pub(super) fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let hints = hints(app);
     let request = app.subjects().into_iter().find_map(Waiting::request);
     let mut spots = Vec::new();
     let mut start = 1;
     for hint in &hints {
-        let width = textwrap::core::display_width(hint);
-        if let Some((key, what)) = hint.split_once(' ')
-            && let Some(target) = hint_target(key, what, request)
-        {
+        let text = hint.text();
+        let width = textwrap::core::display_width(&text);
+        if let Some(target) = hint.target(request) {
             spots.push(button(area, start, width, target));
         }
         start += width + textwrap::core::display_width(SEPARATOR);
     }
-    let line = Line::from(format!(" {}", hints.join(SEPARATOR))).themed(theme::text_dimmed());
+    let texts: Vec<String> = hints.iter().map(Hint::text).collect();
+    let line = Line::from(format!(" {}", texts.join(SEPARATOR))).themed(theme::text_dimmed());
     frame.render_widget(Paragraph::new(line), area);
     spots.retain(|spot| !spot.area.is_empty());
     spots
@@ -372,51 +377,21 @@ pub(super) fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> 
 /// Between two hints.
 pub(super) const SEPARATOR: &str = " · ";
 
-/// The hints that answer a permission request.
-pub(super) const ALLOW: &str = "a allow";
-
-pub(super) const DENY: &str = "d deny";
-
-/// What a click on the hint for `key` does: what the key does, but for allow, which asks for a
-/// second click; `None` for a hint that is no button. `request` is the permission request the
-/// keys answer.
-pub(super) fn hint_target(
-    key: &'static str,
-    what: &'static str,
-    request: Option<Request>,
-) -> Option<Target> {
-    let code = match key {
-        "a" => return request.map(Target::Allow),
-        "d" => return request.map(Target::Deny),
-        "enter" => KeyCode::Enter,
-        "esc" => KeyCode::Esc,
-        "j/k" => return None,
-        _ => {
-            let mut characters = key.chars();
-            match (characters.next(), characters.next()) {
-                (Some(character), None) => KeyCode::Char(character),
-                _ => return None,
-            }
-        }
-    };
-    Some(Target::Key { code, key, what })
-}
-
 /// The keys that work on what is on screen: `esc back`, `v review`.
-pub(super) fn hints(app: &App) -> Vec<&'static str> {
-    let mut acts: Vec<&str> = Vec::new();
+pub(super) fn hints(app: &App) -> Vec<Hint> {
+    let mut acts: Vec<Hint> = Vec::new();
     for entry in app.subjects() {
-        let keys: &[&str] = match entry {
+        let keys: &[Hint] = match entry {
             Waiting::Permission { .. } => &[ALLOW, DENY],
-            Waiting::Blocker { .. } => &["r answer", "R in editor"],
+            Waiting::Blocker { .. } => &[ANSWER, ANSWER_IN_EDITOR],
             // In the diff, `v` selects lines.
-            Waiting::Review { .. } if app.diff_has_keys() => &["R review"],
-            Waiting::Review { .. } => &["v review", "D diff"],
+            Waiting::Review { .. } if app.diff_has_keys() => &[REVIEW_IN_DIFF],
+            Waiting::Review { .. } => &[REVIEW, DIFF],
             Waiting::Notice { .. } | Waiting::MachineFault { .. } => &[],
         };
         for key in keys {
             if !acts.contains(key) {
-                acts.push(key);
+                acts.push(*key);
             }
         }
     }
@@ -429,36 +404,20 @@ pub(super) fn hints(app: &App) -> Vec<&'static str> {
             ..
         })
     );
-    let navigation: &[&str] = match (app.tab, opened.map(|opened| &opened.detail)) {
-        (_, Some(Detail::Session(_))) => &["esc back", "j/k scroll", "i item", "f full", "l diff"],
+    let navigation: &[Hint] = match (app.tab, opened.map(|opened| &opened.detail)) {
+        (_, Some(Detail::Session(_))) => &[BACK, SCROLL, ITEM, FULL, OPEN_DIFF],
         (_, Some(Detail::Diff(_))) => match app.diff_on_top() {
-            Some(pane) if pane.selection.is_some() => {
-                &["esc unselect", "j/k extend", "c comment", "r change"]
-            }
-            Some(pane) if pane.draft_at_cursor().is_some() => {
-                &["esc back", "j/k move", "e edit", "d drop"]
-            }
-            Some(_) | None => &[
-                "esc back",
-                "j/k move",
-                "v select",
-                "c comment",
-                "r change",
-                "]/[ file",
-                "enter fold",
-                "i item",
-                "p pager",
-            ],
+            Some(pane) if pane.selection.is_some() => &[UNSELECT, EXTEND, COMMENT, CHANGE],
+            Some(pane) if pane.draft_at_cursor().is_some() => &[BACK, MOVE, EDIT, DROP],
+            Some(_) | None => &[BACK, MOVE, SELECT, COMMENT, CHANGE, FILE, FOLD, ITEM, PAGER],
         },
-        (_, Some(Detail::Item(_))) if item_session => &["esc back", "j/k scroll", "enter session"],
-        (_, Some(Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_))) => {
-            &["esc back", "j/k scroll"]
-        }
-        (Tab::Now, None) => &["enter open", "j/k move"],
-        (Tab::Items, None) => &["enter open", "o group", "/ filter", "F ready"],
-        (Tab::Log, None) if !app.log.filter.is_empty() => &["/ change filter", "esc clear"],
-        (Tab::Log, None) => &["/ filter", "j/k scroll"],
-        (Tab::Agents, None) => &["enter open", "j/k move"],
+        (_, Some(Detail::Item(_))) if item_session => &[BACK, SCROLL, OPEN_SESSION],
+        (_, Some(Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_))) => &[BACK, SCROLL],
+        (Tab::Now, None) => &[OPEN, MOVE],
+        (Tab::Items, None) => &[OPEN, GROUP, FILTER, READINESS],
+        (Tab::Log, None) if !app.log.filter.is_empty() => &[CHANGE_FILTER, CLEAR_FILTER],
+        (Tab::Log, None) => &[FILTER, SCROLL],
+        (Tab::Agents, None) => &[OPEN, MOVE],
     };
     // What follows what is added, once scrolled away from its end.
     let followed = match (app.tab, opened) {
@@ -471,9 +430,9 @@ pub(super) fn hints(app: &App) -> Vec<&'static str> {
     };
     let mut hints = navigation.to_vec();
     if let Some(Scroll::At(_)) = followed {
-        hints.push("G follow");
+        hints.push(FOLLOW);
     }
     hints.extend(acts);
-    hints.push("? keys");
+    hints.push(KEYS);
     hints
 }

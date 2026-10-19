@@ -6,11 +6,12 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use super::chrome::{ALLOW, DENY, SEPARATOR, button, draw_breadcrumb};
+use super::chrome::{SEPARATOR, button, draw_breadcrumb};
 use super::lists::{RowLines, context_line, right_start};
 use super::{Themed, ansi_text, draw_position, padded, themed};
 use crate::dashboard::app::{App, Drawn, Opened, Request, Scroll, Spot, Target};
 use crate::dashboard::draw_diff;
+use crate::dashboard::hint::{ALLOW, DENY};
 use crate::dashboard::links;
 use crate::dashboard::snapshot::Detail;
 use crate::dashboard::snapshot::{InView, Place, SessionInfo, Waiting};
@@ -197,15 +198,21 @@ pub(super) fn draw_session(
             themed("? ", theme::attention().bold()),
             Span::raw(format!("wants: {what}")),
         ]);
-        let keys = [ALLOW, DENY].join(SEPARATOR);
+        let (allow_text, deny_text) = (ALLOW.text(), DENY.text());
+        let keys = [allow_text.as_str(), deny_text.as_str()].join(SEPARATOR);
         let row = RowLines::new(app, false, bar.width);
         let right = Line::from(themed(keys.clone(), theme::key()));
         let first = row.lines(line.spans, Some(right), Vec::new()).remove(0);
         let allow = right_start(&first, &keys);
         let width = textwrap::core::display_width;
-        let deny = allow + width(ALLOW) + width(SEPARATOR);
-        spots.push(button(bar, allow, width(ALLOW), Target::Allow(*request)));
-        spots.push(button(bar, deny, width(DENY), Target::Deny(*request)));
+        let deny = allow + width(&allow_text) + width(SEPARATOR);
+        spots.push(button(
+            bar,
+            allow,
+            width(&allow_text),
+            Target::Allow(*request),
+        ));
+        spots.push(button(bar, deny, width(&deny_text), Target::Deny(*request)));
         frame.render_widget(Paragraph::new(first), bar);
     }
     shown

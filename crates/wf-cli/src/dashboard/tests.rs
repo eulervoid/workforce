@@ -3355,6 +3355,21 @@ fn a_draft_under_the_cursor_is_edited_with_e_and_dropped_with_d() {
 }
 
 #[test]
+fn a_click_on_drop_in_a_diff_drops_the_draft_instead_of_denying() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('c'));
+    type_text(&mut app, "Why io?");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.drafts(archive).len(), 1);
+    let (column, row) = find(&mut app, 80, 16, "d drop");
+    assert_eq!(app.click(column, row), None);
+    assert!(app.drafts(archive).is_empty());
+}
+
+#[test]
 fn without_a_review_a_comment_on_lines_is_posted_at_once() {
     let mut app = app();
     let parse = ItemId::from_bytes([1; 32]);

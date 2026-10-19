@@ -11,6 +11,7 @@ use wf_core::id::HashId;
 use super::chrome::SEPARATOR;
 use super::{KeysAt, Themed, accent, clear, highlight, themed};
 use crate::dashboard::app::{App, Choice, Prompt, Starter, Written};
+use crate::dashboard::hint::HELP;
 use crate::render;
 use crate::theme;
 
@@ -81,45 +82,14 @@ pub(super) fn draw_choice(
     );
 }
 
-/// Every key, by where it works.
-pub(super) const KEYS: &[(&str, &str)] = &[
-    ("1-4 tab", "switch tabs, also shift-tab"),
-    ("j/k g/G", "move, top, end (and follow)"),
-    ("pgup/pgdn", "a page up, down; also space"),
-    ("wheel", "move what is under the pointer"),
-    ("click", "pick a tab or an entry, again to open"),
-    ("", "follow a link, a key hint, a crumb"),
-    ("shift-drag", "select text, as without the dashboard"),
-    ("enter esc", "open, go back"),
-    ("H L", "one pane or both, also shift ←/→"),
-    ("a d", "allow, deny a permission request"),
-    ("", "a click on allow asks for a second"),
-    ("r R", "answer a blocker here, in $EDITOR"),
-    ("ctrl+g", "carry a comment or answer to $EDITOR"),
-    ("v D", "review, open the diff"),
-    ("] [ enter", "diff: next, previous file, fold one"),
-    ("v drag", "diff: select lines, as vim's visual line"),
-    ("c r", "diff: comment, request a change on them"),
-    ("e d", "diff: edit, drop a comment of the review"),
-    ("R", "diff: review, as v does elsewhere"),
-    ("p", "diff: in git's pager, as `wf item diff`"),
-    ("s x", "start a session, stop one"),
-    ("m c e", "move, comment on, edit an item"),
-    ("i f l", "item, full transcript, diff"),
-    ("o O", "items: grouping, order"),
-    ("/ F", "items: title or id, readiness"),
-    ("q", "quit"),
-    ("tmux", "focus-events on: dims when unfocused"),
-];
-
 /// Draws the keys, under their title in `accent`.
 pub(super) fn draw_keys(frame: &mut Frame, accent: Color, body: Rect, base: Style) {
-    let lines: Vec<Line> = KEYS
+    let lines: Vec<Line> = HELP
         .iter()
-        .map(|(keys, what)| {
+        .map(|hint| {
             Line::from(vec![
-                themed(format!(" {keys:<12}"), theme::key()),
-                Span::raw(*what),
+                themed(format!(" {:<12}", hint.label), theme::key()),
+                Span::raw(hint.what),
             ])
         })
         .collect();

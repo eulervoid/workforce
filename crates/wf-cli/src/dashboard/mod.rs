@@ -6,6 +6,7 @@ mod app;
 mod diff;
 mod draw;
 mod draw_diff;
+mod hint;
 mod links;
 mod snapshot;
 mod transcript_lines;
