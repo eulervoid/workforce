@@ -22,12 +22,41 @@ struct DiffView {
     commit: String,
     /// The merge that brought the work into the target, whose diff it is once there is one.
     merge: Option<String>,
-    /// What the work changes; `None` while the branch has no commits ahead of the target, empty
-    /// when its commits change nothing.
-    diff: Option<String>,
+    /// What the commits of the work change; `None` while the branch has no commits ahead of the
+    /// target, empty when its commits change nothing.
+    committed: Option<String>,
+    /// What the worktree of the session has changed since `commit`, new files included; absent
+    /// when no worktree was read, empty when it has no changes.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    uncommitted: Option<String>,
 }
 
 const NO_COMMITS: &str = "the agent has not made any commits";
+
+/// The text of the two parts of a diff: the committed one, then the uncommitted one under a header
+/// of its own, when a worktree was read.
+fn diff_text(committed: Option<&str>, uncommitted: Option<&str>, head: &str) -> String {
+    let mut text = match committed {
+        Some(diff) => diff.to_owned(),
+        None => format!("{NO_COMMITS}\n"),
+    };
+    if let Some(diff) = uncommitted {
+        let diff = if diff.is_empty() {
+            "no changes\n"
+        } else {
+            diff
+        };
+        text.push_str(&format!(
+            "\n{}\n{diff}",
+            uncommitted_header(wf_core::session::short_commit(head))
+        ));
+    }
+    text
+}
+
+fn uncommitted_header(head: &str) -> String {
+    format!("uncommitted, against {head}")
+}
 
 /// The work on an item: once merged, the merge that brought it into the target; before, the head
 /// of its branch, or after the branch is gone, what was submitted.
@@ -43,7 +72,17 @@ pub(crate) fn item_work(
         return Ok(wf_vcs::Work::Merged { merge, commit });
     }
     let target = target(workspace);
-    if let Some(work) = git.branch_work(id, &target)? {
+    // While a session works here, its worktree is read as well.
+    let worktree = workspace
+        .state()
+        .claim(id)
+        .is_some_and(|session| session.device() == workspace.device_key())
+        .then(|| wf_vcs::item_worktree(&workspace.data.workforce(&workspace.workforce()), id));
+    let found = match worktree {
+        Some(worktree) => git.working_branch_work(id, &target, &worktree)?,
+        None => git.branch_work(id, &target)?,
+    };
+    if let Some(work) = found {
         return Ok(work);
     }
     match submission {
@@ -151,9 +190,16 @@ pub(super) fn diff(
         }
     };
     let has_commits = git.has_commits(&work)?;
+    let uncommitted = git.uncommitted_diff(&work, git_args)?;
     match mode {
         Mode::Interactive if has_commits => {
-            Ok(git.show_diff(&work, git_args, wf_vcs::Pager::AsConfigured)?)
+            git.show_diff(&work, git_args, wf_vcs::Pager::AsConfigured)?;
+            if let Some(diff) = uncommitted {
+                let head = work.commit().to_string();
+                let text = diff_text(Some(""), Some(&diff), &head);
+                print!("{text}");
+            }
+            Ok(())
         }
         Mode::Interactive | Mode::Scripted => {
             let view = DiffView {
@@ -161,18 +207,22 @@ pub(super) fn diff(
                 device: None,
                 commit: work.commit().to_string(),
                 merge: match &work {
-                    wf_vcs::Work::Unmerged { .. } => None,
+                    wf_vcs::Work::Unmerged { .. } | wf_vcs::Work::Working { .. } => None,
                     wf_vcs::Work::Merged { merge, .. } => Some(merge.to_string()),
                 },
-                diff: if has_commits {
+                committed: if has_commits {
                     Some(git.diff(&work, git_args)?)
                 } else {
                     None
                 },
+                uncommitted,
             };
-            emit(json, &view, |view| match &view.diff {
-                Some(diff) => diff.clone(),
-                None => format!("{NO_COMMITS}\n"),
+            emit(json, &view, |view| {
+                diff_text(
+                    view.committed.as_deref(),
+                    view.uncommitted.as_deref(),
+                    &view.commit,
+                )
             })
         }
     }
@@ -211,7 +261,8 @@ fn device_view(
                 device: Some(device.to_string()),
                 commit: work.head.to_string(),
                 merge: None,
-                diff: Some(work.committed),
+                committed: Some(work.committed),
+                uncommitted: None,
             };
             Ok((view, text))
         }
@@ -330,14 +381,14 @@ mod tests {
         assert_eq!(view.device, Some(device().to_string()));
         assert_eq!(view.commit, commit().to_string());
         assert_eq!(view.merge, None);
-        assert_eq!(view.diff.as_deref(), Some("diff --git a/f b/f\n"));
+        assert_eq!(view.committed.as_deref(), Some("diff --git a/f b/f\n"));
         assert_eq!(
             text,
             "committed on laptop, against main\ndiff --git a/f b/f\n"
         );
         let json = serde_json::to_value(&view).unwrap();
         assert_eq!(json["device"], device().to_string());
-        assert_eq!(json["diff"], "diff --git a/f b/f\n");
+        assert_eq!(json["committed"], "diff --git a/f b/f\n");
     }
 
     #[test]
