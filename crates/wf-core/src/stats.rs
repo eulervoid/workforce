@@ -65,12 +65,6 @@ fn median(mut values: Vec<u64>) -> Option<u64> {
 }
 
 impl State {
-    fn all_items(&self) -> impl Iterator<Item = &Item> {
-        self.workforce
-            .iter()
-            .flat_map(|workforce| workforce.items.values())
-    }
-
     /// How the workforce is doing at `now_ms`, archived items included.
     pub fn project_stats(&self, now_ms: u64) -> ProjectStats {
         let mut stats = ProjectStats::default();
@@ -78,7 +72,7 @@ impl State {
             return stats;
         };
         let mut leads = Vec::new();
-        for item in self.all_items() {
+        for item in self.items_including_archived() {
             let done_at = item.state.stamp().hlc.wall_ms();
             let done = item.state(policy) == ItemState::Done;
             if done && now_ms.saturating_sub(done_at) <= RECENT_MS {

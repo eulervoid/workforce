@@ -65,15 +65,15 @@ pub trait HashId: Copy {
     }
 }
 
-/// Reads a hash as one byte string. A tuple of 32 `u8`s costs 32 serde calls per id, which
+/// Reads a hash as one byte string. A tuple of `u8`s costs one serde call per byte, which
 /// dominates snapshot decoding.
-pub(crate) struct HashVisitor;
+pub(crate) struct HashVisitor<const LEN: usize>;
 
-impl serde::de::Visitor<'_> for HashVisitor {
-    type Value = [u8; HASH_LEN];
+impl<const LEN: usize> serde::de::Visitor<'_> for HashVisitor<LEN> {
+    type Value = [u8; LEN];
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{HASH_LEN} bytes")
+        write!(formatter, "{LEN} bytes")
     }
 
     fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<Self::Value, E> {
@@ -142,7 +142,7 @@ macro_rules! hash_id {
                     let text = String::deserialize(deserializer)?;
                     text.parse().map_err(serde::de::Error::custom)
                 } else {
-                    deserializer.deserialize_bytes(HashVisitor).map(Self)
+                    deserializer.deserialize_bytes(HashVisitor::<HASH_LEN>).map(Self)
                 }
             }
         }

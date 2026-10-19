@@ -7,7 +7,7 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::crdt::Stamp;
-use crate::id::{ItemId, SessionId};
+use crate::id::{HashVisitor, ItemId, SessionId};
 use crate::identity::{Actor, AgentId, DeviceKey};
 
 const GIT_OID_LEN: usize = 20;
@@ -70,24 +70,9 @@ impl<'de> Deserialize<'de> for GitOid {
             let text = String::deserialize(deserializer)?;
             text.parse().map_err(serde::de::Error::custom)
         } else {
-            struct Visitor;
-
-            impl serde::de::Visitor<'_> for Visitor {
-                type Value = GitOid;
-
-                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    write!(formatter, "{GIT_OID_LEN} bytes")
-                }
-
-                fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<GitOid, E> {
-                    bytes
-                        .try_into()
-                        .map(GitOid)
-                        .map_err(|_| E::invalid_length(bytes.len(), &self))
-                }
-            }
-
-            deserializer.deserialize_bytes(Visitor)
+            deserializer
+                .deserialize_bytes(HashVisitor::<GIT_OID_LEN>)
+                .map(GitOid)
         }
     }
 }

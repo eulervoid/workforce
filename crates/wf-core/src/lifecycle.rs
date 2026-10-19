@@ -139,10 +139,7 @@ impl State {
         };
         Some(match end {
             SessionEnd::Finish(finish) => {
-                let by_agent = Actor::Agent {
-                    agent: session.agent().clone(),
-                    session: session.id(),
-                };
+                let by_agent = session.actor();
                 match finish {
                     Finish::Submit { note } => closing(
                         EndReason::Submitted { commit: submitted },
