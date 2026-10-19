@@ -445,7 +445,7 @@ mod tests {
 
     const GOLDEN_SNAPSHOT: (u32, usize, &str) = (
         12,
-        9254,
-        "sdme5vtqi7vkkwzqv4rmq5yxyg4dyjab5utlarweuqu4lmvyqyra",
+        23380,
+        "ehqsuvfrhwynxghqj3hk2pdxx5rb2tvkz2ft5uny7wzwttaczmuq",
     );
 }
