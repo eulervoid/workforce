@@ -1,7 +1,6 @@
 //! Sessions and agents, as `wf session list` and `wf agent list` show them.
 
 use jiff::Timestamp;
-use serde::ser::SerializeMap;
 use serde::{Serialize, Serializer};
 use wf_core::graph::DependencyGraph;
 use wf_core::id::{HashId, ItemId, SessionId};
@@ -101,18 +100,6 @@ impl SessionStatus {
     }
 }
 
-impl Serialize for SessionStatus {
-    /// `status` is `live`, `parked` or why the session ended, which `ended` says when.
-    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        let mut map = serializer.serialize_map(None)?;
-        map.serialize_entry("status", self.name())?;
-        if let SessionStatus::Ended { at, .. } = self {
-            map.serialize_entry("ended", at)?;
-        }
-        map.end()
-    }
-}
-
 fn serialize_role_name<S: Serializer>(
     role: &SessionRole,
     serializer: S,
@@ -120,17 +107,15 @@ fn serialize_role_name<S: Serializer>(
     serializer.serialize_str(role.name())
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionView {
     pub id: SessionId,
     pub agent: String,
     pub item: ItemId,
     pub title: String,
     /// Written as its name: `work`, `review`, `supervise` or `diagnose`.
-    #[serde(serialize_with = "serialize_role_name")]
     pub role: SessionRole,
-    /// Written as `status`, and `ended` once it ended.
-    #[serde(flatten)]
+    /// Written as `status`, and as `ended` after `started`.
     pub status: SessionStatus,
     pub started: Timestamp,
     /// The model the session runs with, as the agent reported it; `None` when that is not known
@@ -140,6 +125,46 @@ pub struct SessionView {
     pub commit: Option<String>,
     /// How many steps of the item are checked off.
     pub steps: Option<StepsView>,
+}
+
+impl Serialize for SessionView {
+    /// `status` is `live`, `parked` or why the session ended; `ended` says when, and is null
+    /// while the session lives.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Wire<'a> {
+            id: SessionId,
+            agent: &'a str,
+            item: ItemId,
+            title: &'a str,
+            #[serde(serialize_with = "serialize_role_name")]
+            role: SessionRole,
+            status: &'static str,
+            started: Timestamp,
+            ended: Option<Timestamp>,
+            model: &'a Option<String>,
+            commit: &'a Option<String>,
+            steps: &'a Option<StepsView>,
+        }
+        let ended = match self.status {
+            SessionStatus::Live | SessionStatus::Parked => None,
+            SessionStatus::Ended { at, .. } => Some(at),
+        };
+        Wire {
+            id: self.id,
+            agent: &self.agent,
+            item: self.item,
+            title: &self.title,
+            role: self.role,
+            status: self.status.name(),
+            started: self.started,
+            ended,
+            model: &self.model,
+            commit: &self.commit,
+            steps: &self.steps,
+        }
+        .serialize(serializer)
+    }
 }
 
 /// Live sessions first, then the others, each the newest first. `model_of` tells the model a
