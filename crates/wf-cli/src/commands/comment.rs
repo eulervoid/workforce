@@ -1,9 +1,9 @@
 //! `wf comment` and `wf mentions`.
 
 use anyhow::{anyhow, bail};
-use wf_core::event::{Change, Comment, CommentKind, EventBody};
+use wf_core::event::{Change, CommentKind, Commented, EventBody};
 use wf_core::id::{CommentId, HashId, ItemId};
-use wf_core::item::{Item, ItemView};
+use wf_core::item::{Item, ItemEntry};
 use wf_core::lifecycle::Finish;
 use wf_core::refs::{self, Mention, Token};
 use wf_core::session::SessionRole;
@@ -37,7 +37,7 @@ pub(super) fn comment(
         .step
         .map(|number| step_numbered(workspace, id, number))
         .transpose()?;
-    let event = workspace.author(EventBody::Commented(Comment {
+    let event = workspace.author(EventBody::Commented(Commented {
         item: id,
         text: text.to_string(),
         kind,
@@ -97,7 +97,7 @@ fn step_numbered(
     number: std::num::NonZeroUsize,
 ) -> anyhow::Result<wf_core::body::StepId> {
     let state = workspace.state();
-    let Some(ItemView::Live(live)) = state.item(item) else {
+    let Some(ItemEntry::Live(live)) = state.item(item) else {
         bail!("#{} is archived", item.short());
     };
     let steps: Vec<_> = live.steps().collect();
@@ -122,7 +122,7 @@ pub(super) fn comment_why(
     let Some(why) = why.filter(|why| !why.trim().is_empty()) else {
         return Ok(None);
     };
-    let written = workspace.author(EventBody::Commented(Comment::plain(item, why.trim())))?;
+    let written = workspace.author(EventBody::Commented(Commented::plain(item, why.trim())))?;
     Ok(Some(CommentId::from(written.id())))
 }
 
@@ -135,7 +135,7 @@ fn comments_to_resolve(
     args: &CommentArgs,
 ) -> anyhow::Result<Vec<CommentId>> {
     let state = workspace.state();
-    let Some(ItemView::Live(live)) = state.item(item) else {
+    let Some(ItemEntry::Live(live)) = state.item(item) else {
         if args.resolve.is_empty() && !args.resolve_blockers && !args.resolve_change_requests {
             return Ok(Vec::new());
         }
@@ -233,7 +233,7 @@ mod tests {
         let change = fixture.apply(&mut state, 0, 2_001, change_request(task, "rename"));
         let failure = fixture.apply(&mut state, 0, 2_002, check_failure(task, "cargo test"));
         fixture.apply(&mut state, 0, 2_003, blocker(task, "which one?"));
-        let Some(ItemView::Live(item)) = state.item(task) else {
+        let Some(ItemEntry::Live(item)) = state.item(task) else {
             unreachable!("the item is live")
         };
         let mut expected = vec![CommentId::from(change.id()), CommentId::from(failure.id())];

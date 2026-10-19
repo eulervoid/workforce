@@ -6,7 +6,7 @@ use std::fmt::Write;
 use crate::event::CommentKind;
 use crate::id::{CommentId, HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::{Comment, Item, ItemView};
+use crate::item::{Comment, Item, ItemEntry};
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, SessionRole};
@@ -16,7 +16,7 @@ use crate::state::State;
 /// has, and the branch and diffs of the repository.
 pub trait Sources {
     /// The text of a comment, with the lines of the diff it is about above it, as
-    /// [`crate::event::Comment::text_with_lines`] writes them.
+    /// [`crate::event::Commented::text_with_lines`] writes them.
     fn text(&self, comment: CommentId) -> Option<String>;
     /// The branch the work on `item` is committed to.
     fn branch(&self, item: ItemId) -> String;
@@ -36,7 +36,7 @@ impl Brief {
     /// The brief of `session`, or `None` when the session or its item is not known or archived.
     pub fn of(state: &State, session: SessionId, sources: &impl Sources) -> Option<Self> {
         let session = state.session(session)?;
-        let Some(ItemView::Live(item)) = state.item(session.item()) else {
+        let Some(ItemEntry::Live(item)) = state.item(session.item()) else {
             return None;
         };
         let merge = &state.policy()?.policy.merge;
@@ -169,7 +169,7 @@ pub fn resumed_text(state: &State, session: SessionId, sources: &impl Sources) -
         return text;
     };
     let item = folded.item();
-    if let Some(ItemView::Live(live)) = state.item(item) {
+    if let Some(ItemEntry::Live(live)) = state.item(item) {
         let asked = live
             .comments()
             .values()
@@ -184,7 +184,7 @@ pub fn resumed_text(state: &State, session: SessionId, sources: &impl Sources) -
     }
     let graph = state.dependency_graph();
     for dependency in graph.depends_on(item) {
-        let Some(ItemView::Live(dependency)) = state.item(dependency) else {
+        let Some(ItemEntry::Live(dependency)) = state.item(dependency) else {
             continue;
         };
         if let Some(note) = last_comment(dependency, sources) {
@@ -212,7 +212,7 @@ pub fn restarted_text(
          may not have finished; check before you go on.",
     );
     let item = state.session(session).map(|folded| folded.item());
-    if let Some(ItemView::Live(live)) = item.and_then(|item| state.item(item)) {
+    if let Some(ItemEntry::Live(live)) = item.and_then(|item| state.item(item)) {
         let lines: Vec<_> = written_since(state, live, session, sources, |comment| {
             comment.at.wall_ms() > prompted_ms
         })
@@ -301,8 +301,8 @@ fn dependencies(state: &State, item: &Item, sources: &impl Sources) -> Vec<Depen
     graph
         .depends_on(item.id())
         .filter_map(|dependency| match state.item(dependency) {
-            Some(ItemView::Live(dependency)) => Some(dependency),
-            Some(ItemView::Archived(_)) | None => None,
+            Some(ItemEntry::Live(dependency)) => Some(dependency),
+            Some(ItemEntry::Archived(_)) | None => None,
         })
         .map(|dependency| Dependency {
             item: HashId::short(&dependency.id()),
@@ -816,7 +816,7 @@ mod tests {
             .id()
             .into();
         fixture.apply(&mut state, 0, 2_001, check_failure(task, "cargo test"));
-        let Some(ItemView::Live(item)) = state.item(task) else {
+        let Some(ItemEntry::Live(item)) = state.item(task) else {
             unreachable!("the item is live")
         };
         let open = open_change_requests(&state, item, &Texts);

@@ -9,7 +9,7 @@ use crate::crdt::SetChange;
 use crate::event::{Change, CommentKind, Event, EventBody};
 use crate::id::{EventId, ItemId};
 use crate::identity::{DeviceSigner, InviteSigner};
-use crate::item::{ItemState, ItemView, Priority};
+use crate::item::{ItemEntry, ItemState, Priority};
 use crate::name::{Label, Requirement};
 use crate::session::{CommitId, EndReason, Verdict};
 use crate::state::{Disposition, State, Trust};
@@ -176,7 +176,7 @@ impl Simulation {
             }
             (6, Some(item)) => {
                 let removal = match self.replicas[device].item(item) {
-                    Some(ItemView::Live(live)) => live.labels().removal(&label),
+                    Some(ItemEntry::Live(live)) => live.labels().removal(&label),
                     _ => return,
                 };
                 self.submit(device, edit(item, Change::Labels(removal)));
@@ -216,7 +216,7 @@ impl Simulation {
             (11, Some(item)) if second % 2 == 1 => {
                 if let Some(target) = other {
                     let removal = match self.replicas[device].item(item) {
-                        Some(ItemView::Live(live)) => live.depends_on().removal(&target),
+                        Some(ItemEntry::Live(live)) => live.depends_on().removal(&target),
                         _ => return,
                     };
                     self.submit(
@@ -253,9 +253,11 @@ impl Simulation {
                 let eligible: Vec<ItemId> = self.replicas[device]
                     .items()
                     .filter(|view| match view {
-                        ItemView::Live(item) if second % 2 == 0 => item.state(policy).is_terminal(),
-                        ItemView::Archived(_) => second % 2 == 1,
-                        ItemView::Live(_) => false,
+                        ItemEntry::Live(item) if second % 2 == 0 => {
+                            item.state(policy).is_terminal()
+                        }
+                        ItemEntry::Archived(_) => second % 2 == 1,
+                        ItemEntry::Live(_) => false,
                     })
                     .map(|view| view.id())
                     .collect();
@@ -270,7 +272,9 @@ impl Simulation {
             }
             (13, Some(item)) if second % 2 == 0 => {
                 let steps: Vec<_> = match self.replicas[device].item(item) {
-                    Some(ItemView::Live(live)) => live.body().steps().map(|step| step.id).collect(),
+                    Some(ItemEntry::Live(live)) => {
+                        live.body().steps().map(|step| step.id).collect()
+                    }
                     _ => return,
                 };
                 if let Some(step) = steps.get(usize::from(first) % steps.len().max(1)) {
@@ -350,7 +354,7 @@ impl Simulation {
             }
             (16, Some(item)) => {
                 let open: Vec<_> = match self.replicas[device].item(item) {
-                    Some(ItemView::Live(live)) => {
+                    Some(ItemEntry::Live(live)) => {
                         live.open_comments().into_iter().map(|(id, _)| id).collect()
                     }
                     _ => return,
@@ -384,7 +388,7 @@ impl Simulation {
                 };
                 // Only some verdicts are valid at a time: ask for changes when there are requests.
                 let changes_requested = match self.replicas[device].item(item) {
-                    Some(ItemView::Live(live)) => live
+                    Some(ItemEntry::Live(live)) => live
                         .open_comments()
                         .iter()
                         .any(|(_, comment)| comment.kind == CommentKind::ChangeRequest),
@@ -583,7 +587,7 @@ fn the_generator_exercises_real_histories() {
     assert!(transitions > 30);
     let archived = state
         .items()
-        .filter(|view| matches!(view, ItemView::Archived(_)))
+        .filter(|view| matches!(view, ItemEntry::Archived(_)))
         .count();
     let graph = state.dependency_graph();
     assert!(

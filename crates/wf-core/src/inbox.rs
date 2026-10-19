@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::id::{CommentId, HashId, ItemId, SessionId};
-use crate::item::{ItemState, ItemView};
+use crate::item::{ItemEntry, ItemState};
 use crate::policy::ReviewStep;
 use crate::recovery::Recovery;
 use crate::review::ReviewStatus;
@@ -184,7 +184,7 @@ impl State {
         }
         for blocker in self.open_blockers() {
             if let WaitsOn::Principal(_) = blocker.waits_on {
-                let Some(crate::item::ItemView::Live(item)) = self.item(blocker.item) else {
+                let Some(crate::item::ItemEntry::Live(item)) = self.item(blocker.item) else {
                     continue;
                 };
                 entries.push((
@@ -207,8 +207,8 @@ impl State {
     /// The title the inbox shows for an item.
     pub fn inbox_title(&self, item: ItemId) -> String {
         match self.item(item) {
-            Some(ItemView::Live(live)) => live.title().to_string(),
-            Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
+            Some(ItemEntry::Live(live)) => live.title().to_string(),
+            Some(ItemEntry::Archived(_)) | None => "(archived)".to_string(),
         }
     }
 

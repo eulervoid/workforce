@@ -8,7 +8,7 @@ use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::inbox::{InboxKind, Waiting as InboxWaiting};
-use wf_core::item::{ItemState, ItemView};
+use wf_core::item::{ItemEntry, ItemState};
 use wf_core::name::AgentName;
 use wf_core::resolve::MentionTarget;
 use wf_core::session::{CommitId, Session};
@@ -509,12 +509,12 @@ impl InView {
             Detail::Item(id) => {
                 let item = state.item(id)?;
                 let text = match item {
-                    ItemView::Live(live) => render::item_detail_for(
+                    ItemEntry::Live(live) => render::item_detail_for(
                         &view::item_detail(state, live, events),
                         Some(usize::from(width).min(100)),
                         Format::Styled,
                     ),
-                    ItemView::Archived(_) => {
+                    ItemEntry::Archived(_) => {
                         format!("#{} {} (archived)\n", id.short(), item.title())
                     }
                 };
@@ -545,7 +545,7 @@ impl InView {
                 })
             }
             Detail::Diff(id) => {
-                let ItemView::Live(item) = state.item(id)? else {
+                let ItemEntry::Live(item) = state.item(id)? else {
                     return None;
                 };
                 let comments = events

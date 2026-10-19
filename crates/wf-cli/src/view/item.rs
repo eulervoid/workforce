@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::ItemId;
-use wf_core::item::{Item, ItemState, ItemView, Priority};
+use wf_core::item::{Item, ItemEntry, ItemState, Priority};
 use wf_core::state::State;
 use wf_core::stats::ItemStats;
 
@@ -55,11 +55,11 @@ pub(super) fn steps_view(item: &Item) -> Option<StepsView> {
     (total > 0).then_some(StepsView { done, total })
 }
 
-pub fn item_ref_view(state: &State, view: ItemView<'_>) -> ItemRefView {
+pub fn item_ref_view(state: &State, view: ItemEntry<'_>) -> ItemRefView {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let priority = match view {
-        ItemView::Live(item) => item.priority(),
-        ItemView::Archived(_) => None,
+        ItemEntry::Live(item) => item.priority(),
+        ItemEntry::Archived(_) => None,
     };
     ItemRefView {
         id: view.id(),
@@ -89,7 +89,7 @@ pub fn item_stats_views(state: &State) -> Vec<ItemStatsView> {
             let stats = state.item_stats(view.id())?;
             (stats.sessions > 0).then(|| ItemStatsView {
                 item: item_ref_view(state, view),
-                archived: matches!(view, ItemView::Archived(_)),
+                archived: matches!(view, ItemEntry::Archived(_)),
                 stats,
             })
         })
@@ -106,8 +106,8 @@ fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<It
     let mut waiting: Vec<&Item> = graph
         .dependents(item.id())
         .filter_map(|id| match state.item(id) {
-            Some(ItemView::Live(waiting)) => Some(waiting),
-            Some(ItemView::Archived(_)) | None => None,
+            Some(ItemEntry::Live(waiting)) => Some(waiting),
+            Some(ItemEntry::Archived(_)) | None => None,
         })
         .collect();
     waiting.sort_by_key(|waiting| {
@@ -120,18 +120,18 @@ fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<It
     });
     waiting
         .into_iter()
-        .map(|waiting| item_ref_view(state, ItemView::Live(waiting)))
+        .map(|waiting| item_ref_view(state, ItemEntry::Live(waiting)))
         .collect()
 }
 
-pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> ItemSummary {
+pub fn summary(state: &State, graph: &DependencyGraph, view: ItemEntry<'_>) -> ItemSummary {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let steps = match view {
-        ItemView::Live(item) => steps_view(item),
-        ItemView::Archived(_) => None,
+        ItemEntry::Live(item) => steps_view(item),
+        ItemEntry::Archived(_) => None,
     };
     let (priority, readiness, blocked_by, blocking, labels, lane, archived) = match view {
-        ItemView::Live(item) => (
+        ItemEntry::Live(item) => (
             item.priority(),
             state.readiness(graph, item),
             state
@@ -149,7 +149,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
             item.effective_lane(policy).map(ToString::to_string),
             false,
         ),
-        ItemView::Archived(_) => (None, None, Vec::new(), Vec::new(), Vec::new(), None, true),
+        ItemEntry::Archived(_) => (None, None, Vec::new(), Vec::new(), Vec::new(), None, true),
     };
     ItemSummary {
         id: view.id(),

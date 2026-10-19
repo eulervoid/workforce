@@ -5,9 +5,9 @@ use anyhow::{anyhow, bail};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
-use wf_core::event::{Comment, CommentKind, EventBody, ItemEdited, ItemMoved, Review};
+use wf_core::event::{CommentKind, Commented, EventBody, ItemEdited, ItemMoved, Reviewed};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
-use wf_core::item::{ItemState, ItemView};
+use wf_core::item::{ItemEntry, ItemState};
 use wf_core::name::AgentName;
 use wf_core::session::{CommitId, Verdict};
 use wf_core::state::State;
@@ -147,7 +147,7 @@ fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let draft = matches!(
         state.item(item),
-        Some(ItemView::Live(live)) if live.state(policy) == ItemState::Draft
+        Some(ItemEntry::Live(live)) if live.state(policy) == ItemState::Draft
     );
     let principal = workspace.principal();
     let default = state
@@ -179,7 +179,7 @@ fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
 fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let ItemView::Live(live) = state
+    let ItemEntry::Live(live) = state
         .item(item)
         .ok_or_else(|| anyhow!("#{} is gone", item.short()))?
     else {
@@ -244,7 +244,7 @@ fn edit_item(
     item: ItemId,
 ) -> anyhow::Result<String> {
     let draft = {
-        let ItemView::Live(live) = workspace
+        let ItemEntry::Live(live) = workspace
             .state()
             .item(item)
             .ok_or_else(|| anyhow!("#{} is gone", item.short()))?
@@ -258,8 +258,8 @@ fn edit_item(
         edit_until_valid(&markdown, ".md", Draft::from_markdown)
     })??;
     let changes = match workspace.state().item(item) {
-        Some(ItemView::Live(live)) => draft.changes(live),
-        Some(ItemView::Archived(_)) | None => bail!("#{} is gone", item.short()),
+        Some(ItemEntry::Live(live)) => draft.changes(live),
+        Some(ItemEntry::Archived(_)) | None => bail!("#{} is gone", item.short()),
     };
     if changes.is_empty() {
         return Ok("nothing changed".to_owned());
@@ -456,15 +456,15 @@ impl ReviewSink for WorkspaceSink<'_> {
     }
 
     fn change_request(&mut self, text: &str) -> anyhow::Result<()> {
-        self.workspace.author(EventBody::Commented(Comment {
+        self.workspace.author(EventBody::Commented(Commented {
             kind: CommentKind::ChangeRequest,
-            ..Comment::plain(self.item, text)
+            ..Commented::plain(self.item, text)
         }))?;
         Ok(())
     }
 
     fn verdict(&mut self, verdict: Verdict) -> anyhow::Result<()> {
-        self.workspace.author(EventBody::Reviewed(Review {
+        self.workspace.author(EventBody::Reviewed(Reviewed {
             item: self.item,
             commit: self.commit,
             verdict,
@@ -520,10 +520,10 @@ fn post_line_comment(
 ) -> anyhow::Result<String> {
     let location = comment.lines.location();
     let kind = comment.kind;
-    workspace.author(EventBody::Commented(Comment {
+    workspace.author(EventBody::Commented(Commented {
         kind,
         lines: Some(comment.lines),
-        ..Comment::plain(item, comment.text)
+        ..Commented::plain(item, comment.text)
     }))?;
     Ok(format!(
         "wrote a {} on {location} of #{}",
@@ -533,7 +533,7 @@ fn post_line_comment(
 }
 
 fn comment(workspace: &mut Workspace, item: ItemId, text: String) -> anyhow::Result<String> {
-    workspace.author(EventBody::Commented(Comment::plain(item, text)))?;
+    workspace.author(EventBody::Commented(Commented::plain(item, text)))?;
     Ok(format!("commented on #{}", item.short()))
 }
 
@@ -543,9 +543,9 @@ fn resolve(
     blocker: CommentId,
     text: String,
 ) -> anyhow::Result<String> {
-    workspace.author(EventBody::Commented(Comment {
+    workspace.author(EventBody::Commented(Commented {
         resolves: vec![blocker],
-        ..Comment::plain(item, text)
+        ..Commented::plain(item, text)
     }))?;
     Ok(format!("resolved {}", blocker.short()))
 }

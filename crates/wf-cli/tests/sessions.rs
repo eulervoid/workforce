@@ -10,7 +10,7 @@ use std::time::Duration;
 use serde_json::Value;
 use wf_core::event::EventBody;
 use wf_core::name::HarnessName;
-use wf_daemon::{Config, Daemon};
+use wf_daemon::{Daemon, Launch};
 use wf_harness::AcpAgentConfig;
 use wf_net::Network;
 use wf_vcs::testing::{git_in, init_repository};
@@ -220,7 +220,7 @@ async fn start_daemon(
     }
     let socket = wf.root.path().join("run/workforce/daemon.sock");
     let daemon = Daemon::start(
-        Config {
+        Launch {
             data_dir: data.clone(),
             socket: socket.clone(),
             network: Network::Direct,
@@ -1261,7 +1261,11 @@ wf work submit
         "parked sessions are live"
     );
     let inbox = inbox(&world);
-    assert_eq!(inbox.len(), 1, "no supervisor, so it waits on the principal");
+    assert_eq!(
+        inbox.len(),
+        1,
+        "no supervisor, so it waits on the principal"
+    );
     assert_eq!(inbox[0]["kind"], "blocker");
 
     world.wf.run(&[
@@ -2556,7 +2560,7 @@ async fn an_item_with_a_live_session_is_not_started_twice() {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_token_acts_for_the_session_and_never_for_the_principal() {
-    use wf_core::event::{Comment, EventBody, ItemMoved, Review};
+    use wf_core::event::{Commented, EventBody, ItemMoved, Reviewed};
     use wf_core::identity::Actor;
     use wf_core::item::ItemState;
     use wf_core::session::Verdict;
@@ -2593,7 +2597,7 @@ hang
     let comment = client
         .author(
             workforce,
-            EventBody::Commented(Comment::plain(item, "as the agent")),
+            EventBody::Commented(Commented::plain(item, "as the agent")),
         )
         .unwrap();
     assert!(
@@ -2601,7 +2605,7 @@ hang
         "{:?}",
         comment.content.actor
     );
-    let approve = EventBody::Reviewed(Review {
+    let approve = EventBody::Reviewed(Reviewed {
         item,
         commit: None,
         verdict: Verdict::Approve,

@@ -108,7 +108,7 @@ fn bodies() -> Vec<EventBody> {
         devices: vec![device.key()],
         previous: vec![],
     };
-    let plain_comment = Comment::plain(item, "why");
+    let plain_comment = Commented::plain(item, "why");
     let created = ItemCreated {
         item_type: TypeName::new("task").unwrap(),
         title: "t".into(),
@@ -235,7 +235,7 @@ fn bodies() -> Vec<EventBody> {
             reason: EndReason::Released,
             because: None,
         }),
-        EventBody::Reviewed(Review {
+        EventBody::Reviewed(Reviewed {
             item,
             commit: Some(commit),
             verdict: Verdict::RequestChanges,
@@ -251,7 +251,7 @@ fn bodies() -> Vec<EventBody> {
             reason: EndReason::Released,
             because: Some(comment),
         }),
-        EventBody::Commented(Comment {
+        EventBody::Commented(Commented {
             lines: Some(LineAnchor {
                 commit,
                 path: "src/lib.rs".into(),
@@ -262,7 +262,7 @@ fn bodies() -> Vec<EventBody> {
             }),
             ..plain_comment.clone()
         }),
-        EventBody::Commented(Comment {
+        EventBody::Commented(Commented {
             kind: CommentKind::CheckFailure,
             ..plain_comment
         }),

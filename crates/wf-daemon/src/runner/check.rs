@@ -4,7 +4,7 @@
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use wf_core::event::{Comment, CommentKind, EventBody};
+use wf_core::event::{CommentKind, Commented, EventBody};
 use wf_core::id::{ItemId, WorkforceId};
 use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::lifecycle::AfterFailedChecks;
@@ -168,9 +168,9 @@ impl Daemon {
                         worktree: &worktree,
                         repository,
                         branch: None,
-                        socket: &self.config.socket,
-                        data_dir: &self.config.data_dir,
-                        machine_config: self.config.machine_config.as_deref(),
+                        socket: &self.launch.socket,
+                        data_dir: &self.launch.data_dir,
+                        machine_config: self.launch.machine_config.as_deref(),
                     },
                     &config,
                     &profile_file,
@@ -241,9 +241,9 @@ impl Daemon {
             self.author(
                 loaded,
                 Actor::Daemon(principal),
-                EventBody::Commented(Comment {
+                EventBody::Commented(Commented {
                     kind,
-                    ..Comment::plain(item, text)
+                    ..Commented::plain(item, text)
                 }),
             )
         };

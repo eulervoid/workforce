@@ -5,7 +5,7 @@ use serde::{Serialize, Serializer};
 use wf_core::graph::DependencyGraph;
 use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
-use wf_core::item::ItemView;
+use wf_core::item::ItemEntry;
 use wf_core::resolve::MentionTarget;
 use wf_core::session::{EndReason, Session, SessionRole};
 use wf_core::state::{AgentDefinition, State};
@@ -190,8 +190,8 @@ pub fn session_view(
     model: Option<String>,
 ) -> SessionView {
     let title = match state.item(session.item()) {
-        Some(ItemView::Live(item)) => item.title().to_string(),
-        Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
+        Some(ItemEntry::Live(item)) => item.title().to_string(),
+        Some(ItemEntry::Archived(_)) | None => "(archived)".to_string(),
     };
     let commit = match (session.role(), session.ended().map(|ended| ended.reason)) {
         (SessionRole::Review { commit }, _) => commit.map(|commit| commit.to_string()),
@@ -201,8 +201,8 @@ pub fn session_view(
         (SessionRole::Work | SessionRole::Supervise | SessionRole::Diagnose, _) => None,
     };
     let steps = match state.item(session.item()) {
-        Some(ItemView::Live(item)) => steps_view(item),
-        Some(ItemView::Archived(_)) | None => None,
+        Some(ItemEntry::Live(item)) => steps_view(item),
+        Some(ItemEntry::Archived(_)) | None => None,
     };
     SessionView {
         id: session.id(),

@@ -10,7 +10,7 @@ use crate::event::{AgentDefined, DeviceProfile, Event, EventBody, EventBuilder, 
 use crate::hlc::Hlc;
 use crate::id::{EventId, HashId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, InviteKey, PrincipalKey, Role};
-use crate::item::{Item, ItemView};
+use crate::item::{Item, ItemEntry};
 use crate::name::{AgentName, Handle, HarnessName, LaneName, Requirement};
 use crate::policy::{DEFAULT_POLICY_TOML, Policy, PolicyError};
 use crate::session::{Session, SessionRole};
@@ -644,22 +644,22 @@ impl State {
             .min_by_key(|session| session.started())
     }
 
-    pub fn item(&self, id: ItemId) -> Option<ItemView<'_>> {
-        self.workforce.as_ref()?.items.get(&id).map(ItemView::of)
+    pub fn item(&self, id: ItemId) -> Option<ItemEntry<'_>> {
+        self.workforce.as_ref()?.items.get(&id).map(ItemEntry::of)
     }
 
     /// All items, archived ones as stubs, ordered by id.
-    pub fn items(&self) -> impl Iterator<Item = ItemView<'_>> {
+    pub fn items(&self) -> impl Iterator<Item = ItemEntry<'_>> {
         self.workforce
             .iter()
             .flat_map(|workforce| workforce.items.values())
-            .map(ItemView::of)
+            .map(ItemEntry::of)
     }
 
     pub fn live_items(&self) -> impl Iterator<Item = &Item> {
         self.items().filter_map(|view| match view {
-            ItemView::Live(item) => Some(item),
-            ItemView::Archived(_) => None,
+            ItemEntry::Live(item) => Some(item),
+            ItemEntry::Archived(_) => None,
         })
     }
 

@@ -1,6 +1,6 @@
 use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::{ItemState, ItemView};
+use crate::item::{ItemEntry, ItemState};
 use crate::lifecycle::{
     AfterEnd, AfterFailedChecks, Closing, Finish, Interruption, MergeFailure, MergePlan,
     SessionEnd, TurnOutcome,
@@ -540,7 +540,7 @@ fn a_merge_is_planned_from_what_the_item_already_went_through() {
     let plan = |scene: &Scene| {
         let state = &scene.state;
         let policy = &state.policy().unwrap().policy;
-        let Some(ItemView::Live(item)) = state.item(task) else {
+        let Some(ItemEntry::Live(item)) = state.item(task) else {
             panic!("the item is live");
         };
         MergePlan::of(item, policy, commit())

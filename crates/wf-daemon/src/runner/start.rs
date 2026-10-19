@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use wf_core::event::{EventBody, SessionStarted};
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, PrincipalKey};
-use wf_core::item::ItemView;
+use wf_core::item::ItemEntry;
 use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::name::AgentName;
 use wf_core::session::{MachineFault, SessionRole};
@@ -64,9 +64,9 @@ pub(crate) fn sandboxed_in(
         worktree,
         repository,
         branch,
-        socket: &daemon.config.socket,
-        data_dir: &daemon.config.data_dir,
-        machine_config: daemon.config.machine_config.as_deref(),
+        socket: &daemon.launch.socket,
+        data_dir: &daemon.launch.data_dir,
+        machine_config: daemon.launch.machine_config.as_deref(),
     };
     crate::sandbox::wrap(config, &access, &agent, profile_file).map_err(|error| error.to_string())
 }
@@ -116,15 +116,15 @@ impl Daemon {
         }
         let policy = &state.policy().ok_or(SessionError::NoPolicy)?.policy;
         let item_context = match state.item(item).ok_or(SessionError::UnknownItem(item))? {
-            ItemView::Live(live) => ItemContext {
+            ItemEntry::Live(live) => ItemContext {
                 id: item.to_base32(),
                 title: live.title().to_string(),
                 item_type: live.item_type().to_string(),
                 state: live.state(policy).to_string(),
             },
-            ItemView::Archived(_) => return Err(SessionError::Archived(item)),
+            ItemEntry::Archived(_) => return Err(SessionError::Archived(item)),
         };
-        let transcripts = self.config.data_dir.transcripts(&workforce);
+        let transcripts = self.launch.data_dir.transcripts(&workforce);
         Ok(Setup {
             workforce,
             principal,
@@ -324,7 +324,7 @@ impl Daemon {
                 workforce,
                 item,
                 session,
-                machine_config: self.config.machine_config.clone(),
+                machine_config: self.launch.machine_config.clone(),
                 agents: crate::judges::WorkforceJudges {
                     daemon: Arc::downgrade(self),
                     workforce,
@@ -362,7 +362,7 @@ impl Daemon {
             command: harness,
             model: definition.model.clone(),
             worktree,
-            transcript: self.config.data_dir.transcript(&workforce, session),
+            transcript: self.launch.data_dir.transcript(&workforce, session),
             agent_session: super::resume::record_path(&transcripts, session),
             begin,
             branch: item_branch(item),

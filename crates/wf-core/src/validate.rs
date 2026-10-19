@@ -668,7 +668,7 @@ impl State {
                     Err(Invalid::UnknownSession(ended.session))
                 }
             }
-            EventBody::Reviewed(crate::event::Review { item, .. })
+            EventBody::Reviewed(crate::event::Reviewed { item, .. })
             | EventBody::Merged(crate::event::Merged { item, .. }) => known_item(item),
             EventBody::ItemEdited(ItemEdited { item, .. })
             | EventBody::ItemMoved(ItemMoved { item, .. })

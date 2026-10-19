@@ -137,7 +137,7 @@ fn the_latest_merge_is_the_one_recorded_last() {
     let mut scene = Scene::new();
     let item = scene.apply(create("task", "plain")).id().into();
     let latest_merge = |state: &State| {
-        let Some(crate::item::ItemView::Live(live)) = state.item(item) else {
+        let Some(crate::item::ItemEntry::Live(live)) = state.item(item) else {
             panic!("the item is live");
         };
         live.latest_merge()
@@ -284,7 +284,7 @@ fn requesting_changes_reopens_the_item_in_the_same_event() {
     scene.apply(moved(item, ItemState::Review));
     scene.apply(verdict(item, commit(1), Verdict::RequestChanges));
     let policy = &scene.state.policy().unwrap().policy;
-    let Some(crate::item::ItemView::Live(live)) = scene.state.item(item) else {
+    let Some(crate::item::ItemEntry::Live(live)) = scene.state.item(item) else {
         panic!("the item is live")
     };
     assert_eq!(live.state(policy), ItemState::Open);

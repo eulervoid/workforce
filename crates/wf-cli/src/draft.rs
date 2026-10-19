@@ -245,7 +245,7 @@ impl NewItemDraft {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wf_core::item::ItemView;
+    use wf_core::item::ItemEntry;
     use wf_core::testing::*;
 
     #[test]
@@ -259,7 +259,7 @@ mod tests {
             create_with_body("task", "Old", "text"),
         );
         let id = created.id().into();
-        let ItemView::Live(item) = state.item(id).unwrap() else {
+        let ItemEntry::Live(item) = state.item(id).unwrap() else {
             panic!()
         };
         let draft = Draft::of(item);

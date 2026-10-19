@@ -1,14 +1,14 @@
 use crate::event::EventBody;
 use crate::id::{CommentId, ItemId, SessionId};
-use crate::item::{Item, ItemState, ItemView};
+use crate::item::{Item, ItemEntry, ItemState};
 use crate::state::{State, Trust};
 use crate::testing::*;
 use crate::validate::PolicyViolation;
 
 fn live(state: &State, item: ItemId) -> &Item {
     match state.item(item).unwrap() {
-        ItemView::Live(item) => item,
-        ItemView::Archived(_) => panic!("live"),
+        ItemEntry::Live(item) => item,
+        ItemEntry::Archived(_) => panic!("live"),
     }
 }
 
@@ -302,7 +302,7 @@ fn a_comment_on_lines_needs_lines_from_1_the_last_after_the_first() {
         let EventBody::Commented(written) = comment(task, "rename it back") else {
             unreachable!("a comment")
         };
-        EventBody::Commented(crate::event::Comment {
+        EventBody::Commented(crate::event::Commented {
             lines: Some(crate::event::LineAnchor {
                 commit: crate::session::CommitId::Git(
                     "00112233445566778899aabbccddeeff00112233".parse().unwrap(),

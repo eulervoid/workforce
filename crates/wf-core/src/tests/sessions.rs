@@ -1,6 +1,6 @@
 use crate::event::Event;
 use crate::id::{ItemId, SessionId};
-use crate::item::{ItemState, ItemView};
+use crate::item::{ItemEntry, ItemState};
 use crate::name::ReviewLevelName;
 use crate::session::EndReason;
 use crate::state::{State, Trust};
@@ -143,7 +143,7 @@ fn an_item_held_by_a_live_session_is_not_ready() {
 
     let (fixture, mut state, task) = with_task();
     let readiness = |state: &State| {
-        let ItemView::Live(item) = state.item(task).unwrap() else {
+        let ItemEntry::Live(item) = state.item(task).unwrap() else {
             panic!("live")
         };
         state.readiness(&state.dependency_graph(), item)
@@ -370,7 +370,7 @@ mod reports {
 
     /// The steps the comments of sessions on the item are about.
     fn reports(state: &State, task: ItemId) -> Vec<(Option<SessionId>, Option<StepId>)> {
-        let ItemView::Live(item) = state.item(task).unwrap() else {
+        let ItemEntry::Live(item) = state.item(task).unwrap() else {
             panic!("live")
         };
         item.comments()
@@ -398,7 +398,12 @@ mod reports {
             3_002,
             comment(task, "halfway"),
         );
-        fixture.apply(&mut state, 0, 3_003, comment(task, "the principal's remark"));
+        fixture.apply(
+            &mut state,
+            0,
+            3_003,
+            comment(task, "the principal's remark"),
+        );
         let reports = reports(&state, task);
         assert_eq!(reports.len(), 2);
         assert!(reports.contains(&(Some(session), Some(step))));
@@ -425,7 +430,7 @@ mod reports {
                 crate::event::Change::Body("- [ ] pick a database\n".into()),
             ),
         );
-        let ItemView::Live(item) = state.item(task).unwrap() else {
+        let ItemEntry::Live(item) = state.item(task).unwrap() else {
             panic!("live")
         };
         assert!(item.body().step(step).is_none());

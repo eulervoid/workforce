@@ -363,7 +363,7 @@ impl Daemon {
 
     /// The config of this machine, read anew so that edits apply to the next session.
     pub(crate) fn machine_config(&self) -> Result<MachineConfig, MachineConfigError> {
-        match &self.config.machine_config {
+        match &self.launch.machine_config {
             Some(path) => MachineConfig::load(path),
             None => Ok(MachineConfig::default()),
         }
@@ -400,13 +400,13 @@ impl Daemon {
     }
 
     pub(crate) fn harness_command(&self, harness: &HarnessName) -> Option<AcpAgentConfig> {
-        self.config.harnesses.get(harness).cloned().or_else(|| {
+        self.launch.harnesses.get(harness).cloned().or_else(|| {
             wf_harness::KnownHarness::from_name(harness.as_str()).map(|known| known.command())
         })
     }
 
     pub(crate) fn workforce_directory(&self, workforce: WorkforceId) -> PathBuf {
-        self.config.data_dir.workforce(&workforce)
+        self.launch.data_dir.workforce(&workforce)
     }
 
     /// Where the repository of a workforce is on this machine, as the last `wf` run there said.

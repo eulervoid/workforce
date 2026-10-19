@@ -9,7 +9,7 @@ use wf_core::graph::Readiness;
 use wf_core::id::{HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
-use wf_core::item::ItemView;
+use wf_core::item::ItemEntry;
 use wf_core::name::AgentName;
 use wf_core::session::HarnessFault;
 use wf_core::state::State;
@@ -286,8 +286,8 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
     let mut archived_items = 0;
     for view in state.items() {
         match view {
-            ItemView::Archived(_) => archived_items += 1,
-            ItemView::Live(item) => {
+            ItemEntry::Archived(_) => archived_items += 1,
+            ItemEntry::Live(item) => {
                 let config = policy.type_config(item.item_type());
                 let id = item.id();
                 let title = item.title().to_string();
@@ -400,8 +400,8 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
                 last,
             } => {
                 let title = match state.item(entry.item) {
-                    Some(ItemView::Live(item)) => item.title().to_string(),
-                    Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
+                    Some(ItemEntry::Live(item)) => item.title().to_string(),
+                    Some(ItemEntry::Archived(_)) | None => "(archived)".to_string(),
                 };
                 Some(format!(
                     "#{} \"{title}\": {}",

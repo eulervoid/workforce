@@ -8,7 +8,7 @@ use wf_daemon::data_dir::STORE_FILE;
 use wf_daemon::proto::{
     Hello, HelloReply, PROTOCOL_VERSION, ProtoError, read_message, write_message,
 };
-use wf_daemon::{Config, Daemon, DaemonError, DataDir};
+use wf_daemon::{Daemon, DaemonError, DataDir, Launch};
 use wf_net::Network;
 use wf_store::{RedbStore, Replica};
 
@@ -64,7 +64,7 @@ async fn start() -> Running {
 
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
-        Config {
+        Launch {
             data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: socket.clone(),
             network: Network::Direct,
@@ -241,7 +241,7 @@ async fn a_second_daemon_on_the_same_socket_is_refused() {
     let running = start().await;
     let workforce = running.fixture.workforce();
     let second = Daemon::start(
-        Config {
+        Launch {
             data_dir: DataDir::new(running._directory.path().to_path_buf()),
             socket: running.socket.clone(),
             network: Network::Direct,
@@ -282,7 +282,7 @@ async fn start_peer_as(
     drop(replica);
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
-        Config {
+        Launch {
             data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: socket.clone(),
             network: Network::Direct,
@@ -484,7 +484,7 @@ async fn start_empty(
     let directory = TempDir::new().unwrap();
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
-        Config {
+        Launch {
             data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: socket.clone(),
             network: Network::Direct,
@@ -600,7 +600,7 @@ async fn a_log_longer_than_a_page_arrives_whole_and_in_order() {
 
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
-        Config {
+        Launch {
             data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: socket.clone(),
             network: Network::Direct,
@@ -634,7 +634,7 @@ async fn a_daemon_starts_with_an_empty_store_in_its_data_directory() {
     std::fs::create_dir_all(&store_directory).unwrap();
     drop(RedbStore::open(store_directory.join(STORE_FILE)).unwrap());
     let daemon = Daemon::start(
-        Config {
+        Launch {
             data_dir: DataDir::new(directory.path().to_path_buf()),
             socket: directory.path().join("daemon.sock"),
             network: Network::Direct,

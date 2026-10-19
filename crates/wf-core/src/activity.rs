@@ -10,7 +10,7 @@ use crate::event::{Change, CommentKind, Event, EventBody, Link};
 use crate::hlc::Hlc;
 use crate::id::{CommentId, EventId, HashId, ItemId, MIN_PREFIX_LEN, SessionId};
 use crate::identity::Actor;
-use crate::item::{ItemState, ItemView};
+use crate::item::{ItemEntry, ItemState};
 use crate::refs;
 use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::State;
@@ -97,11 +97,11 @@ impl State {
         // When the item was created, where it is known, to tell its creation apart without
         // hashing every other.
         let (depends_on, created_at): (Vec<ItemId>, Option<Hlc>) = match self.item(item) {
-            Some(ItemView::Live(live)) => (
+            Some(ItemEntry::Live(live)) => (
                 live.depends_on().values().copied().collect(),
                 Some(live.created()),
             ),
-            Some(ItemView::Archived(_)) | None => (Vec::new(), None),
+            Some(ItemEntry::Archived(_)) | None => (Vec::new(), None),
         };
         let resolver = self.resolver();
         // Every reference to this item has the start of its id: text without it is not parsed.

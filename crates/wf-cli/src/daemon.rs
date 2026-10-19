@@ -216,7 +216,7 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
     if answers(&socket) {
         bail!("a daemon is already listening on {}", socket.display());
     }
-    let config = wf_daemon::Config {
+    let launch = wf_daemon::Launch {
         data_dir: data.clone(),
         socket: socket.clone(),
         network: if args.no_network {
@@ -235,7 +235,7 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
     runtime.block_on(async {
         let mut terminate =
             tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;
-        let daemon = wf_daemon::Daemon::start(config, device.clone()).await?;
+        let daemon = wf_daemon::Daemon::start(launch, device.clone()).await?;
         std::fs::write(&pid_file, std::process::id().to_string())
             .with_context(|| format!("writing {}", pid_file.display()))?;
         tracing::info!(

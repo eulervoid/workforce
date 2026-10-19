@@ -42,7 +42,7 @@ pub(crate) fn review(
     };
     let verdict = args.verdict();
     let because = comment_why(workspace, item, args.note)?;
-    let event = workspace.author(EventBody::Reviewed(wf_core::event::Review {
+    let event = workspace.author(EventBody::Reviewed(wf_core::event::Reviewed {
         item,
         commit,
         verdict,

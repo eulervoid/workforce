@@ -321,7 +321,7 @@ pub struct ItemRef {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Comment {
+pub struct Commented {
     pub item: ItemId,
     pub text: String,
     pub kind: CommentKind,
@@ -334,7 +334,7 @@ pub struct Comment {
     pub lines: Option<LineAnchor>,
 }
 
-/// The wire form of `Comment` before it could be about lines of a diff, and still for one that
+/// The wire form of `Commented` before it could be about lines of a diff, and still for one that
 /// is not. Borrows what it encodes.
 #[derive(Serialize, Deserialize)]
 struct CommentWithoutLines<'a> {
@@ -345,7 +345,7 @@ struct CommentWithoutLines<'a> {
     step: Option<StepId>,
 }
 
-impl Comment {
+impl Commented {
     pub fn plain(item: ItemId, text: impl Into<String>) -> Self {
         Self {
             item,
@@ -394,7 +394,7 @@ impl Comment {
 
     /// One without lines would encode to other bytes than were signed.
     fn on_lines(payload: &[u8]) -> Result<Self, EncodingError> {
-        let comment: Comment = encoding::decode(payload)?;
+        let comment: Commented = encoding::decode(payload)?;
         match (comment.kind, &comment.lines) {
             (CommentKind::CheckFailure, _) | (_, None) => Err(EncodingError::malformed()),
             (_, Some(_)) => Ok(comment),
@@ -403,7 +403,7 @@ impl Comment {
 
     /// A check failure under any other tag would encode to other bytes than were signed.
     fn check_failure(payload: &[u8]) -> Result<Self, EncodingError> {
-        let comment: Comment = encoding::decode(payload)?;
+        let comment: Commented = encoding::decode(payload)?;
         match comment.kind {
             CommentKind::CheckFailure => Ok(comment),
             CommentKind::Plain | CommentKind::Blocker | CommentKind::ChangeRequest => {
@@ -417,7 +417,7 @@ impl Comment {
         if old.kind == CommentKind::CheckFailure {
             return Err(EncodingError::malformed());
         }
-        Ok(Comment {
+        Ok(Commented {
             item: old.item,
             text: old.text.into_owned(),
             kind: old.kind,
@@ -574,7 +574,7 @@ impl SessionEnded {
 
 /// The verdict of a review session or of a principal on the work submitted for an item.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct Review {
+pub struct Reviewed {
     pub item: ItemId,
     /// The submitted commit, or `None` for work submitted without commits.
     pub commit: Option<CommitId>,
@@ -608,10 +608,10 @@ pub enum EventBody {
     ItemLinked(ItemLinked),
     ItemArchived(ItemRef),
     ItemUnarchived(ItemRef),
-    Commented(Comment),
+    Commented(Commented),
     SessionStarted(SessionStarted),
     SessionEnded(SessionEnded),
-    Reviewed(Review),
+    Reviewed(Reviewed),
     Merged(Merged),
     /// A body from a newer peer. Stored and relayed, ignored by the fold.
     Unknown {
@@ -636,7 +636,7 @@ mod tag {
     pub const ITEM_LINKED: u16 = 13;
     pub const ITEM_ARCHIVED: u16 = 14;
     pub const ITEM_UNARCHIVED: u16 = 15;
-    /// `Comment` as written before it could be about lines, and still for one that is not.
+    /// `Commented` as written before it could be about lines, and still for one that is not.
     pub const COMMENT: u16 = 16;
     pub const ITEM_CREATED: u16 = 17;
     pub const SESSION_STARTED: u16 = 20;
@@ -647,9 +647,9 @@ mod tag {
     pub const MERGED: u16 = 23;
     // 24 was `Report`, now a comment with a step. Retired: never reuse it.
     pub const SESSION_ENDED: u16 = 25;
-    /// `Comment` about lines of a diff; one that is not is still written as `COMMENT`.
+    /// `Commented` about lines of a diff; one that is not is still written as `COMMENT`.
     pub const COMMENT_ON_LINES: u16 = 26;
-    /// `Comment` of kind `CheckFailure`. Peers that predate it carry it as `Unknown` instead of
+    /// `Commented` of kind `CheckFailure`. Peers that predate it carry it as `Unknown` instead of
     /// failing to decode the event; they do not show it as a change request.
     pub const COMMENT_CHECK_FAILURE: u16 = 27;
     /// `PolicySet` as written once it carried the hlc of its event; tag 2 is the unbound one.
@@ -770,9 +770,9 @@ impl EventBody {
             tag::ITEM_LINKED => EventBody::ItemLinked(encoding::decode(payload)?),
             tag::ITEM_ARCHIVED => EventBody::ItemArchived(encoding::decode(payload)?),
             tag::ITEM_UNARCHIVED => EventBody::ItemUnarchived(encoding::decode(payload)?),
-            tag::COMMENT => EventBody::Commented(Comment::without_lines(payload)?),
-            tag::COMMENT_ON_LINES => EventBody::Commented(Comment::on_lines(payload)?),
-            tag::COMMENT_CHECK_FAILURE => EventBody::Commented(Comment::check_failure(payload)?),
+            tag::COMMENT => EventBody::Commented(Commented::without_lines(payload)?),
+            tag::COMMENT_ON_LINES => EventBody::Commented(Commented::on_lines(payload)?),
+            tag::COMMENT_CHECK_FAILURE => EventBody::Commented(Commented::check_failure(payload)?),
             tag::SESSION_STARTED => EventBody::SessionStarted(encoding::decode(payload)?),
             tag::SESSION_ENDED_WITHOUT_COMMENT => {
                 EventBody::SessionEnded(SessionEnded::without_comment(payload)?)
@@ -980,7 +980,7 @@ mod tests {
 
     #[test]
     fn golden_comment_body() {
-        let body = EventBody::Commented(Comment {
+        let body = EventBody::Commented(Commented {
             item: ItemId::from_bytes([1; 32]),
             text: "why".into(),
             kind: CommentKind::ChangeRequest,
@@ -1013,7 +1013,7 @@ mod tests {
                 },
                 because: None,
             }),
-            EventBody::Reviewed(Review {
+            EventBody::Reviewed(Reviewed {
                 item,
                 commit: Some(commit),
                 verdict: Verdict::RequestChanges,
@@ -1091,8 +1091,8 @@ mod tests {
         assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
     }
 
-    fn comment_on_lines() -> Comment {
-        Comment {
+    fn comment_on_lines() -> Commented {
+        Commented {
             kind: CommentKind::ChangeRequest,
             lines: Some(LineAnchor {
                 commit: CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap()),
@@ -1102,7 +1102,7 @@ mod tests {
                 last: 13,
                 quote: "+fn parse_lazily() {}\n fn main() {}".into(),
             }),
-            ..Comment::plain(ItemId::from_bytes([1; 32]), "Keep the old name.")
+            ..Commented::plain(ItemId::from_bytes([1; 32]), "Keep the old name.")
         }
     }
 
@@ -1117,7 +1117,7 @@ mod tests {
         );
         let forged = TaggedBody {
             tag: tag::COMMENT_ON_LINES,
-            payload: encoding::encode(&Comment {
+            payload: encoding::encode(&Commented {
                 lines: None,
                 ..comment
             })
@@ -1128,9 +1128,9 @@ mod tests {
 
     #[test]
     fn a_check_failure_round_trips_under_its_own_tag_that_older_peers_carry_unknown() {
-        let failure = Comment {
+        let failure = Commented {
             kind: CommentKind::CheckFailure,
-            ..Comment::plain(ItemId::from_bytes([1; 32]), "cargo test failed")
+            ..Commented::plain(ItemId::from_bytes([1; 32]), "cargo test failed")
         };
         let body = EventBody::Commented(failure.clone());
         let bytes = encoding::encode(&body).unwrap();
@@ -1153,7 +1153,7 @@ mod tests {
         }
         let forged = TaggedBody {
             tag: tag::COMMENT_CHECK_FAILURE,
-            payload: encoding::encode(&Comment::plain(failure.item, "x")).unwrap(),
+            payload: encoding::encode(&Commented::plain(failure.item, "x")).unwrap(),
         };
         assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
     }
