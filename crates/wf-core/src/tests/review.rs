@@ -581,7 +581,8 @@ mod inbox {
                 InboxEntry {
                     item: careful,
                     waiting: Waiting::PrincipalReview {
-                        commit: Some(commit(1))
+                        commit: Some(commit(1)),
+                        stale: None
                     }
                 },
             ]
@@ -796,4 +797,55 @@ fn check_failures_of_merged_work_count_as_change_requests_of_the_project() {
     scene.apply(check_failure(item, "cargo test"));
     scene.apply(merged(item, commit(1), commit(9)));
     assert_eq!(scene.state.project_stats(0).change_requests, 2);
+}
+
+#[test]
+fn a_daemon_change_request_after_the_offer_makes_the_principal_review_stale() {
+    use crate::identity::Actor;
+    use crate::inbox::Waiting;
+
+    let mut scene = Scene::new();
+    let item = scene.submitted("critical");
+    assert!(matches!(
+        scene.state.offered_reviews().as_slice(),
+        [(offered, _, ReviewStep::Agent { .. })] if *offered == item
+    ));
+    scene.agent_verdict(item, Verdict::Approve);
+    assert_eq!(
+        scene.state.offered_reviews(),
+        [(item, commit(1), ReviewStep::Principal)]
+    );
+    let stale_of = |scene: &Scene| match scene.state.inbox().as_slice() {
+        [entry] => match entry.waiting {
+            Waiting::PrincipalReview { stale, .. } => stale,
+            _ => panic!("expected a principal review"),
+        },
+        other => panic!("expected one entry, found {other:?}"),
+    };
+    assert_eq!(stale_of(&scene), None);
+
+    scene.clock += 1;
+    let daemon = Actor::Daemon(scene.fixture.founder.key());
+    let request = scene.fixture.author_as(
+        &scene.state,
+        0,
+        daemon,
+        scene.clock,
+        change_request(item, "no longer merges: a.txt"),
+    );
+    scene
+        .state
+        .receive(request.clone(), crate::state::Trust::Untrusted)
+        .unwrap();
+    let stale = stale_of(&scene).expect("stale");
+    assert_eq!(stale.since_ms, scene.clock);
+    assert_eq!(stale.comment, request.id().into());
+
+    scene.submit(item, commit(2));
+    let (_, resubmitted) = scene.state.submission(item).unwrap();
+    assert_eq!(
+        scene.state.stale_since(item, resubmitted.hlc),
+        None,
+        "a new submission starts over"
+    );
 }

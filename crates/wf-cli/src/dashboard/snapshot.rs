@@ -452,7 +452,7 @@ fn waiting(
                     text,
                 }
             }
-            InboxWaiting::PrincipalReview { commit } => InboxEntry::Review { item, commit },
+            InboxWaiting::PrincipalReview { commit, .. } => InboxEntry::Review { item, commit },
             InboxWaiting::Proposal | InboxWaiting::Merge { .. } | InboxWaiting::Recovery { .. } => {
                 InboxEntry::Notice {
                     kind: entry.waiting.kind(),

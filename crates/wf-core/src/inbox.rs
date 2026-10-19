@@ -19,8 +19,12 @@ pub enum Waiting {
     /// The item waits in its review state without submitted work, such as a proposed decision.
     /// Moving it on decides.
     Proposal,
-    /// The review of the work has reached a step for the principal: `wf review`.
-    PrincipalReview { commit: Option<CommitId> },
+    /// The review of the work has reached a step for the principal: `wf review`. `stale` says
+    /// when the branch stopped merging into the target after the review was offered.
+    PrincipalReview {
+        commit: Option<CommitId>,
+        stale: Option<Stale>,
+    },
     /// The work is ready to merge, but the target branch is checked out with changes.
     Merge { commit: CommitId },
     /// Sessions of `role` on the item ended without finishing, and its recovery level leaves the
@@ -30,6 +34,14 @@ pub enum Waiting {
         failures: usize,
         last: SessionId,
     },
+}
+
+/// The daemon found that the work no longer merges into the target branch, after it offered the
+/// review: its open change request on the item says in which files.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Stale {
+    pub comment: CommentId,
+    pub since_ms: u64,
 }
 
 /// The kind of an entry of the inbox: what waits in the state, or what the daemon keeps: a
@@ -111,8 +123,11 @@ impl State {
                     Some(ReviewStatus::Awaiting {
                         step: ReviewStep::Principal,
                     }) => {
-                        let (commit, _) = self.submission(item.id())?;
-                        Waiting::PrincipalReview { commit }
+                        let (commit, submitted) = self.submission(item.id())?;
+                        Waiting::PrincipalReview {
+                            commit,
+                            stale: self.stale_since(item.id(), submitted.hlc),
+                        }
                     }
                     Some(ReviewStatus::Awaiting {
                         step: ReviewStep::Agent { .. },
@@ -203,6 +218,11 @@ impl State {
     }
 }
 
+fn timestamp(at_ms: u64) -> String {
+    jiff::Timestamp::from_millisecond(i64::try_from(at_ms).unwrap_or(i64::MAX))
+        .map_or_else(|_| at_ms.to_string(), |at| at.to_string())
+}
+
 impl State {
     /// The title the inbox shows for an item.
     pub fn inbox_title(&self, item: ItemId) -> String {
@@ -229,13 +249,24 @@ impl State {
                 entry.item.short(),
                 entry.item.short()
             ),
-            Waiting::PrincipalReview { commit } => match commit {
-                Some(commit) => format!(
-                    "review of {}: `wf item diff`, then `wf review`",
-                    commit.short()
-                ),
-                None => "review of work without commits: read it, then `wf review`".to_string(),
-            },
+            Waiting::PrincipalReview { commit, stale } => {
+                let review = match commit {
+                    Some(commit) => format!(
+                        "review of {}: `wf item diff`, then `wf review`",
+                        commit.short()
+                    ),
+                    None => "review of work without commits: read it, then `wf review`".to_string(),
+                };
+                match stale {
+                    Some(stale) => format!(
+                        "{review}. Stale since {}: it no longer merges into {}, see the daemon's change request {}",
+                        timestamp(stale.since_ms),
+                        policy.merge.target,
+                        stale.comment.short()
+                    ),
+                    None => review,
+                }
+            }
             Waiting::Merge { commit } => format!(
                 "{} is ready to merge, but {} is checked out with changes; the daemon's comment on the item names them",
                 commit.short(),
