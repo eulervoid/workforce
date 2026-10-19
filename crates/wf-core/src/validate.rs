@@ -21,6 +21,7 @@ use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role, Signed};
 use crate::item::ItemState;
 use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, TypeName};
 use crate::policy::Field;
+use crate::review::ReviewStatus;
 use crate::session::{SessionRole, Verdict};
 use crate::state::{
     Disposition, ForkState, MAX_PENDING, MAX_PENDING_BINDINGS, Origin, PendingOn, Received, State,
@@ -1123,7 +1124,13 @@ impl State {
                 }
                 let changes_open = has_open(item, CommentKind::ChangeRequest);
                 match review.verdict {
-                    Verdict::Approve if changes_open => {
+                    // After a step requested changes, the others still review the same commit:
+                    // their approvals are recorded and count for nothing.
+                    Verdict::Approve
+                        if changes_open
+                            && self.review_status(review.item)
+                                != Some(ReviewStatus::ChangesRequested) =>
+                    {
                         Err(PolicyViolation::OpenChangeRequests(review.item))
                     }
                     Verdict::RequestChanges if !changes_open => {

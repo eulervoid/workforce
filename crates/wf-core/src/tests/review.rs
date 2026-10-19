@@ -2,6 +2,7 @@ use crate::event::EventBody;
 use crate::id::{ItemId, SessionId};
 use crate::identity::AgentId;
 use crate::item::ItemState;
+use crate::lifecycle::TurnOutcome;
 use crate::name::AgentName;
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
@@ -999,6 +1000,60 @@ mod at_once {
         scene.step_verdict("second", item, Some("style"), Verdict::Approve);
         scene.step_verdict("third", item, Some("security"), Verdict::RequestChanges);
         assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+    }
+
+    #[test]
+    fn the_other_steps_finish_after_one_requested_changes() {
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        let security: SessionId = scene
+            .apply(start_review_step(
+                "third",
+                item,
+                commit(1),
+                Some("security"),
+            ))
+            .id()
+            .into();
+        scene.step_verdict("second", item, Some("style"), Verdict::RequestChanges);
+        assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+        assert_eq!(
+            scene.state.turn_outcome(security, 0, 3, None),
+            TurnOutcome::Continue,
+            "its session goes on until it gives a verdict"
+        );
+
+        // Its approval is written and counts for nothing.
+        let actor = scene.fixture.agent_actor("third", security);
+        scene.clock += 1;
+        let approval = scene.fixture.author_as(
+            &scene.state,
+            0,
+            actor,
+            scene.clock,
+            verdict(item, commit(1), Verdict::Approve),
+        );
+        scene
+            .state
+            .receive(approval, crate::state::Trust::Untrusted)
+            .expect("the approval is valid");
+        assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+
+        // Once new work replaced the commit, its review has nothing left to judge.
+        let late: SessionId = scene
+            .apply(start_review_step(
+                "reviewer",
+                item,
+                commit(1),
+                Some("security"),
+            ))
+            .id()
+            .into();
+        scene.submit(item, commit(2));
+        assert_eq!(
+            scene.state.turn_outcome(late, 0, 3, None),
+            TurnOutcome::Close
+        );
     }
 
     #[test]
