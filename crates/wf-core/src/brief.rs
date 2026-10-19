@@ -112,7 +112,7 @@ impl Brief {
                                     "{}/{} {}",
                                     handle(state, &other.agent().principal),
                                     other.agent().name,
-                                    ended.reason.name().replace('_', " ")
+                                    ended.reason.label()
                                 ))
                             }
                             EndReason::Submitted { .. }
@@ -175,7 +175,7 @@ fn earlier(state: &State, item: &Item, sources: &impl Sources) -> Vec<Earlier> {
         .filter_map(|(id, comment)| {
             Some(Earlier {
                 by: speaker(state, &comment.by),
-                kind: comment.kind.name().replace('_', " "),
+                kind: comment.kind.label(),
                 text: sources.text(*id)?,
             })
         })

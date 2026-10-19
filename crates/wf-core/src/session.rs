@@ -134,6 +134,17 @@ pub enum SessionRole {
     Diagnose,
 }
 
+impl SessionRole {
+    pub fn name(&self) -> &'static str {
+        match self {
+            SessionRole::Work => "work",
+            SessionRole::Review { .. } => "review",
+            SessionRole::Supervise => "supervise",
+            SessionRole::Diagnose => "diagnose",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum EndReason {
     /// The work is done. `None` when the branch has no commits.
@@ -181,6 +192,11 @@ impl MachineFault {
             MachineFault::HarnessUnknown => "harness_unknown",
         }
     }
+
+    /// The name for reading: words, not an identifier.
+    pub fn label(&self) -> String {
+        self.name().replace('_', " ")
+    }
 }
 
 /// What is wrong with a harness, so that none of its sessions can run.
@@ -220,6 +236,11 @@ impl EndReason {
             EndReason::Interrupted => "interrupted",
             EndReason::Diagnosed => "diagnosed",
         }
+    }
+
+    /// The name for reading: words, not an identifier.
+    pub fn label(&self) -> String {
+        self.name().replace('_', " ")
     }
 }
 

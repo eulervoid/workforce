@@ -271,7 +271,7 @@ impl State {
         let ended = self
             .session(last)
             .and_then(|session| {
-                let reason = session.ended()?.reason.name().replace('_', " ");
+                let reason = session.ended()?.reason.label();
                 Some(format!("@{} {reason}", session.agent().name))
             })
             .unwrap_or_else(|| "the last one ended".to_string());

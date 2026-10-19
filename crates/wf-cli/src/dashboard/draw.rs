@@ -482,7 +482,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
             input,
             ..
         } => (
-            format!("{} on {}:", kind.name().replace('_', " "), lines.location()),
+            format!("{} on {}:", kind.label(), lines.location()),
             input,
             match then {
                 Written::Post => "enter post · ctrl+g editor · esc cancel ",
@@ -1524,7 +1524,7 @@ fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<L
         SessionStatus::Ended { reason, at_ms } => {
             format!(
                 "{} {} ago",
-                reason.name().replace('_', " "),
+                reason.label(),
                 age(at_ms, now_ms)
             )
         }

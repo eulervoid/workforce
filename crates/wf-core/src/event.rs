@@ -503,6 +503,11 @@ impl CommentKind {
             CommentKind::ChangeRequest | CommentKind::CheckFailure => "change_request",
         }
     }
+
+    /// The name for reading: words, not an identifier.
+    pub fn label(self) -> String {
+        self.name().replace('_', " ")
+    }
 }
 
 /// A session starts. Its id is the id of this event, and the agent is one of the acting principal.

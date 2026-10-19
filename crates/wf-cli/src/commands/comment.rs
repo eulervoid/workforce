@@ -60,7 +60,7 @@ pub(super) fn comment(
     let comment = CommentId::from(event.id());
     let mut message = format!(
         "wrote {} {} on #{}",
-        kind.name().replace('_', " "),
+        kind.label(),
         comment.short(),
         id.short()
     );
@@ -168,7 +168,7 @@ fn comments_to_resolve(
             bail!(
                 "#{} has no open {}s",
                 item.short(),
-                wanted.name().replace('_', " ")
+                wanted.label()
             );
         }
         resolves.extend(open);
