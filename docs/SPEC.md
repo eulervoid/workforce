@@ -1094,7 +1094,9 @@ template. Without Fence installed, sessions fail; there is no silent fallback. `
 agents with the principal's privileges, and then `allow` is treated as `ask`.
 
 * **Write:** the session's directory, the parts of the repository's `.git` that commits need (`objects`, remote and tag refs, the
-  session's own branch, the admin directory of its own worktree), temporary files,
+  session's own branch, the admin directory of its own worktree as the `gitdir:` line of the worktree's
+  `.git` file names it, and the lock of `packed-refs`, which git takes to delete the pseudorefs it
+  removes after each commit; the file itself stays closed), temporary files,
   `~/.cache` and the caches and state of agent tools and package managers, the daemon's socket, and
   `allow_write`. Not `.env*` or key files.
 * **Network:** model APIs, git hosts and package registries, plus `allow_domains`; cloud metadata and
@@ -1112,6 +1114,12 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
   * reading SSH and GPG keys and the credentials of clouds, registries and docker.
 
 `wf` in a session reads no key: the daemon signs what it writes.
+
+**Repository maintenance** (`gc`, `pack-refs`, repacking) is not the agents': they cannot write
+`packed-refs` or the repository's config, and git's automatic maintenance fails in the sandbox. The
+git the daemon runs outside it (merges, rebases, commits of the merge) keeps the default
+`maintenance.auto`, so git packs and prunes the repository as it always does when the principal or
+the daemon works in it. Nothing relies on an agent doing it.
 
 ### Environment
 
