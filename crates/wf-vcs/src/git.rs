@@ -12,9 +12,11 @@ use crate::{
     VcsAdapter, VcsError, Work,
 };
 
-/// How long a `packed-refs.lock` may stay before it counts as left behind: git holds it for
-/// the moment it takes to rewrite the file.
-const STALE_LOCK_AGE: Duration = Duration::from_secs(10);
+/// How long a `packed-refs.lock` may stay before it counts as left behind. Age alone decides,
+/// without looking for a git process that holds it: git keeps the lock only while it rewrites
+/// `packed-refs` (seconds even for a very large repository), so a limit this far above that
+/// never removes a live lock, and it needs no platform specific process lookup.
+const STALE_LOCK_AGE: Duration = Duration::from_secs(120);
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
 
@@ -203,12 +205,9 @@ impl GitCli {
         let lock = self.git_directory().join("packed-refs.lock");
         let age = std::fs::metadata(&lock)
             .and_then(|metadata| metadata.modified())
-            .map(|modified| {
-                SystemTime::now()
-                    .duration_since(modified)
-                    .unwrap_or_default()
-            });
-        if age.is_ok_and(|age| age > STALE_LOCK_AGE) {
+            // A modification time in the future cannot come from git, so it counts as stale.
+            .map(|modified| SystemTime::now().duration_since(modified).ok());
+        if age.is_ok_and(|age| age.is_none_or(|age| age > STALE_LOCK_AGE)) {
             let _ = std::fs::remove_file(&lock);
         }
     }
@@ -1161,13 +1160,39 @@ mod tests {
         let lock = repo.directory().join(".git/packed-refs.lock");
         let left_behind = std::fs::File::create(&lock).unwrap();
         left_behind
-            .set_modified(SystemTime::now() - Duration::from_secs(60))
+            .set_modified(SystemTime::now() - Duration::from_secs(600))
             .unwrap();
         repo.git
             .remove_worktree(&repo.worktree_path("wf/gone"))
             .unwrap();
         repo.git.delete_branch("wf/gone").unwrap();
         assert!(!lock.exists());
+    }
+
+    #[test]
+    fn a_packed_refs_lock_dated_in_the_future_is_removed() {
+        let repo = TestRepo::new();
+        repo.work("wf/gone", "a.txt", "a");
+        git_in(&repo.directory(), &["pack-refs", "--all"]);
+        let lock = repo.directory().join(".git/packed-refs.lock");
+        let left_behind = std::fs::File::create(&lock).unwrap();
+        left_behind
+            .set_modified(SystemTime::now() + Duration::from_secs(86_400))
+            .unwrap();
+        repo.git
+            .remove_worktree(&repo.worktree_path("wf/gone"))
+            .unwrap();
+        repo.git.delete_branch("wf/gone").unwrap();
+        assert!(!lock.exists());
+    }
+
+    #[test]
+    fn a_fresh_packed_refs_lock_is_left_alone() {
+        let repo = TestRepo::new();
+        let lock = repo.directory().join(".git/packed-refs.lock");
+        std::fs::File::create(&lock).unwrap();
+        repo.git.remove_stale_packed_refs_lock();
+        assert!(lock.exists());
     }
 
     #[test]
