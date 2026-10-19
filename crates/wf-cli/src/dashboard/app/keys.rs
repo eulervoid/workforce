@@ -10,7 +10,7 @@ use super::effect::Effect;
 use super::nav::{Navigated, Opened, Pane, Scroll};
 use super::prompt::{Filtered, Prompt, Written};
 use super::{App, GROUPINGS, ORDERS, Split, Status, Tab};
-use crate::dashboard::snapshot::{Detail, InView, Waiting};
+use crate::dashboard::snapshot::{Detail, InView};
 use crate::transcript::Verbosity;
 
 impl App {
@@ -104,20 +104,10 @@ impl App {
     pub(super) fn act(&mut self, key: KeyEvent) -> Option<Effect> {
         let subjects = self.subjects();
         let permission = subjects.iter().find_map(|entry| entry.request());
-        let blocker = subjects.iter().find_map(|entry| match entry {
-            Waiting::Blocker { item, comment, .. } => Some((item.id, *comment)),
-            Waiting::Permission { .. }
-            | Waiting::Review { .. }
-            | Waiting::Notice { .. }
-            | Waiting::MachineFault { .. } => None,
-        });
-        let review = subjects.iter().find_map(|entry| match entry {
-            Waiting::Review { item, .. } => Some(item.id),
-            Waiting::Permission { .. }
-            | Waiting::Blocker { .. }
-            | Waiting::Notice { .. }
-            | Waiting::MachineFault { .. } => None,
-        });
+        let blocker = subjects.iter().find_map(|entry| entry.blocker());
+        let review = subjects
+            .iter()
+            .find_map(|entry| entry.review().map(|(item, _)| item));
         match key.code {
             KeyCode::Char('a') => permission.map(|request| Effect::Permit {
                 request,

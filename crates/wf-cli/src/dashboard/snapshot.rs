@@ -697,6 +697,37 @@ impl Detail {
 }
 
 impl Waiting {
+    /// The blocker this is, if it is one: its item and its comment.
+    pub fn blocker(&self) -> Option<(ItemId, CommentId)> {
+        match self {
+            Waiting::Blocker { item, comment, .. } => Some((item.id, *comment)),
+            Waiting::Permission { .. }
+            | Waiting::Review { .. }
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => None,
+        }
+    }
+
+    /// The review this is, if it is one: its item, and the commit that was submitted.
+    pub fn review(&self) -> Option<(ItemId, Option<CommitId>)> {
+        match self {
+            Waiting::Review { item, commit } => Some((item.id, *commit)),
+            Waiting::Permission { .. }
+            | Waiting::Blocker { .. }
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => None,
+        }
+    }
+
+    /// The review of `item` this is, if it is one: the commit that was submitted.
+    pub fn review_of(&self, item: ItemId) -> Option<Option<CommitId>> {
+        self.review()
+            .filter(|(reviewed, _)| *reviewed == item)
+            .map(|(_, commit)| commit)
+    }
+}
+
+impl Waiting {
     /// The permission request this is, if it is one.
     pub fn request(&self) -> Option<Request> {
         match self {

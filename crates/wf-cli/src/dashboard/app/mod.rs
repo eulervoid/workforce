@@ -812,13 +812,10 @@ impl App {
 
     /// The item whose work `D` shows: of a review waiting, or of the item keys.
     fn item_with_work(&self) -> Option<ItemId> {
-        let review = self.subjects().into_iter().find_map(|entry| match entry {
-            Waiting::Review { item, .. } => Some(item.id),
-            Waiting::Permission { .. }
-            | Waiting::Blocker { .. }
-            | Waiting::Notice { .. }
-            | Waiting::MachineFault { .. } => None,
-        });
+        let review = self
+            .subjects()
+            .into_iter()
+            .find_map(|entry| entry.review().map(|(item, _)| item));
         review.or_else(|| self.item_subject())
     }
 
@@ -903,13 +900,10 @@ impl App {
 
     /// Whether the work of `item` waits for the principal's review.
     fn review_waits(&self, item: ItemId) -> bool {
-        self.snapshot.waiting.iter().any(|entry| match entry {
-            Waiting::Review { item: reviewed, .. } => reviewed.id == item,
-            Waiting::Permission { .. }
-            | Waiting::Blocker { .. }
-            | Waiting::Notice { .. }
-            | Waiting::MachineFault { .. } => false,
-        })
+        self.snapshot
+            .waiting
+            .iter()
+            .any(|entry| entry.review_of(item).is_some())
     }
 
     /// The commit of `item` the principal looks at when giving a verdict: the one the diff on
@@ -924,17 +918,11 @@ impl App {
             Some(Err(_)) | None => None,
         });
         shown.unwrap_or_else(|| {
-            self.snapshot.waiting.iter().find_map(|entry| match entry {
-                Waiting::Review {
-                    item: waiting,
-                    commit,
-                } if waiting.id == item => *commit,
-                Waiting::Review { .. }
-                | Waiting::Permission { .. }
-                | Waiting::Blocker { .. }
-                | Waiting::Notice { .. }
-                | Waiting::MachineFault { .. } => None,
-            })
+            self.snapshot
+                .waiting
+                .iter()
+                .find_map(|entry| entry.review_of(item))
+                .flatten()
         })
     }
 

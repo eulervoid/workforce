@@ -140,6 +140,35 @@ pub enum Filtered {
     Log,
 }
 
+/// What a key did to a prompt for a text that is posted.
+enum Typed {
+    /// The text goes on being typed.
+    Typing,
+    /// Esc, or enter with nothing typed.
+    Cancelled,
+    /// Ctrl-G: the text so far is to be finished in `$EDITOR`.
+    InEditor(String),
+    /// Enter: the text, trimmed, is posted.
+    Sent(String),
+}
+
+/// Takes a key of a prompt for a text that is posted.
+fn type_into(input: &mut Input, key: KeyEvent) -> Typed {
+    let text = || input.value().trim().to_owned();
+    match key.code {
+        KeyCode::Esc => Typed::Cancelled,
+        KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            Typed::InEditor(text())
+        }
+        KeyCode::Enter if input.value().trim().is_empty() => Typed::Cancelled,
+        KeyCode::Enter => Typed::Sent(text()),
+        _ => {
+            input.handle_event(&TerminalEvent::Key(key));
+            Typed::Typing
+        }
+    }
+}
+
 impl App {
     /// Pasted text: it goes into the prompt that is open, where a line break is a space as the
     /// prompts are one line; with none open, it is ignored rather than taken for keys. Whether
@@ -209,58 +238,38 @@ impl App {
                 item,
                 blocker,
                 mut input,
-            } => match key.code {
-                KeyCode::Esc => (None, None),
-                KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
+            } => match type_into(&mut input, key) {
+                Typed::Typing => (
+                    Some(Prompt::Answer {
+                        item,
+                        blocker,
+                        input,
+                    }),
+                    None,
+                ),
+                Typed::Cancelled => (None, None),
+                Typed::InEditor(text) => (
                     None,
                     Some(Effect::ResolveInEditor {
                         item,
                         blocker,
-                        text: input.value().trim().to_owned(),
+                        text,
                     }),
                 ),
-                KeyCode::Enter if input.value().trim().is_empty() => (None, None),
-                KeyCode::Enter => {
-                    let text = input.value().trim().to_owned();
-                    (
-                        None,
-                        Some(Effect::Resolve {
-                            item,
-                            blocker,
-                            text,
-                        }),
-                    )
-                }
-                _ => {
-                    input.handle_event(&TerminalEvent::Key(key));
-                    (
-                        Some(Prompt::Answer {
-                            item,
-                            blocker,
-                            input,
-                        }),
-                        None,
-                    )
-                }
-            },
-            Prompt::Comment { item, mut input } => match key.code {
-                KeyCode::Esc => (None, None),
-                KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
+                Typed::Sent(text) => (
                     None,
-                    Some(Effect::CommentInEditor {
+                    Some(Effect::Resolve {
                         item,
-                        text: input.value().trim().to_owned(),
+                        blocker,
+                        text,
                     }),
                 ),
-                KeyCode::Enter if input.value().trim().is_empty() => (None, None),
-                KeyCode::Enter => {
-                    let text = input.value().trim().to_owned();
-                    (None, Some(Effect::Comment { item, text }))
-                }
-                _ => {
-                    input.handle_event(&TerminalEvent::Key(key));
-                    (Some(Prompt::Comment { item, input }), None)
-                }
+            },
+            Prompt::Comment { item, mut input } => match type_into(&mut input, key) {
+                Typed::Typing => (Some(Prompt::Comment { item, input }), None),
+                Typed::Cancelled => (None, None),
+                Typed::InEditor(text) => (None, Some(Effect::CommentInEditor { item, text })),
+                Typed::Sent(text) => (None, Some(Effect::Comment { item, text })),
             },
             Prompt::Verdict { item } => match key.code {
                 KeyCode::Char('a') => {
@@ -314,37 +323,14 @@ impl App {
                 then,
                 mut input,
             } => {
-                let comment = |input: &Input| LineComment {
+                let outcome = type_into(&mut input, key);
+                let comment = |text: String| LineComment {
                     kind,
                     lines: lines.clone(),
-                    text: input.value().trim().to_owned(),
+                    text,
                 };
-                match key.code {
-                    KeyCode::Esc => (None, None),
-                    KeyCode::Char('g') if key.modifiers.contains(KeyModifiers::CONTROL) => (
-                        None,
-                        Some(Effect::LineCommentInEditor {
-                            item,
-                            comment: comment(&input),
-                            then,
-                        }),
-                    ),
-                    KeyCode::Enter if input.value().trim().is_empty() => (None, None),
-                    KeyCode::Enter => match then {
-                        Written::Post => (
-                            None,
-                            Some(Effect::PostLineComment {
-                                item,
-                                comment: comment(&input),
-                            }),
-                        ),
-                        Written::Draft { replacing } => {
-                            self.drafted(item, comment(&input), replacing);
-                            (None, None)
-                        }
-                    },
-                    _ => {
-                        input.handle_event(&TerminalEvent::Key(key));
+                match outcome {
+                    Typed::Typing => {
                         let prompt = Prompt::LineComment {
                             item,
                             kind,
@@ -354,6 +340,28 @@ impl App {
                         };
                         (Some(prompt), None)
                     }
+                    Typed::Cancelled => (None, None),
+                    Typed::InEditor(text) => (
+                        None,
+                        Some(Effect::LineCommentInEditor {
+                            item,
+                            comment: comment(text),
+                            then,
+                        }),
+                    ),
+                    Typed::Sent(text) => match then {
+                        Written::Post => (
+                            None,
+                            Some(Effect::PostLineComment {
+                                item,
+                                comment: comment(text),
+                            }),
+                        ),
+                        Written::Draft { replacing } => {
+                            self.drafted(item, comment(text), replacing);
+                            (None, None)
+                        }
+                    },
                 }
             }
             Prompt::Choose(mut choice) => {
