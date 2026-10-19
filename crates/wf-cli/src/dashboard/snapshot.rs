@@ -8,9 +8,10 @@ use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::inbox::{InboxKind, Waiting as InboxWaiting};
-use wf_core::item::{ItemState, ItemView, Priority};
+use wf_core::item::{ItemState, ItemView};
+use wf_core::name::AgentName;
 use wf_core::resolve::MentionTarget;
-use wf_core::session::{CommitId, EndReason, Session};
+use wf_core::session::{CommitId, Session};
 use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
 use wf_daemon::proto::HeldPermission;
@@ -19,7 +20,7 @@ use super::diff::{LineComment, PostedComment};
 use crate::cli::{ItemGrouping, ItemOrder};
 use crate::commands::sorted_views;
 use crate::transcript::Format;
-use crate::view::Flag;
+use crate::view::{Flag, ItemGroup, ItemRefView};
 use crate::{render, view};
 
 /// Everything the dashboard draws besides transcripts, as plain data: the loop takes one at each
@@ -96,32 +97,12 @@ const ENDED_SESSIONS: usize = 5;
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AgentInfo {
     pub id: AgentId,
-    /// `claude-code · opus`
-    pub runs_on: String,
+    pub view: view::AgentView,
     /// How many sessions this machine runs of it at once; `None` when it does not run it.
     pub capacity: Option<u32>,
     pub stats: AgentStats,
     /// Its live sessions, then the latest that ended.
     pub sessions: Vec<SessionInfo>,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ItemGroup {
-    pub name: String,
-    pub items: Vec<ItemRow>,
-}
-
-/// An item in a list, as `wf item list` shows it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ItemRow {
-    pub id: ItemId,
-    pub title: String,
-    pub state: ItemState,
-    pub priority: Option<Priority>,
-    /// `None` unless the item is open.
-    pub readiness: Option<Readiness>,
-    /// Steps checked off, and all steps.
-    pub steps: Option<(usize, usize)>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -130,12 +111,6 @@ pub struct Counts {
     pub open_items: usize,
     pub blocked_items: usize,
     pub devices: usize,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ItemRef {
-    pub id: ItemId,
-    pub title: String,
 }
 
 /// One thing that waits on the principal, with what it takes to answer it.
@@ -147,22 +122,22 @@ pub enum Waiting {
         /// When it asked, which tells two requests of a session apart.
         since_ms: u64,
         agent: String,
-        item: Option<ItemRef>,
+        item: Option<ItemRefView>,
         what: String,
     },
     Blocker {
-        item: ItemRef,
+        item: ItemRefView,
         comment: CommentId,
         by: String,
         text: String,
     },
     Review {
-        item: ItemRef,
+        item: ItemRefView,
         commit: Option<CommitId>,
     },
     /// A proposal, a merge or a recovery step: answered with commands for now.
     Notice {
-        item: ItemRef,
+        item: ItemRefView,
         kind: InboxKind,
         what: String,
     },
@@ -209,18 +184,6 @@ impl Waiting {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum SessionStatus {
-    Live,
-    /// Live, but its item waits on a dependency or an open blocker.
-    Parked,
-    Ended {
-        reason: EndReason,
-        /// Milliseconds since the Unix epoch.
-        at_ms: u64,
-    },
-}
-
 /// Where a session runs, which tells whether its transcript can be read here.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Place {
@@ -231,14 +194,18 @@ pub enum Place {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionInfo {
-    pub id: SessionId,
-    pub agent: String,
-    /// `work`, `review`, `supervise` or `diagnose`.
-    pub role: &'static str,
-    pub item: ItemRef,
-    pub status: SessionStatus,
-    pub started_ms: u64,
+    pub view: view::SessionView,
+    /// The name of its agent, which the rows show where the view has the label.
+    pub agent_name: AgentName,
     pub place: Place,
+}
+
+impl std::ops::Deref for SessionInfo {
+    type Target = view::SessionView;
+
+    fn deref(&self) -> &view::SessionView {
+        &self.view
+    }
 }
 
 /// What the detail on screen shows, besides a transcript.
@@ -275,7 +242,7 @@ impl InView {
     pub fn is_of(&self, detail: &Detail) -> bool {
         match (self, detail) {
             (Self::Item { id, .. }, Detail::Item(wanted)) => id == wanted,
-            (Self::Session(session), Detail::Session(wanted)) => session.id == *wanted,
+            (Self::Session(session), Detail::Session(wanted)) => session.view.id == *wanted,
             (Self::Diff { id, .. }, Detail::Diff(wanted)) => id == wanted,
             (Self::Agent { id, .. }, Detail::Agent(wanted)) => id == wanted,
             (Self::Flag { flag, .. }, Detail::Flag(wanted)) => flag == wanted,
@@ -415,11 +382,8 @@ fn counts(state: &State) -> Counts {
     counts
 }
 
-fn item_ref(state: &State, id: ItemId) -> ItemRef {
-    ItemRef {
-        id,
-        title: state.inbox_title(id),
-    }
+fn item_ref(state: &State, id: ItemId) -> Option<ItemRefView> {
+    state.item(id).map(|item| view::item_ref_view(state, item))
 }
 
 /// `coder` for an agent, `@ada` for a principal.
@@ -447,13 +411,16 @@ fn waiting(
                     || "an agent".to_owned(),
                     |session| session.agent().name.to_string(),
                 ),
-                item: session.map(|session| item_ref(state, session.item())),
+                item: session.and_then(|session| item_ref(state, session.item())),
                 what: request.what.clone(),
             }
         })
         .collect();
     for entry in state.inbox() {
-        let item = item_ref(state, entry.item);
+        // An entry of the inbox is about an item of the state.
+        let Some(item) = item_ref(state, entry.item) else {
+            continue;
+        };
         waiting.push(match entry.waiting {
             InboxWaiting::Blocker { comment } => {
                 let id = EventId::from(comment);
@@ -505,16 +472,6 @@ fn session_info(
     own: DeviceKey,
     session: &Session,
 ) -> SessionInfo {
-    let status = if let Some(ended) = session.ended() {
-        SessionStatus::Ended {
-            reason: ended.reason,
-            at_ms: ended.at().wall_ms(),
-        }
-    } else if state.session_waits(session.id(), graph) {
-        SessionStatus::Parked
-    } else {
-        SessionStatus::Live
-    };
     let place = if session.device() == own {
         Place::Here
     } else {
@@ -526,12 +483,8 @@ fn session_info(
         Place::Elsewhere(name)
     };
     SessionInfo {
-        id: session.id(),
-        agent: session.agent().name.to_string(),
-        role: session.role().name(),
-        item: item_ref(state, session.item()),
-        status,
-        started_ms: session.started().hlc.wall_ms(),
+        view: view::session_view(state, graph, session, None),
+        agent_name: session.agent().name.clone(),
         place,
     }
 }
@@ -642,10 +595,7 @@ fn agents(state: &State, graph: &DependencyGraph, own: DeviceKey) -> Vec<AgentIn
             let live = sessions.iter().filter(|session| session.is_live()).count();
             AgentInfo {
                 id: id.clone(),
-                runs_on: match &definition.model {
-                    Some(model) => format!("{} · {model}", definition.harness),
-                    None => definition.harness.to_string(),
-                },
+                view: view::agent_view(state, id, definition),
                 capacity: hosted.get(&id.name).copied(),
                 stats: state.agent_stats(id),
                 sessions: sessions
@@ -659,30 +609,11 @@ fn agents(state: &State, graph: &DependencyGraph, own: DeviceKey) -> Vec<AgentIn
 }
 
 fn item_groups(state: &State, graph: &DependencyGraph, listing: ItemListing) -> Vec<ItemGroup> {
-    let entries: Vec<_> = sorted_views(state, false, listing.order)
+    let summaries = sorted_views(state, false, listing.order)
         .into_iter()
         .map(|view| view::summary(state, graph, view))
         .collect();
-    view::group_items(listing.grouping, entries)
-        .into_iter()
-        .map(|group| ItemGroup {
-            name: group.group,
-            items: group
-                .items
-                .into_iter()
-                .filter_map(|summary| {
-                    Some(ItemRow {
-                        id: summary.id.parse().ok()?,
-                        title: summary.title,
-                        state: summary.state,
-                        priority: summary.priority,
-                        readiness: summary.readiness,
-                        steps: summary.steps.map(|steps| (steps.done, steps.total)),
-                    })
-                })
-                .collect(),
-        })
-        .collect()
+    view::group_items(listing.grouping, summaries)
 }
 
 /// Work the daemon moved from `review` back to `open`, as when approved work conflicts with the

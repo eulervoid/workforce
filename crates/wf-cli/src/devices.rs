@@ -3,9 +3,10 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, bail};
+use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::event::{DeviceProfile, EventBody};
-use wf_core::identity::DeviceKey;
+use wf_core::identity::{DeviceKey, Role};
 use wf_core::name::AgentName;
 use wf_core::state::State;
 
@@ -27,7 +28,7 @@ pub struct DeviceView {
     pub hardware: Option<String>,
     pub max_sessions: Option<u32>,
     pub agents: BTreeMap<String, u32>,
-    pub last_seen: Option<String>,
+    pub last_seen: Option<Timestamp>,
     pub this_device: bool,
     pub flags: Vec<String>,
 }
@@ -77,7 +78,7 @@ pub fn device_views(state: &State, own: DeviceKey, last_seen: &LastSeen) -> Vec<
 pub struct MemberView {
     pub handle: String,
     pub principal: String,
-    pub role: String,
+    pub role: Role,
     pub devices: Vec<String>,
 }
 
@@ -87,7 +88,7 @@ pub fn member_views(state: &State) -> Vec<MemberView> {
         .map(|(principal, member)| MemberView {
             handle: format!("@{}", member.handle),
             principal: principal.to_string(),
-            role: format!("{:?}", member.role).to_lowercase(),
+            role: member.role,
             devices: member
                 .devices
                 .iter()

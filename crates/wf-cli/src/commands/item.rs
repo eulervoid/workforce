@@ -4,6 +4,7 @@ use std::cmp::Ordering;
 use std::collections::BTreeSet;
 
 use anyhow::{Context, bail};
+use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::crdt::SetChange;
 use wf_core::event::{Change, EventBody, ItemCreated, ItemLinked, ItemMoved, ItemRef, Link};
@@ -96,7 +97,7 @@ impl Scope {
 
 fn item_choice(summary: &ItemSummary) -> Choice {
     Choice {
-        value: summary.id.clone(),
+        value: summary.id.to_base32(),
         label: render::item_choice(summary),
     }
 }
@@ -219,7 +220,7 @@ pub(super) fn item(
             emit(json, &created, |created| {
                 format!(
                     "created #{}\n{}",
-                    wf_core::id::short(&created.id),
+                    created.id.short(),
                     render::item_list(std::slice::from_ref(created))
                 )
             })
@@ -229,7 +230,7 @@ pub(super) fn item(
             check_list_filters(state, &args)?;
             let graph = state.dependency_graph();
             let views = sorted_views(state, args.archived, args.sort);
-            let dispatchable: Option<BTreeSet<String>> = match &args.for_agent {
+            let dispatchable: Option<BTreeSet<ItemId>> = match &args.for_agent {
                 None => None,
                 Some(name) => {
                     let device = workspace.device_key();
@@ -247,7 +248,7 @@ pub(super) fn item(
                         state
                             .dispatchable(device, &agent)
                             .iter()
-                            .map(|item| item.id().to_base32())
+                            .map(|item| item.id())
                             .collect(),
                     )
                 }
@@ -283,9 +284,7 @@ pub(super) fn item(
                 })
                 .collect();
             match args.group_by {
-                None => {
-                    emit(json, &entries, |items| render::item_list(items))
-                }
+                None => emit(json, &entries, |items| render::item_list(items)),
                 Some(grouping) => {
                     let groups = view::group_items(grouping, entries);
                     emit(json, &groups, |groups| {
@@ -520,7 +519,7 @@ fn archive_finished(
 struct ArchivedShown {
     #[serde(flatten)]
     summary: ItemSummary,
-    archived_at: String,
+    archived_at: Timestamp,
     note: &'static str,
 }
 

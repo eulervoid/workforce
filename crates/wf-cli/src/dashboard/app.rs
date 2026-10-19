@@ -22,13 +22,13 @@ use wf_harness::{Permission, TranscriptEntry};
 use super::diff::{Changes, DiffPane, LineComment};
 use super::draw;
 use super::snapshot::{
-    Detail, InView, ItemListing, ItemRow, MovedBack, SessionInfo, SessionStatus, Snapshot, Waiting,
-    WaitingKey, Wanted,
+    Detail, InView, ItemListing, MovedBack, SessionInfo, Snapshot, Waiting, WaitingKey, Wanted,
 };
 use super::transcript_lines::TranscriptLines;
 use crate::cli::{ItemGrouping, ItemOrder};
 use crate::theme;
 use crate::transcript::{Transcript, Verbosity};
+use crate::view::{ItemSummary, SessionStatus};
 
 /// From this width the detail sits right of the list, instead of in its place.
 pub const WIDE: u16 = 120;
@@ -1131,7 +1131,7 @@ impl App {
     /// The groups of the Items tab with the items that pass its filters; empty groups are left
     /// out. The text filter passes an item whose title contains it or whose id starts with it,
     /// as `wf item` commands resolve an id, with or without a leading `#`.
-    pub fn item_groups(&self) -> Vec<(&str, Vec<&ItemRow>)> {
+    pub fn item_groups(&self) -> Vec<(&str, Vec<&ItemSummary>)> {
         let filter = self.items.filter.to_lowercase();
         let id_prefix = filter.strip_prefix('#').unwrap_or(&filter);
         self.snapshot
@@ -1147,9 +1147,9 @@ impl App {
                             || item.id.to_base32().starts_with(id_prefix)
                     })
                     .collect();
-                (group.name.as_str(), items)
+                (group.group.as_str(), items)
             })
-            .filter(|(_, items): &(&str, Vec<&ItemRow>)| !items.is_empty())
+            .filter(|(_, items): &(&str, Vec<&ItemSummary>)| !items.is_empty())
             .collect()
     }
 
@@ -1309,14 +1309,18 @@ impl App {
                     .iter()
                     .flat_map(|agent| agent.sessions.iter()),
             )
-            .map(|session| &session.item);
-        let waiting = snapshot.waiting.iter().filter_map(|entry| match entry {
-            Waiting::Permission { item, .. } => item.as_ref(),
-            Waiting::Blocker { item, .. }
-            | Waiting::Review { item, .. }
-            | Waiting::Notice { item, .. } => Some(item),
-            Waiting::MachineFault { .. } => None,
-        });
+            .map(|session| (session.item, session.title.as_str()));
+        let waiting = snapshot
+            .waiting
+            .iter()
+            .filter_map(|entry| match entry {
+                Waiting::Permission { item, .. } => item.as_ref(),
+                Waiting::Blocker { item, .. }
+                | Waiting::Review { item, .. }
+                | Waiting::Notice { item, .. } => Some(item),
+                Waiting::MachineFault { .. } => None,
+            })
+            .map(|item| (item.id, item.title.as_str()));
         let listed = snapshot
             .items
             .iter()
@@ -1326,8 +1330,8 @@ impl App {
         listed.or_else(|| {
             sessions
                 .chain(waiting)
-                .find(|known| known.id == item)
-                .map(|known| known.title.as_str())
+                .find(|(known, _)| *known == item)
+                .map(|(_, title)| title)
         })
     }
 
@@ -1422,7 +1426,7 @@ impl App {
     pub fn item_subject(&self) -> Option<ItemId> {
         match self.focus()? {
             Detail::Item(item) | Detail::Diff(item) => Some(item),
-            Detail::Session(session) => self.session_info(session).map(|info| info.item.id),
+            Detail::Session(session) => self.session_info(session).map(|info| info.item),
             Detail::Agent(_) | Detail::Flag(_) => None,
         }
     }

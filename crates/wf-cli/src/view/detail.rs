@@ -2,6 +2,7 @@
 
 use std::collections::BTreeMap;
 
+use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::activity::{Activity, Entry};
 use wf_core::body::{Body, BodyPart, StepId};
@@ -25,7 +26,7 @@ use super::{ActorView, actor_view, mention_view, set_change, timestamp};
 
 #[derive(Serialize)]
 pub struct LinkView {
-    pub id: String,
+    pub id: ItemId,
     #[serde(rename = "type")]
     pub item_type: String,
     pub title: String,
@@ -38,7 +39,7 @@ fn link_view(state: &State, id: ItemId, ignored: bool) -> LinkView {
     let view = state.item(id).expect("linked items exist");
     let policy = &state.policy().expect("a workforce has a policy").policy;
     LinkView {
-        id: id.to_base32(),
+        id,
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
         state: view.state(policy),
@@ -58,7 +59,7 @@ pub struct ReferenceView {
 /// An item that references this one, or a comment on it; once, however often it does so.
 #[derive(Serialize)]
 pub struct BacklinkView {
-    pub item: String,
+    pub item: ItemId,
     pub title: String,
     /// The short id of the comment of this item referenced, when it is one.
     pub comment: Option<String>,
@@ -71,7 +72,7 @@ fn backlink_views(state: &State, target: ItemId) -> Vec<BacklinkView> {
         views
             .entry((backlink.from.item, backlink.comment))
             .or_insert_with(|| BacklinkView {
-                item: backlink.from.item.to_base32(),
+                item: backlink.from.item,
                 title: state
                     .item(backlink.from.item)
                     .map(|view| view.title().to_string())
@@ -84,7 +85,7 @@ fn backlink_views(state: &State, target: ItemId) -> Vec<BacklinkView> {
 
 #[derive(Serialize)]
 pub struct SourceView {
-    pub item: String,
+    pub item: ItemId,
     pub title: String,
     /// The comment or move note the reference is in, by id; `None` for the body.
     pub in_comment: Option<String>,
@@ -92,7 +93,7 @@ pub struct SourceView {
 
 pub fn source_view(state: &State, source: &wf_core::resolve::Source) -> SourceView {
     SourceView {
-        item: source.item.to_base32(),
+        item: source.item,
         title: state
             .item(source.item)
             .map(|view| view.title().to_string())
@@ -111,7 +112,7 @@ pub struct CommentView {
     pub short: String,
     pub kind: CommentKindView,
     pub by: ActorView,
-    pub at: String,
+    pub at: Timestamp,
     /// The session that wrote it, such as `coder work 7c2k`, when an agent did.
     pub session: Option<String>,
     /// The step it is about.
@@ -175,7 +176,7 @@ pub enum ActivityKind {
 /// One thing that happened to an item.
 #[derive(Serialize)]
 pub struct ActivityView {
-    pub at: String,
+    pub at: Timestamp,
     pub by: ActorView,
     pub kind: ActivityKind,
     /// What happened, in a few words: `moved to done`, `#k3f9ab now depends on this`.
@@ -240,8 +241,8 @@ pub struct ItemDetail {
     pub summary: ItemSummary,
     pub body: Vec<BodyPartView>,
     pub author: ActorView,
-    pub created: String,
-    pub updated: String,
+    pub created: Timestamp,
+    pub updated: Timestamp,
     /// The review level the item needs: its own, or its type's default.
     pub review: Option<String>,
     /// Where the review of the submitted work stands.
@@ -347,7 +348,7 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     short: comment.short(),
                     kind: CommentKindView::from(*kind),
                     by: by.clone(),
-                    at: at.clone(),
+                    at,
                     session: item
                         .comments()
                         .get(comment)
@@ -483,10 +484,7 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     EndReason::Interrupted => "was interrupted".into(),
                     EndReason::Diagnosed => "said what went wrong".into(),
                     EndReason::MachineFault(fault) => {
-                        format!(
-                            "was ended by the machine: {}",
-                            fault.label()
-                        )
+                        format!("was ended by the machine: {}", fault.label())
                     }
                 };
                 let summary = match moved_to {
@@ -691,10 +689,9 @@ fn waiting_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<WaitingVi
                     };
                     let mut points_to = Vec::new();
                     if let Some(session) = state.session(last) {
-                        let ended = session.ended().map_or_else(
-                            || "ended".to_string(),
-                            |ended| ended.reason.label(),
-                        );
+                        let ended = session
+                            .ended()
+                            .map_or_else(|| "ended".to_string(), |ended| ended.reason.label());
                         points_to.push(format!("the last, {}: {ended}", session_label(session)));
                         if let Some((_, _, text)) = comments().rev().find(|(entry, _, _)| {
                             matches!(entry.by, Actor::Agent { session, .. } if session == last)

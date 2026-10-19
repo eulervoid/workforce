@@ -29,7 +29,7 @@ pub fn session(
         SessionCommand::List { live } => {
             let views: Vec<_> = view::session_views(workspace.state(), session_model(workspace))
                 .into_iter()
-                .filter(|view| !live || view.ended.is_none())
+                .filter(|view| !live || view.status.is_live())
                 .collect();
             emit(json, &views, |views| render::sessions(views))
         }
@@ -38,7 +38,7 @@ pub fn session(
             let views = view::session_views(workspace.state(), session_model(workspace));
             let shown = views
                 .into_iter()
-                .find(|view| view.id == id.to_base32())
+                .find(|view| view.id == id)
                 .expect("resolved sessions exist");
             emit(json, &shown, render::session)
         }
@@ -134,7 +134,7 @@ fn pick_session(workspace: &Workspace, mode: Mode, which: Which) -> anyhow::Resu
         Which::Permission => workspace.held_permissions()?,
         Which::LocalLive | Which::Transcript | Which::Any => Vec::new(),
     };
-    let eligible: std::collections::HashSet<String> = state
+    let eligible: std::collections::HashSet<SessionId> = state
         .sessions()
         .filter(|session| match which {
             Which::LocalLive => session.is_live() && session.device() == workspace.device_key(),
@@ -142,13 +142,13 @@ fn pick_session(workspace: &Workspace, mode: Mode, which: Which) -> anyhow::Resu
             Which::Transcript => transcript_path(workspace, session.id()).is_file(),
             Which::Any => true,
         })
-        .map(|session| session.id().to_base32())
+        .map(|session| session.id())
         .collect();
     let choices = view::session_views(state, session_model(workspace))
         .iter()
         .filter(|view| eligible.contains(&view.id))
         .map(|view| Choice {
-            value: view.id.clone(),
+            value: view.id.to_base32(),
             label: render::session_choice(view),
         })
         .collect();

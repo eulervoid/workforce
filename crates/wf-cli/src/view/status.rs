@@ -2,6 +2,7 @@
 
 use std::fmt;
 
+use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::autonomy::StartMode;
 use wf_core::graph::Readiness;
@@ -266,7 +267,7 @@ pub struct DeviceStatus {
     pub name: String,
     pub this_device: bool,
     /// Only a running daemon knows.
-    pub last_seen: Option<String>,
+    pub last_seen: Option<Timestamp>,
 }
 
 pub fn status(state: &State, context: StatusContext) -> StatusView {
@@ -471,7 +472,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
             .unwrap_or_default(),
         members: state
             .members()
-            .map(|(_, member)| format!("@{} ({:?})", member.handle, member.role).to_lowercase())
+            .map(|(_, member)| format!("@{} ({})", member.handle, member.role.name()))
             .collect(),
         agents: state.agents().count(),
         events: state.event_count(),

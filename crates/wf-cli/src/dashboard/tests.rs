@@ -17,14 +17,15 @@ use super::app::{
 };
 use super::draw;
 use super::snapshot::{
-    AgentInfo, Counts, Detail, InView, ItemGroup, ItemListing, ItemRef, ItemRow, Links, MovedBack,
-    Place, SessionInfo, SessionStatus, Snapshot, Waiting, moves_back,
+    AgentInfo, Counts, Detail, InView, ItemListing, Links, MovedBack, Place, SessionInfo, Snapshot,
+    Waiting, moves_back,
 };
-use crate::view::Flag;
+use crate::view::{Flag, ItemGroup, ItemRefView, ItemSummary, SessionStatus};
 use crate::{render, theme};
 use ratatui::style::{Color, Modifier, Style};
 use wf_core::identity::AgentId;
 use wf_core::session::EndReason;
+use wf_core::session::SessionRole;
 use wf_core::stats::{AgentStats, ProjectStats};
 use wf_daemon::machine_config::Background;
 
@@ -37,22 +38,32 @@ fn screen(app: &mut App, width: u16, height: u16) -> String {
     terminal.backend().to_string()
 }
 
-fn item(seed: u8, title: &str) -> ItemRef {
-    ItemRef {
+fn item(seed: u8, title: &str) -> ItemRefView {
+    ItemRefView {
         id: ItemId::from_bytes([seed; 32]),
+        item_type: "task".to_owned(),
         title: title.to_owned(),
+        state: ItemState::Open,
+        priority: None,
     }
 }
 
-fn session(seed: u8, agent: &str, item: ItemRef, minutes: u64) -> SessionInfo {
+fn session(seed: u8, agent: &str, item: ItemRefView, minutes: u64) -> SessionInfo {
     SessionInfo {
-        id: SessionId::from_bytes([seed; 32]),
-        agent: agent.to_owned(),
-        role: "work",
-        item,
-        status: SessionStatus::Live,
-        started_ms: NOW_MS - minutes * 60_000,
+        view: session_view(seed, agent, &item, SessionStatus::Live, minutes),
+        agent_name: AgentName::new(agent).unwrap(),
         place: Place::Here,
+    }
+}
+
+/// `info` with another status.
+fn with_status(info: SessionInfo, status: SessionStatus) -> SessionInfo {
+    SessionInfo {
+        view: crate::view::SessionView {
+            status,
+            ..info.view
+        },
+        ..info
     }
 }
 
@@ -78,10 +89,10 @@ fn snapshot() -> Snapshot {
     let spans = item(2, "Fix error spans");
     let archive = item(3, "Archive by category");
     let coder = session(11, "coder", parse.clone(), 12);
-    let parked = SessionInfo {
-        status: SessionStatus::Parked,
-        ..session(12, "coder", spans.clone(), 40)
-    };
+    let parked = with_status(
+        session(12, "coder", spans.clone(), 40),
+        SessionStatus::Parked,
+    );
     let reviewer = SessionInfo {
         place: Place::Elsewhere("laptop".to_owned()),
         ..session(13, "reviewer", archive.clone(), 2)
@@ -731,14 +742,20 @@ fn an_action_error_goes_away_after_its_time() {
     assert!(!screen(&mut app, 60, 8).contains("✓ allowed"));
 }
 
-fn item_row(seed: u8, title: &str, state: ItemState) -> ItemRow {
-    ItemRow {
+fn item_row(seed: u8, title: &str, state: ItemState) -> ItemSummary {
+    ItemSummary {
         id: ItemId::from_bytes([seed; 32]),
+        item_type: "task".to_owned(),
         title: title.to_owned(),
         state,
         priority: None,
         readiness: None,
+        blocked_by: Vec::new(),
+        blocking: Vec::new(),
+        labels: Vec::new(),
+        lane: None,
         steps: None,
+        archived: false,
     }
 }
 
@@ -747,23 +764,23 @@ fn with_items() -> Snapshot {
     let mut snapshot = snapshot();
     snapshot.items = vec![
         ItemGroup {
-            name: "open".to_owned(),
+            group: "open".to_owned(),
             items: vec![
-                ItemRow {
+                ItemSummary {
                     priority: Some(Priority::P1),
                     readiness: Some(Readiness::Ready),
                     ..item_row(4, "Dashboard", ItemState::Open)
                 },
-                ItemRow {
+                ItemSummary {
                     readiness: Some(Readiness::Blocked),
                     ..item_row(5, "Session subscription", ItemState::Open)
                 },
             ],
         },
         ItemGroup {
-            name: "active".to_owned(),
-            items: vec![ItemRow {
-                steps: Some((2, 5)),
+            group: "active".to_owned(),
+            items: vec![ItemSummary {
+                steps: Some(crate::view::StepsView { done: 2, total: 5 }),
                 priority: Some(Priority::P0),
                 ..item_row(1, "Parse config lazily", ItemState::Active)
             }],
@@ -1147,24 +1164,41 @@ fn the_keys_show_on_a_question_mark() {
     assert!(app.prompt.is_none());
 }
 
+fn agent_view(name: &str, harness: &str, model: Option<&str>) -> crate::view::AgentView {
+    crate::view::AgentView {
+        id: format!("@ada/{name}"),
+        harness: harness.to_owned(),
+        harness_startable_here: true,
+        model: model.map(str::to_owned),
+        capabilities: Vec::new(),
+        lanes: Vec::new(),
+        start: "manual".to_owned(),
+        permissions: "ask".to_owned(),
+        nudges: 0,
+        park_timeout: "1h".to_owned(),
+        max_duration: None,
+        instructions: None,
+    }
+}
+
 /// The snapshot while the Agents tab is on screen.
 fn with_agents() -> Snapshot {
     let mut snapshot = snapshot();
     let principal = wf_core::testing::Fixture::new(1).founder.key();
-    let ended = SessionInfo {
-        status: SessionStatus::Ended {
+    let ended = with_status(
+        session(14, "coder", item(4, "Dashboard"), 300),
+        SessionStatus::Ended {
             reason: EndReason::Submitted { commit: None },
-            at_ms: NOW_MS - 2 * 60 * 60_000,
+            at: crate::view::timestamp_ms(NOW_MS - 2 * 60 * 60_000),
         },
-        ..session(14, "coder", item(4, "Dashboard"), 300)
-    };
+    );
     snapshot.agents = vec![
         AgentInfo {
             id: AgentId {
                 principal,
                 name: AgentName::new("coder").unwrap(),
             },
-            runs_on: "claude-code · opus".to_owned(),
+            view: agent_view("coder", "claude-code", Some("opus")),
             capacity: Some(2),
             stats: AgentStats {
                 sessions: 3,
@@ -1184,7 +1218,7 @@ fn with_agents() -> Snapshot {
                 principal,
                 name: AgentName::new("reviewer").unwrap(),
             },
-            runs_on: "claude-code".to_owned(),
+            view: agent_view("reviewer", "claude-code", None),
             capacity: None,
             stats: AgentStats {
                 live: 1,
@@ -1309,7 +1343,7 @@ fn long_item_list() -> App {
     press(&mut app, KeyCode::Char('2'));
     let mut snapshot = snapshot();
     snapshot.items = vec![ItemGroup {
-        name: "open".to_owned(),
+        group: "open".to_owned(),
         items: (1..=30)
             .map(|seed| item_row(seed, &format!("Item {seed}"), ItemState::Open))
             .collect(),
@@ -2608,21 +2642,32 @@ fn an_indicator_on_the_selection_has_its_background() {
 }
 
 /// A session of `coder` as `wf agent show` lists it, `minutes` old, or ended `minutes` ago.
-fn session_view(seed: u8, item: &ItemRef, status: &str, minutes: u64) -> crate::view::SessionView {
-    let at = crate::view::timestamp_ms(NOW_MS - minutes * 60_000);
-    let live = matches!(status, "live" | "parked");
+fn session_view(
+    seed: u8,
+    agent: &str,
+    item: &ItemRefView,
+    status: SessionStatus,
+    started_minutes_ago: u64,
+) -> crate::view::SessionView {
     crate::view::SessionView {
-        id: SessionId::from_bytes([seed; 32]).to_base32(),
-        agent: "@ada/coder".to_owned(),
-        item: item.id.to_base32(),
+        id: SessionId::from_bytes([seed; 32]),
+        agent: format!("@ada/{agent}"),
+        item: item.id,
         title: item.title.clone(),
-        role: "work".to_owned(),
-        status: status.to_owned(),
-        started: crate::view::timestamp_ms(NOW_MS - (minutes + 30) * 60_000),
-        ended: (!live).then_some(at),
+        role: SessionRole::Work,
+        status,
+        started: crate::view::timestamp_ms(NOW_MS - started_minutes_ago * 60_000),
         model: None,
         commit: None,
         steps: None,
+    }
+}
+
+/// How a session ended `minutes` ago.
+fn ended(reason: EndReason, minutes: u64) -> SessionStatus {
+    SessionStatus::Ended {
+        reason,
+        at: crate::view::timestamp_ms(NOW_MS - minutes * 60_000),
     }
 }
 
@@ -2665,9 +2710,27 @@ fn coder_detail(hosted_here: bool) -> crate::view::AgentDetail {
             median_duration_ms: Some(4 * 60_000),
         },
         sessions: vec![
-            session_view(11, &item(1, "Parse config lazily"), "live", 12),
-            session_view(14, &item(4, "Dashboard"), "submitted", 120),
-            session_view(15, &item(2, "Fix error spans"), "timed_out", 60 * 26),
+            session_view(
+                11,
+                "coder",
+                &item(1, "Parse config lazily"),
+                SessionStatus::Live,
+                12 + 30,
+            ),
+            session_view(
+                14,
+                "coder",
+                &item(4, "Dashboard"),
+                ended(EndReason::Submitted { commit: None }, 120),
+                120 + 30,
+            ),
+            session_view(
+                15,
+                "coder",
+                &item(2, "Fix error spans"),
+                ended(EndReason::TimedOut, 60 * 26),
+                60 * 26 + 30,
+            ),
         ],
         older_sessions: 11,
         activity: Vec::new(),
