@@ -360,6 +360,10 @@ pub enum DaemonCommand {
     Start(DaemonArgs),
     /// Stop the daemon and its sessions.
     Stop,
+    /// Stop the daemon if it runs, then start the binary of this command in the background.
+    ///
+    /// A rebuilt `wf` takes over: the new daemon is the one that runs this command's binary.
+    Restart(DaemonArgs),
     /// Whether the daemon of this machine runs, and where it logs.
     Status,
     /// Show the log of this machine's daemon in a pager.
