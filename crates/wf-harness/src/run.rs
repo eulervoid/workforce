@@ -30,8 +30,17 @@ pub enum Error {
     Protocol(#[from] agent_client_protocol::Error),
     #[error("writing the transcript failed")]
     Transcript(#[from] io::Error),
-    #[error("the agent is gone")]
-    Closed,
+    #[error("the task that runs the agent panicked")]
+    Panicked,
+    #[error("the agent exited before it opened a session")]
+    ExitedBeforeOpen,
+    #[error(
+        "the agent did not stop within {}; it was killed",
+        humantime::format_duration(CLOSE_GRACE)
+    )]
+    Killed,
+    #[error("the conversation is over")]
+    Ended,
     #[error("the agent said nothing for {}", humantime::format_duration(*.0))]
     Silent(Duration),
     #[error("the agent can neither resume nor load a session it opened before")]
@@ -49,7 +58,10 @@ impl Error {
         match self {
             Error::Protocol(error) => error.code == agent_client_protocol::ErrorCode::AuthRequired,
             Error::Transcript(_)
-            | Error::Closed
+            | Error::Panicked
+            | Error::ExitedBeforeOpen
+            | Error::Killed
+            | Error::Ended
             | Error::Silent(_)
             | Error::CannotResume
             | Error::UnknownModel { .. } => false,
@@ -381,14 +393,22 @@ impl Conversation {
                                 ));
                                 decision.permission.answer(&request.options)
                             }
-                            _ = cancelled.changed() => RequestPermissionOutcome::Cancelled,
+                            _ = cancelled.changed() => Ok(RequestPermissionOutcome::Cancelled),
                         };
                         waiting.fetch_sub(1, Ordering::SeqCst);
                         *answered
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                             tokio::time::Instant::now();
-                        responder.respond(RequestPermissionResponse::new(outcome))
+                        match outcome {
+                            Ok(outcome) => {
+                                responder.respond(RequestPermissionResponse::new(outcome))
+                            }
+                            Err(missing) => responder.respond_with_error(
+                                agent_client_protocol::Error::invalid_params()
+                                    .data(missing.to_string()),
+                            ),
+                        }
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -497,7 +517,7 @@ impl Conversation {
                                 Ok(_) = transcript_failed.wait_for(|failed| *failed) => {
                                     break Err(match writer_of_turns.finish() {
                                         Err(error) => Error::Transcript(error),
-                                        Ok(()) => Error::Closed,
+                                        Ok(()) => Error::Ended,
                                     });
                                 }
                                 () = tokio::time::sleep(SILENCE_CHECK) => {
@@ -545,7 +565,8 @@ impl Conversation {
                 let finished = task.0.take().expect("the task is there until here").await;
                 Err(match finished {
                     Ok(Err(error)) => refusal.try_recv().unwrap_or(error),
-                    Ok(Ok(())) | Err(_) => Error::Closed,
+                    Ok(Ok(())) => Error::ExitedBeforeOpen,
+                    Err(_) => Error::Panicked,
                 })
             }
         }
@@ -576,8 +597,8 @@ impl Conversation {
             prompt: prompt.into(),
             reply,
         };
-        self.turns.send(turn).await.map_err(|_| Error::Closed)?;
-        answer.await.map_err(|_| Error::Closed)?
+        self.turns.send(turn).await.map_err(|_| Error::Ended)?;
+        answer.await.map_err(|_| Error::Ended)?
     }
 
     /// Asks the agent to stop the turn that is running, and answers a permission request it
@@ -595,10 +616,10 @@ impl Conversation {
         let abort = task.abort_handle();
         match tokio::time::timeout(CLOSE_GRACE, task).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(Error::Closed),
+            Ok(Err(_)) => Err(Error::Panicked),
             Err(_) => {
                 abort.abort();
-                Err(Error::Closed)
+                Err(Error::Killed)
             }
         }
     }

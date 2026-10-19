@@ -732,11 +732,7 @@ mod tests {
             [ReviewStep::Agent { requires }, ReviewStep::Principal]
         );
         assert_eq!(policy.merge, MergeConfig::default());
-        assert!(
-            policy
-                .lanes
-                .contains_key(&LaneName::supervision())
-        );
+        assert!(policy.lanes.contains_key(&LaneName::supervision()));
         let task = policy.type_config(&type_name("task")).unwrap();
         assert_eq!(task.review, Some(ReviewLevelName::new("manual").unwrap()));
         assert_eq!(

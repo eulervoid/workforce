@@ -403,13 +403,9 @@ impl Daemon {
     }
 
     pub(crate) fn harness_command(&self, harness: &HarnessName) -> Option<AcpAgentConfig> {
-        self.config
-            .harnesses
-            .get(harness)
-            .cloned()
-            .or_else(|| {
-                wf_harness::KnownHarness::from_name(harness.as_str()).map(|known| known.command())
-            })
+        self.config.harnesses.get(harness).cloned().or_else(|| {
+            wf_harness::KnownHarness::from_name(harness.as_str()).map(|known| known.command())
+        })
     }
 
     pub(crate) fn workforce_directory(&self, workforce: WorkforceId) -> PathBuf {

@@ -290,7 +290,7 @@ pub(crate) mod tests {
             },
             directory: std::env::temp_dir(),
             tool: PermissionRequest {
-                kind: Some("execute".into()),
+                kind: Some(wf_harness::ToolKind::Execute),
                 title: "cargo test".into(),
                 input: Some(serde_json::json!({"command": "cargo test"})),
             },
