@@ -132,7 +132,7 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
                 fault: wf_core::session::HarnessFault::LoginLapsed,
                 since_ms: 1_000,
                 last_ms: 1_000,
-                    retry_at_ms: None,
+                retry_at_ms: None,
                 what: "not logged in".to_owned(),
             },
         )]

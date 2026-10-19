@@ -931,7 +931,10 @@ async fn a_usage_limit_ends_the_session_for_the_machine_and_the_inbox_says_so() 
     assert_eq!(entries[0]["kind"], "machine_fault");
     assert_eq!(entries[0]["title"], "fake-coder hit its usage limit");
     assert!(
-        entries[0]["what"].as_str().unwrap().contains("tried again at"),
+        entries[0]["what"]
+            .as_str()
+            .unwrap()
+            .contains("tried again at"),
         "{entries:?}"
     );
 }

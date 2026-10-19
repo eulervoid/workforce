@@ -375,7 +375,12 @@ mod tests {
             None,
         );
         let first = faults.current().harnesses[&claude].clone();
-        faults.note_harness(&claude, HarnessFault::LoginLapsed, "again".to_string(), None);
+        faults.note_harness(
+            &claude,
+            HarnessFault::LoginLapsed,
+            "again".to_string(),
+            None,
+        );
         let again = faults.current().harnesses[&claude].clone();
         assert_eq!(
             (again.since_ms, again.what.as_str()),
@@ -407,7 +412,10 @@ mod tests {
             "session limit".to_string(),
             Some(reset_ms),
         );
-        assert_eq!(faults.current().harnesses[&claude].retry_at_ms, Some(reset_ms));
+        assert_eq!(
+            faults.current().harnesses[&claude].retry_at_ms,
+            Some(reset_ms)
+        );
         assert!(faults.holds(&claude, reset_ms - 1));
         assert!(!faults.holds(&claude, reset_ms));
     }

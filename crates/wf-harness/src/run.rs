@@ -102,7 +102,10 @@ fn parse_reset(message: &str, now: Timestamp) -> Option<Timestamp> {
     };
     let (hour, minute) = digits.split_once(':').unwrap_or((&digits, "0"));
     let hour: i8 = hour.parse().ok().filter(|hour| (1..=12).contains(hour))?;
-    let minute: i8 = minute.parse().ok().filter(|minute| (0..60).contains(minute))?;
+    let minute: i8 = minute
+        .parse()
+        .ok()
+        .filter(|minute| (0..60).contains(minute))?;
     let hour = hour % 12 + if is_pm { 12 } else { 0 };
     let zone = rest
         .trim()
@@ -111,7 +114,11 @@ fn parse_reset(message: &str, now: Timestamp) -> Option<Timestamp> {
         .and_then(|(name, _)| jiff::tz::TimeZone::get(name).ok())
         .unwrap_or_else(jiff::tz::TimeZone::system);
     let now = now.to_zoned(zone);
-    let today = now.date().at(hour, minute, 0, 0).to_zoned(now.time_zone().clone()).ok()?;
+    let today = now
+        .date()
+        .at(hour, minute, 0, 0)
+        .to_zoned(now.time_zone().clone())
+        .ok()?;
     let reset = if today > now {
         today
     } else {
@@ -713,11 +720,17 @@ mod tests {
         let limit = rate_limit("You've hit your session limit · resets 7:50pm (Europe/Berlin)")
             .usage_limit(now)
             .expect("a rate limit");
-        assert_eq!(limit.resets_at, Some("2026-10-19T17:50:00Z".parse().unwrap()));
+        assert_eq!(
+            limit.resets_at,
+            Some("2026-10-19T17:50:00Z".parse().unwrap())
+        );
         let tomorrow = rate_limit("limit · resets 7:50am (Europe/Berlin)")
             .usage_limit(now)
             .unwrap();
-        assert_eq!(tomorrow.resets_at, Some("2026-10-20T05:50:00Z".parse().unwrap()));
+        assert_eq!(
+            tomorrow.resets_at,
+            Some("2026-10-20T05:50:00Z".parse().unwrap())
+        );
         let unsaid = rate_limit("slow down").usage_limit(now).unwrap();
         assert_eq!(unsaid.resets_at, None);
     }
