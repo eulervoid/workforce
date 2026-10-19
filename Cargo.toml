@@ -14,8 +14,10 @@ wf-net = { path = "crates/wf-net" }
 wf-daemon = { path = "crates/wf-daemon" }
 wf-harness = { path = "crates/wf-harness" }
 wf-vcs = { path = "crates/wf-vcs" }
+anstyle = "1.0.14"
 anyhow = "1"
 blake3 = "1"
+bytesize = "2.7.0"
 close_fds = "0.3"
 clap = { version = "4", features = ["derive"] }
 comfy-table = { version = "8", features = ["custom_styling"] }

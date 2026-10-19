@@ -10,7 +10,6 @@ workspace = true
 [dependencies]
 wf-core.workspace = true
 redb.workspace = true
-serde.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
