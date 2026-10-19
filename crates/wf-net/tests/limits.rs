@@ -34,14 +34,14 @@ fn replica(fixture: &Fixture) -> SharedReplica<RedbStore> {
     SharedReplica::new(replica)
 }
 
-#[tokio::test]
-async fn a_log_larger_than_a_frame_syncs_in_several() {
+/// Syncs `count` events with a body of `body_len` bytes each between two replicas and checks
+/// that all of them arrive.
+async fn sync_log_of(count: usize, body_len: usize) {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
     let full = replica(&fixture);
     let empty = replica(&fixture);
-    let text = "x".repeat(MAX_EVENT_LEN - 1000);
-    let count = MAX_FRAME_LEN as usize / text.len() + 1;
+    let text = "x".repeat(body_len);
     for index in 0..count {
         let event = fixture.apply(
             &mut state,
@@ -51,7 +51,6 @@ async fn a_log_larger_than_a_frame_syncs_in_several() {
         );
         full.lock().receive(event).unwrap();
     }
-    assert!(count * text.len() > MAX_FRAME_LEN as usize);
 
     let (left, mut right) = tokio::io::duplex(256 * 1024);
     let (pulled, served) = tokio::join!(initiate(left, fixture.workforce(), &empty), async {
@@ -61,6 +60,28 @@ async fn a_log_larger_than_a_frame_syncs_in_several() {
     assert_eq!(pulled.unwrap().applied, count);
     assert_eq!(served.unwrap().sent, count);
     assert_eq!(empty.lock().state().event_count(), count + 1);
+}
+
+#[tokio::test]
+async fn a_log_of_many_events_syncs_in_several_frames() {
+    sync_log_of(600, 10).await;
+}
+
+#[tokio::test]
+async fn a_few_large_events_sync_in_several_frames() {
+    sync_log_of(5, 3 * 1024 * 1024).await;
+}
+
+/// Takes 30-50s in debug, so it only runs on request: `cargo test -- --ignored`. The two tests
+/// above cover splitting by count and by bytes; this one proves the whole log exceeds
+/// `MAX_FRAME_LEN`.
+#[tokio::test]
+#[ignore = "slow: moves more than MAX_FRAME_LEN bytes"]
+async fn a_log_larger_than_a_frame_syncs_in_several() {
+    let body_len = MAX_EVENT_LEN - 1000;
+    let count = MAX_FRAME_LEN as usize / body_len + 1;
+    assert!(count * body_len > MAX_FRAME_LEN as usize);
+    sync_log_of(count, body_len).await;
 }
 
 /// A responder that has read the open message of a peer that then speaks for itself.
