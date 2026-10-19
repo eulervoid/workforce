@@ -15,7 +15,7 @@ use serde::{Deserialize, Serialize};
 use wf_core::encoding;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::DeviceKey;
+use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
 use wf_harness::Permission;
@@ -23,7 +23,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 15;
+pub const PROTOCOL_VERSION: u32 = 16;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -79,8 +79,9 @@ pub struct Request {
 /// Each call is answered with a [`Reply`] of the type its documentation names.
 ///
 /// A connection that acts for a session makes calls in the session's workforce only: the reads
-/// (`State`, `Event`, `Events`, `LastSeen`, `Permissions`, `MachineFaults`), `Author`, `SyncNow` and
-/// `EndSession`. `EndSession` is for sessions only; the other calls are for the principal only.
+/// (`State`, `Event`, `Events`, `ItemEvents`, `AgentEvents`, `LastSeen`, `Permissions`,
+/// `MachineFaults`, `CacheUsage`), `Author`, `SyncNow` and `EndSession`. `EndSession` is for
+/// sessions only; the other calls are for the principal only.
 #[derive(Serialize, Deserialize)]
 pub enum Call {
     /// The encoded [`wf_core::state::State`], as `Vec<u8>`.
@@ -90,6 +91,12 @@ pub enum Call {
     /// A page of the log: up to [`EVENTS_PER_PAGE`] events in the order the daemon applied them,
     /// starting at position `from`, as `Vec<Event>`. An empty page is the end.
     Events { from: u64 },
+    /// The events of the log that can show in the activity of an item, in the order the daemon
+    /// applied them, as `Vec<Event>` ([`wf_core::state::State::can_be_activity_of`]).
+    ItemEvents(ItemId),
+    /// The events that defined or removed an agent, in the order the daemon applied them, as
+    /// `Vec<Event>`.
+    AgentEvents(AgentId),
     /// Checks the policy, signs with the device key of the daemon and stores the event, written
     /// by whom the connection acts for; answered with the `Event`.
     Author { body: Box<EventBody> },
@@ -137,6 +144,9 @@ pub enum Call {
     /// What is wrong with the machine, as [`MachineFaults`](crate::MachineFaults): that the
     /// daemon's writes fail for lack of space, and the harnesses whose sessions cannot run.
     MachineFaults,
+    /// What the caches in the worktrees of the workforce took when the daemon last checked them
+    /// against the budget of the machine config, as `Option<CacheUsage>`; `None` without a budget.
+    CacheUsage,
 }
 
 /// A request of an agent for permission to do something, held until the principal answers.

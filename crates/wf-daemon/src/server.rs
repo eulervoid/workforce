@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::net::UnixStream;
+use wf_core::event::Event;
 use wf_core::id::WorkforceId;
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::invite::{InviteCode, InviteCodeError};
@@ -11,6 +12,7 @@ use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::session::SessionRole;
 use wf_core::state::State;
 use wf_net::frame::{FrameError, read_frame, write_encoded_frame, write_frame};
+use wf_store::{RedbStore, Replica};
 
 use crate::caller::Caller;
 use crate::peers::{PeerSync, peers_of, sync_all};
@@ -95,6 +97,8 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         Call::State
         | Call::Event(_)
         | Call::Events { .. }
+        | Call::ItemEvents(_)
+        | Call::AgentEvents(_)
         | Call::Author { .. }
         | Call::SyncNow
         | Call::Fork(_)
@@ -104,7 +108,8 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::Permissions
         | Call::AnswerPermission { .. }
         | Call::LastSeen
-        | Call::MachineFaults => daemon.workforce(request.workforce).await,
+        | Call::MachineFaults
+        | Call::CacheUsage => daemon.workforce(request.workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
@@ -148,10 +153,13 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         Call::State
         | Call::Event(_)
         | Call::Events { .. }
+        | Call::ItemEvents(_)
+        | Call::AgentEvents(_)
         | Call::Author { .. }
         | Call::SyncNow
         | Call::LastSeen
         | Call::MachineFaults
+        | Call::CacheUsage
         | Call::Permissions
         | Call::EndSession { .. } => Ok(()),
         Call::Fork(_) => principals("found a fork"),
@@ -181,6 +189,26 @@ fn actor(state: &State, device: DeviceKey, caller: Caller) -> Result<Actor, Stri
 
 fn encode_failed(message: String) -> Vec<u8> {
     wf_core::encoding::encode(&failed(message)).expect("a message encodes")
+}
+
+/// The events of the log that `keep` accepts, in log order, read a page at a time.
+fn filtered_log(
+    replica: &Replica<RedbStore>,
+    keep: impl Fn(&State, &Event) -> bool,
+) -> Result<Vec<Event>, wf_store::StoreError> {
+    let mut kept = Vec::new();
+    let mut position = 0;
+    loop {
+        let page = wf_store::EventStore::log_page(replica.store(), position, EVENTS_PER_PAGE)?;
+        if page.is_empty() {
+            return Ok(kept);
+        }
+        position += page.len() as u64;
+        kept.extend(
+            page.into_iter()
+                .filter(|event| keep(replica.state(), event)),
+        );
+    }
 }
 
 async fn call(
@@ -213,6 +241,30 @@ async fn call(
             let events = storage
                 .with(move |replica| {
                     wf_store::EventStore::log_page(replica.store(), from, EVENTS_PER_PAGE)
+                })
+                .await
+                .map_err(closed)?
+                .map_err(|error| wf_core::error_chain(&error))?;
+            reply(events)
+        }
+        Call::ItemEvents(item) => {
+            let events = storage
+                .with(move |replica| {
+                    filtered_log(replica, |state, event| {
+                        state.can_be_activity_of(item, event)
+                    })
+                })
+                .await
+                .map_err(closed)?
+                .map_err(|error| wf_core::error_chain(&error))?;
+            reply(events)
+        }
+        Call::AgentEvents(agent) => {
+            let events = storage
+                .with(move |replica| {
+                    filtered_log(replica, |state, event| {
+                        state.agent_change(&agent, event).is_some()
+                    })
                 })
                 .await
                 .map_err(closed)?
@@ -283,6 +335,7 @@ async fn call(
         }
         Call::LastSeen => reply(daemon.presence().snapshot()),
         Call::MachineFaults => reply(daemon.faults.current()),
+        Call::CacheUsage => reply(daemon.cache_usage_of(workforce)),
         Call::StartSession {
             agent,
             item,

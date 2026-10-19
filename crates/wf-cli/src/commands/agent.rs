@@ -41,7 +41,7 @@ pub(super) fn agent(
                     });
                     anyhow!("there is no agent `{agent}`; {}", OneOf::new(all))
                 })?;
-            let events = workspace.events()?;
+            let events = workspace.agent_events(&id)?;
             let detail = view::agent_detail(
                 workspace.state(),
                 &id,

@@ -190,7 +190,7 @@ pub(super) fn item(
                     );
                 }
             }
-            let event = workspace.author(EventBody::ItemCreated(ItemCreated {
+            let event = workspace.author_without_refresh(EventBody::ItemCreated(ItemCreated {
                 item_type: new_item.item_type,
                 title: draft.title,
                 body: draft.body,
@@ -204,11 +204,14 @@ pub(super) fn item(
             let id = ItemId::from(event.id());
             // The recovery level is no field of a new item, so that events keep their layout.
             if let Some(recovery) = draft.recovery {
-                workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {
-                    item: id,
-                    changes: vec![Change::RecoveryLevel(Some(recovery))],
-                }))?;
+                workspace.author_without_refresh(EventBody::ItemEdited(
+                    wf_core::event::ItemEdited {
+                        item: id,
+                        changes: vec![Change::RecoveryLevel(Some(recovery))],
+                    },
+                ))?;
             }
+            workspace.refresh()?;
             let state = workspace.state();
             let graph = state.dependency_graph();
             let created = view::summary(state, &graph, state.item(id).expect("just created"));
@@ -544,7 +547,7 @@ fn show(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Re
             })
         }
         ItemEntry::Live(item) => {
-            let events = workspace.events()?;
+            let events = workspace.item_events(id)?;
             let detail = view::item_detail(state, item, &events);
             emit_paged(json, mode, &detail, render::item_detail)
         }

@@ -26,6 +26,11 @@ impl MachineFaults {
     pub fn is_empty(&self) -> bool {
         self.out_of_space.is_none() && self.harnesses.is_empty()
     }
+
+    /// How many things are wrong: the disk, and each harness.
+    pub fn count(&self) -> usize {
+        usize::from(self.out_of_space.is_some()) + self.harnesses.len()
+    }
 }
 
 /// The disk the daemon writes to is full.

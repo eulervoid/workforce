@@ -7,6 +7,16 @@ use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
+use serde::{Deserialize, Serialize};
+
+/// The disk the caches in the worktrees of a workforce take on this machine, and the budget the
+/// daemon keeps them under.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CacheUsage {
+    pub used_bytes: u64,
+    pub budget_bytes: u64,
+}
+
 /// The caches of one worktree, measured.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorktreeCaches {

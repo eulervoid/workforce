@@ -34,12 +34,23 @@ impl Log {
         event
     }
 
+    /// The activity of `item`; it must not depend on the events a reader may leave out.
     fn activity(&self, item: ItemId) -> Vec<Activity> {
-        self.state
-            .activity(item, &self.events)
-            .into_iter()
-            .map(|entry| entry.activity)
-            .collect()
+        let candidates: Vec<Event> = self
+            .events
+            .iter()
+            .filter(|event| self.state.can_be_activity_of(item, event))
+            .cloned()
+            .collect();
+        let activity = |events: &[Event]| -> Vec<Activity> {
+            self.state
+                .activity(item, events)
+                .into_iter()
+                .map(|entry| entry.activity)
+                .collect()
+        };
+        assert_eq!(activity(&candidates), activity(&self.events));
+        activity(&self.events)
     }
 }
 

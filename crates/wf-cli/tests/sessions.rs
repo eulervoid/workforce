@@ -727,6 +727,13 @@ wf work release --note \"later\"
                 && !worktree.join("target").exists()
         })
         .await;
+    world
+        .wait("the daemon to report what is left of the caches", |world| {
+            let status: serde_json::Value =
+                serde_json::from_str(&world.wf.run(&["status", "--json"])).unwrap();
+            status["data"]["caches"] == serde_json::json!({"used_bytes": 0, "budget_bytes": 0})
+        })
+        .await;
     assert!(
         worktree.join("wip.txt").is_file(),
         "an open item keeps its worktree"

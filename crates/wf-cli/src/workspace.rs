@@ -7,10 +7,11 @@ use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use wf_core::event::{Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, DeviceKey, DeviceSigner, PrincipalKey, PrincipalSigner};
+use wf_core::identity::{Actor, AgentId, DeviceKey, DeviceSigner, PrincipalKey, PrincipalSigner};
 use wf_core::lifecycle::Finish;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
+use wf_daemon::caches::CacheUsage;
 use wf_daemon::caller::Caller;
 use wf_daemon::client::DaemonClient;
 use wf_daemon::proto::HeldPermission;
@@ -261,7 +262,7 @@ impl Workspace {
         }
     }
 
-    /// Refreshes the cached state from the daemon while a long-running command follows it.
+    /// Fetches the state again from the daemon, to show what was written or what arrived since.
     pub fn refresh(&mut self) -> anyhow::Result<()> {
         match &mut self.source {
             Source::Daemon { client, state } => {
@@ -306,18 +307,52 @@ impl Workspace {
         }
     }
 
-    /// Checks the policy rules, signs with this machine's device key and stores the event.
+    /// The events that can show in the activity of `item`, in the order this machine applied them.
+    pub fn item_events(&self, item: ItemId) -> anyhow::Result<Vec<Event>> {
+        match &self.source {
+            Source::Local(replica, _) => Ok(replica
+                .store()
+                .log_since(0)?
+                .into_iter()
+                .filter(|event| replica.state().can_be_activity_of(item, event))
+                .collect()),
+            Source::Daemon { client, .. } => {
+                Ok(client.borrow_mut().item_events(self.workforce, item)?)
+            }
+        }
+    }
+
+    /// The events that defined or removed `agent`, in the order this machine applied them.
+    pub fn agent_events(&self, agent: &AgentId) -> anyhow::Result<Vec<Event>> {
+        match &self.source {
+            Source::Local(replica, _) => Ok(replica
+                .store()
+                .log_since(0)?
+                .into_iter()
+                .filter(|event| replica.state().agent_change(agent, event).is_some())
+                .collect()),
+            Source::Daemon { client, .. } => Ok(client
+                .borrow_mut()
+                .agent_events(self.workforce, agent.clone())?),
+        }
+    }
+
+    /// Checks the policy rules, signs with this machine's device key and stores the event; the
+    /// state then shows it.
     pub fn author(&mut self, body: EventBody) -> anyhow::Result<Event> {
+        let event = self.author_without_refresh(body)?;
+        self.refresh()?;
+        Ok(event)
+    }
+
+    /// Like [`Self::author`], but the state does not show the event until [`Self::refresh`]: a
+    /// command that writes several events refreshes once, after the last.
+    pub fn author_without_refresh(&mut self, body: EventBody) -> anyhow::Result<Event> {
         match &mut self.source {
             Source::Local(replica, signer) => {
                 Ok(replica.author(signer, self.actor.clone(), wf_store::now_ms(), body)?)
             }
-            Source::Daemon { client, state } => {
-                let mut client = client.borrow_mut();
-                let event = client.author(self.workforce, body)?;
-                *state = client.state(self.workforce)?;
-                Ok(event)
-            }
+            Source::Daemon { client, .. } => Ok(client.get_mut().author(self.workforce, body)?),
         }
     }
 
@@ -344,6 +379,15 @@ impl Workspace {
         match &self.source {
             Source::Local(..) => Ok(Vec::new()),
             Source::Daemon { client, .. } => Ok(client.borrow_mut().permissions(self.workforce)?),
+        }
+    }
+
+    /// What the caches in the worktrees take, as the daemon last checked them against its budget;
+    /// nothing without a daemon, or when the machine config sets no budget.
+    pub fn cache_usage(&self) -> anyhow::Result<Option<CacheUsage>> {
+        match &self.source {
+            Source::Local(..) => Ok(None),
+            Source::Daemon { client, .. } => Ok(client.borrow_mut().cache_usage(self.workforce)?),
         }
     }
 

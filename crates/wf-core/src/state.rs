@@ -573,6 +573,20 @@ impl State {
             .filter_map(|(id, definition)| Some((id, definition.value().as_ref()?)))
     }
 
+    /// What `event` did to `agent`: defined or removed it. `None` for any other event.
+    pub fn agent_change<'a>(&self, agent: &AgentId, event: &'a Event) -> Option<AgentChange<'a>> {
+        let workforce = self.workforce.as_ref()?;
+        let (name, change) = if let EventBody::AgentDefined(defined) = &event.content.body {
+            (&defined.name, AgentChange::Defined(defined))
+        } else if let EventBody::AgentRemoved(removed) = &event.content.body {
+            (&removed.name, AgentChange::Removed)
+        } else {
+            return None;
+        };
+        let principal = workforce.canonical(&event.content.actor.principal());
+        (*name == agent.name && principal == agent.principal).then_some(change)
+    }
+
     /// What `events` did to `agent`, in the order they fold: each definition and removal, with
     /// its event.
     pub fn agent_history<'a>(
@@ -580,22 +594,9 @@ impl State {
         agent: &AgentId,
         events: &'a [Event],
     ) -> Vec<(&'a Event, AgentChange<'a>)> {
-        let Some(workforce) = &self.workforce else {
-            return Vec::new();
-        };
         let mut history: Vec<(&Event, AgentChange)> = events
             .iter()
-            .filter_map(|event| {
-                let (name, change) = if let EventBody::AgentDefined(defined) = &event.content.body {
-                    (&defined.name, AgentChange::Defined(defined))
-                } else if let EventBody::AgentRemoved(removed) = &event.content.body {
-                    (&removed.name, AgentChange::Removed)
-                } else {
-                    return None;
-                };
-                let principal = workforce.canonical(&event.content.actor.principal());
-                (*name == agent.name && principal == agent.principal).then_some((event, change))
-            })
+            .filter_map(|event| Some((event, self.agent_change(agent, event)?)))
             .collect();
         history.sort_by_cached_key(|(event, _)| (event.content.hlc, event.id()));
         history

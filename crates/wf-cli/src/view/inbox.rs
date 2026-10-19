@@ -57,6 +57,15 @@ pub fn inbox_views(
     entries
 }
 
+/// How many entries [`inbox_views`] has, without building them.
+pub fn inbox_count(
+    state: &State,
+    held: &[HeldPermission],
+    machine_faults: &MachineFaults,
+) -> usize {
+    state.inbox().len() + held.len() + machine_faults.count()
+}
+
 /// One entry for each thing wrong with the machine, however many sessions it ended: what it is
 /// and what the principal does about it.
 pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {

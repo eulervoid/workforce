@@ -224,7 +224,11 @@ impl DeviceKey {
         time: u64,
         signature: &Signature,
     ) -> Result<(), KeyError> {
-        self.verify(HEADS_DOMAIN, &heads_message(topic, digest, time)?, signature)
+        self.verify(
+            HEADS_DOMAIN,
+            &heads_message(topic, digest, time)?,
+            signature,
+        )
     }
 }
 
@@ -358,7 +362,8 @@ impl<T: Serialize> Signed<T> {
             workforce,
             statement: &self.statement,
         })?;
-        self.signer.verify(AUTHORITY_DOMAIN, &payload, &self.signature)
+        self.signer
+            .verify(AUTHORITY_DOMAIN, &payload, &self.signature)
     }
 }
 
@@ -382,8 +387,18 @@ mod tests {
         let principal = PrincipalSigner::generate([1; 32]);
         let message = b"statement";
         let signature = principal.sign(AUTHORITY_DOMAIN, message);
-        assert!(principal.key().verify(AUTHORITY_DOMAIN, message, &signature).is_ok());
-        assert!(principal.key().verify(AUTHORITY_DOMAIN, b"other", &signature).is_err());
+        assert!(
+            principal
+                .key()
+                .verify(AUTHORITY_DOMAIN, message, &signature)
+                .is_ok()
+        );
+        assert!(
+            principal
+                .key()
+                .verify(AUTHORITY_DOMAIN, b"other", &signature)
+                .is_err()
+        );
 
         let device = DeviceSigner::from_bytes(&principal.to_bytes()).unwrap();
         assert!(device.key().verify_event(message, &signature).is_err());
