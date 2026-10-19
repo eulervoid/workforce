@@ -31,7 +31,7 @@ pub enum KeyError {
 }
 
 macro_rules! key_pair {
-    ($(#[$meta:meta])* $public:ident, $signer:ident, $domain:expr) => {
+    ($(#[$meta:meta])* $public:ident, $signer:ident) => {
         $(#[$meta])*
         ///
         /// The bytes are kept raw: decoding a key from a snapshot or an event must be cheap, and a
@@ -62,9 +62,15 @@ macro_rules! key_pair {
                 }
             }
 
-            pub(crate) fn verify(&self, message: &[u8], signature: &Signature) -> Result<(), KeyError> {
-                let mut signed = Vec::with_capacity($domain.len() + message.len());
-                signed.extend_from_slice($domain);
+            /// Verifies `message` under `domain`, which says what kind of message it is.
+            pub(crate) fn verify(
+                &self,
+                domain: &[u8],
+                message: &[u8],
+                signature: &Signature,
+            ) -> Result<(), KeyError> {
+                let mut signed = Vec::with_capacity(domain.len() + message.len());
+                signed.extend_from_slice(domain);
                 signed.extend_from_slice(message);
                 self.parsed()?
                     .verify(&signed, signature)
@@ -139,9 +145,10 @@ macro_rules! key_pair {
                 $public(*self.0.public().as_bytes())
             }
 
-            pub(crate) fn sign(&self, message: &[u8]) -> Signature {
-                let mut signed = Vec::with_capacity($domain.len() + message.len());
-                signed.extend_from_slice($domain);
+            /// Signs `message` under `domain`, which says what kind of message it is.
+            pub(crate) fn sign(&self, domain: &[u8], message: &[u8]) -> Signature {
+                let mut signed = Vec::with_capacity(domain.len() + message.len());
+                signed.extend_from_slice(domain);
                 signed.extend_from_slice(message);
                 self.0.sign(&signed)
             }
@@ -157,16 +164,16 @@ macro_rules! key_pair {
 
 key_pair!(
     /// Identifies the accountable person. Signs authority statements: genesis, policy, owners, invites.
-    PrincipalKey, PrincipalSigner, AUTHORITY_DOMAIN
+    PrincipalKey, PrincipalSigner
 );
 key_pair!(
     /// Identifies a machine. Signs every ordinary event. Never copied between machines.
-    DeviceKey, DeviceSigner, EVENT_DOMAIN
+    DeviceKey, DeviceSigner
 );
 
 impl DeviceSigner {
     pub(crate) fn sign_event(&self, encoded_content: &[u8]) -> Signature {
-        self.sign(encoded_content)
+        self.sign(EVENT_DOMAIN, encoded_content)
     }
 }
 
@@ -176,7 +183,7 @@ impl DeviceKey {
         encoded_content: &[u8],
         signature: &Signature,
     ) -> Result<(), KeyError> {
-        self.verify(encoded_content, signature)
+        self.verify(EVENT_DOMAIN, encoded_content, signature)
     }
 }
 
@@ -189,13 +196,11 @@ struct HeadsPayload<'a> {
 }
 
 fn heads_message(topic: &[u8; 32], digest: &[u8; 32], time: u64) -> Result<Vec<u8>, KeyError> {
-    let mut message = HEADS_DOMAIN.to_vec();
-    message.extend(crate::encoding::encode(&HeadsPayload {
+    Ok(crate::encoding::encode(&HeadsPayload {
         topic,
         digest,
         time,
-    })?);
-    Ok(message)
+    })?)
 }
 
 impl DeviceSigner {
@@ -207,7 +212,7 @@ impl DeviceSigner {
         digest: &[u8; 32],
         time: u64,
     ) -> Result<Signature, KeyError> {
-        Ok(self.sign(&heads_message(topic, digest, time)?))
+        Ok(self.sign(HEADS_DOMAIN, &heads_message(topic, digest, time)?))
     }
 }
 
@@ -219,13 +224,13 @@ impl DeviceKey {
         time: u64,
         signature: &Signature,
     ) -> Result<(), KeyError> {
-        self.verify(&heads_message(topic, digest, time)?, signature)
+        self.verify(HEADS_DOMAIN, &heads_message(topic, digest, time)?, signature)
     }
 }
 
 key_pair!(
     /// The secret half travels in an invite code; the public half is published in the log.
-    InviteKey, InviteSigner, INVITE_DOMAIN
+    InviteKey, InviteSigner
 );
 
 #[derive(Serialize)]
@@ -248,7 +253,7 @@ impl InviteSigner {
             invite,
             device,
         })?;
-        Ok(self.sign(&payload))
+        Ok(self.sign(INVITE_DOMAIN, &payload))
     }
 }
 
@@ -265,7 +270,7 @@ impl InviteKey {
             invite,
             device,
         })?;
-        self.verify(&payload, proof)
+        self.verify(INVITE_DOMAIN, &payload, proof)
     }
 }
 
@@ -342,7 +347,7 @@ impl<T: Serialize> Signed<T> {
             statement: &statement,
         })?;
         Ok(Self {
-            signature: signer.sign(&payload),
+            signature: signer.sign(AUTHORITY_DOMAIN, &payload),
             signer: signer.key(),
             statement,
         })
@@ -353,7 +358,7 @@ impl<T: Serialize> Signed<T> {
             workforce,
             statement: &self.statement,
         })?;
-        self.signer.verify(&payload, &self.signature)
+        self.signer.verify(AUTHORITY_DOMAIN, &payload, &self.signature)
     }
 }
 
@@ -376,12 +381,28 @@ mod tests {
     fn signatures_verify_and_are_domain_separated() {
         let principal = PrincipalSigner::generate([1; 32]);
         let message = b"statement";
-        let signature = principal.sign(message);
-        assert!(principal.key().verify(message, &signature).is_ok());
-        assert!(principal.key().verify(b"other", &signature).is_err());
+        let signature = principal.sign(AUTHORITY_DOMAIN, message);
+        assert!(principal.key().verify(AUTHORITY_DOMAIN, message, &signature).is_ok());
+        assert!(principal.key().verify(AUTHORITY_DOMAIN, b"other", &signature).is_err());
 
         let device = DeviceSigner::from_bytes(&principal.to_bytes()).unwrap();
         assert!(device.key().verify_event(message, &signature).is_err());
+    }
+
+    #[test]
+    fn event_and_heads_signatures_do_not_verify_as_each_other() {
+        let signer = DeviceSigner::generate([6; 32]);
+        let key = signer.key();
+        let (topic, digest) = ([1; 32], [2; 32]);
+
+        let heads = signer.sign_heads(&topic, &digest, 7).unwrap();
+        let payload = heads_message(&topic, &digest, 7).unwrap();
+        assert!(key.verify_heads(&topic, &digest, 7, &heads).is_ok());
+        assert!(key.verify_event(&payload, &heads).is_err());
+
+        let event = signer.sign_event(&payload);
+        assert!(key.verify_event(&payload, &event).is_ok());
+        assert!(key.verify_heads(&topic, &digest, 7, &event).is_err());
     }
 
     #[test]
