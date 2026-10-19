@@ -45,9 +45,6 @@ fn body_length(prefix: [u8; 4], max_len: u32) -> Result<usize, FrameError> {
 /// Frames are read and written in pieces of this size, so a deadline can be set on each piece.
 const CHUNK_LEN: usize = 64 * 1024;
 
-/// A deadline that never expires, for streams where waiting is normal.
-const NO_DEADLINE: Duration = Duration::MAX;
-
 /// A stream ending where a length prefix should start is the peer closing it. One ending inside
 /// the prefix is a connection that broke.
 fn closed_at_prefix(first_read: usize) -> Result<(), FrameError> {
@@ -57,15 +54,19 @@ fn closed_at_prefix(first_read: usize) -> Result<(), FrameError> {
     }
 }
 
-/// Fails with [`FrameError::TimedOut`] when `operation` does not finish within `idle`.
+/// Fails with [`FrameError::TimedOut`] when `operation` does not finish within `idle`. Without
+/// a deadline no timer is involved, so it works on runtimes without the time driver.
 async fn within<T>(
-    idle: Duration,
+    idle: Option<Duration>,
     operation: impl Future<Output = std::io::Result<T>>,
 ) -> Result<T, FrameError> {
-    tokio::time::timeout(idle, operation)
-        .await
-        .map_err(|_| FrameError::TimedOut)?
-        .map_err(FrameError::from)
+    match idle {
+        Some(idle) => tokio::time::timeout(idle, operation)
+            .await
+            .map_err(|_| FrameError::TimedOut)?,
+        None => operation.await,
+    }
+    .map_err(FrameError::from)
 }
 
 pub async fn write_frame<W, T>(writer: &mut W, message: &T) -> Result<(), FrameError>
@@ -73,7 +74,7 @@ where
     W: AsyncWrite + Unpin,
     T: Serialize,
 {
-    write_frame_within(writer, message, NO_DEADLINE).await
+    write_frame_within_opt(writer, message, None).await
 }
 
 /// Writes a message that is already encoded.
@@ -81,7 +82,7 @@ pub async fn write_encoded_frame<W>(writer: &mut W, bytes: &[u8]) -> Result<(), 
 where
     W: AsyncWrite + Unpin,
 {
-    write_encoded_frame_within(writer, bytes, NO_DEADLINE).await
+    write_encoded_frame_within(writer, bytes, None).await
 }
 
 /// Like [`write_frame`], failing when the peer takes `idle` to accept any piece of the frame.
@@ -94,13 +95,25 @@ where
     W: AsyncWrite + Unpin,
     T: Serialize,
 {
+    write_frame_within_opt(writer, message, Some(idle)).await
+}
+
+async fn write_frame_within_opt<W, T>(
+    writer: &mut W,
+    message: &T,
+    idle: Option<Duration>,
+) -> Result<(), FrameError>
+where
+    W: AsyncWrite + Unpin,
+    T: Serialize,
+{
     write_encoded_frame_within(writer, &encoding::encode(message)?, idle).await
 }
 
 async fn write_encoded_frame_within<W>(
     writer: &mut W,
     bytes: &[u8],
-    idle: Duration,
+    idle: Option<Duration>,
 ) -> Result<(), FrameError>
 where
     W: AsyncWrite + Unpin,
@@ -117,7 +130,7 @@ where
     R: AsyncRead + Unpin,
     T: DeserializeOwned,
 {
-    read_frame_within(reader, MAX_FRAME_LEN, NO_DEADLINE).await
+    read_frame_until(reader, MAX_FRAME_LEN, None).await
 }
 
 /// Like [`read_frame`], refusing frames over `max_len` bytes and failing when the peer sends
@@ -127,6 +140,18 @@ pub async fn read_frame_within<R, T>(
     reader: &mut R,
     max_len: u32,
     idle: Duration,
+) -> Result<T, FrameError>
+where
+    R: AsyncRead + Unpin,
+    T: DeserializeOwned,
+{
+    read_frame_until(reader, max_len, Some(idle)).await
+}
+
+async fn read_frame_until<R, T>(
+    reader: &mut R,
+    max_len: u32,
+    idle: Option<Duration>,
 ) -> Result<T, FrameError>
 where
     R: AsyncRead + Unpin,
@@ -168,7 +193,13 @@ pub mod blocking {
 
     pub fn read_frame<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, FrameError> {
         let mut prefix = [0u8; 4];
-        closed_at_prefix(reader.read(&mut prefix[..1])?)?;
+        let first_read = loop {
+            match reader.read(&mut prefix[..1]) {
+                Err(error) if error.kind() == std::io::ErrorKind::Interrupted => continue,
+                result => break result?,
+            }
+        };
+        closed_at_prefix(first_read)?;
         reader.read_exact(&mut prefix[1..])?;
         let mut bytes = vec![0u8; body_length(prefix, MAX_FRAME_LEN)?];
         reader.read_exact(&mut bytes)?;
@@ -220,7 +251,6 @@ mod tests {
 
     fn written_by_async(written: &mut Vec<u8>) {
         tokio::runtime::Builder::new_current_thread()
-            .enable_time()
             .build()
             .unwrap()
             .block_on(write_frame(written, &vec![1u32, 2, 3]))
