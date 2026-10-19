@@ -739,10 +739,9 @@ impl GitCli {
         self.run(
             worktree,
             &environment,
-            ["diff", "--cached"]
+            ["diff", "--cached", head.as_str()]
                 .into_iter()
-                .chain(args.iter().map(String::as_str))
-                .chain([head.as_str()]),
+                .chain(args.iter().map(String::as_str)),
         )?
         .ok()
         .map(Some)
@@ -1452,6 +1451,24 @@ mod tests {
             repo.git.uncommitted_diff(&unmerged(commit), &[]).unwrap(),
             None
         );
+    }
+
+    #[test]
+    fn the_uncommitted_diff_of_a_working_item_can_be_limited_to_paths() {
+        let repo = TestRepo::new();
+        let commit = repo.work("wf/k3f9", "file.txt", "one\ntwo\nthree\nfour\n");
+        let worktree = repo.worktree_path("wf/k3f9");
+        repo.write(&worktree, "file.txt", "one\ntwo\nthree\nfour\nfive\n");
+        repo.write(&worktree, "new.txt", "brand new\n");
+        let work = Work::Working {
+            target: "main".into(),
+            commit,
+            worktree,
+        };
+        let args = ["--stat".to_string(), "--".into(), "file.txt".into()];
+        let uncommitted = repo.git.uncommitted_diff(&work, &args).unwrap().unwrap();
+        assert!(uncommitted.contains("file.txt"), "{uncommitted}");
+        assert!(!uncommitted.contains("new.txt"), "{uncommitted}");
     }
 
     #[test]

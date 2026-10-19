@@ -552,3 +552,20 @@ fn the_uncommitted_part_is_a_section_after_the_committed_files_where_no_comment_
     let shown = screen(&mut app, 100, 40);
     assert!(!shown.contains("uncommitted"), "{shown}");
 }
+
+#[test]
+fn the_pane_says_the_agent_made_no_commits_while_it_shows_the_uncommitted_part() {
+    let mut app = diff_app();
+    let pane = app.diff_on_top_mut().unwrap();
+    pane.read(Ok(crate::dashboard::diff::ItemWork {
+        commit: work_commit(),
+        changes: crate::dashboard::diff::Changes::NoCommits,
+        uncommitted: Some(wf_vcs::diff::parse(UNCOMMITTED)),
+    }));
+    let shown = screen(&mut app, 120, 40);
+    assert!(shown.contains("has not made any commits"), "{shown}");
+    assert!(
+        shown.contains("src/scratch.rs (new) (uncommitted)"),
+        "{shown}"
+    );
+}

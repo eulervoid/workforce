@@ -19,7 +19,14 @@ const TAB: &str = "    ";
 /// Where the diff on screen was read, when not here, and how old it is.
 pub fn header_note(pane: &DiffPane, now_ms: u64) -> Option<String> {
     let Some(reading) = pane.device() else {
-        return pane.has_uncommitted_part().then(|| {
+        if !pane.has_uncommitted_part() {
+            return None;
+        }
+        let no_commits =
+            matches!(pane.work(), Some(Ok(work)) if work.changes == Changes::NoCommits);
+        return Some(if no_commits {
+            "the agent has not made any commits; uncommitted in the worktree".to_owned()
+        } else {
             "committed, then uncommitted in the worktree; comments on lines only on committed"
                 .to_owned()
         });
