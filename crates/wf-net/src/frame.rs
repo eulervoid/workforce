@@ -235,4 +235,59 @@ mod tests {
         assert!(matches!(result, Err(FrameError::TooLarge(_))));
         assert!(written.is_empty());
     }
+
+    #[tokio::test]
+    async fn a_stream_ending_inside_the_length_prefix_is_an_error_not_a_close() {
+        let (mut left, mut right) = tokio::io::duplex(1024);
+        left.write_all(&[0, 0]).await.unwrap();
+        drop(left);
+        let result: Result<Vec<u32>, _> = read_frame(&mut right).await;
+        assert!(matches!(result, Err(FrameError::Io(_))), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn frames_over_the_limit_given_are_refused() {
+        let (mut left, mut right) = tokio::io::duplex(1024);
+        write_frame(&mut left, &vec![7u8; 100]).await.unwrap();
+        let result: Result<Vec<u8>, _> =
+            read_frame_within(&mut right, 50, Duration::from_secs(1)).await;
+        assert!(matches!(result, Err(FrameError::TooLarge(_))), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn the_deadline_is_for_each_piece_of_a_frame_not_the_whole() {
+        let idle = Duration::from_millis(200);
+        let message = vec![7u8; 3 * CHUNK_LEN];
+        let bytes = encoding::encode(&message).unwrap();
+        let (mut left, mut right) = tokio::io::duplex(2 * CHUNK_LEN);
+        let slow_writer = tokio::spawn(async move {
+            left.write_all(&(bytes.len() as u32).to_be_bytes())
+                .await
+                .unwrap();
+            for chunk in bytes.chunks(CHUNK_LEN) {
+                left.write_all(chunk).await.unwrap();
+                tokio::time::sleep(Duration::from_millis(120)).await;
+            }
+            left
+        });
+        let read: Vec<u8> = read_frame_within(&mut right, MAX_FRAME_LEN, idle)
+            .await
+            .unwrap();
+        assert_eq!(read, message);
+        let mut left = slow_writer.await.unwrap();
+
+        // Half a frame, then nothing.
+        left.write_all(&100u32.to_be_bytes()).await.unwrap();
+        left.write_all(&[0; 10]).await.unwrap();
+        let result: Result<Vec<u8>, _> = read_frame_within(&mut right, MAX_FRAME_LEN, idle).await;
+        assert!(matches!(result, Err(FrameError::TimedOut)), "{result:?}");
+    }
+
+    #[tokio::test]
+    async fn a_write_to_a_peer_that_reads_nothing_times_out() {
+        let (mut left, _unread) = tokio::io::duplex(1024);
+        let result =
+            write_frame_within(&mut left, &vec![7u8; 10_000], Duration::from_millis(100)).await;
+        assert!(matches!(result, Err(FrameError::TimedOut)), "{result:?}");
+    }
 }

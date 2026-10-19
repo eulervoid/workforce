@@ -1188,8 +1188,8 @@ mDNS for LAN-only use.
 
 * **`wf/sync/3`**: the initiator opens a workforce; both sides exchange version vectors
   `{author → (max seq, tips)}` (tips for equivocated feeds); each streams what the other lacks, in
-  `(hlc, id)` order, 256 events per frame; then missing parents and wanted history are fetched by id.
-  One side writes at a time, with a 30 s idle timeout per frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`), so mismatched peers refuse at the handshake.
+  `(hlc, id)` order, in frames of at most 256 events and 8 MiB; then missing parents and wanted history are fetched by id, answered in `Have` frames and an `EndOfHave`.
+  One side writes at a time. A peer that neither sends nor accepts a byte for 30 s ends the session, and `Open`, `Versions`, wants and the join messages have small size limits. An event of more than 1 MiB is refused at admission, so every event fits a frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`; `3`: `Have` is ended by `EndOfHave`), so mismatched peers refuse at the handshake.
 * **Gossip** on a topic derived from the workforce id announces a digest of each device's heads after
   writes and every 60 s; a digest that differs from its own makes a device sync with that peer. One
   task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes. Presence ("last

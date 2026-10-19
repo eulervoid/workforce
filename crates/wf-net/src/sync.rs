@@ -344,3 +344,30 @@ where
     session.pull_missing().await?;
     Ok(session.report)
 }
+
+#[cfg(test)]
+mod tests {
+    use wf_core::testing::*;
+
+    use super::*;
+
+    #[test]
+    fn batches_close_on_bytes_or_count_and_never_come_up_empty() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let events: Vec<Event> = (0..10)
+            .map(|index| fixture.apply(&mut state, 0, 2_000 + index, create("task", "t")))
+            .collect();
+        let size = events[0].encode().unwrap().len();
+        let sizes =
+            |batches: Vec<&[Event]>| batches.iter().map(|batch| batch.len()).collect::<Vec<_>>();
+
+        assert_eq!(sizes(batches(&events, 4, usize::MAX)), [4, 4, 2]);
+        assert_eq!(
+            sizes(batches(&events, 100, size * 3 + size / 2)),
+            [3, 3, 3, 1]
+        );
+        assert_eq!(sizes(batches(&events, 100, 1)), [1; 10]);
+        assert!(batches(&[], 4, 4).is_empty());
+    }
+}

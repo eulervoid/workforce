@@ -388,6 +388,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             &mut tokio::io::join(&mut recv, &mut send),
             request,
             log,
+            IDLE_TIMEOUT,
             author,
         )
         .await;
