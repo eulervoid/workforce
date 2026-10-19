@@ -521,8 +521,8 @@ threads into decisions is ordinary work in `distill` items, so there is no separ
 A field only of types that list it (by default `task`): `P0` (drop everything), `P1` (this cycle),
 `P2` (normal, the default), `P3` (when nothing else waits). The author check requires one where the
 type has the field and refuses one where it has not; an item whose type gained the field later sorts
-last until one is set. `item list` orders by priority, then creation, then id (`--sort`, section 16). *Not decided:* inheriting
-the highest priority of the items an item blocks.
+last until one is set. `item list` orders by priority, then creation, then id (`--sort`, section 16).
+*Not decided:* inheriting the highest priority of the items an item blocks.
 
 ### Relations
 
