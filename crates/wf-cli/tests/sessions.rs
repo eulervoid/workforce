@@ -990,7 +990,7 @@ wf work submit
     let item = world.wf.add(&["--title", "Add hello"]);
     let file = world.wf.repository.join(".workforce.toml");
     let original = std::fs::read_to_string(&file).unwrap();
-    std::fs::write(&file, format!("{original}# edited by a person\n")).unwrap();
+    std::fs::write(&file, format!("{original}# edited by hand\n")).unwrap();
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
@@ -1014,7 +1014,7 @@ wf work submit
     assert!(
         std::fs::read_to_string(&file)
             .unwrap()
-            .ends_with("# edited by a person\n")
+            .ends_with("# edited by hand\n")
     );
 
     git_in(

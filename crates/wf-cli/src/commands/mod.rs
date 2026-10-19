@@ -68,7 +68,7 @@ pub(crate) fn emit_line<T: Serialize>(
     Ok(())
 }
 
-/// Like [`emit`], but long text goes through the pager when a person is at the terminal.
+/// Like [`emit`], but long text goes through the pager when a terminal is attached.
 fn emit_paged<T: Serialize>(
     json: bool,
     mode: Mode,

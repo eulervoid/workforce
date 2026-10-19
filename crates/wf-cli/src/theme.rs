@@ -348,7 +348,6 @@ pub fn priority(priority: Priority) -> Style {
 
 #[cfg(test)]
 mod tests {
-
     use super::*;
 
     #[test]

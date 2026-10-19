@@ -47,7 +47,7 @@ pub enum Confinement<'a> {
         access: Access<'a>,
         sandbox: &'a SandboxConfig,
         environment: &'a EnvironmentConfig,
-        /// Where Fence's sandbox profile for the command are written.
+        /// Where Fence's sandbox profile for the command is written.
         profile_file: &'a Path,
         /// Where the git config the command runs with is written: see [`wf_vcs::config::write_unsigned_global_config`].
         git_config: &'a Path,
