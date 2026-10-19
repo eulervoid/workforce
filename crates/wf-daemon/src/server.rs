@@ -373,8 +373,8 @@ async fn call(
             daemon
                 .finish_session(workforce, loaded, session, SessionEnd::Finish(finish))
                 .await
-                .map_err(|error| wf_core::error_chain(&error))?;
-            reply(())
+                .map_err(|error| wf_core::error_chain(&error))
+                .and_then(reply)
         }
         Call::StopSession(session) => {
             daemon

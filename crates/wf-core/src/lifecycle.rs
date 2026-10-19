@@ -1,8 +1,6 @@
 //! What follows from a session starting, ending and finishing a turn. Pure functions of the
 //! state: the daemon asks and then writes the events.
 
-use std::collections::BTreeSet;
-
 use serde::{Deserialize, Serialize};
 
 use crate::event::CommentKind;
@@ -11,7 +9,7 @@ use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::Policy;
-use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole};
+use crate::session::{CommitId, EndReason, MachineFault, SessionRole};
 use crate::state::State;
 
 /// How an agent ends its session. The session ends after the agent's turn, and the agent writes
@@ -270,40 +268,20 @@ impl State {
     }
 
     /// How many check runs on the merge result of `item` failed since the principal last acted on
-    /// it. A failed run is told as check failures by the daemon, one per failed check, after the
-    /// submission whose merge was checked; the submissions they follow are counted. A check
-    /// failure before any submission belongs to no run.
+    /// it, at its submission or at its merge. The daemon tells a failed run as one check failure
+    /// naming every check that failed.
     pub fn failed_check_runs(&self, item: ItemId) -> usize {
         let Some(ItemEntry::Live(live)) = self.item(item) else {
             return 0;
         };
         let since = live.principal_touched();
-        let submissions: Vec<_> = self
-            .sessions_of(item)
-            .filter(|session| session.role() == SessionRole::Work)
-            .filter_map(|session| {
-                let ended = session.ended()?;
-                match ended.reason.outcome() {
-                    Outcome::Submitted { .. } => Some(ended.at()),
-                    Outcome::Finished | Outcome::Failed | Outcome::Neither => None,
-                }
-            })
-            .collect();
-        let checked: BTreeSet<_> = live
-            .comments()
+        live.comments()
             .values()
             .filter(|comment| {
                 comment.kind == CommentKind::CheckFailure
                     && since.is_none_or(|since| comment.at > since)
             })
-            .filter_map(|comment| {
-                submissions
-                    .iter()
-                    .filter(|submitted| **submitted < comment.at)
-                    .max()
-            })
-            .collect();
-        checked.len()
+            .count()
     }
 
     /// The state the daemon moves the item of a work session to when the session starts:

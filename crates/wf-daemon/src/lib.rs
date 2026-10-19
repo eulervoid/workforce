@@ -232,6 +232,10 @@ pub struct Daemon {
     node: tokio::sync::OnceCell<Arc<Node<StorageHandle>>>,
     presence: Presence,
     runners: runner::Runners,
+    /// The checks the daemon runs as sessions submit.
+    submissions: runner::SubmissionChecks,
+    /// Taken while checks run in the check worktree of a workforce, which they share.
+    checking: Arc<keyed_locks::KeyedLocks<WorkforceId>>,
     starting: runner::ItemLocks,
     /// Taken while a session ends, so that two ends of one session, such as the agent's submit
     /// and a timeout, do not both act; ends of other sessions do not wait.
@@ -272,6 +276,8 @@ impl Daemon {
             node: tokio::sync::OnceCell::new(),
             presence: Presence::default(),
             runners: runner::Runners::default(),
+            submissions: runner::SubmissionChecks::default(),
+            checking: Default::default(),
             starting: runner::ItemLocks::default(),
             ending: Default::default(),
             opening: Default::default(),

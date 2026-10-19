@@ -486,8 +486,8 @@ pub enum CommentKind {
     Blocker,
     /// The work has to do this before it is submitted.
     ChangeRequest,
-    /// A change request the daemon's check runner wrote because a check of the item's merge
-    /// result failed. Counted by [`State::failed_check_runs`](crate::state::State), and otherwise
+    /// A change request the daemon's check runner wrote because checks of the item's merge
+    /// result failed, one per failed run. Counted by [`State::failed_check_runs`](crate::state::State), and otherwise
     /// a change request.
     CheckFailure,
 }

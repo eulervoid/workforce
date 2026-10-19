@@ -11,6 +11,7 @@ use wf_core::session::CommitId;
 use super::{Done, emit};
 use crate::cli::*;
 use crate::workspace::Workspace;
+use wf_daemon::proto::EndAnswer;
 
 pub(super) fn work(
     json: bool,
@@ -110,11 +111,24 @@ fn end(
         .session(session)
         .expect("the session was resolved when the workspace was opened")
         .item();
-    workspace.end_session(finish)?;
+    let message = match workspace.end_session(finish)? {
+        EndAnswer::Ended => format!("{verb} #{}", item.short()),
+        EndAnswer::Checking { checks } => format!(
+            "Checking #{}: the checks ({}) run on the merge of the work in your sandbox. They \
+             can take a while: end your turn now. You are prompted again with what failed, and \
+             when they pass the work is submitted for review.",
+            item.short(),
+            checks
+                .iter()
+                .map(|check| check.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
     emit(
         json,
         &Done {
-            message: format!("{verb} #{}", item.short()),
+            message,
             event: None,
             session: None,
             item: Some(item.to_base32()),

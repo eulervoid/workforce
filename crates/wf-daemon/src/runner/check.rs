@@ -1,5 +1,5 @@
 //! The checks of the policy, run on the merge result in the workforce's check worktree before
-//! the target moves.
+//! the work is reviewed and again before the target moves.
 
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -10,13 +10,33 @@ use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::lifecycle::AfterFailedChecks;
 use wf_core::policy::CheckConfig;
 use wf_core::session::{CommitId, GitOid};
+use wf_core::state::State;
 use wf_vcs::GitCli;
 
 use super::merge::Attempt;
 use super::{SessionError, blocking};
 use crate::command::{CommandRun, CommandRunner, Confinement, Outcome};
-use crate::machine_config::{CheckRunConfig, SandboxConfig};
+use crate::machine_config::{CheckRunConfig, MachineConfig, SandboxConfig};
 use crate::{Daemon, Loaded};
+
+/// When checks run, which decides the sandbox they run in.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum CheckStage {
+    /// As the work is submitted, before anyone reviewed it: always in the sandbox of every agent,
+    /// whatever `[check] sandbox` says, since the code is not reviewed yet.
+    Submission,
+    /// Before the target moves: in the sandbox of checks on this machine, which may be off.
+    Merge,
+}
+
+impl CheckStage {
+    fn sandbox(self, config: &MachineConfig) -> &SandboxConfig {
+        match self {
+            CheckStage::Submission => &config.sandbox,
+            CheckStage::Merge => config.check_sandbox(),
+        }
+    }
+}
 
 /// A check that did not pass on the merge result, and whose fault that is.
 pub(super) struct FailedCheck {
@@ -32,7 +52,7 @@ pub(super) struct FailedCheck {
 
 impl FailedCheck {
     /// What failed, and what can be done about it, said to whoever is to resolve it.
-    fn told(&self, target: &str) -> String {
+    pub(super) fn told(&self, target: &str) -> String {
         let name = &self.check.name;
         let what = match self.blame {
             Blame::Work => format!("The check `{name}` fails on the merge into {target}."),
@@ -61,6 +81,18 @@ impl FailedCheck {
     }
 }
 
+/// What `failed` say, one after the other.
+pub(super) fn told_all<'a>(
+    failed: impl IntoIterator<Item = &'a FailedCheck>,
+    target: &str,
+) -> String {
+    let told: Vec<_> = failed
+        .into_iter()
+        .map(|failed| failed.told(target))
+        .collect();
+    told.join("\n\n")
+}
+
 /// Why a check did not pass on the merge result.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Blame {
@@ -72,25 +104,31 @@ pub(super) enum Blame {
     TimedOut(Duration),
 }
 
-/// The checks that passed on this machine, by tree and command: one empty file each. A check's
-/// result depends on nothing else, so one that passed on a tree does not run there again.
+/// The checks that passed on this machine, by tree, command and sandbox: one empty file each. A
+/// check's result depends on nothing else, so one that passed on a tree in a sandbox does not run
+/// there again.
 struct PassedChecks {
     directory: PathBuf,
 }
 
 impl PassedChecks {
-    fn contains(&self, tree: GitOid, check: &CheckConfig) -> bool {
-        self.path(tree, check).exists()
+    fn contains(&self, tree: GitOid, check: &CheckConfig, sandbox: &SandboxConfig) -> bool {
+        self.path(tree, check, sandbox).exists()
     }
 
-    fn insert(&self, tree: GitOid, check: &CheckConfig) -> Result<(), SessionError> {
-        let path = self.path(tree, check);
+    fn insert(
+        &self,
+        tree: GitOid,
+        check: &CheckConfig,
+        sandbox: &SandboxConfig,
+    ) -> Result<(), SessionError> {
+        let path = self.path(tree, check, sandbox);
         std::fs::create_dir_all(&self.directory)
             .and_then(|()| std::fs::write(&path, ""))
             .map_err(|source| SessionError::Io { path, source })
     }
 
-    fn path(&self, tree: GitOid, check: &CheckConfig) -> PathBuf {
+    fn path(&self, tree: GitOid, check: &CheckConfig, sandbox: &SandboxConfig) -> PathBuf {
         let mut key = blake3::Hasher::new();
         key.update(tree.as_bytes());
         for argument in &check.run {
@@ -98,15 +136,19 @@ impl PassedChecks {
             key.update(&(argument.len() as u64).to_le_bytes());
             key.update(argument.as_bytes());
         }
+        // What the sandbox allows is all of its debug form, so that a changed config is another
+        // sandbox.
+        key.update(format!("{sandbox:?}").as_bytes());
         self.directory.join(key.finalize().to_hex().as_str())
     }
 }
 
-/// Runs checks in the check worktree, in the sandbox of checks on this machine.
+/// Runs checks in the check worktree, in one sandbox.
 struct Checker<'a> {
     runner: CommandRunner<'a>,
     passed: PassedChecks,
     limits: &'a CheckRunConfig,
+    sandbox: &'a SandboxConfig,
 }
 
 impl Checker<'_> {
@@ -116,7 +158,7 @@ impl Checker<'_> {
         check: &CheckConfig,
         tree: GitOid,
     ) -> Result<Option<CommandRun>, SessionError> {
-        if self.passed.contains(tree, check) {
+        if self.passed.contains(tree, check, self.sandbox) {
             return Ok(None);
         }
         let run = self
@@ -125,7 +167,7 @@ impl Checker<'_> {
             .await?;
         match run.outcome {
             Outcome::Passed => {
-                self.passed.insert(tree, check)?;
+                self.passed.insert(tree, check, self.sandbox)?;
                 Ok(None)
             }
             Outcome::Failed(_) | Outcome::TimedOut => Ok(Some(run)),
@@ -135,8 +177,8 @@ impl Checker<'_> {
 
 impl Daemon {
     /// Runs every one of `checks` on `tree`, the merge of the work into the target at `base`, in
-    /// order, and returns those that did not pass. A check that failed runs on the target's own
-    /// tree too, to tell whose fault it is.
+    /// order, in the sandbox `stage` says, and returns those that did not pass. A check that failed
+    /// runs on the target's own tree too, to tell whose fault it is.
     pub(super) async fn check_merge(
         &self,
         workforce: WorkforceId,
@@ -144,15 +186,19 @@ impl Daemon {
         checks: &[CheckConfig],
         base: CommitId,
         tree: GitOid,
+        stage: CheckStage,
     ) -> Result<Vec<FailedCheck>, SessionError> {
         if checks.is_empty() {
             return Ok(Vec::new());
         }
+        // One run at a time per workforce: they share the check worktree.
+        let _running = self.checking.lock(workforce).await;
         let config = self.machine_config()?;
         let git = {
             let repository = repository.to_path_buf();
             blocking(move || GitCli::open(&repository)).await??
         };
+        let sandbox = stage.sandbox(&config);
         let directory = self.workforce_directory(workforce);
         let (worktree, profile_file, git_config, logs) = (
             directory.join("check"),
@@ -172,7 +218,8 @@ impl Daemon {
                         data_dir: &self.launch.data_dir,
                         machine_config: self.launch.machine_config.as_deref(),
                     },
-                    &config,
+                    sandbox,
+                    &config.environment,
                     &profile_file,
                     &git_config,
                 ),
@@ -182,6 +229,7 @@ impl Daemon {
                 directory: directory.join("checks-passed"),
             },
             limits: &config.check,
+            sandbox,
         };
 
         let mut failed = Vec::new();
@@ -213,7 +261,7 @@ impl Daemon {
                 check: check.clone(),
                 tree,
                 run,
-                sandbox: config.check_sandbox().clone(),
+                sandbox: sandbox.clone(),
                 blame,
             });
         }
@@ -222,6 +270,33 @@ impl Daemon {
 }
 
 impl Daemon {
+    /// Writes `text` on `item` as the daemon, naming the principal so that a blocker waits on
+    /// them and not on a supervisor.
+    pub(super) async fn comment_to_principal(
+        &self,
+        loaded: &Loaded,
+        state: &State,
+        principal: PrincipalKey,
+        item: ItemId,
+        kind: CommentKind,
+        text: String,
+    ) -> Result<(), SessionError> {
+        let text = match state.member(&principal) {
+            Some(member) => format!("@{} {text}", member.handle),
+            None => text,
+        };
+        self.author(
+            loaded,
+            Actor::Daemon(principal),
+            EventBody::Commented(Commented {
+                kind,
+                ..Commented::plain(item, text)
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Tells of the checks that failed on the merge of the work of `item`, each to whoever can
     /// resolve it: what the work broke goes back to work as a change request per check, unless
     /// that happened too often since the principal last acted; what is not the work's fault, or
@@ -263,17 +338,11 @@ impl Daemon {
         }
         match state.after_failed_checks(item) {
             AfterFailedChecks::BackToWork { to } => {
-                for failed in &by_work {
-                    comment(CommentKind::CheckFailure, failed.told(target)).await?;
-                }
+                comment(CommentKind::CheckFailure, told_all(&by_work, target)).await?;
                 if !not_by_work.is_empty() {
-                    let told: Vec<_> = not_by_work
-                        .iter()
-                        .map(|failed| failed.told(target))
-                        .collect();
                     let text = format!(
                         "Not sent back for these, which are not the work's fault:\n\n{}",
-                        told.join("\n\n")
+                        told_all(&not_by_work, target)
                     );
                     comment(CommentKind::Plain, to_principal(text)).await?;
                 }
@@ -281,16 +350,12 @@ impl Daemon {
                     .await?;
             }
             AfterFailedChecks::WaitsForPrincipal { runs } => {
-                let told: Vec<_> = by_work
-                    .iter()
-                    .chain(&not_by_work)
-                    .map(|failed| failed.told(target))
-                    .collect();
+                let all: Vec<_> = by_work.iter().chain(&not_by_work).collect();
                 let text = format!(
                     "The checks failed on the merge into {target} again, after {runs} failed runs \
                      since you last acted on the item, so the work is not sent back by itself. \
                      Resolve this to check it again and send it back with what fails.\n\n{}",
-                    told.join("\n\n")
+                    told_all(all, target)
                 );
                 comment(CommentKind::Blocker, to_principal(text)).await?;
             }
@@ -312,20 +377,34 @@ mod tests {
     }
 
     #[test]
-    fn a_pass_is_kept_for_its_tree_and_command_only() {
+    fn checks_at_submission_run_in_the_sandbox_of_agents_whatever_checks_get_at_the_merge() {
+        let mut config = MachineConfig::default();
+        config.check.sandbox = Some(SandboxConfig::Off {});
+        assert_eq!(
+            CheckStage::Submission.sandbox(&config),
+            &SandboxConfig::default()
+        );
+        assert_eq!(CheckStage::Merge.sandbox(&config), &SandboxConfig::Off {});
+    }
+
+    #[test]
+    fn a_pass_is_kept_for_its_tree_command_and_sandbox_only() {
         let directory = tempfile::tempdir().unwrap();
         let passed = PassedChecks {
             directory: directory.path().join("checks-passed"),
         };
         let (tree, other_tree) = (GitOid::from_bytes([1; 20]), GitOid::from_bytes([2; 20]));
         let test = check(&["cargo", "test"]);
-        assert!(!passed.contains(tree, &test));
-        passed.insert(tree, &test).unwrap();
-        assert!(passed.contains(tree, &test));
-        assert!(!passed.contains(other_tree, &test));
-        assert!(!passed.contains(tree, &check(&["cargo", "test", "--release"])));
+        let fence = SandboxConfig::default();
+        assert!(!passed.contains(tree, &test, &fence));
+        passed.insert(tree, &test, &fence).unwrap();
+        assert!(passed.contains(tree, &test, &fence));
+        assert!(!passed.contains(other_tree, &test, &fence));
+        assert!(!passed.contains(tree, &check(&["cargo", "test", "--release"]), &fence));
         // The arguments are kept apart, not joined.
-        assert!(!passed.contains(tree, &check(&["cargo test"])));
-        assert!(!passed.contains(tree, &check(&["cargot", "est"])));
+        assert!(!passed.contains(tree, &check(&["cargo test"]), &fence));
+        assert!(!passed.contains(tree, &check(&["cargot", "est"]), &fence));
+        // A pass in one sandbox is not one in another.
+        assert!(!passed.contains(tree, &test, &SandboxConfig::Off {}));
     }
 }

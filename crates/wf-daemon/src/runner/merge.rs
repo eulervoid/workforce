@@ -15,6 +15,7 @@ use wf_core::review::PendingMerge;
 use wf_core::session::CommitId;
 use wf_vcs::{CommitSigning, GitCli, MergeOutcome, MergeTree, item_branch, item_worktree};
 
+use super::check::CheckStage;
 use super::{SessionError, blocking};
 use crate::machine_config::MergeSigningConfig;
 use crate::{Daemon, Loaded};
@@ -258,6 +259,10 @@ impl Daemon {
         if attempt == Attempt::Retry && !state.pending_merges().contains(&pending) {
             return Ok(MergeEnd::Handled);
         }
+        // The submission's checks, or anyone, left a blocker for the principal: it waits for them.
+        if live.has_open_blocker() {
+            return Ok(MergeEnd::Handled);
+        }
         let principal = self.principal_of_device(&state)?;
         if plan == MergePlan::MoveToDone {
             self.move_item(
@@ -328,7 +333,14 @@ impl Daemon {
                 MergeTree::Conflict { paths } => MergeOutcome::Conflict { paths },
                 MergeTree::Clean { base, tree } => {
                     let failed = match self
-                        .check_merge(workforce, &repository, checks, base, tree)
+                        .check_merge(
+                            workforce,
+                            &repository,
+                            checks,
+                            base,
+                            tree,
+                            CheckStage::Merge,
+                        )
                         .await
                     {
                         Ok(failed) => failed,

@@ -124,12 +124,13 @@ picks up where the last one stopped.
 
 The agent gets a **brief**: the item, its steps, open change requests, what was said before, and how to
 report. It works, commits, and reports with `wf comment`, ticking steps as it goes. When the policy has
-checks, the brief tells it, and a reviewer too, that tests its sandbox cannot run are run by the
-checks before the merge, not by you. It asks a question
+checks, the brief tells it to build and run the tests near its change and leave the whole suite to
+its submission, which runs the checks in its sandbox; a reviewer is told they passed. It asks a question
 with a blocker (`wf comment <item> "..." --block`) and parks until it is answered. It ends with:
 
-* `wf work submit --note "..."`: the work is done. It goes to review, or is merged right away if the
-  item's review level has no steps.
+* `wf work submit --note "..."`: the work is done. With checks in the policy the daemon runs them
+  first, while the session waits: what fails is the agent's next prompt, and when they pass the work
+  goes to review, or is merged right away if the item's review level has no steps.
 * `wf work release --note "..."`: it gives up; the item goes back to open, and its recovery level
   says what happens next.
 
