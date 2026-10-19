@@ -7,6 +7,7 @@ use common::SharedReplica;
 use std::time::Duration;
 
 use wf_core::testing::*;
+use wf_net::frame::FrameError;
 use wf_net::{SyncError, initiate_within, respond_within};
 use wf_store::{RedbStore, Replica};
 
@@ -22,7 +23,10 @@ async fn an_initiator_gives_up_on_a_peer_that_goes_silent() {
     let log = replica(&fixture);
     let (left, _silent) = tokio::io::duplex(8192);
     let result = initiate_within(left, fixture.workforce(), &log, Duration::from_millis(100)).await;
-    assert!(matches!(result, Err(SyncError::TimedOut)), "{result:?}");
+    assert!(
+        matches!(result, Err(SyncError::Frame(FrameError::TimedOut))),
+        "{result:?}"
+    );
 }
 
 #[tokio::test]
@@ -31,5 +35,8 @@ async fn a_responder_gives_up_on_a_peer_that_goes_silent() {
     let log = replica(&fixture);
     let (_silent, right) = tokio::io::duplex(8192);
     let result = respond_within(right, &log, Duration::from_millis(100)).await;
-    assert!(matches!(result, Err(SyncError::TimedOut)), "{result:?}");
+    assert!(
+        matches!(result, Err(SyncError::Frame(FrameError::TimedOut))),
+        "{result:?}"
+    );
 }

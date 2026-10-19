@@ -1,12 +1,14 @@
-//! `wf/sync/2`: bring two replicas of one workforce to the same set of events.
+//! `wf/sync/3`: bring two replicas of one workforce to the same set of events.
 //!
 //! 1. Both sides send their version vector.
 //! 2. Each sends the events the other lacks, in causal order, all branches of equivocated feeds.
 //! 3. Each side then asks for the parents of events it had to park, by id, until nothing is
-//!    missing or the peer does not have it.
+//!    missing or the peer does not have it. The answer is any number of `Have` frames and an
+//!    `EndOfHave`.
 //!
 //! Only one side writes at a time, so neither end can block the other on a full buffer. The
-//! initiator goes first at every step.
+//! initiator goes first at every step. Frames hold events up to [`BATCH_BYTES`], so no log is too
+//! long for one, and a peer that sends or accepts nothing for [`IDLE_TIMEOUT`] ends the session.
 
 use std::collections::BTreeSet;
 use std::time::Duration;
@@ -17,16 +19,26 @@ use wf_core::event::Event;
 use wf_core::id::{EventId, WorkforceId};
 use wf_core::sync::Versions;
 
-use crate::frame::{FrameError, read_frame, write_frame};
+use crate::frame::{FrameError, MAX_FRAME_LEN, read_frame_within, write_frame_within};
 use crate::log::{LogError, SyncLog};
 
-pub const SYNC_ALPN: &[u8] = b"wf/sync/2";
+pub const SYNC_ALPN: &[u8] = b"wf/sync/3";
 
-/// A peer that says nothing for this long has stopped answering: the session ends.
+/// A peer that neither sends nor accepts a byte for this long has stopped answering: the session
+/// ends. It restarts with every piece of a frame, so large frames over slow links go through.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
 
 const EVENTS_PER_FRAME: usize = 256;
+/// A frame of events is closed once it holds this many encoded bytes. An event is at most
+/// `MAX_EVENT_LEN`, so a frame stays far below `MAX_FRAME_LEN`.
+const BATCH_BYTES: usize = 8 * 1024 * 1024;
 const IDS_PER_WANT: usize = 1024;
+
+/// Largest frame of the messages whose content is small. Sizes are the encoded message with
+/// generous room; a peer that sends more is not speaking the protocol.
+const OPEN_FRAME_LEN: u32 = 256;
+const VERSIONS_FRAME_LEN: u32 = 1024 * 1024;
+const WANT_FRAME_LEN: u32 = 64 * 1024;
 
 #[derive(Debug, thiserror::Error)]
 pub enum SyncError {
@@ -39,10 +51,10 @@ pub enum SyncError {
         expected: &'static str,
         got: &'static str,
     },
+    #[error("the peer opened another workforce than the one it was admitted for")]
+    OtherWorkforce,
     #[error("the peer asked for {0} events at once")]
     WantTooLarge(usize),
-    #[error("the peer stopped answering")]
-    TimedOut,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -55,7 +67,9 @@ enum Message {
     /// Ids the sender needs.
     Want(Vec<EventId>),
     EndOfWants,
+    /// Some of the events asked for; the answer ends with `EndOfHave`.
     Have(Vec<Event>),
+    EndOfHave,
 }
 
 impl Message {
@@ -68,6 +82,7 @@ impl Message {
             Message::Want(_) => "want",
             Message::EndOfWants => "end of wants",
             Message::Have(_) => "have",
+            Message::EndOfHave => "end of have",
         }
     }
 
@@ -105,14 +120,12 @@ struct Session<'a, S, L> {
 
 impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
     async fn send(&mut self, message: Message) -> Result<(), SyncError> {
-        Ok(write_frame(&mut self.stream, &message).await?)
+        Ok(write_frame_within(&mut self.stream, &message, self.idle).await?)
     }
 
-    async fn receive(&mut self) -> Result<Message, SyncError> {
-        tokio::time::timeout(self.idle, read_frame(&mut self.stream))
-            .await
-            .map_err(|_| SyncError::TimedOut)?
-            .map_err(SyncError::from)
+    /// The next message, which may be at most `max_len` bytes encoded.
+    async fn receive(&mut self, max_len: u32) -> Result<Message, SyncError> {
+        Ok(read_frame_within(&mut self.stream, max_len, self.idle).await?)
     }
 
     async fn exchange_versions(&mut self, role: Role) -> Result<Versions, SyncError> {
@@ -120,9 +133,11 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
         if let Role::Initiator = role {
             self.send(Message::Versions(mine.clone())).await?;
         }
-        let message = self.receive().await?;
-        let Message::Versions(theirs) = message else {
-            return Err(message.unexpected("versions"));
+        let theirs = match self.receive(VERSIONS_FRAME_LEN).await? {
+            Message::Versions(versions) => versions,
+            other => {
+                return Err(other.unexpected("versions"));
+            }
         };
         if let Role::Responder = role {
             self.send(Message::Versions(mine)).await?;
@@ -133,22 +148,30 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
     async fn push_events(&mut self, theirs: &Versions) -> Result<(), SyncError> {
         let events = self.log.events_after(theirs).await?;
         self.report.sent += events.len();
-        for batch in events.chunks(EVENTS_PER_FRAME) {
-            self.send(Message::Events(batch.to_vec())).await?;
-        }
+        self.send_batches(&events, Message::Events).await?;
         self.send(Message::EndOfEvents).await
+    }
+
+    async fn send_batches(
+        &mut self,
+        events: &[Event],
+        message: fn(Vec<Event>) -> Message,
+    ) -> Result<(), SyncError> {
+        for batch in batches(events, EVENTS_PER_FRAME, BATCH_BYTES) {
+            self.send(message(batch.to_vec())).await?;
+        }
+        Ok(())
     }
 
     async fn accept_events(&mut self) -> Result<(), SyncError> {
         loop {
-            let message = self.receive().await?;
-            if let Message::EndOfEvents = message {
-                return Ok(());
+            match self.receive(MAX_FRAME_LEN).await? {
+                Message::Events(events) => self.apply(events).await?,
+                Message::EndOfEvents => return Ok(()),
+                other => {
+                    return Err(other.unexpected("events"));
+                }
             }
-            let Message::Events(events) = message else {
-                return Err(message.unexpected("events"));
-            };
-            self.apply(events).await?;
         }
     }
 
@@ -177,42 +200,67 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
             }
             asked.extend(wanted.iter().copied());
             self.send(Message::Want(wanted)).await?;
-            let message = self.receive().await?;
-            let Message::Have(events) = message else {
-                return Err(message.unexpected("have"));
-            };
-            self.apply(events).await?;
+            loop {
+                match self.receive(MAX_FRAME_LEN).await? {
+                    Message::Have(events) => self.apply(events).await?,
+                    Message::EndOfHave => break,
+                    other => {
+                        return Err(other.unexpected("have"));
+                    }
+                }
+            }
         }
     }
 
     async fn answer_wants(&mut self) -> Result<(), SyncError> {
         loop {
-            let message = self.receive().await?;
-            if let Message::EndOfWants = message {
-                return Ok(());
+            match self.receive(WANT_FRAME_LEN).await? {
+                Message::EndOfWants => return Ok(()),
+                Message::Want(ids) if ids.len() > IDS_PER_WANT => {
+                    return Err(SyncError::WantTooLarge(ids.len()));
+                }
+                Message::Want(ids) => {
+                    let events = self.log.events_by_id(&ids).await?;
+                    self.report.sent += events.len();
+                    self.send_batches(&events, Message::Have).await?;
+                    self.send(Message::EndOfHave).await?;
+                }
+                other => {
+                    return Err(other.unexpected("want"));
+                }
             }
-            let Message::Want(ids) = message else {
-                return Err(message.unexpected("want"));
-            };
-            if ids.len() > IDS_PER_WANT {
-                return Err(SyncError::WantTooLarge(ids.len()));
-            }
-            let events = self.log.events_by_id(&ids).await?;
-            self.report.sent += events.len();
-            self.send(Message::Have(events)).await?;
         }
     }
 }
 
-/// Reads which workforce the initiator wants to sync. The responder then picks the log and
-/// calls [`respond`].
-pub async fn read_open<S>(stream: &mut S) -> Result<WorkforceId, SyncError>
+/// Splits `events` into runs of at most `max_events` and, unless a single event is larger, at most
+/// `max_bytes` encoded bytes. A run has at least one event.
+fn batches(events: &[Event], max_events: usize, max_bytes: usize) -> Vec<&[Event]> {
+    let mut batches = Vec::new();
+    let mut start = 0;
+    let mut bytes = 0;
+    for (index, event) in events.iter().enumerate() {
+        let length = event.encode().map_or(0, |encoded| encoded.len());
+        if index > start && (index - start == max_events || bytes + length > max_bytes) {
+            batches.push(&events[start..index]);
+            start = index;
+            bytes = 0;
+        }
+        bytes += length;
+    }
+    if start < events.len() {
+        batches.push(&events[start..]);
+    }
+    batches
+}
+
+/// Reads which workforce the initiator wants to sync, giving up when nothing arrives for `idle`.
+/// The responder then picks the log and calls [`respond`].
+pub async fn read_open<S>(stream: &mut S, idle: Duration) -> Result<WorkforceId, SyncError>
 where
     S: AsyncRead + Unpin,
 {
-    let message = tokio::time::timeout(IDLE_TIMEOUT, read_frame(stream))
-        .await
-        .map_err(|_| SyncError::TimedOut)??;
+    let message = read_frame_within(stream, OPEN_FRAME_LEN, idle).await?;
     match message {
         Message::Open(workforce) => Ok(workforce),
         Message::Versions(_)
@@ -220,7 +268,8 @@ where
         | Message::EndOfEvents
         | Message::Want(_)
         | Message::EndOfWants
-        | Message::Have(_) => Err(message.unexpected("open")),
+        | Message::Have(_)
+        | Message::EndOfHave => Err(message.unexpected("open")),
     }
 }
 
@@ -248,7 +297,7 @@ where
     S: AsyncRead + AsyncWrite + Unpin,
     L: SyncLog,
 {
-    write_frame(&mut stream, &Message::Open(workforce)).await?;
+    write_frame_within(&mut stream, &Message::Open(workforce), idle).await?;
     let mut session = Session {
         stream,
         log,

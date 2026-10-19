@@ -1,4 +1,4 @@
-//! `wf/join/1`: a new device redeems an invite with a member that serves the workforce.
+//! `wf/join/2`: a new device redeems an invite with a member that serves the workforce.
 //!
 //! The connection authenticates the joiner's device key. The member checks the proof, reserves
 //! the invite so a second device cannot use it while this join is in progress, and streams the
@@ -16,12 +16,16 @@ use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::DeviceKey;
 use wf_core::invite::JoinRefusal;
 
-use crate::frame::{read_frame, write_frame};
+use crate::frame::{read_frame_within, write_frame_within};
 use crate::log::SyncLog;
-use crate::node::{FAILED, Registry, SourceError, device_key};
-use crate::sync::{IDLE_TIMEOUT, initiate, read_open, respond};
+use crate::node::{FAILED, Registry, SourceError, device_key, linger};
+use crate::sync::{IDLE_TIMEOUT, SyncError, initiate, read_open, respond};
 
-pub const JOIN_ALPN: &[u8] = b"wf/join/1";
+/// The request is about 150 bytes and comes from a device that is not a member yet.
+const REQUEST_FRAME_LEN: u32 = 1024;
+const REPLY_FRAME_LEN: u32 = 256;
+
+pub const JOIN_ALPN: &[u8] = b"wf/join/2";
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct JoinRequest {
@@ -87,28 +91,30 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for JoinHandler<L> {
             .accept_bi()
             .await
             .map_err(AcceptError::from_err)?;
-        let request: JoinRequest = tokio::time::timeout(IDLE_TIMEOUT, read_frame(&mut recv))
+        let request: JoinRequest = read_frame_within(&mut recv, REQUEST_FRAME_LEN, IDLE_TIMEOUT)
             .await
-            .map_err(AcceptError::from_err)?
             .map_err(AcceptError::from_err)?;
         let log = match self.decide(&request, joiner).await {
             Ok(accepted) => accepted,
             Err(refusal) => {
-                write_frame(&mut send, &JoinReply::Refused(refusal))
+                write_frame_within(&mut send, &JoinReply::Refused(refusal), IDLE_TIMEOUT)
                     .await
                     .map_err(AcceptError::from_err)?;
                 let _ = send.finish();
-                connection.closed().await;
+                linger(&connection).await;
                 return Ok(());
             }
         };
-        write_frame(&mut send, &JoinReply::Accepted)
+        write_frame_within(&mut send, &JoinReply::Accepted, IDLE_TIMEOUT)
             .await
             .map_err(AcceptError::from_err)?;
         // The log goes out first, then the joiner's own events come in.
         for _ in 0..2 {
             let result = async {
-                read_open(&mut recv).await?;
+                let opened = read_open(&mut recv, IDLE_TIMEOUT).await?;
+                if opened != request.workforce {
+                    return Err(SyncError::OtherWorkforce);
+                }
                 respond(tokio::io::join(&mut recv, &mut send), &log).await
             }
             .await;
@@ -118,7 +124,7 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for JoinHandler<L> {
             }
         }
         let _ = send.finish();
-        connection.closed().await;
+        linger(&connection).await;
         Ok(())
     }
 }
@@ -136,10 +142,10 @@ where
     Fut: std::future::Future<Output = Result<(), E>>,
 {
     let workforce = request.workforce;
-    write_frame(stream, &request)
+    write_frame_within(stream, &request, IDLE_TIMEOUT)
         .await
         .map_err(|error| JoinFailure::Net(error.into()))?;
-    match read_frame(stream)
+    match read_frame_within(stream, REPLY_FRAME_LEN, IDLE_TIMEOUT)
         .await
         .map_err(|error| JoinFailure::Net(error.into()))?
     {

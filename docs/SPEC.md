@@ -70,8 +70,8 @@ wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine,
                                             ├─ permission deciders, notifications
                                             ├─ wf-vcs: worktrees, rebase, merge (the only crate that runs git)
                                             └─ iroh endpoint, started once a second device exists
-                                                 ├─ wf/join/1   invites
-                                                 ├─ wf/sync/2   feed sync
+                                                 ├─ wf/join/2   invites
+                                                 ├─ wf/sync/3   feed sync
                                                  └─ iroh-gossip heads
 ```
 
@@ -1172,7 +1172,7 @@ wf join <code> [--name] [--max-sessions] [--agent NAME=N] [--hardware]   # on th
    a proof by the invite key over its own device key. Any peer verifies it offline; no owner needs to
    be online, the new device never sees the principal key, and nothing in the log could bind another
    device.
-3. **Expiry and single use are enforced by the member serving `wf/join/1`**, not by admission: they
+3. **Expiry and single use are enforced by the member serving `wf/join/2`**, not by admission: they
    need a clock and coordination, and admission must depend on neither. The member reserves an invite
    for the first device that proves it (in memory). A leaked code redeemed through two members that
    cannot see each other binds both devices, on every peer alike, and both are flagged; the fix is
@@ -1186,7 +1186,7 @@ mDNS for LAN-only use.
 
 ### Sync
 
-* **`wf/sync/2`**: the initiator opens a workforce; both sides exchange version vectors
+* **`wf/sync/3`**: the initiator opens a workforce; both sides exchange version vectors
   `{author → (max seq, tips)}` (tips for equivocated feeds); each streams what the other lacks, in
   `(hlc, id)` order, 256 events per frame; then missing parents and wanted history are fetched by id.
   One side writes at a time, with a 30 s idle timeout per frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`), so mismatched peers refuse at the handshake.
@@ -1207,7 +1207,7 @@ mDNS for LAN-only use.
 | Need | Piece |
 |---|---|
 | connectivity, NAT traversal, relays, encryption | `iroh` endpoint, dialed by `EndpointId` |
-| announce heads | `iroh-gossip` (digests only; events go over `wf/sync/2`) |
+| announce heads | `iroh-gossip` (digests only; events go over `wf/sync/3`) |
 | large artifacts (*Planned*: bundles, transcripts) | `iroh-blobs` |
 
 **Not iroh-docs:** it is a mutable key-value store, not a log. Each `(author, key)` keeps only its
@@ -1215,7 +1215,7 @@ latest value by wall clock, and a write removes the author's older entries under
 could erase its own events on every replica. That breaks the append-only log, equivocation evidence
 and admission against the causal past. Its namespace secret is a bearer credential shared by every
 writer. A state-based model on it would be simpler but gives up history, offline authorization and
-causal conflict resolution (P3, P4, P6, P9), while removing only `wf/sync/2`. We write sync ourselves,
+causal conflict resolution (P3, P4, P6, P9), while removing only `wf/sync/3`. We write sync ourselves,
 which also keeps the log independent of transport. Keep the shape compatible with Willow ideas (author
 as subspace, `kind/id` as path) in case that matures.
 
