@@ -274,7 +274,7 @@ async fn turns(
     record: &mut AgentSessionRecord,
 ) -> End {
     // A resumed session's time counts from the resume: how long the daemon was down is unknown.
-    let deadline = run.max_duration.map(|duration| Instant::now() + duration);
+    let mut deadline = run.max_duration.map(|duration| Instant::now() + duration);
     let mut prompt = match first_prompt(daemon, loaded, run, stopped, &deadline, record).await {
         Ok(prompt) => prompt,
         Err(end) => return end,
@@ -350,12 +350,15 @@ async fn turns(
         daemon.faults.harness_answered(&run.harness);
 
         // The agent submitted and ended its turn while the checks run: nothing to say to it until
-        // they are done.
+        // they are done. The daemon runs them, not the agent, so the wait does not count against
+        // the session's time.
+        let waiting_since = Instant::now();
         tokio::select! {
             () = daemon.submissions.until_settled(run.session) => {}
             Some(_) = stopped.recv() => return End::Over,
-            () = sleep_until(deadline) => return End::Interrupt(Interruption::TimedOut),
         }
+        let waited = waiting_since.elapsed();
+        deadline = deadline.map(|deadline| deadline + waited);
         if let Some(failures) = daemon.submissions.take_failure(run.session) {
             last_head = branch_head(run).await;
             turns_without_commit = 0;
