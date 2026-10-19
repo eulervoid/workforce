@@ -263,10 +263,17 @@ impl InView {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Wanted {
     pub detail: Option<Detail>,
+    /// The list of the tab on screen, when that is one the workspace is asked to read.
+    pub listing: Option<Listing>,
+}
+
+/// A list read from the workspace for the tab on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listing {
     /// The items, listed so.
-    pub items: Option<ItemListing>,
+    Items(ItemListing),
     /// The agents and the stats.
-    pub agents: bool,
+    Agents,
 }
 
 /// How the items are listed: `wf item list --group-by --sort`.
@@ -345,20 +352,18 @@ impl Snapshot {
                 .clone()
                 .and_then(|wanted| InView::take(sources, &flagged, wanted)),
             flagged,
-            agents: if wanted.agents {
-                agents(state, &graph, own)
-            } else {
-                Vec::new()
+            agents: match wanted.listing {
+                Some(Listing::Agents) => agents(state, &graph, own),
+                Some(Listing::Items(_)) | None => Vec::new(),
             },
-            stats: if wanted.agents {
-                state.project_stats(now_ms)
-            } else {
-                ProjectStats::default()
+            stats: match wanted.listing {
+                Some(Listing::Agents) => state.project_stats(now_ms),
+                Some(Listing::Items(_)) | None => ProjectStats::default(),
             },
-            items: wanted
-                .items
-                .map(|listing| item_groups(state, &graph, listing))
-                .unwrap_or_default(),
+            items: match wanted.listing {
+                Some(Listing::Items(listing)) => item_groups(state, &graph, listing),
+                Some(Listing::Agents) | None => Vec::new(),
+            },
             links: Links::take(state),
         }
     }

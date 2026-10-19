@@ -16,12 +16,12 @@ use wf_daemon::machine_config::Background;
 use self::chrome::{
     counts_line, draw_header, draw_hints, draw_rule, draw_tip, draw_warning, latest_line,
 };
-use self::detail::{Shown, draw_detail, draw_log, shown_detail};
+use self::detail::{draw_detail, draw_log};
 use self::lists::{
     ListLines, agents_lines, draw_indicator, draw_list, items_lines, now_lines, row,
 };
 use self::popups::{draw_choice, draw_keys, draw_prompt};
-use crate::dashboard::app::{App, Clickable, Drawn, Hovered, Prompt, STRIP, Tab};
+use crate::dashboard::app::{App, Clickable, Drawn, DrawnDetail, Hovered, Prompt, STRIP, Tab};
 use crate::dashboard::links;
 use crate::theme;
 
@@ -278,14 +278,15 @@ pub(super) fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
             let mut spots = Vec::new();
             let shown = match app.in_view() {
                 Some(opened) => draw_detail(frame, app, opened, area, &mut spots),
-                None => draw_log(frame, app, area, &mut spots).map(Shown::Text),
+                None => draw_log(frame, app, area, &mut spots).map(DrawnDetail::Text),
             };
             Drawn {
                 clickable: Clickable {
                     spots,
                     ..Clickable::default()
                 },
-                ..shown_detail(shown)
+                detail: shown,
+                ..Drawn::default()
             }
         }
         Tab::Agents => draw_split(frame, app, area, agents_lines),
@@ -312,14 +313,14 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
                         spots,
                         ..Clickable::default()
                     },
-                    ..shown_detail(shown)
+                    detail: shown,
+                    ..Drawn::default()
                 }
             }
             None => {
                 let mut spots = Vec::new();
                 let (list_top, list) = draw_list(frame, app, list_lines, area, &mut spots);
                 Drawn {
-                    text: None,
                     list_top: Some(list_top),
                     clickable: Clickable {
                         list: Some(list),
@@ -352,7 +353,8 @@ fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -
             spots,
             ..Clickable::default()
         },
-        ..shown_detail(shown)
+        detail: shown,
+        ..Drawn::default()
     }
 }
 

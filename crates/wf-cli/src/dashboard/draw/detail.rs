@@ -9,7 +9,7 @@ use ratatui::widgets::{Paragraph, Wrap};
 use super::chrome::{SEPARATOR, button, draw_breadcrumb};
 use super::lists::{RowLines, context_line, right_start};
 use super::{Themed, ansi_text, draw_position, padded, themed};
-use crate::dashboard::app::{App, Drawn, Opened, Request, Scroll, Spot, Target};
+use crate::dashboard::app::{App, DrawnDetail, Opened, Request, Scroll, Spot, Target};
 use crate::dashboard::draw_diff;
 use crate::dashboard::hint::{ALLOW, DENY};
 use crate::dashboard::links;
@@ -19,33 +19,6 @@ use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::theme;
 use crate::transcript::{self, Format, Transcript};
 
-/// Where a detail was drawn.
-pub(super) enum Shown {
-    /// A text, at this scroll.
-    Text(Scroll),
-    /// A diff, its rows in `area` from `top`, with the cursor on the row `cursor`.
-    Diff {
-        area: Rect,
-        top: usize,
-        cursor: usize,
-    },
-}
-
-/// What drawing showed of a detail, for the rest of what was drawn to go with.
-pub(super) fn shown_detail(shown: Option<Shown>) -> Drawn {
-    match shown {
-        Some(Shown::Text(scroll)) => Drawn {
-            text: Some(scroll),
-            ..Drawn::default()
-        },
-        Some(Shown::Diff { area, top, cursor }) => Drawn {
-            diff: Some((area, top, cursor)),
-            ..Drawn::default()
-        },
-        None => Drawn::default(),
-    }
-}
-
 /// Draws a detail under its breadcrumb; returns where it was drawn, and adds its links to
 /// `spots`.
 pub(super) fn draw_detail(
@@ -54,7 +27,7 @@ pub(super) fn draw_detail(
     opened: Opened,
     area: Rect,
     spots: &mut Vec<Spot>,
-) -> Option<Shown> {
+) -> Option<DrawnDetail> {
     let [title, body] = Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(area);
     // The same margin as the lists.
     let body = Rect {
@@ -107,7 +80,7 @@ pub(super) fn draw_detail(
         Detail::Diff(id) => {
             let pane = app.diffs.get(id)?;
             let (top, cursor) = draw_diff::draw_diff(frame, app, pane, body);
-            return Some(Shown::Diff {
+            return Some(DrawnDetail::Diff {
                 area: body,
                 top,
                 cursor,
@@ -121,7 +94,7 @@ pub(super) fn draw_detail(
         Some(&opened.detail),
         &app.snapshot.links,
     ));
-    Some(Shown::Text(scroll))
+    Some(DrawnDetail::Text(scroll))
 }
 
 /// Draws a session's transcript, with its permission request under it; returns the scroll it was

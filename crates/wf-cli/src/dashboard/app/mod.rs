@@ -28,7 +28,8 @@ use crate::cli::{ItemGrouping, ItemOrder};
 use crate::dashboard::diff::{Changes, DiffPane, LineComment};
 use crate::dashboard::draw;
 use crate::dashboard::snapshot::{
-    Detail, InView, ItemListing, MovedBack, SessionInfo, Snapshot, Waiting, WaitingKey, Wanted,
+    Detail, InView, ItemListing, Listing, MovedBack, SessionInfo, Snapshot, Waiting, WaitingKey,
+    Wanted,
 };
 use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::theme;
@@ -594,18 +595,20 @@ impl App {
         for pane in self.diffs.values_mut() {
             pane.area = None;
         }
-        if let Some((area, top, cursor)) = drawn.diff
-            && let Some(pane) = self.diff_on_top_mut()
-        {
-            pane.shown(area, top, cursor);
-        }
-        let Some(scroll) = drawn.text else {
-            return;
-        };
-        let is_log = self.tab == Tab::Log;
-        match self.stack_mut().last_mut() {
-            Some(opened) => opened.scroll = scroll,
-            None if is_log => self.log.scroll = scroll,
+        match drawn.detail {
+            Some(DrawnDetail::Diff { area, top, cursor }) => {
+                if let Some(pane) = self.diff_on_top_mut() {
+                    pane.shown(area, top, cursor);
+                }
+            }
+            Some(DrawnDetail::Text(scroll)) => {
+                let is_log = self.tab == Tab::Log;
+                match self.stack_mut().last_mut() {
+                    Some(opened) => opened.scroll = scroll,
+                    None if is_log => self.log.scroll = scroll,
+                    None => {}
+                }
+            }
             None => {}
         }
     }
@@ -716,11 +719,14 @@ impl App {
     pub fn wanted(&self) -> Wanted {
         Wanted {
             detail: self.in_view().map(|opened| opened.detail),
-            items: (self.tab == Tab::Items).then_some(ItemListing {
-                grouping: self.items.grouping,
-                order: self.items.order,
-            }),
-            agents: self.tab == Tab::Agents,
+            listing: match self.tab {
+                Tab::Items => Some(Listing::Items(ItemListing {
+                    grouping: self.items.grouping,
+                    order: self.items.order,
+                })),
+                Tab::Agents => Some(Listing::Agents),
+                Tab::Now | Tab::Log => None,
+            },
         }
     }
 

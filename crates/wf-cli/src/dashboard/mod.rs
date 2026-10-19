@@ -141,7 +141,7 @@ fn event_loop(
                 // Scrolling within what is on screen needs nothing new from the workspace.
                 continue;
             }
-            if now_wanted.items == wanted.items && now_wanted.agents == wanted.agents {
+            if now_wanted.listing == wanted.listing {
                 // A move of the selection needs only the detail it comes to.
                 draw = true;
                 feed.read_transcripts(workspace, &mut app);

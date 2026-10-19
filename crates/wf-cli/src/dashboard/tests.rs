@@ -17,8 +17,8 @@ use super::app::{
 };
 use super::draw;
 use super::snapshot::{
-    AgentInfo, Counts, Detail, InView, ItemListing, Links, MovedBack, Place, SessionInfo, Snapshot,
-    Waiting, moves_back,
+    AgentInfo, Counts, Detail, InView, ItemListing, Links, Listing, MovedBack, Place, SessionInfo,
+    Snapshot, Waiting, moves_back,
 };
 use crate::view::{Flag, ItemGroup, ItemRefView, ItemSummary, SessionStatus};
 use crate::{render, theme};
@@ -146,6 +146,14 @@ fn app() -> App {
         "07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_review\n".to_owned(),
     ]);
     app
+}
+
+/// How the items are listed, while the Items tab is on screen.
+fn item_listing(app: &App) -> Option<ItemListing> {
+    match app.wanted().listing {
+        Some(Listing::Items(listing)) => Some(listing),
+        Some(Listing::Agents) | None => None,
+    }
 }
 
 fn press(app: &mut App, code: KeyCode) -> Option<Effect> {
@@ -794,7 +802,7 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
     let mut app = app();
     press(&mut app, KeyCode::Char('2'));
     assert_eq!(
-        app.wanted().items.map(|listing| listing.grouping),
+        item_listing(&app).map(|listing| listing.grouping),
         Some(crate::cli::ItemGrouping::State)
     );
     app.refresh(with_items());
@@ -817,7 +825,7 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
     assert_eq!(titles, ["Parse config lazily"]);
     press(&mut app, KeyCode::Char('o'));
     assert_eq!(
-        app.wanted().items.map(|listing| listing.grouping),
+        item_listing(&app).map(|listing| listing.grouping),
         Some(crate::cli::ItemGrouping::Lane)
     );
 }
@@ -828,7 +836,7 @@ fn the_items_tab_cycles_its_order_and_shows_it_in_its_title() {
     let mut app = app();
     press(&mut app, KeyCode::Char('2'));
     app.refresh(with_items());
-    let order = |app: &App| app.wanted().items.map(|listing| listing.order);
+    let order = |app: &App| item_listing(app).map(|listing| listing.order);
     assert_eq!(order(&app), Some(ItemOrder::Priority));
     assert!(screen(&mut app, 60, 14).contains("by state · sorted by priority"));
     press(&mut app, KeyCode::Char('O'));
@@ -1243,7 +1251,7 @@ fn with_agents() -> Snapshot {
 fn the_agents_tab_lists_each_agent_with_its_sessions() {
     let mut app = app();
     press(&mut app, KeyCode::Char('3'));
-    assert!(app.wanted().agents);
+    assert_eq!(app.wanted().listing, Some(Listing::Agents));
     app.refresh(with_agents());
     insta::assert_snapshot!("agents", screen(&mut app, 60, 16));
     // An agent opens on its definition, a session on its transcript.
@@ -1476,7 +1484,7 @@ fn the_list_behind_an_open_detail_takes_no_keys() {
     press(&mut app, KeyCode::Char('F'));
     press(&mut app, KeyCode::Char('/'));
     assert_eq!(
-        app.wanted().items,
+        item_listing(&app),
         Some(ItemListing {
             grouping: crate::cli::ItemGrouping::State,
             order: crate::cli::ItemOrder::Priority,

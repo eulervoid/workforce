@@ -12,14 +12,24 @@ use crate::dashboard::snapshot::Detail;
 /// land on.
 #[derive(Clone, Debug, Default)]
 pub struct Drawn {
-    pub text: Option<Scroll>,
-    /// Where the rows of a diff were drawn, the first row on screen and the row of its cursor,
-    /// where a diff is.
-    pub diff: Option<(Rect, usize, usize)>,
+    pub detail: Option<DrawnDetail>,
     pub list_top: Option<usize>,
     pub clickable: Clickable,
     /// What is under the pointer.
     pub hovered: Option<Hovered>,
+}
+
+/// What drawing showed of the detail with the keys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DrawnDetail {
+    /// A text, at this scroll.
+    Text(Scroll),
+    /// A diff, its rows in `area` from `top`, with the cursor on the row `cursor`.
+    Diff {
+        area: Rect,
+        top: usize,
+        cursor: usize,
+    },
 }
 
 /// What a click can land on that shows the pointer is over it.
