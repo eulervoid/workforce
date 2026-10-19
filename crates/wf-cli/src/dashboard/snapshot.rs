@@ -3,7 +3,7 @@
 use std::collections::{HashMap, HashSet};
 
 use wf_core::event::{Event, EventBody};
-use wf_core::graph::Readiness;
+use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::identity::{Actor, DeviceKey};
@@ -370,7 +370,7 @@ impl Snapshot {
             waiting,
             working: live
                 .into_iter()
-                .map(|session| session_info(state, own, session))
+                .map(|session| session_info(state, &graph, own, session))
                 .collect(),
             in_view: wanted
                 .detail
@@ -378,7 +378,7 @@ impl Snapshot {
                 .and_then(|wanted| InView::take(sources, &flagged, wanted)),
             flagged,
             agents: if wanted.agents {
-                agents(state, own)
+                agents(state, &graph, own)
             } else {
                 Vec::new()
             },
@@ -499,13 +499,18 @@ fn waiting(
     waiting
 }
 
-fn session_info(state: &State, own: DeviceKey, session: &Session) -> SessionInfo {
+fn session_info(
+    state: &State,
+    graph: &DependencyGraph,
+    own: DeviceKey,
+    session: &Session,
+) -> SessionInfo {
     let status = if let Some(ended) = session.ended() {
         SessionStatus::Ended {
             reason: ended.reason,
             at_ms: ended.at().wall_ms(),
         }
-    } else if state.session_waits(session.id()) {
+    } else if state.session_waits(session.id(), graph) {
         SessionStatus::Parked
     } else {
         SessionStatus::Live
@@ -564,7 +569,8 @@ impl InView {
             }
             Detail::Session(id) => {
                 let session = state.session(id)?;
-                Some(InView::Session(session_info(state, own, session)))
+                let graph = state.dependency_graph();
+                Some(InView::Session(session_info(state, &graph, own, session)))
             }
             Detail::Agent(id) => {
                 let detail = view::agent_detail(state, &id, events, Some(own))?;
@@ -617,7 +623,7 @@ impl InView {
 }
 
 /// The agents, each with its live sessions and the latest that ended.
-fn agents(state: &State, own: DeviceKey) -> Vec<AgentInfo> {
+fn agents(state: &State, graph: &DependencyGraph, own: DeviceKey) -> Vec<AgentInfo> {
     let hosted = state
         .devices()
         .find(|info| info.device == own)
@@ -645,18 +651,14 @@ fn agents(state: &State, own: DeviceKey) -> Vec<AgentInfo> {
                 sessions: sessions
                     .into_iter()
                     .take(live + ENDED_SESSIONS)
-                    .map(|session| session_info(state, own, session))
+                    .map(|session| session_info(state, &graph, own, session))
                     .collect(),
             }
         })
         .collect()
 }
 
-fn item_groups(
-    state: &State,
-    graph: &wf_core::graph::DependencyGraph,
-    listing: ItemListing,
-) -> Vec<ItemGroup> {
+fn item_groups(state: &State, graph: &DependencyGraph, listing: ItemListing) -> Vec<ItemGroup> {
     let entries: Vec<_> = sorted_views(state, false, listing.order)
         .into_iter()
         .map(|view| (view, view::summary(state, graph, view)))

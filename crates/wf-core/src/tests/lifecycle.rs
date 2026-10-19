@@ -1,6 +1,6 @@
 use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::ItemState;
+use crate::item::{ItemState, ItemView};
 use crate::lifecycle::{
     AfterEnd, AfterFailedChecks, Closing, Finish, Interruption, MergeFailure, MergePlan,
     SessionEnd, TurnOutcome,
@@ -537,22 +537,21 @@ fn work_with_an_open_blocker_waits_to_merge_and_the_inbox_shows_the_blocker() {
 fn a_merge_is_planned_from_what_the_item_already_went_through() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));
-    assert_eq!(
-        scene.state.merge_plan(task, commit()),
-        Some(MergePlan::Merge)
-    );
+    let plan = |scene: &Scene| {
+        let state = &scene.state;
+        let policy = &state.policy().unwrap().policy;
+        let Some(ItemView::Live(item)) = state.item(task) else {
+            panic!("the item is live");
+        };
+        MergePlan::of(item, policy, commit())
+    };
+    assert_eq!(plan(&scene), MergePlan::Merge);
 
     scene.apply(merged(task, commit(), commit()));
-    assert_eq!(
-        scene.state.merge_plan(task, commit()),
-        Some(MergePlan::MoveToDone)
-    );
+    assert_eq!(plan(&scene), MergePlan::MoveToDone);
 
     scene.apply(moved(task, ItemState::Done));
-    assert_eq!(
-        scene.state.merge_plan(task, commit()),
-        Some(MergePlan::Nothing)
-    );
+    assert_eq!(plan(&scene), MergePlan::Nothing);
 }
 
 #[test]
@@ -561,18 +560,30 @@ fn only_a_live_work_session_with_a_waiting_item_waits() {
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
     scene.apply(moved(task, ItemState::Active));
-    assert!(!scene.state.session_waits(session));
+    assert!(
+        !scene
+            .state
+            .session_waits(session, &scene.state.dependency_graph())
+    );
 
     let first = scene.item(create("task", "pick a database"));
     scene.apply(depends_on(task, first));
-    assert!(scene.state.session_waits(session));
+    assert!(
+        scene
+            .state
+            .session_waits(session, &scene.state.dependency_graph())
+    );
     assert_eq!(
         scene.state.turn_outcome(session, 0, 3, None),
         TurnOutcome::Park
     );
 
     scene.end(session, EndReason::Released);
-    assert!(!scene.state.session_waits(session));
+    assert!(
+        !scene
+            .state
+            .session_waits(session, &scene.state.dependency_graph())
+    );
 }
 
 #[test]

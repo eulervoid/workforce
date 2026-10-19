@@ -6,9 +6,11 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::event::CommentKind;
+use crate::graph::DependencyGraph;
 use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::{ItemState, ItemView};
+use crate::item::{Item, ItemState, ItemView};
+use crate::policy::Policy;
 use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole};
 use crate::state::State;
 
@@ -133,6 +135,24 @@ pub enum MergePlan {
     MoveToDone,
     /// Merge the commit into the target branch, clean up the branch and move the item to `done`.
     Merge,
+}
+
+impl MergePlan {
+    /// What the daemon does for a request to merge `commit`, the commit that was reviewed, of
+    /// `item`.
+    pub fn of(item: &Item, policy: &Policy, commit: CommitId) -> MergePlan {
+        if item.state(policy) == ItemState::Done {
+            MergePlan::Nothing
+        } else if item
+            .merges()
+            .values()
+            .any(|merged| merged.reviewed == commit)
+        {
+            MergePlan::MoveToDone
+        } else {
+            MergePlan::Merge
+        }
+    }
 }
 
 /// What to do when a turn of a session has ended.
@@ -391,7 +411,7 @@ impl State {
         if let Some(fault) = machine_fault {
             return TurnOutcome::MachineFault(fault);
         }
-        if self.session_waits(session) {
+        if self.session_waits(session, &self.dependency_graph()) {
             return TurnOutcome::Park;
         }
         if nudges_used > nudges_allowed {
@@ -403,8 +423,9 @@ impl State {
 
     /// Whether `session` is a live work session whose item waits on a dependency or on an open
     /// blocker, such as the session's own question. The runner parks such a session after its
-    /// turn, and the dashboards show it as parked.
-    pub fn session_waits(&self, session: SessionId) -> bool {
+    /// turn, and the dashboards show it as parked. `graph` is the dependency graph of this state,
+    /// which callers asking about many sessions build once.
+    pub fn session_waits(&self, session: SessionId, graph: &DependencyGraph) -> bool {
         let Some(folded) = self.session(session) else {
             return false;
         };
@@ -416,30 +437,7 @@ impl State {
             Some(ItemView::Live(live)) => live.has_open_blocker(),
             Some(ItemView::Archived(_)) | None => false,
         };
-        blocked_by_comment
-            || !self
-                .unfinished_dependencies(&self.dependency_graph(), item)
-                .is_empty()
-    }
-
-    /// What the daemon does for a request to merge `commit` of `item`, the commit that was
-    /// reviewed. `None` for an item that does not exist or is archived.
-    pub fn merge_plan(&self, item: ItemId, commit: CommitId) -> Option<MergePlan> {
-        let policy = &self.policy()?.policy;
-        let ItemView::Live(live) = self.item(item)? else {
-            return None;
-        };
-        Some(if live.state(policy) == ItemState::Done {
-            MergePlan::Nothing
-        } else if live
-            .merges()
-            .values()
-            .any(|merged| merged.reviewed == commit)
-        {
-            MergePlan::MoveToDone
-        } else {
-            MergePlan::Merge
-        })
+        blocked_by_comment || !self.unfinished_dependencies(graph, item).is_empty()
     }
 
     /// Refuses a work session on `item` while a live one holds it.

@@ -387,7 +387,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         .collect();
     let parked_sessions = live
         .iter()
-        .filter(|session| state.session_waits(session.id()))
+        .filter(|session| state.session_waits(session.id(), &graph))
         .count();
     let after_failures: Vec<String> = state
         .inbox()

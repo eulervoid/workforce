@@ -66,6 +66,7 @@ pub fn agent_detail(
     sessions.sort_by_key(|session| (!session.is_live(), std::cmp::Reverse(session.started())));
     let live = sessions.iter().filter(|session| session.is_live()).count();
     let shown = sessions.len().min(live + ENDED_SESSIONS_SHOWN);
+    let graph = state.dependency_graph();
     Some(AgentDetail {
         definition: agent_view(state, agent, definition),
         hosts,
@@ -73,7 +74,7 @@ pub fn agent_detail(
         older_sessions: sessions.len() - shown,
         sessions: sessions[..shown]
             .iter()
-            .map(|session| session_view(state, session, None))
+            .map(|session| session_view(state, &graph, session, None))
             .collect(),
         activity: agent_activity(state, agent, events),
     })
