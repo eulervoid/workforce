@@ -160,8 +160,8 @@ impl Daemon {
         let checker = Checker {
             runner: CommandRunner {
                 git: &git,
-                confinement: Confinement::Agents {
-                    access: crate::sandbox::Access {
+                confinement: Confinement::for_checks(
+                    crate::sandbox::Access {
                         worktree: &worktree,
                         repository,
                         branch: None,
@@ -169,11 +169,10 @@ impl Daemon {
                         data_dir: &self.config.data_dir,
                         machine_config: self.config.machine_config.as_deref(),
                     },
-                    sandbox: config.check_sandbox(),
-                    environment: &config.environment,
-                    settings: &settings,
-                    git_config: &git_config,
-                },
+                    &config,
+                    &settings,
+                    &git_config,
+                ),
                 logs: &logs,
             },
             passed: PassedChecks {

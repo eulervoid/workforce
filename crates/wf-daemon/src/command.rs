@@ -13,7 +13,7 @@ use wf_core::session::{CommitId, GitOid};
 use wf_harness::AcpAgentConfig;
 use wf_vcs::{GitCli, VcsError};
 
-use crate::machine_config::{EnvironmentConfig, SandboxConfig};
+use crate::machine_config::{EnvironmentConfig, MachineConfig, SandboxConfig};
 pub use crate::sandbox::Access;
 
 /// How many lines of the end of the output a run returns.
@@ -55,6 +55,25 @@ pub enum Confinement<'a> {
     /// As this process is, which runs in a session and so in the sandbox and environment of its
     /// agent already, but without the session's variables.
     Session { directory: &'a Path },
+}
+
+impl<'a> Confinement<'a> {
+    /// The confinement of a check: in the sandbox that `config` gives checks, with the
+    /// environment it gives agents.
+    pub fn for_checks(
+        access: Access<'a>,
+        config: &'a MachineConfig,
+        settings: &'a Path,
+        git_config: &'a Path,
+    ) -> Self {
+        Confinement::Agents {
+            access,
+            sandbox: config.check_sandbox(),
+            environment: &config.environment,
+            settings,
+            git_config,
+        }
+    }
 }
 
 /// What came of a command.
