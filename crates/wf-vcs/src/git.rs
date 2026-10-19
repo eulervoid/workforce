@@ -4,7 +4,6 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::str::FromStr;
 use std::sync::OnceLock;
-use std::time::{Duration, SystemTime};
 
 use wf_core::id::ItemId;
 use wf_core::session::{CommitId, GitOid};
@@ -14,12 +13,6 @@ use crate::{
     CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Pager, Rebase, StoppedRebase, VcsError,
     Work, item_branch,
 };
-
-/// How long a `packed-refs.lock` may stay before it counts as left behind. Age alone decides,
-/// without looking for a git process that holds it: git keeps the lock only while it rewrites
-/// `packed-refs` (seconds even for a very large repository), so a limit this far above that
-/// never removes a live lock, and it needs no platform specific process lookup.
-const STALE_LOCK_AGE: Duration = Duration::from_secs(120);
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
 
@@ -246,7 +239,7 @@ impl GitCli {
         Ok(PathBuf::from(top.stdout.trim()))
     }
 
-    /// Runs git in `directory` with `environment` set on top, after clearing a lock left behind.
+    /// Runs git in `directory` with `environment` set on top.
     pub(crate) fn run<I, S>(
         &self,
         directory: &Path,
@@ -257,22 +250,7 @@ impl GitCli {
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        self.remove_stale_packed_refs_lock();
         spawn(directory, environment, args)
-    }
-
-    /// Removes a `packed-refs.lock` that has been there for longer than git holds it. A session
-    /// may create that file (its sandbox allows it, so that git can fail quietly), and a
-    /// lock left behind makes every git that deletes or packs a reference fail.
-    fn remove_stale_packed_refs_lock(&self) {
-        let lock = self.git_directory.join("packed-refs.lock");
-        let age = std::fs::metadata(&lock)
-            .and_then(|metadata| metadata.modified())
-            // A modification time in the future cannot come from git, so it counts as stale.
-            .map(|modified| SystemTime::now().duration_since(modified).ok());
-        if age.is_ok_and(|age| age.is_none_or(|age| age > STALE_LOCK_AGE)) {
-            let _ = std::fs::remove_file(&lock);
-        }
     }
 
     /// Whether the git config asks for commits to be signed (`commit.gpgsign`).
@@ -1087,45 +1065,6 @@ mod tests {
     }
 
     #[test]
-    fn a_packed_refs_lock_left_behind_does_not_block_deleting_a_branch() {
-        let repo = TestRepo::new();
-        repo.work("wf/gone", "a.txt", "a");
-        git_in(&repo.directory(), &["pack-refs", "--all"]);
-        let lock = repo.directory().join(".git/packed-refs.lock");
-        let left_behind = std::fs::File::create(&lock).unwrap();
-        left_behind
-            .set_modified(SystemTime::now() - Duration::from_secs(600))
-            .unwrap();
-        repo.remove_worktree(&repo.worktree_path("wf/gone"));
-        repo.git.delete_branch("wf/gone").unwrap();
-        assert!(!lock.exists());
-    }
-
-    #[test]
-    fn a_packed_refs_lock_dated_in_the_future_is_removed() {
-        let repo = TestRepo::new();
-        repo.work("wf/gone", "a.txt", "a");
-        git_in(&repo.directory(), &["pack-refs", "--all"]);
-        let lock = repo.directory().join(".git/packed-refs.lock");
-        let left_behind = std::fs::File::create(&lock).unwrap();
-        left_behind
-            .set_modified(SystemTime::now() + Duration::from_secs(86_400))
-            .unwrap();
-        repo.remove_worktree(&repo.worktree_path("wf/gone"));
-        repo.git.delete_branch("wf/gone").unwrap();
-        assert!(!lock.exists());
-    }
-
-    #[test]
-    fn a_fresh_packed_refs_lock_is_left_alone() {
-        let repo = TestRepo::new();
-        let lock = repo.directory().join(".git/packed-refs.lock");
-        std::fs::File::create(&lock).unwrap();
-        repo.git.remove_stale_packed_refs_lock();
-        assert!(lock.exists());
-    }
-
-    #[test]
     fn a_directory_that_is_not_a_repository_is_refused() {
         let directory = tempfile::TempDir::new().unwrap();
         assert!(GitCli::open(directory.path()).is_err());
@@ -1870,6 +1809,94 @@ mod tests {
             packed.contains("in-pack: 3") || packed.contains("in-pack: 0"),
             "{packed}"
         );
+    }
+
+    /// An agent repository for the item `[7; 32]` with git configured, and that item.
+    fn agent_repository_of_item(repo: &TestRepo) -> (PathBuf, ItemId, String) {
+        let item = ItemId::from_bytes([7; 32]);
+        let path = repo.root.path().join("agent");
+        let branch = item_branch(item);
+        repo.git
+            .create_agent_repository(&path, &branch, repo.main())
+            .unwrap();
+        git_in(&path, &["config", "user.name", "Ada"]);
+        git_in(&path, &["config", "user.email", "ada@example.com"]);
+        git_in(&path, &["config", "commit.gpgsign", "false"]);
+        (path, item, branch)
+    }
+
+    #[test]
+    fn a_commit_graph_in_the_agents_objects_is_not_believed() {
+        let repo = TestRepo::new();
+        let (path, item, branch) = agent_repository_of_item(&repo);
+        let head = commit_in(&path, "a.txt", "a\n");
+        commit_to_main(&repo, "b.txt", "b\n");
+        git_in(&path, &["commit-graph", "write", "--reachable"]);
+        let graph = path.join(".git/objects/info/commit-graph");
+        assert!(graph.exists());
+        // A graph that is not one is ignored, and a valid one does not make the head contain
+        // what it lacks.
+        let behind = repo
+            .git
+            .import_commits(&path, item, "main", ImportMode::Submission)
+            .unwrap();
+        assert_eq!(behind, Import::BehindTarget);
+        let mut bytes = std::fs::read(&graph).unwrap();
+        let middle = bytes.len() / 2;
+        bytes[middle] ^= 0xff;
+        std::fs::remove_file(&graph).unwrap();
+        std::fs::write(&graph, bytes).unwrap();
+        let progress = repo
+            .git
+            .import_commits(&path, item, "main", ImportMode::InProgress)
+            .unwrap();
+        assert_eq!(progress, Import::Imported { commit: head });
+        assert_eq!(repo.git.branch_head(&branch).unwrap(), head);
+    }
+
+    #[test]
+    fn a_tree_with_a_dot_git_entry_is_not_imported() {
+        let repo = TestRepo::new();
+        let (path, item, branch) = agent_repository_of_item(&repo);
+        let script = r#"
+            blob=$(echo x | git hash-object -w --stdin)
+            tree=$({ printf '100644 .git\0'; printf %s "$blob" | xxd -r -p; } | git hash-object -t tree -w --stdin --literally)
+            commit=$(git commit-tree "$tree" -p HEAD -m bad)
+            git update-ref "refs/heads/$1" "$commit"
+        "#;
+        let status = Command::new("sh")
+            .args(["-c", script, "sh", &branch])
+            .current_dir(&path)
+            .status()
+            .unwrap();
+        assert!(status.success());
+        let imported = repo
+            .git
+            .import_commits(&path, item, "main", ImportMode::InProgress);
+        assert!(imported.is_err(), "{imported:?}");
+        assert!(repo.git.branch_head(&branch).is_err());
+    }
+
+    #[test]
+    fn a_packed_refs_that_is_not_a_regular_file_is_not_read() {
+        let repo = TestRepo::new();
+        let (path, _, branch) = agent_repository_of_item(&repo);
+        let packed = path.join(".git/packed-refs");
+        std::fs::remove_file(path.join(".git/refs/heads").join(&branch)).ok();
+        std::os::unix::fs::symlink("/dev/zero", &packed).unwrap();
+        assert_eq!(agent_branch_head(&path, &branch), None);
+        std::fs::remove_file(&packed).unwrap();
+        assert!(
+            Command::new("mkfifo")
+                .arg(&packed)
+                .status()
+                .unwrap()
+                .success()
+        );
+        assert_eq!(agent_branch_head(&path, &branch), None);
+        std::fs::remove_file(&packed).unwrap();
+        std::fs::write(&packed, vec![b'#'; 17 * 1024 * 1024]).unwrap();
+        assert_eq!(agent_branch_head(&path, &branch), None);
     }
 
     #[test]

@@ -17,6 +17,31 @@ use crate::{Import, ImportMode, VcsError, item_branch};
 /// The variable that adds object directories to those git reads from.
 const ALTERNATE_OBJECTS: &str = "GIT_ALTERNATE_OBJECT_DIRECTORIES";
 
+/// Git options for reading the agent's objects: it controls the `commit-graph` and
+/// `multi-pack-index` files in its objects directory, and git would believe a forged one about
+/// parents and reachability.
+const UNTRUSTED_OBJECTS: [&str; 4] = [
+    "-c",
+    "core.commitGraph=false",
+    "-c",
+    "core.multiPackIndex=false",
+];
+
+/// Git never fetches a missing object from a promisor remote while reading the agent's objects.
+const NO_LAZY_FETCH: (&str, &str) = ("GIT_NO_LAZY_FETCH", "1");
+
+/// The most `packed-refs` that is read from the agent's repository.
+const PACKED_REFS_LIMIT: u64 = 16 * 1024 * 1024;
+
+/// `args` after the options for reading untrusted objects.
+fn untrusted<'a>(args: impl IntoIterator<Item = &'a str>) -> Vec<String> {
+    UNTRUSTED_OBJECTS
+        .into_iter()
+        .chain(args)
+        .map(str::to_string)
+        .collect()
+}
+
 impl GitCli {
     /// Makes the repository of an agent at `path`, with `branch` checked out at `commit`. The
     /// agent's objects directory has the principal's as alternate. Does nothing if the
@@ -131,13 +156,13 @@ impl GitCli {
                 output: objects.display().to_string(),
             });
         };
-        let environment = [(ALTERNATE_OBJECTS, objects)];
+        let environment = [(ALTERNATE_OBJECTS, objects), NO_LAZY_FETCH];
         let (head_text, target_reference) = (head.to_string(), format!("refs/heads/{target}"));
         let commit = format!("{head_text}^{{commit}}");
         self.run(
             &self.repository,
             &environment,
-            ["rev-parse", "--verify", &commit],
+            untrusted(["rev-parse", "--verify", &commit]),
         )?
         .ok()?;
         match mode {
@@ -146,7 +171,7 @@ impl GitCli {
                 let contains = self.run(
                     &self.repository,
                     &environment,
-                    ["merge-base", "--is-ancestor", &target_reference, &head_text],
+                    untrusted(["merge-base", "--is-ancestor", &target_reference, &head_text]),
                 )?;
                 if !contains.success {
                     return Ok(Import::BehindTarget);
@@ -154,13 +179,14 @@ impl GitCli {
             }
         }
         // What the principal has already is left out: the target and the branch as it was.
-        let mut reachable = vec![
-            "rev-list".to_string(),
-            "--objects".into(),
-            head_text.clone(),
-        ];
-        reachable.extend(["--not".to_string(), target_reference]);
         let own_branch = format!("refs/heads/{branch}");
+        let mut reachable = untrusted([
+            "rev-list",
+            "--objects",
+            &head_text,
+            "--not",
+            &target_reference,
+        ]);
         if self.branch_exists(&branch)? {
             reachable.push(own_branch.clone());
         }
@@ -168,6 +194,20 @@ impl GitCli {
         if !listing.trim().is_empty() {
             self.pack(&environment, &listing)?;
         }
+        // The principal's repository alone, without the agent's objects, must now have all of
+        // the commits: a bad import leaves the branch where it was.
+        let mut complete = untrusted([
+            "rev-list",
+            "--objects",
+            &head_text,
+            "--not",
+            &target_reference,
+        ]);
+        if self.branch_exists(&branch)? {
+            complete.push(own_branch.clone());
+        }
+        self.run(&self.repository, &[NO_LAZY_FETCH], &complete)?
+            .ok()?;
         self.run(
             &self.repository,
             &[],
@@ -177,32 +217,48 @@ impl GitCli {
         Ok(Import::Imported { commit: head })
     }
 
-    /// Writes a pack of the objects `listing` names, as `git rev-list --objects` prints them.
+    /// Writes a pack of the objects `listing` names, as `git rev-list --objects` prints them,
+    /// into the principal's repository through `index-pack --strict`, which refuses malformed
+    /// objects (a `.git` entry in a tree, say) and objects that do not connect.
     fn pack(&self, environment: &[(&str, &str)], listing: &str) -> Result<(), VcsError> {
         use std::io::Write;
-        let pack = self.git_directory.join("objects/pack/pack");
         let mut packer = git();
         packer
-            .args(["pack-objects", "--quiet"])
-            .arg(&pack)
+            .args(UNTRUSTED_OBJECTS)
+            .args(["pack-objects", "--quiet", "--stdout"])
             .envs(environment.iter().copied())
             .env("LC_ALL", "C")
             .current_dir(&self.repository)
             .stdin(Stdio::piped())
-            .stdout(Stdio::null())
+            .stdout(Stdio::piped())
             .stderr(Stdio::piped());
         let mut packer = packer.spawn().map_err(VcsError::Spawn)?;
         let mut input = packer.stdin.take().expect("stdin is piped");
+        let pack = packer.stdout.take().expect("stdout is piped");
+        let mut indexer = git();
+        // Without the agent's objects: what the pack lacks must be in the principal's.
+        indexer
+            .args(["index-pack", "--stdin", "--strict", "--fix-thin"])
+            .env(NO_LAZY_FETCH.0, NO_LAZY_FETCH.1)
+            .env("LC_ALL", "C")
+            .current_dir(&self.repository)
+            .stdin(Stdio::from(pack))
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped());
+        let indexer = indexer.spawn().map_err(VcsError::Spawn)?;
         // The listing is small beside the pack, and `pack-objects` reads all of it before it
         // writes anything.
         let written = input.write_all(listing.as_bytes());
         drop(input);
-        let output = packer.wait_with_output().map_err(VcsError::Spawn)?;
-        if !output.status.success() {
-            return Err(VcsError::Git {
-                command: "pack-objects".into(),
-                stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
-            });
+        let packed = packer.wait_with_output().map_err(VcsError::Spawn)?;
+        let indexed = indexer.wait_with_output().map_err(VcsError::Spawn)?;
+        for (command, output) in [("pack-objects", packed), ("index-pack", indexed)] {
+            if !output.status.success() {
+                return Err(VcsError::Git {
+                    command: command.into(),
+                    stderr: String::from_utf8_lossy(&output.stderr).trim().to_string(),
+                });
+            }
         }
         written?;
         Ok(())
@@ -220,15 +276,32 @@ pub fn agent_branch_head(repository: &Path, branch: &str) -> Option<CommitId> {
     let reference = format!("refs/heads/{branch}");
     let file = git_directory.join(&reference);
     let text = match std::fs::symlink_metadata(&file) {
-        Ok(metadata) if metadata.is_file() => std::fs::read_to_string(&file).ok()?,
+        Ok(metadata) if metadata.is_file() => read_regular_file(&file, 1024)?,
         Ok(_) => return None,
-        Err(_) => std::fs::read_to_string(git_directory.join("packed-refs"))
-            .ok()?
+        Err(_) => read_regular_file(&git_directory.join("packed-refs"), PACKED_REFS_LIMIT)?
             .lines()
             .find_map(|line| line.strip_suffix(reference.as_str())?.strip_suffix(' '))?
             .to_string(),
     };
     text.trim().parse::<GitOid>().ok().map(CommitId::Git)
+}
+
+/// The text of the file at `path`, if it is a regular file (not a link, FIFO or device, which
+/// could block the daemon or never end) of at most `limit` bytes.
+fn read_regular_file(path: &Path, limit: u64) -> Option<String> {
+    use std::io::Read;
+    let metadata = std::fs::symlink_metadata(path).ok()?;
+    if !metadata.is_file() || metadata.len() > limit {
+        return None;
+    }
+    let mut text = String::new();
+    // The file can grow after the check: the limit applies to what is read.
+    std::fs::File::open(path)
+        .ok()?
+        .take(limit)
+        .read_to_string(&mut text)
+        .ok()?;
+    Some(text)
 }
 
 /// Removes the repository at `path` with the work in it. Does nothing if it is not there.
