@@ -651,7 +651,7 @@ fn agents(state: &State, graph: &DependencyGraph, own: DeviceKey) -> Vec<AgentIn
                 sessions: sessions
                     .into_iter()
                     .take(live + ENDED_SESSIONS)
-                    .map(|session| session_info(state, &graph, own, session))
+                    .map(|session| session_info(state, graph, own, session))
                     .collect(),
             }
         })
