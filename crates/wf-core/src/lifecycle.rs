@@ -1,7 +1,6 @@
 //! What follows from a session starting, ending and finishing a turn. Pure functions of the
 //! state: the daemon asks and then writes the events.
 
-use std::collections::BTreeSet;
 
 use serde::{Deserialize, Serialize};
 
@@ -11,7 +10,7 @@ use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::Policy;
-use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole};
+use crate::session::{CommitId, EndReason, MachineFault, SessionRole};
 use crate::state::State;
 
 /// How an agent ends its session. The session ends after the agent's turn, and the agent writes

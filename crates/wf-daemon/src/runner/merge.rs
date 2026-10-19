@@ -15,6 +15,7 @@ use wf_core::review::PendingMerge;
 use wf_core::session::CommitId;
 use wf_vcs::{CommitSigning, GitCli, MergeOutcome, MergeTree, item_branch, item_worktree};
 
+use super::check::CheckStage;
 use super::{SessionError, blocking};
 use crate::machine_config::MergeSigningConfig;
 use crate::{Daemon, Loaded};
@@ -328,7 +329,14 @@ impl Daemon {
                 MergeTree::Conflict { paths } => MergeOutcome::Conflict { paths },
                 MergeTree::Clean { base, tree } => {
                     let failed = match self
-                        .check_merge(workforce, &repository, checks, base, tree)
+                        .check_merge(
+                            workforce,
+                            &repository,
+                            checks,
+                            base,
+                            tree,
+                            CheckStage::Merge,
+                        )
                         .await
                     {
                         Ok(failed) => failed,
