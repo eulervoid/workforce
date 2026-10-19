@@ -14,7 +14,9 @@ use wf_vcs::{GitCli, Rebase, VcsError, item_branch, item_worktree};
 
 use super::merge::{Attempt, MergeRequest, Reservation};
 use super::start::git_identity;
+use super::submit::Submission;
 use super::{SessionError, Stop, blocking};
+use crate::proto::EndAnswer;
 use crate::{Daemon, Loaded};
 
 impl Daemon {
@@ -100,13 +102,16 @@ impl Daemon {
 
     /// Ends a live session of this machine and applies what follows to its item. Ending one that
     /// has ended already only makes sure its task is stopped.
+    ///
+    /// A submission whose checks have not passed yet is not ended: its checks start, and the
+    /// answer says so.
     pub(crate) async fn finish_session(
         self: &Arc<Self>,
         workforce: WorkforceId,
         loaded: &Arc<Loaded>,
         session: SessionId,
         end: SessionEnd,
-    ) -> Result<(), SessionError> {
+    ) -> Result<EndAnswer, SessionError> {
         let _ending = self.ending.lock(session).await;
         let state = self.snapshot(loaded).await?;
         let folded = state
@@ -117,14 +122,18 @@ impl Daemon {
         }
         if !folded.is_live() {
             self.runners.stop(session, Stop::Now);
-            return Ok(());
+            return Ok(EndAnswer::Ended);
         }
         let principal = self.principal_of_device(&state)?;
         let item = folded.item();
         let role = folded.role();
         let submitted = match &end {
             SessionEnd::Finish(Finish::Submit { .. }) => {
-                if state.rebases_at_submit(session) {
+                // Checks that passed on the head are not run again, nor is the branch rebased
+                // under them.
+                let head = self.submitted_commit(workforce, &state, item).await?;
+                let checked = head.is_some_and(|head| self.submission_checked(session, head));
+                if state.rebases_at_submit(session) && !checked {
                     let agent = folded.agent();
                     let committer = git_identity(&state, agent.principal, &agent.name)?;
                     self.rebase_at_submit(workforce, &state, item, committer)
@@ -152,6 +161,23 @@ impl Daemon {
                 because: None,
             }))
             .map_err(|violation| SessionError::Authoring(violation.into()))?;
+        // The checks of the policy run on the submission before anyone reviews it.
+        if let (SessionEnd::Finish(finish @ Finish::Submit { .. }), Some(commit)) =
+            (&end, submitted)
+            && !self.submission_checked(session, commit)
+        {
+            let checks = Self::checks_of(&state)?;
+            if !checks.is_empty() {
+                let submission = Submission {
+                    workforce,
+                    session,
+                    item,
+                    commit,
+                    finish: finish.clone(),
+                };
+                return self.begin_submission_checks(loaded, submission, checks);
+            }
+        }
         // The comment comes first: once the session has ended it can no longer write. A retry
         // after a failed write finds what an earlier try wrote and goes on from there.
         let because = match note {
@@ -203,7 +229,7 @@ impl Daemon {
         if let Err(error) = &effect
             && error.is_failed_write()
         {
-            return effect.map(|_| ());
+            return effect.map(|_| EndAnswer::Ended);
         }
         self.author(
             loaded,
@@ -215,6 +241,7 @@ impl Daemon {
             }),
         )
         .await?;
+        self.submissions.clear(session);
         // The merge task merges it after the merges before it, now that the submission is
         // written; one that waits on the principal is told of by the dispatcher, which queues it
         // again.
@@ -236,7 +263,7 @@ impl Daemon {
             self.discard_branch(workforce, item).await;
         }
         effect?;
-        Ok(())
+        Ok(EndAnswer::Ended)
     }
 
     /// Removes the worktree and the branch of an item whose work left nothing to keep.

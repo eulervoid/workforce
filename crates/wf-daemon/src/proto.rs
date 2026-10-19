@@ -130,7 +130,7 @@ pub enum Call {
         repository: PathBuf,
     },
     /// Ends the session the connection acts for after the agent's turn, as the agent says, and
-    /// applies what follows from it to its item; answered with `()`.
+    /// applies what follows from it to its item; answered with an [`EndAnswer`].
     EndSession { finish: Finish },
     /// Stops a live session of this machine now, for the principal; answered with `()`.
     StopSession(SessionId),
@@ -162,6 +162,19 @@ pub struct HeldPermission {
     pub passed: Vec<String>,
     /// Milliseconds since the Unix epoch.
     pub since_ms: u64,
+}
+
+/// What an `EndSession` call came to.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EndAnswer {
+    /// The session ends after the agent's turn.
+    Ended,
+    /// A submission is checked first: the daemon runs the checks named here on the merge of the
+    /// work, and the session goes on until they are done. Its next prompt tells which failed;
+    /// when they pass, it ends as the agent said.
+    Checking {
+        checks: Vec<wf_core::name::CommandName>,
+    },
 }
 
 /// What the daemon answers a [`Call`] with: what the call asks for, or why it failed. Each call

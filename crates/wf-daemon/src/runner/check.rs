@@ -10,6 +10,7 @@ use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::lifecycle::AfterFailedChecks;
 use wf_core::policy::CheckConfig;
 use wf_core::session::{CommitId, GitOid};
+use wf_core::state::State;
 use wf_vcs::GitCli;
 
 use super::merge::Attempt;
@@ -51,7 +52,7 @@ pub(super) struct FailedCheck {
 
 impl FailedCheck {
     /// What failed, and what can be done about it, said to whoever is to resolve it.
-    fn told(&self, target: &str) -> String {
+    pub(super) fn told(&self, target: &str) -> String {
         let name = &self.check.name;
         let what = match self.blame {
             Blame::Work => format!("The check `{name}` fails on the merge into {target}."),
@@ -85,7 +86,10 @@ pub(super) fn told_all<'a>(
     failed: impl IntoIterator<Item = &'a FailedCheck>,
     target: &str,
 ) -> String {
-    let told: Vec<_> = failed.into_iter().map(|failed| failed.told(target)).collect();
+    let told: Vec<_> = failed
+        .into_iter()
+        .map(|failed| failed.told(target))
+        .collect();
     told.join("\n\n")
 }
 
@@ -187,6 +191,8 @@ impl Daemon {
         if checks.is_empty() {
             return Ok(Vec::new());
         }
+        // One run at a time per workforce: they share the check worktree.
+        let _running = self.checking.lock(workforce).await;
         let config = self.machine_config()?;
         let git = {
             let repository = repository.to_path_buf();
@@ -264,6 +270,33 @@ impl Daemon {
 }
 
 impl Daemon {
+    /// Writes `text` on `item` as the daemon, naming the principal so that a blocker waits on
+    /// them and not on a supervisor.
+    pub(super) async fn comment_to_principal(
+        &self,
+        loaded: &Loaded,
+        state: &State,
+        principal: PrincipalKey,
+        item: ItemId,
+        kind: CommentKind,
+        text: String,
+    ) -> Result<(), SessionError> {
+        let text = match state.member(&principal) {
+            Some(member) => format!("@{} {text}", member.handle),
+            None => text,
+        };
+        self.author(
+            loaded,
+            Actor::Daemon(principal),
+            EventBody::Commented(Commented {
+                kind,
+                ..Commented::plain(item, text)
+            }),
+        )
+        .await?;
+        Ok(())
+    }
+
     /// Tells of the checks that failed on the merge of the work of `item`, each to whoever can
     /// resolve it: what the work broke goes back to work as a change request per check, unless
     /// that happened too often since the principal last acted; what is not the work's fault, or

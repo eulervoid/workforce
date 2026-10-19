@@ -1,7 +1,6 @@
 //! What follows from a session starting, ending and finishing a turn. Pure functions of the
 //! state: the daemon asks and then writes the events.
 
-
 use serde::{Deserialize, Serialize};
 
 use crate::event::CommentKind;

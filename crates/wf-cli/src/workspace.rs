@@ -14,7 +14,7 @@ use wf_daemon::MachineFaults;
 use wf_daemon::caches::CacheUsage;
 use wf_daemon::caller::Caller;
 use wf_daemon::client::DaemonClient;
-use wf_daemon::proto::HeldPermission;
+use wf_daemon::proto::{EndAnswer, HeldPermission};
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
@@ -413,12 +413,12 @@ impl Workspace {
     }
 
     /// Ends the session this process works in, which runs in the daemon.
-    pub fn end_session(&mut self, finish: Finish) -> anyhow::Result<()> {
+    pub fn end_session(&mut self, finish: Finish) -> anyhow::Result<EndAnswer> {
         let workforce = self.workforce;
         let (client, state) = self.daemon("end sessions")?;
-        client.end_session(workforce, finish)?;
+        let answer = client.end_session(workforce, finish)?;
         *state = client.state(workforce)?;
-        Ok(())
+        Ok(answer)
     }
 
     /// Stops a session that runs in the daemon now.

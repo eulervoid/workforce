@@ -39,6 +39,7 @@ pub(super) async fn run_session(
     daemon.runners.stop(run.session, Stop::Now);
     daemon.held.forget(run.session);
     daemon.callers.revoke(run.session);
+    daemon.submissions.clear(run.session);
     // A session that is still live was only stopped, as when the daemon halts.
     let session = run.session;
     let ended = daemon
@@ -347,6 +348,20 @@ async fn turns(
             }
         };
         daemon.faults.harness_answered(&run.harness);
+
+        // The agent submitted and ended its turn while the checks run: nothing to say to it until
+        // they are done.
+        tokio::select! {
+            () = daemon.submissions.until_settled(run.session) => {}
+            Some(_) = stopped.recv() => return End::Over,
+            () = sleep_until(deadline) => return End::Interrupt(Interruption::TimedOut),
+        }
+        if let Some(failures) = daemon.submissions.take_failure(run.session) {
+            last_head = branch_head(run).await;
+            turns_without_commit = 0;
+            prompt = failures;
+            continue;
+        }
 
         let head = branch_head(run).await;
         if head != last_head {

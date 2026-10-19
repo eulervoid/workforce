@@ -10,12 +10,14 @@ mod merge;
 mod offered;
 mod resume;
 mod start;
+mod submit;
 mod worktrees;
 
 pub(crate) use dispatch::run_dispatcher;
 pub(crate) use merge::{MergeQueue, run_merger};
 pub use resume::session_model;
 pub(crate) use start::sandboxed_in;
+pub(crate) use submit::SubmissionChecks;
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -82,6 +84,11 @@ pub enum SessionError {
         target: String,
         dirty: DirtyCheckout,
     },
+    #[error(
+        "the checks of the submission are running; you are told when they are done, so end your \
+         turn"
+    )]
+    ChecksRunning,
     #[error(transparent)]
     Authoring(#[from] AuthorError),
     #[error(transparent)]
@@ -139,6 +146,7 @@ impl SessionError {
             | Self::Vcs(_)
             | Self::RebaseConflict { .. }
             | Self::RebaseDirty { .. }
+            | Self::ChecksRunning
             | Self::MachineConfig(_)
             | Self::SigningKey(_)
             | Self::Task(_)

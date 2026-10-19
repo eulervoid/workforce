@@ -908,7 +908,9 @@ mod tests {
         assert!(text.contains("- c4d2e1 by @ada/reviewer: Exit with 2 on a missing file"));
         assert!(text.contains("--resolve <id>"));
         assert!(
-            text.contains("Submitting runs the checks of the merge (`fmt`, `test`) in your sandbox"),
+            text.contains(
+                "Submitting runs the checks of the merge (`fmt`, `test`) in your sandbox"
+            ),
             "{text}"
         );
     }

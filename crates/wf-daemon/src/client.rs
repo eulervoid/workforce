@@ -17,8 +17,8 @@ use wf_harness::Permission;
 use crate::caller::{Caller, Token};
 use crate::peers::PeerSync;
 use crate::proto::{
-    Call, Credential, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError, Reply,
-    Request, read_message, write_message,
+    Call, Credential, EndAnswer, HeldPermission, Hello, HelloReply, PROTOCOL_VERSION, ProtoError,
+    Reply, Request, read_message, write_message,
 };
 
 #[derive(Debug, thiserror::Error)]
@@ -221,7 +221,7 @@ impl DaemonClient {
         &mut self,
         workforce: WorkforceId,
         finish: Finish,
-    ) -> Result<(), ClientError> {
+    ) -> Result<EndAnswer, ClientError> {
         self.call(workforce, Call::EndSession { finish })
     }
 
