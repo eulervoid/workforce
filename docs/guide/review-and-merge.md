@@ -102,27 +102,42 @@ What was reviewed is what gets merged: a new submission starts the review over.
 
 ## Checks
 
-With checks in the policy (see [policy.md](policy.md#checks)), the daemon runs them on the merge
-result before it moves the target: one after another, all of them even when one fails, in a worktree
-of their own and in the sandbox the machine config gives checks. A check that passed on a tree is
-not run on it again.
+With checks in the policy (see [policy.md](policy.md#checks)), the daemon runs them on the merge of
+the work into the target twice: when the agent submits, before anyone reviews, and before it moves
+the target. They run one after another, all of them even when one fails, in a worktree of their own.
+A check that passed on a tree in a sandbox is not run on it again in that sandbox.
 
-* **All pass:** the work is merged. If the target moved meanwhile, the new merge result is checked.
-* **The work broke one:** for each such check the daemon writes a change request that the check
-  fails on the merge into `main`, with the command, the end of its output and where its whole log is,
-  and the item goes back to open. The next session has to resolve each before it submits again; the
-  new submission is reviewed again.
+**At submission** the checks run in the agents' sandbox, `[sandbox]` of the machine config, even when
+you let the checks of the merge run without one: the code is not reviewed yet. `wf work submit`
+answers at once that they run, and the agent ends its turn; a whole test suite takes longer than an
+agent's harness lets a command run. The session waits until they are done.
+
+* **They fail:** the daemon prompts the same session with each failed check's name, command, the end
+  of its output and where its whole log is, and writes one change request with the same. The agent
+  fixes them, resolves the change request and submits again. Nobody reviews work that fails its
+  checks.
+* **They pass:** the session ends and the item goes to review.
+
+**At the merge** they run again as the machine config says, which may be without a sandbox (see
+[machine-config.md](machine-config.md#checks)); this is the only place where a check can run outside
+it. Only a check that ran in another sandbox, or on another merge result because the target moved,
+runs again.
+
+* **All pass:** the work is merged.
+* **The work broke one:** the daemon writes a change request that the check fails on the merge into
+  `main`, and the item goes back to open. The next session has to resolve it before it submits again;
+  the new submission is checked and reviewed again.
 * **It is not the work's fault:** a check that fails on the target itself too, or runs out of time,
-  is a blocker for you, and the item stays in review. Fix the target, or the timeout, and resolve the
-  blocker; the merge is checked again.
-* **It keeps failing:** after two failed runs since you last acted on the item, the next failure is a
-  blocker for you instead of going back to the agent.
+  is a blocker for you, at submission as well as at the merge, and the item waits in review. Fix the
+  target, or the timeout, and resolve the blocker; the merge is checked again.
+* **It keeps failing:** after two failed runs, at submission or merge, since you last acted on the
+  item, the next failure is a blocker for you instead of going back to the agent.
 
 `wf check` runs the policy's checks on a checkout as it is, uncommitted changes included, and
 `wf check clippy` runs one. It prints `✓` or `✗` per check, with the end of the output of each that
-failed and where its log is, and fails when one does. Agents are told to run it before they submit;
-the daemon's run before the merge is the one that counts. Not to be mixed up with `wf item check`,
-which ticks steps.
+failed and where its log is, and fails when one does. Agents are told not to run the whole suite
+while they work, since submitting runs it; `wf check` is for when it is worth it. Not to be mixed up
+with `wf item check`, which ticks steps.
 
 The merge commit is signed as your git config says, or as the machine config chooses; see
 [machine-config.md](machine-config.md#commits-and-signatures).

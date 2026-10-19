@@ -184,8 +184,10 @@ name = "examples"
 run = ["cargo", "build", "--workspace", "--examples"]
 ```
 
-A check gets the agents' environment and no secrets, and runs in the sandbox the machine config gives
-checks, by default the agents' (see [machine-config.md](machine-config.md#checks)). Being in the
+A check gets the agents' environment and no secrets, and runs in the agents' sandbox at submission and
+in the sandbox the machine config gives checks at the merge, by default the agents' (see
+[machine-config.md](machine-config.md#checks)). Being in the
 policy, it is out of reach of the work it checks: a branch cannot turn its own checks off. `wf check`
-runs them on your checkout, and agents are told to run it before they submit; what happens when one
-fails before a merge is in [review-and-merge.md](review-and-merge.md#checks).
+runs them on your checkout. The daemon runs them when an agent submits, in the agents' sandbox, so
+the agent hears what fails before anyone reviews, and again before the merge; what happens when one
+fails is in [review-and-merge.md](review-and-merge.md#checks).

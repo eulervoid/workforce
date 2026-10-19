@@ -684,11 +684,13 @@ with its numbered steps, and every earlier comment with its kind. By role it add
 
 * **Work:** dependencies with their last comment; open change requests, each to resolve; the rules:
   commit small on the branch, tick steps (`wf item check`), report per step (`wf comment --step
-  [--done]`), run `wf check` before submitting when the policy has checks, ask with a blocker and end
-  the turn, and end with `wf work submit --note` or `release --note`.
+  [--done]`), build and run the tests near the change while working and leave the whole suite to the
+  submission, which runs the policy's checks and says what failed (`wf check` stays for when it is
+  worth it), ask with a blocker and end the turn, and end with `wf work submit --note` or
+  `release --note`.
 * **Review:** the commit and its diff (inline up to 60 kB), the step in words, change nothing,
-  request changes even when small, give exactly one verdict. Tests the sandbox cannot run are left to
-  the checks.
+  request changes even when small, give exactly one verdict. The checks passed in the sandbox before
+  the review; tests the reviewer's sandbox cannot run are not a reason to escalate.
 * **Supervise:** the blockers waiting on the agent: answer with `--resolve`, or escalate with a
   blocker mentioning the principal that resolves the old one.
 * **Diagnose:** the attempts that did not finish, with their reasons and last words.
@@ -816,7 +818,7 @@ task** per workforce merges one item at a time, outside the dispatch loop; the d
 ends only queue work for it. Work without a review level waits in `review` while queued.
 
 1. Build the merge with `git merge-tree --write-tree`, touching no checkout.
-2. Run the policy's checks on that tree (below).
+2. Run the policy's checks on that tree (below), unless they passed on it in the same sandbox.
 3. Commit it (`Merge #<item>: <title>`) with `git commit-tree`, and advance the target: fast-forward a
    clean checkout of it, or compare-and-swap with `git update-ref`. A target that moved meanwhile is
    tried again (3 times, then one comment).
@@ -829,30 +831,47 @@ ends only queue work for it. Work without a review level waits in `review` while
 * Any other failure comments once and leaves the item in `review` to retry. A reviewed commit that
   already landed only moves the item to done.
 
-**Checks.** `[[merge.check]]` commands (section 15) must pass on the merge result before the target
-moves. They run in the workforce's one check worktree (`<wf>/check`, cleaned before each run, build
+**Checks.** `[[merge.check]]` commands (section 15) must pass on the merge result twice: when the work
+is submitted, before anyone reviews it, and before the target moves. They run in the workforce's one check worktree (`<wf>/check`, cleaned before each run, build
 caches warm), one after another in the policy's order, all of them even after a failure, each without
 a shell, for its timeout at most (capped by the machine config's `[check] max_timeout`). They get the
 agents' environment without `CARGO_TARGET_DIR` (a shared target could give a false pass), the global
-git config with signing off, and the check sandbox of the machine config (section 13). Each run's
-output stays in `check-logs/<name>/`. A pass is kept per tree and command on this machine, so a check
-does not run twice on the same tree.
+git config with signing off, and a sandbox of the machine config (section 13). Each run's output stays
+in `check-logs/<name>/`. A pass is kept per tree, command and sandbox on this machine, so a check does
+not run twice on the same tree in the same sandbox. Runs of one workforce take turns in the check
+worktree.
 
-* **All pass:** the merge commit is made from that tree; if the target moved, the new merge is
-  checked again.
-* **A check fails:** it runs on the target's own tree too. If it passes there, the work broke it: a
-  change request by `@daemon` per such check (name, command, tree, the end of the output, the log's
-  path) and the item goes back to open. If it fails there too, or timed out, it is not the work's
-  fault: a blocker to the principal, the item stays in `review`, and resolving the blocker checks the
-  merge again. Mixed results send the item back for the work's failures and tell the principal of the
-  others.
-* After two failed runs since the principal last acted on the item, or when its type has no open
-  state, failures go to the principal instead of back to work.
+* **At submission.** After the submit rebase the daemon builds the merge of the branch into the target
+  and runs the checks on it in `[sandbox]` (every agent's sandbox without what `[agent.<name>]`
+  adds), even when `[check] sandbox` is off: the code is not reviewed yet. `wf work submit` answers
+  `Checking` at once, with the names of the checks, since a suite takes longer than a harness lets a
+  command run; the session stays live and waits, after its turn, until they are done. A failure is
+  the session's next prompt: each failed check's name, command, tree, the end of its output and its
+  log's path, also written as one change request by `@daemon` for the run, which the session resolves
+  before it submits again. When all pass, the session ends `Submitted` as the agent said and the
+  item moves to review. A submission with open change requests is refused before anything runs; a
+  new submission while the checks run is refused; stopping the session stops them. A daemon that
+  restarts loses the run, and the resumed session submits again.
+* **At the merge** the checks run as the machine config says, in the check sandbox, which may be off;
+  this is the only place a check may run outside the sandbox. Checks that passed at submission on the
+  same tree in the same sandbox do not run again; they run again when the target moved, or when the
+  check sandbox differs from `[sandbox]`.
+* **A check fails:** it runs on the target's own tree too. If it passes there, the work broke it: one
+  change request by `@daemon` for the run (per failed check: name, command, tree, the end of the
+  output, the log's path). At submission it goes back to the session; at the merge the item goes back
+  to open. If it fails there too, or timed out, it is not the work's fault: a blocker to the principal
+  and it does not hold the work back at submission. The blocker is written before the session ends,
+  so the item waits in `review` with it open, and the merge does not run until it is resolved.
+  Mixed results send the work back for its own failures and tell the principal of the others.
+* After two failed runs, at submission or merge, since the principal last acted on the item
+  (`failed_check_runs`: one `CheckFailure` comment is one run), or when its type has no open state,
+  failures go to the principal instead of back to the agent; at submission the session then parks on
+  the blocker.
 * A check's result is about one machine's toolchain, so nothing else goes into the log.
 * `wf check [<name>...]` runs the checks on the checkout it is run in, as it is, and prints a mark per
   check with the end of each failure's output: in a session in the session's sandbox, otherwise in
-  the check sandbox. Agents are told to run it before submitting; the daemon's run is the one that
-  counts.
+  the check sandbox. Agents are told not to run the whole suite while they work, since submitting
+  runs it; the daemon's runs are the ones that count.
 
 **Planned:**
 * `mode = "origin"` (M3): wf pushes approved branches and opens pull requests; the origin decides
@@ -1266,8 +1285,8 @@ reserved; types name existing types and levels; the state rules of section 8. A 
 parse is refused when written, and flagged if it arrives (section 6).
 
 Checks are the one place the policy names programs. They run what the branch contains, as agents
-already do, but in the sandbox this machine's config gives checks and with no secrets, so each
-machine's principal decides what they may do. Being in the policy puts them out of reach of the work
+already do, with no secrets: at submission in the agents' sandbox, at the merge in the sandbox this
+machine's config gives checks, so each machine's principal decides what they may do. Being in the policy puts them out of reach of the work
 they check.
 
 *Planned:* `[compaction] after` (M6), `[assignment]` with `mode`, `fallback` and `lease` (M3),
@@ -1348,6 +1367,9 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 6. Batching several approved items into one checked merge, if checks get slow. Not before it hurts.
 7. A version byte per body instead of a new tag per layout change, before bodies change often.
 8. Prior art to read before M7: Radicle, p2panda, Keyhive, Matrix state resolution.
+9. Should the merge refuse to run checks outside the sandbox for work no principal reviewed (a `light`
+   level, agents only)? Today it runs agent-written code with the principal's privileges after only
+   another agent read it.
 
 ## 18. Milestones
 
