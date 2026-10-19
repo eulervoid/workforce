@@ -179,6 +179,13 @@ impl SyncLog for StorageHandle {
             .await?)
     }
 
+    async fn fill_history(&self) -> Result<(), LogError> {
+        self.with(|replica| replica.fill_history())
+            .await?
+            .map(drop)
+            .map_err(LogError::new)
+    }
+
     async fn missing_parents(&self) -> Result<Vec<EventId>, LogError> {
         Ok(self.with(|replica| replica.missing_parents()).await?)
     }

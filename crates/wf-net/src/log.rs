@@ -11,7 +11,7 @@ use wf_core::sync::{BatchReceived, Versions};
 
 #[derive(Debug, thiserror::Error)]
 #[error("the local log failed")]
-pub struct LogError(#[source] pub Box<dyn std::error::Error + Send + Sync>);
+pub struct LogError(#[source] Box<dyn std::error::Error + Send + Sync>);
 
 impl LogError {
     pub fn new(error: impl std::error::Error + Send + Sync + 'static) -> Self {
@@ -50,6 +50,10 @@ pub trait SyncLog: Send + Sync {
         proof: Signature,
         now_ms: u64,
     ) -> impl Future<Output = Result<Result<(), JoinRefusal>, LogError>> + Send;
+
+    /// Takes in the history of the workforce this one was forked from that parked events are
+    /// waiting for, when it is on this machine.
+    fn fill_history(&self) -> impl Future<Output = Result<(), LogError>> + Send;
 
     /// Parents of parked events that are not known yet.
     fn missing_parents(&self) -> impl Future<Output = Result<Vec<EventId>, LogError>> + Send;

@@ -162,6 +162,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
     async fn pull_missing(&mut self) -> Result<(), SyncError> {
         let mut asked = BTreeSet::new();
         loop {
+            self.log.fill_history().await?;
             let wanted: Vec<EventId> = self
                 .log
                 .missing_parents()

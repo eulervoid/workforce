@@ -164,13 +164,8 @@ impl<S: EventStore> Replica<S> {
     /// Receives many events and persists the outcome once, which is much cheaper than one commit
     /// (and snapshot) per event when a peer sends a long log. Events that are invalid are counted
     /// and dropped.
-    ///
-    /// Then takes in the history of the workforce this one was forked from that the events were
-    /// waiting for, when it is on this machine.
     pub fn receive_batch(&mut self, events: Vec<Event>) -> Result<BatchReceived, StoreError> {
-        let received = self.receive_events(events, Trust::Untrusted)?;
-        self.fill_history()?;
-        Ok(received)
+        self.receive_events(events, Trust::Untrusted)
     }
 
     fn receive_events(
@@ -312,8 +307,7 @@ impl<S: EventStore> Replica<S> {
             .state
             .receive(event.clone(), Trust::Untrusted)
             .map_err(ReceiveError::from)?;
-        self.persist(&event, &received)
-            .map_err(ReceiveError::from)?;
+        self.persist(&event, &received).map_err(ReceiveError::from)?;
         Ok(event)
     }
 

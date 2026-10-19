@@ -38,6 +38,7 @@ struct Forked {
     fixture: Fixture,
     history: Vec<Event>,
     forker: SharedReplica<RedbStore>,
+    genesis: Event,
     child: wf_core::id::WorkforceId,
 }
 
@@ -66,7 +67,7 @@ fn forked(history_len: usize) -> Forked {
 
     // The forker holds the child and, newest first, the history it names.
     let forker = replica(child);
-    forker.lock().receive(genesis).unwrap();
+    forker.lock().receive(genesis.clone()).unwrap();
     let mut newest_first = history.clone();
     newest_first.sort_by_key(|event| std::cmp::Reverse((event.content.hlc, event.id())));
     for event in newest_first {
@@ -77,6 +78,7 @@ fn forked(history_len: usize) -> Forked {
         fixture,
         history,
         forker,
+        genesis,
         child,
     }
 }
@@ -245,5 +247,22 @@ async fn a_source_that_holds_another_workforce_is_ignored() {
     let unrelated = Replica::open(RedbStore::in_memory().unwrap(), other.workforce()).unwrap();
     device.lock().set_history_source(Box::new(unrelated));
     sync(&device, &forked.forker, forked.child).await;
+    assert_eq!(encoded(&device), encoded(&forked.forker));
+}
+
+#[tokio::test]
+async fn history_that_appears_locally_is_taken_in_even_when_the_peer_sends_nothing() {
+    let forked = forked(40);
+    let device = replica(forked.child);
+    device.lock().receive(forked.genesis.clone()).unwrap();
+    assert!(!device.missing_parents().await.unwrap().is_empty());
+
+    device
+        .lock()
+        .set_history_source(Box::new(parent_with(&forked, forked.history.len())));
+    let silent_peer = replica(forked.child);
+    let (device_report, _) = sync(&device, &silent_peer, forked.child).await;
+    assert_eq!(device_report.applied, 0);
+    assert!(device.missing_parents().await.unwrap().is_empty());
     assert_eq!(encoded(&device), encoded(&forked.forker));
 }

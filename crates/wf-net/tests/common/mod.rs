@@ -66,6 +66,10 @@ impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
             .check_join(&invite, device, &proof, now_ms))
     }
 
+    async fn fill_history(&self) -> Result<(), LogError> {
+        self.lock().fill_history().map(drop).map_err(LogError::new)
+    }
+
     async fn missing_parents(&self) -> Result<Vec<EventId>, LogError> {
         Ok(self.lock().missing_parents())
     }
