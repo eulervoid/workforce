@@ -12,6 +12,9 @@ path = "src/lib.rs"
 name = "wf"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 wf-core.workspace = true
 wf-store.workspace = true
@@ -35,9 +38,9 @@ tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 rustix = { version = "1", features = ["process", "system"] }
 terminal_size = "0.4.4"
 nucleo-picker = "0.12"
-anstyle = "1.0.14"
+anstyle.workspace = true
 anstream = "1.0.0"
-pulldown-cmark = "0.13"
+pulldown-cmark.workspace = true
 rand.workspace = true
 similar = "3.2"
 textwrap = "0.16"
@@ -48,9 +51,8 @@ ratatui = { version = "0.30", features = ["unstable-rendered-line-info"] }
 ratatui-core = { version = "0.1", features = ["anstyle"] }
 ansi-to-tui = "8"
 tui-input = "0.15"
-bytesize = "2.7.0"
+bytesize.workspace = true
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }
-wf-net.workspace = true
 insta = { version = "1", features = ["json"] }

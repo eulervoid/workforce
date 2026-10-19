@@ -145,62 +145,53 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 render::status,
             )
         }
-        command => {
-            let mut workspace = Workspace::open(data, cwd, false)?;
-            match command {
-                Command::Init(_)
-                | Command::Join(_)
-                | Command::Daemon(_)
-                | Command::Import { .. }
-                | Command::Permissions(_)
-                | Command::Harness(_)
-                | Command::Status { .. } => unreachable!("handled above"),
-                Command::Session(command) => {
-                    crate::session::session(json, mode, command, &mut workspace)
-                }
-                Command::Work(command) => work(json, command, &mut workspace),
-                Command::Review(args) => review(json, mode, &mut workspace, args),
-                Command::Check { names } => check(json, &workspace, cwd, names),
-                Command::Inbox => {
-                    let views = view::inbox_views(
-                        workspace.state(),
-                        &workspace.held_permissions()?,
-                        &workspace.machine_faults()?,
-                    );
-                    emit(json, &views, |views| render::inbox(views))
-                }
-                Command::Agent(command) => agent(json, command, &mut workspace),
-                Command::Item(command) => item(json, mode, command, &mut workspace),
-                Command::Comment(args) => comment(json, mode, &mut workspace, args),
-                Command::Mentions { target } => mentions(json, &workspace, &target),
-                Command::Policy(command) => policy(json, command, &mut workspace),
-                Command::Log(args) => log(json, mode, &mut workspace, args),
-                Command::Stats => {
-                    let views = view::item_stats_views(workspace.state());
-                    emit_paged(json, mode, &views, |views| render::item_stats_list(views))
-                }
-                Command::Export => crate::export::export(&workspace),
-                Command::Device(command) => crate::devices::device(json, command, &mut workspace),
-                Command::Members => crate::devices::members(json, &workspace),
-                Command::Fork {
-                    command: Some(ForkCommand::List),
-                    ..
-                } => crate::fork::list(json, &workspace),
-                Command::Fork {
-                    args,
-                    command: None,
-                } => crate::fork::fork(json, &mut workspace, args, cwd),
-                Command::Fork {
-                    command: Some(ForkCommand::Accept { .. }),
-                    ..
-                } => unreachable!("handled above"),
-                Command::Sync(args) => crate::network::sync(json, workspace, args),
-                Command::Invite(InviteCommand::Device(args)) => {
-                    crate::network::invite_device(json, &mut workspace, args)
-                }
-            }
+        Command::Session(command) => {
+            crate::session::session(json, mode, command, &mut open(data, cwd)?)
+        }
+        Command::Work(command) => work(json, command, &mut open(data, cwd)?),
+        Command::Review(args) => review(json, mode, &mut open(data, cwd)?, args),
+        Command::Check { names } => check(json, &open(data, cwd)?, cwd, names),
+        Command::Inbox => {
+            let workspace = open(data, cwd)?;
+            let views = view::inbox_views(
+                workspace.state(),
+                &workspace.held_permissions()?,
+                &workspace.machine_faults()?,
+            );
+            emit(json, &views, |views| render::inbox(views))
+        }
+        Command::Agent(command) => agent(json, command, &mut open(data, cwd)?),
+        Command::Item(command) => item(json, mode, command, &mut open(data, cwd)?),
+        Command::Comment(args) => comment(json, mode, &mut open(data, cwd)?, args),
+        Command::Mentions { target } => mentions(json, &open(data, cwd)?, &target),
+        Command::Policy(command) => policy(json, command, &mut open(data, cwd)?),
+        Command::Log(args) => log(json, mode, &mut open(data, cwd)?, args),
+        Command::Stats => {
+            let workspace = open(data, cwd)?;
+            let views = view::item_stats_views(workspace.state());
+            emit_paged(json, mode, &views, |views| render::item_stats_list(views))
+        }
+        Command::Export => crate::export::export(&open(data, cwd)?),
+        Command::Device(command) => crate::devices::device(json, command, &mut open(data, cwd)?),
+        Command::Members => crate::devices::members(json, &open(data, cwd)?),
+        Command::Fork {
+            command: Some(ForkCommand::List),
+            ..
+        } => crate::fork::list(json, &open(data, cwd)?),
+        Command::Fork {
+            args,
+            command: None,
+        } => crate::fork::fork(json, &mut open(data, cwd)?, args, cwd),
+        Command::Sync(args) => crate::network::sync(json, open(data, cwd)?, args),
+        Command::Invite(InviteCommand::Device(args)) => {
+            crate::network::invite_device(json, &mut open(data, cwd)?, args)
         }
     }
+}
+
+/// The workforce of the working directory, for the commands that read or write its log.
+fn open(data: DataDir, cwd: &Path) -> anyhow::Result<Workspace> {
+    Workspace::open(data, cwd, false)
 }
 
 /// What the caches in the worktrees of the workforce take on this machine, when the machine

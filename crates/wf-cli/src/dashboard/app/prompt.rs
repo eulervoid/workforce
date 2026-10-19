@@ -153,6 +153,10 @@ enum Typed {
 }
 
 /// Takes a key of a prompt for a text that is posted.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "crossterm's `KeyCode` has keys no binding uses"
+)]
 fn type_into(input: &mut Input, key: KeyEvent) -> Typed {
     let text = || input.value().trim().to_owned();
     match key.code {
@@ -206,6 +210,10 @@ impl App {
 
     /// A key while the footer asks for something: the prompt it leaves open, and what it asks of
     /// the workforce.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "crossterm's `KeyCode` has keys no binding uses"
+    )]
     pub(super) fn prompt_key(
         &mut self,
         prompt: Prompt,

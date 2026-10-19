@@ -3158,7 +3158,7 @@ fn i_in_a_diff_or_session_opened_from_its_item_goes_back_to_the_item() {
     app.refresh(snapshot);
     press(&mut app, KeyCode::Char('G'));
     press(&mut app, KeyCode::Enter);
-    let item_scroll = app.stack().last().unwrap().scroll.clone();
+    let item_scroll = app.stack().last().unwrap().scroll;
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.path(), [Detail::Item(parse), Detail::Session(coder)]);
     press(&mut app, KeyCode::Char('i'));
@@ -3651,9 +3651,11 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
     let titles: Vec<&str> = snapshot
         .waiting
         .iter()
-        .filter_map(|entry| match entry {
-            InboxEntry::MachineFault { title, .. } => Some(title.as_str()),
-            _ => None,
+        .filter_map(|entry| {
+            let InboxEntry::MachineFault { title, .. } = entry else {
+                return None;
+            };
+            Some(title.as_str())
         })
         .collect();
     assert_eq!(

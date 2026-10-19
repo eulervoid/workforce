@@ -14,8 +14,10 @@ wf-net = { path = "crates/wf-net" }
 wf-daemon = { path = "crates/wf-daemon" }
 wf-harness = { path = "crates/wf-harness" }
 wf-vcs = { path = "crates/wf-vcs" }
+anstyle = "1.0.14"
 anyhow = "1"
 blake3 = "1"
+bytesize = "2.7.0"
 close_fds = "0.3"
 clap = { version = "4", features = ["derive"] }
 comfy-table = { version = "8", features = ["custom_styling"] }
@@ -44,3 +46,8 @@ tracing = "0.1"
 [profile.dev]
 # Line tables keep backtraces with file and line, at about half the size of a target directory.
 debug = "line-tables-only"
+
+[workspace.lints.clippy]
+# A new variant of an enum we own must fail to compile where it needs handling. Matches on
+# enums of other crates carry an `#[expect]` saying why a wildcard is right there.
+wildcard_enum_match_arm = "warn"

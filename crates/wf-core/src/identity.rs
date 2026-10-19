@@ -26,7 +26,7 @@ pub enum KeyError {
     #[error("signature does not match")]
     BadSignature,
     #[error("failed to encode signed content")]
-    Encoding(#[from] postcard::Error),
+    Encoding(#[from] crate::encoding::EncodingError),
 }
 
 macro_rules! key_pair {
@@ -199,7 +199,7 @@ impl InviteSigner {
         invite: EventId,
         device: DeviceKey,
     ) -> Result<Signature, KeyError> {
-        let payload = postcard::to_stdvec(&InviteProofPayload {
+        let payload = crate::encoding::encode(&InviteProofPayload {
             workforce,
             invite,
             device,
@@ -216,7 +216,7 @@ impl InviteKey {
         device: DeviceKey,
         proof: &Signature,
     ) -> Result<(), KeyError> {
-        let payload = postcard::to_stdvec(&InviteProofPayload {
+        let payload = crate::encoding::encode(&InviteProofPayload {
             workforce,
             invite,
             device,
@@ -293,7 +293,7 @@ impl<T: Serialize> Signed<T> {
         workforce: Option<WorkforceId>,
         statement: T,
     ) -> Result<Self, KeyError> {
-        let payload = postcard::to_stdvec(&SignedPayload {
+        let payload = crate::encoding::encode(&SignedPayload {
             workforce,
             statement: &statement,
         })?;
@@ -305,7 +305,7 @@ impl<T: Serialize> Signed<T> {
     }
 
     pub fn verify(&self, workforce: Option<WorkforceId>) -> Result<(), KeyError> {
-        let payload = postcard::to_stdvec(&SignedPayload {
+        let payload = crate::encoding::encode(&SignedPayload {
             workforce,
             statement: &self.statement,
         })?;

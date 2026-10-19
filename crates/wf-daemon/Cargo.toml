@@ -4,6 +4,9 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lints]
+workspace = true
+
 [dependencies]
 wf-core.workspace = true
 wf-store.workspace = true
@@ -28,9 +31,9 @@ url = { version = "2", features = ["serde"] }
 reqwest = { version = "0.13", default-features = false, features = ["rustls-no-provider", "json"] }
 rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 shellexpand = { version = "3.1.2", default-features = false, features = ["base-0"] }
-bytesize = { version = "2.7.0", features = ["serde"] }
+bytesize = { workspace = true, features = ["serde"] }
 walkdir = "2.5.0"
-anstyle = "1.0.14"
+anstyle.workspace = true
 anstyle-git = "1.1.5"
 
 [dev-dependencies]
