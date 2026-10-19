@@ -7,15 +7,13 @@ use std::time::Duration;
 use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use wf_core::name::HarnessName;
+use wf_harness::KnownHarness;
 
 use crate::commands::emit;
 
-/// The harnesses wf knows how to start, in the order they are offered.
-const KNOWN: &[&str] = &["claude-code", "opencode", "codex", "gemini-cli"];
-
 /// Whether this machine can start `harness`: wf knows it by name.
 pub fn is_startable(harness: &str) -> bool {
-    wf_harness::command_for(harness).is_some()
+    KnownHarness::from_name(harness).is_some()
 }
 
 /// What `wf agent add` and `edit` make of a harness name.
@@ -29,16 +27,17 @@ pub fn check_startable(
     if is_startable(harness.as_str()) {
         return Ok(None);
     }
-    let closest = KNOWN
-        .iter()
+    let closest = KnownHarness::ALL
+        .into_iter()
         .max_by(|left, right| {
-            strsim::jaro_winkler(harness.as_str(), left)
-                .total_cmp(&strsim::jaro_winkler(harness.as_str(), right))
+            strsim::jaro_winkler(harness.as_str(), left.name())
+                .total_cmp(&strsim::jaro_winkler(harness.as_str(), right.name()))
         })
-        .expect("wf knows harnesses");
-    let known = KNOWN
+        .expect("wf knows harnesses")
+        .name();
+    let known = KnownHarness::ALL
         .iter()
-        .map(|name| format!("`{name}`"))
+        .map(|known| format!("`{}`", known.name()))
         .collect::<Vec<_>>()
         .join(", ");
     if allow_unknown_here {
@@ -60,17 +59,15 @@ fn is_executable(path: &Path) -> bool {
 
 pub fn detect(path_variable: &std::ffi::OsStr) -> Vec<&'static str> {
     let directories: Vec<PathBuf> = std::env::split_paths(path_variable).collect();
-    KNOWN
-        .iter()
+    KnownHarness::ALL
+        .into_iter()
         .filter(|harness| {
-            let Some(agent) = wf_harness::command_for(harness) else {
-                return false;
-            };
+            let agent = harness.command();
             directories
                 .iter()
                 .any(|directory| is_executable(&directory.join(agent.command())))
         })
-        .copied()
+        .map(KnownHarness::name)
         .collect()
 }
 
@@ -99,8 +96,9 @@ fn without_provider<'a>(value: &str, name: &'a str) -> &'a str {
 /// `wf harness models`: starts the harness, opens a session in an empty directory to read the
 /// models it offers, and stops it.
 pub fn models(json: bool, harness: &HarnessName) -> anyhow::Result<()> {
-    let agent = wf_harness::command_for(harness.as_str())
-        .ok_or_else(|| anyhow!("wf does not know how to start the harness {harness}"))?;
+    let agent = KnownHarness::from_name(harness.as_str())
+        .ok_or_else(|| anyhow!("wf does not know how to start the harness {harness}"))?
+        .command();
     let directory = tempfile::tempdir()?;
     let runtime = tokio::runtime::Builder::new_current_thread()
         .enable_all()

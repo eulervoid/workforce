@@ -185,14 +185,46 @@ const CLOSE_INHERITED: &str = r#"for path in /dev/fd/*; do
 done
 exec "$@""#;
 
-/// The command that starts a known harness in ACP mode.
-pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
-    match harness {
-        "opencode" => Some(AcpAgentConfig::new("opencode").arg("acp")),
-        "claude-code" => Some(AcpAgentConfig::new("claude-agent-acp")),
-        "codex" => Some(AcpAgentConfig::new("codex-acp")),
-        "gemini-cli" => Some(AcpAgentConfig::new("gemini").arg("--experimental-acp")),
-        _ => None,
+/// A harness wf knows how to start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KnownHarness {
+    ClaudeCode,
+    Opencode,
+    Codex,
+    GeminiCli,
+}
+
+impl KnownHarness {
+    /// Every known harness, in the order they are offered.
+    pub const ALL: [KnownHarness; 4] = [
+        KnownHarness::ClaudeCode,
+        KnownHarness::Opencode,
+        KnownHarness::Codex,
+        KnownHarness::GeminiCli,
+    ];
+
+    /// The harness called `name`, if wf knows it.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|harness| harness.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            KnownHarness::ClaudeCode => "claude-code",
+            KnownHarness::Opencode => "opencode",
+            KnownHarness::Codex => "codex",
+            KnownHarness::GeminiCli => "gemini-cli",
+        }
+    }
+
+    /// The command that starts it in ACP mode.
+    pub fn command(self) -> AcpAgentConfig {
+        match self {
+            KnownHarness::ClaudeCode => AcpAgentConfig::new("claude-agent-acp"),
+            KnownHarness::Opencode => AcpAgentConfig::new("opencode").arg("acp"),
+            KnownHarness::Codex => AcpAgentConfig::new("codex-acp"),
+            KnownHarness::GeminiCli => AcpAgentConfig::new("gemini").arg("--experimental-acp"),
+        }
     }
 }
 
@@ -588,9 +620,12 @@ mod tests {
 
     #[test]
     fn known_harnesses_have_commands() {
-        let opencode = command_for("opencode").unwrap();
+        let opencode = KnownHarness::from_name("opencode").unwrap().command();
         assert_eq!(opencode.arguments(), ["acp"]);
-        assert!(command_for("unknown").is_none());
+        assert!(KnownHarness::from_name("unknown").is_none());
+        for harness in KnownHarness::ALL {
+            assert_eq!(KnownHarness::from_name(harness.name()), Some(harness));
+        }
     }
 }
 
