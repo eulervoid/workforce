@@ -51,6 +51,11 @@ item's work, as `wf item diff` computes it, against the target or, once merged, 
 it in: a header for each file with what it adds and removes, then its hunks, each line with its
 numbers before and after.
 
+While an agent works on another of your machines, the diff is read from that machine: a line above
+it says which device and how long ago it answered. The dashboard asks again every few seconds while
+the diff is on screen, and when the machine cannot be reached it keeps the last diff, with its age and
+the reason. Only what is committed shows from another machine, not what its agent has yet to commit.
+
 ### Keys
 
 `?` shows them all. The keys that act work on the selected entry of the Now tab, or on the item or

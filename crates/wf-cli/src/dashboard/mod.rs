@@ -29,12 +29,17 @@ use wf_daemon::proto::HeldPermission;
 use self::app::{App, Wheel};
 use self::diff::{Changes, ItemWork};
 use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
+use crate::commands::{DeviceDiff, ItemDiff};
 use crate::transcript::Format;
 use crate::workspace::Workspace;
 use crate::{commands, render, transcript, view};
 
 /// How often the daemon is asked for what is new.
 const REFRESH_EVERY: Duration = Duration::from_millis(500);
+
+/// How often the diff on screen is asked of the device of its session, which is a request over
+/// the network rather than a read of a branch.
+const ASK_DEVICE_EVERY: Duration = Duration::from_secs(3);
 
 /// How many of the latest events the Log tab starts with.
 const BACKLOG: usize = 200;
@@ -281,6 +286,30 @@ struct Feed {
     git: Option<wf_vcs::GitCli>,
     /// What the snapshot on screen was taken from.
     taken: Option<Taken>,
+    /// When each diff was last asked of the device of its session.
+    asked_devices: AskedDevices,
+}
+
+/// When each diff was last asked of the device of its session, however that came out, so a
+/// device that cannot be reached is not waited for on every tick.
+#[derive(Default)]
+struct AskedDevices(HashMap<ItemId, Instant>);
+
+impl AskedDevices {
+    fn due(&self, item: ItemId) -> bool {
+        self.0
+            .get(&item)
+            .is_none_or(|asked| asked.elapsed() >= ASK_DEVICE_EVERY)
+    }
+
+    fn asked(&mut self, item: ItemId) {
+        self.0.insert(item, Instant::now());
+    }
+
+    /// The diff is read here again, so nothing holds it back.
+    fn forget(&mut self, item: ItemId) {
+        self.0.remove(&item);
+    }
 }
 
 impl Feed {
@@ -294,6 +323,7 @@ impl Feed {
             readers: HashMap::new(),
             git: None,
             taken: None,
+            asked_devices: AskedDevices::default(),
         })
     }
 
@@ -370,27 +400,51 @@ impl Feed {
         let Some(pane) = app.diffs.get_mut(&item) else {
             return;
         };
-        let mut read = || -> anyhow::Result<Option<ItemWork>> {
+        if !self.asked_devices.due(item) {
+            return;
+        }
+        let mut read = || -> anyhow::Result<()> {
             let git = match &self.git {
                 Some(git) => git,
                 None => self.git.insert(workspace.repository()?),
             };
-            let work = commands::item_work(workspace, git, item)?;
-            let commit = work.shown();
-            if pane.commit() == Some(commit) {
-                return Ok(None);
+            let now_ms = wf_store::now_ms();
+            match commands::item_diff(workspace, git, item, pane.commit())? {
+                ItemDiff::Local(work) => {
+                    self.asked_devices.forget(item);
+                    let commit = work.shown();
+                    if pane.commit() == Some(commit) && pane.device().is_none() {
+                        return Ok(());
+                    }
+                    let changes = if git.has_commits(&work)? {
+                        Changes::Files(git.file_diffs(&work)?)
+                    } else {
+                        Changes::NoCommits
+                    };
+                    pane.read(Ok(ItemWork { commit, changes }));
+                }
+                ItemDiff::Device { device, diff } => {
+                    self.asked_devices.asked(item);
+                    match diff {
+                        DeviceDiff::Work(work) => {
+                            let changes = Changes::Files(wf_vcs::diff::parse(&work.committed));
+                            let work = ItemWork {
+                                commit: work.head,
+                                changes,
+                            };
+                            pane.read_from_device(device, work, now_ms);
+                        }
+                        DeviceDiff::Unchanged => pane.device_unchanged(device, now_ms),
+                        DeviceDiff::Unreachable(reason) => {
+                            pane.device_unreachable(device, reason);
+                        }
+                    }
+                }
             }
-            let changes = if git.has_commits(&work)? {
-                Changes::Files(git.file_diffs(&work)?)
-            } else {
-                Changes::NoCommits
-            };
-            Ok(Some(ItemWork { commit, changes }))
+            Ok(())
         };
-        match read() {
-            Ok(None) => {}
-            Ok(Some(work)) => pane.read(Ok(work)),
-            Err(error) => pane.read(Err(format!("{error:#}"))),
+        if let Err(error) = read() {
+            pane.read(Err(format!("{error:#}")));
         }
     }
 

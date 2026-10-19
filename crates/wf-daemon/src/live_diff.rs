@@ -122,7 +122,7 @@ fn read_work(
     Ok(DiffAnswer::Work(Work {
         target: target.to_string(),
         head,
-        committed: git.diff(&work, &[])?,
+        committed: git.parseable_diff(&work)?,
     }))
 }
 

@@ -952,8 +952,14 @@ impl GitCli {
     /// The same diff as data: the files it changes, their hunks and their lines, whatever the
     /// git config says about how a diff looks.
     pub fn file_diffs(&self, work: &Work) -> Result<Vec<diff::FileDiff>, VcsError> {
+        Ok(diff::parse(&self.parseable_diff(work)?))
+    }
+
+    /// What `work` changes in the form [`diff::parse`] reads, whatever the git config says, which
+    /// is what a device sends another that shows the diff as data.
+    pub fn parseable_diff(&self, work: &Work) -> Result<String, VcsError> {
         let args = diff::ARGS.map(String::from);
-        Ok(diff::parse(&self.diff(work, &args)?))
+        self.diff(work, &args)
     }
 }
 

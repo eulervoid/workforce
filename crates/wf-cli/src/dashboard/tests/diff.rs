@@ -429,3 +429,62 @@ fn a_refresh_clears_only_the_failure_of_reading_the_workforce() {
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(app.status, None);
 }
+
+#[test]
+fn a_diff_read_from_another_device_says_where_and_keeps_the_last_one_while_it_is_unreachable() {
+    let device = wf_core::identity::DeviceSigner::generate([9; 32]).key();
+    let mut app = diff_app();
+    let now_ms = app.snapshot.now_ms;
+    let pane = app.diff_on_top_mut().unwrap();
+    let work = crate::dashboard::diff::ItemWork {
+        commit: work_commit(),
+        changes: crate::dashboard::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
+    };
+    pane.read_from_device(device, work, now_ms.saturating_sub(120_000));
+    let shown = screen(&mut app, 100, 24);
+    assert!(
+        shown.contains(&format!("committed on {}, 2 min ago", device.fmt_short())),
+        "{shown}"
+    );
+    assert!(!shown.contains("unreachable"), "{shown}");
+
+    let pane = app.diff_on_top_mut().unwrap();
+    pane.device_unreachable(device, "timed out".to_owned());
+    let shown = screen(&mut app, 120, 24);
+    assert!(
+        shown.contains("unreachable, as of 2 min ago: timed out"),
+        "{shown}"
+    );
+    // The last diff stays on screen.
+    assert!(!app.diff_on_top_mut().unwrap().files().is_empty());
+
+    let pane = app.diff_on_top_mut().unwrap();
+    pane.device_unchanged(device, now_ms);
+    let shown = screen(&mut app, 120, 24);
+    assert!(shown.contains("just now"), "{shown}");
+    assert!(!shown.contains("unreachable"), "{shown}");
+}
+
+#[test]
+fn a_device_that_cannot_be_reached_before_any_diff_was_read_is_said_so() {
+    let device = wf_core::identity::DeviceSigner::generate([9; 32]).key();
+    let mut app = diff_app();
+    let pane = app.diff_on_top_mut().unwrap();
+    pane.device_unreachable(device, "timed out".to_owned());
+    let shown = screen(&mut app, 100, 24);
+    assert!(shown.contains("cannot be reached: timed out"), "{shown}");
+}
+
+#[test]
+fn a_device_asked_is_not_asked_again_within_the_interval_even_when_unreachable() {
+    use crate::dashboard::AskedDevices;
+
+    let item = ItemId::from_bytes([3; 32]);
+    let mut asked = AskedDevices::default();
+    assert!(asked.due(item));
+    asked.asked(item);
+    assert!(!asked.due(item));
+    assert!(asked.due(ItemId::from_bytes([4; 32])));
+    asked.forget(item);
+    assert!(asked.due(item));
+}
