@@ -37,6 +37,7 @@ pub(super) fn sandboxed(
         &run.sandbox,
         &run.worktree,
         &run.repository,
+        Some(&run.branch),
         &settings,
         agent,
     )
@@ -48,6 +49,7 @@ pub(crate) fn sandboxed_in(
     sandbox: &SandboxConfig,
     worktree: &std::path::Path,
     repository: &std::path::Path,
+    branch: Option<&str>,
     settings: &std::path::Path,
     agent: AcpAgentConfig,
 ) -> Result<AcpAgentConfig, String> {
@@ -61,6 +63,7 @@ pub(crate) fn sandboxed_in(
     let access = crate::sandbox::Access {
         worktree,
         repository,
+        branch,
         socket: &daemon.config.socket,
         data_dir: &daemon.config.data_dir,
         machine_config: daemon.config.machine_config.as_deref(),

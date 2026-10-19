@@ -20,6 +20,9 @@ pub struct Access<'a> {
     pub worktree: &'a Path,
     /// The repository of the worktree: commits write their objects and refs there.
     pub repository: &'a Path,
+    /// The branch the agent commits to, the only branch it may move. `None` where the agent has no
+    /// branch, as in checks.
+    pub branch: Option<&'a str>,
     /// The socket of the daemon, which `wf` in the agent talks to.
     pub socket: &'a Path,
     /// wf's data directory, which holds the keys of the device and of the principals.
@@ -66,14 +69,11 @@ pub(crate) fn wrap(
 /// The settings Fence runs the agent with.
 fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
     let git_directory = access.repository.join(".git");
-    let writable: Vec<PathBuf> = [
-        access.worktree.to_path_buf(),
-        git_directory.clone(),
-        access.socket.to_path_buf(),
-    ]
-    .into_iter()
-    .chain(config.allow_write.iter().cloned())
-    .collect();
+    let writable: Vec<PathBuf> = [access.worktree.to_path_buf(), access.socket.to_path_buf()]
+        .into_iter()
+        .chain(git_writable(access, &git_directory))
+        .chain(config.allow_write.iter().cloned())
+        .collect();
 
     // With these an agent signs as the device or the principal, has the daemon act for the
     // principal, or turns its sandbox off.
@@ -93,6 +93,7 @@ fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
         git_directory.join("config"),
         git_directory.join("hooks"),
         git_directory.join("worktrees").join("*").join("commondir"),
+        git_directory.join("worktrees").join("*").join("config.worktree"),
         access.worktree.join(".git"),
         PathBuf::from("~/.config/git"),
     ];
@@ -125,6 +126,39 @@ fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
             "deny": DENIED_COMMANDS,
         },
     })
+}
+
+/// What of the repository's `.git` the agent writes, so that it can commit, rebase and fetch but
+/// not move any branch but its own, nor the target, nor touch the admin directory of another
+/// worktree. Everything else (`HEAD`, `packed-refs`, `config`, `hooks`, `refs/heads` of others)
+/// stays closed.
+fn git_writable(access: &Access<'_>, git_directory: &Path) -> Vec<PathBuf> {
+    let mut paths = vec![
+        git_directory.join("objects"),
+        git_directory.join("refs/remotes"),
+        // Git appends a reflog entry for every remote-tracking ref a fetch updates.
+        git_directory.join("logs/refs/remotes"),
+        git_directory.join("refs/tags"),
+        git_directory.join("FETCH_HEAD"),
+    ];
+    // Git names the admin directory of a worktree after its directory.
+    paths.extend(
+        access
+            .worktree
+            .file_name()
+            .map(|name| git_directory.join("worktrees").join(name)),
+    );
+    if let Some(branch) = access.branch {
+        for kind in ["refs/heads", "logs/refs/heads"] {
+            let reference = git_directory.join(kind).join(branch);
+            // Git writes a reference through `<name>.lock`.
+            let mut lock = reference.clone().into_os_string();
+            lock.push(".lock");
+            paths.push(reference);
+            paths.push(lock.into());
+        }
+    }
+    paths
 }
 
 const ALLOWED_DOMAINS: &[&str] = &[
@@ -306,6 +340,7 @@ mod tests {
         Access {
             worktree: Path::new(WORKTREE),
             repository: Path::new("/work/repo"),
+            branch: Some("wf/k3f9"),
             socket: Path::new("/run/wf/daemon.sock"),
             data_dir: Path::new(DATA),
             machine_config: Some(Path::new("/home/ada/.config/workforce/config.toml")),
@@ -376,6 +411,12 @@ mod tests {
             "/home/ada/.local/share/workforce/w1/worktrees/k3f9/src/main.rs",
             "/work/repo/.git/objects/ab/cdef",
             "/work/repo/.git/refs/heads/wf/k3f9",
+            "/work/repo/.git/refs/heads/wf/k3f9.lock",
+            "/work/repo/.git/logs/refs/heads/wf/k3f9",
+            "/work/repo/.git/refs/remotes/origin/main",
+            "/work/repo/.git/logs/refs/remotes/origin/main",
+            "/work/repo/.git/worktrees/k3f9/index",
+            "/work/repo/.git/worktrees/k3f9/HEAD",
             "/run/wf/daemon.sock",
             "/opt/cache/x",
         ] {
@@ -412,11 +453,41 @@ mod tests {
             "/work/repo/.git/config",
             "/work/repo/.git/hooks/pre-commit",
             "/work/repo/.git/worktrees/k3f9/commondir",
+            "/work/repo/.git/worktrees/k3f9/config.worktree",
             "/home/ada/.local/share/workforce/w1/worktrees/k3f9/.git",
             "~/.config/git/config",
         ] {
             assert!(covers("denyWrite", path), "{path} is not writable");
         }
+    }
+
+    #[test]
+    fn the_target_and_other_worktrees_cannot_be_moved() {
+        for path in [
+            "/work/repo/.git/refs/heads/main",
+            "/work/repo/.git/refs/heads/main.lock",
+            "/work/repo/.git/refs/heads/wf/other",
+            "/work/repo/.git/logs/refs/heads/main",
+            "/work/repo/.git/packed-refs",
+            "/work/repo/.git/packed-refs.lock",
+            "/work/repo/.git/HEAD",
+            "/work/repo/.git/worktrees/other/HEAD",
+            "/work/repo/.git/worktrees/other/index",
+        ] {
+            assert!(!covers("allowWrite", path), "{path} is not writable");
+        }
+    }
+
+    #[test]
+    fn without_a_branch_no_branch_is_writable() {
+        let access = Access {
+            branch: None,
+            ..access()
+        };
+        let profile = profile(&config(), &access);
+        let allowed = profile["filesystem"]["allowWrite"].to_string();
+        assert!(!allowed.contains("refs/heads"));
+        assert!(allowed.contains("/work/repo/.git/objects"));
     }
 
     #[test]
