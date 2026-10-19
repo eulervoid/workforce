@@ -149,10 +149,12 @@ impl Workspace {
             .as_deref()
             .and_then(Path::parent)
             .map(Path::to_path_buf);
-        // The checkouts of sessions have the workforce file too, but they come and go.
+        // The repositories of sessions have the workforce file too, but they are not the
+        // principal's and they come and go.
         if let Some(repository) = repository
             .as_deref()
             .filter(|directory| directory.join(".git").is_dir())
+            .filter(|_| std::env::var_os(wf_daemon::caller::SESSION_VARIABLE).is_none())
         {
             data.remember_repository(&id, repository);
         }

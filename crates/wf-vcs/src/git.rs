@@ -97,7 +97,7 @@ pub(crate) struct Finished {
     /// The arguments git ran with, to say which command failed.
     command: String,
     pub(crate) success: bool,
-    stdout: String,
+    pub(crate) stdout: String,
     stderr: String,
 }
 
@@ -778,8 +778,22 @@ impl GitCli {
                 );
             }
         }
-        // The editor would open for the message of a commit whose conflicts were resolved.
-        let rebased = self.run(worktree, &[("GIT_EDITOR", "true")], &args)?;
+        // The git config the session was given in its environment (how its commits are signed)
+        // is the agent's own, so the rewritten commits are made the way its commits are. The
+        // editor would open for the message of a commit whose conflicts were resolved.
+        let session_config: Vec<(String, String)> = std::env::vars()
+            .filter(|(name, _)| {
+                name == crate::CONFIG_COUNT
+                    || name.starts_with(crate::CONFIG_KEY)
+                    || name.starts_with(crate::CONFIG_VALUE)
+            })
+            .collect();
+        let mut environment: Vec<(&str, &str)> = session_config
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect();
+        environment.push(("GIT_EDITOR", "true"));
+        let rebased = self.run(worktree, &environment, &args)?;
         if rebased.success {
             return Ok(Rebase::Rebased);
         }

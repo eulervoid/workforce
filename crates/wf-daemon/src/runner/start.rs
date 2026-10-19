@@ -179,6 +179,7 @@ impl Daemon {
                     let git = GitCli::open(&repository)?;
                     let commit = git.starting_commit(item, &target)?;
                     git.create_agent_repository(&path, &branch, commit)?;
+                    git.ensure_item_branch(item, commit)?;
                     Ok::<_, VcsError>(git)
                 })
                 .await??

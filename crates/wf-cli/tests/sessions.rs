@@ -736,7 +736,7 @@ wf work release --note \"I cannot do this\"
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_starting_daemon_removes_stray_worktrees_and_caches_over_the_budget() {
+async fn a_starting_daemon_removes_stray_repositories_and_caches_over_the_budget() {
     let script = "\
 sh echo wip > wip.txt && git add wip.txt && git commit -q -m wip && mkdir target && echo built > target/app
 wf work release --note \"later\"
@@ -748,16 +748,7 @@ wf work release --note \"later\"
     let worktree = PathBuf::from(world.wf.run(&["item", "path", short(&item)]).trim());
     let worktrees = worktree.parent().unwrap().to_path_buf();
     let stray_checkout = worktrees.join("stray-12345678");
-    git_in(
-        &world.wf.repository,
-        &[
-            "worktree",
-            "add",
-            "--quiet",
-            "--detach",
-            stray_checkout.to_str().unwrap(),
-        ],
-    );
+    std::fs::create_dir_all(stray_checkout.join(".git")).unwrap();
     let stray_directory = worktrees.join("stray-supervise");
     std::fs::create_dir_all(&stray_directory).unwrap();
     world.machine_config("[storage]\nbudget = \"0B\"\ncaches = [\"target\"]\n");
@@ -781,8 +772,6 @@ wf work release --note \"later\"
         worktree.join("wip.txt").is_file(),
         "an open item keeps its worktree"
     );
-    let listed = git_in(&world.wf.repository, &["worktree", "list"]);
-    assert!(!listed.contains("stray"), "{listed}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2505,47 +2494,59 @@ async fn the_diff_says_when_the_agent_has_not_made_any_commits() {
     let path = world.wf.run(&["item", "path", short(&item)]);
     git_in(
         Path::new(path.trim()),
-        &["commit", "-q", "--allow-empty", "-m", "nothing"],
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "nothing",
+        ],
     );
-    let diff = world.wf.json(&["item", "diff", short(&item)]);
-    assert_eq!(diff["committed"], "", "{diff}");
+    world
+        .wait("the commit to be copied", |world| {
+            world.wf.json(&["item", "diff", short(&item)])["committed"] == ""
+        })
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_diff_of_a_working_item_has_the_worktree_as_its_uncommitted_part() {
+async fn the_diff_of_a_working_item_follows_the_commits_the_daemon_copies_and_has_no_uncommitted_part()
+ {
     let world = World::new("hang\n").await;
     let item = world.wf.add(&["--title", "Working"]);
     start_session(&world, &item);
     let path = world.wf.run(&["item", "path", short(&item)]);
-    let worktree = Path::new(path.trim());
+    let repository = Path::new(path.trim());
 
-    // Edits and a new file are uncommitted only; there are no commits yet.
-    std::fs::write(worktree.join("new.txt"), "brand new\n").unwrap();
-    let mut text = std::fs::read_to_string(worktree.join("file.txt")).unwrap();
+    // Edits and a new file are not shown: wf runs no git in the agent's repository for them.
+    std::fs::write(repository.join("new.txt"), "brand new\n").unwrap();
+    let mut text = std::fs::read_to_string(repository.join("file.txt")).unwrap();
     text.push_str("edited\n");
-    std::fs::write(worktree.join("file.txt"), text).unwrap();
+    std::fs::write(repository.join("file.txt"), text).unwrap();
     let diff = world.wf.json(&["item", "diff", short(&item)]);
     assert!(diff["committed"].is_null(), "{diff}");
-    let uncommitted = diff["uncommitted"].as_str().unwrap();
-    assert!(uncommitted.contains("+edited"), "{diff}");
-    assert!(uncommitted.contains("+brand new"), "{diff}");
-    let printed = world.wf.run(&["item", "diff", short(&item)]);
-    assert!(
-        printed.starts_with("the agent has not made any commits"),
-        "{printed}"
-    );
-    assert!(printed.contains("\nuncommitted, against "), "{printed}");
+    assert!(diff.get("uncommitted").is_none(), "{diff}");
 
-    // A commit moves them to the committed part.
-    git_in(worktree, &["add", "--all"]);
-    git_in(worktree, &["commit", "-q", "-m", "edit"]);
-    let diff = world.wf.json(&["item", "diff", short(&item)]);
-    let committed = diff["committed"].as_str().unwrap();
-    assert!(committed.contains("+edited") && committed.contains("+brand new"));
-    assert_eq!(diff["uncommitted"], "", "{diff}");
+    // A commit is copied into the principal's repository within a few seconds.
+    git_in(repository, &["add", "--all"]);
+    git_in(
+        repository,
+        &["-c", "commit.gpgsign=false", "commit", "-q", "-m", "edit"],
+    );
+    world
+        .wait("the commit to be copied", |world| {
+            world.wf.json(&["item", "diff", short(&item)])["committed"]
+                .as_str()
+                .is_some_and(|committed| {
+                    committed.contains("+edited") && committed.contains("+brand new")
+                })
+        })
+        .await;
 
     // Once the session has ended, only the commits are shown.
-    std::fs::write(worktree.join("later.txt"), "later\n").unwrap();
+    std::fs::write(repository.join("later.txt"), "later\n").unwrap();
     world.wf.run(&[
         "session",
         "stop",

@@ -8,7 +8,7 @@ use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
-use wf_core::session::{CommitId, EndReason};
+use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
 use wf_vcs::{GitCli, Import, ImportMode, VcsError, item_branch, item_repository};
 
@@ -142,7 +142,22 @@ impl Daemon {
             SessionEnd::Finish(
                 Finish::Release { .. } | Finish::Reviewed | Finish::Supervised | Finish::Diagnosed,
             )
-            | SessionEnd::Interruption(_) => None,
+            | SessionEnd::Interruption(_) => {
+                // What the work has got to stays on the branch of the item, for the next session
+                // and for the principal to look at.
+                if role == SessionRole::Work
+                    && let Err(error) = self
+                        .import_commits(workforce, &state, item, ImportMode::InProgress)
+                        .await
+                {
+                    tracing::warn!(
+                        "could not copy the commits of session {}: {}",
+                        session.short(),
+                        wf_core::error_chain(&error)
+                    );
+                }
+                None
+            }
         };
         let Closing {
             reason,

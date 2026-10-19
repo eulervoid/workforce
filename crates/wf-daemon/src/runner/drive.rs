@@ -54,6 +54,9 @@ pub(super) async fn run_session(
     }
 }
 
+/// How often the commits of a running turn are copied into the principal's repository.
+const IMPORT_EVERY: Duration = Duration::from_secs(3);
+
 /// How long to wait before trying again to end a session whose end could not be written.
 const RETRY_END: Duration = Duration::from_secs(30);
 
@@ -282,6 +285,9 @@ async fn turns(
     let cancel = conversation.cancel();
     let mut last_head = branch_head(run);
     let mut turns_without_commit = 0;
+    let mut imported = None;
+    let mut importing = tokio::time::interval(IMPORT_EVERY);
+    importing.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         record.prompted_ms = Some(wf_store::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
@@ -289,23 +295,27 @@ async fn turns(
         }
         let turn = conversation.reply(prompt);
         tokio::pin!(turn);
-        let result = tokio::select! {
-            result = &mut turn => result,
-            Some(how) = stopped.recv() => {
-                if matches!(how, Stop::AfterTurn)
-                    && tokio::time::timeout(GRACE, &mut turn).await.is_ok()
-                {
-                    import_progress(daemon, loaded, run).await;
+        let result = loop {
+            tokio::select! {
+                result = &mut turn => break result,
+                // The work so far is copied while the turn goes on, for whoever looks at it.
+                _ = importing.tick() => import_progress(daemon, loaded, run, &mut imported).await,
+                Some(how) = stopped.recv() => {
+                    if matches!(how, Stop::AfterTurn)
+                        && tokio::time::timeout(GRACE, &mut turn).await.is_ok()
+                    {
+                        import_progress(daemon, loaded, run, &mut imported).await;
+                        return End::Over;
+                    }
+                    cancel.cancel();
+                    let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
                     return End::Over;
                 }
-                cancel.cancel();
-                let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
-                return End::Over;
-            }
-            () = sleep_until(deadline) => {
-                cancel.cancel();
-                let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
-                return End::Interrupt(Interruption::TimedOut);
+                () = sleep_until(deadline) => {
+                    cancel.cancel();
+                    let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
+                    return End::Interrupt(Interruption::TimedOut);
+                }
             }
         };
         let (_stop_reason, last_message) = match result {
@@ -344,7 +354,7 @@ async fn turns(
             }
         };
         daemon.faults.harness_answered(&run.harness);
-        import_progress(daemon, loaded, run).await;
+        import_progress(daemon, loaded, run, &mut imported).await;
 
         // The agent submitted and ended its turn while the checks run: nothing to say to it until
         // they are done. The daemon runs them, not the agent, so the wait does not count against
@@ -533,8 +543,18 @@ async fn nudge(run: &Run) -> String {
 /// Copies the commits of a work session so far into the principal's repository, so that its
 /// branch there, and what shows the work of the item, is where the agent has got to. A session
 /// that has ended is left alone: what it submitted is under review.
-async fn import_progress(daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run) {
+async fn import_progress(
+    daemon: &Arc<Daemon>,
+    loaded: &Arc<Loaded>,
+    run: &Run,
+    imported: &mut Option<CommitId>,
+) {
     if run.role != SessionRole::Work {
+        return;
+    }
+    // Nothing new since the last copy.
+    let head = branch_head(run);
+    if head.is_none() || head == *imported {
         return;
     }
     let session = run.session;
@@ -551,11 +571,11 @@ async fn import_progress(daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run) 
         run.item,
         run.target.clone(),
     );
-    let imported =
+    let copied =
         blocking(move || git.import_commits(&directory, item, &target, ImportMode::InProgress))
             .await;
-    match imported {
-        Ok(Ok(_)) => {}
+    match copied {
+        Ok(Ok(_)) => *imported = head,
         Ok(Err(error)) => tracing::warn!(
             "session {}: could not copy its commits: {}",
             run.session,

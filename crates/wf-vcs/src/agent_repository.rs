@@ -37,6 +37,13 @@ impl GitCli {
         self.run(path, &[], ["update-ref", &reference, &commit.to_string()])?
             .ok()?;
         self.run(path, &[], ["reset", "--hard", "--quiet"])?.ok()?;
+        // The agent commits under its own name, from the environment, but git wants an address,
+        // which the principal's repository may be the only place to give one.
+        let email = self.run(&self.repository, &[], ["config", "--get", "user.email"])?;
+        if email.success && !email.stdout.trim().is_empty() {
+            let address = email.stdout.trim().to_string();
+            self.run(path, &[], ["config", "user.email", &address])?.ok()?;
+        }
         Ok(())
     }
 
@@ -60,6 +67,23 @@ impl GitCli {
             Err(VcsError::NoBranch(_)) => self.branch_head(target),
             found => found,
         }
+    }
+
+    /// Makes the branch of `item` at `commit`, unless the principal's repository has it already,
+    /// so that the item has a branch from the start of its first session.
+    pub fn ensure_item_branch(&self, item: ItemId, commit: CommitId) -> Result<(), VcsError> {
+        let branch = item_branch(item);
+        if !self.branch_exists(&branch)? {
+            let reference = format!("refs/heads/{branch}");
+            // The empty old value makes this fail, not overwrite, if the branch came meanwhile.
+            self.run(
+                &self.repository,
+                &[],
+                ["update-ref", &reference, &commit.to_string(), ""],
+            )?
+            .ok()?;
+        }
+        Ok(())
     }
 
     fn init_with_alternates<const N: usize>(
