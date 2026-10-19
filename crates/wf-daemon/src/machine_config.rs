@@ -511,12 +511,7 @@ impl MachineConfig {
 
 /// Whether wf sets the variable `name` itself, so that the config must not.
 fn set_by_wf(name: &str) -> bool {
-    matches!(
-        name,
-        "PATH" | "GIT_AUTHOR_NAME" | "GIT_COMMITTER_NAME" | "GIT_CONFIG_COUNT"
-    ) || ["WF_", "GIT_CONFIG_KEY_", "GIT_CONFIG_VALUE_"]
-        .iter()
-        .any(|prefix| name.starts_with(prefix))
+    name == "PATH" || name.starts_with("WF_") || wf_vcs::config::is_set_by_wf(name)
 }
 
 /// `text` with `~` and `$NAME` expanded from `variable`; a variable that is not set is an error.

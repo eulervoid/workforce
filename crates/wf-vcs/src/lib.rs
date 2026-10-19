@@ -1,6 +1,7 @@
 //! The version control the work happens in: one branch and worktree per item, and the merge of
 //! reviewed work into the target branch. Git is the only system, called as the `git` CLI.
 
+pub mod config;
 pub mod diff;
 mod git;
 pub mod signing;
@@ -11,6 +12,11 @@ use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::session::{CommitId, GitOid, SessionRole};
 
 pub use git::GitCli;
+
+/// The variables that give git config through the environment: how many, then each key and value.
+const CONFIG_COUNT: &str = "GIT_CONFIG_COUNT";
+const CONFIG_KEY: &str = "GIT_CONFIG_KEY_";
+const CONFIG_VALUE: &str = "GIT_CONFIG_VALUE_";
 
 /// Whether and how commits are signed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -53,10 +59,10 @@ impl CommitSigning {
         if config.is_empty() {
             return Vec::new();
         }
-        let mut environment = vec![("GIT_CONFIG_COUNT".to_string(), config.len().to_string())];
+        let mut environment = vec![(CONFIG_COUNT.to_string(), config.len().to_string())];
         for (index, (key, value)) in config.into_iter().enumerate() {
-            environment.push((format!("GIT_CONFIG_KEY_{index}"), key.to_string()));
-            environment.push((format!("GIT_CONFIG_VALUE_{index}"), value));
+            environment.push((format!("{CONFIG_KEY}{index}"), key.to_string()));
+            environment.push((format!("{CONFIG_VALUE}{index}"), value));
         }
         environment
     }
