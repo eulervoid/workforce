@@ -2771,7 +2771,7 @@ async fn checks_that_pass_let_the_work_merge_and_a_moved_target_is_checked_again
     let world = World::new(ADD_HELLO).await;
     let repository = world.wf.repository.clone();
     let moved = world.wf.root.path().join("moved");
-    // The first run moves main, as another merge would while the checks run.
+    // The first run, at the submission, moves main, as another merge would while the checks run.
     let (check, check_runs) = counted_check(
         &world,
         "hello",
@@ -2798,7 +2798,11 @@ async fn checks_that_pass_let_the_work_merge_and_a_moved_target_is_checked_again
         "{:#}",
         comments(&world.item(&item))
     );
-    assert_eq!(runs(&check_runs), 2, "the moved target is checked again");
+    assert_eq!(
+        runs(&check_runs),
+        2,
+        "at the submission, then on the merge with the moved target"
+    );
     for file in ["hello.txt", "moved.txt"] {
         assert!(repository.join(file).exists(), "{file} is on main");
     }
@@ -2814,9 +2818,14 @@ async fn checks_that_pass_let_the_work_merge_and_a_moved_target_is_checked_again
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_check_the_work_breaks_sends_it_back_with_a_change_request() {
+async fn a_check_the_work_breaks_goes_back_to_the_same_session_before_any_review() {
+    // The first submission breaks the check; what the daemon says back is the next prompt.
     let script = "\
 sh echo x > broken.txt && git add broken.txt && git commit -q -m break
+wf work submit
+turn
+sh git rm -q broken.txt && git commit -q -m unbreak
+wf comment {item} \"fixed\" --resolve-change-requests
 wf work submit
 ";
     let world = World::new(script).await;
@@ -2824,10 +2833,10 @@ wf work submit
     add_checks(&world, &check);
     let main = git_in(&world.wf.repository, &["rev-parse", "main"]);
     let item = world.wf.add(&["--title", "Break it"]);
-    start_session(&world, &item);
+    let session = start_session(&world, &item);
     world
-        .wait("the failed check", |world| {
-            world.item(&item)["state"] == "open"
+        .wait("the failed check to be told", |world| {
+            !comments_with(world, &item, "change_request", "`unbroken`").is_empty()
         })
         .await;
     let requests = comments_with(&world, &item, "change_request", "`unbroken`");
@@ -2846,32 +2855,126 @@ wf work submit
     ] {
         assert!(request.contains(part), "{part} in {request}");
     }
-    assert_eq!(git_in(&world.wf.repository, &["rev-parse", "main"]), main);
-    assert_eq!(runs(&check_runs), 2, "on the merge, then on main itself");
+    // The same session fixes it, and its second submission passes the checks and ends it.
+    world
+        .wait("the second submission", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    assert_eq!(world.sessions().len(), 1, "the same session went on");
+    let transcript = world
+        .wf
+        .run(&["session", "watch", short(&session), "--no-follow"]);
+    assert!(
+        transcript.contains("Your submission was not sent to review: its checks failed"),
+        "{transcript}"
+    );
+    assert_ne!(git_in(&world.wf.repository, &["rev-parse", "main"]), main);
     assert!(inbox(&world).is_empty(), "{:?}", inbox(&world));
+    // The failed run, and main itself to tell whose fault it was; the fixed work is main's tree,
+    // which passed.
+    assert_eq!(runs(&check_runs), 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn failed_checks_send_work_back_twice_then_wait_for_the_principal() {
-    // Each session adds another broken file, so that each merge is a new tree.
+async fn work_that_fails_its_checks_does_not_reach_review() {
     let script = "\
-sh n=$(ls broken-* 2>/dev/null | wc -l | tr -d ' '); echo x > broken-$n.txt && git add . && git commit -q -m break
-sh \"$WF_BIN\" comment {item} \"tried again\" --resolve-change-requests || true
+sh echo x > broken.txt && git add broken.txt && git commit -q -m break
 wf work submit
 ";
     let world = World::new(script).await;
+    let (check, _) = counted_check(&world, "unbroken", "! test -f broken.txt");
+    add_checks(&world, &check);
+    let item = world.wf.add(&["--title", "Break it"]);
+    start_session(&world, &item);
+    world
+        .wait("the failed check to be told", |world| {
+            !comments_with(world, &item, "change_request", "`unbroken`").is_empty()
+        })
+        .await;
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    assert!(["active", "open"].contains(&world.item(&item)["state"].as_str().unwrap()));
+    assert!(
+        world
+            .sessions()
+            .iter()
+            .all(|session| session["status"] != "submitted")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn passing_checks_end_the_session_submitted_and_the_merge_reuses_the_pass() {
+    let world = World::new(ADD_HELLO).await;
+    let (check, check_runs) = counted_check(&world, "hello", "test -f hello.txt");
+    add_checks(&world, &check);
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
+    assert!(
+        world
+            .sessions()
+            .iter()
+            .all(|session| session["status"] == "submitted")
+    );
+    // On the merge of the submission; the merge of the same tree in the same sandbox runs nothing.
+    assert_eq!(runs(&check_runs), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn submitting_answers_at_once_while_the_checks_run() {
+    let script = "\
+wf work submit
+";
+    let world = World::new(&format!(
+        "sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello\n{script}"
+    ))
+    .await;
+    let waiting = world.wf.root.path().join("go");
+    let (check, _) = counted_check(
+        &world,
+        "slow",
+        &format!(
+            "while [ ! -f \"{}\" ]; do sleep 0.1; done",
+            waiting.display()
+        ),
+    );
+    add_checks(&world, &check);
+    let item = world.wf.add(&["--title", "Add hello"]);
+    let session = start_session(&world, &item);
+    world
+        .wait("the submission to be answered", |world| {
+            world
+                .wf
+                .run(&["session", "watch", short(&session), "--no-follow"])
+                .contains("Checking #")
+        })
+        .await;
+    // The checks have not passed yet: the session is live and the item is not in review.
+    assert_eq!(world.item(&item)["state"], "active");
+    std::fs::write(&waiting, "").unwrap();
+    world
+        .wait("the work to merge", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_checks_go_back_to_the_session_twice_then_wait_for_the_principal() {
+    // Each round adds another broken file, so that each merge is a new tree.
+    let round = "\
+sh n=$(ls broken-* 2>/dev/null | wc -l | tr -d ' '); echo x > broken-$n.txt && git add . && git commit -q -m break
+wf work submit
+turn
+";
+    let resolving = "wf comment {item} \"tried again\" --resolve-change-requests\n";
+    let script = format!("{round}{resolving}{round}{resolving}{round}");
+    let world = World::new(&script).await;
     let (check, check_runs) = counted_check(&world, "unbroken", "! ls broken-* >/dev/null 2>&1");
     add_checks(&world, &check);
     let item = world.wf.add(&["--title", "Break it again and again"]);
-    for round in 1..=2 {
-        start_session(&world, &item);
-        world
-            .wait("the failed check", |world| {
-                world.item(&item)["state"] == "open"
-                    && comments_with(world, &item, "change_request", "`unbroken`").len() == round
-            })
-            .await;
-    }
     start_session(&world, &item);
     world
         .wait("the blocker", |world| {
@@ -2879,19 +2982,20 @@ wf work submit
         })
         .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
-    assert_eq!(world.item(&item)["state"], "review");
+    assert_eq!(world.item(&item)["state"], "active");
     let blocker = &comments_with(&world, &item, "blocker", "`unbroken`")[0];
     assert!(blocker.starts_with("@ada "), "{blocker}");
     assert!(blocker.contains("after 2 failed runs"), "{blocker}");
     assert_eq!(
         comments_with(&world, &item, "change_request", "`unbroken`").len(),
         2,
-        "the third failure is not sent back"
+        "the third failure is not told to the session"
     );
     let waiting = inbox(&world);
     assert_eq!(waiting.len(), 1, "{waiting:?}");
     assert_eq!(waiting[0]["kind"], "blocker", "{waiting:?}");
-    // Three merges, and main once: its pass is kept.
+    assert_eq!(world.sessions().len(), 1, "one session made all three");
+    // Three submissions, and main once: its pass is kept.
     assert_eq!(runs(&check_runs), 4);
 }
 
@@ -2969,9 +3073,9 @@ async fn a_check_that_runs_too_long_is_stopped_and_waits_for_the_principal() {
     world
         .wait("the blocker", |world| {
             !comments_with(world, &item, "blocker", "`slow`").is_empty()
+                && world.item(&item)["state"] == "review"
         })
         .await;
-    assert_eq!(world.item(&item)["state"], "review");
     let blocker = &comments_with(&world, &item, "blocker", "`slow`")[0];
     assert!(blocker.contains("ran longer than 1s"), "{blocker}");
     assert!(!world.wf.repository.join("hello.txt").exists());

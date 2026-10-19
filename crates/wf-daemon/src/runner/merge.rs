@@ -259,6 +259,10 @@ impl Daemon {
         if attempt == Attempt::Retry && !state.pending_merges().contains(&pending) {
             return Ok(MergeEnd::Handled);
         }
+        // The submission's checks, or anyone, left a blocker for the principal: it waits for them.
+        if live.has_open_blocker() {
+            return Ok(MergeEnd::Handled);
+        }
         let principal = self.principal_of_device(&state)?;
         if plan == MergePlan::MoveToDone {
             self.move_item(

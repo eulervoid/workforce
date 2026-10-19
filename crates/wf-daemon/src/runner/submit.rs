@@ -257,8 +257,8 @@ impl Daemon {
             .await
     }
 
-    /// Ends the session as the agent said, now that the checks passed, and tells the principal of
-    /// the checks that failed for another reason than the work.
+    /// Tells the principal of the checks that failed for another reason than the work, and ends the
+    /// session as the agent said, now that the checks passed.
     async fn submission_passed(
         self: &Arc<Self>,
         loaded: &Arc<Loaded>,
@@ -266,20 +266,8 @@ impl Daemon {
         target: &str,
         not_by_work: &[FailedCheck],
     ) -> Result<(), SessionError> {
-        self.submissions.settle(
-            submission.session,
-            submission.commit,
-            Some(Checks::Passed {
-                commit: submission.commit,
-            }),
-        );
-        self.finish_session(
-            submission.workforce,
-            loaded,
-            submission.session,
-            SessionEnd::Finish(submission.finish.clone()),
-        )
-        .await?;
+        // Before the session ends, so that the item goes to review with the blocker open, and
+        // the merge waits for the principal.
         if !not_by_work.is_empty() {
             let state = self.snapshot(loaded).await?;
             let principal = self.principal_of_device(&state)?;
@@ -296,6 +284,20 @@ impl Daemon {
                 .await?;
             }
         }
+        self.submissions.settle(
+            submission.session,
+            submission.commit,
+            Some(Checks::Passed {
+                commit: submission.commit,
+            }),
+        );
+        self.finish_session(
+            submission.workforce,
+            loaded,
+            submission.session,
+            SessionEnd::Finish(submission.finish.clone()),
+        )
+        .await?;
         Ok(())
     }
 
