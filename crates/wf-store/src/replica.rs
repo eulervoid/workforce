@@ -16,7 +16,7 @@ pub const SNAPSHOT_INTERVAL: usize = 256;
 
 /// Bumped whenever the serialized shape of [`State`] changes. Snapshots are a cache: a mismatch
 /// discards the snapshot and refolds from the log.
-const SNAPSHOT_FORMAT: u32 = 10;
+const SNAPSHOT_FORMAT: u32 = 11;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
@@ -327,8 +327,7 @@ impl<S: EventStore> Replica<S> {
             .state
             .receive(event.clone(), Trust::Untrusted)
             .map_err(ReceiveError::from)?;
-        self.persist(&event, &received)
-            .map_err(ReceiveError::from)?;
+        self.persist(&event, &received).map_err(ReceiveError::from)?;
         Ok(event)
     }
 

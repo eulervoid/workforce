@@ -962,7 +962,7 @@ impl State {
         if supervises || !worked_on {
             return false;
         }
-        let policy = &workforce.policy.value().policy;
+        let policy = &workforce.running_policy().policy;
         // `None` ranks below every level, so removing the review lowers it.
         let rank = |level: Option<&ReviewLevelName>| {
             level.and_then(|name| policy.review_rank(name).map(|rank| rank + 1))
@@ -989,7 +989,7 @@ impl State {
         let Some(workforce) = &self.workforce else {
             return Ok(());
         };
-        let policy = &workforce.policy.value().policy;
+        let policy = &workforce.running_policy().policy;
         let known_lane = |lane: &LaneName| {
             if policy.lanes.contains_key(lane) {
                 Ok(())

@@ -280,12 +280,14 @@ pub(crate) struct Workforce {
     pub(crate) aliases: BTreeMap<PrincipalKey, PrincipalKey>,
     pub(crate) announcements: BTreeMap<EventId, Announcement>,
     pub(crate) profiles: BTreeMap<DeviceKey, Lww<DeviceProfile>>,
-    /// Whether a policy bound to its event has been folded; from then on unbound ones are ignored.
-    pub(crate) policy_bound: bool,
-    /// The policy as the latest genesis or policy event set it.
+    /// The policy as the latest genesis or unbound policy event set it.
     pub(crate) policy_source: Lww<String>,
-    /// The latest policy this version can read, which the workforce runs on.
+    /// The latest unbound policy this version can read.
     pub(crate) policy: Lww<PolicyDoc>,
+    /// The policy as the latest bound policy event set it, once there is one.
+    pub(crate) bound_policy_source: Option<Lww<String>>,
+    /// The latest bound policy this version can read, once there is one.
+    pub(crate) bound_policy: Option<Lww<PolicyDoc>>,
     /// `None` once removed, so events of its sessions stay valid in any order.
     pub(crate) agents: BTreeMap<AgentId, Lww<Option<AgentDefinition>>>,
     pub(crate) items: BTreeMap<ItemId, Item>,
@@ -297,35 +299,50 @@ impl Workforce {
         self.aliases.get(principal).copied().unwrap_or(*principal)
     }
 
-    /// Takes `source` as the policy if it wins: a bound policy beats every unbound one whatever
-    /// their stamps, so a replayed old unbound policy cannot roll a bound one back; among equals
-    /// the latest `stamp` wins. It runs only if this version can read it.
+    /// Records `source` in the register of its kind. A bound policy beats every unbound one
+    /// whatever their stamps, so a replayed old unbound policy cannot roll a bound one back; the
+    /// registers are kept apart so that this holds even when a bound policy cannot be read.
+    /// Within a register the latest `stamp` wins, and only a readable policy is run.
     pub(crate) fn set_policy(&mut self, source: String, stamp: Stamp, binding: PolicyBinding) {
-        let parsed = PolicyDoc::parse(&source);
-        match (binding, self.policy_bound) {
-            (PolicyBinding::Unbound, true) => return,
-            (PolicyBinding::Bound, false) => {
-                self.policy_bound = true;
-                self.policy_source = Lww::new(source, stamp);
-                self.policy = match parsed {
-                    Ok(policy) => Lww::new(policy, stamp),
-                    // Keeps the unbound policy, below any bound one that can be read.
-                    Err(_) => Lww::new(
-                        self.policy.value().clone(),
-                        Stamp {
-                            hlc: Hlc::ZERO,
-                            id: stamp.id,
-                        },
-                    ),
-                };
-                return;
+        let parsed = PolicyDoc::parse(&source).ok();
+        match binding {
+            PolicyBinding::Unbound => {
+                self.policy_source.set(source, stamp);
+                if let Some(policy) = parsed {
+                    self.policy.set(policy, stamp);
+                }
             }
-            (PolicyBinding::Unbound, false) | (PolicyBinding::Bound, true) => {}
+            PolicyBinding::Bound => {
+                set_optional(&mut self.bound_policy_source, source, stamp);
+                if let Some(policy) = parsed {
+                    set_optional(&mut self.bound_policy, policy, stamp);
+                }
+            }
         }
-        self.policy_source.set(source, stamp);
-        if let Ok(policy) = parsed {
-            self.policy.set(policy, stamp);
+    }
+
+    /// The policy the workforce runs on: the latest readable bound one, else the unbound one.
+    pub(crate) fn running_policy(&self) -> &PolicyDoc {
+        self.bound_policy
+            .as_ref()
+            .map_or_else(|| self.policy.value(), Lww::value)
+    }
+
+    /// The source of the policy the workforce set last, readable or not.
+    pub(crate) fn latest_policy_source(&self) -> &str {
+        self.bound_policy_source
+            .as_ref()
+            .unwrap_or(&self.policy_source)
+            .value()
+    }
+}
+
+fn set_optional<T>(register: &mut Option<Lww<T>>, value: T, stamp: Stamp) {
+    match register {
+        Some(current) => {
+            current.set(value, stamp);
         }
+        None => *register = Some(Lww::new(value, stamp)),
     }
 }
 
@@ -442,15 +459,15 @@ impl State {
     pub fn policy(&self) -> Option<&PolicyDoc> {
         self.workforce
             .as_ref()
-            .map(|workforce| workforce.policy.value())
+            .map(Workforce::running_policy)
     }
 
     /// Why this version cannot read the policy the workforce set last, if it cannot. The
     /// workforce then runs on [`State::policy`], the last one it could read, or the default.
     pub fn unreadable_policy(&self) -> Option<PolicyError> {
         let workforce = self.workforce.as_ref()?;
-        let latest = workforce.policy_source.value();
-        if *latest == workforce.policy.value().source {
+        let latest = workforce.latest_policy_source();
+        if latest == workforce.running_policy().source {
             return None;
         }
         Policy::parse(latest).err()

@@ -524,6 +524,48 @@ fn a_bound_policy_beats_an_unbound_one_whatever_its_parents_and_stamp() {
     assert_eq!(before_bound.policy(), state.policy());
 }
 
+#[test]
+fn an_unreadable_bound_policy_gives_the_same_policy_in_either_fold_order() {
+    let fixture = Fixture::new(2);
+    let base = fixture.state();
+    let unbound_source = format!("{}\n# unbound\n", crate::policy::DEFAULT_POLICY_TOML);
+    let unbound = fixture.author(
+        &base,
+        1,
+        5_200,
+        EventBody::PolicySet(
+            Signed::sign(
+                &fixture.founder,
+                Some(fixture.workforce()),
+                crate::event::PolicySet {
+                    policy: unbound_source.clone(),
+                },
+            )
+            .unwrap(),
+        ),
+    );
+    let unreadable = newer_policy();
+    let bound = fixture.author(
+        &base,
+        0,
+        5_100,
+        fixture.policy_set(&base, 0, 5_100, &fixture.founder, &unreadable),
+    );
+
+    let mut bound_first = base.clone();
+    receive(&mut bound_first, bound.clone()).unwrap();
+    receive(&mut bound_first, unbound.clone()).unwrap();
+    let mut unbound_first = base;
+    receive(&mut unbound_first, unbound).unwrap();
+    receive(&mut unbound_first, bound).unwrap();
+
+    // With no readable bound policy the unbound one still runs, and the bound one is flagged.
+    assert_eq!(bound_first.policy(), unbound_first.policy());
+    assert_eq!(bound_first.policy().unwrap().source, unbound_source);
+    assert!(bound_first.unreadable_policy().is_some());
+    assert!(unbound_first.unreadable_policy().is_some());
+}
+
 /// A policy written by a newer version, with a recovery step this version does not know.
 fn newer_policy() -> String {
     crate::policy::DEFAULT_POLICY_TOML.replace(

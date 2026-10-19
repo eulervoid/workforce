@@ -1229,7 +1229,7 @@ follows the same one. A copy in the repository has no effect. `wf policy show | 
 `edit` and `apply` need the principal key. The default is `crates/wf-core/src/default_policy.toml`,
 reproduced in `docs/guide/policy.md`.
 
-The policy is the latest `BoundPolicySet` by stamp. An unbound `PolicySet` (and the genesis policy) only
+The policy is the latest readable `BoundPolicySet` by stamp (an unreadable one is flagged and the unbound policy runs). An unbound `PolicySet` (and the genesis policy) only
 counts until the first `BoundPolicySet` is folded and never again after it, whatever its parents or stamp,
 so an old owner-signed policy written into a new event cannot roll the policy back. This is a rule of the
 fold, so it does not depend on arrival order.

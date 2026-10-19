@@ -193,7 +193,7 @@ fn unusable_snapshots_are_discarded_and_refolded() {
 
 #[test]
 fn a_snapshot_of_the_previous_format_is_discarded_and_refolded() {
-    const PREVIOUS_FORMAT: u32 = 9;
+    const PREVIOUS_FORMAT: u32 = 10;
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);
     let expected = {
