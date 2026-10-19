@@ -214,7 +214,10 @@ async fn drive(
         }
         Err(
             error @ (wf_harness::Error::Protocol(_)
-            | wf_harness::Error::Closed
+            | wf_harness::Error::Panicked
+            | wf_harness::Error::ExitedBeforeOpen
+            | wf_harness::Error::Killed
+            | wf_harness::Error::Ended
             | wf_harness::Error::Silent(_)
             | wf_harness::Error::CannotResume),
         ) => {
@@ -321,7 +324,10 @@ async fn turns(
             // the work.
             Err(
                 error @ (wf_harness::Error::Protocol(_)
-                | wf_harness::Error::Closed
+                | wf_harness::Error::Panicked
+                | wf_harness::Error::ExitedBeforeOpen
+                | wf_harness::Error::Killed
+                | wf_harness::Error::Ended
                 | wf_harness::Error::Silent(_)
                 | wf_harness::Error::CannotResume
                 | wf_harness::Error::UnknownModel { .. }),

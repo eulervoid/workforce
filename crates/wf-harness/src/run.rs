@@ -30,8 +30,17 @@ pub enum Error {
     Protocol(#[from] agent_client_protocol::Error),
     #[error("writing the transcript failed")]
     Transcript(#[from] io::Error),
-    #[error("the agent is gone")]
-    Closed,
+    #[error("the task that runs the agent panicked")]
+    Panicked,
+    #[error("the agent exited before it opened a session")]
+    ExitedBeforeOpen,
+    #[error(
+        "the agent did not stop within {}; it was killed",
+        humantime::format_duration(CLOSE_GRACE)
+    )]
+    Killed,
+    #[error("the conversation is over")]
+    Ended,
     #[error("the agent said nothing for {}", humantime::format_duration(*.0))]
     Silent(Duration),
     #[error("the agent can neither resume nor load a session it opened before")]
@@ -49,7 +58,10 @@ impl Error {
         match self {
             Error::Protocol(error) => error.code == agent_client_protocol::ErrorCode::AuthRequired,
             Error::Transcript(_)
-            | Error::Closed
+            | Error::Panicked
+            | Error::ExitedBeforeOpen
+            | Error::Killed
+            | Error::Ended
             | Error::Silent(_)
             | Error::CannotResume
             | Error::UnknownModel { .. } => false,
@@ -185,14 +197,46 @@ const CLOSE_INHERITED: &str = r#"for path in /dev/fd/*; do
 done
 exec "$@""#;
 
-/// The command that starts a known harness in ACP mode.
-pub fn command_for(harness: &str) -> Option<AcpAgentConfig> {
-    match harness {
-        "opencode" => Some(AcpAgentConfig::new("opencode").arg("acp")),
-        "claude-code" => Some(AcpAgentConfig::new("claude-agent-acp")),
-        "codex" => Some(AcpAgentConfig::new("codex-acp")),
-        "gemini-cli" => Some(AcpAgentConfig::new("gemini").arg("--experimental-acp")),
-        _ => None,
+/// A harness wf knows how to start.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KnownHarness {
+    ClaudeCode,
+    Opencode,
+    Codex,
+    GeminiCli,
+}
+
+impl KnownHarness {
+    /// Every known harness, in the order they are offered.
+    pub const ALL: [KnownHarness; 4] = [
+        KnownHarness::ClaudeCode,
+        KnownHarness::Opencode,
+        KnownHarness::Codex,
+        KnownHarness::GeminiCli,
+    ];
+
+    /// The harness called `name`, if wf knows it.
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|harness| harness.name() == name)
+    }
+
+    pub fn name(self) -> &'static str {
+        match self {
+            KnownHarness::ClaudeCode => "claude-code",
+            KnownHarness::Opencode => "opencode",
+            KnownHarness::Codex => "codex",
+            KnownHarness::GeminiCli => "gemini-cli",
+        }
+    }
+
+    /// The command that starts it in ACP mode.
+    pub fn command(self) -> AcpAgentConfig {
+        match self {
+            KnownHarness::ClaudeCode => AcpAgentConfig::new("claude-agent-acp"),
+            KnownHarness::Opencode => AcpAgentConfig::new("opencode").arg("acp"),
+            KnownHarness::Codex => AcpAgentConfig::new("codex-acp"),
+            KnownHarness::GeminiCli => AcpAgentConfig::new("gemini").arg("--experimental-acp"),
+        }
     }
 }
 
@@ -349,14 +393,22 @@ impl Conversation {
                                 ));
                                 decision.permission.answer(&request.options)
                             }
-                            _ = cancelled.changed() => RequestPermissionOutcome::Cancelled,
+                            _ = cancelled.changed() => Ok(RequestPermissionOutcome::Cancelled),
                         };
                         waiting.fetch_sub(1, Ordering::SeqCst);
                         *answered
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                             tokio::time::Instant::now();
-                        responder.respond(RequestPermissionResponse::new(outcome))
+                        match outcome {
+                            Ok(outcome) => {
+                                responder.respond(RequestPermissionResponse::new(outcome))
+                            }
+                            Err(missing) => responder.respond_with_error(
+                                agent_client_protocol::Error::invalid_params()
+                                    .data(missing.to_string()),
+                            ),
+                        }
                     },
                     agent_client_protocol::on_receive_request!(),
                 )
@@ -465,7 +517,7 @@ impl Conversation {
                                 Ok(_) = transcript_failed.wait_for(|failed| *failed) => {
                                     break Err(match writer_of_turns.finish() {
                                         Err(error) => Error::Transcript(error),
-                                        Ok(()) => Error::Closed,
+                                        Ok(()) => Error::Ended,
                                     });
                                 }
                                 () = tokio::time::sleep(SILENCE_CHECK) => {
@@ -513,7 +565,8 @@ impl Conversation {
                 let finished = task.0.take().expect("the task is there until here").await;
                 Err(match finished {
                     Ok(Err(error)) => refusal.try_recv().unwrap_or(error),
-                    Ok(Ok(())) | Err(_) => Error::Closed,
+                    Ok(Ok(())) => Error::ExitedBeforeOpen,
+                    Err(_) => Error::Panicked,
                 })
             }
         }
@@ -544,8 +597,8 @@ impl Conversation {
             prompt: prompt.into(),
             reply,
         };
-        self.turns.send(turn).await.map_err(|_| Error::Closed)?;
-        answer.await.map_err(|_| Error::Closed)?
+        self.turns.send(turn).await.map_err(|_| Error::Ended)?;
+        answer.await.map_err(|_| Error::Ended)?
     }
 
     /// Asks the agent to stop the turn that is running, and answers a permission request it
@@ -563,10 +616,10 @@ impl Conversation {
         let abort = task.abort_handle();
         match tokio::time::timeout(CLOSE_GRACE, task).await {
             Ok(Ok(result)) => result,
-            Ok(Err(_)) => Err(Error::Closed),
+            Ok(Err(_)) => Err(Error::Panicked),
             Err(_) => {
                 abort.abort();
-                Err(Error::Closed)
+                Err(Error::Killed)
             }
         }
     }
@@ -588,9 +641,12 @@ mod tests {
 
     #[test]
     fn known_harnesses_have_commands() {
-        let opencode = command_for("opencode").unwrap();
+        let opencode = KnownHarness::from_name("opencode").unwrap().command();
         assert_eq!(opencode.arguments(), ["acp"]);
-        assert!(command_for("unknown").is_none());
+        assert!(KnownHarness::from_name("unknown").is_none());
+        for harness in KnownHarness::ALL {
+            assert_eq!(KnownHarness::from_name(harness.name()), Some(harness));
+        }
     }
 }
 

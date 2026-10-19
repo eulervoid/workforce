@@ -19,9 +19,8 @@ use crate::permissions::Held;
 /// What every decider is given: the call and what it is part of. Hooks get it as JSON on stdin.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeciderRequest {
-    /// Always `permission`, so a program that serves several hooks can tell them apart.
-    pub hook: String,
-    pub version: u32,
+    #[serde(flatten)]
+    pub header: HookHeader,
     pub workforce: String,
     pub item: ItemContext,
     pub session: String,
@@ -30,6 +29,23 @@ pub struct DeciderRequest {
     pub directory: PathBuf,
     pub tool: PermissionRequest,
     pub guidance: Option<String>,
+}
+
+/// Which hook a request is for and the version of its format. Only the current one can be made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookHeader {
+    /// Always `permission`, so a program that serves several hooks can tell them apart.
+    hook: String,
+    version: u32,
+}
+
+impl Default for HookHeader {
+    fn default() -> Self {
+        HookHeader {
+            hook: "permission".to_string(),
+            version: 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -274,8 +290,7 @@ pub(crate) mod tests {
 
     pub(crate) fn request() -> DeciderRequest {
         DeciderRequest {
-            hook: "permission".into(),
-            version: 1,
+            header: HookHeader::default(),
             workforce: "w".into(),
             item: ItemContext {
                 id: "k3f7".into(),
@@ -290,12 +305,20 @@ pub(crate) mod tests {
             },
             directory: std::env::temp_dir(),
             tool: PermissionRequest {
-                kind: Some("execute".into()),
+                kind: Some(wf_harness::ToolKind::Execute),
                 title: "cargo test".into(),
                 input: Some(serde_json::json!({"command": "cargo test"})),
             },
             guidance: None,
         }
+    }
+
+    #[test]
+    fn request_json_keeps_the_hook_fields_at_the_top_level() {
+        let json = serde_json::to_value(request()).unwrap();
+        assert_eq!(json["hook"], "permission");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["tool"]["kind"], "execute");
     }
 
     #[test]

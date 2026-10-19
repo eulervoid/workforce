@@ -28,10 +28,6 @@ pub struct OpenBlocker {
     pub waits_on: WaitsOn,
 }
 
-fn supervision() -> LaneName {
-    LaneName::new("supervision").expect("a valid lane name")
-}
-
 impl State {
     /// Who the open blocker `comment` on `item` waits on: the first principal or agent it mentions,
     /// otherwise a supervisor, otherwise the principal of whoever wrote it.
@@ -74,7 +70,7 @@ impl State {
         match &blocker.waits_on {
             WaitsOn::Supervisor => self
                 .agent(&agent.name, agent.principal)
-                .is_some_and(|definition| definition.lanes.contains(&supervision())),
+                .is_some_and(|definition| definition.lanes.contains(&LaneName::supervision())),
             WaitsOn::Agent(waited_on) => waited_on == agent,
             WaitsOn::Principal(_) => false,
         }
@@ -119,6 +115,6 @@ impl State {
     /// Whether some agent is in the `supervision` lane.
     fn has_supervisor(&self) -> bool {
         self.agents()
-            .any(|(_, definition)| definition.lanes.contains(&supervision()))
+            .any(|(_, definition)| definition.lanes.contains(&LaneName::supervision()))
     }
 }

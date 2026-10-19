@@ -314,7 +314,7 @@ mod tests {
     #[test]
     fn new_item_drafts_carry_the_type() {
         let new = NewItemDraft {
-            item_type: TypeName::new("decision").unwrap(),
+            item_type: TypeName::decision(),
             state: None,
             draft: Draft {
                 title: String::new(),

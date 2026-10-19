@@ -2,7 +2,7 @@
 
 use agent_client_protocol::schema::v1::{
     PermissionOption, PermissionOptionKind, RequestPermissionOutcome, SelectedPermissionOutcome,
-    ToolCallUpdateFields,
+    ToolCallUpdateFields, ToolKind,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -15,8 +15,18 @@ pub enum Permission {
     Deny,
 }
 
+/// The agent offered no option of the kind that would carry out a [`Permission`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
+#[error("the agent offered no option to {}", match .0 { Permission::Allow => "allow", Permission::Deny => "reject" })]
+pub struct MissingOption(pub Permission);
+
 impl Permission {
-    pub(crate) fn answer(self, options: &[PermissionOption]) -> RequestPermissionOutcome {
+    /// The outcome that selects the option carrying out this permission. `Cancelled` is not an
+    /// answer here: ACP reserves it for a cancelled turn.
+    pub(crate) fn answer(
+        self,
+        options: &[PermissionOption],
+    ) -> Result<RequestPermissionOutcome, MissingOption> {
         let wanted = match self {
             Permission::Allow => [
                 PermissionOptionKind::AllowOnce,
@@ -30,11 +40,12 @@ impl Permission {
         wanted
             .iter()
             .find_map(|kind| options.iter().find(|option| option.kind == *kind))
-            .map_or(RequestPermissionOutcome::Cancelled, |option| {
+            .map(|option| {
                 RequestPermissionOutcome::Selected(SelectedPermissionOutcome::new(
                     option.option_id.clone(),
                 ))
             })
+            .ok_or(MissingOption(self))
     }
 }
 
@@ -42,7 +53,7 @@ impl Permission {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PermissionRequest {
     /// What sort of call it is, such as `execute`, `edit` or `fetch`, when the harness says.
-    pub kind: Option<String>,
+    pub kind: Option<ToolKind>,
     pub title: String,
     /// The arguments of the call as the harness passes them, such as `{"command": "cargo test"}`.
     pub input: Option<Value>,
@@ -51,11 +62,7 @@ pub struct PermissionRequest {
 impl PermissionRequest {
     pub(crate) fn of(fields: &ToolCallUpdateFields) -> Self {
         PermissionRequest {
-            kind: fields
-                .kind
-                .as_ref()
-                .and_then(|kind| serde_json::to_value(kind).ok())
-                .and_then(|kind| kind.as_str().map(str::to_string)),
+            kind: fields.kind,
             title: fields
                 .title
                 .clone()
@@ -151,30 +158,36 @@ mod tests {
 
     #[test]
     fn allow_prefers_once_over_always() {
-        assert_eq!(selected(Permission::Allow.answer(&options())), "once");
+        assert_eq!(
+            selected(Permission::Allow.answer(&options()).unwrap()),
+            "once"
+        );
     }
 
     #[test]
     fn deny_picks_a_reject_option() {
-        assert_eq!(selected(Permission::Deny.answer(&options())), "reject");
+        assert_eq!(
+            selected(Permission::Deny.answer(&options()).unwrap()),
+            "reject"
+        );
     }
 
     #[test]
-    fn missing_options_cancel() {
-        assert!(matches!(
-            Permission::Deny.answer(&options()[..1]),
-            RequestPermissionOutcome::Cancelled
-        ));
+    fn a_missing_option_is_not_a_cancel() {
+        assert_eq!(
+            Permission::Deny.answer(&options()[..1]).unwrap_err(),
+            MissingOption(Permission::Deny)
+        );
     }
 
     #[test]
     fn a_request_carries_the_kind_title_and_input_of_the_call() {
         let fields = ToolCallUpdateFields::new()
-            .kind(agent_client_protocol::schema::v1::ToolKind::Execute)
+            .kind(ToolKind::Execute)
             .title("Terminal".to_string())
             .raw_input(serde_json::json!({"command": "wf item show k3f7"}));
         let request = PermissionRequest::of(&fields);
-        assert_eq!(request.kind.as_deref(), Some("execute"));
+        assert_eq!(request.kind, Some(ToolKind::Execute));
         assert_eq!(request.title, "Terminal");
         assert_eq!(request.command(), Some("wf item show k3f7"));
     }

@@ -76,8 +76,7 @@ fn render(view: &ChainView) -> String {
 /// A request to run `command`, made up around it as if a session in `cwd` asked.
 fn request_for(command: &str, cwd: &Path) -> DeciderRequest {
     DeciderRequest {
-        hook: "permission".to_string(),
-        version: 1,
+        header: Default::default(),
         workforce: String::new(),
         item: ItemContext {
             id: String::new(),
@@ -92,7 +91,7 @@ fn request_for(command: &str, cwd: &Path) -> DeciderRequest {
         },
         directory: cwd.to_path_buf(),
         tool: PermissionRequest {
-            kind: Some("execute".to_string()),
+            kind: Some(wf_harness::ToolKind::Execute),
             title: command.to_string(),
             input: Some(serde_json::json!({ "command": command })),
         },

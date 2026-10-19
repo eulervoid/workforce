@@ -369,7 +369,7 @@ mod tests {
 
     fn request(command: &str) -> PermissionRequest {
         PermissionRequest {
-            kind: Some("execute".into()),
+            kind: Some(wf_harness::ToolKind::Execute),
             title: command.into(),
             input: Some(serde_json::json!({ "command": command })),
         }
@@ -484,7 +484,7 @@ mod tests {
     #[test]
     fn a_call_without_a_command_is_passed_on() {
         let edit = PermissionRequest {
-            kind: Some("edit".into()),
+            kind: Some(wf_harness::ToolKind::Edit),
             title: "Edit src/lib.rs".into(),
             input: Some(serde_json::json!({ "path": "src/lib.rs" })),
         };

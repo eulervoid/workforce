@@ -19,6 +19,8 @@ pub enum PolicyError {
     Parse(String),
     #[error("built-in type `{0}` is missing")]
     BuiltinMissing(TypeName),
+    #[error("built-in lane `{0}` is missing")]
+    BuiltinLaneMissing(LaneName),
     #[error("initial state `{state}` of type `{type_name}` is not one of its states")]
     InitialNotInStates {
         type_name: TypeName,
@@ -357,6 +359,9 @@ impl Policy {
         {
             return Err(PolicyError::BuiltinMissing(name.clone()));
         }
+        if !self.lanes.contains_key(&LaneName::supervision()) {
+            return Err(PolicyError::BuiltinLaneMissing(LaneName::supervision()));
+        }
         for (name, config) in &self.types {
             if !config.uses(config.initial) {
                 return Err(PolicyError::InitialNotInStates {
@@ -624,6 +629,15 @@ mod tests {
     }
 
     #[test]
+    fn rejects_missing_supervision_lane() {
+        let source = DEFAULT_POLICY_TOML.replace("[lanes.supervision]", "[lanes.oversight]");
+        assert_eq!(
+            Policy::parse(&source),
+            Err(PolicyError::BuiltinLaneMissing(LaneName::supervision()))
+        );
+    }
+
+    #[test]
     fn rejects_missing_builtin() {
         let source = DEFAULT_POLICY_TOML.replace("[types.distill]", "[types.distillery]");
         assert_eq!(
@@ -718,11 +732,7 @@ mod tests {
             [ReviewStep::Agent { requires }, ReviewStep::Principal]
         );
         assert_eq!(policy.merge, MergeConfig::default());
-        assert!(
-            policy
-                .lanes
-                .contains_key(&LaneName::new("supervision").unwrap())
-        );
+        assert!(policy.lanes.contains_key(&LaneName::supervision()));
         let task = policy.type_config(&type_name("task")).unwrap();
         assert_eq!(task.review, Some(ReviewLevelName::new("manual").unwrap()));
         assert_eq!(
