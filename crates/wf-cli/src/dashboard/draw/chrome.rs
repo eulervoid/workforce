@@ -17,7 +17,7 @@ use crate::dashboard::hint::{
     UNSELECT,
 };
 use crate::dashboard::snapshot::Detail;
-use crate::dashboard::snapshot::{InView, MovedBack, SessionInfo, Waiting};
+use crate::dashboard::snapshot::{InView, InboxEntry, MovedBack, SessionInfo};
 use crate::theme;
 use crate::view::SessionStatus;
 
@@ -356,7 +356,7 @@ pub(super) fn latest_line(app: &App) -> Line<'static> {
 /// Draws the hints of the keys that work on what is on screen, which a click presses.
 pub(super) fn draw_hints(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
     let hints = hints(app);
-    let request = app.subjects().into_iter().find_map(Waiting::request);
+    let request = app.subjects().into_iter().find_map(InboxEntry::request);
     let mut spots = Vec::new();
     let mut start = 1;
     for hint in &hints {
@@ -382,12 +382,12 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
     let mut acts: Vec<Hint> = Vec::new();
     for entry in app.subjects() {
         let keys: &[Hint] = match entry {
-            Waiting::Permission { .. } => &[ALLOW, DENY],
-            Waiting::Blocker { .. } => &[ANSWER, ANSWER_IN_EDITOR],
+            InboxEntry::Permission { .. } => &[ALLOW, DENY],
+            InboxEntry::Blocker { .. } => &[ANSWER, ANSWER_IN_EDITOR],
             // In the diff, `v` selects lines.
-            Waiting::Review { .. } if app.diff_has_keys() => &[REVIEW_IN_DIFF],
-            Waiting::Review { .. } => &[REVIEW, DIFF],
-            Waiting::Notice { .. } | Waiting::MachineFault { .. } => &[],
+            InboxEntry::Review { .. } if app.diff_has_keys() => &[REVIEW_IN_DIFF],
+            InboxEntry::Review { .. } => &[REVIEW, DIFF],
+            InboxEntry::Notice { .. } | InboxEntry::MachineFault { .. } => &[],
         };
         for key in keys {
             if !acts.contains(key) {

@@ -11,8 +11,8 @@ use wf_core::id::HashId;
 use super::chrome::button;
 use super::{KeysAt, SPINNER, Themed, accent, list_top, selection_bar, themed};
 use crate::cli::{ItemGrouping, ItemOrder};
-use crate::dashboard::app::{AgentRow, App, ClickableList, ListTop, Row, Spot, Target};
-use crate::dashboard::snapshot::{AgentInfo, Place, SessionInfo, Waiting};
+use crate::dashboard::app::{AgentRow, App, ClickableList, FirstRow, NowRow, Spot, Target};
+use crate::dashboard::snapshot::{AgentInfo, InboxEntry, Place, SessionInfo};
 use crate::render;
 use crate::text::{duration, prefix_within};
 use crate::theme;
@@ -76,7 +76,7 @@ pub(super) fn draw_list(
 ) -> (usize, ClickableList) {
     let previous = app
         .panes()
-        .map_or(ListTop::FollowsSelection(0), |panes| panes.list_top);
+        .map_or(FirstRow::Follows(0), |panes| panes.list_top);
     // Nothing of it fits: it stays where it was.
     if area.is_empty() {
         let entries = Vec::new();
@@ -84,13 +84,13 @@ pub(super) fn draw_list(
     }
     let list = list_lines(app, area.width);
     let top = match previous {
-        ListTop::FollowsSelection(previous) => list_top(
+        FirstRow::Follows(previous) => list_top(
             previous,
             list.selected_line,
             list.lines.len(),
             usize::from(area.height),
         ),
-        ListTop::Scrolled(top) => {
+        FirstRow::Scrolled(top) => {
             top.min(list.lines.len().saturating_sub(usize::from(area.height)))
         }
     };
@@ -306,9 +306,9 @@ pub(super) fn right_start(first: &Line, right: &str) -> usize {
         .saturating_sub(textwrap::core::display_width(right) + 1)
 }
 
-pub(super) fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
+pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'static>> {
     match entry {
-        Waiting::Permission {
+        InboxEntry::Permission {
             agent, item, what, ..
         } => {
             let mut first = vec![
@@ -323,7 +323,7 @@ pub(super) fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>
             first.push(Span::raw(what.clone()));
             row.lines(first, row.keys(ROW_ANSWERS).map(Line::from), Vec::new())
         }
-        Waiting::Blocker { item, by, text, .. } => {
+        InboxEntry::Blocker { item, by, text, .. } => {
             let mut first = vec![themed("⧗ ", theme::attention())];
             first.push(themed(format!("#{}", item.id.short()), theme::id()));
             first.push(Span::raw(format!(" blocker from {by}")));
@@ -343,7 +343,7 @@ pub(super) fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>
                 vec![Line::from(more).themed(theme::text_dimmed())],
             )
         }
-        Waiting::Review { item, commit } => {
+        InboxEntry::Review { item, commit } => {
             let mut first = vec![themed("◎ ", theme::attention())];
             first.push(themed(format!("#{}", item.id.short()), theme::id()));
             first.push(Span::raw(" review"));
@@ -353,13 +353,13 @@ pub(super) fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>
             first.push(Span::raw(format!("  {}", item.title)));
             row.lines(first, row.keys("v").map(Line::from), Vec::new())
         }
-        Waiting::Notice { item, kind, what } => {
+        InboxEntry::Notice { item, kind, what } => {
             let mut first = vec![themed("• ", theme::attention())];
             first.extend(item_spans(item.id, &item.title));
             let more = Line::from(format!("  {kind}: {what}")).themed(theme::text_dimmed());
             row.lines(first, None, vec![more])
         }
-        Waiting::MachineFault { title, what } => {
+        InboxEntry::MachineFault { title, what } => {
             let first = vec![themed("! ", theme::attention()), Span::raw(title.clone())];
             let more = Line::from(format!("  {what}")).themed(theme::text_dimmed());
             row.lines(first, None, vec![more])
@@ -500,7 +500,7 @@ pub(super) fn now_lines(app: &App, width: u16) -> ListText {
     if !snapshot.waiting.is_empty() {
         list.push(section("WAITING ON YOU"));
         for entry in &snapshot.waiting {
-            let is_selected = selected == Some(&Row::Waiting(entry.key()));
+            let is_selected = selected == Some(&NowRow::Waiting(entry.key()));
             let lines = waiting_lines(entry, RowLines::new(app, is_selected, width));
             // The keys of the selected request answer it on a click.
             if is_selected && let Some(request) = entry.request() {
@@ -526,7 +526,7 @@ pub(super) fn now_lines(app: &App, width: u16) -> ListText {
     if !snapshot.working.is_empty() {
         list.push(section("WORKING"));
         for session in &snapshot.working {
-            let is_selected = selected == Some(&Row::Session(session.id));
+            let is_selected = selected == Some(&NowRow::Session(session.id));
             list.entry(
                 session_lines(app, session, RowLines::new(app, is_selected, width)),
                 is_selected,
@@ -537,7 +537,7 @@ pub(super) fn now_lines(app: &App, width: u16) -> ListText {
     if !snapshot.flagged.is_empty() {
         list.push(section("NEEDS ATTENTION"));
         for flag in &snapshot.flagged {
-            let is_selected = selected == Some(&Row::Flag(flag.clone()));
+            let is_selected = selected == Some(&NowRow::Flag(flag.clone()));
             let first = vec![themed("! ", theme::warning()), Span::raw(flag.to_string())];
             list.entry(
                 RowLines::new(app, is_selected, width).lines(first, None, Vec::new()),

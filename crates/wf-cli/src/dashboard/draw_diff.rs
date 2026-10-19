@@ -8,7 +8,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 use wf_vcs::diff::{Content, DiffLine, FileChange, FileDiff};
 
-use super::diff::{self, Changes, DiffPane, DiffRow, Shown};
+use super::diff::{self, Changes, DiffPane, DiffRow, ShownComment};
 use super::draw::{KeysAt, Themed, accent, draw_position, padded, selection_bar, themed};
 use crate::dashboard::app::App;
 use crate::theme;
@@ -136,18 +136,23 @@ fn row_spans(pane: &DiffPane, row: DiffRow, numbers: usize, room: usize) -> Vec<
 
 /// A row of a comment, below the numbers of the lines: its header, a line it quotes when it is of
 /// another commit, or a line of its text.
-fn comment_spans(pane: &DiffPane, shown: Shown, row: usize, numbers: usize) -> Vec<Span<'static>> {
+fn comment_spans(
+    pane: &DiffPane,
+    shown: ShownComment,
+    row: usize,
+    numbers: usize,
+) -> Vec<Span<'static>> {
     let gap = " ".repeat(numbers * 2 + 2);
     let comment = pane.comment(shown);
     let (bar, by) = match shown {
-        Shown::Draft(_) => (theme::attention(), "✎ draft".to_owned()),
-        Shown::Posted(index) => (theme::text_dimmed(), pane.posted[index].by.clone()),
+        ShownComment::Draft(_) => (theme::attention(), "✎ draft".to_owned()),
+        ShownComment::Posted(index) => (theme::text_dimmed(), pane.posted[index].by.clone()),
     };
     let mut spans = vec![Span::raw(gap), themed("┃ ", bar)];
     let outdated = pane.is_outdated(shown);
     if row == 0 {
         let mut header = format!("{by} · {}", comment.kind.label());
-        if let Shown::Posted(index) = shown
+        if let ShownComment::Posted(index) = shown
             && pane.posted[index].resolved
         {
             header.push_str(" · resolved");

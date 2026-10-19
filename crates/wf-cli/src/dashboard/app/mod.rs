@@ -27,8 +27,8 @@ use crate::cli::{ItemGrouping, ItemOrder};
 use crate::dashboard::diff::{Changes, DiffPane, LineComment};
 use crate::dashboard::draw;
 use crate::dashboard::snapshot::{
-    Detail, InView, ItemListing, Listing, MovedBack, Place, SessionInfo, Snapshot, Waiting,
-    WaitingKey, Wanted,
+    Detail, InView, InboxEntry, InboxKey, ItemListing, Listing, MovedBack, Place, SessionInfo,
+    Snapshot, Wanted,
 };
 use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::theme;
@@ -191,7 +191,7 @@ pub struct App {
     /// being written while other details are on screen.
     pub diffs: HashMap<ItemId, DiffPane>,
     pub tab: Tab,
-    pub now: ListTab<Row>,
+    pub now: ListTab<NowRow>,
     pub items: ItemsTab,
     pub agents: ListTab<AgentRow>,
     pub log: LogTab,
@@ -459,7 +459,7 @@ impl App {
         let Some(Opened {
             detail: Detail::Session(session),
             ..
-        }) = self.in_view()
+        }) = self.on_screen()
         else {
             return;
         };
@@ -502,17 +502,17 @@ impl App {
     }
 
     /// The rows of the Now tab, in the order they are shown.
-    pub fn now_rows(&self) -> Vec<Row> {
+    pub fn now_rows(&self) -> Vec<NowRow> {
         let snapshot = &self.snapshot;
         let waiting = snapshot
             .waiting
             .iter()
-            .map(|entry| Row::Waiting(entry.key()));
+            .map(|entry| NowRow::Waiting(entry.key()));
         let working = snapshot
             .working
             .iter()
-            .map(|session| Row::Session(session.id));
-        let flagged = snapshot.flagged.iter().cloned().map(Row::Flag);
+            .map(|session| NowRow::Session(session.id));
+        let flagged = snapshot.flagged.iter().cloned().map(NowRow::Flag);
         waiting.chain(working).chain(flagged).collect()
     }
 
@@ -565,26 +565,26 @@ impl App {
     }
 
     /// The detail of a row of the Now tab, if it has one.
-    pub fn detail_of(&self, row: &Row) -> Option<Detail> {
+    pub fn detail_of(&self, row: &NowRow) -> Option<Detail> {
         match row {
-            Row::Waiting(key) => match self.waiting(key)? {
-                Waiting::Permission { session, .. } => Some(Detail::Session(*session)),
-                Waiting::Blocker { item, .. }
-                | Waiting::Review { item, .. }
-                | Waiting::Notice { item, .. } => Some(Detail::Item(item.id)),
+            NowRow::Waiting(key) => match self.waiting(key)? {
+                InboxEntry::Permission { session, .. } => Some(Detail::Session(*session)),
+                InboxEntry::Blocker { item, .. }
+                | InboxEntry::Review { item, .. }
+                | InboxEntry::Notice { item, .. } => Some(Detail::Item(item.id)),
                 // The row says all there is to say.
-                Waiting::MachineFault { .. } => None,
+                InboxEntry::MachineFault { .. } => None,
             },
-            Row::Session(session) => Some(Detail::Session(*session)),
+            NowRow::Session(session) => Some(Detail::Session(*session)),
             // A flag about an item shows in the item's notice box.
-            Row::Flag(flag) => Some(
+            NowRow::Flag(flag) => Some(
                 flag.item()
                     .map_or_else(|| Detail::Flag(flag.clone()), Detail::Item),
             ),
         }
     }
 
-    fn waiting(&self, key: &WaitingKey) -> Option<&Waiting> {
+    fn waiting(&self, key: &InboxKey) -> Option<&InboxEntry> {
         self.snapshot
             .waiting
             .iter()
@@ -664,7 +664,7 @@ impl App {
     /// it: when none is, or when the list has taken them back. The log is the list of its tab.
     pub fn list_has_keys(&self) -> bool {
         match self.panes() {
-            Some(panes) => panes.stack.is_empty() || panes.focus == Pane::List,
+            Some(panes) => panes.stack.is_empty() || panes.keys == Pane::List,
             None => self.log.stack.is_empty(),
         }
     }
@@ -680,7 +680,7 @@ impl App {
                 stack.iter().map(|opened| opened.detail.clone()).collect()
             }
             _ => self
-                .in_view()
+                .on_screen()
                 .map(|opened| opened.detail)
                 .into_iter()
                 .collect(),
@@ -704,11 +704,11 @@ impl App {
             .waiting
             .iter()
             .filter_map(|entry| match entry {
-                Waiting::Permission { item, .. } => item.as_ref(),
-                Waiting::Blocker { item, .. }
-                | Waiting::Review { item, .. }
-                | Waiting::Notice { item, .. } => Some(item),
-                Waiting::MachineFault { .. } => None,
+                InboxEntry::Permission { item, .. } => item.as_ref(),
+                InboxEntry::Blocker { item, .. }
+                | InboxEntry::Review { item, .. }
+                | InboxEntry::Notice { item, .. } => Some(item),
+                InboxEntry::MachineFault { .. } => None,
             })
             .map(|item| (item.id, item.title.as_str()));
         let listed = snapshot
@@ -739,7 +739,7 @@ impl App {
     }
 
     /// The detail the keys act on: the one opened last, else the selection's.
-    fn focus(&self) -> Option<Detail> {
+    fn detail_for_keys(&self) -> Option<Detail> {
         match self.stack().last() {
             Some(opened) => Some(opened.detail.clone()),
             None => self.selected_detail(),
@@ -748,7 +748,7 @@ impl App {
 
     /// The detail on screen: the one opened last, or beside the list the selection's. With one
     /// pane on screen, none while the list has the keys.
-    pub fn in_view(&self) -> Option<Opened> {
+    pub fn on_screen(&self) -> Option<Opened> {
         if !self.shows_both() && self.list_has_keys() {
             return None;
         }
@@ -765,7 +765,7 @@ impl App {
     /// What the workspace is asked about, for what is on screen.
     pub fn wanted(&self) -> Wanted {
         Wanted {
-            detail: self.in_view().map(|opened| opened.detail),
+            detail: self.on_screen().map(|opened| opened.detail),
             listing: match self.tab {
                 Tab::Items => Some(Listing::Items(ItemListing {
                     grouping: self.items.grouping,
@@ -779,36 +779,36 @@ impl App {
 
     /// What waits that the keys on screen act on: the selected entry, the permission request of
     /// a selected or open session, or what waits about the selected or open item.
-    pub fn subjects(&self) -> Vec<&Waiting> {
+    pub fn subjects(&self) -> Vec<&InboxEntry> {
         if self.list_has_keys()
             && self.tab == Tab::Now
-            && let Some(Row::Waiting(key)) = self.now.selection.get()
+            && let Some(NowRow::Waiting(key)) = self.now.selection.get()
         {
             return self.waiting(key).into_iter().collect();
         }
         let waiting = self.snapshot.waiting.iter();
-        match self.focus() {
+        match self.detail_for_keys() {
             Some(Detail::Session(id)) => waiting
                 .filter(
-                    |entry| matches!(entry, Waiting::Permission { session, .. } if *session == id),
+                    |entry| matches!(entry, InboxEntry::Permission { session, .. } if *session == id),
                 )
                 .collect(),
             Some(Detail::Item(id)) => waiting
                 .filter(|entry| match entry {
-                    Waiting::Blocker { item, .. } | Waiting::Review { item, .. } => item.id == id,
-                    Waiting::Permission { .. }
-                    | Waiting::Notice { .. }
-                    | Waiting::MachineFault { .. } => false,
+                    InboxEntry::Blocker { item, .. } | InboxEntry::Review { item, .. } => item.id == id,
+                    InboxEntry::Permission { .. }
+                    | InboxEntry::Notice { .. }
+                    | InboxEntry::MachineFault { .. } => false,
                 })
                 .collect(),
             // A diff is looked at to review it.
             Some(Detail::Diff(id)) => waiting
                 .filter(|entry| match entry {
-                    Waiting::Review { item, .. } => item.id == id,
-                    Waiting::Permission { .. }
-                    | Waiting::Blocker { .. }
-                    | Waiting::Notice { .. }
-                    | Waiting::MachineFault { .. } => false,
+                    InboxEntry::Review { item, .. } => item.id == id,
+                    InboxEntry::Permission { .. }
+                    | InboxEntry::Blocker { .. }
+                    | InboxEntry::Notice { .. }
+                    | InboxEntry::MachineFault { .. } => false,
                 })
                 .collect(),
             Some(Detail::Agent(_) | Detail::Flag(_)) | None => Vec::new(),
@@ -817,7 +817,7 @@ impl App {
 
     /// The item the item keys act on: of the open or selected detail.
     pub fn item_subject(&self) -> Option<ItemId> {
-        match self.focus()? {
+        match self.detail_for_keys()? {
             Detail::Item(item) | Detail::Diff(item) => Some(item),
             Detail::Session(session) => self.session_info(session).map(|info| info.item),
             Detail::Agent(_) | Detail::Flag(_) => None,
@@ -826,7 +826,7 @@ impl App {
 
     /// The session `x` stops: the one open, or selected, while it is live.
     pub fn session_subject(&self) -> Option<SessionId> {
-        match self.focus()? {
+        match self.detail_for_keys()? {
             Detail::Session(session) => self
                 .session_info(session)
                 .filter(|info| match info.status {
@@ -884,7 +884,7 @@ impl App {
         }
         let from_list = self.list_has_keys();
         if let Some(panes) = self.panes_mut() {
-            panes.focus = Pane::Detail;
+            panes.keys = Pane::Detail;
         }
         let stack = self.stack_mut();
         if from_list {

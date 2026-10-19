@@ -11,7 +11,7 @@ use wf_core::event::{CommentKind, DiffSide, LineAnchor};
 use wf_core::session::CommitId;
 use wf_vcs::diff::{Content, DiffLine, FileDiff};
 
-use super::app::ListTop;
+use super::app::FirstRow;
 
 /// The work of an item as git read it.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -56,7 +56,7 @@ pub struct PostedComment {
 
 /// One of the comments the diff shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Shown {
+pub enum ShownComment {
     /// Of the review being written, by its place among the drafts.
     Draft(usize),
     /// In the log, by its place among the posted ones.
@@ -81,7 +81,7 @@ pub enum DiffRow {
     /// it is about lines of another commit: its header on row 0, then its text.
     Comment {
         file: usize,
-        shown: Shown,
+        shown: ShownComment,
         row: usize,
     },
     /// Between two files.
@@ -95,7 +95,7 @@ impl DiffRow {
             DiffRow::File(_)
             | DiffRow::Line { .. }
             | DiffRow::Comment {
-                shown: Shown::Draft(_),
+                shown: ShownComment::Draft(_),
                 row: 0,
                 ..
             } => true,
@@ -126,7 +126,7 @@ pub struct DiffPane {
     /// The row the cursor is on.
     pub cursor: usize,
     /// The first row on screen, and whether it follows the cursor.
-    pub top: ListTop,
+    pub top: FirstRow,
     /// The files folded to their header, by path, so they stay folded as the work moves on.
     pub folded: HashSet<String>,
     /// The row a selection of lines started on, which reaches from there to the cursor; `None`
@@ -154,7 +154,7 @@ impl DiffPane {
         Self {
             work: None,
             cursor: 0,
-            top: ListTop::FollowsSelection(0),
+            top: FirstRow::Follows(0),
             folded: HashSet::new(),
             selection: None,
             pressed: None,
@@ -202,7 +202,7 @@ impl DiffPane {
     pub fn rows(&self) -> Vec<DiffRow> {
         let (under_lines, under_files) = self.placed_comments();
         let mut rows = Vec::new();
-        let comment_rows = |rows: &mut Vec<DiffRow>, file: usize, shown: &[Shown]| {
+        let comment_rows = |rows: &mut Vec<DiffRow>, file: usize, shown: &[ShownComment]| {
             for shown in shown {
                 let height = 1 + self.comment_body(*shown).len();
                 rows.extend((0..height).map(|row| DiffRow::Comment {
@@ -249,21 +249,21 @@ impl DiffPane {
     }
 
     /// The comment `shown` is of.
-    pub fn comment(&self, shown: Shown) -> &LineComment {
+    pub fn comment(&self, shown: ShownComment) -> &LineComment {
         match shown {
-            Shown::Draft(index) => &self.drafts[index],
-            Shown::Posted(index) => &self.posted[index].comment,
+            ShownComment::Draft(index) => &self.drafts[index],
+            ShownComment::Posted(index) => &self.posted[index].comment,
         }
     }
 
     /// Whether the comment is about lines of another commit than the one on screen.
-    pub fn is_outdated(&self, shown: Shown) -> bool {
+    pub fn is_outdated(&self, shown: ShownComment) -> bool {
         Some(self.comment(shown).lines.commit) != self.commit()
     }
 
     /// The rows of a comment under its header: the lines it quotes when they are of another
     /// commit, then its text, wrapped.
-    pub fn comment_body(&self, shown: Shown) -> Vec<String> {
+    pub fn comment_body(&self, shown: ShownComment) -> Vec<String> {
         let comment = self.comment(shown);
         let mut body = Vec::new();
         if self.is_outdated(shown) {
@@ -290,14 +290,14 @@ impl DiffPane {
     fn placed_comments(
         &self,
     ) -> (
-        HashMap<(usize, usize, usize), Vec<Shown>>,
-        HashMap<usize, Vec<Shown>>,
+        HashMap<(usize, usize, usize), Vec<ShownComment>>,
+        HashMap<usize, Vec<ShownComment>>,
     ) {
-        let mut under_lines: HashMap<_, Vec<Shown>> = HashMap::new();
-        let mut under_files: HashMap<_, Vec<Shown>> = HashMap::new();
+        let mut under_lines: HashMap<_, Vec<ShownComment>> = HashMap::new();
+        let mut under_files: HashMap<_, Vec<ShownComment>> = HashMap::new();
         let shown = (0..self.posted.len())
-            .map(Shown::Posted)
-            .chain((0..self.drafts.len()).map(Shown::Draft));
+            .map(ShownComment::Posted)
+            .chain((0..self.drafts.len()).map(ShownComment::Draft));
         for shown in shown {
             let lines = &self.comment(shown).lines;
             let Some(file) = self.files().iter().position(|file| file.path == lines.path) else {
@@ -384,11 +384,11 @@ impl DiffPane {
     pub fn draft_at_cursor(&self) -> Option<usize> {
         match self.rows().get(self.cursor)? {
             DiffRow::Comment {
-                shown: Shown::Draft(index),
+                shown: ShownComment::Draft(index),
                 ..
             } => Some(*index),
             DiffRow::Comment {
-                shown: Shown::Posted(_),
+                shown: ShownComment::Posted(_),
                 ..
             }
             | DiffRow::File(_)
@@ -466,7 +466,7 @@ impl DiffPane {
             Some(start) => keep_to_hunk(&rows, start, cursor),
             None => cursor,
         };
-        self.top = self.top.follow_selection();
+        self.top = self.top.follow();
         true
     }
 
@@ -493,7 +493,7 @@ impl DiffPane {
         self.cursor = nearest_cursor_row(&rows, row);
         self.selection = None;
         self.pressed = matches!(rows[self.cursor], DiffRow::Line { .. }).then_some(self.cursor);
-        self.top = self.top.follow_selection();
+        self.top = self.top.follow();
         true
     }
 
@@ -516,7 +516,7 @@ impl DiffPane {
         };
         self.selection = Some(start);
         self.cursor = keep_to_hunk(&rows, start, row);
-        self.top = self.top.follow_selection();
+        self.top = self.top.follow();
     }
 
     /// Folds the file the cursor is in to its header, or unfolds it; the cursor goes to the
@@ -536,11 +536,11 @@ impl DiffPane {
         {
             self.cursor = header;
         }
-        self.top = self.top.follow_selection();
+        self.top = self.top.follow();
     }
 
     /// The wheel scrolled the diff to `top`; the cursor is kept on screen by drawing.
-    pub fn scroll(&mut self, top: ListTop) {
+    pub fn scroll(&mut self, top: FirstRow) {
         self.top = top;
     }
 
@@ -614,10 +614,10 @@ pub fn nearest_cursor_row(rows: &[DiffRow], row: usize) -> usize {
 
 /// The first row on screen of `rows` drawn `height` high, from `top` as it was: kept to the
 /// cursor when it follows it, else where the wheel put it; and the cursor, kept on screen.
-pub fn placed(rows: &[DiffRow], top: ListTop, cursor: usize, height: usize) -> (usize, usize) {
+pub fn placed(rows: &[DiffRow], top: FirstRow, cursor: usize, height: usize) -> (usize, usize) {
     let last_top = rows.len().saturating_sub(height);
     match top {
-        ListTop::FollowsSelection(previous) => {
+        FirstRow::Follows(previous) => {
             let mut top = previous.min(last_top);
             // A row of context above the cursor, where there is one.
             if cursor < top + 1 {
@@ -628,7 +628,7 @@ pub fn placed(rows: &[DiffRow], top: ListTop, cursor: usize, height: usize) -> (
             }
             (top, cursor)
         }
-        ListTop::Scrolled(top) => {
+        FirstRow::Scrolled(top) => {
             let top = top.min(last_top);
             let bottom = (top + height).min(rows.len());
             let cursor = if (top..bottom).contains(&cursor) {

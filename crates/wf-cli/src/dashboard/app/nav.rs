@@ -4,7 +4,7 @@ use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use wf_core::id::SessionId;
 use wf_core::identity::AgentId;
 
-use crate::dashboard::snapshot::{Detail, WaitingKey};
+use crate::dashboard::snapshot::{Detail, InboxKey};
 
 /// How many lines a text moves for a notch of the mouse wheel.
 const WHEEL_LINES: usize = 3;
@@ -98,8 +98,8 @@ pub enum AgentRow {
 
 /// A line of the Now tab that can be selected.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Row {
-    Waiting(WaitingKey),
+pub enum NowRow {
+    Waiting(InboxKey),
     Session(SessionId),
     Flag(crate::view::Flag),
 }
@@ -210,43 +210,44 @@ pub struct Panes {
     /// The details opened from the list, the latest on top.
     pub stack: Vec<Opened>,
     /// In a wide window, which of the list and the detail opened beside it has the keys.
-    pub focus: Pane,
+    pub keys: Pane,
     /// The first line of the list on screen, and whether it follows the selection.
-    pub list_top: ListTop,
+    pub list_top: FirstRow,
 }
 
-/// The first line of a list on screen.
+/// The first row of a list or a diff on screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ListTop {
-    /// Kept while the selection moves within the list, moved only as far as keeps it on screen.
-    FollowsSelection(usize),
-    /// Where the wheel scrolled the list, wherever the selection is.
+pub enum FirstRow {
+    /// Kept while the selection or cursor moves within the rows, moved only as far as keeps it on
+    /// screen.
+    Follows(usize),
+    /// Where the wheel scrolled the rows, wherever the selection or cursor is.
     Scrolled(usize),
 }
 
-impl ListTop {
+impl FirstRow {
     pub fn line(self) -> usize {
         match self {
-            ListTop::FollowsSelection(line) | ListTop::Scrolled(line) => line,
+            FirstRow::Follows(line) | FirstRow::Scrolled(line) => line,
         }
     }
 
     /// The same way of keeping the list, from `line`.
     pub fn at(self, line: usize) -> Self {
         match self {
-            ListTop::FollowsSelection(_) => ListTop::FollowsSelection(line),
-            ListTop::Scrolled(_) => ListTop::Scrolled(line),
+            FirstRow::Follows(_) => FirstRow::Follows(line),
+            FirstRow::Scrolled(_) => FirstRow::Scrolled(line),
         }
     }
 
     /// The list from where it is on screen, kept to the selection again.
-    pub fn follow_selection(self) -> Self {
-        ListTop::FollowsSelection(self.line())
+    pub fn follow(self) -> Self {
+        FirstRow::Follows(self.line())
     }
 
     pub fn scroll(self, wheel: Wheel) -> Self {
         let line = self.line();
-        ListTop::Scrolled(match wheel {
+        FirstRow::Scrolled(match wheel {
             Wheel::Up => line.saturating_sub(WHEEL_LINES),
             Wheel::Down => line + WHEEL_LINES,
         })
@@ -267,7 +268,7 @@ impl<Key: Clone + PartialEq> ListTab<Key> {
         let before = self.selection.get().cloned();
         self.selection.update(rows);
         if self.selection.get() != before.as_ref() {
-            self.panes.list_top = self.panes.list_top.follow_selection();
+            self.panes.list_top = self.panes.list_top.follow();
         }
     }
 }
@@ -278,8 +279,8 @@ impl<Key> Default for ListTab<Key> {
             selection: Selection::default(),
             panes: Panes {
                 stack: Vec::new(),
-                focus: Pane::Detail,
-                list_top: ListTop::FollowsSelection(0),
+                keys: Pane::Detail,
+                list_top: FirstRow::Follows(0),
             },
         }
     }

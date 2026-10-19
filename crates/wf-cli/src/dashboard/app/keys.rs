@@ -95,8 +95,8 @@ impl App {
         match self.split {
             Split::Both => {
                 match towards {
-                    Pane::List => self.focus_list(),
-                    Pane::Detail => self.focus_detail(),
+                    Pane::List => self.keys_to_list(),
+                    Pane::Detail => self.keys_to_detail(),
                 }
                 // Without a detail to give the keys to, both stay.
                 if self.pane_with_keys() == towards {
@@ -224,7 +224,7 @@ impl App {
         if matches!(key.code, KeyCode::Esc | KeyCode::Left | KeyCode::Char('h')) {
             match self.panes_mut() {
                 // The detail opened from the list stays as it is, to come back to with `l`.
-                Some(panes) if panes.stack.len() == 1 => panes.focus = Pane::List,
+                Some(panes) if panes.stack.len() == 1 => panes.keys = Pane::List,
                 Some(_) | None => {
                     self.stack_mut().pop();
                 }
@@ -360,7 +360,7 @@ impl App {
             self.stack_mut().clear();
             // A list scrolled away from the selection comes back to show it.
             if let Some(panes) = self.panes_mut() {
-                panes.list_top = panes.list_top.follow_selection();
+                panes.list_top = panes.list_top.follow();
             }
         }
         navigated != Navigated::Unused

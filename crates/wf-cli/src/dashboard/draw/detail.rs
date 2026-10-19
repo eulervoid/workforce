@@ -14,7 +14,7 @@ use crate::dashboard::draw_diff;
 use crate::dashboard::hint::{ALLOW, DENY};
 use crate::dashboard::links;
 use crate::dashboard::snapshot::Detail;
-use crate::dashboard::snapshot::{InView, Place, SessionInfo, Waiting};
+use crate::dashboard::snapshot::{InView, InboxEntry, Place, SessionInfo};
 use crate::theme;
 use crate::transcript::Transcript;
 
@@ -126,16 +126,16 @@ pub(super) fn draw_session(
         .waiting
         .iter()
         .filter_map(|entry| match entry {
-            Waiting::Permission {
+            InboxEntry::Permission {
                 session: asking,
                 what,
                 ..
             } if *asking == session.id => Some((what.as_str(), entry.request()?)),
-            Waiting::Permission { .. }
-            | Waiting::Blocker { .. }
-            | Waiting::Review { .. }
-            | Waiting::Notice { .. }
-            | Waiting::MachineFault { .. } => None,
+            InboxEntry::Permission { .. }
+            | InboxEntry::Blocker { .. }
+            | InboxEntry::Review { .. }
+            | InboxEntry::Notice { .. }
+            | InboxEntry::MachineFault { .. } => None,
         })
         .collect();
     let transcript = app.transcripts.get(&session.id);

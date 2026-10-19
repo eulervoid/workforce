@@ -279,7 +279,7 @@ pub(super) fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
         Tab::Items => draw_split(frame, app, area, items_lines),
         Tab::Log => {
             let mut spots = Vec::new();
-            let shown = match app.in_view() {
+            let shown = match app.on_screen() {
                 Some(opened) => draw_detail(frame, app, opened, area, &mut spots),
                 None => draw_log(frame, app, area, &mut spots).map(DrawnDetail::Text),
             };
@@ -299,7 +299,7 @@ pub(super) fn draw_body(frame: &mut Frame, app: &App, area: Rect) -> Drawn {
 /// The list, and the detail on screen: right of it in a wide window, or in its place in a
 /// narrow one or with the other pane folded away to a strip.
 fn draw_split(frame: &mut Frame, app: &App, area: Rect, list_lines: ListLines) -> Drawn {
-    let in_view = app.in_view();
+    let in_view = app.on_screen();
     if !app.shows_both() {
         let (area, strip) = if app.is_wide() {
             let (pane, strip) = draw_strip(frame, app, area);

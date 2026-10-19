@@ -33,7 +33,7 @@ pub struct Snapshot {
     pub now_ms: u64,
     pub counts: Counts,
     /// What waits on the principal, as `wf inbox` lists it.
-    pub waiting: Vec<Waiting>,
+    pub waiting: Vec<InboxEntry>,
     /// The live sessions, the newest first.
     pub working: Vec<SessionInfo>,
     /// What `wf status` flags.
@@ -116,7 +116,7 @@ pub struct Counts {
 
 /// One thing that waits on the principal, with what it takes to answer it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Waiting {
+pub enum InboxEntry {
     /// A session of this machine asks to do something.
     Permission {
         session: SessionId,
@@ -148,7 +148,7 @@ pub enum Waiting {
 
 /// What tells an entry that waits apart from the others, across refreshes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WaitingKey {
+pub enum InboxKey {
     Permission {
         session: SessionId,
         since_ms: u64,
@@ -162,25 +162,25 @@ pub enum WaitingKey {
     MachineFault(String),
 }
 
-impl Waiting {
-    pub fn key(&self) -> WaitingKey {
+impl InboxEntry {
+    pub fn key(&self) -> InboxKey {
         match self {
-            Waiting::Permission {
+            InboxEntry::Permission {
                 session, since_ms, ..
-            } => WaitingKey::Permission {
+            } => InboxKey::Permission {
                 session: *session,
                 since_ms: *since_ms,
             },
-            Waiting::Blocker { comment, .. } => WaitingKey::Blocker(*comment),
-            Waiting::Review { item, .. } => WaitingKey::Item {
+            InboxEntry::Blocker { comment, .. } => InboxKey::Blocker(*comment),
+            InboxEntry::Review { item, .. } => InboxKey::Item {
                 item: item.id,
                 kind: InboxKind::PrincipalReview,
             },
-            Waiting::Notice { item, kind, .. } => WaitingKey::Item {
+            InboxEntry::Notice { item, kind, .. } => InboxKey::Item {
                 item: item.id,
                 kind: *kind,
             },
-            Waiting::MachineFault { title, .. } => WaitingKey::MachineFault(title.clone()),
+            InboxEntry::MachineFault { title, .. } => InboxKey::MachineFault(title.clone()),
         }
     }
 }
@@ -405,12 +405,12 @@ fn waiting(
     events: &[Event],
     held: &[HeldPermission],
     machine_faults: &wf_daemon::MachineFaults,
-) -> Vec<Waiting> {
-    let mut waiting: Vec<Waiting> = held
+) -> Vec<InboxEntry> {
+    let mut waiting: Vec<InboxEntry> = held
         .iter()
         .map(|request| {
             let session = state.session(request.session);
-            Waiting::Permission {
+            InboxEntry::Permission {
                 session: request.session,
                 since_ms: request.since_ms,
                 agent: session.map_or_else(
@@ -444,16 +444,16 @@ fn waiting(
                         (who(state, &event.content.actor), text)
                     })
                     .unwrap_or_default();
-                Waiting::Blocker {
+                InboxEntry::Blocker {
                     item,
                     comment,
                     by,
                     text,
                 }
             }
-            InboxWaiting::PrincipalReview { commit } => Waiting::Review { item, commit },
+            InboxWaiting::PrincipalReview { commit } => InboxEntry::Review { item, commit },
             InboxWaiting::Proposal | InboxWaiting::Merge { .. } | InboxWaiting::Recovery { .. } => {
-                Waiting::Notice {
+                InboxEntry::Notice {
                     kind: entry.waiting.kind(),
                     what: state.what_waits(&entry),
                     item,
@@ -464,7 +464,7 @@ fn waiting(
     waiting.extend(
         view::machine_fault_views(machine_faults)
             .into_iter()
-            .map(|fault| Waiting::MachineFault {
+            .map(|fault| InboxEntry::MachineFault {
                 title: fault.title,
                 what: fault.what,
             }),
@@ -701,26 +701,26 @@ impl Detail {
     }
 }
 
-impl Waiting {
+impl InboxEntry {
     /// The blocker this is, if it is one: its item and its comment.
     pub fn blocker(&self) -> Option<(ItemId, CommentId)> {
         match self {
-            Waiting::Blocker { item, comment, .. } => Some((item.id, *comment)),
-            Waiting::Permission { .. }
-            | Waiting::Review { .. }
-            | Waiting::Notice { .. }
-            | Waiting::MachineFault { .. } => None,
+            InboxEntry::Blocker { item, comment, .. } => Some((item.id, *comment)),
+            InboxEntry::Permission { .. }
+            | InboxEntry::Review { .. }
+            | InboxEntry::Notice { .. }
+            | InboxEntry::MachineFault { .. } => None,
         }
     }
 
     /// The review this is, if it is one: its item, and the commit that was submitted.
     pub fn review(&self) -> Option<(ItemId, Option<CommitId>)> {
         match self {
-            Waiting::Review { item, commit } => Some((item.id, *commit)),
-            Waiting::Permission { .. }
-            | Waiting::Blocker { .. }
-            | Waiting::Notice { .. }
-            | Waiting::MachineFault { .. } => None,
+            InboxEntry::Review { item, commit } => Some((item.id, *commit)),
+            InboxEntry::Permission { .. }
+            | InboxEntry::Blocker { .. }
+            | InboxEntry::Notice { .. }
+            | InboxEntry::MachineFault { .. } => None,
         }
     }
 
@@ -732,20 +732,20 @@ impl Waiting {
     }
 }
 
-impl Waiting {
+impl InboxEntry {
     /// The permission request this is, if it is one.
     pub fn request(&self) -> Option<Request> {
         match self {
-            Waiting::Permission {
+            InboxEntry::Permission {
                 session, since_ms, ..
             } => Some(Request {
                 session: *session,
                 since_ms: *since_ms,
             }),
-            Waiting::Blocker { .. }
-            | Waiting::Review { .. }
-            | Waiting::Notice { .. }
-            | Waiting::MachineFault { .. } => None,
+            InboxEntry::Blocker { .. }
+            | InboxEntry::Review { .. }
+            | InboxEntry::Notice { .. }
+            | InboxEntry::MachineFault { .. } => None,
         }
     }
 }

@@ -52,7 +52,7 @@ impl App {
             && let Some(detail) = self.selected_detail()
         {
             self.open(detail);
-            self.focus_list();
+            self.keys_to_list();
         }
         // Without a detail beside the list, there is nothing to scroll.
         if let Some(pane) = self.diff_on_top_mut() {
@@ -105,7 +105,7 @@ impl App {
             && pane.press(position)
         {
             if in_detail {
-                self.focus_detail();
+                self.keys_to_detail();
             }
             return None;
         }
@@ -120,7 +120,7 @@ impl App {
             return None;
         }
         if in_detail {
-            self.focus_detail();
+            self.keys_to_detail();
         }
         None
     }
@@ -137,14 +137,14 @@ impl App {
             Target::Open { detail, .. } => {
                 // On top of the detail it is in, so esc goes back to it.
                 if in_detail {
-                    self.focus_detail();
+                    self.keys_to_detail();
                 }
                 self.open(detail);
                 None
             }
             Target::Diff { item, .. } => {
                 if in_detail {
-                    self.focus_detail();
+                    self.keys_to_detail();
                 }
                 self.open(Detail::Diff(item));
                 None
@@ -155,7 +155,7 @@ impl App {
                 if depth > 0
                     && let Some(panes) = self.panes_mut()
                 {
-                    panes.focus = Pane::Detail;
+                    panes.keys = Pane::Detail;
                 }
                 None
             }
@@ -273,12 +273,12 @@ impl App {
                 }
             }
             // A click on the selection only takes the keys from the detail.
-            Some(Picked::Again) => panes.focus = Pane::List,
+            Some(Picked::Again) => panes.keys = Pane::List,
             // The details opened before give way to the selection's, which the list keeps on
             // screen from now on.
             Some(Picked::Moved) => {
                 panes.stack.clear();
-                panes.list_top = panes.list_top.follow_selection();
+                panes.list_top = panes.list_top.follow();
             }
         }
     }
@@ -295,15 +295,15 @@ impl App {
     }
 
     /// Gives the keys to the list, leaving the details opened from it as they are.
-    pub(super) fn focus_list(&mut self) {
+    pub(super) fn keys_to_list(&mut self) {
         if let Some(panes) = self.panes_mut() {
-            panes.focus = Pane::List;
+            panes.keys = Pane::List;
         }
     }
 
     /// Gives the keys to the detail on screen beside the list: the one opened, else the
     /// selection's, if it has one.
-    pub(super) fn focus_detail(&mut self) {
+    pub(super) fn keys_to_detail(&mut self) {
         if !self.list_has_keys() {
             return;
         }
@@ -311,7 +311,7 @@ impl App {
             return;
         };
         if !panes.stack.is_empty() {
-            panes.focus = Pane::Detail;
+            panes.keys = Pane::Detail;
             return;
         }
         // The detail of the selection is on screen beside the list already: opening it only
