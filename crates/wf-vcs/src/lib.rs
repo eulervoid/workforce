@@ -235,6 +235,11 @@ pub trait VcsAdapter {
     /// out in a worktree at `path`. Does nothing if that worktree is already there.
     fn prepare_worktree(&self, branch: &str, path: &Path, target: &str) -> Result<(), VcsError>;
 
+    /// Makes sure `branch` is a loose reference, a file under `refs/heads`. Packing the
+    /// references (`git gc`) removes the file and its directories, and a session that may only
+    /// write its own branch's file cannot create them again.
+    fn make_branch_loose(&self, branch: &str) -> Result<(), VcsError>;
+
     /// Checks `commit` out, detached, in a new worktree at `path`, for a reviewer.
     fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError>;
 
