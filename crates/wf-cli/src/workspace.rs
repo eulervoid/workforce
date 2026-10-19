@@ -9,12 +9,13 @@ use wf_core::event::{Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{Actor, AgentId, DeviceKey, DeviceSigner, PrincipalKey, PrincipalSigner};
 use wf_core::lifecycle::Finish;
+use wf_core::session::CommitId;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
 use wf_daemon::caches::CacheUsage;
 use wf_daemon::caller::Caller;
 use wf_daemon::client::DaemonClient;
-use wf_daemon::proto::{EndAnswer, HeldPermission};
+use wf_daemon::proto::{EndAnswer, HeldPermission, LiveDiff};
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
@@ -388,6 +389,21 @@ impl Workspace {
         match &self.source {
             Source::Local(..) => Ok(None),
             Source::Daemon { client, .. } => Ok(client.borrow_mut().cache_usage(self.workforce)?),
+        }
+    }
+
+    /// The work of `item` as the device of its live session shows it, which the daemon asks for;
+    /// `None` without a daemon. `since` is the head of the answer the caller last had.
+    pub fn live_diff(
+        &self,
+        item: ItemId,
+        since: Option<CommitId>,
+    ) -> anyhow::Result<Option<LiveDiff>> {
+        match &self.source {
+            Source::Local(..) => Ok(None),
+            Source::Daemon { client, .. } => {
+                Ok(Some(client.borrow_mut().live_diff(self.workforce, item, since)?))
+            }
         }
     }
 
