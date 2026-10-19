@@ -439,7 +439,7 @@ mod tests {
             GOLDEN_SNAPSHOT,
             "the encoded shape of `State` changed. Bump `SNAPSHOT_FORMAT` here and \
              `PROTOCOL_VERSION` in wf-daemon/src/proto.rs, then update `GOLDEN_SNAPSHOT` here \
-             and `GOLDEN_STATE` in wf-daemon/src/proto.rs to what these tests print"
+             and `GOLDEN_REPLIES` in wf-daemon/src/proto.rs to what these tests print"
         );
     }
 

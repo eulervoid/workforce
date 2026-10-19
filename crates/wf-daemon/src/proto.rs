@@ -267,6 +267,203 @@ mod tests {
         );
     }
 
+    /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
+    /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
+    /// One request per call, from fixed keys; the events inside are pinned by their own tests.
+    #[test]
+    fn golden_request_bytes() {
+        use wf_core::event::DeviceProfile;
+        use wf_core::identity::PrincipalSigner;
+        use wf_core::testing::{Fixture, comment};
+
+        let fixture = Fixture::new(2);
+        let state = fixture.state();
+        let item = ItemId::from_bytes([1; 32]);
+        let device = DeviceSigner::from_bytes(&[2; 32]).unwrap().key();
+        let fork = fixture.fork(&state, &PrincipalSigner::generate([9; 32]), 3_000);
+        let profile = DeviceProfile {
+            name: "laptop".into(),
+            hardware: "gpu, os:linux".into(),
+            agents: [(AgentName::new("claude").unwrap(), 2)].into(),
+            max_sessions: 4,
+        };
+        let calls: Vec<(&str, Call)> = vec![
+            ("State", Call::State),
+            ("Event", Call::Event(EventId::from_bytes([4; 32]))),
+            ("Events", Call::Events { from: 7 }),
+            ("ItemEvents", Call::ItemEvents(item)),
+            (
+                "AgentEvents",
+                Call::AgentEvents(AgentId {
+                    principal: PrincipalSigner::generate([9; 32]).key(),
+                    name: AgentName::new("claude").unwrap(),
+                }),
+            ),
+            (
+                "Author",
+                Call::Author {
+                    body: Box::new(comment(item, "why")),
+                },
+            ),
+            ("SyncNow", Call::SyncNow),
+            ("Fork", Call::Fork(Box::new(fork))),
+            (
+                "Join",
+                Call::Join {
+                    code: "wfi1abc".into(),
+                    profile,
+                },
+            ),
+            ("Follow", Call::Follow(vec![device])),
+            ("LastSeen", Call::LastSeen),
+            (
+                "StartSession",
+                Call::StartSession {
+                    agent: AgentName::new("claude").unwrap(),
+                    item,
+                    repository: "/repo".into(),
+                },
+            ),
+            (
+                "EndSession",
+                Call::EndSession {
+                    finish: Finish::Submit {
+                        note: Some("done".into()),
+                    },
+                },
+            ),
+            (
+                "StopSession",
+                Call::StopSession(SessionId::from_bytes([3; 32])),
+            ),
+            ("Permissions", Call::Permissions),
+            (
+                "AnswerPermission",
+                Call::AnswerPermission {
+                    session: SessionId::from_bytes([3; 32]),
+                    since_ms: 5_000,
+                    answer: Permission::Allow,
+                },
+            ),
+            ("MachineFaults", Call::MachineFaults),
+            ("CacheUsage", Call::CacheUsage),
+        ];
+        let hashes: Vec<(&str, usize, String)> = calls
+            .into_iter()
+            .map(|(name, call)| {
+                let request = Request {
+                    workforce: fixture.workforce(),
+                    call,
+                };
+                let bytes = encoding::encode(&request).unwrap();
+                (name, bytes.len(), EventId::of(&bytes).to_string())
+            })
+            .collect();
+        let found: Vec<(&str, usize, &str)> = hashes
+            .iter()
+            .map(|(call, len, hash)| (*call, *len, hash.as_str()))
+            .collect();
+        assert_eq!(
+            (PROTOCOL_VERSION, found),
+            (GOLDEN_PROTOCOL_VERSION, GOLDEN_REQUESTS.to_vec()),
+            "the encoded shape of a `Request` changed. Bump `PROTOCOL_VERSION`, then update \
+             `GOLDEN_PROTOCOL_VERSION` and `GOLDEN_REQUESTS` here to what this test prints"
+        );
+    }
+
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 18] = [
+        (
+            "State",
+            34,
+            "rwod3o6kmzhclbg4vmggbkxubs3qxy4oikqsgxpzgnc2aidnnfva",
+        ),
+        (
+            "Event",
+            67,
+            "vfmbc5hdevm24ohyxlhvwj4sqzciku3f6ww5nsfkzlxyxzmo4zra",
+        ),
+        (
+            "Events",
+            35,
+            "szwf5qplrttkeszvqnyusj7tfrzoueuqjnwjd7cevkarhgbguxqq",
+        ),
+        (
+            "ItemEvents",
+            67,
+            "cqs4u6vupdlgrelbvs555vut6q4fine6lcnbkug2xqben5ph4t3q",
+        ),
+        (
+            "AgentEvents",
+            74,
+            "7at2zkvfhh5muitehip7wzqhxnofy2bqveep24x4cruyeadn53xa",
+        ),
+        (
+            "Author",
+            76,
+            "sppriks3gifpm2x37rt7kjgoi7hurgekndouuncq2apu3ldurh2q",
+        ),
+        (
+            "SyncNow",
+            34,
+            "v5luf6ogxl6t6zx7qbdbax7zaf7lb4c75k6f6kjvz66guaofr7ca",
+        ),
+        (
+            "Fork",
+            2150,
+            "u4arqufcknq2l5qfnhibcm6e6edezeo4cyzarucab2ioayhr5nia",
+        ),
+        (
+            "Join",
+            73,
+            "7dvbhhqk2b4kqgu56xvgmfnurqo6kgi7y5eulb3ncyp5ws3hezea",
+        ),
+        (
+            "Follow",
+            68,
+            "7xuwmrhpsnbxwqiw4npsnym3m3vyh3fzvomekdw6qdgdezkvdnla",
+        ),
+        (
+            "LastSeen",
+            34,
+            "4yzdxuhm7vmgtv2p6puua5dk5mo7m6y6dlankpwpumr2ldjorqra",
+        ),
+        (
+            "StartSession",
+            80,
+            "3w56pkagoeq3kfp4dglbqsmaizplarxpyxe7nzra2qimc2isb7wq",
+        ),
+        (
+            "EndSession",
+            41,
+            "cdl3goyy6actulwynoznk5xtr53zm4cxe2dth2dtwsljge4lkona",
+        ),
+        (
+            "StopSession",
+            67,
+            "cawkc6w4asw2ngvwkvksmhjrryqbpiiktrlfwc5df5zdf2qjbotq",
+        ),
+        (
+            "Permissions",
+            34,
+            "3ple4audlypkcdsfdz74z4qb5gowtksipkseo66b7wpeuz4qrciq",
+        ),
+        (
+            "AnswerPermission",
+            70,
+            "buiv5v6wig2angyzvhla4v76j5rvxbyybu3yyavpgj5jdlh6nnia",
+        ),
+        (
+            "MachineFaults",
+            34,
+            "yg5ntdbc727c4osihghi3qqxw6stmbov6frj6yngan535l2eem6a",
+        ),
+        (
+            "CacheUsage",
+            34,
+            "ytabkzyokvnpzluoivm3fn5zmjkp3extlk6yvdx2lufejibufa6a",
+        ),
+    ];
+
     const GOLDEN_PROTOCOL_VERSION: u32 = 16;
     const GOLDEN_REPLIES: [(&str, usize, &str); 6] = [
         (
