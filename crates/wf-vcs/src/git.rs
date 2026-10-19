@@ -34,7 +34,9 @@ fn less_staying_open(less: Option<&str>) -> String {
 /// The revisions `git diff` compares to show `work`.
 fn diff_revisions(work: &Work) -> Vec<String> {
     match work {
-        Work::Unmerged { target, commit } => vec![format!("refs/heads/{target}...{commit}")],
+        Work::Unmerged { target, commit } | Work::Working { target, commit, .. } => {
+            vec![format!("refs/heads/{target}...{commit}")]
+        }
         Work::Merged { merge, .. } => vec![format!("{merge}^1"), merge.to_string()],
     }
 }
@@ -665,6 +667,24 @@ impl GitCli {
         }
     }
 
+    /// The unmerged work on the branch of `item` with the worktree of its session as well, when
+    /// `worktree` is there; otherwise as [`GitCli::branch_work`].
+    pub fn working_branch_work(
+        &self,
+        item: ItemId,
+        target: &str,
+        worktree: &Path,
+    ) -> Result<Option<Work>, VcsError> {
+        Ok(self.branch_work(item, target)?.map(|work| match work {
+            Work::Unmerged { target, commit } if worktree.is_dir() => Work::Working {
+                target,
+                commit,
+                worktree: worktree.to_path_buf(),
+            },
+            Work::Unmerged { .. } | Work::Working { .. } | Work::Merged { .. } => work,
+        }))
+    }
+
     /// How many commits `commit` has that `target` does not.
     pub fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError> {
         let range = format!("refs/heads/{target}..{commit}");
@@ -687,6 +707,49 @@ impl GitCli {
                 .chain(args.iter().map(String::as_str)),
         )?
         .ok()
+    }
+
+    /// What the worktree of `work` has changed since its commit, with `args` added to `git diff`;
+    /// `None` when `work` has no worktree. New files are included, as they would be once added,
+    /// which is done in an index of its own, so the worktree's stays as the agent left it.
+    pub fn uncommitted_diff(
+        &self,
+        work: &Work,
+        args: &[String],
+    ) -> Result<Option<String>, VcsError> {
+        let Work::Working {
+            commit, worktree, ..
+        } = work
+        else {
+            return Ok(None);
+        };
+        let directory = tempfile::tempdir()?;
+        let index = directory.path().join("index");
+        let environment = [(
+            "GIT_INDEX_FILE",
+            index.to_str().ok_or_else(|| VcsError::UnexpectedOutput {
+                command: "tempdir".into(),
+                output: directory.path().display().to_string(),
+            })?,
+        )];
+        let head = commit.to_string();
+        self.run(worktree, &environment, ["read-tree", &head])?
+            .ok()?;
+        self.run(worktree, &environment, ["add", "--all"])?.ok()?;
+        self.run(
+            worktree,
+            &environment,
+            ["diff", "--cached", head.as_str()]
+                .into_iter()
+                .chain(args.iter().map(String::as_str)),
+        )?
+        .ok()
+        .map(Some)
+    }
+
+    /// [`GitCli::uncommitted_diff`] in the form [`diff::parse`] reads.
+    pub fn parseable_uncommitted_diff(&self, work: &Work) -> Result<Option<String>, VcsError> {
+        self.uncommitted_diff(work, &diff::ARGS.map(String::from))
     }
 
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
@@ -944,7 +1007,9 @@ impl GitCli {
     /// ahead of the target, which a branch just started is not.
     pub fn has_commits(&self, work: &Work) -> Result<bool, VcsError> {
         match work {
-            Work::Unmerged { target, commit } => Ok(self.commits_ahead(target, *commit)? > 0),
+            Work::Unmerged { target, commit } | Work::Working { target, commit, .. } => {
+                Ok(self.commits_ahead(target, *commit)? > 0)
+            }
             Work::Merged { .. } => Ok(true),
         }
     }
@@ -1357,6 +1422,53 @@ mod tests {
             .prepare_worktree("wf/x", &repo.worktree_path("x"), "trunk")
             .unwrap_err();
         assert!(matches!(error, VcsError::NoBranch(name) if name == "trunk"));
+    }
+
+    #[test]
+    fn the_uncommitted_diff_is_what_the_worktree_changed_since_the_commit_and_leaves_its_index() {
+        let repo = TestRepo::new();
+        let commit = repo.work("wf/k3f9", "file.txt", "one\ntwo\nthree\nfour\n");
+        let worktree = repo.worktree_path("wf/k3f9");
+        repo.write(&worktree, "file.txt", "one\ntwo\nthree\nfour\nfive\n");
+        repo.write(&worktree, "new.txt", "brand new\n");
+        let work = Work::Working {
+            target: "main".into(),
+            commit,
+            worktree: worktree.clone(),
+        };
+        let uncommitted = repo.git.uncommitted_diff(&work, &[]).unwrap().unwrap();
+        assert!(uncommitted.contains("+five"), "{uncommitted}");
+        assert!(uncommitted.contains("+brand new"), "{uncommitted}");
+        assert!(!uncommitted.contains("+four"), "{uncommitted}");
+        let committed = repo.git.diff(&work, &[]).unwrap();
+        assert!(committed.contains("+four"), "{committed}");
+        assert!(!committed.contains("five"), "{committed}");
+        // The agent's index still has nothing staged, and the new file is still untracked.
+        let status = crate::testing::git_in(&worktree, &["status", "--porcelain"]);
+        assert!(status.contains("?? new.txt"), "{status}");
+        assert!(status.contains("M file.txt"), "{status}");
+        assert_eq!(
+            repo.git.uncommitted_diff(&unmerged(commit), &[]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn the_uncommitted_diff_of_a_working_item_can_be_limited_to_paths() {
+        let repo = TestRepo::new();
+        let commit = repo.work("wf/k3f9", "file.txt", "one\ntwo\nthree\nfour\n");
+        let worktree = repo.worktree_path("wf/k3f9");
+        repo.write(&worktree, "file.txt", "one\ntwo\nthree\nfour\nfive\n");
+        repo.write(&worktree, "new.txt", "brand new\n");
+        let work = Work::Working {
+            target: "main".into(),
+            commit,
+            worktree,
+        };
+        let args = ["--stat".to_string(), "--".into(), "file.txt".into()];
+        let uncommitted = repo.git.uncommitted_diff(&work, &args).unwrap().unwrap();
+        assert!(uncommitted.contains("file.txt"), "{uncommitted}");
+        assert!(!uncommitted.contains("new.txt"), "{uncommitted}");
     }
 
     #[test]

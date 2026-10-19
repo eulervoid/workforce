@@ -17,8 +17,20 @@ use crate::theme;
 const TAB: &str = "    ";
 
 /// Where the diff on screen was read, when not here, and how old it is.
-pub fn device_note(pane: &DiffPane, now_ms: u64) -> Option<String> {
-    let reading = pane.device()?;
+pub fn header_note(pane: &DiffPane, now_ms: u64) -> Option<String> {
+    let Some(reading) = pane.device() else {
+        if !pane.has_uncommitted_part() {
+            return None;
+        }
+        let no_commits =
+            matches!(pane.work(), Some(Ok(work)) if work.changes == Changes::NoCommits);
+        return Some(if no_commits {
+            "the agent has not made any commits; uncommitted in the worktree".to_owned()
+        } else {
+            "committed, then uncommitted in the worktree; comments on lines only on committed"
+                .to_owned()
+        });
+    };
     let device = reading.device.fmt_short();
     let age = age(now_ms.saturating_sub(reading.answered_ms));
     Some(match &reading.unreachable {
@@ -42,6 +54,7 @@ pub fn draw_diff(frame: &mut Frame, app: &App, pane: &DiffPane, area: Rect) -> (
     let note = match pane.work() {
         None => Some(" reading the diff…".to_owned()),
         Some(Err(error)) => Some(format!(" {error}")),
+        Some(Ok(_)) if !pane.uncommitted_files().is_empty() => None,
         Some(Ok(work)) => match &work.changes {
             Changes::NoCommits => Some(" the agent has not made any commits".to_owned()),
             Changes::Files(files) if files.is_empty() => {
@@ -60,8 +73,7 @@ pub fn draw_diff(frame: &mut Frame, app: &App, pane: &DiffPane, area: Rect) -> (
     let rows = pane.rows();
     let height = usize::from(area.height);
     let (top, cursor) = diff::placed(&rows, pane.top, pane.cursor, height);
-    let files = pane.files();
-    let numbers = number_width(files);
+    let numbers = number_width(pane.all_files());
     let width = usize::from(padded(area).width);
     let accent = accent(app, KeysAt::Detail);
     let selected = pane.selected();
@@ -104,9 +116,8 @@ pub fn draw_diff(frame: &mut Frame, app: &App, pane: &DiffPane, area: Rect) -> (
 }
 
 /// How many columns the widest line number of `files` takes.
-fn number_width(files: &[FileDiff]) -> usize {
+fn number_width<'a>(files: impl Iterator<Item = &'a FileDiff>) -> usize {
     let widest = files
-        .iter()
         .filter_map(|file| match &file.content {
             Content::Text(hunks) => hunks.last()?.lines.last().map(|line| {
                 line.old_number()
@@ -122,16 +133,24 @@ fn number_width(files: &[FileDiff]) -> usize {
 
 /// What a row shows, right of the cursor's column, in `room` columns.
 fn row_spans(pane: &DiffPane, row: DiffRow, numbers: usize, room: usize) -> Vec<Span<'static>> {
-    let files = pane.files();
     match row {
         DiffRow::Blank => Vec::new(),
-        DiffRow::File(index) => {
-            let file = &files[index];
-            file_header(file, pane.is_folded(&file.path), room)
-        }
+        DiffRow::UncommittedHeader => vec![themed(
+            format!(
+                "━━ uncommitted, against {} ━━",
+                wf_core::session::short_commit(&pane.head_label())
+            ),
+            theme::attention().bold(),
+        )],
+        DiffRow::File(index) => file_header(
+            pane.file(index),
+            pane.is_folded(index),
+            pane.is_uncommitted(index),
+            room,
+        ),
         DiffRow::Comment { shown, row, .. } => comment_spans(pane, shown, row, numbers),
         DiffRow::NoLines(index) => {
-            let note = match (&files[index].content, &files[index].change) {
+            let note = match (&pane.file(index).content, &pane.file(index).change) {
                 (Content::Binary, _) => "binary, not shown",
                 (Content::Text(_), FileChange::Renamed { .. }) => "renamed, no lines changed",
                 (Content::Text(_), _) => "no lines changed, only its mode",
@@ -139,7 +158,7 @@ fn row_spans(pane: &DiffPane, row: DiffRow, numbers: usize, room: usize) -> Vec<
             vec![themed(format!("  {note}"), theme::text_dimmed())]
         }
         DiffRow::Hunk { file, hunk } => {
-            let Content::Text(hunks) = &files[file].content else {
+            let Content::Text(hunks) = &pane.file(file).content else {
                 return Vec::new();
             };
             let heading = &hunks[hunk].heading;
@@ -147,7 +166,7 @@ fn row_spans(pane: &DiffPane, row: DiffRow, numbers: usize, room: usize) -> Vec<
             vec![themed(format!("{gap} ⋯ {heading}"), theme::text_dimmed())]
         }
         DiffRow::Line { file, hunk, line } => {
-            let Content::Text(hunks) = &files[file].content else {
+            let Content::Text(hunks) = &pane.file(file).content else {
                 return Vec::new();
             };
             line_spans(&hunks[hunk].lines[line], numbers)
@@ -209,7 +228,12 @@ fn comment_spans(
 }
 
 /// `▾ src/lib.rs  +12 −3`, with where a file renamed came from; `▸` while it is folded.
-fn file_header(file: &FileDiff, folded: bool, room: usize) -> Vec<Span<'static>> {
+fn file_header(
+    file: &FileDiff,
+    folded: bool,
+    uncommitted: bool,
+    room: usize,
+) -> Vec<Span<'static>> {
     let (added, removed) = file.counts();
     let what = match &file.change {
         FileChange::Added => " (new)".to_owned(),
@@ -222,6 +246,9 @@ fn file_header(file: &FileDiff, folded: bool, room: usize) -> Vec<Span<'static>>
         themed(file.path.clone(), theme::text_bold()),
         themed(what, theme::text_dimmed()),
     ];
+    if uncommitted {
+        spans.push(themed(" (uncommitted)", theme::attention()));
+    }
     let used: usize = spans.iter().map(Span::width).sum::<usize>() + 2;
     let padding = room
         .saturating_sub(used + counts.chars().count() + 1)

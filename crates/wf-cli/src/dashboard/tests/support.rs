@@ -676,6 +676,7 @@ pub(super) fn diff_app() -> App {
         .read(Ok(crate::dashboard::diff::ItemWork {
             commit: work_commit(),
             changes: crate::dashboard::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
+            uncommitted: None,
         }));
     app
 }

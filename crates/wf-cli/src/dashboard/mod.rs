@@ -45,6 +45,9 @@ const REFRESH_EVERY: Duration = Duration::from_millis(500);
 /// the network rather than a read of a branch.
 const ASK_DEVICE_EVERY: Duration = Duration::from_secs(3);
 
+/// How often the worktree of the diff on screen is read again while the branch head stays.
+const READ_WORKTREE_EVERY: Duration = Duration::from_secs(2);
+
 /// How many of the latest events the Log tab starts with.
 const BACKLOG: usize = 200;
 
@@ -314,7 +317,9 @@ struct Feed {
     /// What the snapshot on screen was taken from.
     taken: Option<Taken>,
     /// When each diff was last asked of the device of its session.
-    asked_devices: AskedDevices,
+    asked_devices: Asks,
+    /// When the worktree of each diff on screen was last read.
+    read_worktrees: Asks,
     /// The executable as it was when the dashboard started.
     executable: Executable,
 }
@@ -326,25 +331,34 @@ enum Refreshed {
     RunRebuilt,
 }
 
-/// When each diff was last asked of the device of its session, however that came out, so a
-/// device that cannot be reached is not waited for on every tick.
-#[derive(Default)]
-struct AskedDevices(HashMap<ItemId, Instant>);
+/// When each item was last asked about, however that came out, so a device that cannot be reached
+/// or a worktree is not read on every tick.
+struct Asks {
+    every: Duration,
+    at: HashMap<ItemId, Instant>,
+}
 
-impl AskedDevices {
+impl Asks {
+    fn new(every: Duration) -> Self {
+        Self {
+            every,
+            at: HashMap::new(),
+        }
+    }
+
     fn due(&self, item: ItemId) -> bool {
-        self.0
+        self.at
             .get(&item)
-            .is_none_or(|asked| asked.elapsed() >= ASK_DEVICE_EVERY)
+            .is_none_or(|asked| asked.elapsed() >= self.every)
     }
 
     fn asked(&mut self, item: ItemId) {
-        self.0.insert(item, Instant::now());
+        self.at.insert(item, Instant::now());
     }
 
-    /// The diff is read here again, so nothing holds it back.
+    /// The item is asked about again, whatever is held back.
     fn forget(&mut self, item: ItemId) {
-        self.0.remove(&item);
+        self.at.remove(&item);
     }
 }
 
@@ -359,7 +373,8 @@ impl Feed {
             readers: HashMap::new(),
             git: None,
             taken: None,
-            asked_devices: AskedDevices::default(),
+            asked_devices: Asks::new(ASK_DEVICE_EVERY),
+            read_worktrees: Asks::new(READ_WORKTREE_EVERY),
             executable,
         })
     }
@@ -485,15 +500,37 @@ impl Feed {
                 ItemDiff::Local(work) => {
                     self.asked_devices.forget(item);
                     let commit = work.shown();
+                    let has_worktree = matches!(work, wf_vcs::Work::Working { .. });
                     if pane.commit() == Some(commit) && pane.device().is_none() {
-                        return Ok(());
+                        // The head did not move: the worktree is read again every few seconds
+                        // while there is one, and once more when it is gone.
+                        let held_back = if has_worktree {
+                            !self.read_worktrees.due(item)
+                        } else {
+                            !pane.has_uncommitted_part()
+                        };
+                        if held_back {
+                            return Ok(());
+                        }
                     }
                     let changes = if git.has_commits(&work)? {
                         Changes::Files(git.file_diffs(&work)?)
                     } else {
                         Changes::NoCommits
                     };
-                    pane.read(Ok(ItemWork { commit, changes }));
+                    let uncommitted = git
+                        .parseable_uncommitted_diff(&work)?
+                        .map(|text| wf_vcs::diff::parse(&text));
+                    if has_worktree {
+                        self.read_worktrees.asked(item);
+                    } else {
+                        self.read_worktrees.forget(item);
+                    }
+                    pane.read(Ok(ItemWork {
+                        commit,
+                        changes,
+                        uncommitted,
+                    }));
                 }
                 ItemDiff::Device { device, diff } => {
                     self.asked_devices.asked(item);
@@ -503,6 +540,7 @@ impl Feed {
                             let work = ItemWork {
                                 commit: work.head,
                                 changes,
+                                uncommitted: None,
                             };
                             pane.read_from_device(device, work, now_ms);
                         }

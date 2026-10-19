@@ -2244,7 +2244,10 @@ wf work release --note later
     let diff = world
         .wf
         .json(&["item", "diff", short(&item), "--", "file.txt"]);
-    assert!(diff["diff"].as_str().unwrap().contains("+four"), "{diff}");
+    assert!(
+        diff["committed"].as_str().unwrap().contains("+four"),
+        "{diff}"
+    );
 
     let path = world.wf.run(&["item", "path", short(&item)]);
     assert!(
@@ -2274,9 +2277,13 @@ async fn the_diff_says_when_the_agent_has_not_made_any_commits() {
     start_session(&world, &item);
 
     let text = world.wf.run(&["item", "diff", short(&item)]);
-    assert_eq!(text, "the agent has not made any commits\n");
+    assert!(
+        text.starts_with("the agent has not made any commits\n")
+            && text.ends_with("\nno changes\n"),
+        "{text}"
+    );
     let diff = world.wf.json(&["item", "diff", short(&item)]);
-    assert!(diff["diff"].is_null(), "{diff}");
+    assert!(diff["committed"].is_null(), "{diff}");
 
     // Commits that change nothing are an empty diff.
     let path = world.wf.run(&["item", "path", short(&item)]);
@@ -2285,7 +2292,53 @@ async fn the_diff_says_when_the_agent_has_not_made_any_commits() {
         &["commit", "-q", "--allow-empty", "-m", "nothing"],
     );
     let diff = world.wf.json(&["item", "diff", short(&item)]);
-    assert_eq!(diff["diff"], "", "{diff}");
+    assert_eq!(diff["committed"], "", "{diff}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_diff_of_a_working_item_has_the_worktree_as_its_uncommitted_part() {
+    let world = World::new("hang\n").await;
+    let item = world.wf.add(&["--title", "Working"]);
+    start_session(&world, &item);
+    let path = world.wf.run(&["item", "path", short(&item)]);
+    let worktree = Path::new(path.trim());
+
+    // Edits and a new file are uncommitted only; there are no commits yet.
+    std::fs::write(worktree.join("new.txt"), "brand new\n").unwrap();
+    let mut text = std::fs::read_to_string(worktree.join("file.txt")).unwrap();
+    text.push_str("edited\n");
+    std::fs::write(worktree.join("file.txt"), text).unwrap();
+    let diff = world.wf.json(&["item", "diff", short(&item)]);
+    assert!(diff["committed"].is_null(), "{diff}");
+    let uncommitted = diff["uncommitted"].as_str().unwrap();
+    assert!(uncommitted.contains("+edited"), "{diff}");
+    assert!(uncommitted.contains("+brand new"), "{diff}");
+    let printed = world.wf.run(&["item", "diff", short(&item)]);
+    assert!(
+        printed.starts_with("the agent has not made any commits"),
+        "{printed}"
+    );
+    assert!(printed.contains("\nuncommitted, against "), "{printed}");
+
+    // A commit moves them to the committed part.
+    git_in(worktree, &["add", "--all"]);
+    git_in(worktree, &["commit", "-q", "-m", "edit"]);
+    let diff = world.wf.json(&["item", "diff", short(&item)]);
+    let committed = diff["committed"].as_str().unwrap();
+    assert!(committed.contains("+edited") && committed.contains("+brand new"));
+    assert_eq!(diff["uncommitted"], "", "{diff}");
+
+    // Once the session has ended, only the commits are shown.
+    std::fs::write(worktree.join("later.txt"), "later\n").unwrap();
+    world.wf.run(&[
+        "session",
+        "stop",
+        short(world.sessions()[0]["id"].as_str().unwrap()),
+    ]);
+    world.ended_session().await;
+    let diff = world.wf.json(&["item", "diff", short(&item)]);
+    assert!(diff["committed"].as_str().unwrap().contains("+edited"));
+    assert!(diff.get("uncommitted").is_none(), "{diff}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2310,7 +2363,7 @@ wf work submit
     let diff = world.wf.json(&["item", "diff", short(&item)]);
     assert_eq!(diff["commit"], session["commit"], "{diff}");
     assert_eq!(diff["merge"], merge.as_str(), "{diff}");
-    let text = diff["diff"].as_str().unwrap();
+    let text = diff["committed"].as_str().unwrap();
     assert!(text.contains("+hi"), "{diff}");
     assert!(!text.contains("later"), "{diff}");
 

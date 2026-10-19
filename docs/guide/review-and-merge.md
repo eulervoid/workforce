@@ -47,8 +47,16 @@ cd $(wf item path k3f7)          # or go to the item's worktree
 `wf item diff` shows what the work changes since it left the target. Once the item is merged, it shows
 what the merge brought into the target, however far the target moved since, and `wf item checkout`
 still checks out the work itself. While the branch has no commits ahead of the target, it says the
-agent has not made any commits; with `--json`, `diff` is then `null`, where commits that change nothing
+agent has not made any commits; with `--json`, `committed` is then `null`, where commits that change nothing
 give an empty one.
+
+While an agent works on the item on this machine, the diff has two parts, never one: the committed
+part above, and under it, headed `uncommitted, against <head>`, what the worktree has changed since
+the branch head, new files included. Only commits carry over to a later session and are what review
+and merge see, and a comment on lines is anchored to a commit, so the uncommitted part is for
+looking at only. A file changed in both shows in both. With `--json`, `uncommitted` holds the second
+part, and is absent, not empty, when no worktree was read, as when no session is running. Git's own
+options, such as `--stat`, apply to both parts.
 
 When the agent's session runs on another of your machines, `wf item diff` asks that machine through
 the daemon and prints what it has committed, saying which device it came from; `--json` has the

@@ -12,11 +12,8 @@ wf-core.workspace = true
 close_fds.workspace = true
 ssh-key.workspace = true
 thiserror.workspace = true
-tempfile = { workspace = true, optional = true }
+tempfile.workspace = true
 
 [features]
 # A git repository for the tests of the crates that run against one.
-testing = ["dep:tempfile"]
-
-[dev-dependencies]
-tempfile.workspace = true
+testing = []

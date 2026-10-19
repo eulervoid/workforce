@@ -56,6 +56,13 @@ it says which device and how long ago it answered. The dashboard asks again ever
 the diff is on screen, and when the machine cannot be reached it keeps the last diff, with its age and
 the reason. Only what is committed shows from another machine, not what its agent has yet to commit.
 
+While an agent works on the item on this machine, what its worktree has changed but not committed
+shows as a section of its own after the committed files, under a `uncommitted, against <head>` row,
+with each of its files marked `(uncommitted)` and a line above the diff saying so. It is read again
+every couple of seconds while the diff is on screen. Only the committed part takes comments on
+lines: the uncommitted lines are not in any commit to anchor to, and `c` and `r` do nothing on them.
+`p` shows the committed part through git.
+
 ### When the daemon restarts
 
 After `wf daemon restart` the dashboard stays open. While the daemon is down the status line says it
