@@ -690,3 +690,178 @@ async fn a_join_with_an_invite_for_another_workforce_leaves_no_store_behind() {
     assert!(result.is_err());
     assert!(!data_dir.join(other.to_string()).exists());
 }
+
+/// Where `directory`, a daemon's data directory, has its worktrees, and a repository with the
+/// work of `item` on its branch in the worktree there; returns the head of the branch.
+fn give_work(
+    directory: &Path,
+    workforce: wf_core::id::WorkforceId,
+    item: wf_core::id::ItemId,
+    repository: &wf_vcs::testing::TestRepository,
+) -> wf_core::session::CommitId {
+    let data_dir = DataDir::new(directory.to_path_buf());
+    let workforce_directory = data_dir.workforce(&workforce);
+    wf_daemon::remember_repository(&workforce_directory, &repository.directory()).unwrap();
+    let worktree = wf_vcs::item_worktree(&workforce_directory, item);
+    repository
+        .git
+        .prepare_worktree(&wf_vcs::item_branch(item), &worktree, "main")
+        .unwrap();
+    repository.write(&worktree, "live.txt", "work in progress\n");
+    repository.commit(&worktree, "the first step")
+}
+
+/// Starts a work session of a new item on the daemon behind `socket`, which has the item; returns
+/// the item.
+async fn start_work_session(
+    socket: &Path,
+    workforce: wf_core::id::WorkforceId,
+) -> wf_core::id::ItemId {
+    let socket = socket.to_path_buf();
+    blocking(move || {
+        let mut client = connect(&socket);
+        client.author(workforce, define_agent("coder")).unwrap();
+        let item = client
+            .author(workforce, create("task", "the work shown live"))
+            .unwrap()
+            .id()
+            .into();
+        client
+            .author(workforce, start_session("coder", item))
+            .unwrap();
+        item
+    })
+    .await
+}
+
+async fn live_diff(
+    socket: &Path,
+    workforce: wf_core::id::WorkforceId,
+    item: wf_core::id::ItemId,
+    since: Option<wf_core::session::CommitId>,
+) -> wf_daemon::proto::LiveDiff {
+    let socket = socket.to_path_buf();
+    blocking(move || connect(&socket).live_diff(workforce, item, since).unwrap()).await
+}
+
+#[tokio::test]
+async fn a_session_on_this_device_is_answered_without_the_network() {
+    use wf_daemon::proto::LiveDiff;
+    use wf_net::DiffAnswer;
+
+    let running = start().await;
+    let workforce = running.fixture.workforce();
+    let idle = {
+        let socket = running.socket.clone();
+        blocking(move || {
+            let mut client = connect(&socket);
+            client.author(workforce, define_agent("coder")).unwrap();
+            client
+                .author(workforce, create("task", "nobody works on it"))
+                .unwrap()
+                .id()
+                .into()
+        })
+        .await
+    };
+    assert_eq!(
+        live_diff(&running.socket, workforce, idle, None).await,
+        LiveDiff::NoSession
+    );
+
+    let item = start_work_session(&running.socket, workforce).await;
+    let repository = wf_vcs::testing::TestRepository::new();
+    let head = give_work(running._directory.path(), workforce, item, &repository);
+
+    let LiveDiff::Answer(DiffAnswer::Work(work)) =
+        live_diff(&running.socket, workforce, item, None).await
+    else {
+        panic!("the daemon answers with the work of its own session");
+    };
+    assert_eq!((work.target.as_str(), work.head), ("main", head));
+    assert!(work.committed.contains("+work in progress"));
+    assert_eq!(
+        live_diff(&running.socket, workforce, item, Some(head)).await,
+        LiveDiff::Answer(DiffAnswer::Unchanged)
+    );
+    assert!(!running.daemon.network_is_on(), "the network stayed off");
+
+    // The branch and the worktree are gone, as after the session ended.
+    let worktree = wf_vcs::item_worktree(
+        &DataDir::new(running._directory.path().to_path_buf()).workforce(&workforce),
+        item,
+    );
+    repository.git.remove_worktree(&worktree).unwrap();
+    repository
+        .git
+        .delete_branch(&wf_vcs::item_branch(item))
+        .unwrap();
+    assert_eq!(
+        live_diff(&running.socket, workforce, item, None).await,
+        LiveDiff::Answer(DiffAnswer::NotHere)
+    );
+}
+
+#[tokio::test]
+async fn a_device_reads_the_committed_work_of_a_session_on_another() {
+    use wf_daemon::proto::LiveDiff;
+    use wf_net::DiffAnswer;
+
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
+    let fixture = Fixture::new(2);
+    let (_laptop_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
+    let (vm_dir, vm, vm_socket) = start_peer(&fixture, 1).await;
+    laptop
+        .node()
+        .await
+        .unwrap()
+        .remember(vm.node().await.unwrap().local_addr());
+    vm.node()
+        .await
+        .unwrap()
+        .remember(laptop.node().await.unwrap().local_addr());
+    let workforce = fixture.workforce();
+
+    let item = start_work_session(&vm_socket, workforce).await;
+    let repository = wf_vcs::testing::TestRepository::new();
+    let head = give_work(vm_dir.path(), workforce, item, &repository);
+
+    // The laptop knows the session once the vm's events arrive.
+    for _ in 0..200 {
+        let socket = laptop_socket.clone();
+        let state = blocking(move || connect(&socket).state(workforce).unwrap()).await;
+        if state.claim(item).is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    let LiveDiff::Answer(DiffAnswer::Work(work)) =
+        live_diff(&laptop_socket, workforce, item, None).await
+    else {
+        panic!("the vm answers with its work");
+    };
+    assert_eq!((work.target.as_str(), work.head), ("main", head));
+    assert!(work.committed.contains("+work in progress"));
+    assert_eq!(
+        live_diff(&laptop_socket, workforce, item, Some(head)).await,
+        LiveDiff::Answer(DiffAnswer::Unchanged)
+    );
+
+    // The branch and the worktree are gone, as after the session ended.
+    let worktree = wf_vcs::item_worktree(
+        &DataDir::new(vm_dir.path().to_path_buf()).workforce(&workforce),
+        item,
+    );
+    repository.git.remove_worktree(&worktree).unwrap();
+    repository
+        .git
+        .delete_branch(&wf_vcs::item_branch(item))
+        .unwrap();
+    assert_eq!(
+        live_diff(&laptop_socket, workforce, item, None).await,
+        LiveDiff::Answer(DiffAnswer::NotHere)
+    );
+}
