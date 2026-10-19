@@ -330,8 +330,7 @@ impl Daemon {
                     workforce,
                 },
                 context: DeciderRequest {
-                    hook: "permission".to_string(),
-                    version: 1,
+                    header: Default::default(),
                     workforce: workforce.to_base32(),
                     item: item_context,
                     session: session.to_base32(),

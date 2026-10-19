@@ -19,9 +19,8 @@ use crate::permissions::Held;
 /// What every decider is given: the call and what it is part of. Hooks get it as JSON on stdin.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DeciderRequest {
-    /// Always `permission`, so a program that serves several hooks can tell them apart.
-    pub hook: String,
-    pub version: u32,
+    #[serde(flatten)]
+    pub header: HookHeader,
     pub workforce: String,
     pub item: ItemContext,
     pub session: String,
@@ -30,6 +29,23 @@ pub struct DeciderRequest {
     pub directory: PathBuf,
     pub tool: PermissionRequest,
     pub guidance: Option<String>,
+}
+
+/// Which hook a request is for and the version of its format. Only the current one can be made.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HookHeader {
+    /// Always `permission`, so a program that serves several hooks can tell them apart.
+    hook: String,
+    version: u32,
+}
+
+impl Default for HookHeader {
+    fn default() -> Self {
+        HookHeader {
+            hook: "permission".to_string(),
+            version: 1,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -274,8 +290,7 @@ pub(crate) mod tests {
 
     pub(crate) fn request() -> DeciderRequest {
         DeciderRequest {
-            hook: "permission".into(),
-            version: 1,
+            header: HookHeader::default(),
             workforce: "w".into(),
             item: ItemContext {
                 id: "k3f7".into(),
