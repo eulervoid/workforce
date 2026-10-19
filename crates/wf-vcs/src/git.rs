@@ -1,7 +1,9 @@
 use std::ffi::OsStr;
+use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
+use std::time::{Duration, SystemTime};
 
 use wf_core::session::{CommitId, GitOid};
 
@@ -9,6 +11,10 @@ use crate::{
     CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Pager, Rebase, StoppedRebase,
     VcsAdapter, VcsError, Work,
 };
+
+/// How long a `packed-refs.lock` may stay before it counts as left behind: git holds it for
+/// the moment it takes to rewrite the file.
+const STALE_LOCK_AGE: Duration = Duration::from_secs(10);
 
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
 
@@ -164,6 +170,7 @@ impl GitCli {
         directory: &Path,
         args: [&OsStr; N],
     ) -> Result<String, VcsError> {
+        self.remove_stale_packed_refs_lock();
         let finished = Self::run_in(directory, args)?;
         if finished.success {
             Ok(finished.stdout)
@@ -179,6 +186,33 @@ impl GitCli {
         self.succeed_in(&self.repository, args.map(OsStr::new))
     }
 
+    /// The repository's `.git` directory, where the references are.
+    fn git_directory(&self) -> PathBuf {
+        let inside = self.repository.join(".git");
+        if inside.is_dir() {
+            inside
+        } else {
+            self.repository.clone()
+        }
+    }
+
+    /// Removes a `packed-refs.lock` that has been there for longer than git holds it. A session
+    /// may create that file (its sandbox allows it, so that git can fail quietly), and a
+    /// lock left behind makes every git that deletes or packs a reference fail.
+    fn remove_stale_packed_refs_lock(&self) {
+        let lock = self.git_directory().join("packed-refs.lock");
+        let age = std::fs::metadata(&lock)
+            .and_then(|metadata| metadata.modified())
+            .map(|modified| {
+                SystemTime::now()
+                    .duration_since(modified)
+                    .unwrap_or_default()
+            });
+        if age.is_ok_and(|age| age > STALE_LOCK_AGE) {
+            let _ = std::fs::remove_file(&lock);
+        }
+    }
+
     /// Whether the git config asks for commits to be signed (`commit.gpgsign`).
     fn signs_commits(&self) -> Result<bool, VcsError> {
         let configured = self.attempt(["config", "--type=bool", "--get", "commit.gpgsign"])?;
@@ -186,6 +220,7 @@ impl GitCli {
     }
 
     fn attempt<const N: usize>(&self, args: [&str; N]) -> Result<Finished, VcsError> {
+        self.remove_stale_packed_refs_lock();
         Self::run_in(&self.repository, args)
     }
 
@@ -197,6 +232,61 @@ impl GitCli {
                 command: command.into(),
                 output: text.trim().into(),
             })
+    }
+
+    /// Adds the worktree of `branch` at `path`, unless it is there.
+    fn add_worktree_if_missing(
+        &self,
+        branch: &str,
+        path: &Path,
+        target: &str,
+    ) -> Result<(), VcsError> {
+        self.prune_worktrees()?;
+        let reference = format!("refs/heads/{branch}");
+        let existing = self.worktrees()?;
+        if let Some(worktree) = existing
+            .iter()
+            .find(|worktree| same_path(&worktree.path, path))
+        {
+            return if worktree.branch.as_deref() == Some(reference.as_str()) {
+                Ok(())
+            } else {
+                Err(VcsError::Git {
+                    command: format!("worktree add {}", path.display()),
+                    stderr: format!("the worktree there does not have `{branch}` checked out"),
+                })
+            };
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
+        }
+        if self.branch_exists(branch)? {
+            self.succeed_in(
+                &self.repository,
+                [
+                    OsStr::new("worktree"),
+                    OsStr::new("add"),
+                    path.as_os_str(),
+                    OsStr::new(branch),
+                ],
+            )?;
+        } else {
+            if !self.branch_exists(target)? {
+                return Err(VcsError::NoBranch(target.into()));
+            }
+            self.succeed_in(
+                &self.repository,
+                [
+                    OsStr::new("worktree"),
+                    OsStr::new("add"),
+                    OsStr::new("-b"),
+                    OsStr::new(branch),
+                    path.as_os_str(),
+                    OsStr::new(target),
+                ],
+            )?;
+        }
+        Ok(())
     }
 
     fn branch_exists(&self, branch: &str) -> Result<bool, VcsError> {
@@ -370,53 +460,34 @@ fn describe(args: &[&OsStr]) -> String {
 }
 
 impl VcsAdapter for GitCli {
-    fn prepare_worktree(&self, branch: &str, path: &Path, target: &str) -> Result<(), VcsError> {
-        self.prune_worktrees()?;
-        let reference = format!("refs/heads/{branch}");
-        let existing = self.worktrees()?;
-        if let Some(worktree) = existing
-            .iter()
-            .find(|worktree| same_path(&worktree.path, path))
-        {
-            return if worktree.branch.as_deref() == Some(reference.as_str()) {
-                Ok(())
-            } else {
-                Err(VcsError::Git {
-                    command: format!("worktree add {}", path.display()),
-                    stderr: format!("the worktree there does not have `{branch}` checked out"),
-                })
-            };
+    fn make_branch_loose(&self, branch: &str) -> Result<(), VcsError> {
+        let commit = self.branch_head(branch)?;
+        let reference = self.git_directory().join("refs/heads").join(branch);
+        if reference.is_file() {
+            return Ok(());
         }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
+        if let Some(parent) = reference.parent() {
+            std::fs::create_dir_all(parent)?;
         }
-        if self.branch_exists(branch)? {
-            self.succeed_in(
-                &self.repository,
-                [
-                    OsStr::new("worktree"),
-                    OsStr::new("add"),
-                    path.as_os_str(),
-                    OsStr::new(branch),
-                ],
-            )?;
-        } else {
-            if !self.branch_exists(target)? {
-                return Err(VcsError::NoBranch(target.into()));
-            }
-            self.succeed_in(
-                &self.repository,
-                [
-                    OsStr::new("worktree"),
-                    OsStr::new("add"),
-                    OsStr::new("-b"),
-                    OsStr::new(branch),
-                    path.as_os_str(),
-                    OsStr::new(target),
-                ],
-            )?;
-        }
+        // `git update-ref` writes nothing when the value is the packed one. This follows git's
+        // own protocol: the lock is created exclusively and renamed onto the reference.
+        let mut lock_name = reference.clone().into_os_string();
+        lock_name.push(".lock");
+        let lock = PathBuf::from(lock_name);
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&lock)?;
+        file.write_all(format!("{commit}\n").as_bytes())?;
+        std::fs::rename(&lock, &reference).inspect_err(|_| {
+            let _ = std::fs::remove_file(&lock);
+        })?;
         Ok(())
+    }
+
+    fn prepare_worktree(&self, branch: &str, path: &Path, target: &str) -> Result<(), VcsError> {
+        self.add_worktree_if_missing(branch, path, target)?;
+        self.make_branch_loose(branch)
     }
 
     fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError> {
@@ -1064,6 +1135,39 @@ mod tests {
             opened.repository().canonicalize().unwrap(),
             repo.directory().canonicalize().unwrap()
         );
+    }
+
+    #[test]
+    fn packed_refs_are_made_loose_again_so_a_session_can_commit() {
+        let repo = TestRepo::new();
+        let path = repo.worktree_path("wf/k3f9");
+        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        git_in(&repo.directory(), &["pack-refs", "--all"]);
+        let reference = repo.directory().join(".git/refs/heads/wf/k3f9");
+        assert!(!reference.exists());
+        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        assert!(reference.is_file());
+        // What the sandbox allows: the file and its lock, and no new directory.
+        std::fs::remove_dir_all(repo.directory().join(".git/logs")).ok();
+        let commit = repo.work("wf/k3f9", "a.txt", "a");
+        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), commit);
+    }
+
+    #[test]
+    fn a_packed_refs_lock_left_behind_does_not_block_deleting_a_branch() {
+        let repo = TestRepo::new();
+        repo.work("wf/gone", "a.txt", "a");
+        git_in(&repo.directory(), &["pack-refs", "--all"]);
+        let lock = repo.directory().join(".git/packed-refs.lock");
+        let left_behind = std::fs::File::create(&lock).unwrap();
+        left_behind
+            .set_modified(SystemTime::now() - Duration::from_secs(60))
+            .unwrap();
+        repo.git
+            .remove_worktree(&repo.worktree_path("wf/gone"))
+            .unwrap();
+        repo.git.delete_branch("wf/gone").unwrap();
+        assert!(!lock.exists());
     }
 
     #[test]
