@@ -107,7 +107,7 @@ impl Daemon {
         session: SessionId,
         end: SessionEnd,
     ) -> Result<(), SessionError> {
-        let _ending = self.ending.lock().await;
+        let _ending = self.ending.lock(session).await;
         let state = self.snapshot(loaded).await?;
         let folded = state
             .session(session)
