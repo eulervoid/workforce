@@ -428,32 +428,6 @@ pub fn list_top(
     top
 }
 
-#[cfg(test)]
-mod tests {
-    use tui_input::Input;
-
-    use super::popups::visible_input;
-
-    #[test]
-    fn wide_characters_are_skipped_by_cells_and_the_cursor_follows() {
-        // 13 cells; in 3 cells the scroll is 10 cells, which is 5 characters. Skipping 10
-        // characters would drop everything.
-        let input = Input::new("日本語日本語a".to_owned());
-        assert_eq!(input.visual_scroll(3), 10);
-        let (typed, cursor) = visible_input(&input, 3);
-        assert_eq!(typed, "語a");
-        assert_eq!(cursor, 3);
-    }
-
-    #[test]
-    fn narrow_text_is_skipped_by_cells_as_characters() {
-        let input = Input::new("abcdefgh".to_owned());
-        let (typed, cursor) = visible_input(&input, 4);
-        assert_eq!(typed, "efgh");
-        assert_eq!(cursor, 4);
-    }
-}
-
 /// `line` wrapped into rows of at most `width` columns, each character keeping its style.
 pub(super) fn break_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
     if line.width() <= width {
@@ -496,4 +470,62 @@ pub(super) fn break_line(line: Line<'static>, width: usize) -> Vec<Line<'static>
         Line::from(spans).style(line.style)
     })
     .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
+    use tui_input::Input;
+
+    use super::break_line;
+
+    use super::popups::visible_input;
+
+    #[test]
+    fn wide_characters_are_skipped_by_cells_and_the_cursor_follows() {
+        // 13 cells; in 3 cells the scroll is 10 cells, which is 5 characters. Skipping 10
+        // characters would drop everything.
+        let input = Input::new("日本語日本語a".to_owned());
+        assert_eq!(input.visual_scroll(3), 10);
+        let (typed, cursor) = visible_input(&input, 3);
+        assert_eq!(typed, "語a");
+        assert_eq!(cursor, 3);
+    }
+
+    #[test]
+    fn narrow_text_is_skipped_by_cells_as_characters() {
+        let input = Input::new("abcdefgh".to_owned());
+        let (typed, cursor) = visible_input(&input, 4);
+        assert_eq!(typed, "efgh");
+        assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn a_wide_styled_line_breaks_into_rows_that_fit_and_keep_their_styles() {
+        let red = Style::new().fg(Color::Red);
+        let blue = Style::new().fg(Color::Blue);
+        let line = Line::from(vec![
+            Span::styled("alpha beta ", red),
+            Span::styled("gamma delta", blue),
+        ]);
+        let rows = break_line(line, 11);
+        assert!(rows.len() > 1);
+        assert!(rows.iter().all(|row| row.width() <= 11));
+        let cells: Vec<(String, Style)> = rows
+            .iter()
+            .flat_map(|row| {
+                row.spans
+                    .iter()
+                    .map(|span| (span.content.to_string(), span.style))
+            })
+            .collect();
+        assert_eq!(
+            cells,
+            vec![
+                ("alpha beta".to_owned(), red),
+                ("gamma delta".to_owned(), blue),
+            ]
+        );
+    }
 }
