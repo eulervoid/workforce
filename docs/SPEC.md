@@ -1225,8 +1225,9 @@ mDNS for LAN-only use.
 * **`wf/status/1`**: a device asks another for the live diff of an item, which only the device with
   its branch and worktree has. One `Request::Diff { workforce, item, since }` (the head commit the
   asker last saw), one answer: `Unchanged` (the head is still `since`, so polling is one small
-  frame), `Work` (the target, the head commit and its files against the target) or `NotHere` (no
-  branch or worktree of the item on this device). A request is at most 1 KiB, an answer at most
+  frame), `Work` (the target, the head commit and its files against the target), `NotHere` (no
+  branch or worktree of the item on this device) or `TooLarge` (the work does not fit the answer,
+  told apart from a broken connection). A request is at most 1 KiB, an answer at most
   32 MiB, and a peer silent for 30 s ends the exchange. The uncommitted part (the worktree against
   the head) is kept apart from the committed one, and joins `Work` with a bumped ALPN. A live view
   is asked of one device and never stored or synced; iroh-docs would replicate every snapshot to

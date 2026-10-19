@@ -48,6 +48,8 @@ pub enum Answer {
     Work(Work),
     /// This device has no branch or worktree of the item.
     NotHere,
+    /// The work is larger than the largest answer; the asker sees it is not a broken connection.
+    TooLarge,
 }
 
 /// The changes of the work on an item. What is not committed yet is kept apart from what is, and
@@ -136,5 +138,10 @@ where
             .await
             .map_err(StatusError::Source)?,
     };
-    Ok(write_frame_within(&mut stream, &answer, idle).await?)
+    match write_frame_within(&mut stream, &answer, idle).await {
+        Err(FrameError::TooLarge(_)) => {
+            Ok(write_frame_within(&mut stream, &Answer::TooLarge, idle).await?)
+        }
+        written => Ok(written?),
+    }
 }

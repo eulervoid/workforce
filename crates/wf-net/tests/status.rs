@@ -12,7 +12,7 @@ use wf_core::id::{EventId, ItemId, WorkforceId};
 use wf_core::identity::DeviceSigner;
 use wf_core::session::{CommitId, GitOid};
 use wf_core::testing::*;
-use wf_net::frame::FrameError;
+use wf_net::frame::{FrameError, MAX_FRAME_LEN};
 use wf_net::{
     Answer, Network, Node, Request, SourceError, StatusError, StatusSource, Work, read_request,
     status_initiate, status_initiate_within, status_respond, status_respond_within,
@@ -137,6 +137,20 @@ async fn a_large_diff_fits_the_answer() {
 }
 
 #[tokio::test]
+async fn work_above_the_largest_answer_is_told_apart_from_a_broken_connection() {
+    let mut huge = work(commit(1));
+    huge.committed[0].content = Content::Text(vec![Hunk {
+        heading: String::new(),
+        lines: vec![DiffLine::Added {
+            new: 1,
+            text: "x".repeat(MAX_FRAME_LEN as usize + 1),
+        }],
+    }]);
+    let source = Worktree(Some(huge));
+    assert_eq!(ask(&source, None).await, Answer::TooLarge);
+}
+
+#[tokio::test]
 async fn an_initiator_gives_up_on_a_peer_that_goes_silent() {
     let fixture = Fixture::new(1);
     let (left, _silent) = tokio::io::duplex(8192);
@@ -183,7 +197,7 @@ async fn node(fixture: &Fixture, signer: &DeviceSigner) -> Node<SharedReplica<Re
 }
 
 #[tokio::test]
-async fn a_bound_device_statuss_and_a_stranger_is_refused() {
+async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
     if wf_core::testing::skip_in_fence("iroh needs the route socket") {
         return;
     }
@@ -212,9 +226,39 @@ async fn a_bound_device_statuss_and_a_stranger_is_refused() {
     let refused = stranger
         .status(holder.local_addr(), fixture.workforce(), item(), None)
         .await;
-    assert!(refused.is_err(), "{refused:?}");
+    let error = refused.expect_err("a stranger is refused");
+    assert!(
+        format!("{error:?}").contains("403"),
+        "not refused as a non-member: {error:?}"
+    );
 
     for node in [holder, member, stranger] {
+        node.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn a_node_that_serves_no_status_refuses_instead_of_hanging() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
+    let fixture = Fixture::new(2);
+    let holder = node(&fixture, &fixture.devices[0]).await;
+    let member = node(&fixture, &fixture.devices[1]).await;
+
+    let refused = tokio::time::timeout(
+        Duration::from_secs(20),
+        member.status(holder.local_addr(), fixture.workforce(), item(), None),
+    )
+    .await
+    .expect("the request is refused, not left hanging");
+    let error = refused.expect_err("nothing is served");
+    assert!(
+        format!("{error:?}").contains("404"),
+        "not refused as unserved: {error:?}"
+    );
+
+    for node in [holder, member] {
         node.shutdown().await;
     }
 }
