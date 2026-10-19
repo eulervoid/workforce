@@ -79,7 +79,7 @@ pub struct Request {
 /// Each call is answered with a [`Reply`] of the type its documentation names.
 ///
 /// A connection that acts for a session makes calls in the session's workforce only: the reads
-/// (`State`, `Event`, `Events`, `ItemEvents`, `AgentEvents`, `LastSeen`, `Permissions`, `MachineFaults`), `Author`, `SyncNow` and
+/// (`State`, `Event`, `Events`, `ItemEvents`, `AgentEvents`, `LastSeen`, `Permissions`, `MachineFaults`, `CacheUsage`), `Author`, `SyncNow` and
 /// `EndSession`. `EndSession` is for sessions only; the other calls are for the principal only.
 #[derive(Serialize, Deserialize)]
 pub enum Call {
@@ -143,6 +143,9 @@ pub enum Call {
     /// What is wrong with the machine, as [`MachineFaults`](crate::MachineFaults): that the
     /// daemon's writes fail for lack of space, and the harnesses whose sessions cannot run.
     MachineFaults,
+    /// What the caches in the worktrees of the workforce took when the daemon last checked them
+    /// against the budget of the machine config, as `Option<CacheUsage>`; `None` without a budget.
+    CacheUsage,
 }
 
 /// A request of an agent for permission to do something, held until the principal answers.

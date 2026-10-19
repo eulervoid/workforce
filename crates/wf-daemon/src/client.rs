@@ -242,6 +242,15 @@ impl DaemonClient {
         self.call(workforce, Call::Permissions)
     }
 
+    /// What the caches in the worktrees took when the daemon last checked them against its budget;
+    /// `None` when the machine config sets none.
+    pub fn cache_usage(
+        &mut self,
+        workforce: WorkforceId,
+    ) -> Result<Option<crate::caches::CacheUsage>, ClientError> {
+        self.call(workforce, Call::CacheUsage)
+    }
+
     /// What is wrong with the machine the daemon runs on.
     pub fn machine_faults(
         &mut self,

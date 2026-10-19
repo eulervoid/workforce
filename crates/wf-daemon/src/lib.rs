@@ -251,6 +251,9 @@ pub struct Daemon {
     halted: tokio::sync::watch::Sender<bool>,
     /// What is wrong with this machine, as what failed said.
     faults: faults::Faults,
+    /// What the caches of each workforce took when they were last checked against the budget.
+    /// A workforce without a budget has none.
+    cache_usage: Mutex<BTreeMap<WorkforceId, caches::CacheUsage>>,
     /// For the tests: the next write of an event this matches fails once.
     failing_write: Mutex<Option<WriteMatcher>>,
 }
@@ -277,6 +280,7 @@ impl Daemon {
             caches_measured: Mutex::new(BTreeMap::new()),
             halted: tokio::sync::watch::Sender::new(false),
             faults: faults::Faults::default(),
+            cache_usage: Mutex::new(BTreeMap::new()),
             failing_write: Mutex::new(None),
         });
         daemon.load_stored_workforces().await;

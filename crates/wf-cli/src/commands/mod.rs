@@ -124,12 +124,11 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
             let machine_faults = workspace.machine_faults()?;
-            let waiting_on_you = view::inbox_views(
+            let waiting_on_you = view::inbox_count(
                 workspace.state(),
                 &workspace.held_permissions()?,
                 &machine_faults,
-            )
-            .len();
+            );
             let context = view::StatusContext {
                 machine_faults: &machine_faults,
                 own: Some(workspace.device_key()),
@@ -137,7 +136,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 daemon: workspace.follows_daemon(),
                 waiting_on_you,
                 refolded: refold,
-                caches: cache_usage(&workspace),
+                caches: workspace.cache_usage()?,
             };
             emit(
                 json,
@@ -192,21 +191,6 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
 /// The workforce of the working directory, for the commands that read or write its log.
 fn open(data: DataDir, cwd: &Path) -> anyhow::Result<Workspace> {
     Workspace::open(data, cwd, false)
-}
-
-/// What the caches in the worktrees of the workforce take on this machine, when the machine
-/// config sets a budget for them.
-fn cache_usage(workspace: &Workspace) -> Option<view::CacheUsage> {
-    let path = wf_daemon::machine_config::MachineConfig::path_from_env()?;
-    let storage = wf_daemon::machine_config::MachineConfig::load(&path)
-        .ok()?
-        .storage?;
-    let worktrees = workspace.data.worktrees(&workspace.workforce());
-    let measured = wf_daemon::caches::measure(&worktrees, &storage.caches);
-    Some(view::CacheUsage {
-        used_bytes: wf_daemon::caches::total(&measured),
-        budget_bytes: storage.budget.as_u64(),
-    })
 }
 
 /// Plain `wf`: the dashboard at a terminal. Anywhere else nobody could use it, so the help.

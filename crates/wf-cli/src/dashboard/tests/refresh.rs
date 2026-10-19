@@ -153,6 +153,11 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
     );
     let in_inbox = crate::view::inbox_views(&state, &[], &faults).len();
     assert_eq!(snapshot.waiting.len(), in_inbox);
+    assert_eq!(
+        crate::view::inbox_count(&state, &[], &faults),
+        in_inbox,
+        "the count is of the entries"
+    );
     assert_eq!(snapshot.waiting.len(), 3);
     let titles: Vec<&str> = snapshot
         .waiting

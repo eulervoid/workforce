@@ -1,7 +1,7 @@
 //! Tidying the worktrees of a workforce: the directories of ended sessions and of items that are
 //! finished removed, and the caches of the rest kept under the budget of the machine config.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -179,6 +179,7 @@ impl Daemon {
             }
         };
         let Some(storage) = storage else {
+            self.cache_usage().remove(&workforce);
             return;
         };
         let Ok(state) = self.snapshot(loaded).await else {
@@ -186,23 +187,53 @@ impl Daemon {
         };
         let busy = self.busy_directories(workforce, &state);
         let directory = self.launch.data_dir.worktrees(&workforce);
-        let _ = blocking(move || {
+        let budget_bytes = storage.budget.as_u64();
+        let Ok(used_bytes) = blocking(move || {
             let measured = caches::measure(&directory, &storage.caches);
-            for worktree in caches::over_budget(&measured, storage.budget.as_u64(), &busy) {
+            let mut used_bytes = caches::total(&measured);
+            for worktree in caches::over_budget(&measured, budget_bytes, &busy) {
                 match caches::delete(worktree, &storage.caches) {
-                    Ok(()) => tracing::info!(
-                        "deleted the caches of {} to stay under the budget of {}",
-                        worktree.display(),
-                        storage.budget.display().si()
-                    ),
+                    Ok(()) => {
+                        used_bytes -= measured
+                            .iter()
+                            .find(|caches| caches.worktree == worktree)
+                            .map_or(0, |caches| caches.bytes);
+                        tracing::info!(
+                            "deleted the caches of {} to stay under the budget of {}",
+                            worktree.display(),
+                            storage.budget.display().si()
+                        );
+                    }
                     Err(error) => tracing::warn!(
                         "could not delete the caches of {}: {error}",
                         worktree.display()
                     ),
                 }
             }
+            used_bytes
         })
-        .await;
+        .await
+        else {
+            return;
+        };
+        self.cache_usage().insert(
+            workforce,
+            caches::CacheUsage {
+                used_bytes,
+                budget_bytes,
+            },
+        );
+    }
+
+    /// What the caches of `workforce` took when they were last checked against the budget.
+    pub(crate) fn cache_usage_of(&self, workforce: WorkforceId) -> Option<caches::CacheUsage> {
+        self.cache_usage().get(&workforce).copied()
+    }
+
+    fn cache_usage(&self) -> std::sync::MutexGuard<'_, BTreeMap<WorkforceId, caches::CacheUsage>> {
+        self.cache_usage
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 

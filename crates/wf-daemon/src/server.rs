@@ -108,7 +108,8 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::Permissions
         | Call::AnswerPermission { .. }
         | Call::LastSeen
-        | Call::MachineFaults => daemon.workforce(request.workforce).await,
+        | Call::MachineFaults
+        | Call::CacheUsage => daemon.workforce(request.workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
@@ -158,6 +159,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         | Call::SyncNow
         | Call::LastSeen
         | Call::MachineFaults
+        | Call::CacheUsage
         | Call::Permissions
         | Call::EndSession { .. } => Ok(()),
         Call::Fork(_) => principals("found a fork"),
@@ -333,6 +335,7 @@ async fn call(
         }
         Call::LastSeen => reply(daemon.presence().snapshot()),
         Call::MachineFaults => reply(daemon.faults.current()),
+        Call::CacheUsage => reply(daemon.cache_usage_of(workforce)),
         Call::StartSession {
             agent,
             item,

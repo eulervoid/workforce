@@ -14,6 +14,7 @@ use wf_core::name::AgentName;
 use wf_core::session::HarnessFault;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
+use wf_daemon::caches::CacheUsage;
 
 use super::{device_label, timestamp_ms};
 
@@ -240,14 +241,6 @@ impl Serialize for Flag {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         serializer.collect_str(self)
     }
-}
-
-/// The disk the caches in the worktrees of the workforce take on this machine, and the budget
-/// the daemon keeps them under.
-#[derive(Serialize, Clone, Copy, Debug, PartialEq, Eq)]
-pub struct CacheUsage {
-    pub used_bytes: u64,
-    pub budget_bytes: u64,
 }
 
 /// What `wf status` knows besides the state.

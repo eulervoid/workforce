@@ -11,6 +11,7 @@ use wf_core::identity::{Actor, AgentId, DeviceKey, DeviceSigner, PrincipalKey, P
 use wf_core::lifecycle::Finish;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
+use wf_daemon::caches::CacheUsage;
 use wf_daemon::caller::Caller;
 use wf_daemon::client::DaemonClient;
 use wf_daemon::proto::HeldPermission;
@@ -378,6 +379,15 @@ impl Workspace {
         match &self.source {
             Source::Local(..) => Ok(Vec::new()),
             Source::Daemon { client, .. } => Ok(client.borrow_mut().permissions(self.workforce)?),
+        }
+    }
+
+    /// What the caches in the worktrees take, as the daemon last checked them against its budget;
+    /// nothing without a daemon, or when the machine config sets no budget.
+    pub fn cache_usage(&self) -> anyhow::Result<Option<CacheUsage>> {
+        match &self.source {
+            Source::Local(..) => Ok(None),
+            Source::Daemon { client, .. } => Ok(client.borrow_mut().cache_usage(self.workforce)?),
         }
     }
 

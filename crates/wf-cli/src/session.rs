@@ -34,11 +34,14 @@ pub fn session(
         }
         SessionCommand::Show { session } => {
             let id = choose_session(workspace, mode, session, Which::Any)?;
-            let views = view::session_views(workspace.state(), session_model(workspace));
-            let shown = views
-                .into_iter()
-                .find(|view| view.id == id)
-                .expect("resolved sessions exist");
+            let state = workspace.state();
+            let session = state.session(id).expect("resolved sessions exist");
+            let shown = view::session_view(
+                state,
+                &state.dependency_graph(),
+                session,
+                session_model(workspace)(id),
+            );
             emit(json, &shown, render::session)
         }
         SessionCommand::Stop { session } => {
