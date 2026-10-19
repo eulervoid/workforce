@@ -272,6 +272,17 @@ impl App {
 
     pub fn refresh(&mut self, snapshot: Snapshot) {
         self.snapshot = snapshot;
+        self.settle();
+    }
+
+    /// Moves the clock of the snapshot on screen when nothing else changed.
+    pub fn tick(&mut self, now_ms: u64) {
+        self.snapshot.now_ms = now_ms;
+        self.settle();
+    }
+
+    /// Lets what the app keeps follow the snapshot on screen.
+    fn settle(&mut self) {
         self.take_posted();
         match self.status {
             Some(

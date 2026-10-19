@@ -8,7 +8,7 @@ use wf_core::activity::{Activity, Entry};
 use wf_core::body::{Body, BodyPart, StepId};
 use wf_core::crdt::SetChange;
 use wf_core::event::{Change, CommentKind, Event};
-use wf_core::graph::Readiness;
+use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::{InboxKind, Waiting};
@@ -723,8 +723,12 @@ fn quoted(text: &str) -> String {
 }
 
 /// The detail of a live item. `events` is the log, for the item's activity.
-pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
-    let graph = state.dependency_graph();
+pub fn item_detail(
+    state: &State,
+    graph: &DependencyGraph,
+    item: &Item,
+    events: &[Event],
+) -> ItemDetail {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut flags = Vec::new();
     if let Some(name) = item.unknown_state() {
@@ -769,7 +773,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         .dependents(item.id())
         .map(|id| link_view(state, id, false))
         .collect();
-    if state.readiness(&graph, item) == Some(Readiness::Stranded) {
+    if state.readiness(graph, item) == Some(Readiness::Stranded) {
         flags.push(
             "stranded: a dependency was cancelled; `wf item link --remove-depends-on` frees it"
                 .to_string(),
@@ -795,7 +799,7 @@ pub fn item_detail(state: &State, item: &Item, events: &[Event]) -> ItemDetail {
         .collect();
 
     ItemDetail {
-        summary: summary(state, &graph, ItemEntry::Live(item)),
+        summary: summary(state, graph, ItemEntry::Live(item)),
         body: body_parts(&item.body()),
         author: actor_view(state, item.author()),
         created: timestamp(item.created()),
@@ -858,7 +862,7 @@ mod tests {
         let ItemEntry::Live(item) = state.item(item).unwrap() else {
             unreachable!("the item is live")
         };
-        item_detail(state, item, &[]).flags
+        item_detail(state, &state.dependency_graph(), item, &[]).flags
     }
 
     #[test]

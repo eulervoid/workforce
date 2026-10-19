@@ -5,7 +5,7 @@ use std::fmt;
 use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::autonomy::StartMode;
-use wf_core::graph::Readiness;
+use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
@@ -263,7 +263,7 @@ pub struct DeviceStatus {
     pub last_seen: Option<Timestamp>,
 }
 
-pub fn status(state: &State, context: StatusContext) -> StatusView {
+pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) -> StatusView {
     let StatusContext {
         own,
         last_seen,
@@ -274,7 +274,6 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         machine_faults,
     } = context;
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let graph = state.dependency_graph();
     let mut flagged = Vec::new();
     let mut archived_items = 0;
     for view in state.items() {
@@ -302,7 +301,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
                         title,
                         state: item.state(policy).to_string(),
                     });
-                } else if state.readiness(&graph, item) == Some(Readiness::Stranded) {
+                } else if state.readiness(graph, item) == Some(Readiness::Stranded) {
                     flagged.push(Flag::Stranded { item: id, title });
                 }
             }
@@ -381,7 +380,7 @@ pub fn status(state: &State, context: StatusContext) -> StatusView {
         .collect();
     let parked_sessions = live
         .iter()
-        .filter(|session| state.session_waits(session.id(), &graph))
+        .filter(|session| state.session_waits(session.id(), graph))
         .count();
     let after_failures: Vec<String> = state
         .inbox()
@@ -533,6 +532,7 @@ mod tests {
     ) -> Option<String> {
         status(
             state,
+            &state.dependency_graph(),
             StatusContext {
                 machine_faults,
                 own: Some(fixture.devices[0].key()),

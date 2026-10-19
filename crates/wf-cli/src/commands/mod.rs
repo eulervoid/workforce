@@ -140,7 +140,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             };
             emit(
                 json,
-                &view::status(workspace.state(), context),
+                &view::status(workspace.state(), &workspace.state().dependency_graph(), context),
                 render::status,
             )
         }

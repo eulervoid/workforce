@@ -137,9 +137,12 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
         )]
         .into(),
     };
+    let graph = state.dependency_graph();
     let sources = Sources {
         state: &state,
+        graph: &graph,
         events: &events,
+        event: &|id| events.iter().find(|event| event.id() == id).cloned(),
         own: fixture.devices[0].key(),
         now_ms: 3_000,
         detail_width: 80,

@@ -595,7 +595,7 @@ mod tests {
         let ItemEntry::Live(item) = state.item(target).unwrap() else {
             panic!()
         };
-        let detail = crate::view::item_detail(&state, item, &[]);
+        let detail = crate::view::item_detail(&state, &state.dependency_graph(), item, &[]);
         let shown =
             anstream::adapter::strip_str(&item_detail_for(&detail, None, Format::Raw)).to_string();
         let mut backlinks: Vec<&str> = shown
@@ -912,7 +912,7 @@ mod tests {
         let ItemEntry::Live(live) = state.item(item).unwrap() else {
             panic!()
         };
-        crate::view::item_detail(&state, live, &events)
+        crate::view::item_detail(&state, &state.dependency_graph(), live, &events)
     }
 
     /// The lines of the notice box, without the bar.
