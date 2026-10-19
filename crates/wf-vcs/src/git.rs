@@ -7,12 +7,13 @@ use std::str::FromStr;
 use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
+use wf_core::id::ItemId;
 use wf_core::session::{CommitId, GitOid};
 
 use crate::diff;
 use crate::{
     CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Pager, Rebase, StoppedRebase, VcsError,
-    Work,
+    Work, item_branch,
 };
 
 /// How long a `packed-refs.lock` may stay before it counts as left behind. Age alone decides,
@@ -649,6 +650,19 @@ impl GitCli {
             return Err(VcsError::NoBranch(branch.into()));
         }
         self.oid("rev-parse", &found.stdout)
+    }
+
+    /// The unmerged work on the branch of `item`, compared against `target`; `None` when this
+    /// repository has no branch of the item.
+    pub fn branch_work(&self, item: ItemId, target: &str) -> Result<Option<Work>, VcsError> {
+        match self.branch_head(&item_branch(item)) {
+            Ok(commit) => Ok(Some(Work::Unmerged {
+                target: target.to_string(),
+                commit,
+            })),
+            Err(VcsError::NoBranch(_)) => Ok(None),
+            Err(error) => Err(error),
+        }
     }
 
     /// How many commits `commit` has that `target` does not.

@@ -36,17 +36,12 @@ pub(crate) fn item_work(
     {
         return Ok(wf_vcs::Work::Merged { merge, commit });
     }
-    let unmerged = |commit| wf_vcs::Work::Unmerged {
-        target: target(workspace),
-        commit,
-    };
-    match git.branch_head(&wf_vcs::item_branch(id)) {
-        Ok(commit) => return Ok(unmerged(commit)),
-        Err(wf_vcs::VcsError::NoBranch(_)) => {}
-        Err(error) => return Err(error.into()),
+    let target = target(workspace);
+    if let Some(work) = git.branch_work(id, &target)? {
+        return Ok(work);
     }
     match submission {
-        Some((Some(commit), _)) => Ok(unmerged(commit)),
+        Some((Some(commit), _)) => Ok(wf_vcs::Work::Unmerged { target, commit }),
         Some((None, _)) => bail!(
             "#{} was submitted without commits, there is no work to show",
             id.short()
