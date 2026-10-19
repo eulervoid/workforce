@@ -9,3 +9,4 @@ cc 61803f2ffd7f9e4e7b16f365799e2831c1f681364c2d9c432daf5bf4076c4be5 # shrinks to
 cc be426c17b4967b6dc368070b80008fd741cc5b71b9f1eca901eb873aa91dfb21 # shrinks to operations = [(11, 105, 135, 0), (0, 47, 83, 151), (80, 228, 0, 21), (143, 238, 73, 20), (0, 0, 0, 0), (232, 138, 0, 0)], seeds = [0, 0, 0]
 cc c370b61feea855314de5811c7235f0841e74ac557df5d485c5865078ca0b93e6 # shrinks to operations = [(0, 54, 0, 160)]
 cc f81611587e419a4c018b47962f7b848844525b3ba814806178d0b98e650a3d0b # shrinks to operations = [(0, 214, 0, 112)], seeds = [0, 0, 0]
+cc b7acdacb022342814f071f61e737c807e0b6d74e5a293db016df5182ca3d2e12 # shrinks to operations = [(45, 139, 0, 116), (0, 15, 3, 163), (42, 139, 73, 55), (169, 139, 31, 0)], seeds = [0, 0, 0]

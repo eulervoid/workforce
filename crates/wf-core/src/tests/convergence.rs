@@ -67,6 +67,14 @@ impl Simulation {
         }
     }
 
+    /// A millisecond no other event outside `submit_event` was authored at. A joiner binds on
+    /// whichever replica it meets, and two of its bindings of one invite from equal heads at equal
+    /// times are the same event: a device never authors one event twice.
+    fn next_millisecond(&mut self) -> u64 {
+        self.clock += 2;
+        self.clock / 2
+    }
+
     fn pick_item(&self, device: usize, choice: u8) -> Option<ItemId> {
         let ids: Vec<ItemId> = self.replicas[device]
             .items()
@@ -402,16 +410,15 @@ impl Simulation {
                 self.submit(device, verdict(item, submitted, kind));
             }
             (19, _) if second % 2 == 0 && device == 0 => {
-                let (invite, secret) =
-                    self.fixture
-                        .invite(&self.replicas[0], self.clock / 2, 99_000);
-                self.clock += 1;
+                let now_ms = self.next_millisecond();
+                let (invite, secret) = self.fixture.invite(&self.replicas[0], now_ms, 99_000);
                 self.receive_unchecked(0, invite.clone());
                 self.invites.push((invite, secret));
             }
             (19, _) => {
                 // Devices redeem invites on whichever replica knows them: concurrently, one
                 // device may be bound twice, and one invite may bind two devices.
+                let now_ms = self.next_millisecond();
                 let joiner = &self.joiners[usize::from(first) % self.joiners.len()];
                 let known: Vec<_> = self
                     .invites
@@ -422,14 +429,9 @@ impl Simulation {
                     return;
                 }
                 let (invite, secret) = known[usize::from(second) % known.len()];
-                self.clock += 1;
-                let bound = self.fixture.bind(
-                    &self.replicas[device],
-                    joiner,
-                    invite,
-                    secret,
-                    self.clock / 2,
-                );
+                let bound =
+                    self.fixture
+                        .bind(&self.replicas[device], joiner, invite, secret, now_ms);
                 self.receive_unchecked(device, bound);
             }
             _ => {}
