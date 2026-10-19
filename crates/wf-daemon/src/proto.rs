@@ -267,6 +267,35 @@ mod tests {
         );
     }
 
+    /// Names each `Call` variant for the golden requests. The match has no wildcard, so a new
+    /// variant fails to compile here: add its arm, raise `CALL_VARIANTS` and add a request for
+    /// it to `golden_request_bytes`.
+    fn golden_name(call: &Call) -> &'static str {
+        match call {
+            Call::State => "State",
+            Call::Event(_) => "Event",
+            Call::Events { .. } => "Events",
+            Call::ItemEvents(_) => "ItemEvents",
+            Call::AgentEvents(_) => "AgentEvents",
+            Call::Author { .. } => "Author",
+            Call::SyncNow => "SyncNow",
+            Call::Fork(_) => "Fork",
+            Call::Join { .. } => "Join",
+            Call::Follow(_) => "Follow",
+            Call::LastSeen => "LastSeen",
+            Call::StartSession { .. } => "StartSession",
+            Call::EndSession { .. } => "EndSession",
+            Call::StopSession(_) => "StopSession",
+            Call::Permissions => "Permissions",
+            Call::AnswerPermission { .. } => "AnswerPermission",
+            Call::MachineFaults => "MachineFaults",
+            Call::CacheUsage => "CacheUsage",
+        }
+    }
+
+    /// The number of arms of [`golden_name`].
+    const CALL_VARIANTS: usize = 18;
+
     /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
     /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
     /// One request per call, from fixed keys; the events inside are pinned by their own tests.
@@ -287,70 +316,61 @@ mod tests {
             agents: [(AgentName::new("claude").unwrap(), 2)].into(),
             max_sessions: 4,
         };
-        let calls: Vec<(&str, Call)> = vec![
-            ("State", Call::State),
-            ("Event", Call::Event(EventId::from_bytes([4; 32]))),
-            ("Events", Call::Events { from: 7 }),
-            ("ItemEvents", Call::ItemEvents(item)),
-            (
-                "AgentEvents",
-                Call::AgentEvents(AgentId {
-                    principal: PrincipalSigner::generate([9; 32]).key(),
-                    name: AgentName::new("claude").unwrap(),
-                }),
-            ),
-            (
-                "Author",
-                Call::Author {
-                    body: Box::new(comment(item, "why")),
+        let calls: Vec<Call> = vec![
+            Call::State,
+            Call::Event(EventId::from_bytes([4; 32])),
+            Call::Events { from: 7 },
+            Call::ItemEvents(item),
+            Call::AgentEvents(AgentId {
+                principal: PrincipalSigner::generate([9; 32]).key(),
+                name: AgentName::new("claude").unwrap(),
+            }),
+            Call::Author {
+                body: Box::new(comment(item, "why")),
+            },
+            Call::SyncNow,
+            Call::Fork(Box::new(fork)),
+            Call::Join {
+                code: "wfi1abc".into(),
+                profile,
+            },
+            Call::Follow(vec![device]),
+            Call::LastSeen,
+            Call::StartSession {
+                agent: AgentName::new("claude").unwrap(),
+                item,
+                repository: "/repo".into(),
+            },
+            Call::EndSession {
+                finish: Finish::Submit {
+                    note: Some("done".into()),
                 },
-            ),
-            ("SyncNow", Call::SyncNow),
-            ("Fork", Call::Fork(Box::new(fork))),
-            (
-                "Join",
-                Call::Join {
-                    code: "wfi1abc".into(),
-                    profile,
-                },
-            ),
-            ("Follow", Call::Follow(vec![device])),
-            ("LastSeen", Call::LastSeen),
-            (
-                "StartSession",
-                Call::StartSession {
-                    agent: AgentName::new("claude").unwrap(),
-                    item,
-                    repository: "/repo".into(),
-                },
-            ),
-            (
-                "EndSession",
-                Call::EndSession {
-                    finish: Finish::Submit {
-                        note: Some("done".into()),
-                    },
-                },
-            ),
-            (
-                "StopSession",
-                Call::StopSession(SessionId::from_bytes([3; 32])),
-            ),
-            ("Permissions", Call::Permissions),
-            (
-                "AnswerPermission",
-                Call::AnswerPermission {
-                    session: SessionId::from_bytes([3; 32]),
-                    since_ms: 5_000,
-                    answer: Permission::Allow,
-                },
-            ),
-            ("MachineFaults", Call::MachineFaults),
-            ("CacheUsage", Call::CacheUsage),
+            },
+            Call::StopSession(SessionId::from_bytes([3; 32])),
+            Call::Permissions,
+            Call::AnswerPermission {
+                session: SessionId::from_bytes([3; 32]),
+                since_ms: 5_000,
+                answer: Permission::Allow,
+            },
+            Call::MachineFaults,
+            Call::CacheUsage,
         ];
+        assert_eq!(
+            calls.len(),
+            CALL_VARIANTS,
+            "`Call` has a variant without a request in `golden_request_bytes`"
+        );
+        let names: std::collections::BTreeSet<_> = calls.iter().map(golden_name).collect();
+        assert_eq!(
+            names.len(),
+            CALL_VARIANTS,
+            "two requests are for the same call"
+        );
         let hashes: Vec<(&str, usize, String)> = calls
             .into_iter()
-            .map(|(name, call)| {
+            .map(|call| {
+                let name = golden_name(&call);
                 let request = Request {
                     workforce: fixture.workforce(),
                     call,
