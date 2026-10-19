@@ -7,10 +7,9 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use wf_core::event::CommentKind;
-use wf_core::item::ItemView;
-use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
+use wf_core::lifecycle::{Interruption, Resume, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
+use wf_core::state::State;
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
 use wf_vcs::StoppedRebase;
 
@@ -353,16 +352,7 @@ async fn turns(
         };
         let machine_fault = daemon.faults.blocking_all();
         match state.turn_outcome(run.session, turns_without_commit, run.nudges, machine_fault) {
-            TurnOutcome::Close => {
-                let live = state
-                    .session(run.session)
-                    .is_some_and(|session| session.is_live());
-                return if live {
-                    End::Interrupt(Interruption::MovedOn)
-                } else {
-                    End::Over
-                };
-            }
+            TurnOutcome::Close => return closed(&state, run),
             TurnOutcome::Continue => prompt = nudge(run).await,
             TurnOutcome::MachineFault(fault) => {
                 return End::Interrupt(Interruption::MachineFault(fault));
@@ -374,13 +364,11 @@ async fn turns(
                 });
             }
             TurnOutcome::Park => match park(daemon, loaded, run, stopped, &deadline).await {
-                Parked::Ready => {
+                None => {
                     prompt = resumed(loaded, run).await;
                     turns_without_commit = 0;
                 }
-                Parked::Over => return End::Over,
-                Parked::TimedOut => return End::Interrupt(Interruption::TimedOut),
-                Parked::MovedOn => return End::Interrupt(Interruption::MovedOn),
+                Some(end) => return end,
             },
         }
     }
@@ -402,37 +390,18 @@ async fn first_prompt(
     let Ok(state) = daemon.snapshot(loaded).await else {
         return Err(failed("the workforce could not be read".to_string()));
     };
-    // A session whose last turn asked a blocker was parked when the daemon stopped, even if the
-    // blocker is answered by now.
-    let asked = match state.item(run.item) {
-        Some(ItemView::Live(item)) => item.comments().values().any(|comment| {
-            comment.session() == Some(run.session)
-                && comment.kind == CommentKind::Blocker
-                && comment.at.wall_ms() >= prompted_ms
-        }),
-        Some(ItemView::Archived(_)) | None => false,
-    };
     match state.turn_outcome(run.session, 0, run.nudges, daemon.faults.blocking_all()) {
         TurnOutcome::MachineFault(fault) => Err(End::Interrupt(Interruption::MachineFault(fault))),
-        TurnOutcome::Continue | TurnOutcome::GiveUp if asked => Ok(resumed(loaded, run).await),
         TurnOutcome::Continue | TurnOutcome::GiveUp => {
-            Ok(restarted(loaded, run, prompted_ms).await)
+            match state.resume_after_restart(run.session, prompted_ms) {
+                Resume::AfterWait => Ok(resumed(loaded, run).await),
+                Resume::AfterRestart => Ok(restarted(loaded, run, prompted_ms).await),
+            }
         }
-        TurnOutcome::Close => {
-            let live = state
-                .session(run.session)
-                .is_some_and(|session| session.is_live());
-            Err(if live {
-                End::Interrupt(Interruption::MovedOn)
-            } else {
-                End::Over
-            })
-        }
+        TurnOutcome::Close => Err(closed(&state, run)),
         TurnOutcome::Park => match park(daemon, loaded, run, stopped, deadline).await {
-            Parked::Ready => Ok(resumed(loaded, run).await),
-            Parked::Over => Err(End::Over),
-            Parked::TimedOut => Err(End::Interrupt(Interruption::TimedOut)),
-            Parked::MovedOn => Err(End::Interrupt(Interruption::MovedOn)),
+            None => Ok(resumed(loaded, run).await),
+            Some(end) => Err(end),
         },
     }
 }
@@ -517,47 +486,49 @@ async fn branch_head(run: &Run) -> Option<CommitId> {
     blocking(move || git.branch_head(&branch)).await.ok()?.ok()
 }
 
-enum Parked {
-    Ready,
-    Over,
-    TimedOut,
-    MovedOn,
+/// How the task ends when a turn outcome says to close: the session ended already, or its item
+/// moved on under it.
+fn closed(state: &State, run: &Run) -> End {
+    let live = state
+        .session(run.session)
+        .is_some_and(|session| session.is_live());
+    if live {
+        End::Interrupt(Interruption::MovedOn)
+    } else {
+        End::Over
+    }
 }
 
-/// Waits until the item is ready again, keeping the harness and its conversation.
+/// Waits until the item is ready again, keeping the harness and its conversation. `None` when it
+/// is; otherwise how the task ends instead.
 async fn park(
     daemon: &Arc<Daemon>,
     loaded: &Arc<Loaded>,
     run: &Run,
     stopped: &mut mpsc::UnboundedReceiver<Stop>,
     deadline: &Option<Instant>,
-) -> Parked {
+) -> Option<End> {
     let mut heads = loaded.storage.watch_heads();
     let wake = Instant::now() + run.park_timeout;
     loop {
         let Ok(state) = daemon.snapshot(loaded).await else {
-            return Parked::Over;
+            return Some(End::Over);
         };
         // A parked session needs nothing of the machine: it waits, whatever is wrong with it.
         match state.turn_outcome(run.session, 0, run.nudges, None) {
             TurnOutcome::Park | TurnOutcome::MachineFault(_) => {}
-            TurnOutcome::Close => {
-                let live = state
-                    .session(run.session)
-                    .is_some_and(|session| session.is_live());
-                return if live { Parked::MovedOn } else { Parked::Over };
-            }
-            TurnOutcome::Continue | TurnOutcome::GiveUp => return Parked::Ready,
+            TurnOutcome::Close => return Some(closed(&state, run)),
+            TurnOutcome::Continue | TurnOutcome::GiveUp => return None,
         }
         tokio::select! {
             changed = heads.changed() => {
                 if changed.is_err() {
-                    return Parked::Over;
+                    return Some(End::Over);
                 }
             }
-            Some(_) = stopped.recv() => return Parked::Over,
-            () = tokio::time::sleep_until(wake) => return Parked::TimedOut,
-            () = sleep_until(*deadline) => return Parked::TimedOut,
+            Some(_) = stopped.recv() => return Some(End::Over),
+            () = tokio::time::sleep_until(wake) => return Some(End::Interrupt(Interruption::TimedOut)),
+            () = sleep_until(*deadline) => return Some(End::Interrupt(Interruption::TimedOut)),
         }
     }
 }
