@@ -18,6 +18,10 @@ pub fn render_after(marker: &str, text: &str, width: Option<usize>, indent: &str
     write(text, width, indent, Some(marker.to_owned()))
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "pulldown-cmark's `Event` has variants this function does not read"
+)]
 fn write(text: &str, width: Option<usize>, indent: &str, marker: Option<String>) -> String {
     let mut writer = MarkdownWriter {
         width,
@@ -151,6 +155,10 @@ impl MarkdownWriter {
         self.blank();
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "pulldown-cmark's `Event` and `LinkType` have variants this function does not draw"
+    )]
     fn event(&mut self, event: Event<'_>) {
         match event {
             Event::Start(Tag::Strong) => self.style_on(theme::text_bold()),

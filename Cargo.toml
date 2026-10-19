@@ -44,3 +44,8 @@ tracing = "0.1"
 [profile.dev]
 # Line tables keep backtraces with file and line, at about half the size of a target directory.
 debug = "line-tables-only"
+
+[workspace.lints.clippy]
+# A new variant of an enum we own must fail to compile where it needs handling. Matches on
+# enums of other crates carry an `#[expect]` saying why a wildcard is right there.
+wildcard_enum_match_arm = "warn"

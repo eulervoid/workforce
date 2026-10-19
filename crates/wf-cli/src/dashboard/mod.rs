@@ -230,7 +230,7 @@ fn handle(
             app.resize(width, height);
             return Handled::Changed;
         }
-        _ => return Handled::Ignored,
+        TerminalEvent::Key(_) | TerminalEvent::Mouse(_) => return Handled::Ignored,
     };
     match effect {
         Some(effect) => {

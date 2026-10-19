@@ -89,6 +89,10 @@ pub struct Body {
 impl Body {
     /// Splits `text` at its task-list items, which must not be nested in anything else:
     /// a checklist in a quote or inside a list item is an error. Code blocks are not checklists.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "pulldown-cmark's `Event` has variants this function does not read"
+    )]
     pub fn parse(text: &str) -> Result<Self, BodyError> {
         let mut parts = Vec::new();
         let mut seen = BTreeSet::new();

@@ -43,6 +43,10 @@ pub enum Token {
     Mention(Mention),
 }
 
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "pulldown-cmark's `Event` has variants this function does not read"
+)]
 pub fn parse(markdown: &str) -> Vec<Token> {
     let mut tokens = Vec::new();
     let mut prose = String::new();

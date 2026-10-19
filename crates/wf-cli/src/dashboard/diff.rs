@@ -419,6 +419,10 @@ impl DiffPane {
     }
 
     /// What the keys of the diff do; `false` for a key it does not take. A page is `page` rows.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "crossterm's `KeyCode` has keys no binding uses"
+    )]
     pub fn key(&mut self, key: KeyEvent, page: usize) -> bool {
         let rows = self.rows();
         if rows.is_empty() {

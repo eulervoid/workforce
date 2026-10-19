@@ -70,6 +70,14 @@ impl Message {
             Message::Have(_) => "have",
         }
     }
+
+    /// The error for receiving this message where `expected` was due.
+    fn unexpected(&self, expected: &'static str) -> SyncError {
+        SyncError::Unexpected {
+            expected,
+            got: self.name(),
+        }
+    }
 }
 
 /// What one run of the protocol changed on this side.
@@ -112,14 +120,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
         if let Role::Initiator = role {
             self.send(Message::Versions(mine.clone())).await?;
         }
-        let theirs = match self.receive().await? {
-            Message::Versions(versions) => versions,
-            other => {
-                return Err(SyncError::Unexpected {
-                    expected: "versions",
-                    got: other.name(),
-                });
-            }
+        let message = self.receive().await?;
+        let Message::Versions(theirs) = message else {
+            return Err(message.unexpected("versions"));
         };
         if let Role::Responder = role {
             self.send(Message::Versions(mine)).await?;
@@ -138,16 +141,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
 
     async fn accept_events(&mut self) -> Result<(), SyncError> {
         loop {
-            match self.receive().await? {
-                Message::Events(events) => self.apply(events).await?,
-                Message::EndOfEvents => return Ok(()),
-                other => {
-                    return Err(SyncError::Unexpected {
-                        expected: "events",
-                        got: other.name(),
-                    });
-                }
+            let message = self.receive().await?;
+            if let Message::EndOfEvents = message {
+                return Ok(());
             }
+            let Message::Events(events) = message else {
+                return Err(message.unexpected("events"));
+            };
+            self.apply(events).await?;
         }
     }
 
@@ -176,37 +177,29 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
             }
             asked.extend(wanted.iter().copied());
             self.send(Message::Want(wanted)).await?;
-            match self.receive().await? {
-                Message::Have(events) => self.apply(events).await?,
-                other => {
-                    return Err(SyncError::Unexpected {
-                        expected: "have",
-                        got: other.name(),
-                    });
-                }
-            }
+            let message = self.receive().await?;
+            let Message::Have(events) = message else {
+                return Err(message.unexpected("have"));
+            };
+            self.apply(events).await?;
         }
     }
 
     async fn answer_wants(&mut self) -> Result<(), SyncError> {
         loop {
-            match self.receive().await? {
-                Message::EndOfWants => return Ok(()),
-                Message::Want(ids) if ids.len() > IDS_PER_WANT => {
-                    return Err(SyncError::WantTooLarge(ids.len()));
-                }
-                Message::Want(ids) => {
-                    let events = self.log.events_by_id(&ids).await?;
-                    self.report.sent += events.len();
-                    self.send(Message::Have(events)).await?;
-                }
-                other => {
-                    return Err(SyncError::Unexpected {
-                        expected: "want",
-                        got: other.name(),
-                    });
-                }
+            let message = self.receive().await?;
+            if let Message::EndOfWants = message {
+                return Ok(());
             }
+            let Message::Want(ids) = message else {
+                return Err(message.unexpected("want"));
+            };
+            if ids.len() > IDS_PER_WANT {
+                return Err(SyncError::WantTooLarge(ids.len()));
+            }
+            let events = self.log.events_by_id(&ids).await?;
+            self.report.sent += events.len();
+            self.send(Message::Have(events)).await?;
         }
     }
 }
@@ -222,10 +215,12 @@ where
         .map_err(|_| SyncError::TimedOut)??;
     match message {
         Message::Open(workforce) => Ok(workforce),
-        other => Err(SyncError::Unexpected {
-            expected: "open",
-            got: other.name(),
-        }),
+        Message::Versions(_)
+        | Message::Events(_)
+        | Message::EndOfEvents
+        | Message::Want(_)
+        | Message::EndOfWants
+        | Message::Have(_) => Err(message.unexpected("open")),
     }
 }
 

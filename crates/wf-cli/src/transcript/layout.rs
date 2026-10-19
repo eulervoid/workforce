@@ -550,7 +550,11 @@ impl Layout {
         }
         let by = match &decision.by {
             Decider::Principal => "you".to_owned(),
-            by => by.to_string(),
+            Decider::FixedPermissions
+            | Decider::Rules
+            | Decider::Hook { .. }
+            | Decider::Model { .. }
+            | Decider::Agent { .. } => decision.by.to_string(),
         };
         let verb = match decision.permission {
             Permission::Allow => "allowed",

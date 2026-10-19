@@ -39,6 +39,10 @@ fn body_length(prefix: [u8; 4]) -> Result<usize, FrameError> {
 }
 
 /// A stream ending where a length prefix should start is the peer closing it.
+#[expect(
+    clippy::wildcard_enum_match_arm,
+    reason = "`std::io::ErrorKind` is non-exhaustive; only an unexpected end of file means a closed stream"
+)]
 fn closed_at_prefix(error: std::io::Error) -> FrameError {
     match error.kind() {
         std::io::ErrorKind::UnexpectedEof => FrameError::Closed,

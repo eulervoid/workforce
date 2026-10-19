@@ -2063,9 +2063,11 @@ wf review --approve
             .expect("the conflict comment");
         let moved = events[conflict..]
             .iter()
-            .find_map(|event| match &event.content.body {
-                EventBody::ItemMoved(moved) if moved.to.state() == ItemState::Open => Some(moved),
-                _ => None,
+            .find_map(|event| {
+                let EventBody::ItemMoved(moved) = &event.content.body else {
+                    return None;
+                };
+                (moved.to.state() == ItemState::Open).then_some(moved)
             })
             .expect("the move back to open");
         assert_eq!(moved.because, Some(CommentId::from(events[conflict].id())));

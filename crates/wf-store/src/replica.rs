@@ -93,14 +93,13 @@ impl<S: EventStore> Replica<S> {
         let unseen = store.log_since(snapshot_event_count as u64)?;
         let replayed = unseen.len();
         for event in unseen {
-            state
-                .receive(event, Trust::Stored)
-                .map_err(|error| match error {
-                    Invalid::WrongWorkforce(found) => {
-                        StoreError::WrongWorkforce { expected, found }
-                    }
-                    other => StoreError::Inconsistent(wf_core::error_chain(&other)),
-                })?;
+            state.receive(event, Trust::Stored).map_err(|error| {
+                if let Invalid::WrongWorkforce(found) = error {
+                    StoreError::WrongWorkforce { expected, found }
+                } else {
+                    StoreError::Inconsistent(wf_core::error_chain(&error))
+                }
+            })?;
         }
         if state.pending_events().next().is_some() {
             return Err(StoreError::Inconsistent(
@@ -307,7 +306,8 @@ impl<S: EventStore> Replica<S> {
             .state
             .receive(event.clone(), Trust::Untrusted)
             .map_err(ReceiveError::from)?;
-        self.persist(&event, &received).map_err(ReceiveError::from)?;
+        self.persist(&event, &received)
+            .map_err(ReceiveError::from)?;
         Ok(event)
     }
 

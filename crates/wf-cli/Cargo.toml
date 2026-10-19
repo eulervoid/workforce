@@ -12,6 +12,9 @@ path = "src/lib.rs"
 name = "wf"
 path = "src/main.rs"
 
+[lints]
+workspace = true
+
 [dependencies]
 wf-core.workspace = true
 wf-store.workspace = true

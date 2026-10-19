@@ -70,6 +70,10 @@ impl Scroll {
 
     /// What the keys of a scrolled text do to it, a page being `page` lines; `None` for a key it
     /// does not take.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "crossterm's `KeyCode` has keys no binding uses"
+    )]
     pub(super) fn key(self, key: KeyEvent, page: usize) -> Option<Scroll> {
         Some(match key.code {
             KeyCode::Down | KeyCode::Char('j') => self.down(1),
@@ -142,6 +146,10 @@ impl<Key: Clone + PartialEq> Selection<Key> {
     }
 
     /// What the keys of a list do to its selection, a page being `page` rows.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "crossterm's `KeyCode` has keys no binding uses"
+    )]
     pub(super) fn key(&mut self, rows: &[Key], key: KeyEvent, page: usize) -> Navigated {
         self.update(rows);
         let before = self.index;

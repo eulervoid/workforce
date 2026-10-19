@@ -202,7 +202,15 @@ impl State {
                             Change::Body(body) if overwritten.contains(&event.id()) => {
                                 Activity::BodyOverwritten { body: body.clone() }
                             }
-                            change => Activity::Edited(change.clone()),
+                            Change::Title(_)
+                            | Change::Body(_)
+                            | Change::Priority(_)
+                            | Change::Lane(_)
+                            | Change::Labels(_)
+                            | Change::Requires(_)
+                            | Change::ReviewLevel(_)
+                            | Change::StepDone { .. }
+                            | Change::RecoveryLevel(_) => Activity::Edited(change.clone()),
                         };
                         entries.push(Entry {
                             event: event.id(),

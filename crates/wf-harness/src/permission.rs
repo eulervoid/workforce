@@ -149,6 +149,10 @@ mod tests {
         ]
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "`RequestPermissionOutcome` is non-exhaustive; any outcome but a selection fails the test"
+    )]
     fn selected(outcome: RequestPermissionOutcome) -> String {
         match outcome {
             RequestPermissionOutcome::Selected(selected) => selected.option_id.to_string(),

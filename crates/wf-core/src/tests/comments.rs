@@ -147,12 +147,14 @@ fn a_move_names_a_comment_of_its_item_as_its_reason() {
         comment(other.id().into(), "not about this one"),
     ));
     let why = comment_id(&fixture.apply(&mut state, 0, 2_003, comment(task, "not needed")));
-    let move_because = |because| match moved(task, ItemState::Cancelled) {
-        EventBody::ItemMoved(moved) => EventBody::ItemMoved(crate::event::ItemMoved {
+    let move_because = |because| {
+        let EventBody::ItemMoved(moved) = moved(task, ItemState::Cancelled) else {
+            unreachable!("`moved` builds an ItemMoved")
+        };
+        EventBody::ItemMoved(crate::event::ItemMoved {
             because: Some(because),
             ..moved
-        }),
-        _ => unreachable!(),
+        })
     };
     assert_eq!(state.check_policy(&move_because(why)), Ok(()));
     assert_eq!(

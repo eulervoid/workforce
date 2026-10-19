@@ -31,6 +31,10 @@ impl From<Option<Effect>> for Acted {
 }
 
 impl App {
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "crossterm's `KeyCode` has keys no binding uses"
+    )]
     pub fn key(&mut self, key: KeyEvent) -> Option<Effect> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
             return Some(Effect::Quit);
@@ -117,6 +121,10 @@ impl App {
     }
 
     /// The keys that act on what waits, on items and on sessions, for whatever is on screen.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "crossterm's `KeyCode` has keys no binding uses"
+    )]
     pub(super) fn act(&mut self, key: KeyEvent) -> Acted {
         let subjects = self.subjects();
         let permission = subjects.iter().find_map(|entry| entry.request());
@@ -277,6 +285,10 @@ impl App {
     }
 
     /// The keys of the diff of `item`, open on top.
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "crossterm's `KeyCode` has keys no binding uses"
+    )]
     pub(super) fn diff_key(&mut self, item: ItemId, key: KeyEvent) -> Option<Effect> {
         let page = self.page();
         match key.code {
@@ -403,6 +415,10 @@ impl App {
         }
     }
 
+    #[expect(
+        clippy::wildcard_enum_match_arm,
+        reason = "crossterm's `KeyCode` has keys no binding uses"
+    )]
     pub(super) fn log_key(&mut self, key: KeyEvent) {
         if let Some(scroll) = self.log.scroll.key(key, self.page()) {
             self.log.scroll = scroll;
