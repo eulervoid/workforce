@@ -14,6 +14,7 @@ pub mod network;
 pub mod permissions;
 pub mod render;
 pub mod session;
+pub mod text;
 pub mod theme;
 pub mod transcript;
 pub mod view;
