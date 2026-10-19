@@ -218,7 +218,8 @@ impl State {
     }
 }
 
-fn timestamp(at_ms: u64) -> String {
+/// A point in time, given in milliseconds since the epoch, as the inbox and the dashboard show it.
+pub fn timestamp(at_ms: u64) -> String {
     jiff::Timestamp::from_millisecond(i64::try_from(at_ms).unwrap_or(i64::MAX))
         .map_or_else(|_| at_ms.to_string(), |at| at.to_string())
 }

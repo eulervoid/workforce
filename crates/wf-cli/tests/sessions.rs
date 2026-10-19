@@ -3042,8 +3042,13 @@ wf work submit
             world.wf.run(&["inbox"]).contains("review of")
         })
         .await;
-    // The daemon checks the principal step when it is offered; a comment makes it check again.
-    tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+    // The daemon's first check of the principal step must pass before main moves; a comment
+    // makes it check again.
+    world
+        .wait("the daemon to check that the review merges", |world| {
+            world.daemon.reviews_found_merging() > 0
+        })
+        .await;
     let repository = &world.wf.repository;
     std::fs::write(repository.join("file.txt"), "main\n").unwrap();
     git_in(repository, &["commit", "--quiet", "-am", "main moves on"]);

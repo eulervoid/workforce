@@ -17,6 +17,7 @@ use crate::{Daemon, Loaded};
 /// What the daemon remembers of checking offered reviews against the target. It lives in memory:
 /// a restarted daemon cannot tell which principal reviews it already offered, so its first pass
 /// keeps the ones that conflict in the inbox as stale instead of sending them back to work.
+/// Only principal steps are remembered: an agent step never waits in the inbox.
 pub(super) struct CheckedReviews {
     seen: BTreeSet<(ItemId, CommitId)>,
     first_pass: bool,
@@ -66,7 +67,12 @@ impl Daemon {
             };
             let paths = match merges {
                 Ok(MergeTree::Landed { .. } | MergeTree::Clean { .. }) => {
-                    checked.seen.insert((item, commit));
+                    if matches!(step, ReviewStep::Principal) && checked.seen.insert((item, commit))
+                    {
+                        tracing::info!("#{}: merges into {target}", item.short());
+                        self.reviews_found_merging
+                            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    }
                     if let Some((_, submitted)) = state.submission(item)
                         && let Some(stale) = state.stale_since(item, submitted.hlc)
                     {
@@ -92,7 +98,8 @@ impl Daemon {
                     continue;
                 }
             };
-            let first_offer = checked.seen.insert((item, commit));
+            let first_offer =
+                matches!(step, ReviewStep::Principal) && checked.seen.insert((item, commit));
             let stale = match step {
                 ReviewStep::Principal if after_restart || !first_offer => {
                     let Some((_, submitted)) = state.submission(item) else {

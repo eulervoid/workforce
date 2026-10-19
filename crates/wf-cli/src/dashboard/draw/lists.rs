@@ -358,12 +358,11 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
             let more = stale
                 .iter()
                 .map(|stale| {
-                    let since = jiff::Timestamp::from_millisecond(
-                        i64::try_from(stale.since_ms).unwrap_or(i64::MAX),
-                    )
-                    .map_or_else(|_| stale.since_ms.to_string(), |at| at.to_string());
-                    Line::from(format!("  stale since {since}: it no longer merges"))
-                        .themed(theme::text_dimmed())
+                    Line::from(format!(
+                        "  stale since {}: it no longer merges",
+                        wf_core::inbox::timestamp(stale.since_ms)
+                    ))
+                    .themed(theme::text_dimmed())
                 })
                 .collect();
             row.lines(first, row.keys("v").map(Line::from), more)
