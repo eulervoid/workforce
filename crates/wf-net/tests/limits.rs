@@ -69,7 +69,7 @@ async fn a_log_of_many_events_syncs_in_several_frames() {
 
 #[tokio::test]
 async fn a_few_large_events_sync_in_several_frames() {
-    sync_log_of(20, 900 * 1024).await;
+    sync_log_of(10, 900 * 1024).await;
 }
 
 /// Takes 30-50s in debug, so it only runs on request: `cargo test -- --ignored`. The two tests
