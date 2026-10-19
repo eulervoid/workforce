@@ -457,9 +457,7 @@ impl State {
     }
 
     pub fn policy(&self) -> Option<&PolicyDoc> {
-        self.workforce
-            .as_ref()
-            .map(Workforce::running_policy)
+        self.workforce.as_ref().map(Workforce::running_policy)
     }
 
     /// Why this version cannot read the policy the workforce set last, if it cannot. The

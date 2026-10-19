@@ -327,7 +327,8 @@ impl<S: EventStore> Replica<S> {
             .state
             .receive(event.clone(), Trust::Untrusted)
             .map_err(ReceiveError::from)?;
-        self.persist(&event, &received).map_err(ReceiveError::from)?;
+        self.persist(&event, &received)
+            .map_err(ReceiveError::from)?;
         Ok(event)
     }
 
@@ -417,15 +418,13 @@ fn load_snapshot<S: EventStore>(store: &S) -> Result<Option<State>, StoreError> 
     let Some(stored) = store.snapshot()? else {
         return Ok(None);
     };
-    let Ok(((format, parser), rest)) = postcard::take_from_bytes::<(u32, u16)>(&stored) else {
+    let Ok((format, parser, state)) = wf_core::encoding::decode::<(u32, u16, State)>(&stored)
+    else {
         return Ok(None);
     };
     if format != SNAPSHOT_FORMAT || parser != PARSER_VERSION {
         return Ok(None);
     }
-    let Ok(state) = postcard::from_bytes::<State>(rest) else {
-        return Ok(None);
-    };
     let position = state.event_count() as u64;
     if position > store.log_len()? {
         return Ok(None);

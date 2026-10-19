@@ -1,4 +1,4 @@
-//! Networking for workforces: the sync protocol over any byte stream, and (later) the iroh
+//! Networking for workforces: the sync protocol over any byte stream, and the iroh
 //! transport that carries it.
 
 pub mod frame;

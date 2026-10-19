@@ -18,12 +18,10 @@ use wf_core::invite::JoinRefusal;
 
 use crate::frame::{read_frame, write_frame};
 use crate::log::SyncLog;
-use crate::node::{Registry, SourceError, device_key};
+use crate::node::{FAILED, Registry, SourceError, device_key};
 use crate::sync::{IDLE_TIMEOUT, initiate, read_open, respond};
 
 pub const JOIN_ALPN: &[u8] = b"wf/join/1";
-
-const FAILED: u32 = 500;
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct JoinRequest {
