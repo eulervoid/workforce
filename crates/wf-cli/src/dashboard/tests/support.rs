@@ -185,6 +185,7 @@ pub(super) fn snapshot() -> Snapshot {
             InboxEntry::Review {
                 item: archive,
                 commit: None,
+                stale: None,
             },
         ],
         working: vec![coder, parked, reviewer],

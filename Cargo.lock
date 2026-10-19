@@ -6007,6 +6007,7 @@ dependencies = [
  "data-encoding",
  "humantime-serde",
  "iroh-base",
+ "jiff",
  "postcard",
  "proptest",
  "pulldown-cmark",

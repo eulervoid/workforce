@@ -256,6 +256,9 @@ pub struct Daemon {
     cache_usage: Mutex<BTreeMap<WorkforceId, caches::CacheUsage>>,
     /// For the tests: the next write of an event this matches fails once.
     failing_write: Mutex<Option<WriteMatcher>>,
+    /// How many principal reviews the daemon found to merge into the target when it first checked
+    /// them; the tests wait on it to know a check ran.
+    reviews_found_merging: std::sync::atomic::AtomicUsize,
 }
 
 impl Daemon {
@@ -282,10 +285,18 @@ impl Daemon {
             faults: faults::Faults::default(),
             cache_usage: Mutex::new(BTreeMap::new()),
             failing_write: Mutex::new(None),
+            reviews_found_merging: Default::default(),
         });
         daemon.load_stored_workforces().await;
         tokio::spawn(rescan(Arc::downgrade(&daemon)));
         Ok(daemon)
+    }
+
+    /// For the tests: how many principal reviews the daemon has found to merge when first checking
+    /// them.
+    pub fn reviews_found_merging(&self) -> usize {
+        self.reviews_found_merging
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     pub fn device(&self) -> wf_core::identity::DeviceKey {

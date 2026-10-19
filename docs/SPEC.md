@@ -791,6 +791,13 @@ default for tasks).
     them; a resolution the reviewer does not accept gets a new change request.
   * `Escalate` (agents only) inserts a principal step after the current one.
   * A verdict may carry a plain comment as its `because`.
+* Before a review step is offered the daemon builds the merge of the work into the target
+  (`git merge-tree`). Work that conflicts goes back to its open state with a change request from
+  `@daemon` naming the files. If the work merged when offered and stops merging while the principal
+  waits, it stays in the inbox, with the same change request; the entry says since when it is stale
+  (the inbox and the dashboard both show it). When the work merges again the daemon resolves that
+  change request. A daemon that restarted cannot tell which principal reviews it offered, so its
+  first check keeps the conflicting ones in the inbox as stale rather than sending them back.
 * Principal steps wait in `wf inbox` as `principal_review`. `wf item diff` shows the work through git
   (the principal's pager and diff settings apply); `wf item checkout` puts the main checkout on it,
   detached, since the branch is checked out in the item's worktree.

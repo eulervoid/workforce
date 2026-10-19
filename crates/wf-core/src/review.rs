@@ -4,8 +4,11 @@
 use std::collections::BTreeSet;
 
 use crate::crdt::Stamp;
+use crate::event::CommentKind;
+use crate::hlc::Hlc;
 use crate::id::ItemId;
 use crate::identity::{Actor, AgentId, DeviceKey};
+use crate::inbox::Stale;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::name::Requirement;
 use crate::policy::ReviewStep;
@@ -102,6 +105,55 @@ impl State {
             Some(step) => ReviewStatus::Awaiting { step: step.clone() },
             None => ReviewStatus::Approved { commit },
         })
+    }
+
+    /// The review steps on offer: items in `review` with submitted commits whose next step
+    /// has no verdict yet, and no review session is on. These are the items whose branch the
+    /// daemon checks against the target before anyone spends a review on it.
+    pub fn offered_reviews(&self) -> Vec<(ItemId, CommitId, ReviewStep)> {
+        let Some(policy) = self.policy().map(|document| &document.policy) else {
+            return Vec::new();
+        };
+        self.live_items()
+            .filter(|item| item.state(policy) == ItemState::Review)
+            .filter(|item| {
+                !self.sessions_of(item.id()).any(|session| {
+                    session.is_live() && matches!(session.role(), SessionRole::Review { .. })
+                })
+            })
+            .filter_map(|item| {
+                let (Some(commit), _) = self.submission(item.id())? else {
+                    return None;
+                };
+                match self.review_status(item.id())? {
+                    ReviewStatus::Awaiting { step } => Some((item.id(), commit, step)),
+                    ReviewStatus::ChangesRequested
+                    | ReviewStatus::Approved { .. }
+                    | ReviewStatus::Merged { .. } => None,
+                }
+            })
+            .collect()
+    }
+
+    /// When the daemon found, after `submitted`, that the work of `item` no longer merges into
+    /// the target: its latest change request on the item that is still open.
+    pub fn stale_since(&self, item: ItemId, submitted: Hlc) -> Option<Stale> {
+        let ItemEntry::Live(live) = self.item(item)? else {
+            return None;
+        };
+        live.comments()
+            .iter()
+            .filter(|(_, comment)| {
+                comment.kind == CommentKind::ChangeRequest
+                    && comment.is_open()
+                    && matches!(comment.by, Actor::Daemon(_))
+                    && comment.at > submitted
+            })
+            .max_by_key(|(_, comment)| comment.at)
+            .map(|(id, comment)| Stale {
+                comment: *id,
+                since_ms: comment.at.wall_ms(),
+            })
     }
 
     /// Items whose work is ready to merge, approved or needing no review, and waiting in

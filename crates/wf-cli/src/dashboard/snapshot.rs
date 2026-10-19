@@ -7,7 +7,7 @@ use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::identity::{Actor, DeviceKey};
-use wf_core::inbox::{InboxKind, Waiting as InboxWaiting};
+use wf_core::inbox::{InboxKind, Stale, Waiting as InboxWaiting};
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::name::AgentName;
 use wf_core::resolve::MentionTarget;
@@ -135,6 +135,8 @@ pub enum InboxEntry {
     Review {
         item: ItemRefView,
         commit: Option<CommitId>,
+        /// The branch stopped merging into the target after the review was offered.
+        stale: Option<Stale>,
     },
     /// A proposal, a merge or a recovery step: answered with commands for now.
     Notice {
@@ -452,7 +454,11 @@ fn waiting(
                     text,
                 }
             }
-            InboxWaiting::PrincipalReview { commit } => InboxEntry::Review { item, commit },
+            InboxWaiting::PrincipalReview { commit, stale } => InboxEntry::Review {
+                item,
+                commit,
+                stale,
+            },
             InboxWaiting::Proposal | InboxWaiting::Merge { .. } | InboxWaiting::Recovery { .. } => {
                 InboxEntry::Notice {
                     kind: entry.waiting.kind(),
@@ -718,7 +724,7 @@ impl InboxEntry {
     /// The review this is, if it is one: its item, and the commit that was submitted.
     pub fn review(&self) -> Option<(ItemId, Option<CommitId>)> {
         match self {
-            InboxEntry::Review { item, commit } => Some((item.id, *commit)),
+            InboxEntry::Review { item, commit, .. } => Some((item.id, *commit)),
             InboxEntry::Permission { .. }
             | InboxEntry::Blocker { .. }
             | InboxEntry::Notice { .. }

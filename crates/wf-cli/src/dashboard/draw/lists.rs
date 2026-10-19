@@ -343,7 +343,11 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
                 vec![Line::from(more).themed(theme::text_dimmed())],
             )
         }
-        InboxEntry::Review { item, commit } => {
+        InboxEntry::Review {
+            item,
+            commit,
+            stale,
+        } => {
             let mut first = vec![themed("◎ ", theme::attention())];
             first.push(themed(format!("#{}", item.id.short()), theme::id()));
             first.push(Span::raw(" review"));
@@ -351,7 +355,17 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
                 first.push(Span::raw(format!(" {}", commit.short())).themed(theme::text_dimmed()));
             }
             first.push(Span::raw(format!("  {}", item.title)));
-            row.lines(first, row.keys("v").map(Line::from), Vec::new())
+            let more = stale
+                .iter()
+                .map(|stale| {
+                    Line::from(format!(
+                        "  stale since {}: it no longer merges",
+                        wf_core::inbox::timestamp(stale.since_ms)
+                    ))
+                    .themed(theme::text_dimmed())
+                })
+                .collect();
+            row.lines(first, row.keys("v").map(Line::from), more)
         }
         InboxEntry::Notice { item, kind, what } => {
             let mut first = vec![themed("• ", theme::attention())];
