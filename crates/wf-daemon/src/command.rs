@@ -47,8 +47,8 @@ pub enum Confinement<'a> {
         access: Access<'a>,
         sandbox: &'a SandboxConfig,
         environment: &'a EnvironmentConfig,
-        /// Where Fence's settings for the command are written.
-        settings: &'a Path,
+        /// Where Fence's sandbox profile for the command are written.
+        profile_file: &'a Path,
         /// Where the git config the command runs with is written: see [`wf_vcs::config::write_unsigned_global_config`].
         git_config: &'a Path,
     },
@@ -63,14 +63,14 @@ impl<'a> Confinement<'a> {
     pub fn for_checks(
         access: Access<'a>,
         config: &'a MachineConfig,
-        settings: &'a Path,
+        profile_file: &'a Path,
         git_config: &'a Path,
     ) -> Self {
         Confinement::Agents {
             access,
             sandbox: config.check_sandbox(),
             environment: &config.environment,
-            settings,
+            profile_file,
             git_config,
         }
     }
@@ -237,7 +237,7 @@ impl Confinement<'_> {
             access,
             sandbox,
             environment,
-            settings,
+            profile_file,
             git_config: git_config_path,
         } = self
         else {
@@ -253,9 +253,9 @@ impl Confinement<'_> {
                 return Err(CommandError::NoFence);
             }
             SandboxConfig::Fence(config) => {
-                crate::sandbox::wrap(config, access, &command, settings).map_err(|source| {
+                crate::sandbox::wrap(config, access, &command, profile_file).map_err(|source| {
                     CommandError::Io {
-                        path: settings.to_path_buf(),
+                        path: profile_file.to_path_buf(),
                         source,
                     }
                 })?
@@ -302,7 +302,7 @@ mod tests {
     use crate::DataDir;
 
     /// A repository with one commit, whose tree has `file.txt`, and a place for the worktree,
-    /// the logs and the settings.
+    /// the logs and the sandbox profile.
     struct Setup {
         repository: TestRepository,
         tree: GitOid,
@@ -341,7 +341,7 @@ mod tests {
             argv: &[&str],
             timeout: Duration,
         ) -> CommandRun {
-            let (worktree, logs, settings) = (
+            let (worktree, logs, profile_file) = (
                 self.path("check"),
                 self.path("logs"),
                 self.path("check.json"),
@@ -359,7 +359,7 @@ mod tests {
                     },
                     sandbox,
                     environment,
-                    settings: &settings,
+                    profile_file: &profile_file,
                     git_config: &self.path("check.gitconfig"),
                 },
                 logs: &logs,
@@ -530,7 +530,7 @@ git cat-file commit HEAD | grep -q gpgsig"#;
     }
 
     /// iroh watches the routes through an `AF_ROUTE` socket, which Fence denies on macOS whatever
-    /// its settings, so tests of the network need a check sandbox that is off. Once this fails,
+    /// its sandbox profile, so tests of the network need a check sandbox that is off. Once this fails,
     /// Fence allows the socket, and checks can run those tests in it.
     #[cfg(target_os = "macos")]
     #[tokio::test]

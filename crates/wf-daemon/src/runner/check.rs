@@ -154,7 +154,7 @@ impl Daemon {
             blocking(move || GitCli::open(&repository)).await??
         };
         let directory = self.workforce_directory(workforce);
-        let (worktree, settings, git_config, logs) = (
+        let (worktree, profile_file, git_config, logs) = (
             directory.join("check"),
             directory.join("sandbox").join("check.json"),
             directory.join("sandbox").join("check.gitconfig"),
@@ -173,7 +173,7 @@ impl Daemon {
                         machine_config: self.config.machine_config.as_deref(),
                     },
                     &config,
-                    &settings,
+                    &profile_file,
                     &git_config,
                 ),
                 logs: &logs,

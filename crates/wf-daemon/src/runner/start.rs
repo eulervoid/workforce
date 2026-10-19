@@ -28,7 +28,7 @@ pub(super) fn sandboxed(
     run: &Run,
     agent: AcpAgentConfig,
 ) -> Result<AcpAgentConfig, String> {
-    let settings = daemon
+    let profile_file = daemon
         .workforce_directory(run.workforce)
         .join("sandbox")
         .join(format!("{}.json", run.session));
@@ -38,19 +38,19 @@ pub(super) fn sandboxed(
         &run.worktree,
         run.git.repository(),
         Some(&run.branch),
-        &settings,
+        &profile_file,
         agent,
     )
 }
 
-/// `agent` in `sandbox`, working in `worktree`; Fence's settings are written to `settings`.
+/// `agent` in `sandbox`, working in `worktree`; Fence's sandbox profile is written to `profile_file`.
 pub(crate) fn sandboxed_in(
     daemon: &Daemon,
     sandbox: &SandboxConfig,
     worktree: &std::path::Path,
     repository: &std::path::Path,
     branch: Option<&str>,
-    settings: &std::path::Path,
+    profile_file: &std::path::Path,
     agent: AcpAgentConfig,
 ) -> Result<AcpAgentConfig, String> {
     let config = match sandbox {
@@ -68,7 +68,7 @@ pub(crate) fn sandboxed_in(
         data_dir: &daemon.config.data_dir,
         machine_config: daemon.config.machine_config.as_deref(),
     };
-    crate::sandbox::wrap(config, &access, &agent, settings).map_err(|error| error.to_string())
+    crate::sandbox::wrap(config, &access, &agent, profile_file).map_err(|error| error.to_string())
 }
 
 /// The name an agent of `principal` commits under: `@principal/agent`, as it is named everywhere

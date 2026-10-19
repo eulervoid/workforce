@@ -160,7 +160,7 @@ impl WorkforceJudges {
         }
         // Judges read text the requesting agent controls, so they run in the sandbox of their agent,
         // working in their own directory.
-        let settings = workforce
+        let profile_file = workforce
             .join("sandbox")
             .join(format!("judge-{agent}.json"));
         let command = crate::runner::sandboxed_in(
@@ -169,7 +169,7 @@ impl WorkforceJudges {
             &directory,
             &directory,
             None,
-            &settings,
+            &profile_file,
             command,
         )
         .map_err(|problem| format!("the sandbox could not be set up: {problem}"))?;
