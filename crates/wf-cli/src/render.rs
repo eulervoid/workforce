@@ -75,8 +75,6 @@ fn readiness_icon(readiness: Readiness) -> &'static str {
 }
 
 /// `2026-10-09 21:42` in the local time zone; text that is not a timestamp is kept as it is.
-/// Device ids are shown with 8 characters, as before ids got their own short length.
-const DEVICE_ID_LEN: usize = 8;
 
 fn short_time(timestamp: &str) -> String {
     local_time(timestamp, "%Y-%m-%d %H:%M")
