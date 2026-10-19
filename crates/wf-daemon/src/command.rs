@@ -109,6 +109,8 @@ pub enum CommandError {
         #[source]
         source: std::io::Error,
     },
+    #[error("a background task did not finish: {0}")]
+    Task(#[source] tokio::task::JoinError),
 }
 
 impl CommandRunner<'_> {
@@ -125,10 +127,7 @@ impl CommandRunner<'_> {
         let worktree = self.confinement.directory().to_path_buf();
         tokio::task::spawn_blocking(move || git.check_out_tree(&worktree, tree))
             .await
-            .map_err(|error| CommandError::Io {
-                path: self.confinement.directory().to_path_buf(),
-                source: std::io::Error::other(error),
-            })??;
+            .map_err(CommandError::Task)??;
         self.confinement
             .run(name, argv, timeout, &self.log_path(name, tree))
             .await

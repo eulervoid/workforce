@@ -102,6 +102,8 @@ pub enum SessionError {
         #[source]
         source: std::io::Error,
     },
+    #[error("a background task did not finish: {0}")]
+    Task(#[from] tokio::task::JoinError),
 }
 
 impl SessionError {
@@ -138,7 +140,13 @@ impl SessionError {
             | Self::RebaseDirty { .. }
             | Self::MachineConfig(_)
             | Self::SigningKey(_)
-            | Self::Check(CommandError::Empty(_) | CommandError::Vcs(_) | CommandError::NoFence)
+            | Self::Task(_)
+            | Self::Check(
+                CommandError::Empty(_)
+                | CommandError::Vcs(_)
+                | CommandError::NoFence
+                | CommandError::Task(_),
+            )
             | Self::NoFence => false,
         }
     }
@@ -338,10 +346,7 @@ async fn blocking<T: Send + 'static>(
 ) -> Result<T, SessionError> {
     tokio::task::spawn_blocking(job)
         .await
-        .map_err(|error| SessionError::Io {
-            path: PathBuf::new(),
-            source: std::io::Error::other(error),
-        })
+        .map_err(SessionError::Task)
 }
 
 impl Daemon {

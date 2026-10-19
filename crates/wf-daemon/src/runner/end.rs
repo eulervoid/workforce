@@ -143,7 +143,7 @@ impl Daemon {
             note,
         } = state
             .closing(session, &end, submitted)
-            .ok_or(SessionError::NotBound)?;
+            .ok_or(SessionError::UnknownSession(session))?;
         // A submission with open change requests is refused before anything is written.
         state
             .check_policy(&EventBody::SessionEnded(SessionEnded {
