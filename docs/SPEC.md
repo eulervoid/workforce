@@ -88,8 +88,10 @@ wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine,
 **The daemon owns the store when it runs.** redb is single-process. The CLI reads and writes through
 a `Workspace`, which asks the daemon or, when none runs, opens the store itself. In the daemon one
 storage task owns each store and takes writes over a channel. Agents and the dashboard need the
-daemon. The CLI fetches the whole folded `State` per command, the dashboard twice a second. *Planned:*
-when that grows too slow, an `events_since` call with a local fold cache, or a subscription.
+daemon. The CLI fetches the whole folded `State` per command, the dashboard twice a second. The
+daemon answers `Call::Events { from }` with a page of the log from a position, which the dashboard polls
+with. *Planned:* when folding the whole `State` grows too slow, a local fold cache on top of it, or a
+subscription.
 
 ### Files
 
@@ -305,6 +307,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 23 | `Merged` | `item`, `reviewed`, `commit` |
 | 24 | retired | (`Report`, now a comment) |
 | 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
+| 26 | `Commented` | as tag 16, plus `lines: LineAnchor`, the lines of the diff it is about (section 11); a comment without lines is written under tag 16 |
 | 28 | `BoundPolicySet` | `Signed<BoundPolicySet>`: `policy`, and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
 
 * `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.
@@ -518,7 +521,7 @@ threads into decisions is ordinary work in `distill` items, so there is no separ
 A field only of types that list it (by default `task`): `P0` (drop everything), `P1` (this cycle),
 `P2` (normal, the default), `P3` (when nothing else waits). The author check requires one where the
 type has the field and refuses one where it has not; an item whose type gained the field later sorts
-last until one is set. `item list` orders by priority, then age, then id. *Not decided:* inheriting
+last until one is set. `item list` orders by priority, then creation, then id (`--sort`, section 16). *Not decided:* inheriting
 the highest priority of the items an item blocks.
 
 ### Relations
@@ -1263,7 +1266,7 @@ they check.
 wf [--item <item>]                                  # the dashboard at a terminal; piped, the help
 wf init | status [--refold] | stats | members | log [--follow] [--item] | export | import <file>
 wf policy show | edit | apply <file>
-wf item add [--draft] | list | show | edit | link | check | archive | unarchive | diff | checkout | path
+wf item add [--draft] | list [--sort priority|created|merged] [--group-by state|readiness|label|type|lane|priority] | show | edit | link | check | archive | unarchive | diff | checkout | path
 wf item open | draft | done <item>... | cancel <item>       # [--note]
 wf comment <item> [<text>] [--block | --request-change] [--resolve <c>... | --resolve-blockers |
            --resolve-change-requests] [--step <n> [--done]]
@@ -1275,7 +1278,7 @@ wf agent add | list | show | edit | remove;  wf harness models <harness>
 wf session start [--watch] | list [--live] | show | stop | watch | allow | deny
 wf work brief | submit | release                            # agents, inside a session
 wf permissions test [--command <cmd>]
-wf daemon start | stop | restart | status | run
+wf daemon start | stop | restart | status | log | run
 wf sync [--serve] | invite device | join <code> | device list | edit | allowed-signers
 wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
 ```
