@@ -277,10 +277,11 @@ re-encoding, never taken from received bytes (the decoder does not insist on min
 | `CommitId` | `Git(oid)`: variant 0, then the 20-byte oid, length-prefixed |
 | names (`Handle`, `AgentName`, `TypeName`, `LaneName`, `HarnessName`, `Label`, `Requirement`, `ReviewLevelName`, `RecoveryLevelName`, `CommandName`) | strings validated on decode: `a-z 0-9 - _` (labels and requirements also `:` `.`), starting with a letter or digit, at most 64 characters |
 
-**Signatures** have three domains: the device signature covers `wf/event/1\0` + `EventContent`; a
+**Signatures** have four domains: the device signature covers `wf/event/1\0` + `EventContent`; a
 principal signature in an authority body covers `wf/authority/1\0` + `(workforce, statement)`, so a
 statement cannot be replayed into another workforce; an invite proof covers `wf/invite/1\0` +
-`(workforce, invite, device)`. The key types are distinct in code for the same reason.
+`(workforce, invite, device)`; a gossip announcement covers `wf/heads/1\0` + `(topic, digest, time)`
+(section 14). The key types are distinct in code for the same reason.
 
 ### Bodies
 
@@ -1195,8 +1196,12 @@ mDNS for LAN-only use.
   One side writes at a time. A peer that neither sends nor accepts a byte for 30 s ends the session, and `Open`, `Versions`, wants and the join messages have small size limits. An event of more than 1 MiB is refused at admission, so every event fits a frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`; `3`: `Have` is ended by `EndOfHave`), so mismatched peers refuse at the handshake.
 * **Gossip** on a topic derived from the workforce id announces a digest of each device's heads after
   writes and every 60 s; a digest that differs from its own makes a device sync with that peer. One
-  task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes. Presence ("last
-  seen") is kept in memory.
+  task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes.
+  Each announcement carries the device key, the digest and the time (seconds since the epoch),
+  signed by the device key under the `wf/heads/1` domain over the topic, the digest and the time. A
+  receiver drops an announcement whose signature does not hold, whose time is more than 5 minutes
+  from its own, or whose device is not bound in the workforce of that topic; this is why presence
+  ("last seen", kept in memory) can be trusted.
 * **Members only**: each protocol handler rejects endpoints that are not bound devices of a workforce
   the node serves; sync checks again once the workforce is named. Join is open, and checks the invite.
 * **The network is off until it is needed.** A daemon starts no endpoint and no gossip for a
