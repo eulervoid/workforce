@@ -65,13 +65,12 @@ impl State {
         };
         let since = self.moved_on(live, role);
         let counts = |session: &Session| {
-            session.item() == item
-                && session
-                    .ended()
-                    .is_some_and(|ended| since.is_none_or(|since| ended.at() > since))
+            session
+                .ended()
+                .is_some_and(|ended| since.is_none_or(|since| ended.at() > since))
         };
         let mut steps_taken: Vec<(Hlc, Step)> = self
-            .sessions()
+            .sessions_of(item)
             .filter(|session| counts(session))
             .filter_map(|session| {
                 let reason = session.ended()?.reason;

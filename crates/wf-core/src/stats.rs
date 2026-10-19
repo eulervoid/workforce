@@ -121,10 +121,7 @@ impl State {
                 .count(),
             ..ItemStats::default()
         };
-        for session in self
-            .sessions()
-            .filter(|session| session.item() == item.id())
-        {
+        for session in self.sessions_of(item.id()) {
             stats.sessions += 1;
             if let Some(ended) = session.ended()
                 && matches!(ended.reason.outcome(), Outcome::Submitted { .. })
@@ -142,8 +139,8 @@ impl State {
             return None;
         }
         let first_work = self
-            .sessions()
-            .filter(|session| session.item() == item.id() && session.role() == SessionRole::Work)
+            .sessions_of(item.id())
+            .filter(|session| session.role() == SessionRole::Work)
             .map(|session| session.started().hlc.wall_ms())
             .min()?;
         Some(item.state.stamp().hlc.wall_ms().saturating_sub(first_work))

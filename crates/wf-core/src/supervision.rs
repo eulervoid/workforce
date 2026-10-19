@@ -32,9 +32,8 @@ impl State {
     /// Who the open blocker `comment` on `item` waits on: the first principal or agent it mentions,
     /// otherwise a supervisor, otherwise the principal of whoever wrote it.
     pub fn waits_on(&self, comment: &Comment) -> WaitsOn {
-        let resolver = self.resolver();
         let mentioned = comment.tokens.iter().find_map(|token| match token {
-            Token::Mention(mention) => resolver.mention(mention),
+            Token::Mention(mention) => self.mention(mention),
             Token::ItemRef(_) | Token::CommentRef { .. } => None,
         });
         match mentioned {
@@ -91,10 +90,7 @@ impl State {
             else {
                 continue;
             };
-            let sessions: Vec<_> = self
-                .sessions()
-                .filter(|session| session.item() == item.id())
-                .collect();
+            let sessions: Vec<_> = self.sessions_of(item.id()).collect();
             let worked_on = sessions
                 .iter()
                 .any(|session| session.agent() == agent && session.role() == SessionRole::Work);

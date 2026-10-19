@@ -39,8 +39,8 @@ impl State {
     /// What the latest submitted work session of the item handed in, and when it ended: its
     /// commit, or `None` when the branch had no commits, as for a finding that nothing has to change.
     pub fn submission(&self, item: ItemId) -> Option<(Option<CommitId>, Stamp)> {
-        self.sessions()
-            .filter(|session| session.item() == item && session.role() == SessionRole::Work)
+        self.sessions_of(item)
+            .filter(|session| session.role() == SessionRole::Work)
             .filter_map(|session| {
                 let ended = session.ended()?;
                 match ended.reason.outcome() {
@@ -228,14 +228,11 @@ impl State {
                     return None;
                 };
                 let capable = requires.iter().all(|need| offered.contains(need));
-                let did_the_work = self.sessions().any(|session| {
-                    session.item() == item.id()
-                        && session.agent() == agent
-                        && session.role() == SessionRole::Work
-                });
-                let held = self.live_sessions().any(|session| {
-                    session.item() == item.id()
-                        && matches!(session.role(), SessionRole::Review { .. })
+                let did_the_work = self
+                    .sessions_of(item.id())
+                    .any(|session| session.agent() == agent && session.role() == SessionRole::Work);
+                let held = self.sessions_of(item.id()).any(|session| {
+                    session.is_live() && matches!(session.role(), SessionRole::Review { .. })
                 });
                 let allowed = self
                     .recovery(item.id(), SessionRole::Review { commit })
