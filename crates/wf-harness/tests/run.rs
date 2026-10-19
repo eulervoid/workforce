@@ -359,8 +359,7 @@ async fn a_turn_whose_transcript_cannot_be_written_fails() {
 async fn a_turn_of_an_agent_that_says_nothing_fails() {
     let directory = tempfile::tempdir().unwrap();
     let mut conversation = Conversation::start(Launch {
-        agent: agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
-            .env("FAKE_AGENT_SILENT", "1"),
+        agent: scripted_agent(&directory, "silent"),
         opening: Opening::New,
         model: None,
         directory: directory.path().to_path_buf(),
@@ -375,6 +374,17 @@ async fn a_turn_of_an_agent_that_says_nothing_fails() {
         .expect("the turn ends");
     assert!(matches!(reply, Err(Error::Silent(_))), "{reply:?}");
     let _ = conversation.close().await;
+}
+
+/// The fake agent, following `script` instead of its default, which is kept in `directory`.
+fn scripted_agent(
+    directory: &tempfile::TempDir,
+    script: &str,
+) -> agent_client_protocol::AcpAgentConfig {
+    let path = directory.path().join("script.txt");
+    std::fs::write(&path, script).unwrap();
+    agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
+        .env("FAKE_AGENT_SCRIPT", path.to_string_lossy())
 }
 
 /// Answers each permission request after a while, as a principal does.
@@ -413,11 +423,11 @@ async fn waiting_on_a_permission_is_not_silence() {
 
 async fn start_fake_agent(hang: bool) -> (tempfile::TempDir, Conversation) {
     let directory = tempfile::tempdir().unwrap();
-    let mut agent =
-        agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"));
-    if hang {
-        agent = agent.env("FAKE_AGENT_HANG", "1");
-    }
+    let agent = if hang {
+        scripted_agent(&directory, "hang")
+    } else {
+        agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
+    };
     let conversation = Conversation::start(Launch {
         agent,
         opening: Opening::New,
