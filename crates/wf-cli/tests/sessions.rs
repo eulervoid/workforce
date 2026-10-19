@@ -3058,6 +3058,8 @@ wf work submit
             world.wf.run(&["inbox"]).contains("Stale since")
         })
         .await;
+    // The commit is the one that merged before, so only the moved head can have caused this.
+    assert!(!comments_with(&world, &item, "change_request", "conflicts in file.txt").is_empty());
     assert_eq!(world.item(&item)["state"], "review");
     assert!(world.wf.run(&["inbox"]).contains("review of"));
     git_in(repository, &["reset", "--quiet", "--hard", "HEAD~1"]);
