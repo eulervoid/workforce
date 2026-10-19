@@ -8,7 +8,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use n0_future::boxed::BoxFuture;
-use wf_core::diff::{Content, DiffLine, FileChange, FileDiff, Hunk};
 use wf_core::id::{EventId, ItemId, WorkforceId};
 use wf_core::identity::DeviceSigner;
 use wf_core::session::{CommitId, GitOid};
@@ -32,23 +31,7 @@ fn work(head: CommitId) -> Work {
     Work {
         target: "main".into(),
         head,
-        committed: vec![FileDiff {
-            path: "src/lib.rs".into(),
-            change: FileChange::Modified,
-            content: Content::Text(vec![Hunk {
-                heading: "fn main".into(),
-                lines: vec![
-                    DiffLine::Removed {
-                        old: 1,
-                        text: "old".into(),
-                    },
-                    DiffLine::Added {
-                        new: 1,
-                        text: "new".into(),
-                    },
-                ],
-            }]),
-        }],
+        committed: "diff --git a/src/lib.rs b/src/lib.rs\n@@ -1 +1 @@ fn main\n-old\n+new\n".into(),
     }
 }
 
@@ -118,20 +101,8 @@ async fn an_item_without_work_here_is_not_here() {
 #[tokio::test]
 async fn a_large_diff_fits_the_answer() {
     let mut big = work(commit(1));
-    let line = DiffLine::Added {
-        new: 1,
-        text: "x".repeat(100),
-    };
-    big.committed = (0..2_000)
-        .map(|index| FileDiff {
-            path: format!("file{index}"),
-            change: FileChange::Added,
-            content: Content::Text(vec![Hunk {
-                heading: String::new(),
-                lines: vec![line.clone(); 100],
-            }]),
-        })
-        .collect();
+    big.committed = "+".to_string() + &"x".repeat(100) + "\n";
+    big.committed = big.committed.repeat(200_000);
     let source = Worktree(Some(big.clone()));
     assert_eq!(ask(&source, None).await, DiffAnswer::Work(big));
 }
@@ -139,13 +110,7 @@ async fn a_large_diff_fits_the_answer() {
 #[tokio::test]
 async fn work_above_the_largest_answer_is_told_apart_from_a_broken_connection() {
     let mut huge = work(commit(1));
-    huge.committed[0].content = Content::Text(vec![Hunk {
-        heading: String::new(),
-        lines: vec![DiffLine::Added {
-            new: 1,
-            text: "x".repeat(MAX_FRAME_LEN as usize + 1),
-        }],
-    }]);
+    huge.committed = "x".repeat(MAX_FRAME_LEN as usize + 1);
     let source = Worktree(Some(huge));
     assert_eq!(ask(&source, None).await, DiffAnswer::TooLarge);
 }

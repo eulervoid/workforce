@@ -1,7 +1,6 @@
-//! Reads a diff from what `git diff` prints, with the options [`ARGS`] sets so that the user's
+//! A diff as data: the files it changes, their hunks, and each line with its numbers on the sides
+//! it is on. Read from what `git diff` prints, with the options [`ARGS`] sets so that the user's
 //! diff config does not change its form.
-
-use wf_core::diff::{Content, DiffLine, FileChange, FileDiff, Hunk};
 
 /// What `git diff` is asked for, so that its output is the unified form this module reads,
 /// whatever the git config says: no colours, no external diff or text conversion, the usual
@@ -16,6 +15,114 @@ pub(crate) const ARGS: [&str; 8] = [
     "--dst-prefix=b/",
     "--unified=3",
 ];
+
+/// What a diff changes in one file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileDiff {
+    /// The path the file has after the change; before it, for a file deleted.
+    pub path: String,
+    pub change: FileChange,
+    pub content: Content,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FileChange {
+    Added,
+    Deleted,
+    Modified,
+    /// Moved from `from`, maybe changed too.
+    Renamed {
+        from: String,
+    },
+}
+
+/// How a diff shows what changed in a file.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Content {
+    /// The hunks of the lines that changed; none when only the mode or the name did.
+    Text(Vec<Hunk>),
+    /// A file git does not diff as text.
+    Binary,
+}
+
+/// The lines that changed in one place of a file, with the lines around them.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Hunk {
+    /// What git names the place by, after the `@@`: the function or section it is in, often
+    /// empty.
+    pub heading: String,
+    pub lines: Vec<DiffLine>,
+}
+
+/// A line of a hunk, with its number, from 1, on each side it is on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DiffLine {
+    /// The same on both sides.
+    Context {
+        old: u32,
+        new: u32,
+        text: String,
+    },
+    Added {
+        new: u32,
+        text: String,
+    },
+    Removed {
+        old: u32,
+        text: String,
+    },
+}
+
+impl DiffLine {
+    /// The line without its newline.
+    pub fn text(&self) -> &str {
+        match self {
+            DiffLine::Context { text, .. }
+            | DiffLine::Added { text, .. }
+            | DiffLine::Removed { text, .. } => text,
+        }
+    }
+
+    /// Its number before the change; `None` for a line added.
+    pub fn old_number(&self) -> Option<u32> {
+        match self {
+            DiffLine::Context { old, .. } | DiffLine::Removed { old, .. } => Some(*old),
+            DiffLine::Added { .. } => None,
+        }
+    }
+
+    /// Its number after the change; `None` for a line removed.
+    pub fn new_number(&self) -> Option<u32> {
+        match self {
+            DiffLine::Context { new, .. } | DiffLine::Added { new, .. } => Some(*new),
+            DiffLine::Removed { .. } => None,
+        }
+    }
+
+    /// The mark it has in a unified diff: `+`, `-` or a space.
+    pub fn marker(&self) -> char {
+        match self {
+            DiffLine::Context { .. } => ' ',
+            DiffLine::Added { .. } => '+',
+            DiffLine::Removed { .. } => '-',
+        }
+    }
+}
+
+impl FileDiff {
+    /// How many lines it adds and removes.
+    pub fn counts(&self) -> (usize, usize) {
+        let Content::Text(hunks) = &self.content else {
+            return (0, 0);
+        };
+        let lines = hunks.iter().flat_map(|hunk| &hunk.lines);
+        lines.fold((0, 0), |(added, removed), line| match line {
+            DiffLine::Added { .. } => (added + 1, removed),
+            DiffLine::Removed { .. } => (added, removed + 1),
+            DiffLine::Context { .. } => (added, removed),
+        })
+    }
+}
 
 /// Where a hunk is on each side, as its `@@ -12,3 +12,4 @@ heading` line says, and as far as its
 /// lines are read: the number of the next line, and how many are left.

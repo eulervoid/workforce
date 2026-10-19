@@ -1226,7 +1226,7 @@ mDNS for LAN-only use.
   changing and storing nothing. Today that is the live diff of an item, which only the device with
   its branch and worktree has. One `Query::Diff { workforce, item, since }` (the head commit the
   asker last saw), one answer of its own type, here `DiffAnswer`: `Unchanged` (the head is still `since`, so polling is one small
-  frame), `Work` (the target, the head commit and its files against the target), `NotHere` (no
+  frame), `Work` (the target, the head commit and its diff against the target as git prints it), `NotHere` (no
   branch or worktree of the item on this device) or `TooLarge` (the work does not fit the answer,
   told apart from a broken connection). A request is at most 1 KiB, an answer at most
   32 MiB, and a peer silent for 30 s ends the exchange. The uncommitted part (the worktree against

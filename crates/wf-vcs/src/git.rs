@@ -937,7 +937,7 @@ impl GitCli {
 
     /// The same diff as data: the files it changes, their hunks and their lines, whatever the
     /// git config says about how a diff looks.
-    pub fn file_diffs(&self, work: &Work) -> Result<Vec<wf_core::diff::FileDiff>, VcsError> {
+    pub fn file_diffs(&self, work: &Work) -> Result<Vec<diff::FileDiff>, VcsError> {
         let args = diff::ARGS.map(String::from);
         Ok(diff::parse(&self.diff(work, &args)?))
     }
@@ -1398,7 +1398,7 @@ mod tests {
         assert_eq!(files.len(), 1, "{files:?}");
         assert_eq!(files[0].path, "file.txt");
         assert_eq!(files[0].counts(), (2, 1));
-        let wf_core::diff::Content::Text(hunks) = &files[0].content else {
+        let crate::diff::Content::Text(hunks) = &files[0].content else {
             panic!("a text diff: {files:?}");
         };
         let added: Vec<_> = hunks[0]

@@ -8,7 +8,6 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncRead, AsyncWrite};
-use wf_core::diff::FileDiff;
 use wf_core::id::{ItemId, WorkforceId};
 use wf_core::session::CommitId;
 
@@ -60,8 +59,9 @@ pub struct Work {
     pub target: String,
     /// The head commit of the work.
     pub head: CommitId,
-    /// The files of the head commit against the target.
-    pub committed: Vec<FileDiff>,
+    /// The diff of the head commit against the target, as git prints it. The asker parses it
+    /// where it needs files.
+    pub committed: String,
 }
 
 /// What the responder reads the work of an item from, which the daemon implements with git.

@@ -8,9 +8,9 @@ use std::rc::Rc;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
-use wf_core::diff::{Content, DiffLine, FileDiff};
 use wf_core::event::{CommentKind, DiffSide, LineAnchor};
 use wf_core::session::CommitId;
+use wf_vcs::diff::{Content, DiffLine, FileDiff};
 
 use super::app::FirstRow;
 
