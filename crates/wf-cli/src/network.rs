@@ -209,7 +209,7 @@ pub fn invite_device(
         .state()
         .workforce_id()
         .context("the workforce has no genesis")?;
-    let now = crate::workspace::now_ms();
+    let now = wf_store::now_ms();
     let lifetime = u64::try_from(Duration::from(args.expires).as_millis()).unwrap_or(u64::MAX);
     let expires_ms = now.saturating_add(lifetime);
 
@@ -380,13 +380,7 @@ pub fn join(
                 move || async move {
                     storage
                         .with(move |replica| {
-                            replica.bind_device(
-                                &signer,
-                                invite,
-                                proof,
-                                profile,
-                                workspace::now_ms(),
-                            )
+                            replica.bind_device(&signer, invite, proof, profile, wf_store::now_ms())
                         })
                         .await?
                         .map_err(Into::into)

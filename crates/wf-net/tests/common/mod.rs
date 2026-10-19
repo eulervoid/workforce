@@ -58,12 +58,11 @@ impl<S: EventStore + Send> SyncLog for SharedReplica<S> {
         invite: EventId,
         device: DeviceKey,
         proof: Signature,
-        now_ms: u64,
     ) -> Result<Result<(), JoinRefusal>, LogError> {
         Ok(self
             .lock()
             .state()
-            .check_join(&invite, device, &proof, now_ms))
+            .check_join(&invite, device, &proof, wf_store::now_ms()))
     }
 
     async fn fill_history(&self) -> Result<(), LogError> {

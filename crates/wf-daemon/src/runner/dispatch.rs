@@ -133,7 +133,7 @@ async fn dispatch_once(
 
     // An agent whose session would fail for what is wrong with the machine waits until it is
     // fine, or until it is time to try again whether it is.
-    let now_ms = crate::now_ms();
+    let now_ms = wf_store::now_ms();
     let auto_agents = state.auto_agents(device);
     sync_unknown_harnesses(daemon, workforce, &state, device);
     let agents: Vec<_> = auto_agents

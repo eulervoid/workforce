@@ -42,10 +42,6 @@ fn session_actor(state: &State, id: SessionId) -> anyhow::Result<Actor> {
     Ok(folded.actor())
 }
 
-pub fn now_ms() -> u64 {
-    u64::try_from(jiff::Timestamp::now().as_millisecond()).unwrap_or_default()
-}
-
 /// Looks for `.workforce.toml` in `start` and its parents. Inside a session the workforce is the
 /// session's, whatever the file says.
 pub fn find_workforce(start: &Path) -> anyhow::Result<(PathBuf, WorkforceId)> {
@@ -283,7 +279,7 @@ impl Workspace {
     pub fn author(&mut self, body: EventBody) -> anyhow::Result<Event> {
         match &mut self.source {
             Source::Local(replica, signer) => {
-                Ok(replica.author(signer, self.actor.clone(), now_ms(), body)?)
+                Ok(replica.author(signer, self.actor.clone(), wf_store::now_ms(), body)?)
             }
             Source::Daemon { client, state } => {
                 let mut client = client.borrow_mut();

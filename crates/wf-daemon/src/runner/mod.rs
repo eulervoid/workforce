@@ -371,7 +371,7 @@ impl Daemon {
             });
         }
         let signer = self.signer().clone();
-        let now_ms = crate::now_ms();
+        let now_ms = wf_store::now_ms();
         Ok(loaded
             .storage
             .with(move |replica| replica.author(&signer, actor, now_ms, body))

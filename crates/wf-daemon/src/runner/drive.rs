@@ -282,7 +282,7 @@ async fn turns(
         if run.role == SessionRole::Work {
             make_branch_loose(run).await;
         }
-        record.prompted_ms = Some(crate::now_ms());
+        record.prompted_ms = Some(wf_store::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
             return not_kept(&daemon.faults, &run.agent_session, &error);
         }

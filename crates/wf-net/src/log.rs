@@ -42,13 +42,12 @@ pub trait SyncLog: Send + Sync {
     /// Whether `device` is bound to a member of this workforce.
     fn is_bound(&self, device: DeviceKey) -> impl Future<Output = Result<bool, LogError>> + Send;
 
-    /// The handshake rules for letting a device join with an invite.
+    /// The handshake rules for letting a device join with an invite, at the log's current time.
     fn check_join(
         &self,
         invite: EventId,
         device: DeviceKey,
         proof: Signature,
-        now_ms: u64,
     ) -> impl Future<Output = Result<Result<(), JoinRefusal>, LogError>> + Send;
 
     /// Takes in the history of the workforce this one was forked from that parked events are

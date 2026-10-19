@@ -483,10 +483,7 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     EndReason::Interrupted => "was interrupted".into(),
                     EndReason::Diagnosed => "said what went wrong".into(),
                     EndReason::MachineFault(fault) => {
-                        format!(
-                            "was ended by the machine: {}",
-                            fault.label()
-                        )
+                        format!("was ended by the machine: {}", fault.label())
                     }
                 };
                 let summary = match moved_to {
@@ -691,10 +688,9 @@ fn waiting_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<WaitingVi
                     };
                     let mut points_to = Vec::new();
                     if let Some(session) = state.session(last) {
-                        let ended = session.ended().map_or_else(
-                            || "ended".to_string(),
-                            |ended| ended.reason.label(),
-                        );
+                        let ended = session
+                            .ended()
+                            .map_or_else(|| "ended".to_string(), |ended| ended.reason.label());
                         points_to.push(format!("the last, {}: {ended}", session_label(session)));
                         if let Some((_, _, text)) = comments().rev().find(|(entry, _, _)| {
                             matches!(entry.by, Actor::Agent { session, .. } if session == last)

@@ -28,7 +28,7 @@ use self::app::{App, Effect, Wheel};
 use self::diff::{Changes, ItemWork};
 use self::snapshot::{Detail, InView, Snapshot, Sources};
 use crate::transcript::Format;
-use crate::workspace::{self, Workspace};
+use crate::workspace::Workspace;
 use crate::{commands, render, transcript, view};
 
 /// How often the daemon is asked for what is new.
@@ -235,7 +235,7 @@ fn handle(
         Some(Effect::Quit) => Handled::Quit,
         Some(effect) => {
             match act::carry_out(effect, workspace, terminal) {
-                Ok(act::Outcome::Did(what)) => app.did(what, workspace::now_ms()),
+                Ok(act::Outcome::Did(what)) => app.did(what, wf_store::now_ms()),
                 Ok(act::Outcome::Choose(choice)) => app.choose(choice),
                 Ok(act::Outcome::Drafted {
                     item,
@@ -244,7 +244,7 @@ fn handle(
                 }) => app.drafted(item, comment, replacing),
                 Ok(act::Outcome::Reviewed { item, what }) => {
                     app.reviewed(item);
-                    app.did(what, workspace::now_ms());
+                    app.did(what, wf_store::now_ms());
                 }
                 Ok(act::Outcome::ReviewFailed {
                     item,
@@ -252,9 +252,9 @@ fn handle(
                     error,
                 }) => {
                     app.drafts_posted(item, posted);
-                    app.action_failed(&error, workspace::now_ms());
+                    app.action_failed(&error, wf_store::now_ms());
                 }
-                Err(error) => app.action_failed(&error, workspace::now_ms()),
+                Err(error) => app.action_failed(&error, wf_store::now_ms()),
             }
             // Show what the action changed right away.
             match feed.refresh(workspace, app) {
@@ -388,7 +388,7 @@ impl Feed {
             state: workspace.state(),
             events: &self.events,
             own: workspace.device_key(),
-            now_ms: workspace::now_ms(),
+            now_ms: wf_store::now_ms(),
             detail_width: app.detail_width(),
         }
     }

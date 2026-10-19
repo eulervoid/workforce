@@ -165,11 +165,7 @@ fn comments_to_resolve(
         }
         let open = open_of_kind(live, wanted);
         if open.is_empty() {
-            bail!(
-                "#{} has no open {}s",
-                item.short(),
-                wanted.label()
-            );
+            bail!("#{} has no open {}s", item.short(), wanted.label());
         }
         resolves.extend(open);
     }

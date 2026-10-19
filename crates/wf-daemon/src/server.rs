@@ -17,7 +17,7 @@ use crate::peers::{PeerSync, peers_of, sync_all};
 use crate::proto::{
     Call, Credential, EVENTS_PER_PAGE, Hello, HelloReply, PROTOCOL_VERSION, Reply, Request,
 };
-use crate::{Daemon, Loaded, now_ms};
+use crate::{Daemon, Loaded};
 
 pub(crate) async fn handle(daemon: Arc<Daemon>, mut stream: UnixStream) {
     let _ = converse(&daemon, &mut stream).await;
@@ -221,7 +221,7 @@ async fn call(
         }
         Call::Author { body } => {
             let signer = daemon.signer().clone();
-            let now_ms = now_ms();
+            let now_ms = wf_store::now_ms();
             let event = storage
                 .with(move |replica| {
                     let actor = actor(replica.state(), signer.key(), caller)?;

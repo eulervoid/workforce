@@ -64,21 +64,13 @@ impl<L> std::fmt::Debug for JoinHandler<L> {
     }
 }
 
-fn now_ms() -> u64 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |elapsed| {
-            u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
-        })
-}
-
 impl<L: SyncLog + Clone + 'static> JoinHandler<L> {
     async fn decide(&self, request: &JoinRequest, joiner: DeviceKey) -> Result<L, JoinRefusal> {
         let log = self
             .registry
             .get(&request.workforce)
             .ok_or(JoinRefusal::NotServed)?;
-        log.check_join(request.invite, joiner, request.proof, now_ms())
+        log.check_join(request.invite, joiner, request.proof)
             .await
             .map_err(|_| JoinRefusal::NotServed)??;
         if !self.reservations.reserve(request.invite, joiner) {

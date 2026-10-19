@@ -75,7 +75,7 @@ pub(super) fn init(
     let body = EventBody::Genesis(Signed::sign(&principal, None, genesis)?);
     let actor = Actor::Principal(principal.key());
     let genesis_event =
-        wf_core::event::EventBuilder::genesis(device.key(), actor.clone(), workspace::now_ms())
+        wf_core::event::EventBuilder::genesis(device.key(), actor.clone(), wf_store::now_ms())
             .sign(&device, body)?;
     let id: wf_core::id::WorkforceId = genesis_event.id().into();
 
@@ -89,7 +89,7 @@ pub(super) fn init(
     replica.author(
         &device,
         actor.clone(),
-        workspace::now_ms(),
+        wf_store::now_ms(),
         EventBody::DeviceProfile(wf_core::event::DeviceProfile {
             name: args.device_name.unwrap_or_else(crate::network::host_name),
             hardware: crate::network::detect_hardware(),
@@ -107,7 +107,7 @@ pub(super) fn init(
         replica.author(
             &device,
             actor.clone(),
-            workspace::now_ms(),
+            wf_store::now_ms(),
             EventBody::AgentDefined(AgentDefined {
                 name: setup.name.clone(),
                 harness: setup.harness.clone(),
