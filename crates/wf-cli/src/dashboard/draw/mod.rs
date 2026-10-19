@@ -158,6 +158,9 @@ pub(super) const SPINNER: [&str; 10] = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴"
 
 /// Draws the dashboard, and keeps the scroll of the text and of the list to what is shown of them.
 pub fn draw(frame: &mut Frame, app: &mut App) {
+    let area = frame.area();
+    app.resize(area.width, area.height);
+    app.lay_out_transcript();
     let drawn = draw_all(frame, app);
     app.shown(drawn);
 }

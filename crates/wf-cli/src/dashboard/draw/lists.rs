@@ -74,10 +74,15 @@ pub(super) fn draw_list(
     area: Rect,
     spots: &mut Vec<Spot>,
 ) -> (usize, ClickableList) {
-    let list = list_lines(app, area.width);
     let previous = app
         .panes()
         .map_or(ListTop::FollowsSelection(0), |panes| panes.list_top);
+    // Nothing of it fits: it stays where it was.
+    if area.is_empty() {
+        let entries = Vec::new();
+        return (previous.line(), ClickableList { area, entries });
+    }
+    let list = list_lines(app, area.width);
     let top = match previous {
         ListTop::FollowsSelection(previous) => list_top(
             previous,
@@ -160,6 +165,9 @@ pub(super) fn row(area: Rect, index: u16) -> Rect {
 /// Draws `text` dim at the right end of `row`, a space either side of it, over what is there,
 /// with the background of the row's end behind it; returns where it was drawn.
 pub(super) fn draw_indicator(frame: &mut Frame, row: Rect, text: &str, base: Style) -> Rect {
+    if row.is_empty() {
+        return row;
+    }
     let text = format!(" {text} ");
     let width = (textwrap::core::display_width(&text) as u16).min(row.width);
     let area = Rect {

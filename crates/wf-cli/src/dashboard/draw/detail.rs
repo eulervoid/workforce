@@ -15,9 +15,8 @@ use crate::dashboard::hint::{ALLOW, DENY};
 use crate::dashboard::links;
 use crate::dashboard::snapshot::Detail;
 use crate::dashboard::snapshot::{InView, Place, SessionInfo, Waiting};
-use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::theme;
-use crate::transcript::{self, Format, Transcript};
+use crate::transcript::Transcript;
 
 /// Draws a detail under its breadcrumb; returns where it was drawn, and adds its links to
 /// `spots`.
@@ -107,7 +106,6 @@ pub(super) fn draw_session(
     body: Rect,
     spots: &mut Vec<Spot>,
 ) -> Scroll {
-    let mut transcript_lines = app.transcript_lines.borrow_mut();
     let (lines, open): (&[Line<'static>], Vec<Line<'static>>) =
         match (&session.place, app.transcripts.get(&session.id)) {
             (Place::Elsewhere(device), _) => (
@@ -118,21 +116,10 @@ pub(super) fn draw_session(
                 &[],
                 vec![Line::from(" no transcript yet").themed(theme::text_dimmed())],
             ),
-            (Place::Here, Some(transcript)) => {
-                let layout = transcript::Layout::new(
-                    session.agent_name.as_str(),
-                    usize::from(padded(body).width).max(20),
-                    Format::Styled,
-                    app.verbosity,
-                    app.time_zone.clone(),
-                );
-                let laid_out = transcript_lines
-                    .entry(session.id)
-                    .or_insert_with(|| TranscriptLines::new(layout.clone()));
-                laid_out.update(layout, transcript);
-                let open = laid_out.open_lines(transcript);
-                (laid_out.lines(), open)
-            }
+            (Place::Here, Some(transcript)) => match app.transcript_lines.get(&session.id) {
+                Some(laid_out) => (laid_out.lines(), laid_out.open_lines(transcript)),
+                None => (&[], Vec::new()),
+            },
         };
     let asks: Vec<(&str, Request)> = app
         .snapshot

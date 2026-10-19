@@ -3363,6 +3363,47 @@ fn a_draft_under_the_cursor_is_edited_with_e_and_dropped_with_d() {
 }
 
 #[test]
+fn a_terminal_too_short_for_the_body_draws_every_tab_without_panicking() {
+    for height in 1..=9 {
+        for width in [1, 20, 60, 130] {
+            let mut app = app();
+            app.refresh(with_items());
+            for tab in ['1', '2', '3', '4'] {
+                press(&mut app, KeyCode::Char(tab));
+                screen(&mut app, width, height);
+                // The list scrolled away from its first line has indicators above it.
+                app.wheel(0, Wheel::Down);
+                screen(&mut app, width, height);
+                press(&mut app, KeyCode::Enter);
+                screen(&mut app, width, height);
+                press(&mut app, KeyCode::Esc);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_diff_is_let_go_of_once_closed_unless_a_review_is_being_written() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    app.refresh(snapshot());
+    assert!(app.diffs.contains_key(&archive), "open");
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('c'));
+    type_text(&mut app, "Why io?");
+    press(&mut app, KeyCode::Enter);
+    // Moving the selection closes what was opened from the list.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('k'));
+    assert!(app.stack().is_empty());
+    app.refresh(snapshot());
+    assert!(app.diffs.contains_key(&archive), "its draft is kept");
+    app.reviewed(archive);
+    app.refresh(snapshot());
+    assert!(app.diffs.is_empty());
+}
+
+#[test]
 fn a_click_on_drop_in_a_diff_drops_the_draft_instead_of_denying() {
     let mut app = diff_app();
     let archive = ItemId::from_bytes([3; 32]);

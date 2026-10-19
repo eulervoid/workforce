@@ -1,7 +1,6 @@
 //! The state of the dashboard and what keys and the mouse do to it. Pure: what a key asks of the
 //! workforce comes back as an [`Effect`], which the loop carries out.
 
-use std::cell::RefCell;
 use std::collections::HashMap;
 
 use jiff::tz::TimeZone;
@@ -28,12 +27,12 @@ use crate::cli::{ItemGrouping, ItemOrder};
 use crate::dashboard::diff::{Changes, DiffPane, LineComment};
 use crate::dashboard::draw;
 use crate::dashboard::snapshot::{
-    Detail, InView, ItemListing, Listing, MovedBack, SessionInfo, Snapshot, Waiting, WaitingKey,
-    Wanted,
+    Detail, InView, ItemListing, Listing, MovedBack, Place, SessionInfo, Snapshot, Waiting,
+    WaitingKey, Wanted,
 };
 use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::theme;
-use crate::transcript::{Transcript, Verbosity};
+use crate::transcript::{self, Format, Transcript, Verbosity};
 use crate::view::{ItemSummary, SessionStatus};
 
 /// From this width the detail sits right of the list, instead of in its place.
@@ -187,7 +186,7 @@ pub struct App {
     pub transcripts: HashMap<SessionId, Transcript>,
     /// The lines of the transcripts as last drawn, kept so that drawing lays out only what was
     /// added since.
-    pub transcript_lines: RefCell<HashMap<SessionId, TranscriptLines>>,
+    pub transcript_lines: HashMap<SessionId, TranscriptLines>,
     /// The diffs opened, by item, kept with where their cursor is and the comments of the review
     /// being written while other details are on screen.
     pub diffs: HashMap<ItemId, DiffPane>,
@@ -228,7 +227,7 @@ impl App {
         let mut app = Self {
             snapshot: Snapshot::default(),
             transcripts: HashMap::new(),
-            transcript_lines: RefCell::default(),
+            transcript_lines: HashMap::new(),
             diffs: HashMap::new(),
             tab: Tab::Now,
             now: ListTab::default(),
@@ -310,6 +309,26 @@ impl App {
             }
             Tab::Now | Tab::Log => {}
         }
+        self.keep_diffs();
+    }
+
+    /// Lets go of the diffs that are not open in any tab, but for those with a review being
+    /// written: its comments are not to be lost to a closed diff.
+    fn keep_diffs(&mut self) {
+        let stacks = [
+            &self.now.panes.stack,
+            &self.items.list.panes.stack,
+            &self.agents.panes.stack,
+            &self.log.stack,
+        ];
+        self.diffs.retain(|item, pane| {
+            !pane.drafts.is_empty()
+                || stacks.iter().any(|stack| {
+                    stack
+                        .iter()
+                        .any(|opened| opened.detail == Detail::Diff(*item))
+                })
+        });
     }
 
     /// Takes in what the detail on screen shows, when only the detail changed.
@@ -431,8 +450,36 @@ impl App {
         self.transcripts
             .retain(|session, _| sessions.contains(session));
         self.transcript_lines
-            .get_mut()
             .retain(|session, _| sessions.contains(session));
+    }
+
+    /// Lays out the lines of the transcript of the session on screen that drawing has not seen
+    /// yet, for the width of its text.
+    pub fn lay_out_transcript(&mut self) {
+        let Some(Opened {
+            detail: Detail::Session(session),
+            ..
+        }) = self.in_view()
+        else {
+            return;
+        };
+        let Some(InView::Session(info)) = self.in_view_of(&Detail::Session(session)) else {
+            return;
+        };
+        let (Place::Here, Some(transcript)) = (&info.place, self.transcripts.get(&session)) else {
+            return;
+        };
+        let layout = transcript::Layout::new(
+            info.agent_name.as_str(),
+            usize::from(self.detail_width()).max(20),
+            Format::Styled,
+            self.verbosity,
+            self.time_zone.clone(),
+        );
+        self.transcript_lines
+            .entry(session)
+            .or_insert_with(|| TranscriptLines::new(layout.clone()))
+            .update(layout, transcript);
     }
 
     /// Takes in the lines of new events.
