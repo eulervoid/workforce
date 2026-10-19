@@ -97,7 +97,7 @@ fn i_in_a_diff_or_session_opened_from_its_item_goes_back_to_the_item() {
     app.refresh(snapshot);
     press(&mut app, KeyCode::Char('G'));
     press(&mut app, KeyCode::Enter);
-    let item_scroll = app.stack().last().unwrap().scroll.clone();
+    let item_scroll = app.stack().last().unwrap().scroll;
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.path(), [Detail::Item(parse), Detail::Session(coder)]);
     press(&mut app, KeyCode::Char('i'));
