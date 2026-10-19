@@ -18,8 +18,21 @@ pub struct Sandbox {
     pub bin: PathBuf,
 }
 
+/// A session's own identity, which `cargo test` inherits inside a session, must not reach the
+/// sandboxed workforce: `Workspace::open` in the test process reads it as well as `wf` does.
+fn clear_session_identity() {
+    static CLEARED: std::sync::Once = std::sync::Once::new();
+    CLEARED.call_once(|| {
+        for variable in ["WF_SESSION", "WF_SESSION_TOKEN", "WF_WORKFORCE"] {
+            // SAFETY: runs once, before the test that called it spawns or reads anything.
+            unsafe { std::env::remove_var(variable) };
+        }
+    });
+}
+
 impl Sandbox {
     pub fn new() -> Self {
+        clear_session_identity();
         let root = TempDir::new().unwrap();
         let repository = root.path().join("repo");
         let data = root.path().join("data");
@@ -54,7 +67,11 @@ impl Sandbox {
             .env("XDG_RUNTIME_DIR", self.root.path().join("run"))
             .env("XDG_CONFIG_HOME", self.root.path().join("config"))
             .env("PATH", &self.bin)
-            .env("USER", "ada");
+            .env("USER", "ada")
+            // A session's own identity must not leak into the sandboxed workforce.
+            .env_remove("WF_SESSION")
+            .env_remove("WF_SESSION_TOKEN")
+            .env_remove("WF_WORKFORCE");
         command
     }
 
