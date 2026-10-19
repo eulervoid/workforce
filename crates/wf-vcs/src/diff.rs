@@ -2,6 +2,8 @@
 //! it is on. Read from what `git diff` prints, with the options [`ARGS`] sets so that the user's
 //! diff config does not change its form.
 
+use serde::{Deserialize, Serialize};
+
 /// What `git diff` is asked for, so that its output is the unified form this module reads,
 /// whatever the git config says: no colours, no external diff or text conversion, the usual
 /// prefixes, renames found, and paths relative to the top of the repository.
@@ -17,7 +19,7 @@ pub(crate) const ARGS: [&str; 8] = [
 ];
 
 /// What a diff changes in one file.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileDiff {
     /// The path the file has after the change; before it, for a file deleted.
     pub path: String,
@@ -25,7 +27,7 @@ pub struct FileDiff {
     pub content: Content,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum FileChange {
     Added,
     Deleted,
@@ -37,7 +39,7 @@ pub enum FileChange {
 }
 
 /// How a diff shows what changed in a file.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Content {
     /// The hunks of the lines that changed; none when only the mode or the name did.
     Text(Vec<Hunk>),
@@ -46,7 +48,7 @@ pub enum Content {
 }
 
 /// The lines that changed in one place of a file, with the lines around them.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Hunk {
     /// What git names the place by, after the `@@`: the function or section it is in, often
     /// empty.
@@ -55,7 +57,7 @@ pub struct Hunk {
 }
 
 /// A line of a hunk, with its number, from 1, on each side it is on.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum DiffLine {
     /// The same on both sides.
     Context {
