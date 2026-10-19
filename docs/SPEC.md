@@ -578,7 +578,7 @@ A **session** is one attempt by one agent on one device at **exactly one item**,
 | Role | Does | Runs in |
 |---|---|---|
 | `Work` | does the item; holds its claim | the item's worktree, on branch `wf/<item>` |
-| `Review{commit}` | takes one review step on one submitted commit | a detached checkout of that commit |
+| `Review{commit, step}` | takes one review step, by its name, on one submitted commit | a detached checkout of that commit |
 | `Supervise` | answers or escalates blockers waiting on its agent | an empty directory |
 | `Diagnose` | says why earlier attempts failed (a recovery step) | an empty directory |
 
@@ -766,8 +766,11 @@ default level; an item can name another (`--recovery`).
 
 ### Review
 
-Review levels are an ordered list in the policy, least strict first. Each is a sequence of steps; a
-step is an agent matched by capabilities, or the principal. Default levels: `none` (no steps),
+Review levels are an ordered list in the policy, least strict first. Each is a sequence of entries; an
+entry is a step or a list of steps that run at once and must all approve; a step is an agent matched
+by capabilities, with an optional `name` and `instructions` (in the signed policy, never in a file of
+the repository), or the principal. The stored form `{ agent = { requires } }` still reads, as an agent
+step without a name. Steps of one entry with the same name, or both without, are identical. Default levels: `none` (no steps),
 `light`, `standard`, `critical` (an agent, then the principal) and `manual` (the principal alone, the
 default for tasks).
 
@@ -780,7 +783,9 @@ default for tasks).
   the worktree, the agent resolves the files and submits again, and the daemon continues the rebase.
   A session that ends without submitting abandons the rebase. Once the rebase is through, the session
   ends `Submitted` and the item moves to `review`.
-* Steps run in order. The status (`Awaiting{step}`, `ChangesRequested`, `Approved`, `Merged`) is
+* Entries run in order, the steps of one at once. A review session records the name of the step it
+  was started for, and its verdict counts for an open step of that name in the current entry. The
+  status (`Awaiting{steps}` with the steps still open, `ChangesRequested`, `Approved`, `Merged`) is
   computed from the latest submitted commit, the level and the verdicts on that commit. A new
   submission starts the level over; what was reviewed is what gets merged.
 * **Verdicts** (`wf review <item>`; in a review session it also ends the session `Reviewed`) name the
@@ -793,7 +798,9 @@ default for tasks).
   * `RequestChanges` needs an open change request (written first, one comment each) and moves the item
     back to its open state in the same event. The next work session continues the branch and resolves
     them; a resolution the reviewer does not accept gets a new change request.
-  * `Escalate` (agents only) inserts a principal step after the current one.
+  * `Escalate` (agents only) inserts a principal step after the current entry.
+  * `RequestChanges` from any step of an entry sends the work back; a principal's `Approve`
+    satisfies the whole entry.
   * A verdict may carry a plain comment as its `because`.
 * Before a review step is offered the daemon builds the merge of the work into the target
   (`git merge-tree`). Work that conflicts goes back to its open state with a change request from
@@ -1286,7 +1293,7 @@ fold, so it does not depend on arrival order.
 | `default_agent` | the agent `wf session start` uses without `--agent` |
 | `[lanes.<name>]` | the lanes (`default`, `meta`, `supervision` by default) |
 | `[types.<name>]` | `lane`, `fields`, `depends_on`, `states`, `initial`, `review`, `recovery` (section 8) |
-| `[[review]]` | `name`, `steps`: `{ agent = { requires = [...] } }` or `"principal"` (section 10) |
+| `[[review]]` | `name`, `steps`: `{ name, requires, instructions }`, `"principal"` or a list of them that run at once (section 10) |
 | `[[recovery]]` | `name`, `steps`: `"retry"`, `{ agent = { requires = [...] } }` or `"principal"` (section 9) |
 | `[merge]` | `mode = "local"`, `target` (default `main`) |
 | `[[merge.check]]` | `name` (unique), `run` (argv, no shell, not empty), `timeout` (default 30m) |

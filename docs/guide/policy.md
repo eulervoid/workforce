@@ -36,15 +36,15 @@ steps = []
 
 [[review]]
 name = "light"
-steps = [{ agent = { requires = ["review"] } }]
+steps = [{ requires = ["review"] }]
 
 [[review]]
 name = "standard"
-steps = [{ agent = { requires = ["review", "strong-model"] } }]
+steps = [{ requires = ["review", "strong-model"] }]
 
 [[review]]
 name = "critical"
-steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
+steps = [{ requires = ["review", "strong-model"] }, "principal"]
 
 [[review]]
 name = "manual"
@@ -124,9 +124,10 @@ to you.
 
 ## Review levels
 
-A review level is a list of steps the submitted work goes through, in order. A step is an agent that
-has the capabilities it `requires`, or `"principal"`: you. A level without steps is not reviewed: the
-work is merged as soon as the session submits. Levels are listed from least to most strict; an agent
+A review level is a list of entries the submitted work goes through, in order. An entry is a step, or
+a list of steps that run at once and must all approve before the next entry. A step is an agent that
+has the capabilities it `requires`, or `"principal"`: you. A level without entries is not reviewed:
+the work is merged as soon as the session submits. Levels are listed from least to most strict; an agent
 may raise the level of the item it works on, never lower it.
 
 | Level | Steps |
@@ -136,6 +137,34 @@ may raise the level of the item it works on, never lower it.
 | `standard` | an agent with `review` and `strong-model` |
 | `critical` | an agent with `review` and `strong-model`, then you |
 | `manual` | you alone; the default for tasks |
+
+### Reviews at once
+
+For important work you may want several reviews at once, each with its own instructions, such as one
+on style and one on security. An agent step can have a `name` and `instructions`; the agents that take
+them are the regular agents whose capabilities match, and an agent never takes two steps of one entry.
+
+```toml
+[[review]]
+name = "critical"
+steps = [
+  [
+    { name = "style", requires = ["review"], instructions = """
+Naming, idiom and readability against AGENTS.md.
+""" },
+    { name = "security", requires = ["review", "strong-model"], instructions = """
+Injection, sandbox escapes, secrets in logs, unchecked input from peers.
+""" },
+    { requires = ["review", "strong-model"] },
+  ],
+  "principal",
+]
+```
+
+The instructions go into the brief of the reviewer beside the instructions of its agent. They live in
+the policy, which is signed, and never in a file of the repository, which the reviewed work could
+change. Steps of one entry with the same name, or both without one, have to be identical. Any
+reviewer requesting changes sends the work back; your approval satisfies the whole entry.
 
 See [review-and-merge.md](review-and-merge.md) for how a review goes.
 
