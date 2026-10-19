@@ -55,4 +55,5 @@ bytesize.workspace = true
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }
+wf-vcs = { workspace = true, features = ["testing"] }
 insta = { version = "1", features = ["json"] }

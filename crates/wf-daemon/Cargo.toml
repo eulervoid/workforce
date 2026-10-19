@@ -38,5 +38,6 @@ anstyle-git = "1.1.5"
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }
+wf-vcs = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
 globset = "0.4.20"
