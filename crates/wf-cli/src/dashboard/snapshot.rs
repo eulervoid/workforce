@@ -16,6 +16,7 @@ use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
 use wf_daemon::proto::HeldPermission;
 
+use super::app::{Request, Scroll};
 use super::diff::{LineComment, PostedComment};
 use crate::cli::{ItemGrouping, ItemOrder};
 use crate::commands::sorted_views;
@@ -682,5 +683,33 @@ fn first_sentence(text: &str) -> String {
             format!("{}{}", first.to_lowercase(), &sentence[first.len_utf8()..])
         }
         _ => sentence.to_owned(),
+    }
+}
+
+impl Detail {
+    /// Where a detail starts: a transcript at its end, which is what happens now.
+    pub(super) fn start(&self) -> Scroll {
+        match self {
+            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) | Detail::Diff(_) => Scroll::At(0),
+            Detail::Session(_) => Scroll::END,
+        }
+    }
+}
+
+impl Waiting {
+    /// The permission request this is, if it is one.
+    pub fn request(&self) -> Option<Request> {
+        match self {
+            Waiting::Permission {
+                session, since_ms, ..
+            } => Some(Request {
+                session: *session,
+                since_ms: *since_ms,
+            }),
+            Waiting::Blocker { .. }
+            | Waiting::Review { .. }
+            | Waiting::Notice { .. }
+            | Waiting::MachineFault { .. } => None,
+        }
     }
 }
