@@ -1,6 +1,5 @@
 //! `wf daemon`: runs the daemon of this machine, in this terminal or in the background.
 
-use std::io::{BufRead, BufReader};
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -153,7 +152,7 @@ fn spawn_daemon(args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
             bail!(
                 "the daemon stopped as it started ({exit}); the end of {} (all of it in `wf daemon log`):\n{}",
                 log_path.display(),
-                tail(&log_path, 20)
+                wf_daemon::command::tail(&log_path, 20).unwrap_or_default()
             );
         }
         if Instant::now() > deadline {
@@ -309,13 +308,4 @@ fn pid_of(pid: u32) -> anyhow::Result<Pid> {
         .ok()
         .and_then(Pid::from_raw)
         .with_context(|| format!("{pid} is not a process id"))
-}
-
-/// The last `lines` lines of the file at `path`.
-fn tail(path: &Path, lines: usize) -> String {
-    let Ok(file) = std::fs::File::open(path) else {
-        return String::new();
-    };
-    let all: Vec<String> = BufReader::new(file).lines().map_while(Result::ok).collect();
-    all[all.len().saturating_sub(lines)..].join("\n")
 }

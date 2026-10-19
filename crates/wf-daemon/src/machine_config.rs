@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use bytesize::ByteSize;
-use serde::{Deserialize, Deserializer};
+use serde::Deserialize;
 use url::Url;
 use wf_core::autonomy::PermissionMode;
 use wf_core::inbox::InboxKind;
@@ -69,7 +69,7 @@ pub struct MachineConfig {
 #[serde(deny_unknown_fields)]
 pub struct CheckRunConfig {
     /// The longest a check runs here, whatever its timeout in the policy, such as `"10m"`.
-    #[serde(default, deserialize_with = "optional_duration")]
+    #[serde(default, with = "humantime_serde::option")]
     pub max_timeout: Option<Duration>,
     /// The sandbox checks run in, when it is not the one of every agent: `{ kind = "off" }` for
     /// tests that need what Fence cannot allow, such as the route socket iroh opens on macOS.
@@ -324,7 +324,7 @@ pub enum DeciderConfig {
     Hook {
         /// The program and its arguments, run without a shell.
         command: Vec<String>,
-        #[serde(default = "default_timeout", deserialize_with = "duration")]
+        #[serde(default = "default_timeout", with = "humantime_serde")]
         timeout: Duration,
     },
     /// A decision model behind the System One API.
@@ -334,7 +334,7 @@ pub enum DeciderConfig {
         /// The environment variable that holds the API key.
         api_key_env: String,
         question: QuestionConfig,
-        #[serde(default = "default_timeout", deserialize_with = "duration")]
+        #[serde(default = "default_timeout", with = "humantime_serde")]
         timeout: Duration,
     },
     /// An agent of the workforce that the daemon keeps a session of.
@@ -381,17 +381,6 @@ fn default_turns() -> u32 {
 
 fn default_timeout() -> Duration {
     Duration::from_secs(20)
-}
-
-fn duration<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Duration, D::Error> {
-    let text = String::deserialize(deserializer)?;
-    humantime::parse_duration(&text).map_err(serde::de::Error::custom)
-}
-
-fn optional_duration<'de, D: Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<Duration>, D::Error> {
-    duration(deserializer).map(Some)
 }
 
 impl MachineConfig {
