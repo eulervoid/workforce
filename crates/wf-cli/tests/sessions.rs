@@ -5,7 +5,7 @@ use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::Value;
 use wf_core::event::EventBody;
@@ -135,44 +135,64 @@ impl World {
             .run(&["agent", "edit", agent, "--start", "auto", "--lane", lane]);
     }
 
-    /// Waits until `condition` holds.
+    /// `wf session list` with a bound of its own, so a stalled `wf` fails the wait that polls it.
+    fn sessions_within(&self, limit: Duration) -> Vec<Value> {
+        let mut command = self.wf.command(&["session", "list", "--json"]);
+        let output = common::output_within(&mut command, limit);
+        assert!(output.status.success(), "wf session list failed");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        value["data"].as_array().unwrap().clone()
+    }
+
+    /// Waits until `condition` holds. The 20s are for a daemon that starts a session while the rest
+    /// of the suite loads the machine (about 1s alone); the polls and the report count against them.
     async fn wait(&self, what: &str, condition: impl Fn(&World) -> bool) {
-        for _ in 0..400 {
+        let deadline = Instant::now() + WAIT_LIMIT;
+        while Instant::now() < deadline {
             if condition(self) {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        let sessions = self.sessions();
+        let sessions = self.sessions_within(POLL_LIMIT);
         let mut transcripts = String::new();
         for session in &sessions {
-            transcripts.push_str(&self.wf.run(&[
+            let mut command = self.wf.command(&[
                 "session",
                 "watch",
                 short(session["id"].as_str().unwrap()),
                 "--no-follow",
-            ]));
+            ]);
+            let output = common::output_within(&mut command, POLL_LIMIT);
+            transcripts.push_str(&String::from_utf8_lossy(&output.stdout));
         }
-        panic!("timed out waiting for {what}: {sessions:#?} {transcripts}");
+        panic!("timed out after {WAIT_LIMIT:?} waiting for {what}: {sessions:#?} {transcripts}");
     }
 
     /// Waits until the only session is not live any more and returns it.
     async fn ended_session(&self) -> Value {
-        for _ in 0..400 {
-            let sessions = self.sessions();
+        let deadline = Instant::now() + WAIT_LIMIT;
+        let mut sessions = Vec::new();
+        while Instant::now() < deadline {
+            sessions = self.sessions_within(POLL_LIMIT);
             if let Some(session) = sessions.first()
                 && session["status"] != "live"
                 && session["status"] != "parked"
             {
                 // The item moves after the end, so give that a moment.
                 tokio::time::sleep(Duration::from_millis(300)).await;
-                return self.sessions()[0].clone();
+                return self.sessions_within(POLL_LIMIT)[0].clone();
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        panic!("the session did not end: {:?}", self.sessions());
+        panic!("the session did not end within {WAIT_LIMIT:?}: {sessions:?}");
     }
 }
+
+/// How long a wait for the daemon may take.
+const WAIT_LIMIT: Duration = Duration::from_secs(20);
+/// How long one `wf` run inside a wait may take.
+const POLL_LIMIT: Duration = Duration::from_secs(10);
 
 struct WorldSetup {
     wf: Sandbox,
@@ -339,12 +359,12 @@ async fn a_session_shows_the_model_it_runs_with() {
 
 /// Waits a few seconds for `child` to exit and kills it, naming what it was waited for, if it does not.
 async fn wait_for_exit(child: &mut std::process::Child, what: &str) -> std::process::ExitStatus {
-    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    let deadline = Instant::now() + Duration::from_secs(10);
     loop {
         if let Some(status) = child.try_wait().unwrap() {
             return status;
         }
-        if std::time::Instant::now() >= deadline {
+        if Instant::now() >= deadline {
             child.kill().unwrap();
             child.wait().unwrap();
             panic!("timed out after 10s waiting for {what} to exit");
@@ -378,17 +398,27 @@ async fn interrupting_start_watch_detaches_without_stopping_the_agent() {
     );
 
     let output_path = world.wf.root.path().join("watch.txt");
-    let mut watcher = world
-        .wf
-        .command(&[
-            "session",
-            "start",
-            short(&item),
-            "-a",
-            "coder",
-            "--watch",
-            "--raw",
-        ])
+    let mut watcher_command = world.wf.command(&[
+        "session",
+        "start",
+        short(&item),
+        "-a",
+        "coder",
+        "--watch",
+        "--raw",
+    ]);
+    // A watcher started from a background shell inherits SIGINT as ignored and the interrupt would
+    // never end it; the test sets the disposition so that the interrupt means what it says.
+    unsafe {
+        use std::os::unix::process::CommandExt;
+        watcher_command.pre_exec(|| {
+            if libc::signal(libc::SIGINT, libc::SIG_DFL) == libc::SIG_ERR {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut watcher = watcher_command
         .stdout(Stdio::from(std::fs::File::create(&output_path).unwrap()))
         .spawn()
         .unwrap();
