@@ -191,7 +191,7 @@ pub fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, P
 mod tests {
     use wf_core::id::EventId;
     use wf_core::identity::DeviceSigner;
-    use wf_core::testing::golden_state;
+    use wf_core::testing::{golden_forking_state, golden_state};
 
     use super::*;
     use crate::caches::CacheUsage;
@@ -230,7 +230,7 @@ mod tests {
             used_bytes: 10,
             budget_bytes: 20,
         });
-        let state = encoding::encode(&golden_state()).unwrap();
+        let state = encoding::encode(&(golden_state(), golden_forking_state())).unwrap();
         let replies: Vec<(&str, Vec<u8>)> = vec![
             ("State", encoding::encode(&Reply::Ok(state)).unwrap()),
             (
@@ -468,8 +468,8 @@ mod tests {
     const GOLDEN_REPLIES: [(&str, usize, &str); 6] = [
         (
             "State",
-            9257,
-            "auxjzbopdblpqvaxempnrgr45f4ecnjhyhnyigek6yualjr74eiq",
+            23384,
+            "vtqexdqz2vfoa5bqskvtyv4ehu44nn6zvlvqiy57qic7amp4gzxq",
         ),
         (
             "Permissions",
