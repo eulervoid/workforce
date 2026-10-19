@@ -476,19 +476,25 @@ impl Daemon {
     ) -> Result<Arc<Loaded>, DaemonError> {
         let directory = self.config.data_dir.workforce(&id);
         let store = self.config.data_dir.store(&id);
-        tokio::task::spawn_blocking(move || {
-            std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
-                path: directory.clone(),
-                source,
-            })?;
-            drop(RedbStore::open(store)?);
-            Ok::<_, DaemonError>(())
-        })
-        .await
-        .map_err(|error| DaemonError::Io {
-            path: self.config.data_dir.store(&id),
-            source: std::io::Error::other(error),
-        })??;
+        {
+            // Redb allows one open, so the pre-create waits for a concurrent `workforce` open.
+            let _opening = self.opening.lock(id).await;
+            if self.loaded_workforce(&id).is_none() {
+                tokio::task::spawn_blocking(move || {
+                    std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
+                        path: directory.clone(),
+                        source,
+                    })?;
+                    drop(RedbStore::open(store)?);
+                    Ok::<_, DaemonError>(())
+                })
+                .await
+                .map_err(|error| DaemonError::Io {
+                    path: self.config.data_dir.store(&id),
+                    source: std::io::Error::other(error),
+                })??;
+            }
+        }
         self.workforce(id).await
     }
 
