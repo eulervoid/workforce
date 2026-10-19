@@ -1,5 +1,4 @@
 use std::ffi::OsStr;
-use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -34,7 +33,7 @@ fn less_staying_open(less: Option<&str>) -> String {
 /// The revisions `git diff` compares to show `work`.
 fn diff_revisions(work: &Work) -> Vec<String> {
     match work {
-        Work::Unmerged { target, commit } | Work::Working { target, commit, .. } => {
+        Work::Unmerged { target, commit } => {
             vec![format!("refs/heads/{target}...{commit}")]
         }
         Work::Merged { merge, .. } => vec![format!("{merge}^1"), merge.to_string()],
@@ -45,20 +44,17 @@ fn diff_revisions(work: &Work) -> Vec<String> {
 #[derive(Clone, Debug)]
 pub struct GitCli {
     /// The main checkout.
-    repository: PathBuf,
+    pub(crate) repository: PathBuf,
     /// The git directory the checkouts share, where the references are.
-    git_directory: PathBuf,
+    pub(crate) git_directory: PathBuf,
 }
 
 /// `git`, kept from running code that an agent could have put in the repository's config: hooks
 /// and an fsmonitor run outside the agent's sandbox, with the privileges of whoever runs git.
 ///
-/// Nor does git pack the references behind a session's back: `gc --auto` after a porcelain
-/// command such as the rebase at submit would remove the loose file of the branch that a
-/// sandboxed session can only rewrite, not create. The daemon never runs maintenance itself; the
-/// references stay as they are until the principal packs them, and every turn of a work session
-/// starts with `make_branch_loose`.
-fn git() -> Command {
+/// Nor does git run maintenance behind the caller's back (`gc --auto` after a porcelain command):
+/// the daemon never packs or prunes the principal's repository itself.
+pub(crate) fn git() -> Command {
     let mut command = Command::new("git");
     command.args([
         "-c",
@@ -97,17 +93,17 @@ fn inherit_only_stdio(command: &mut Command) {
 }
 
 /// What `git` said, for commands whose failure is an answer and not an error.
-struct Finished {
+pub(crate) struct Finished {
     /// The arguments git ran with, to say which command failed.
     command: String,
-    success: bool,
+    pub(crate) success: bool,
     stdout: String,
     stderr: String,
 }
 
 impl Finished {
     /// The output of git, or the error of the command if it failed.
-    fn ok(self) -> Result<String, VcsError> {
+    pub(crate) fn ok(self) -> Result<String, VcsError> {
         if self.success {
             Ok(self.stdout)
         } else {
@@ -251,7 +247,7 @@ impl GitCli {
     }
 
     /// Runs git in `directory` with `environment` set on top, after clearing a lock left behind.
-    fn run<I, S>(
+    pub(crate) fn run<I, S>(
         &self,
         directory: &Path,
         environment: &[(&str, &str)],
@@ -293,53 +289,7 @@ impl GitCli {
         parse_output(command, text).map(CommitId::Git)
     }
 
-    /// Adds the worktree of `branch` at `path`, unless it is there.
-    fn add_worktree_if_missing(
-        &self,
-        branch: &str,
-        path: &Path,
-        target: &str,
-    ) -> Result<(), VcsError> {
-        self.prune_worktrees()?;
-        let existing = self.worktrees()?;
-        if let Some(worktree) = existing
-            .iter()
-            .find(|worktree| same_path(&worktree.path, path))
-        {
-            return if worktree.branch.as_deref() == Some(branch) {
-                Ok(())
-            } else {
-                Err(VcsError::Git {
-                    command: format!("worktree add {}", path.display()),
-                    stderr: format!("the worktree there does not have `{branch}` checked out"),
-                })
-            };
-        }
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        if self.branch_exists(branch)? {
-            let words = ["worktree", "add"].map(OsStr::new);
-            let args = words
-                .into_iter()
-                .chain([path.as_os_str(), OsStr::new(branch)]);
-            self.run(&self.repository, &[], args)?.ok()?;
-        } else {
-            if !self.branch_exists(target)? {
-                return Err(VcsError::NoBranch(target.into()));
-            }
-            // The full name, or a tag of the same name would be where the branch starts.
-            let start = format!("refs/heads/{target}");
-            let words = ["worktree", "add", "-b", branch].map(OsStr::new);
-            let args = words
-                .into_iter()
-                .chain([path.as_os_str(), OsStr::new(&start)]);
-            self.run(&self.repository, &[], args)?.ok()?;
-        }
-        Ok(())
-    }
-
-    fn branch_exists(&self, branch: &str) -> Result<bool, VcsError> {
+    pub(crate) fn branch_exists(&self, branch: &str) -> Result<bool, VcsError> {
         let reference = format!("refs/heads/{branch}");
         let found = self.run(
             &self.repository,
@@ -523,61 +473,6 @@ fn same_path(left: &Path, right: &Path) -> bool {
 }
 
 impl GitCli {
-    /// Makes sure `branch` is a loose reference, a file under `refs/heads`. Packing the
-    /// references (`git gc`) removes the file and its directories, and a session that may only
-    /// write its own branch's file cannot create them again.
-    pub fn make_branch_loose(&self, branch: &str) -> Result<(), VcsError> {
-        let reference = self.git_directory.join("refs/heads").join(branch);
-        if reference.is_file() {
-            return Ok(());
-        }
-        let commit = self.branch_head(branch)?;
-        if let Some(parent) = reference.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        // `git update-ref` writes nothing when the value is the packed one. This follows git's
-        // own protocol: the lock is created exclusively and renamed onto the reference.
-        let mut lock_name = reference.clone().into_os_string();
-        lock_name.push(".lock");
-        let lock = PathBuf::from(lock_name);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&lock)?;
-        file.write_all(format!("{commit}\n").as_bytes())?;
-        std::fs::rename(&lock, &reference).inspect_err(|_| {
-            let _ = std::fs::remove_file(&lock);
-        })?;
-        Ok(())
-    }
-
-    /// Makes `branch` (created at the tip of `target` when it does not exist yet) and checks it
-    /// out in a worktree at `path`. Does nothing if that worktree is already there.
-    pub fn prepare_worktree(
-        &self,
-        branch: &str,
-        path: &Path,
-        target: &str,
-    ) -> Result<(), VcsError> {
-        self.add_worktree_if_missing(branch, path, target)?;
-        self.make_branch_loose(branch)
-    }
-
-    /// Checks `commit` out, detached, in a new worktree at `path`, for a reviewer.
-    pub fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError> {
-        self.prune_worktrees()?;
-        if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent)?;
-        }
-        let words = ["worktree", "add", "--detach"].map(OsStr::new);
-        let commit = commit.to_string();
-        let args = words
-            .into_iter()
-            .chain([path.as_os_str(), OsStr::new(&commit)]);
-        self.run(&self.repository, &[], args)?.ok()?;
-        Ok(())
-    }
-
     /// Makes the worktree at `path` hold the files of `tree`, a tree or a commit, and nothing
     /// else: tracked files are reset and untracked ones removed. Ignored files, such as build
     /// output, stay. A commit is checked out with HEAD detached at it. The worktree is made,
@@ -615,14 +510,6 @@ impl GitCli {
         Ok(())
     }
 
-    /// Removes the worktree at `path` together with whatever is uncommitted in it.
-    pub fn remove_worktree(&self, path: &Path) -> Result<(), VcsError> {
-        let words = ["worktree", "remove", "--force"].map(OsStr::new);
-        let args = words.into_iter().chain([path.as_os_str()]);
-        self.run(&self.repository, &[], args)?.ok()?;
-        Ok(())
-    }
-
     /// Forgets the worktrees whose directories are gone.
     pub fn prune_worktrees(&self) -> Result<(), VcsError> {
         self.run(&self.repository, &[], ["worktree", "prune"])?
@@ -630,7 +517,11 @@ impl GitCli {
         Ok(())
     }
 
+    /// Deletes `branch`; a branch that is not there is already gone.
     pub fn delete_branch(&self, branch: &str) -> Result<(), VcsError> {
+        if !self.branch_exists(branch)? {
+            return Ok(());
+        }
         self.run(&self.repository, &[], ["branch", "-D", branch])?
             .ok()?;
         Ok(())
@@ -667,24 +558,6 @@ impl GitCli {
         }
     }
 
-    /// The unmerged work on the branch of `item` with the worktree of its session as well, when
-    /// `worktree` is there; otherwise as [`GitCli::branch_work`].
-    pub fn working_branch_work(
-        &self,
-        item: ItemId,
-        target: &str,
-        worktree: &Path,
-    ) -> Result<Option<Work>, VcsError> {
-        Ok(self.branch_work(item, target)?.map(|work| match work {
-            Work::Unmerged { target, commit } if worktree.is_dir() => Work::Working {
-                target,
-                commit,
-                worktree: worktree.to_path_buf(),
-            },
-            Work::Unmerged { .. } | Work::Working { .. } | Work::Merged { .. } => work,
-        }))
-    }
-
     /// How many commits `commit` has that `target` does not.
     pub fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError> {
         let range = format!("refs/heads/{target}..{commit}");
@@ -707,49 +580,6 @@ impl GitCli {
                 .chain(args.iter().map(String::as_str)),
         )?
         .ok()
-    }
-
-    /// What the worktree of `work` has changed since its commit, with `args` added to `git diff`;
-    /// `None` when `work` has no worktree. New files are included, as they would be once added,
-    /// which is done in an index of its own, so the worktree's stays as the agent left it.
-    pub fn uncommitted_diff(
-        &self,
-        work: &Work,
-        args: &[String],
-    ) -> Result<Option<String>, VcsError> {
-        let Work::Working {
-            commit, worktree, ..
-        } = work
-        else {
-            return Ok(None);
-        };
-        let directory = tempfile::tempdir()?;
-        let index = directory.path().join("index");
-        let environment = [(
-            "GIT_INDEX_FILE",
-            index.to_str().ok_or_else(|| VcsError::UnexpectedOutput {
-                command: "tempdir".into(),
-                output: directory.path().display().to_string(),
-            })?,
-        )];
-        let head = commit.to_string();
-        self.run(worktree, &environment, ["read-tree", &head])?
-            .ok()?;
-        self.run(worktree, &environment, ["add", "--all"])?.ok()?;
-        self.run(
-            worktree,
-            &environment,
-            ["diff", "--cached", head.as_str()]
-                .into_iter()
-                .chain(args.iter().map(String::as_str)),
-        )?
-        .ok()
-        .map(Some)
-    }
-
-    /// [`GitCli::uncommitted_diff`] in the form [`diff::parse`] reads.
-    pub fn parseable_uncommitted_diff(&self, work: &Work) -> Result<Option<String>, VcsError> {
-        self.uncommitted_diff(work, &diff::ARGS.map(String::from))
     }
 
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
@@ -892,20 +722,16 @@ impl GitCli {
         parse_output("rev-parse", &output)
     }
 
-    /// Rebases the branch checked out in `worktree` onto `target`, the rewritten commits signed as
-    /// `signing` says and committed by `committer`. A rebase stopped there earlier is not begun
-    /// again: the conflicting files are staged once they are resolved, and the rebase goes on. A
-    /// text file with content from both sides is resolved when no conflict markers are left in
-    /// it; any other conflict (binary, or a file one side deleted) only when the index says so,
-    /// that is, when whoever works there has staged the outcome with `git add` or `git rm`.
-    pub fn rebase(
-        &self,
-        worktree: &Path,
-        target: &str,
-        signing: &CommitSigning,
-        committer: &str,
-    ) -> Result<Rebase, VcsError> {
-        let mut args = signing.arguments();
+    /// Rebases the branch checked out here onto the commit `onto`, the rewritten commits signed as
+    /// the git config says and committed by whoever the environment names. A rebase stopped
+    /// earlier is not begun again: the conflicting files are staged once they are resolved, and
+    /// the rebase goes on. A text file with content from both sides is resolved when no conflict
+    /// markers are left in it; any other conflict (binary, or a file one side deleted) only when
+    /// the index says so, that is, when whoever works there has staged the outcome with `git add`
+    /// or `git rm`.
+    pub fn rebase(&self, onto: CommitId) -> Result<Rebase, VcsError> {
+        let worktree = self.repository.as_path();
+        let mut args = Vec::new();
         match self.stopped_rebase(worktree)? {
             StoppedRebase::Conflict { .. } | StoppedRebase::Stopped => {
                 let unresolved: Vec<String> = self
@@ -921,14 +747,11 @@ impl GitCli {
                 args.extend(["rebase", "--continue"].map(str::to_string));
             }
             StoppedRebase::NotStopped => {
-                if !self.branch_exists(target)? {
-                    return Err(VcsError::NoBranch(target.into()));
-                }
-                let reference = format!("refs/heads/{target}");
+                let onto = onto.to_string();
                 let contained = self.run(
                     worktree,
                     &[],
-                    ["merge-base", "--is-ancestor", reference.as_str(), "HEAD"],
+                    ["merge-base", "--is-ancestor", onto.as_str(), "HEAD"],
                 )?;
                 if contained.success {
                     return Ok(Rebase::UpToDate);
@@ -949,18 +772,14 @@ impl GitCli {
                         "--no-autosquash",
                         "--no-autostash",
                         "--no-update-refs",
-                        &reference,
+                        &onto,
                     ]
                     .map(str::to_string),
                 );
             }
         }
         // The editor would open for the message of a commit whose conflicts were resolved.
-        let rebased = self.run(
-            worktree,
-            &[("GIT_COMMITTER_NAME", committer), ("GIT_EDITOR", "true")],
-            &args,
-        )?;
+        let rebased = self.run(worktree, &[("GIT_EDITOR", "true")], &args)?;
         if rebased.success {
             return Ok(Rebase::Rebased);
         }
@@ -994,22 +813,11 @@ impl GitCli {
         })
     }
 
-    /// Gives up the rebase stopped in `worktree`, if one is, which checks the branch out again
-    /// as it was before the rebase.
-    pub fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError> {
-        if self.stopped_rebase(worktree)? != StoppedRebase::NotStopped {
-            self.run(worktree, &[], ["rebase", "--abort"])?.ok()?;
-        }
-        Ok(())
-    }
-
     /// Whether `work` has commits of its own: merged work has; unmerged work once its commit is
     /// ahead of the target, which a branch just started is not.
     pub fn has_commits(&self, work: &Work) -> Result<bool, VcsError> {
         match work {
-            Work::Unmerged { target, commit } | Work::Working { target, commit, .. } => {
-                Ok(self.commits_ahead(target, *commit)? > 0)
-            }
+            Work::Unmerged { target, commit } => Ok(self.commits_ahead(target, *commit)? > 0),
             Work::Merged { .. } => Ok(true),
         }
     }
@@ -1096,6 +904,7 @@ impl GitCli {
 mod tests {
     use super::*;
     use crate::testing::{TestRepository as TestRepo, git_in};
+    use crate::{Import, ImportMode, agent_branch_head, remove_agent_repository};
 
     /// Merges `commit` into `target` with a merge commit that has both as parents, signed as
     /// `signing` says.
@@ -1180,7 +989,7 @@ mod tests {
     fn opening_from_a_linked_worktree_finds_the_main_checkout() {
         let repo = TestRepo::new();
         let path = repo.worktree_path("wf/k3f9");
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        repo.prepare_worktree("wf/k3f9", &path, "main");
         let opened = GitCli::open(&path).unwrap();
         assert_eq!(
             opened.repository().canonicalize().unwrap(),
@@ -1189,7 +998,7 @@ mod tests {
     }
 
     #[test]
-    fn a_branch_starts_at_the_target_branch_not_at_a_tag_of_its_name() {
+    fn work_starts_at_the_target_branch_not_at_a_tag_of_its_name() {
         let repo = TestRepo::new();
         let first = repo.main();
         repo.write(&repo.directory(), "file.txt", "changed\n");
@@ -1198,9 +1007,8 @@ mod tests {
             &repo.directory(),
             &["-c", "tag.gpgsign=false", "tag", "main", &first.to_string()],
         );
-        let path = repo.worktree_path("wf/k3f9");
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), second);
+        let item = ItemId::from_bytes([7; 32]);
+        assert_eq!(repo.git.starting_commit(item, "main").unwrap(), second);
     }
 
     #[test]
@@ -1226,7 +1034,18 @@ mod tests {
         git_in(&repository, &["commit", "--quiet", "-m", "first"]);
         let git = GitCli::open(&repository).unwrap();
         let path = root.path().join("worktrees/wf/k3f9");
-        git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        git_in(
+            &repository,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "-b",
+                "wf/k3f9",
+                path.to_str().unwrap(),
+                "main",
+            ],
+        );
         // Git lists the git directory as the main worktree when it is not in `.git`.
         let opened = GitCli::open(&path).unwrap();
         assert_eq!(opened.repository(), git.repository());
@@ -1235,22 +1054,6 @@ mod tests {
             opened.git_directory.canonicalize().unwrap(),
             root.path().join("elsewhere").canonicalize().unwrap()
         );
-    }
-
-    #[test]
-    fn packed_refs_are_made_loose_again_so_a_session_can_commit() {
-        let repo = TestRepo::new();
-        let path = repo.worktree_path("wf/k3f9");
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
-        git_in(&repo.directory(), &["pack-refs", "--all"]);
-        let reference = repo.directory().join(".git/refs/heads/wf/k3f9");
-        assert!(!reference.exists());
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
-        assert!(reference.is_file());
-        // What the sandbox allows: the file and its lock, and no new directory.
-        std::fs::remove_dir_all(repo.directory().join(".git/logs")).ok();
-        let commit = repo.work("wf/k3f9", "a.txt", "a");
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), commit);
     }
 
     #[test]
@@ -1263,9 +1066,7 @@ mod tests {
         left_behind
             .set_modified(SystemTime::now() - Duration::from_secs(600))
             .unwrap();
-        repo.git
-            .remove_worktree(&repo.worktree_path("wf/gone"))
-            .unwrap();
+        repo.remove_worktree(&repo.worktree_path("wf/gone"));
         repo.git.delete_branch("wf/gone").unwrap();
         assert!(!lock.exists());
     }
@@ -1280,9 +1081,7 @@ mod tests {
         left_behind
             .set_modified(SystemTime::now() + Duration::from_secs(86_400))
             .unwrap();
-        repo.git
-            .remove_worktree(&repo.worktree_path("wf/gone"))
-            .unwrap();
+        repo.remove_worktree(&repo.worktree_path("wf/gone"));
         repo.git.delete_branch("wf/gone").unwrap();
         assert!(!lock.exists());
     }
@@ -1312,29 +1111,6 @@ mod tests {
             opened.repository().canonicalize().unwrap(),
             repo.directory().canonicalize().unwrap()
         );
-    }
-
-    #[test]
-    fn an_item_gets_a_branch_and_a_worktree_that_later_sessions_continue() {
-        let repo = TestRepo::new();
-        let path = repo.worktree_path("wf/k3f9");
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
-        assert!(path.join("file.txt").is_file());
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), repo.main());
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
-
-        let first = repo.work("wf/k3f9", "a.txt", "a\n");
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), first);
-        assert_eq!(repo.git.commits_ahead("main", first).unwrap(), 1);
-
-        repo.git.remove_worktree(&path).unwrap();
-        assert!(!path.exists());
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
-        assert!(
-            path.join("a.txt").is_file(),
-            "the branch continues where it was"
-        );
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), first);
     }
 
     #[test]
@@ -1371,28 +1147,20 @@ mod tests {
             &["config", "core.fsmonitor", fsmonitor.to_str().unwrap()],
         );
 
-        let path = repo.worktree_path("wf/k3f9");
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        let path = repo.root.path().join("agent");
+        repo.git
+            .create_agent_repository(&path, "wf/k3f9", repo.main())
+            .unwrap();
         assert!(repo.git.is_clean(&path).unwrap());
         assert!(!ran.exists(), "git ran {:?}", std::fs::read_dir(&ran).ok());
-    }
-
-    #[test]
-    fn a_stale_worktree_entry_after_its_directory_is_gone_is_replaced() {
-        let repo = TestRepo::new();
-        let path = repo.worktree_path("k3f9");
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
-        std::fs::remove_dir_all(&path).unwrap();
-        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
-        assert!(path.join("file.txt").is_file());
     }
 
     #[test]
     fn pruning_forgets_the_worktrees_whose_directories_are_gone() {
         let repo = TestRepo::new();
         let (gone, kept) = (repo.worktree_path("gone"), repo.worktree_path("kept"));
-        repo.git.prepare_worktree("wf/gone", &gone, "main").unwrap();
-        repo.git.prepare_worktree("wf/kept", &kept, "main").unwrap();
+        repo.prepare_worktree("wf/gone", &gone, "main");
+        repo.prepare_worktree("wf/kept", &kept, "main");
         std::fs::remove_dir_all(&gone).unwrap();
         repo.git.prune_worktrees().unwrap();
         let listed: Vec<PathBuf> = repo
@@ -1404,71 +1172,6 @@ mod tests {
             .collect();
         assert_eq!(listed.len(), 2, "{listed:?}");
         assert!(listed.iter().any(|path| same_path(path, &kept)));
-    }
-
-    #[test]
-    fn a_worktree_with_another_branch_is_not_taken_for_the_item() {
-        let repo = TestRepo::new();
-        let path = repo.worktree_path("shared");
-        repo.git.prepare_worktree("wf/one", &path, "main").unwrap();
-        assert!(repo.git.prepare_worktree("wf/two", &path, "main").is_err());
-    }
-
-    #[test]
-    fn a_missing_target_is_named() {
-        let repo = TestRepo::new();
-        let error = repo
-            .git
-            .prepare_worktree("wf/x", &repo.worktree_path("x"), "trunk")
-            .unwrap_err();
-        assert!(matches!(error, VcsError::NoBranch(name) if name == "trunk"));
-    }
-
-    #[test]
-    fn the_uncommitted_diff_is_what_the_worktree_changed_since_the_commit_and_leaves_its_index() {
-        let repo = TestRepo::new();
-        let commit = repo.work("wf/k3f9", "file.txt", "one\ntwo\nthree\nfour\n");
-        let worktree = repo.worktree_path("wf/k3f9");
-        repo.write(&worktree, "file.txt", "one\ntwo\nthree\nfour\nfive\n");
-        repo.write(&worktree, "new.txt", "brand new\n");
-        let work = Work::Working {
-            target: "main".into(),
-            commit,
-            worktree: worktree.clone(),
-        };
-        let uncommitted = repo.git.uncommitted_diff(&work, &[]).unwrap().unwrap();
-        assert!(uncommitted.contains("+five"), "{uncommitted}");
-        assert!(uncommitted.contains("+brand new"), "{uncommitted}");
-        assert!(!uncommitted.contains("+four"), "{uncommitted}");
-        let committed = repo.git.diff(&work, &[]).unwrap();
-        assert!(committed.contains("+four"), "{committed}");
-        assert!(!committed.contains("five"), "{committed}");
-        // The agent's index still has nothing staged, and the new file is still untracked.
-        let status = crate::testing::git_in(&worktree, &["status", "--porcelain"]);
-        assert!(status.contains("?? new.txt"), "{status}");
-        assert!(status.contains("M file.txt"), "{status}");
-        assert_eq!(
-            repo.git.uncommitted_diff(&unmerged(commit), &[]).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn the_uncommitted_diff_of_a_working_item_can_be_limited_to_paths() {
-        let repo = TestRepo::new();
-        let commit = repo.work("wf/k3f9", "file.txt", "one\ntwo\nthree\nfour\n");
-        let worktree = repo.worktree_path("wf/k3f9");
-        repo.write(&worktree, "file.txt", "one\ntwo\nthree\nfour\nfive\n");
-        repo.write(&worktree, "new.txt", "brand new\n");
-        let work = Work::Working {
-            target: "main".into(),
-            commit,
-            worktree,
-        };
-        let args = ["--stat".to_string(), "--".into(), "file.txt".into()];
-        let uncommitted = repo.git.uncommitted_diff(&work, &args).unwrap().unwrap();
-        assert!(uncommitted.contains("file.txt"), "{uncommitted}");
-        assert!(!uncommitted.contains("new.txt"), "{uncommitted}");
     }
 
     #[test]
@@ -1565,23 +1268,10 @@ mod tests {
     }
 
     #[test]
-    fn a_reviewer_gets_a_detached_checkout_of_the_commit() {
-        let repo = TestRepo::new();
-        let commit = repo.work("wf/k3f9", "a.txt", "a\n");
-        let path = repo.worktree_path("review");
-        repo.git.detached_worktree(&path, commit).unwrap();
-        assert!(path.join("a.txt").is_file());
-        assert_eq!(git_in(&path, &["rev-parse", "HEAD"]), commit.to_string());
-        repo.git.remove_worktree(&path).unwrap();
-    }
-
-    #[test]
     fn a_branch_can_be_deleted_after_its_worktree_is_gone() {
         let repo = TestRepo::new();
         repo.work("wf/k3f9", "a.txt", "a\n");
-        repo.git
-            .remove_worktree(&repo.worktree_path("wf/k3f9"))
-            .unwrap();
+        repo.remove_worktree(&repo.worktree_path("wf/k3f9"));
         repo.git.delete_branch("wf/k3f9").unwrap();
         assert!(matches!(
             repo.git.branch_head("wf/k3f9"),
@@ -1857,134 +1547,400 @@ mod tests {
         );
     }
 
-    /// Rebases `wf/k3f9` onto `main` as the agent `@ada/coder`, without signing.
-    fn rebase(repo: &TestRepo) -> Rebase {
+    /// The repository of the agent `@ada/coder` on `wf/k3f9`, started at `main`, and git there.
+    fn agent_repository(repo: &TestRepo) -> (PathBuf, GitCli) {
+        let path = repo.root.path().join("agent");
         repo.git
-            .rebase(
-                &repo.worktree_path("wf/k3f9"),
-                "main",
-                &CommitSigning::Unsigned,
-                "@ada/coder",
-            )
+            .create_agent_repository(&path, "wf/k3f9", repo.main())
+            .unwrap();
+        for (key, value) in [
+            ("user.name", "@ada/coder"),
+            ("user.email", "ada@example.com"),
+            ("commit.gpgsign", "false"),
+        ] {
+            git_in(&path, &["config", key, value]);
+        }
+        (path.clone(), GitCli::open(&path).unwrap())
+    }
+
+    /// Commits `name` with `text` in the agent's repository at `path`.
+    fn commit_in(path: &Path, name: &str, text: &str) -> CommitId {
+        std::fs::write(path.join(name), text).unwrap();
+        git_in(path, &["add", "--all"]);
+        git_in(
+            path,
+            &["commit", "--quiet", "-m", &format!("change {name}")],
+        );
+        let oid: GitOid = git_in(path, &["rev-parse", "HEAD"]).parse().unwrap();
+        CommitId::Git(oid)
+    }
+
+    /// Commits to `main` in the principal's checkout.
+    fn commit_to_main(repo: &TestRepo, name: &str, text: &str) -> CommitId {
+        let main = repo.directory();
+        repo.write(&main, name, text);
+        repo.commit(&main, &format!("main: {name}"))
+    }
+
+    /// How many commits the agent's branch has on top of `onto`.
+    fn ahead(path: &Path, onto: CommitId) -> usize {
+        git_in(path, &["rev-list", "--count", &format!("{onto}..HEAD")])
+            .parse()
             .unwrap()
+    }
+
+    #[test]
+    fn an_agent_repository_starts_at_the_commit_with_the_principals_objects_as_alternates() {
+        let repo = TestRepo::new();
+        let (path, agent) = agent_repository(&repo);
+        assert!(path.join("file.txt").is_file());
+        assert_eq!(agent.branch_head("wf/k3f9").unwrap(), repo.main());
+        assert_eq!(
+            git_in(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "wf/k3f9"
+        );
+        assert_eq!(git_in(&path, &["remote"]), "");
+        let alternates =
+            std::fs::read_to_string(path.join(".git/objects/info/alternates")).unwrap();
+        assert_eq!(
+            Path::new(alternates.trim()).canonicalize().unwrap(),
+            repo.directory()
+                .join(".git/objects")
+                .canonicalize()
+                .unwrap()
+        );
+        assert_eq!(
+            git_in(&path, &["count-objects", "-v"]).lines().next(),
+            Some("count: 0")
+        );
+    }
+
+    #[test]
+    fn creating_the_agent_repository_again_keeps_what_is_there() {
+        let repo = TestRepo::new();
+        let (path, _) = agent_repository(&repo);
+        let work = commit_in(&path, "a.txt", "a\n");
+        repo.git
+            .create_agent_repository(&path, "wf/k3f9", repo.main())
+            .unwrap();
+        assert_eq!(git_in(&path, &["rev-parse", "HEAD"]), work.to_string());
+    }
+
+    #[test]
+    fn work_continues_at_the_branch_of_the_item_when_the_principal_has_it() {
+        let repo = TestRepo::new();
+        let item = ItemId::from_bytes([7; 32]);
+        assert_eq!(repo.git.starting_commit(item, "main").unwrap(), repo.main());
+        let work = repo.work(&item_branch(item), "a.txt", "a\n");
+        assert_eq!(repo.git.starting_commit(item, "main").unwrap(), work);
+        assert!(matches!(
+            repo.git.starting_commit(item, "trunk"),
+            Ok(found) if found == work
+        ));
+        let other = ItemId::from_bytes([8; 32]);
+        assert!(matches!(
+            repo.git.starting_commit(other, "trunk"),
+            Err(VcsError::NoBranch(name)) if name == "trunk"
+        ));
+    }
+
+    #[test]
+    fn a_reviewer_gets_a_repository_with_the_commit_checked_out_detached() {
+        let repo = TestRepo::new();
+        let commit = repo.work("wf/k3f9", "a.txt", "a\n");
+        let path = repo.root.path().join("review");
+        repo.git.create_review_repository(&path, commit).unwrap();
+        assert!(path.join("a.txt").is_file());
+        assert_eq!(git_in(&path, &["rev-parse", "HEAD"]), commit.to_string());
+        assert_eq!(
+            git_in(&path, &["rev-parse", "--abbrev-ref", "HEAD"]),
+            "HEAD"
+        );
+        assert_eq!(git_in(&path, &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn the_head_of_the_agents_branch_is_read_from_a_loose_or_a_packed_reference() {
+        let repo = TestRepo::new();
+        let (path, _) = agent_repository(&repo);
+        let work = commit_in(&path, "a.txt", "a\n");
+        assert_eq!(agent_branch_head(&path, "wf/k3f9"), Some(work));
+        git_in(&path, &["pack-refs", "--all"]);
+        assert!(!path.join(".git/refs/heads/wf/k3f9").exists());
+        assert_eq!(agent_branch_head(&path, "wf/k3f9"), Some(work));
+        assert_eq!(agent_branch_head(&path, "wf/other"), None);
+    }
+
+    #[test]
+    fn a_reference_that_is_not_a_commit_id_or_is_a_link_names_no_head() {
+        let repo = TestRepo::new();
+        let (path, _) = agent_repository(&repo);
+        let reference = path.join(".git/refs/heads/wf/k3f9");
+        std::fs::write(&reference, "ref: refs/heads/main\n").unwrap();
+        assert_eq!(agent_branch_head(&path, "wf/k3f9"), None);
+        std::fs::remove_file(&reference).unwrap();
+        let elsewhere = repo.root.path().join("elsewhere");
+        std::fs::write(&elsewhere, format!("{}\n", repo.main())).unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &reference).unwrap();
+        assert_eq!(agent_branch_head(&path, "wf/k3f9"), None);
+    }
+
+    #[test]
+    fn imported_commits_are_in_the_principals_repository_without_the_agents() {
+        let repo = TestRepo::new();
+        let item = ItemId::from_bytes([7; 32]);
+        let path = repo.root.path().join("agent");
+        let branch = item_branch(item);
+        repo.git
+            .create_agent_repository(&path, &branch, repo.main())
+            .unwrap();
+        git_in(&path, &["config", "user.name", "Ada"]);
+        git_in(&path, &["config", "user.email", "ada@example.com"]);
+        git_in(&path, &["config", "commit.gpgsign", "false"]);
+        commit_in(&path, "a.txt", "a\n");
+        let head = commit_in(&path, "b.txt", "b\n");
+        assert!(repo.git.branch_head(&branch).is_err());
+
+        let imported = repo
+            .git
+            .import_commits(&path, item, "main", ImportMode::Submission)
+            .unwrap();
+        assert_eq!(imported, Import::Imported { commit: head });
+        assert_eq!(repo.git.branch_head(&branch).unwrap(), head);
+        assert_eq!(repo.git.commits_ahead("main", head).unwrap(), 2);
+
+        // Without the agent's repository the commits and their files are all there.
+        std::fs::remove_dir_all(&path).unwrap();
+        git_in(&repo.directory(), &["fsck", "--strict", "--no-dangling"]);
+        assert_eq!(
+            git_in(&repo.directory(), &["show", &format!("{head}:b.txt")]),
+            "b"
+        );
+        assert_eq!(
+            git_in(&repo.directory(), &["show", &format!("{head}~1:a.txt")]),
+            "a"
+        );
+    }
+
+    #[test]
+    fn a_submission_must_contain_the_target_and_is_otherwise_left_out() {
+        let repo = TestRepo::new();
+        let item = ItemId::from_bytes([7; 32]);
+        let path = repo.root.path().join("agent");
+        let branch = item_branch(item);
+        repo.git
+            .create_agent_repository(&path, &branch, repo.main())
+            .unwrap();
+        git_in(&path, &["config", "user.name", "Ada"]);
+        git_in(&path, &["config", "user.email", "ada@example.com"]);
+        git_in(&path, &["config", "commit.gpgsign", "false"]);
+        let head = commit_in(&path, "a.txt", "a\n");
+        commit_to_main(&repo, "b.txt", "b\n");
+
+        let behind = repo
+            .git
+            .import_commits(&path, item, "main", ImportMode::Submission)
+            .unwrap();
+        assert_eq!(behind, Import::BehindTarget);
+        assert!(repo.git.branch_head(&branch).is_err());
+
+        // Work in progress is copied all the same, for the principal to look at.
+        let progress = repo
+            .git
+            .import_commits(&path, item, "main", ImportMode::InProgress)
+            .unwrap();
+        assert_eq!(progress, Import::Imported { commit: head });
+    }
+
+    #[test]
+    fn a_repository_without_commits_of_the_item_imports_nothing() {
+        let repo = TestRepo::new();
+        let item = ItemId::from_bytes([7; 32]);
+        let path = repo.root.path().join("agent");
+        repo.git
+            .create_agent_repository(&path, "wf/other", repo.main())
+            .unwrap();
+        assert_eq!(
+            repo.git
+                .import_commits(&path, item, "main", ImportMode::Submission)
+                .unwrap(),
+            Import::NoCommits
+        );
+    }
+
+    #[test]
+    fn importing_runs_no_hook_filter_or_program_of_the_agents_config() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let repo = TestRepo::new();
+        let item = ItemId::from_bytes([7; 32]);
+        let path = repo.root.path().join("agent");
+        let branch = item_branch(item);
+        repo.git
+            .create_agent_repository(&path, &branch, repo.main())
+            .unwrap();
+        git_in(&path, &["config", "user.name", "Ada"]);
+        git_in(&path, &["config", "user.email", "ada@example.com"]);
+        git_in(&path, &["config", "commit.gpgsign", "false"]);
+        commit_in(&path, "a.txt", "a\n");
+        let ran = repo.root.path().join("ran");
+        let script = repo.root.path().join("script");
+        std::fs::write(&script, format!("#!/bin/sh\ntouch '{}'\n", ran.display())).unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let script = script.to_str().unwrap();
+        for key in [
+            "core.fsmonitor",
+            "core.hooksPath",
+            "core.pager",
+            "core.sshCommand",
+            "uploadpack.packObjectsHook",
+            "gc.auto",
+        ] {
+            git_in(&path, &["config", key, script]);
+        }
+        git_in(&path, &["config", "alias.rev-list", &format!("!{script}")]);
+        let imported = repo
+            .git
+            .import_commits(&path, item, "main", ImportMode::Submission)
+            .unwrap();
+        assert!(matches!(imported, Import::Imported { .. }));
+        assert!(!ran.exists());
+    }
+
+    #[test]
+    fn an_edited_alternates_file_adds_no_object_that_the_commit_does_not_reach() {
+        let repo = TestRepo::new();
+        let item = ItemId::from_bytes([7; 32]);
+        let path = repo.root.path().join("agent");
+        let branch = item_branch(item);
+        repo.git
+            .create_agent_repository(&path, &branch, repo.main())
+            .unwrap();
+        git_in(&path, &["config", "user.name", "Ada"]);
+        git_in(&path, &["config", "user.email", "ada@example.com"]);
+        git_in(&path, &["config", "commit.gpgsign", "false"]);
+        // An object in some repository the alternates file points at, which no commit reaches.
+        let stranger = repo.root.path().join("stranger");
+        std::fs::create_dir(&stranger).unwrap();
+        crate::testing::init_repository(&stranger);
+        let unreachable = git_in(&stranger, &["hash-object", "-w", "--stdin"]);
+        let _ = unreachable;
+        let alternates = path.join(".git/objects/info/alternates");
+        let mut text = std::fs::read_to_string(&alternates).unwrap();
+        text.push_str(&format!("{}\n", stranger.join(".git/objects").display()));
+        std::fs::write(&alternates, text).unwrap();
+        let head = commit_in(&path, "a.txt", "a\n");
+
+        repo.git
+            .import_commits(&path, item, "main", ImportMode::Submission)
+            .unwrap();
+        assert_eq!(repo.git.branch_head(&branch).unwrap(), head);
+        let packed = git_in(&repo.directory(), &["count-objects", "-v"]);
+        assert!(
+            packed.contains("in-pack: 3") || packed.contains("in-pack: 0"),
+            "{packed}"
+        );
+    }
+
+    #[test]
+    fn removing_the_agent_repository_keeps_the_imported_commits_and_ignores_a_missing_one() {
+        let repo = TestRepo::new();
+        let (path, _) = agent_repository(&repo);
+        remove_agent_repository(&path).unwrap();
+        assert!(!path.exists());
+        remove_agent_repository(&path).unwrap();
     }
 
     #[test]
     fn the_branch_is_rebased_onto_the_target_once() {
         let repo = TestRepo::new();
-        repo.work("wf/k3f9", "a.txt", "a\n");
-        repo.work("wf/k3f9", "c.txt", "c\n");
-        let main = repo.directory();
-        repo.write(&main, "b.txt", "b\n");
-        let target = repo.commit(&main, "add b");
-        let worktree = repo.worktree_path("wf/k3f9");
+        let (worktree, agent) = agent_repository(&repo);
+        commit_in(&worktree, "a.txt", "a\n");
+        commit_in(&worktree, "c.txt", "c\n");
+        let target = commit_to_main(&repo, "b.txt", "b\n");
 
-        assert_eq!(rebase(&repo), Rebase::Rebased);
-        let head = repo.git.branch_head("wf/k3f9").unwrap();
-        assert_eq!(repo.git.commits_ahead("main", head).unwrap(), 2);
-        let first = git_in(&worktree, &["rev-parse", "HEAD~1"]);
+        assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
+        assert_eq!(ahead(&worktree, target), 2);
         assert_eq!(
-            repo.parents(repo.commit_id(&first, &repo.directory())),
-            [target.to_string()]
+            git_in(&worktree, &["rev-parse", "HEAD~2"]),
+            target.to_string()
         );
         assert_eq!(
-            git_in(&worktree, &["log", "-2", "--format=%s %cn"]),
-            "change c.txt @ada/coder\nchange a.txt @ada/coder"
+            git_in(&worktree, &["log", "-2", "--format=%s"]),
+            "change c.txt\nchange a.txt"
         );
         assert!(worktree.join("b.txt").is_file());
 
-        assert_eq!(rebase(&repo), Rebase::UpToDate);
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), head);
+        let head = agent.branch_head("wf/k3f9").unwrap();
+        assert_eq!(agent.rebase(target).unwrap(), Rebase::UpToDate);
+        assert_eq!(agent.branch_head("wf/k3f9").unwrap(), head);
     }
 
     #[test]
     fn a_rebase_stops_at_each_conflict_until_the_files_are_resolved() {
         let repo = TestRepo::new();
-        let worktree = repo.worktree_path("wf/k3f9");
-        repo.work("wf/k3f9", "file.txt", "one\nTWO\nthree\n");
-        let work = repo.work("wf/k3f9", "file.txt", "one\nTWO\nTHREE\n");
-        let main = repo.directory();
-        repo.write(&main, "file.txt", "one\n2\n3\n");
-        let target = repo.commit(&main, "conflicting change");
+        let (worktree, agent) = agent_repository(&repo);
+        commit_in(&worktree, "file.txt", "one\nTWO\nthree\n");
+        let work = commit_in(&worktree, "file.txt", "one\nTWO\nTHREE\n");
+        let target = commit_to_main(&repo, "file.txt", "one\n2\n3\n");
         let conflict = Rebase::Conflict {
             paths: vec!["file.txt".into()],
         };
 
-        assert_eq!(rebase(&repo), conflict);
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
+        assert_eq!(agent.rebase(target).unwrap(), conflict);
         assert_eq!(
-            repo.git.stopped_rebase(&worktree).unwrap(),
+            agent.stopped_rebase(&worktree).unwrap(),
             StoppedRebase::Conflict {
                 paths: vec!["file.txt".to_string()]
             }
         );
         // Nothing resolved yet: the same files are named again.
-        assert_eq!(rebase(&repo), conflict);
+        assert_eq!(agent.rebase(target).unwrap(), conflict);
         // Given up, the branch is checked out as it was; the next rebase stops at the same place.
-        repo.git.abort_rebase(&worktree).unwrap();
+        git_in(&worktree, &["rebase", "--abort"]);
         assert_eq!(
-            repo.git.stopped_rebase(&worktree).unwrap(),
+            agent.stopped_rebase(&worktree).unwrap(),
             StoppedRebase::NotStopped
         );
         assert_eq!(git_in(&worktree, &["rev-parse", "HEAD"]), work.to_string());
-        repo.git.abort_rebase(&worktree).unwrap();
-        assert_eq!(rebase(&repo), conflict);
+        assert_eq!(agent.rebase(target).unwrap(), conflict);
 
         // The first commit is resolved; the second conflicts in turn.
         repo.write(&worktree, "file.txt", "one\nTWO\n3\n");
-        assert_eq!(rebase(&repo), conflict);
+        assert_eq!(agent.rebase(target).unwrap(), conflict);
         repo.write(&worktree, "file.txt", "one\nTWO\nTHREE\n");
-        assert_eq!(rebase(&repo), Rebase::Rebased);
+        assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
         assert_eq!(
-            repo.git.stopped_rebase(&worktree).unwrap(),
+            agent.stopped_rebase(&worktree).unwrap(),
             StoppedRebase::NotStopped
         );
-        let head = repo.git.branch_head("wf/k3f9").unwrap();
-        assert_eq!(repo.git.commits_ahead("main", head).unwrap(), 2);
-        assert_eq!(
-            git_in(&worktree, &["merge-base", "main", "HEAD"]),
-            target.to_string()
-        );
+        assert_eq!(ahead(&worktree, target), 2);
         assert_eq!(
             std::fs::read_to_string(worktree.join("file.txt")).unwrap(),
             "one\nTWO\nTHREE\n"
         );
     }
 
-    /// Leaves `wf/k3f9` rebased onto a `main` that conflicts in `name`, which is binary or deleted.
-    fn conflict_in(repo: &TestRepo, name: &str, work: &[u8], main_side: Option<&[u8]>) {
-        let base = repo.directory();
-        std::fs::write(base.join(name), b"\0base").unwrap();
-        repo.commit(&base, "add the file");
-        let worktree = repo.worktree_path("wf/k3f9");
-        repo.git
-            .prepare_worktree("wf/k3f9", &worktree, "main")
-            .unwrap();
-        std::fs::write(worktree.join(name), work).unwrap();
-        git_in(&worktree, &["add", name]);
-        git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
-        match main_side {
-            Some(bytes) => std::fs::write(base.join(name), bytes).unwrap(),
-            None => std::fs::remove_file(base.join(name)).unwrap(),
-        }
-        git_in(&base, &["add", "-A", name]);
-        git_in(&base, &["commit", "--quiet", "-m", "main side"]);
-    }
-
     #[test]
     fn a_binary_conflict_stays_a_conflict_until_it_is_staged() {
         let repo = TestRepo::new();
-        conflict_in(&repo, "img.bin", b"\0work", Some(b"\0main"));
-        let worktree = repo.worktree_path("wf/k3f9");
+        std::fs::write(repo.directory().join("img.bin"), b"\0base").unwrap();
+        repo.commit(&repo.directory(), "add the file");
+        let (worktree, agent) = agent_repository(&repo);
+        std::fs::write(worktree.join("img.bin"), b"\0work").unwrap();
+        git_in(&worktree, &["add", "img.bin"]);
+        git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
+        std::fs::write(repo.directory().join("img.bin"), b"\0main").unwrap();
+        let target = repo.commit(&repo.directory(), "main side");
         let conflict = Rebase::Conflict {
             paths: vec!["img.bin".into()],
         };
-        assert_eq!(rebase(&repo), conflict);
+        assert_eq!(agent.rebase(target).unwrap(), conflict);
         // The worktree holds the target's version without markers; that is not a resolution.
-        assert_eq!(rebase(&repo), conflict);
+        assert_eq!(agent.rebase(target).unwrap(), conflict);
         std::fs::write(worktree.join("img.bin"), b"\0work").unwrap();
         git_in(&worktree, &["add", "img.bin"]);
-        assert_eq!(rebase(&repo), Rebase::Rebased);
+        assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
         assert_eq!(std::fs::read(worktree.join("img.bin")).unwrap(), b"\0work");
     }
 
@@ -1992,44 +1948,48 @@ mod tests {
     fn a_modify_delete_conflict_stays_a_conflict_until_it_is_staged() {
         for deleted_by_main in [true, false] {
             let repo = TestRepo::new();
-            if deleted_by_main {
-                conflict_in(&repo, "gone.txt", b"work\n", None);
+            let base = repo.directory();
+            std::fs::write(base.join("gone.txt"), "base\n").unwrap();
+            repo.commit(&base, "add the file");
+            let (worktree, agent) = agent_repository(&repo);
+            let target = if deleted_by_main {
+                std::fs::write(worktree.join("gone.txt"), "work\n").unwrap();
+                git_in(&worktree, &["add", "gone.txt"]);
+                git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
+                git_in(&base, &["rm", "--quiet", "gone.txt"]);
+                git_in(&base, &["commit", "--quiet", "-m", "main side"]);
+                repo.main()
             } else {
                 // The branch deletes the file the target modified.
-                let base = repo.directory();
-                std::fs::write(base.join("gone.txt"), "base\n").unwrap();
-                repo.commit(&base, "add the file");
-                let worktree = repo.worktree_path("wf/k3f9");
-                repo.git
-                    .prepare_worktree("wf/k3f9", &worktree, "main")
-                    .unwrap();
                 git_in(&worktree, &["rm", "--quiet", "gone.txt"]);
                 git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
                 std::fs::write(base.join("gone.txt"), "main\n").unwrap();
-                repo.commit(&base, "main side");
-            }
-            let worktree = repo.worktree_path("wf/k3f9");
+                repo.commit(&base, "main side")
+            };
             let conflict = Rebase::Conflict {
                 paths: vec!["gone.txt".into()],
             };
-            assert_eq!(rebase(&repo), conflict);
-            assert_eq!(rebase(&repo), conflict);
+            assert_eq!(agent.rebase(target).unwrap(), conflict);
+            assert_eq!(agent.rebase(target).unwrap(), conflict);
             git_in(&worktree, &["rm", "--quiet", "--force", "gone.txt"]);
-            assert_eq!(rebase(&repo), Rebase::Rebased);
+            assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
         }
     }
 
     #[test]
-    fn a_rebase_stopped_with_the_apply_backend_is_found_and_aborted() {
+    fn a_rebase_stopped_with_the_apply_backend_is_found() {
         let repo = TestRepo::new();
-        let worktree = repo.worktree_path("wf/k3f9");
-        let work = repo.work("wf/k3f9", "file.txt", "one\nTWO\n");
-        let main = repo.directory();
-        repo.write(&main, "file.txt", "one\n2\n");
-        repo.commit(&main, "conflicting change");
+        let (worktree, agent) = agent_repository(&repo);
+        commit_in(&worktree, "file.txt", "one\nTWO\n");
+        commit_to_main(&repo, "file.txt", "one\n2\n");
         let output = Command::new("git")
             .current_dir(&worktree)
-            .args(["-c", "rebase.backend=apply", "rebase", "main"])
+            .args([
+                "-c",
+                "rebase.backend=apply",
+                "rebase",
+                &repo.main().to_string(),
+            ])
             .output()
             .unwrap();
         assert!(!output.status.success());
@@ -2044,36 +2004,28 @@ mod tests {
         );
         assert!(Path::new(rebase_apply.trim()).is_dir());
         assert_eq!(
-            repo.git.stopped_rebase(&worktree).unwrap(),
+            agent.stopped_rebase(&worktree).unwrap(),
             StoppedRebase::Conflict {
                 paths: vec!["file.txt".into()],
             }
         );
-        repo.git.abort_rebase(&worktree).unwrap();
-        assert_eq!(
-            repo.git.stopped_rebase(&worktree).unwrap(),
-            StoppedRebase::NotStopped
-        );
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
     }
 
     #[test]
     fn a_branch_with_uncommitted_changes_is_not_rebased() {
         let repo = TestRepo::new();
-        let work = repo.work("wf/k3f9", "a.txt", "a\n");
-        let main = repo.directory();
-        repo.write(&main, "b.txt", "b\n");
-        repo.commit(&main, "add b");
-        let worktree = repo.worktree_path("wf/k3f9");
+        let (worktree, agent) = agent_repository(&repo);
+        let work = commit_in(&worktree, "a.txt", "a\n");
+        let target = commit_to_main(&repo, "b.txt", "b\n");
         repo.write(&worktree, "file.txt", "uncommitted\n");
         assert_eq!(
-            rebase(&repo),
+            agent.rebase(target).unwrap(),
             Rebase::DirtyCheckout(DirtyCheckout {
-                worktree: worktree.clone(),
+                worktree: agent.repository().to_path_buf(),
                 paths: vec!["file.txt".into()],
             })
         );
-        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), work);
+        assert_eq!(agent.branch_head("wf/k3f9").unwrap(), work);
         assert_eq!(
             std::fs::read_to_string(worktree.join("file.txt")).unwrap(),
             "uncommitted\n"
@@ -2081,33 +2033,27 @@ mod tests {
     }
 
     #[test]
-    fn rebased_commits_are_signed_as_the_signing_says() {
+    fn rebased_commits_are_signed_as_the_config_of_the_repository_says() {
         let repo = TestRepo::new();
-        let main = repo.directory();
         repo.sign_with_a_fake_signer();
-        let worktree = repo.worktree_path("wf/k3f9");
-        repo.git
-            .prepare_worktree("wf/k3f9", &worktree, "main")
-            .unwrap();
-        repo.write(&worktree, "a.txt", "a\n");
-        git_in(&worktree, &["add", "a.txt"]);
-        git_in(
-            &worktree,
-            &["-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "a"],
-        );
+        let (worktree, agent) = agent_repository(&repo);
+        commit_in(&worktree, "a.txt", "a\n");
         let signed = || git_in(&worktree, &["cat-file", "commit", "HEAD"]).contains("gpgsig");
-        for (signing, expected) in [
-            (CommitSigning::Unsigned, false),
-            (CommitSigning::AsConfigured, true),
-        ] {
-            repo.write(&main, "b.txt", &format!("{signing:?}\n"));
-            repo.commit(&main, "move main");
-            let rebased = repo
-                .git
-                .rebase(&worktree, "main", &signing, "@ada/coder")
-                .unwrap();
-            assert_eq!(rebased, Rebase::Rebased);
-            assert_eq!(signed(), expected, "{signing:?}");
+        for (signing, expected) in [("false", false), ("true", true)] {
+            let target = commit_to_main(&repo, "b.txt", &format!("{signing}\n"));
+            for (key, value) in [
+                ("commit.gpgsign", signing),
+                ("gpg.format", "ssh"),
+                ("user.signingkey", "key::ssh-ed25519 AAAAfake"),
+                (
+                    "gpg.ssh.program",
+                    repo.root.path().join("fake-sign").to_str().unwrap(),
+                ),
+            ] {
+                git_in(&worktree, &["config", key, value]);
+            }
+            assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
+            assert_eq!(signed(), expected, "gpgsign={signing}");
         }
     }
 

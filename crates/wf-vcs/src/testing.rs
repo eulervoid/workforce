@@ -82,10 +82,44 @@ impl TestRepository {
         self.root.path().join("worktrees").join(name)
     }
 
+    /// Checks `branch` out in a linked worktree at `path`, made at the tip of `target` if the
+    /// branch does not exist yet.
+    pub fn prepare_worktree(&self, branch: &str, path: &Path, target: &str) {
+        let exists = Command::new("git")
+            .args([
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}"),
+            ])
+            .current_dir(self.directory())
+            .env_remove("GIT_DIR")
+            .output()
+            .unwrap()
+            .status
+            .success();
+        let path = path.to_str().unwrap();
+        let start = format!("refs/heads/{target}");
+        let args: Vec<&str> = if exists {
+            vec!["worktree", "add", "--quiet", path, branch]
+        } else {
+            vec!["worktree", "add", "--quiet", "-b", branch, path, &start]
+        };
+        git_in(&self.directory(), &args);
+    }
+
+    /// Removes the linked worktree at `path` with whatever is uncommitted in it.
+    pub fn remove_worktree(&self, path: &Path) {
+        git_in(
+            &self.directory(),
+            &["worktree", "remove", "--force", path.to_str().unwrap()],
+        );
+    }
+
     /// Work on `branch` in its worktree and return the commit.
     pub fn work(&self, branch: &str, name: &str, text: &str) -> CommitId {
         let path = self.worktree_path(branch);
-        self.git.prepare_worktree(branch, &path, "main").unwrap();
+        self.prepare_worktree(branch, &path, "main");
         self.write(&path, name, text);
         self.commit(&path, &format!("change {name}"))
     }
