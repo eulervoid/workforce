@@ -119,7 +119,7 @@ pub fn carry_out(
 /// refused right away, before a starter is picked for nothing.
 fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
-    wf_daemon::ensure_unclaimed(state, item)?;
+    state.ensure_unclaimed(item)?;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let draft = matches!(
         state.item(item),

@@ -1,4 +1,4 @@
-use crate::id::{ItemId, SessionId};
+use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::ItemState;
 use crate::lifecycle::{
@@ -573,4 +573,169 @@ fn only_a_live_work_session_with_a_waiting_item_waits() {
 
     scene.end(session, EndReason::Released);
     assert!(!scene.state.session_waits(session));
+}
+
+#[test]
+fn a_refusal_names_the_item_short_and_the_session_that_holds_it() {
+    let mut scene = Scene::new();
+    let item = scene.item(create("task", "Busy"));
+    assert_eq!(scene.state.ensure_unclaimed(item), Ok(()));
+    let session = scene.start(item);
+    let holder = scene
+        .state
+        .actor_label(&scene.fixture.agent_actor("coder", session));
+    assert!(
+        holder.ends_with(&format!("/coder/{}", session.short())),
+        "{holder}"
+    );
+    assert_eq!(
+        scene.state.ensure_unclaimed(item).unwrap_err().to_string(),
+        format!(
+            "#{} already has a live session, {holder}; stop it first",
+            item.short()
+        )
+    );
+}
+
+/// The texts of the comments of a scene, by what they were written as.
+struct Texts(std::collections::BTreeMap<crate::id::CommentId, String>);
+
+impl crate::brief::Sources for Texts {
+    fn text(&self, comment: crate::id::CommentId) -> Option<String> {
+        self.0.get(&comment).cloned()
+    }
+
+    fn branch(&self, _item: ItemId) -> String {
+        String::new()
+    }
+
+    fn diff(&self, _target: &str, _commit: CommitId) -> String {
+        String::new()
+    }
+}
+
+impl Scene {
+    /// Writes `body` as the principal and remembers its `text`.
+    fn say(&mut self, texts: &mut Texts, body: crate::event::EventBody, text: &str) {
+        let written = self.apply(body);
+        texts.0.insert(written.id().into(), text.to_string());
+    }
+
+    /// Writes `body` as the agent of `session` and remembers its `text`.
+    fn say_as_agent(
+        &mut self,
+        texts: &mut Texts,
+        session: SessionId,
+        body: crate::event::EventBody,
+        text: &str,
+    ) {
+        use crate::state::Trust;
+        self.clock += 1;
+        let actor = self.fixture.agent_actor("coder", session);
+        let written = self
+            .fixture
+            .author_as(&self.state, 0, actor, self.clock, body);
+        self.state
+            .receive(written.clone(), Trust::Untrusted)
+            .unwrap();
+        texts.0.insert(written.id().into(), text.to_string());
+    }
+}
+
+#[test]
+fn a_session_that_asked_a_blocker_since_it_was_prompted_resumes_as_waiting() {
+    use crate::lifecycle::Resume;
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    scene.apply(moved(task, ItemState::Active));
+    let prompted = scene.clock;
+    assert_eq!(
+        scene.state.resume_after_restart(session, prompted),
+        Resume::AfterRestart
+    );
+
+    scene.say_as_agent(
+        &mut texts,
+        session,
+        blocker(task, "which crate?"),
+        "which crate?",
+    );
+    assert_eq!(
+        scene.state.resume_after_restart(session, prompted),
+        Resume::AfterWait
+    );
+    assert_eq!(
+        scene.state.resume_after_restart(session, scene.clock + 1),
+        Resume::AfterRestart,
+        "a blocker from an earlier turn was answered already"
+    );
+}
+
+#[test]
+fn a_restarted_session_is_told_what_others_wrote_since_it_was_prompted() {
+    use crate::brief::restarted_text;
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    scene.say(&mut texts, comment(task, "earlier note"), "earlier note");
+    let prompted = scene.clock;
+    let quiet = restarted_text(&scene.state, session, prompted, &texts);
+    assert!(!quiet.contains("Written on the item since"), "{quiet}");
+    assert!(quiet.ends_with("Continue."), "{quiet}");
+
+    scene.say_as_agent(&mut texts, session, comment(task, "my own"), "my own");
+    scene.say(&mut texts, comment(task, "use serde"), " use serde ");
+    let told = restarted_text(&scene.state, session, prompted, &texts);
+    assert!(told.contains("Written on the item since:\n- "), "{told}");
+    assert!(told.contains(": use serde"), "{told}");
+    assert!(
+        !told.contains("earlier note") && !told.contains("my own"),
+        "{told}"
+    );
+}
+
+#[test]
+fn a_resumed_session_is_told_the_answers_and_what_its_dependencies_left() {
+    use crate::brief::resumed_text;
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    let task = scene.item(create("task", "work"));
+    let first = scene.item(create("task", "pick a database"));
+    scene.apply(depends_on(task, first));
+    let session = scene.start(task);
+    scene.say(&mut texts, comment(task, "old"), "old");
+    scene.say_as_agent(
+        &mut texts,
+        session,
+        blocker(task, "which one?"),
+        "which one?",
+    );
+    scene.say(&mut texts, comment(task, "sqlite"), "sqlite");
+    scene.say(
+        &mut texts,
+        comment(first, "chose postgres"),
+        "chose postgres",
+    );
+
+    let told = resumed_text(&scene.state, session, &texts);
+    assert!(
+        told.starts_with("What you were waiting for is resolved."),
+        "{told}"
+    );
+    assert!(told.contains(": sqlite"), "{told}");
+    assert!(
+        told.contains(&format!(
+            "#{} pick a database: chose postgres",
+            first.short()
+        )),
+        "{told}"
+    );
+    assert!(
+        !told.contains("old") && !told.contains("which one?"),
+        "{told}"
+    );
+    assert!(told.ends_with("\nContinue."), "{told}");
 }

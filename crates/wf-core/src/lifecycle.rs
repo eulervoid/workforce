@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use serde::{Deserialize, Serialize};
 
 use crate::event::CommentKind;
-use crate::id::{ItemId, SessionId};
+use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{ItemState, ItemView};
 use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole};
@@ -102,6 +102,25 @@ pub enum AfterEnd {
         commit: CommitId,
         wait_in: Option<ItemState>,
     },
+}
+
+/// A work session cannot start on an item that a live session holds.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("#{} already has a live session, {holder}; stop it first", .item.short())]
+pub struct ItemClaimed {
+    pub item: ItemId,
+    /// The session that holds the item, as [`State::actor_label`] names it.
+    pub holder: String,
+}
+
+/// What a session that continues after the daemon restarted is told first.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Resume {
+    /// The session was working: the daemon restarted under it.
+    AfterRestart,
+    /// The session's last turn asked a blocker, so it was parked when the daemon stopped, even if
+    /// the blocker is answered by now.
+    AfterWait,
 }
 
 /// What to do for a request to merge the reviewed work of an item.
@@ -421,6 +440,38 @@ impl State {
         } else {
             MergePlan::Merge
         })
+    }
+
+    /// Refuses a work session on `item` while a live one holds it.
+    pub fn ensure_unclaimed(&self, item: ItemId) -> Result<(), ItemClaimed> {
+        match self.claim(item) {
+            Some(holder) => Err(ItemClaimed {
+                item,
+                holder: self.actor_label(&holder.actor()),
+            }),
+            None => Ok(()),
+        }
+    }
+
+    /// What `session` is told first after a restart of the daemon, which last prompted it at
+    /// `prompted_ms`, in milliseconds since the epoch.
+    pub fn resume_after_restart(&self, session: SessionId, prompted_ms: u64) -> Resume {
+        let Some(folded) = self.session(session) else {
+            return Resume::AfterRestart;
+        };
+        let asked = match self.item(folded.item()) {
+            Some(ItemView::Live(item)) => item.comments().values().any(|comment| {
+                comment.session() == Some(session)
+                    && comment.kind == CommentKind::Blocker
+                    && comment.at.wall_ms() >= prompted_ms
+            }),
+            Some(ItemView::Archived(_)) | None => false,
+        };
+        if asked {
+            Resume::AfterWait
+        } else {
+            Resume::AfterRestart
+        }
     }
 
     /// The state of a live item; `None` for an archived one.

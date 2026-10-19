@@ -40,7 +40,7 @@ pub use data_dir::DataDir;
 pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS};
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
-pub use runner::{SessionError, ensure_unclaimed, session_model};
+pub use runner::{SessionError, session_model};
 pub use storage::{StorageClosed, StorageHandle};
 
 /// The file in the directory of a workforce that says where its repository is on this machine.
