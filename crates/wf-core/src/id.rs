@@ -207,27 +207,46 @@ impl From<CommentId> for EventId {
     }
 }
 
-/// Resolves a user supplied prefix like git does: unique match, at least [`MIN_PREFIX_LEN`] characters.
-pub fn resolve_prefix<T: HashId>(
+/// Ids by their base32 text, for resolving a user supplied prefix like git does: unique match, at
+/// least [`MIN_PREFIX_LEN`] characters.
+pub struct PrefixIndex<T> {
+    ids: std::collections::BTreeMap<String, T>,
+}
+
+impl<T: HashId + Copy> PrefixIndex<T> {
+    pub fn new(ids: impl IntoIterator<Item = T>) -> Self {
+        Self {
+            ids: ids.into_iter().map(|id| (id.to_base32(), id)).collect(),
+        }
+    }
+
+    pub fn resolve(&self, prefix: &str) -> Result<T, PrefixError> {
+        let prefix = prefix.to_ascii_lowercase();
+        if prefix.len() < MIN_PREFIX_LEN {
+            return Err(PrefixError::TooShort(prefix));
+        }
+        let mut matches = self
+            .ids
+            .range(prefix.clone()..)
+            .take_while(|(candidate, _)| candidate.starts_with(&prefix))
+            .map(|(_, id)| *id);
+        match (matches.next(), matches.next()) {
+            (None, _) => Err(PrefixError::NotFound(prefix)),
+            (Some(id), None) => Ok(id),
+            (Some(first), Some(second)) => Err(PrefixError::Ambiguous {
+                candidates: [first, second].iter().map(HashId::short).collect(),
+                prefix,
+            }),
+        }
+    }
+}
+
+/// Resolves a prefix among `candidates`; see [`PrefixIndex`].
+pub fn resolve_prefix<T: HashId + Copy>(
     prefix: &str,
     candidates: impl IntoIterator<Item = T>,
 ) -> Result<T, PrefixError> {
-    let normalized = prefix.to_ascii_lowercase();
-    if normalized.len() < MIN_PREFIX_LEN {
-        return Err(PrefixError::TooShort(normalized));
-    }
-    let mut matches: Vec<T> = candidates
-        .into_iter()
-        .filter(|candidate| candidate.to_base32().starts_with(&normalized))
-        .collect();
-    match matches.len() {
-        0 => Err(PrefixError::NotFound(normalized)),
-        1 => Ok(matches.remove(0)),
-        _ => Err(PrefixError::Ambiguous {
-            prefix: normalized,
-            candidates: matches.iter().map(|candidate| candidate.short()).collect(),
-        }),
-    }
+    PrefixIndex::new(candidates).resolve(prefix)
 }
 
 #[cfg(test)]
