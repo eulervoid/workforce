@@ -114,14 +114,10 @@ impl<S: EventStore> Replica<S> {
             history: None,
             failed_write: None,
         };
-        for event in replica.store.pending()? {
-            // Admission may refuse what an earlier version parked unchecked; such an event is
-            // dropped from the pending set rather than failing the open.
-            match replica.state.receive(event.clone(), Trust::Stored) {
-                Ok(received) => replica.persist(&event, &received)?,
-                Err(_) => replica.drop_pending(&event)?,
-            }
-        }
+        // Admission may refuse what an earlier version parked unchecked; such an event is
+        // dropped from the pending set rather than failing the open.
+        let pending = replica.store.pending()?;
+        replica.receive_events(pending, Trust::Stored)?;
         let needs_snapshot = replayed >= SNAPSHOT_INTERVAL || (!from_snapshot && replayed > 0);
         if needs_snapshot {
             replica.write_snapshot()?;
@@ -201,7 +197,11 @@ impl<S: EventStore> Replica<S> {
                     }
                     applied.extend(received.applied);
                 }
-                Err(_) => rejected += 1,
+                Err(_) => {
+                    // Nothing to remove unless the event was pending already.
+                    released.push(event.id());
+                    rejected += 1;
+                }
             }
         }
         let released: BTreeSet<EventId> = released.into_iter().collect();
@@ -309,19 +309,6 @@ impl<S: EventStore> Replica<S> {
         self.persist(&event, &received)
             .map_err(ReceiveError::from)?;
         Ok(event)
-    }
-
-    fn drop_pending(&mut self, event: &Event) -> Result<(), StoreError> {
-        let result = self.store.commit(Commit {
-            append: &[],
-            pending: PendingChange::Update {
-                put: &[],
-                remove: &[event.id()],
-            },
-            snapshot: SnapshotChange::Keep,
-        });
-        self.note_failed_write(&result);
-        result
     }
 
     fn persist(&mut self, submitted: &Event, received: &Received) -> Result<(), StoreError> {

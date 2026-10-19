@@ -169,8 +169,9 @@ impl EventStore for RedbStore {
             let mut feeds = transaction.open_multimap_table(FEEDS)?;
             let mut log = transaction.open_table(LOG)?;
             for (position, event) in (log.len()?..).zip(commit.append) {
-                let id = event.id();
-                events.insert(*id.as_bytes(), event.encode()?.as_slice())?;
+                let encoded = event.encode()?;
+                let id = EventId::of(&encoded);
+                events.insert(*id.as_bytes(), encoded.as_slice())?;
                 feeds.insert(
                     (*event.content.author.as_bytes(), event.content.seq),
                     *id.as_bytes(),
@@ -184,7 +185,8 @@ impl EventStore for RedbStore {
                 pending.remove(*id.as_bytes())?;
             }
             for event in put {
-                pending.insert(*event.id().as_bytes(), event.encode()?.as_slice())?;
+                let encoded = event.encode()?;
+                pending.insert(*EventId::of(&encoded).as_bytes(), encoded.as_slice())?;
             }
         }
         match commit.snapshot {

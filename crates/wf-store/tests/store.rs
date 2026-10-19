@@ -547,10 +547,11 @@ fn forking_a_workforce_with_20k_events_from_a_local_replica_is_fast() {
     assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
 
-/// A store whose writes can be made to fail.
+/// A store whose writes can be made to fail and are counted.
 struct Flaky {
     inner: RedbStore,
     failing: std::cell::Cell<bool>,
+    commits: std::cell::Cell<usize>,
 }
 
 impl EventStore for Flaky {
@@ -583,6 +584,7 @@ impl EventStore for Flaky {
         if self.failing.get() {
             return Err(wf_store::StoreError::Inconsistent("disk full".into()));
         }
+        self.commits.set(self.commits.get() + 1);
         self.inner.commit(commit)
     }
 }
@@ -593,6 +595,7 @@ fn a_failed_write_marks_the_replica_for_reopening() {
     let store = Flaky {
         inner: RedbStore::in_memory().unwrap(),
         failing: std::cell::Cell::new(false),
+        commits: std::cell::Cell::new(0),
     };
     let mut replica = Replica::open(store, fixture.workforce()).unwrap();
     replica.receive(fixture.genesis.clone()).unwrap();
@@ -608,6 +611,48 @@ fn a_failed_write_marks_the_replica_for_reopening() {
     assert!(result.is_err());
     assert!(replica.failed_write().is_some());
     assert_eq!(replica.store().log_len().unwrap(), 1);
+}
+
+#[test]
+fn opening_with_many_pending_events_commits_them_together() {
+    const PENDING: usize = 2_000;
+    let fixture = Fixture::new(1);
+    let mut author = fixture.state();
+    let _missing = fixture.apply(&mut author, 0, 2_000, create("task", "missing"));
+    let waiting: Vec<Event> = (0..PENDING)
+        .map(|index| {
+            fixture.apply(
+                &mut author,
+                0,
+                2_001 + index as u64,
+                create("task", &format!("task {index}")),
+            )
+        })
+        .collect();
+    let store = Flaky {
+        inner: RedbStore::in_memory().unwrap(),
+        failing: std::cell::Cell::new(false),
+        commits: std::cell::Cell::new(0),
+    };
+    store
+        .commit(Commit {
+            append: std::slice::from_ref(&fixture.genesis),
+            pending: PendingChange::Update {
+                put: &waiting,
+                remove: &[],
+            },
+            snapshot: SnapshotChange::Keep,
+        })
+        .unwrap();
+    store.commits.set(0);
+
+    let started = std::time::Instant::now();
+    let replica = Replica::open(store, fixture.workforce()).unwrap();
+    let elapsed = started.elapsed();
+    assert_eq!(replica.state().pending_events().count(), PENDING);
+    // The pending events in one commit, and at most the snapshot of what was replayed.
+    assert!(replica.store().commits.get() <= 2);
+    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
 
 #[test]

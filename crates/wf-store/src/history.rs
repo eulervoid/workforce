@@ -39,7 +39,7 @@ pub fn history_behind<S: EventStore>(
             events.push(event);
         }
     }
-    events.sort_by_key(|event| std::cmp::Reverse((event.content.hlc, event.id())));
+    events.sort_by_cached_key(|event| std::cmp::Reverse((event.content.hlc, event.id())));
     Ok(events)
 }
 

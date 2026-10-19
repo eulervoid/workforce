@@ -295,11 +295,10 @@ impl State {
         if self.pending.events.contains_key(&submitted) {
             return Ok(received);
         }
-        let mut queue = VecDeque::from([(event, trust)]);
-        while let Some((event, trust)) = queue.pop_front() {
-            let id = event.id();
+        let mut queue = VecDeque::from([(submitted, event, trust)]);
+        while let Some((id, event, trust)) = queue.pop_front() {
             let is_submitted = id == submitted;
-            match self.admit(&event, trust, latest_wall_ms) {
+            match self.admit(&event, id, trust, latest_wall_ms) {
                 Ok(Admission::Apply(origin)) => {
                     let is_genesis = origin == Origin::Own
                         && matches!(event.content.body, EventBody::Genesis(_));
@@ -313,14 +312,14 @@ impl State {
                         self.pending
                             .release(PendingOn::Event(id))
                             .into_iter()
-                            .map(|released| (released, Trust::Stored)),
+                            .map(|(id, released)| (id, released, Trust::Stored)),
                     );
                     if is_genesis {
                         queue.extend(
                             self.pending
                                 .release(PendingOn::Genesis)
                                 .into_iter()
-                                .map(|released| (released, Trust::Stored)),
+                                .map(|(id, released)| (id, released, Trust::Stored)),
                         );
                     }
                     if origin == Origin::History && !self.history_incomplete() {
@@ -328,7 +327,7 @@ impl State {
                             self.pending
                                 .release(PendingOn::History)
                                 .into_iter()
-                                .map(|released| (released, Trust::Stored)),
+                                .map(|(id, released)| (id, released, Trust::Stored)),
                         );
                     }
                 }
@@ -372,11 +371,12 @@ impl State {
     fn admit(
         &self,
         event: &Event,
+        id: EventId,
         trust: Trust,
         latest_wall_ms: u64,
     ) -> Result<Admission, Invalid> {
         let content = &event.content;
-        if self.known.contains_key(&event.id()) {
+        if self.known.contains_key(&id) {
             return Ok(Admission::Duplicate);
         }
         if content.v != EVENT_VERSION {
@@ -412,7 +412,7 @@ impl State {
             .fork
             .as_ref()
             .and_then(ForkState::wanted)
-            .is_some_and(|wanted| wanted.contains(&event.id()))
+            .is_some_and(|wanted| wanted.contains(&id))
         {
             Self::check_feed_shape(event)?;
             if !content.hlc.is_admissible() {

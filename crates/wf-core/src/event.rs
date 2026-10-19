@@ -1,5 +1,6 @@
 //! The signed event envelope and the M0 event bodies.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use iroh_base::Signature;
@@ -201,16 +202,18 @@ pub struct ItemCreated {
 }
 
 /// The wire form of `ItemCreated` before it carried a state.
+///
+/// Borrows what it encodes, so that an event encoded for its id copies none of its text.
 #[derive(Serialize, Deserialize)]
-struct ItemCreatedWithoutState {
-    item_type: TypeName,
-    title: String,
-    body: String,
+struct ItemCreatedWithoutState<'a> {
+    item_type: Cow<'a, TypeName>,
+    title: Cow<'a, str>,
+    body: Cow<'a, str>,
     priority: Option<Priority>,
-    lane: Option<LaneName>,
-    labels: Vec<Label>,
-    requires: Vec<Requirement>,
-    review: Option<ReviewLevelName>,
+    lane: Option<Cow<'a, LaneName>>,
+    labels: Cow<'a, [Label]>,
+    requires: Cow<'a, [Requirement]>,
+    review: Option<Cow<'a, ReviewLevelName>>,
 }
 
 impl ItemCreated {
@@ -219,14 +222,14 @@ impl ItemCreated {
             return Ok((tag::ITEM_CREATED, encoding::encode(self)?));
         }
         let without_state = ItemCreatedWithoutState {
-            item_type: self.item_type.clone(),
-            title: self.title.clone(),
-            body: self.body.clone(),
+            item_type: Cow::Borrowed(&self.item_type),
+            title: Cow::Borrowed(&self.title),
+            body: Cow::Borrowed(&self.body),
             priority: self.priority,
-            lane: self.lane.clone(),
-            labels: self.labels.clone(),
-            requires: self.requires.clone(),
-            review: self.review.clone(),
+            lane: self.lane.as_ref().map(Cow::Borrowed),
+            labels: Cow::Borrowed(&self.labels),
+            requires: Cow::Borrowed(&self.requires),
+            review: self.review.as_ref().map(Cow::Borrowed),
         };
         Ok((
             tag::ITEM_CREATED_WITHOUT_STATE,
@@ -246,14 +249,14 @@ impl ItemCreated {
     fn without_state(payload: &[u8]) -> Result<Self, EncodingError> {
         let old: ItemCreatedWithoutState = encoding::decode(payload)?;
         Ok(ItemCreated {
-            item_type: old.item_type,
-            title: old.title,
-            body: old.body,
+            item_type: old.item_type.into_owned(),
+            title: old.title.into_owned(),
+            body: old.body.into_owned(),
             priority: old.priority,
-            lane: old.lane,
-            labels: old.labels,
-            requires: old.requires,
-            review: old.review,
+            lane: old.lane.map(Cow::into_owned),
+            labels: old.labels.into_owned(),
+            requires: old.requires.into_owned(),
+            review: old.review.map(Cow::into_owned),
             state: None,
         })
     }
@@ -329,13 +332,13 @@ pub struct Comment {
 }
 
 /// The wire form of `Comment` before it could be about lines of a diff, and still for one that
-/// is not.
+/// is not. Borrows what it encodes.
 #[derive(Serialize, Deserialize)]
-struct CommentWithoutLines {
+struct CommentWithoutLines<'a> {
     item: ItemId,
-    text: String,
+    text: Cow<'a, str>,
     kind: CommentKind,
-    resolves: Vec<CommentId>,
+    resolves: Cow<'a, [CommentId]>,
     step: Option<StepId>,
 }
 
@@ -377,9 +380,9 @@ impl Comment {
                 tag::COMMENT,
                 encoding::encode(&CommentWithoutLines {
                     item: self.item,
-                    text: self.text.clone(),
+                    text: Cow::Borrowed(&self.text),
                     kind: self.kind,
-                    resolves: self.resolves.clone(),
+                    resolves: Cow::Borrowed(&self.resolves),
                     step: self.step,
                 })?,
             )),
@@ -413,9 +416,9 @@ impl Comment {
         }
         Ok(Comment {
             item: old.item,
-            text: old.text,
+            text: old.text.into_owned(),
             kind: old.kind,
-            resolves: old.resolves,
+            resolves: old.resolves.into_owned(),
             step: old.step,
             lines: None,
         })

@@ -34,7 +34,6 @@ impl<S: EventStore> Replica<S> {
         }
         events.retain(|event| self.is_own(event));
         sync::causal_order(&mut events);
-        events.dedup_by_key(|event| event.id());
         Ok(events)
     }
 

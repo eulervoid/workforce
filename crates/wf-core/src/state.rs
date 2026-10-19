@@ -374,11 +374,13 @@ impl Pending {
         self.waiting.entry(waiting).or_default().insert(id);
     }
 
-    pub(crate) fn release(&mut self, waiting: PendingOn) -> Vec<Event> {
+    pub(crate) fn release(&mut self, waiting: PendingOn) -> Vec<(EventId, Event)> {
         let Some(ids) = self.waiting.remove(&waiting) else {
             return Vec::new();
         };
-        ids.iter().filter_map(|id| self.events.remove(id)).collect()
+        ids.iter()
+            .filter_map(|id| Some((*id, self.events.remove(id)?)))
+            .collect()
     }
 }
 
@@ -595,7 +597,7 @@ impl State {
                 (*name == agent.name && principal == agent.principal).then_some((event, change))
             })
             .collect();
-        history.sort_by_key(|(event, _)| (event.content.hlc, event.id()));
+        history.sort_by_cached_key(|(event, _)| (event.content.hlc, event.id()));
         history
     }
 
