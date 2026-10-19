@@ -682,13 +682,12 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_session_finds_its_branch_loose_again_when_the_refs_were_packed_between_two_turns() {
-    // The sandbox lets the session rewrite its branch's file but not create it.
+async fn packing_and_collecting_garbage_in_either_repository_changes_nothing() {
     let script = "\
 sh echo a > a.txt && git add a.txt && git commit -q -m a && touch \"$XDG_DATA_HOME/committed\"
 sh while [ ! -f \"$XDG_DATA_HOME/packed\" ]; do sleep 0.1; done
 turn
-sh test -f \"$(git rev-parse --git-common-dir)/refs/heads/$(git branch --show-current)\" && touch \"$XDG_DATA_HOME/loose\"
+sh git pack-refs --all && git gc -q
 sh echo b > b.txt && git add b.txt && git commit -q -m b
 wf work submit
 ";
@@ -700,15 +699,28 @@ wf work submit
             world.wf.data.join("committed").exists()
         })
         .await;
+    // The first commit is copied into the principal's repository, which packs and collects.
+    world
+        .wait("the first commit to be copied", |world| {
+            git_in(
+                &world.wf.repository,
+                &["log", "--oneline", "--branches=wf/*", "--not", "main"],
+            )
+            .contains(" a")
+        })
+        .await;
     git_in(&world.wf.repository, &["pack-refs", "--all"]);
+    git_in(&world.wf.repository, &["gc", "-q"]);
     std::fs::write(world.wf.data.join("packed"), "").unwrap();
 
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
-    assert!(
-        world.wf.data.join("loose").exists(),
-        "the branch was a loose ref again when the second turn began"
-    );
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
+    assert!(world.wf.repository.join("a.txt").is_file());
+    assert!(world.wf.repository.join("b.txt").is_file());
+    git_in(&world.wf.repository, &["fsck", "--strict"]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -736,7 +748,7 @@ wf work release --note \"I cannot do this\"
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_starting_daemon_removes_stray_worktrees_and_caches_over_the_budget() {
+async fn a_starting_daemon_removes_stray_repositories_and_caches_over_the_budget() {
     let script = "\
 sh echo wip > wip.txt && git add wip.txt && git commit -q -m wip && mkdir target && echo built > target/app
 wf work release --note \"later\"
@@ -748,16 +760,7 @@ wf work release --note \"later\"
     let worktree = PathBuf::from(world.wf.run(&["item", "path", short(&item)]).trim());
     let worktrees = worktree.parent().unwrap().to_path_buf();
     let stray_checkout = worktrees.join("stray-12345678");
-    git_in(
-        &world.wf.repository,
-        &[
-            "worktree",
-            "add",
-            "--quiet",
-            "--detach",
-            stray_checkout.to_str().unwrap(),
-        ],
-    );
+    std::fs::create_dir_all(stray_checkout.join(".git")).unwrap();
     let stray_directory = worktrees.join("stray-supervise");
     std::fs::create_dir_all(&stray_directory).unwrap();
     world.machine_config("[storage]\nbudget = \"0B\"\ncaches = [\"target\"]\n");
@@ -781,8 +784,6 @@ wf work release --note \"later\"
         worktree.join("wip.txt").is_file(),
         "an open item keeps its worktree"
     );
-    let listed = git_in(&world.wf.repository, &["worktree", "list"]);
-    assert!(!listed.contains("stray"), "{listed}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -984,7 +985,7 @@ async fn a_usage_limit_ends_the_session_for_the_machine_and_the_inbox_says_so() 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_full_disk_ends_the_session_for_the_machine_and_the_inbox_says_so_once() {
     // The first turn of the coder lasts until the disk is full; the next would nudge it.
-    let script = "sh while [ ! -e \"$(git rev-parse --git-common-dir)/disk-full\" ]; do sleep 0.1; done\nturn\n";
+    let script = "sh while [ ! -e \"$XDG_DATA_HOME/disk-full\" ]; do sleep 0.1; done\nturn\n";
     let world = World::new(script).await;
     let item = world
         .wf
@@ -998,7 +999,7 @@ async fn a_full_disk_ends_the_session_for_the_machine_and_the_inbox_says_so_once
         "a transcript",
         &std::io::Error::from(std::io::ErrorKind::StorageFull)
     ));
-    std::fs::write(world.wf.repository.join(".git/disk-full"), "").unwrap();
+    std::fs::write(world.wf.data.join("disk-full"), "").unwrap();
 
     let session = world.ended_session().await;
     assert_eq!(session["status"], "no_space", "{}", world.item(&item));
@@ -1533,7 +1534,7 @@ wf work submit --note \"Already done\"
 /// An agent that submits twice once the write is armed: the second submission is the retry of
 /// the first when that failed.
 const SUBMIT_TWICE_WHEN_ARMED: &str = "\
-sh while [ ! -e \"$(git rev-parse --git-common-dir)/armed\" ]; do sleep 0.1; done
+sh while [ ! -e \"$XDG_DATA_HOME/armed\" ]; do sleep 0.1; done
 wf work submit --note \"Nothing to change\"
 wf work submit --note \"Nothing to change\"
 ";
@@ -1545,7 +1546,7 @@ async fn submit_with_a_failing_write(failing: fn(&EventBody) -> bool) -> (World,
         .add(&["--title", "Check the parser", "--review", "none"]);
     start_session(&world, &item);
     world.daemon.fail_next_write(failing);
-    std::fs::write(world.wf.repository.join(".git/armed"), "").unwrap();
+    std::fs::write(world.wf.data.join("armed"), "").unwrap();
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
     (world, item)
@@ -2262,7 +2263,7 @@ async fn approved_work_that_conflicts_goes_back_to_open_and_the_next_submission_
     // is refused for the conflict, the turn ends, and it resolves the file and submits again in
     // the next.
     let coder = "\
-sh if git diff --quiet main -- file.txt; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
+sh if [ \"$(git log -1 --format=%s)\" != branch ]; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
 wf work submit
 turn
 sh echo branch > file.txt
@@ -2493,11 +2494,7 @@ async fn the_diff_says_when_the_agent_has_not_made_any_commits() {
     start_session(&world, &item);
 
     let text = world.wf.run(&["item", "diff", short(&item)]);
-    assert!(
-        text.starts_with("the agent has not made any commits\n")
-            && text.ends_with("\nno changes\n"),
-        "{text}"
-    );
+    assert!(text == "the agent has not made any commits\n", "{text}");
     let diff = world.wf.json(&["item", "diff", short(&item)]);
     assert!(diff["committed"].is_null(), "{diff}");
 
@@ -2505,47 +2502,59 @@ async fn the_diff_says_when_the_agent_has_not_made_any_commits() {
     let path = world.wf.run(&["item", "path", short(&item)]);
     git_in(
         Path::new(path.trim()),
-        &["commit", "-q", "--allow-empty", "-m", "nothing"],
+        &[
+            "-c",
+            "commit.gpgsign=false",
+            "commit",
+            "-q",
+            "--allow-empty",
+            "-m",
+            "nothing",
+        ],
     );
-    let diff = world.wf.json(&["item", "diff", short(&item)]);
-    assert_eq!(diff["committed"], "", "{diff}");
+    world
+        .wait("the commit to be copied", |world| {
+            world.wf.json(&["item", "diff", short(&item)])["committed"] == ""
+        })
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_diff_of_a_working_item_has_the_worktree_as_its_uncommitted_part() {
+async fn the_diff_of_a_working_item_follows_the_commits_the_daemon_copies_and_has_no_uncommitted_part()
+ {
     let world = World::new("hang\n").await;
     let item = world.wf.add(&["--title", "Working"]);
     start_session(&world, &item);
     let path = world.wf.run(&["item", "path", short(&item)]);
-    let worktree = Path::new(path.trim());
+    let repository = Path::new(path.trim());
 
-    // Edits and a new file are uncommitted only; there are no commits yet.
-    std::fs::write(worktree.join("new.txt"), "brand new\n").unwrap();
-    let mut text = std::fs::read_to_string(worktree.join("file.txt")).unwrap();
+    // Edits and a new file are not shown: wf runs no git in the agent's repository for them.
+    std::fs::write(repository.join("new.txt"), "brand new\n").unwrap();
+    let mut text = std::fs::read_to_string(repository.join("file.txt")).unwrap();
     text.push_str("edited\n");
-    std::fs::write(worktree.join("file.txt"), text).unwrap();
+    std::fs::write(repository.join("file.txt"), text).unwrap();
     let diff = world.wf.json(&["item", "diff", short(&item)]);
     assert!(diff["committed"].is_null(), "{diff}");
-    let uncommitted = diff["uncommitted"].as_str().unwrap();
-    assert!(uncommitted.contains("+edited"), "{diff}");
-    assert!(uncommitted.contains("+brand new"), "{diff}");
-    let printed = world.wf.run(&["item", "diff", short(&item)]);
-    assert!(
-        printed.starts_with("the agent has not made any commits"),
-        "{printed}"
-    );
-    assert!(printed.contains("\nuncommitted, against "), "{printed}");
+    assert!(diff.get("uncommitted").is_none(), "{diff}");
 
-    // A commit moves them to the committed part.
-    git_in(worktree, &["add", "--all"]);
-    git_in(worktree, &["commit", "-q", "-m", "edit"]);
-    let diff = world.wf.json(&["item", "diff", short(&item)]);
-    let committed = diff["committed"].as_str().unwrap();
-    assert!(committed.contains("+edited") && committed.contains("+brand new"));
-    assert_eq!(diff["uncommitted"], "", "{diff}");
+    // A commit is copied into the principal's repository within a few seconds.
+    git_in(repository, &["add", "--all"]);
+    git_in(
+        repository,
+        &["-c", "commit.gpgsign=false", "commit", "-q", "-m", "edit"],
+    );
+    world
+        .wait("the commit to be copied", |world| {
+            world.wf.json(&["item", "diff", short(&item)])["committed"]
+                .as_str()
+                .is_some_and(|committed| {
+                    committed.contains("+edited") && committed.contains("+brand new")
+                })
+        })
+        .await;
 
     // Once the session has ended, only the commits are shown.
-    std::fs::write(worktree.join("later.txt"), "later\n").unwrap();
+    std::fs::write(repository.join("later.txt"), "later\n").unwrap();
     world.wf.run(&[
         "session",
         "stop",
@@ -3431,7 +3440,7 @@ async fn work_that_stopped_merging_goes_back_to_work_before_the_principal_is_ask
     // The reviewer approves, which would offer the review to the principal, only after main moved
     // on and the branch conflicts with it. The second session waits to be let go.
     let coder = "\
-sh if git diff --quiet main -- file.txt; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
+sh if [ \"$(git log -1 --format=%s)\" != branch ]; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
 wf work submit
 ";
     let reviewer = "\

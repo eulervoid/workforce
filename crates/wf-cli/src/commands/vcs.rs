@@ -25,37 +25,16 @@ struct DiffView {
     /// What the commits of the work change; `None` while the branch has no commits ahead of the
     /// target, empty when its commits change nothing.
     committed: Option<String>,
-    /// What the worktree of the session has changed since `commit`, new files included; absent
-    /// when no worktree was read, empty when it has no changes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    uncommitted: Option<String>,
 }
 
 const NO_COMMITS: &str = "the agent has not made any commits";
 
-/// The text of the two parts of a diff: the committed one, then the uncommitted one under a header
-/// of its own, when a worktree was read.
-fn diff_text(committed: Option<&str>, uncommitted: Option<&str>, head: &str) -> String {
-    let mut text = match committed {
+/// The text of a diff: what the commits change, or that there are none.
+fn diff_text(committed: Option<&str>) -> String {
+    match committed {
         Some(diff) => diff.to_owned(),
         None => format!("{NO_COMMITS}\n"),
-    };
-    if let Some(diff) = uncommitted {
-        let diff = if diff.is_empty() {
-            "no changes\n"
-        } else {
-            diff
-        };
-        text.push_str(&format!(
-            "\n{}\n{diff}",
-            uncommitted_header(wf_core::session::short_commit(head))
-        ));
     }
-    text
-}
-
-fn uncommitted_header(head: &str) -> String {
-    format!("uncommitted, against {head}")
 }
 
 /// The work on an item: once merged, the merge that brought it into the target; before, the head
@@ -72,17 +51,7 @@ pub(crate) fn item_work(
         return Ok(wf_vcs::Work::Merged { merge, commit });
     }
     let target = target(workspace);
-    // While a session works here, its worktree is read as well.
-    let worktree = workspace
-        .state()
-        .claim(id)
-        .is_some_and(|session| session.device() == workspace.device_key())
-        .then(|| wf_vcs::item_worktree(&workspace.data.workforce(&workspace.workforce()), id));
-    let found = match worktree {
-        Some(worktree) => git.working_branch_work(id, &target, &worktree)?,
-        None => git.branch_work(id, &target)?,
-    };
-    if let Some(work) = found {
+    if let Some(work) = git.branch_work(id, &target)? {
         return Ok(work);
     }
     match submission {
@@ -190,15 +159,9 @@ pub(super) fn diff(
         }
     };
     let has_commits = git.has_commits(&work)?;
-    let uncommitted = git.uncommitted_diff(&work, git_args)?;
     match mode {
         Mode::Interactive if has_commits => {
             git.show_diff(&work, git_args, wf_vcs::Pager::AsConfigured)?;
-            if let Some(diff) = uncommitted {
-                let head = work.commit().to_string();
-                let text = diff_text(Some(""), Some(&diff), &head);
-                print!("{text}");
-            }
             Ok(())
         }
         Mode::Interactive | Mode::Scripted => {
@@ -207,7 +170,7 @@ pub(super) fn diff(
                 device: None,
                 commit: work.commit().to_string(),
                 merge: match &work {
-                    wf_vcs::Work::Unmerged { .. } | wf_vcs::Work::Working { .. } => None,
+                    wf_vcs::Work::Unmerged { .. } => None,
                     wf_vcs::Work::Merged { merge, .. } => Some(merge.to_string()),
                 },
                 committed: if has_commits {
@@ -215,15 +178,8 @@ pub(super) fn diff(
                 } else {
                     None
                 },
-                uncommitted,
             };
-            emit(json, &view, |view| {
-                diff_text(
-                    view.committed.as_deref(),
-                    view.uncommitted.as_deref(),
-                    &view.commit,
-                )
-            })
+            emit(json, &view, |view| diff_text(view.committed.as_deref()))
         }
     }
 }
@@ -262,7 +218,6 @@ fn device_view(
                 commit: work.head.to_string(),
                 merge: None,
                 committed: Some(work.committed),
-                uncommitted: None,
             };
             Ok((view, text))
         }
@@ -331,7 +286,7 @@ pub(super) fn path(
     item: Option<String>,
 ) -> anyhow::Result<()> {
     let id = choose_item(workspace, mode, item, Scope::Live)?;
-    let path = wf_vcs::item_worktree(&workspace.data.workforce(&workspace.workforce()), id);
+    let path = wf_vcs::item_repository(&workspace.data.workforce(&workspace.workforce()), id);
     if !path.is_dir() {
         let merged = match workspace.state().review_status(id) {
             Some(ReviewStatus::Merged { commit }) => {
@@ -344,7 +299,7 @@ pub(super) fn path(
             )
             | None => String::new(),
         };
-        bail!("#{} has no worktree on this machine{merged}", id.short());
+        bail!("#{} has no repository on this machine{merged}", id.short());
     }
     let view = PathView {
         item: id.to_base32(),

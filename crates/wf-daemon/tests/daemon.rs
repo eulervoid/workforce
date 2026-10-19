@@ -702,11 +702,8 @@ fn give_work(
     let data_dir = DataDir::new(directory.to_path_buf());
     let workforce_directory = data_dir.workforce(&workforce);
     wf_daemon::remember_repository(&workforce_directory, &repository.directory()).unwrap();
-    let worktree = wf_vcs::item_worktree(&workforce_directory, item);
-    repository
-        .git
-        .prepare_worktree(&wf_vcs::item_branch(item), &worktree, "main")
-        .unwrap();
+    let worktree = wf_vcs::item_repository(&workforce_directory, item);
+    repository.prepare_worktree(&wf_vcs::item_branch(item), &worktree, "main");
     repository.write(&worktree, "live.txt", "work in progress\n");
     repository.commit(&worktree, "the first step")
 }
@@ -787,11 +784,11 @@ async fn a_session_on_this_device_is_answered_without_the_network() {
     assert!(!running.daemon.network_is_on(), "the network stayed off");
 
     // The branch and the worktree are gone, as after the session ended.
-    let worktree = wf_vcs::item_worktree(
+    let worktree = wf_vcs::item_repository(
         &DataDir::new(running._directory.path().to_path_buf()).workforce(&workforce),
         item,
     );
-    repository.git.remove_worktree(&worktree).unwrap();
+    repository.remove_worktree(&worktree);
     repository
         .git
         .delete_branch(&wf_vcs::item_branch(item))
@@ -851,11 +848,11 @@ async fn a_device_reads_the_committed_work_of_a_session_on_another() {
     );
 
     // The branch and the worktree are gone, as after the session ended.
-    let worktree = wf_vcs::item_worktree(
+    let worktree = wf_vcs::item_repository(
         &DataDir::new(vm_dir.path().to_path_buf()).workforce(&workforce),
         item,
     );
-    repository.git.remove_worktree(&worktree).unwrap();
+    repository.remove_worktree(&worktree);
     repository
         .git
         .delete_branch(&wf_vcs::item_branch(item))

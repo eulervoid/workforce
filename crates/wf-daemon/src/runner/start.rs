@@ -1,4 +1,4 @@
-//! Starting sessions: the worktree or directory a session runs in, its harness and sandbox.
+//! Starting sessions: the repository or directory a session runs in, its harness and sandbox.
 
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -13,7 +13,7 @@ use wf_core::name::AgentName;
 use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::{AgentDefinition, State};
 use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
-use wf_vcs::{GitCli, VcsError, item_branch, item_worktree, session_directory};
+use wf_vcs::{GitCli, VcsError, item_branch, item_repository, session_directory};
 
 use super::drive::run_session;
 use super::{Begin, Run, SessionError, blocking};
@@ -32,24 +32,14 @@ pub(super) fn sandboxed(
         .workforce_directory(run.workforce)
         .join("sandbox")
         .join(format!("{}.json", run.session));
-    sandboxed_in(
-        daemon,
-        &run.sandbox,
-        &run.worktree,
-        run.git.repository(),
-        Some(&run.branch),
-        &profile_file,
-        agent,
-    )
+    sandboxed_in(daemon, &run.sandbox, &run.directory, &profile_file, agent)
 }
 
-/// `agent` in `sandbox`, working in `worktree`; Fence's sandbox profile is written to `profile_file`.
+/// `agent` in `sandbox`, working in `directory`; Fence's sandbox profile is written to `profile_file`.
 pub(crate) fn sandboxed_in(
     daemon: &Daemon,
     sandbox: &SandboxConfig,
-    worktree: &std::path::Path,
-    repository: &std::path::Path,
-    branch: Option<&str>,
+    directory: &std::path::Path,
     profile_file: &std::path::Path,
     agent: AcpAgentConfig,
 ) -> Result<AcpAgentConfig, String> {
@@ -61,9 +51,7 @@ pub(crate) fn sandboxed_in(
         SandboxConfig::Off {} => return Ok(agent),
     };
     let access = crate::sandbox::Access {
-        worktree,
-        repository,
-        branch,
+        directory,
         socket: &daemon.launch.socket,
         data_dir: &daemon.launch.data_dir,
         machine_config: daemon.launch.machine_config.as_deref(),
@@ -143,7 +131,7 @@ impl Daemon {
         })
     }
 
-    /// The worktree or directory `session` of `role` on `item` runs in.
+    /// The repository or directory `session` of `role` on `item` runs in.
     pub(super) fn session_directory(
         &self,
         workforce: WorkforceId,
@@ -155,10 +143,10 @@ impl Daemon {
     }
 
     /// Starts a session of `agent` on `item`, and a task that runs the harness. A work session
-    /// runs in the item's worktree on its branch, and moves the item to `active`; a
-    /// review session in a detached checkout of the commit under review, or an empty directory
-    /// when it was submitted without commits; a supervise or diagnose session in an empty
-    /// directory.
+    /// runs in a repository of the agent's own with the branch of the item checked out, and
+    /// moves the item to `active`; a review session in a repository of the same kind with the
+    /// commit under review checked out, or an empty directory when it was submitted without
+    /// commits; a supervise or diagnose session in an empty directory.
     pub(crate) async fn start_session(
         self: &Arc<Self>,
         workforce: WorkforceId,
@@ -185,11 +173,13 @@ impl Daemon {
         }
         let git = match role {
             SessionRole::Work => {
-                let path = item_worktree(&self.workforce_directory(workforce), item);
+                let path = item_repository(&self.workforce_directory(workforce), item);
                 let (branch, target) = (item_branch(item), setup.target.clone());
                 blocking(move || {
                     let git = GitCli::open(&repository)?;
-                    git.prepare_worktree(&branch, &path, &target)?;
+                    let commit = git.starting_commit(item, &target)?;
+                    git.create_agent_repository(&path, &branch, commit)?;
+                    git.ensure_item_branch(item, commit)?;
                     Ok::<_, VcsError>(git)
                 })
                 .await??
@@ -216,7 +206,7 @@ impl Daemon {
         let session = SessionId::from(started.id());
         // Once the session is in the log, a failure to set it up ends it: otherwise it would hold
         // the item and a slot until the next daemon starts.
-        let worktree = self.session_directory(workforce, item, session, &role);
+        let directory = self.session_directory(workforce, item, session, &role);
         let prepared = async {
             match &role {
                 SessionRole::Work => {}
@@ -224,14 +214,14 @@ impl Daemon {
                     commit: Some(commit),
                     ..
                 } => {
-                    let (path, git, commit) = (worktree.clone(), git.clone(), *commit);
-                    blocking(move || git.detached_worktree(&path, commit)).await??;
+                    let (path, git, commit) = (directory.clone(), git.clone(), *commit);
+                    blocking(move || git.create_review_repository(&path, commit)).await??;
                 }
                 SessionRole::Review { commit: None, .. }
                 | SessionRole::Supervise
                 | SessionRole::Diagnose => {
-                    std::fs::create_dir_all(&worktree).map_err(|source| SessionError::Io {
-                        path: worktree.clone(),
+                    std::fs::create_dir_all(&directory).map_err(|source| SessionError::Io {
+                        path: directory.clone(),
                         source,
                     })?;
                 }
@@ -274,7 +264,7 @@ impl Daemon {
             }
             return Err(error);
         }
-        let run = self.run(setup, session, worktree, git, Begin::New);
+        let run = self.run(setup, session, directory, git, Begin::New);
         tracing::info!(
             "session {}: {} started on item {}{}",
             session.short(),
@@ -291,7 +281,7 @@ impl Daemon {
         self: &Arc<Self>,
         setup: Setup,
         session: SessionId,
-        worktree: PathBuf,
+        directory: PathBuf,
         git: GitCli,
         begin: Begin,
     ) -> Run {
@@ -343,7 +333,7 @@ impl Daemon {
                             .map(ToString::to_string)
                             .collect(),
                     },
-                    directory: worktree.clone(),
+                    directory: directory.clone(),
                     tool: PermissionRequest {
                         kind: None,
                         title: String::new(),
@@ -362,7 +352,7 @@ impl Daemon {
             harness: definition.harness.clone(),
             command: harness,
             model: definition.model.clone(),
-            worktree,
+            directory,
             transcript: self.launch.data_dir.transcript(&workforce, session),
             agent_session: super::resume::record_path(&transcripts, session),
             begin,

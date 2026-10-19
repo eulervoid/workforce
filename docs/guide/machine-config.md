@@ -50,11 +50,11 @@ state.review = "bold yellow"
 The daemon runs every agent in [Fence](https://github.com/fencesandbox/fence), which has to be
 installed. Inside it, an agent may:
 
-* write in its own worktree, and where it needs to commit and talk to the daemon;
+* write in its own repository and talk to the daemon (your repository is read-only to it);
 * reach model APIs and package registries.
 
 Everything else is denied. Whatever you add, an agent never reads wf's keys or config, and never
-changes git's config or hooks. Because the sandbox holds agents in, an agent with
+changes git's config. Because the sandbox holds agents in, an agent with
 `--permissions allow` (the default) is allowed what it asks without anyone being asked.
 
 ```toml
@@ -87,7 +87,7 @@ set = { CARGO_TARGET_DIR = "~/.cache/workforce/target" }
 
 Values under `set` are expanded when the config is read: `~`, `$NAME` and `${NAME}` come from the
 daemon's environment, and `$$` is a literal `$`. A variable that is not set is an error. A relative
-path is relative to the agent's directory, its worktree. wf's own variables (`PATH`, `WF_*`,
+path is relative to the agent's directory, its repository. wf's own variables (`PATH`, `WF_*`,
 `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, `GIT_CONFIG_*`) cannot be set here.
 
 Setting a variable allows nothing by itself: a directory an agent is to write to goes in
@@ -95,8 +95,8 @@ Setting a variable allows nothing by itself: a directory an agent is to write to
 
 ### A shared build cache
 
-Each item gets its own worktree, so each would build from scratch. One build directory for every
-worktree saves the time and the disk:
+Each item gets its own repository, so each would build from scratch. One build directory for every
+repository saves the time and the disk:
 
 ```toml
 [environment]
@@ -111,21 +111,21 @@ The same works for other build tools with a cache directory set by a variable.
 
 ## Storage
 
-A shared build cache mixes the builds of different branches; one in each worktree (cargo's default
+A shared build cache mixes the builds of different branches; one in each repository (cargo's default
 `target`, without `CARGO_TARGET_DIR`) does not, but each takes its own space, also while its item
-waits in review. With a budget, the daemon keeps the caches in the worktrees under it: when a session
-ends and when the daemon starts, it deletes the caches of the least recently built worktree that no
+waits in review. With a budget, the daemon keeps the caches in the repositories under it: when a session
+ends and when the daemon starts, it deletes the caches of the least recently built repository that no
 session runs in, whole, until the rest fits. A cold build the next time is the only cost. Without
 `[storage]`, nothing is deleted. `wf status` shows what the caches take.
 
 ```toml
 [storage]
 budget = "20GB"
-caches = ["target"]              # paths inside a worktree that can be rebuilt
+caches = ["target"]              # paths inside a repository that can be rebuilt
 ```
 
-The checkout of a review goes when the review ends, the worktree of an item when it is done or
-cancelled, and a daemon that starts removes whatever else is left in its worktrees directory.
+The repository of a review goes when the review ends, the repository of an item when it is done or
+cancelled, and a daemon that starts removes whatever else is left in its repositories directory.
 
 ## One agent
 

@@ -8,10 +8,10 @@ mod drive;
 mod end;
 mod merge;
 mod offered;
+mod repositories;
 mod resume;
 mod start;
 mod submit;
-mod worktrees;
 
 pub(crate) use dispatch::run_dispatcher;
 pub(crate) use merge::{MergeQueue, run_merger};
@@ -34,7 +34,7 @@ use wf_core::session::SessionRole;
 use wf_core::state::State;
 use wf_harness::{AcpAgentConfig, Permissions};
 use wf_store::{AuthorError, ReceiveError};
-use wf_vcs::{DirtyCheckout, GitCli, VcsError};
+use wf_vcs::{GitCli, VcsError};
 
 use crate::command::CommandError;
 use crate::machine_config::{MachineConfig, MachineConfigError, SandboxConfig};
@@ -69,21 +69,10 @@ pub enum SessionError {
     #[error("{0}")]
     Vcs(#[from] VcsError),
     #[error(
-        "the submission rebases the branch onto `{target}`, and the rebase stopped at a commit \
-         that conflicts in {}. Resolve the conflicts in these files, then submit again: the \
-         daemon stages them and goes on with the rebase, which may stop at a later commit",
-        .paths.join(", ")
+        "the branch does not contain the tip of `{target}`, which moved since it was rebased; \
+         submit again to rebase it onto the new tip"
     )]
-    RebaseConflict { target: String, paths: Vec<String> },
-    #[error(
-        "the submission rebases the branch onto `{target}`, but the worktree has uncommitted \
-         changes to {}; commit or discard them, then submit again",
-        .dirty.files()
-    )]
-    RebaseDirty {
-        target: String,
-        dirty: DirtyCheckout,
-    },
+    BehindTarget { target: String },
     #[error(
         "the checks of the submission are running; you are told when they are done, so end your \
          turn"
@@ -144,8 +133,7 @@ impl SessionError {
             | Self::NotOurs(_)
             | Self::NotWork
             | Self::Vcs(_)
-            | Self::RebaseConflict { .. }
-            | Self::RebaseDirty { .. }
+            | Self::BehindTarget { .. }
             | Self::ChecksRunning
             | Self::MachineConfig(_)
             | Self::SigningKey(_)
@@ -298,7 +286,8 @@ struct Run {
     harness: HarnessName,
     command: AcpAgentConfig,
     model: Option<String>,
-    worktree: PathBuf,
+    /// The repository or directory the session runs in.
+    directory: PathBuf,
     transcript: PathBuf,
     /// Where the agent's own id of the session is kept, to resume it after a restart.
     agent_session: PathBuf,

@@ -60,7 +60,7 @@ Devices find each other through iroh, with the public relays and address lookup 
 
 ## Seeing the work of another machine
 
-An item whose session runs on another machine has its branch and worktree only there. `wf item diff`
+An item whose session runs on another machine has its agent repository only there. `wf item diff`
 and the dashboard's diff ask that machine, through the daemon, for the work it has committed, so
 you can follow an agent from your laptop while it works on a desktop. Both machines need to be
 online and have synced; a machine that cannot be reached is said so, and the dashboard keeps the

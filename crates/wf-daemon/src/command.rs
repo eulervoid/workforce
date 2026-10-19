@@ -146,7 +146,7 @@ impl Confinement<'_> {
     /// The directory commands run in.
     pub fn directory(&self) -> &Path {
         match self {
-            Confinement::Agents { access, .. } => access.worktree,
+            Confinement::Agents { access, .. } => access.directory,
             Confinement::Session { directory } => directory,
         }
     }
@@ -349,9 +349,7 @@ mod tests {
                 git: &self.repository.git,
                 confinement: Confinement::Agents {
                     access: Access {
-                        worktree: &worktree,
-                        repository: self.repository.git.repository(),
-                        branch: None,
+                        directory: &worktree,
                         socket: Path::new("/nonexistent/daemon.sock"),
                         data_dir: &DataDir::new(self.repository.root.path().to_path_buf()),
                         machine_config: None,

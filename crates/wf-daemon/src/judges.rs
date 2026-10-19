@@ -167,8 +167,6 @@ impl WorkforceJudges {
             daemon,
             &machine_config.sandbox_of(agent),
             &directory,
-            &directory,
-            None,
             &profile_file,
             command,
         )

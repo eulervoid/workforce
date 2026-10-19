@@ -1,6 +1,8 @@
-//! The version control the work happens in: one branch and worktree per item, and the merge of
-//! reviewed work into the target branch. Git is the only system, called as the `git` CLI.
+//! The version control the work happens in: one branch per item, a repository of its own for the
+//! agent that works on it, and the merge of reviewed work into the target branch. Git is the only
+//! system, called as the `git` CLI.
 
+mod agent_repository;
 pub mod config;
 pub mod diff;
 mod git;
@@ -13,6 +15,7 @@ use std::path::{Path, PathBuf};
 use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::session::{CommitId, GitOid, SessionRole};
 
+pub use agent_repository::{agent_branch_head, remove_agent_repository};
 pub use git::GitCli;
 
 /// The variables that give git config through the environment: how many, then each key and value.
@@ -70,7 +73,7 @@ impl CommitSigning {
     }
 }
 
-/// How much of an item's id names its branch and worktree.
+/// How much of an item's id names its branch and repository.
 const NAME_LEN: usize = 12;
 
 /// The name of the branch that holds the work of an item. Sessions continue it.
@@ -83,19 +86,20 @@ pub fn item_name(item: ItemId) -> String {
     item.to_base32()[..NAME_LEN].to_string()
 }
 
-/// The directory of a workforce that the sessions on this machine run in: the worktree of each
-/// item, and the checkouts and empty directories of review, supervise and diagnose sessions.
-pub fn worktrees(workforce_directory: &Path) -> PathBuf {
-    workforce_directory.join("worktrees")
+/// The directory of a workforce that the sessions on this machine run in: the repository of each
+/// item, and the repositories and empty directories of review, supervise and diagnose sessions.
+pub fn repositories(workforce_directory: &Path) -> PathBuf {
+    workforce_directory.join("repos")
 }
 
-/// The worktree of the work on an item.
-pub fn item_worktree(workforce_directory: &Path, item: ItemId) -> PathBuf {
-    worktrees(workforce_directory).join(item_name(item))
+/// The repository of the agent that works on an item. It is the agent's own, with the principal's
+/// objects as alternates, and the daemon copies the commits it submits into the principal's.
+pub fn item_repository(workforce_directory: &Path, item: ItemId) -> PathBuf {
+    repositories(workforce_directory).join(item_name(item))
 }
 
-/// The worktree or directory `session` of `role` on `item` runs in. Work sessions share the
-/// worktree of the item; every other session has a directory of its own, so that cleaning up
+/// The repository or directory `session` of `role` on `item` runs in. Work sessions share the
+/// repository of the item; every other session has a directory of its own, so that cleaning up
 /// after one cannot remove what the next on the same item uses.
 pub fn session_directory(
     workforce_directory: &Path,
@@ -104,12 +108,12 @@ pub fn session_directory(
     role: &SessionRole,
 ) -> PathBuf {
     let purpose = match role {
-        SessionRole::Work => return item_worktree(workforce_directory, item),
+        SessionRole::Work => return item_repository(workforce_directory, item),
         SessionRole::Review { .. } => "review",
         SessionRole::Supervise => "supervise",
         SessionRole::Diagnose => "diagnose",
     };
-    worktrees(workforce_directory).join(format!(
+    repositories(workforce_directory).join(format!(
         "{}-{purpose}-{}",
         item_name(item),
         session.short()
@@ -141,13 +145,6 @@ pub enum VcsError {
 pub enum Work {
     /// Not merged yet: `commit` changes the target from where it left it, `<target>...<commit>`.
     Unmerged { target: String, commit: CommitId },
-    /// Unmerged, and a session works on it in `worktree` on this machine: what the worktree has
-    /// changed since `commit` is the uncommitted part of the work, which only this machine has.
-    Working {
-        target: String,
-        commit: CommitId,
-        worktree: PathBuf,
-    },
     /// Merged as `merge`, whose first parent is the target: what it brought in is
     /// `<merge>^1 <merge>`, however far the target moved since. `commit` is the merged work.
     Merged { merge: CommitId, commit: CommitId },
@@ -157,16 +154,14 @@ impl Work {
     /// The latest commit of the work itself, the one to check out.
     pub fn commit(&self) -> CommitId {
         match self {
-            Work::Unmerged { commit, .. }
-            | Work::Working { commit, .. }
-            | Work::Merged { commit, .. } => *commit,
+            Work::Unmerged { commit, .. } | Work::Merged { commit, .. } => *commit,
         }
     }
 
     /// The commit whose files the diff of the work shows on its new side.
     pub fn shown(&self) -> CommitId {
         match self {
-            Work::Unmerged { commit, .. } | Work::Working { commit, .. } => *commit,
+            Work::Unmerged { commit, .. } => *commit,
             Work::Merged { merge, .. } => *merge,
         }
     }
@@ -203,6 +198,28 @@ pub enum MergeTree {
     Clean { base: CommitId, tree: GitOid },
     /// The work does not merge cleanly. The paths are the files in conflict.
     Conflict { paths: Vec<String> },
+}
+
+/// What the commits of an agent's repository have to be before they are copied into the
+/// principal's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ImportMode {
+    /// Whatever the branch holds: the work as it stands, for the principal to look at.
+    InProgress,
+    /// Commits that contain the target's tip, as a submission has them after its rebase.
+    Submission,
+}
+
+/// What came of copying the commits of an agent's repository into the principal's.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Import {
+    /// The branch of the item in the principal's repository now points at `commit`.
+    Imported { commit: CommitId },
+    /// The agent's repository has no branch of the item with a commit on it.
+    NoCommits,
+    /// The branch lacks the tip of the target, which moved since the agent rebased. Nothing was
+    /// copied.
+    BehindTarget,
 }
 
 /// What happened when an item's branch was rebased onto the target branch, in its worktree.
@@ -279,7 +296,7 @@ mod tests {
         ] {
             let directory = session_directory(workforce, item, first, &role);
             assert_ne!(directory, session_directory(workforce, item, second, &role));
-            assert_ne!(directory, item_worktree(workforce, item));
+            assert_ne!(directory, item_repository(workforce, item));
         }
         assert_eq!(
             session_directory(workforce, item, first, &SessionRole::Work),

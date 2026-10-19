@@ -110,7 +110,8 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::LastSeen
         | Call::MachineFaults
         | Call::CacheUsage
-        | Call::LiveDiff { .. } => daemon.workforce(request.workforce).await,
+        | Call::LiveDiff { .. }
+        | Call::TargetCommit => daemon.workforce(request.workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
@@ -162,6 +163,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         | Call::MachineFaults
         | Call::CacheUsage
         | Call::Permissions
+        | Call::TargetCommit
         | Call::EndSession { .. } => Ok(()),
         Call::Fork(_) => principals("found a fork"),
         Call::Join { .. } => principals("join a workforce"),
@@ -344,6 +346,13 @@ async fn call(
                 .await
                 .map_err(|error| wf_core::error_chain(&error))?;
             reply(diff)
+        }
+        Call::TargetCommit => {
+            let commit = daemon
+                .target_commit(workforce, loaded)
+                .await
+                .map_err(|error| wf_core::error_chain(&error))?;
+            reply(commit)
         }
         Call::StartSession {
             agent,

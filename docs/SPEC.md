@@ -53,7 +53,7 @@ named, never required.
 | P8 | Harness-agnostic through ACP. |
 | P9 | Forkable: any member can start a new workforce from a frozen point of an old one. |
 | P10 | Indirect communication: agents coordinate through items and comments, not messages. |
-| P11 | Derivable: all workforce state is derivable from the log plus the repository. What a machine keeps besides (transcripts, check passes) is local and never needed by another; a live view of it (the diff of a worktree) is asked of the one device that has it and never stored. |
+| P11 | Derivable: all workforce state is derivable from the log plus the repository. What a machine keeps besides (transcripts, check passes) is local and never needed by another; a live view of it (the diff of an agent's repository) is asked of the one device that has it and never stored. |
 
 ## 3. Non-goals for v1
 
@@ -68,7 +68,7 @@ wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine,
                                             ├─ wf-core: admission, fold, policy, lifecycle (pure)
                                             ├─ runner: dispatcher, ACP sessions, merge task, checks
                                             ├─ permission deciders, notifications
-                                            ├─ wf-vcs: worktrees, rebase, merge (the only crate that runs git)
+                                            ├─ wf-vcs: agent repositories, import, rebase, merge (the only crate that runs git)
                                             └─ iroh endpoint, started once a second device exists
                                                  ├─ wf/join/2   invites
                                                  ├─ wf/sync/3   feed sync
@@ -108,7 +108,7 @@ it, or a subscription.
 | `<wf>/principal.key` | the principal key for this workforce |
 | `<wf>/store.redb` | the event store |
 | `<wf>/repository` | where the main checkout is; every `wf` command run in it refreshes this |
-| `<wf>/worktrees/` | worktrees of items and checkouts of sessions (section 10) |
+| `<wf>/repos/` | the repository of each item's agent and the repositories and directories of other sessions (section 10) |
 | `<wf>/transcripts/` | ACP transcripts and resume records of sessions (local, never synced) |
 | `<wf>/check/`, `check-logs/`, `checks-passed/` | the check worktree, logs, passes |
 | `<wf>/sandbox/`, `judges/`, `announced.json` | sandbox profiles, agent deciders, notified inbox entries |
@@ -577,8 +577,8 @@ A **session** is one attempt by one agent on one device at **exactly one item**,
 
 | Role | Does | Runs in |
 |---|---|---|
-| `Work` | does the item; holds its claim | the item's worktree, on branch `wf/<item>` |
-| `Review{commit, step}` | takes one review step, by its name, on one submitted commit | a detached checkout of that commit |
+| `Work` | does the item; holds its claim | the item's own repository, on branch `wf/<item>` |
+| `Review{commit, step}` | takes one review step, by its name, on one submitted commit | a throwaway repository with that commit checked out, detached |
 | `Supervise` | answers or escalates blockers waiting on its agent | an empty directory |
 | `Diagnose` | says why earlier attempts failed (a recovery step) | an empty directory |
 
@@ -753,21 +753,42 @@ default level; an item can name another (`--recovery`).
   once in `wf inbox` as `machine_fault` rather than as a comment on every item. A `UsageLimit` holds
   them until the reset its message gives (`resets 7:50pm (Europe/Berlin)`); the 10 minutes are the
   fallback when no reset is given. A session end that cannot be written is retried.
-* **Storage.** Daemon start removes stray worktrees. With a `[storage]` budget in the machine config,
-  the build caches of the least recently built idle worktrees are deleted until the rest fits.
+* **Storage.** Daemon start removes stray repositories. With a `[storage]` budget in the machine config,
+  the build caches of the least recently built idle repositories are deleted until the rest fits.
 
 ## 10. VCS, review and merge
 
 * Git only, through the `git` CLI (2.38 or later), run by `wf-vcs` alone, always with
   `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `LC_ALL=C` and no terminal prompt. Commit ids
   are a `vcs` enum with one variant, so jj can be added without a format change.
-* One worktree and branch per item: `wf/<item>`, where `<item>` is the first 12 characters of the item
-  id. Worktrees live in `<wf>/worktrees/<item>`, outside the repository, and are removed after the
-  merge, when the item is cancelled, or at once when a session submits without commits. A review
-  gets a detached checkout in `<item>-<commit prefix>` (an empty `<item>-answer` for a submission
-  without commits), removed when it ends.
-* Whichever worktree it is given, the adapter works on the repository's main checkout, found through
-  `<wf>/repository`.
+* One branch per item, `wf/<item>`, where `<item>` is the first 12 characters of the item id, and one
+  **agent repository** per item, `<wf>/repos/<item>`: a repository of the agent's own, outside the
+  principal's. Its `objects/info/alternates` points at the principal's `.git/objects`, it has no
+  remote, and its branch starts at the tip of the target (at `wf/<item>` after a change request) and
+  is checked out. The daemon runs git there only while it creates it, before the agent touches it.
+  The agent can write all of it and none of the principal's repository, so no rule about which
+  parts of a `.git` it may write exists (and any sandbox that cannot express per-ref write rules,
+  such as a container, works the same way). Later sessions on the item continue in the same
+  repository; it is removed after the merge, when the item is cancelled, or at once when a session
+  submits without commits. A review gets a throwaway repository of the same kind with the commit
+  checked out, detached, in `<item>-review-<session>` (an empty `<item>-review-<session>` directory
+  for a submission without commits), removed when it ends.
+* **Import.** The daemon copies the agent's commits into the principal's repository at the end of
+  every turn of a work session (so that `wf item diff` and the live diff follow the work) and when
+  it submits. It reads the agent's ref from the file (or `packed-refs`) itself, accepting only a
+  regular file holding a commit id, and in the principal's repository, with
+  `GIT_ALTERNATE_OBJECT_DIRECTORIES=<agent repo>/.git/objects`, runs
+  `git rev-list --objects <commit> --not <target> [wf/<item>] | git pack-objects .git/objects/pack/pack`
+  and then `git update-ref refs/heads/wf/<item>`. A submission must name a commit that contains the
+  tip of the target, else it is refused and the agent rebases again; work in progress is copied as it
+  is. No git process runs with the agent repository's config, hooks or attributes, and the objects
+  copied are only those the commit reaches, so an edited `alternates` file adds nothing. Review,
+  checks and merge see only `wf/<item>` in the principal's repository.
+* If the principal rewrites the target behind the agent's base (wf never does), the objects that
+  agent repository got through its alternates can be pruned and git there fails with missing
+  objects; the repository is then removed and made again. `gc` or `pack-refs` in either repository
+  changes nothing the import relies on.
+* The adapter works on the repository's main checkout, found through `<wf>/repository`.
 
 ### Review
 
@@ -782,12 +803,14 @@ default for tasks).
 * An item's level is its own `review` or its type's; `--review default` goes back to the type's, so
   `default` is not a level name. A type or item without steps is not reviewed.
 * **Submitting** (`wf work submit`) is refused while a change request is open, or with uncommitted
-  changes. It first **rebases** the branch onto the target, so the reviewer sees the commits as they
-  will land; nobody has approved them, so rewriting costs nothing (the rebased commits are signed as
-  agents' commits are). A conflict refuses the submission with the files: the rebase stays stopped in
-  the worktree, the agent resolves the files and submits again, and the daemon continues the rebase.
-  A session that ends without submitting abandons the rebase. Once the rebase is through, the session
-  ends `Submitted` and the item moves to `review`.
+  changes. `wf work submit` first **rebases** the branch in the agent's repository onto the tip of the
+  target (which the daemon tells it), so the reviewer sees the commits as they will land; nobody
+  has approved them, so rewriting costs nothing (the rebased commits are signed as agents' commits
+  are, with the environment of the session). A conflict refuses the submission with the files: the
+  rebase stays stopped in the repository, the agent resolves the files and submits again, and
+  `wf work submit` continues the rebase. A rebase left stopped when the turn ends is named in the
+  next prompt. Once the rebase is through and the daemon has imported the commits, the session ends
+  `Submitted` and the item moves to `review`.
 * Entries run in order, the steps of one at once. A review session records the name of the step it
   was started for, and its verdict counts for an open step of that name in the current entry. The
   status (`Awaiting{steps, approved}` with the steps of the entry still open and those that approved,
@@ -825,7 +848,7 @@ default for tasks).
   take names the steps.
 * Principal steps wait in `wf inbox` as `principal_review`. `wf item diff` shows the work through git
   (the principal's pager and diff settings apply); `wf item checkout` puts the main checkout on it,
-  detached, since the branch is checked out in the item's worktree.
+  detached, since the item's agent repository may have it checked out.
 * When the last step approves, the item is merged and then done, which unblocks its dependents. An
   item someone moved after the submission is left where it is.
 
@@ -843,7 +866,7 @@ ends only queue work for it. Work without a review level waits in `review` while
 3. Commit it (`Merge #<item>: <title>`) with `git commit-tree`, and advance the target: fast-forward a
    clean checkout of it, or compare-and-swap with `git update-ref`. A target that moved meanwhile is
    tried again (3 times, then one comment).
-4. Write `Merged{item, reviewed, commit}`, remove the branch and worktree, move the item to done.
+4. Write `Merged{item, reviewed, commit}`, remove the branch and the agent repository, move the item to done.
 
 * A **dirty checkout** of the target makes the merge wait: one comment naming the files, a `merge`
   entry in `wf inbox`, and a retry on every change and tick. Untracked files do not count.
@@ -1141,7 +1164,7 @@ the principal with the reason. A mistake in `[theme]` only warns and keeps the b
 | `[agent.<name>]` | more `environment` and `sandbox` for one agent |
 | `[commits]` | `agent_signing`, `merge_signing` (section 10) |
 | `[check]` | `max_timeout`, and the checks' own `sandbox` (default: `[sandbox]` without per-agent additions) |
-| `[storage]` | `budget` and the rebuildable `caches` paths inside worktrees (section 9) |
+| `[storage]` | `budget` and the rebuildable `caches` paths inside agent repositories (section 9) |
 | `[notify]` | `command` (section 12) |
 | `[permissions]` | `guidance` text for models and agents, and the `[[permissions.decider]]` chain |
 | `[theme]` | colours of the CLI and dashboard, in git's colour syntax |
@@ -1152,33 +1175,27 @@ The daemon runs every harness in **Fence**, with a profile it writes per session
 template. Without Fence installed, sessions fail; there is no silent fallback. `kind = "off"` runs
 agents with the principal's privileges, and then `allow` is treated as `ask`.
 
-* **Write:** the session's directory, the parts of the repository's `.git` that commits need (`objects`, remote and tag refs, the
-  session's own branch, the admin directory of its own worktree as the `gitdir:` line of the worktree's
-  `.git` file names it, and the lock of `packed-refs`, which git takes to delete the pseudorefs it
-  removes after each commit; the file itself stays closed), temporary files,
+* **Write:** the session's directory (its own repository, whole: `.git` included), temporary files,
   `~/.cache` and the caches and state of agent tools and package managers, the daemon's socket, and
-  `allow_write`. Not `.env*` or key files.
+  `allow_write`. Not `.env*` or key files. The principal's repository is read-only, and so are the
+  repositories of other items.
 * **Network:** model APIs, git hosts and package registries, plus `allow_domains`; cloud metadata and
   telemetry are denied.
-* **Commands denied:** pushing, resetting, rebasing and merging with git, publishing packages, `sudo`,
+* **Commands denied:** pushing and merging with git (`reset`, `clean`, `checkout --` and `rebase` only change the agent's own repository), publishing packages, `sudo`,
   and `gh` commands that change anything.
 * **Always denied, whatever the config adds:**
   * reading or writing the device key, principal keys, the principal token and the machine config,
     with which an agent could sign as the device or the principal, have the daemon act for the
     principal, or turn its sandbox off;
-  * writing `.git/config`, `.git/hooks`, the worktree's `.git` file, the `commondir` it leads to and the
-    worktree's `config.worktree`, and git's own config, with which git would run the agent's code outside the sandbox;
-  * writing the target branch, any other item's branch, `packed-refs`, `HEAD` and the admin
-    directories of other worktrees, with which an agent would move the target past review and checks;
+  * writing git's own config (`~/.config/git`), with which git would run the agent's code outside the sandbox;
   * reading SSH and GPG keys and the credentials of clouds, registries and docker.
 
 `wf` in a session reads no key: the daemon signs what it writes.
 
-**Repository maintenance** (`gc`, `pack-refs`, repacking) is not the agents': they cannot write
-`packed-refs` or the repository's config, and git's automatic maintenance fails in the sandbox. The
-git the daemon runs outside it (merges, rebases, commits of the merge) keeps the default
-`maintenance.auto`, so git packs and prunes the repository as it always does when the principal or
-the daemon works in it. Nothing relies on an agent doing it.
+**Repository maintenance** (`gc`, `pack-refs`, repacking) in the agent's repository is the agent's
+own business and changes nothing the import relies on. The git the daemon runs in the principal's
+repository (merges, commits of the merge, imports) keeps the default `maintenance.auto` off, as
+the daemon never packs or prunes it itself; the principal's own git does as it always does.
 
 ### Environment
 
@@ -1245,13 +1262,12 @@ mDNS for LAN-only use.
   One side writes at a time. A peer that neither sends nor accepts a byte for 30 s ends the session, and `Open`, `Versions`, wants and the join messages have small size limits. An event of more than 1 MiB is refused at admission, so every event fits a frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`; `3`: `Have` is ended by `EndOfHave`), so mismatched peers refuse at the handshake.
 * **`wf/query/1`**: a device asks another for what only it has, read from its current state and
   changing and storing nothing. Today that is the live diff of an item, which only the device with
-  its branch and worktree has. One `Query::Diff { workforce, item, since }` (the head commit the
+  its branch and agent repository has. One `Query::Diff { workforce, item, since }` (the head commit the
   asker last saw), one answer of its own type, here `DiffAnswer`: `Unchanged` (the head is still `since`, so polling is one small
   frame), `Work` (the target, the head commit and its diff against the target as git prints it), `NotHere` (no
-  branch or worktree of the item on this device) or `TooLarge` (the work does not fit the answer,
+  branch or agent repository of the item on this device) or `TooLarge` (the work does not fit the answer,
   told apart from a broken connection). A request is at most 1 KiB, an answer at most
-  32 MiB, and a peer silent for 30 s ends the exchange. The uncommitted part (the worktree against
-  the head) is kept apart from the committed one, and joins `Work` with a bumped ALPN. A live view
+  32 MiB, and a peer silent for 30 s ends the exchange. The diff is of the committed work only: the daemon does not run git in an agent's repository to read what is uncommitted there. A live view
   is asked of one device and never stored or synced; iroh-docs would replicate every snapshot to
   every replica whether anyone looks. *Planned:* a `Transcript` request.
 * **Gossip** on a topic derived from the workforce id announces a digest of each device's heads after

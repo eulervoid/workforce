@@ -265,6 +265,14 @@ impl DaemonClient {
         self.call(workforce, Call::LiveDiff { item, since })
     }
 
+    /// The commit the target branch is at.
+    pub fn target_commit(
+        &mut self,
+        workforce: WorkforceId,
+    ) -> Result<wf_core::session::CommitId, ClientError> {
+        self.call(workforce, Call::TargetCommit)
+    }
+
     /// What is wrong with the machine the daemon runs on.
     pub fn machine_faults(
         &mut self,
