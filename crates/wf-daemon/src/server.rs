@@ -109,7 +109,8 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::AnswerPermission { .. }
         | Call::LastSeen
         | Call::MachineFaults
-        | Call::CacheUsage => daemon.workforce(request.workforce).await,
+        | Call::CacheUsage
+        | Call::LiveDiff { .. } => daemon.workforce(request.workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
@@ -168,6 +169,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         Call::StartSession { .. } => principals("start sessions"),
         Call::StopSession(_) => principals("stop sessions"),
         Call::AnswerPermission { .. } => principals("answer permission requests"),
+        Call::LiveDiff { .. } => principals("ask for a live diff"),
     }
 }
 
@@ -336,6 +338,13 @@ async fn call(
         Call::LastSeen => reply(daemon.presence().snapshot()),
         Call::MachineFaults => reply(daemon.faults.current()),
         Call::CacheUsage => reply(daemon.cache_usage_of(workforce)),
+        Call::LiveDiff { item, since } => {
+            let diff = daemon
+                .live_diff(workforce, item, since)
+                .await
+                .map_err(|error| wf_core::error_chain(&error))?;
+            reply(diff)
+        }
         Call::StartSession {
             agent,
             item,

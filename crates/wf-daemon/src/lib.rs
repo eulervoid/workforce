@@ -13,6 +13,7 @@ mod faults;
 mod inherit;
 mod judges;
 mod keyed_locks;
+mod live_diff;
 pub mod machine_config;
 mod notify;
 mod panics;
@@ -158,7 +159,7 @@ async fn go_online_when_needed(
             return;
         }
     };
-    node.serve(id, storage.clone());
+    daemon.serve_on(&node, id, &storage);
     let presence = daemon.presence.clone();
     drop(daemon);
     peers::run_peer_loop(node, id, storage, presence).await;
@@ -368,6 +369,18 @@ impl Daemon {
             .cloned()
     }
 
+    /// Has the node answer the other devices about `id`: sync from its log, and the work of its
+    /// items from this machine's worktrees.
+    fn serve_on(
+        self: &Arc<Self>,
+        node: &Node<StorageHandle>,
+        id: WorkforceId,
+        storage: &StorageHandle,
+    ) {
+        node.serve(id, storage.clone());
+        node.serve_query(live_diff::WorktreeQuery::new(self));
+    }
+
     async fn load_stored_workforces(self: &Arc<Self>) {
         let Ok(entries) = std::fs::read_dir(self.launch.data_dir.root()) else {
             return;
@@ -464,7 +477,7 @@ impl Daemon {
                 })??;
         // With the network on, serve at once: a device may sync a fork right after it was made.
         if let Some(node) = self.node.get() {
-            node.serve(id, storage.clone());
+            self.serve_on(node, id, &storage);
         }
         tokio::spawn(go_online_when_needed(
             Arc::downgrade(self),

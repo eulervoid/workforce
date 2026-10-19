@@ -18,12 +18,14 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::lifecycle::Finish;
 use wf_core::name::AgentName;
+use wf_core::session::CommitId;
 use wf_harness::Permission;
+use wf_net::DiffAnswer;
 use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 16;
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -150,6 +152,24 @@ pub enum Call {
     /// What the caches in the worktrees of the workforce took when the daemon last checked them
     /// against the budget of the machine config, as `Option<CacheUsage>`; `None` without a budget.
     CacheUsage,
+    /// The work of an item as the device of its live work session shows it, for the principal;
+    /// answered with a [`LiveDiff`]. `since` is the head of the last answer, which an unchanged
+    /// head is answered with [`DiffAnswer::Unchanged`].
+    LiveDiff {
+        item: ItemId,
+        since: Option<CommitId>,
+    },
+}
+
+/// What a [`Call::LiveDiff`] came to.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum LiveDiff {
+    /// The device of the session answered, or this one did when the session runs here.
+    Answer(DiffAnswer),
+    /// The item has no live work session.
+    NoSession,
+    /// The device of the session could not be asked.
+    Unreachable { device: DeviceKey, reason: String },
 }
 
 /// A request of an agent for permission to do something, held until the principal answers.
@@ -243,6 +263,18 @@ mod tests {
             used_bytes: 10,
             budget_bytes: 20,
         });
+        let live_diffs = vec![
+            LiveDiff::Answer(DiffAnswer::Work(wf_net::Work {
+                target: "main".into(),
+                head: CommitId::Git("0123456789abcdef0123456789abcdef01234567".parse().unwrap()),
+                committed: "diff --git a/f b/f\n".into(),
+            })),
+            LiveDiff::NoSession,
+            LiveDiff::Unreachable {
+                device,
+                reason: "timed out".into(),
+            },
+        ];
         let state = encoding::encode(&(golden_state(), golden_forking_state())).unwrap();
         let replies: Vec<(&str, Vec<u8>)> = vec![
             ("State", encoding::encode(&Reply::Ok(state)).unwrap()),
@@ -256,6 +288,10 @@ mod tests {
                 encoding::encode(&Reply::Ok(MachineFaults::default())).unwrap(),
             ),
             ("CacheUsage", encoding::encode(&Reply::Ok(usage)).unwrap()),
+            (
+                "LiveDiff",
+                encoding::encode(&Reply::Ok(live_diffs)).unwrap(),
+            ),
             (
                 "failure",
                 encoding::encode(&Reply::<()>::Err("no".into())).unwrap(),
@@ -303,11 +339,12 @@ mod tests {
             Call::AnswerPermission { .. } => "AnswerPermission",
             Call::MachineFaults => "MachineFaults",
             Call::CacheUsage => "CacheUsage",
+            Call::LiveDiff { .. } => "LiveDiff",
         }
     }
 
     /// The number of arms of [`golden_name`].
-    const CALL_VARIANTS: usize = 18;
+    const CALL_VARIANTS: usize = 19;
 
     /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
     /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
@@ -368,6 +405,12 @@ mod tests {
             },
             Call::MachineFaults,
             Call::CacheUsage,
+            Call::LiveDiff {
+                item,
+                since: Some(CommitId::Git(
+                    "0123456789abcdef0123456789abcdef01234567".parse().unwrap(),
+                )),
+            },
         ];
         assert_eq!(
             calls.len(),
@@ -404,7 +447,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_REQUESTS: [(&str, usize, &str); 18] = [
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 19] = [
         (
             "State",
             34,
@@ -495,10 +538,15 @@ mod tests {
             34,
             "ytabkzyokvnpzluoivm3fn5zmjkp3extlk6yvdx2lufejibufa6a",
         ),
+        (
+            "LiveDiff",
+            90,
+            "qg3xsuhpmf35sfb2vny6eu2ya2q6piho5vvnp6dfajknmjmiek7a",
+        ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 16;
-    const GOLDEN_REPLIES: [(&str, usize, &str); 6] = [
+    const GOLDEN_PROTOCOL_VERSION: u32 = 17;
+    const GOLDEN_REPLIES: [(&str, usize, &str); 7] = [
         (
             "State",
             23384,
@@ -523,6 +571,11 @@ mod tests {
             "CacheUsage",
             4,
             "4jbsfkwgblpmpv53kehzpspv6karstuuedmhfclxlcsqy7rt4whq",
+        ),
+        (
+            "LiveDiff",
+            96,
+            "ehkn7afzf5poajq3wkx5kagr5zpy4c5ltaovawkaeypjm4lx2u5a",
         ),
         (
             "failure",

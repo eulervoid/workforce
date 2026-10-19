@@ -251,6 +251,17 @@ impl DaemonClient {
         self.call(workforce, Call::CacheUsage)
     }
 
+    /// The work of an item as the device of its live work session shows it. `since` is the head
+    /// of the answer the caller last had.
+    pub fn live_diff(
+        &mut self,
+        workforce: WorkforceId,
+        item: ItemId,
+        since: Option<wf_core::session::CommitId>,
+    ) -> Result<crate::proto::LiveDiff, ClientError> {
+        self.call(workforce, Call::LiveDiff { item, since })
+    }
+
     /// What is wrong with the machine the daemon runs on.
     pub fn machine_faults(
         &mut self,

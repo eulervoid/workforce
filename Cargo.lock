@@ -6030,6 +6030,7 @@ dependencies = [
  "humantime",
  "humantime-serde",
  "jiff",
+ "n0-future",
  "nix 0.31.3",
  "rand 0.10.3",
  "reqwest",
