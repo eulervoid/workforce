@@ -27,6 +27,7 @@ pub fn daemon(json: bool, command: DaemonCommand, data: DataDir) -> anyhow::Resu
     match command {
         DaemonCommand::Start(args) => start(json, args, &data),
         DaemonCommand::Stop => stop(json, &data),
+        DaemonCommand::Restart(args) => restart(json, args, &data),
         DaemonCommand::Status => emit(json, &status(&data), render_status),
         DaemonCommand::Log => log(&data),
         DaemonCommand::Run(args) => run(json, args, data),
@@ -105,6 +106,19 @@ fn log(data: &DataDir) -> anyhow::Result<()> {
 }
 
 fn start(json: bool, args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
+    spawn_daemon(args, data)?;
+    emit(json, &status(data), render_status)
+}
+
+/// Stops the daemon if one runs, then starts one of this binary in the background.
+fn restart(json: bool, args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
+    if !stop_running(data)? && !json {
+        eprintln!("the daemon did not run; starting it");
+    }
+    start(json, args, data)
+}
+
+fn spawn_daemon(args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
     if answers(&data.daemon_socket()) {
         bail!("the daemon already runs; `wf daemon status` says where it logs");
     }
@@ -151,13 +165,19 @@ fn start(json: bool, args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    emit(json, &status(data), render_status)
+    Ok(())
 }
 
 fn stop(json: bool, data: &DataDir) -> anyhow::Result<()> {
+    stop_running(data)?;
+    emit(json, &status(data), render_status)
+}
+
+/// Stops the daemon and waits until it has exited; whether one ran.
+fn stop_running(data: &DataDir) -> anyhow::Result<bool> {
     // The socket names the process: a pid file left by a crash may name any other.
     let pid = match daemon_process(data) {
-        DaemonProcess::Stopped => return emit(json, &status(data), render_status),
+        DaemonProcess::Stopped => return Ok(false),
         DaemonProcess::Running { pid: Some(pid) } => pid,
         DaemonProcess::Running { pid: None } => bail!(
             "a daemon answers on {} but does not say which process it is; \
@@ -177,7 +197,7 @@ fn stop(json: bool, data: &DataDir) -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    emit(json, &status(data), render_status)
+    Ok(true)
 }
 
 fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {

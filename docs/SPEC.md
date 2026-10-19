@@ -1264,7 +1264,7 @@ wf agent add | list | show | edit | remove;  wf harness models <harness>
 wf session start [--watch] | list [--live] | show | stop | watch | allow | deny
 wf work brief | submit | release                            # agents, inside a session
 wf permissions test [--command <cmd>]
-wf daemon start | stop | status | run
+wf daemon start | stop | restart | status | run
 wf sync [--serve] | invite device | join <code> | device list | edit | allowed-signers
 wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
 ```

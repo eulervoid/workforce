@@ -73,6 +73,7 @@ wf daemon start                  # in the background
 wf daemon status                 # whether it runs, and where it logs
 wf daemon log                    # its log, in a pager
 wf daemon stop                   # stops it and its sessions
+wf daemon restart                # stop and start again, with the binary that runs this command
 wf daemon run                    # in this terminal, until interrupted
 ```
 

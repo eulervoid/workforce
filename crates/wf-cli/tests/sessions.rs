@@ -2886,3 +2886,79 @@ async fn a_check_that_runs_too_long_is_stopped_and_waits_for_the_principal() {
     assert!(blocker.contains("ran longer than 1s"), "{blocker}");
     assert!(!world.wf.repository.join("hello.txt").exists());
 }
+
+/// Stops the background daemon of `sandbox` when the test ends.
+struct BackgroundDaemon<'a>(&'a Sandbox);
+
+impl Drop for BackgroundDaemon<'_> {
+    fn drop(&mut self) {
+        let _ = self.0.command(&["daemon", "stop"]).output();
+    }
+}
+
+/// `wf daemon restart` is the real stop (SIGTERM) and spawn: a daemon in the background has no
+/// injected harnesses, so the fake agent stands in for `claude-agent-acp` on the daemon's PATH.
+#[test]
+fn a_parked_session_resumes_when_wf_daemon_restart_replaces_the_daemon() {
+    let script = "\
+wf comment {item} \"which crate?\" --block
+turn
+say got {item}
+wf work submit
+";
+    let setup = World::without_daemon(&[]);
+    let wf = &setup.wf;
+    let script_path = wf.root.path().join("script-claude.txt");
+    std::fs::write(&script_path, script).unwrap();
+    let shim = wf.bin.join("claude-agent-acp");
+    std::fs::write(
+        &shim,
+        format!(
+            "#!/bin/sh\nexport FAKE_AGENT_SCRIPT='{}' WF_BIN='{}' FAKE_AGENT_REOPENS=resume \
+             XDG_DATA_HOME='{}' XDG_RUNTIME_DIR='{}' USER=ada\nexec '{}'\n",
+            script_path.display(),
+            env!("CARGO_BIN_EXE_wf"),
+            wf.data.display(),
+            wf.root.path().join("run").display(),
+            fake_agent().display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&shim, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    wf.run(&["agent", "add", "coder", "--harness", "claude-code"]);
+    let config = wf.root.path().join("config/workforce");
+    std::fs::create_dir_all(&config).unwrap();
+    std::fs::write(config.join("config.toml"), SANDBOX_OFF).unwrap();
+
+    let _guard = BackgroundDaemon(wf);
+    let first = wf.json(&["daemon", "start", "--no-network"]);
+    let item = wf.add(&["--title", "Waits over a daemon restart"]);
+    wf.json(&["session", "start", short(&item), "--agent", "coder"]);
+    let sessions = || wf.json(&["session", "list"]).as_array().unwrap().clone();
+    let wait_for = |what: &str, status: &str| {
+        for _ in 0..400 {
+            if sessions().first().is_some_and(|s| s["status"] == status) {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let log = wf.run(&["daemon", "log"]);
+        panic!("timed out waiting for {what}: {:#?}\n{log}", sessions());
+    };
+    wait_for("the session to park", "parked");
+
+    let second = wf.json(&["daemon", "restart", "--no-network"]);
+    assert_ne!(second["pid"], first["pid"]);
+    assert_eq!(sessions()[0]["status"], "parked", "parked over the restart");
+
+    wf.run(&[
+        "comment",
+        short(&item),
+        "Use humantime",
+        "--resolve-blockers",
+    ]);
+    wait_for("the resumed session to submit", "submitted");
+    assert_eq!(sessions().len(), 1, "the same session went on");
+    let transcript = wf.run(&["session", "watch", short(&item), "--no-follow"]);
+    assert!(transcript.contains("- @ada: Use humantime"), "{transcript}");
+}

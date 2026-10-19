@@ -929,6 +929,29 @@ fn the_daemon_starts_in_the_background_and_stops() {
 }
 
 #[test]
+fn restarting_replaces_a_running_daemon_and_starts_one_when_none_runs() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&["init", "--name", "demo"]);
+    let _guard = BackgroundDaemon(&sandbox);
+
+    let first = sandbox.json(&["daemon", "restart", "--no-network"]);
+    assert_eq!(first["running"], true);
+    let first_pid = first["pid"].as_u64().unwrap();
+    sandbox.add(&["--title", "Written through the old daemon"]);
+
+    let second = sandbox.json(&["daemon", "restart", "--no-network"]);
+    assert_eq!(second["running"], true);
+    assert_ne!(second["pid"].as_u64().unwrap(), first_pid);
+    sandbox.add(&["--title", "Written through the new daemon"]);
+    assert_eq!(sandbox.json(&["item", "list"]).as_array().unwrap().len(), 2);
+
+    let log = std::fs::read_to_string(second["log"].as_str().unwrap()).unwrap();
+    assert_eq!(log.matches("the daemon runs").count(), 2, "{log}");
+    assert!(log.contains("the daemon stops"), "{log}");
+    sandbox.json(&["daemon", "stop"]);
+}
+
+#[test]
 fn the_network_stays_off_until_another_device_may_join() {
     let sandbox = Sandbox::new();
     sandbox.run(&["init", "--name", "demo"]);
