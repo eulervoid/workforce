@@ -68,7 +68,7 @@ impl Notifier {
         if notify.command.is_none() {
             return;
         }
-        let Ok(state) = daemon.snapshot(loaded).await else {
+        let Ok(inbox) = daemon.read(loaded, |state| state.inbox()).await else {
             return;
         };
         let waits_on_principal = |entry: &InboxEntry| match &entry.waiting {
@@ -78,8 +78,22 @@ impl Notifier {
             | Waiting::PrincipalReview { .. }
             | Waiting::Recovery { .. } => true,
         };
-        for entry in self.take_new(state.inbox(), waits_on_principal) {
-            run_command(&notify, &notice(&state, &entry));
+        let new = self.take_new(inbox, waits_on_principal);
+        if new.is_empty() {
+            return;
+        }
+        let Ok(notices) = daemon
+            .read(loaded, move |state| {
+                new.iter()
+                    .map(|entry| notice(state, entry))
+                    .collect::<Vec<_>>()
+            })
+            .await
+        else {
+            return;
+        };
+        for notice in &notices {
+            run_command(&notify, notice);
         }
     }
 

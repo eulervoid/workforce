@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use tokio::sync::mpsc;
 use tokio::time::Instant;
+use wf_core::id::SessionId;
 use wf_core::lifecycle::{Interruption, Resume, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_core::state::State;
@@ -38,11 +39,11 @@ pub(super) async fn run_session(
     daemon.held.forget(run.session);
     daemon.callers.revoke(run.session);
     // A session that is still live was only stopped, as when the daemon halts.
-    let ended = daemon.snapshot(&loaded).await.is_ok_and(|state| {
-        state
-            .session(run.session)
-            .is_some_and(|session| !session.is_live())
-    });
+    let session = run.session;
+    let ended = daemon
+        .read(&loaded, move |state| !session_is_live(state, session))
+        .await
+        .unwrap_or(false);
     if ended {
         daemon
             .discard_session_directory(run.workforce, &loaded, run.item, run.session, run.role)
@@ -347,12 +348,21 @@ async fn turns(
         } else {
             turns_without_commit += 1;
         }
-        let Ok(state) = daemon.snapshot(loaded).await else {
+        let machine_fault = daemon.faults.blocking_all();
+        let (session, nudges) = (run.session, run.nudges);
+        let Ok((outcome, live)) = daemon
+            .read(loaded, move |state| {
+                (
+                    state.turn_outcome(session, turns_without_commit, nudges, machine_fault),
+                    session_is_live(state, session),
+                )
+            })
+            .await
+        else {
             return failed("the workforce could not be read".to_string());
         };
-        let machine_fault = daemon.faults.blocking_all();
-        match state.turn_outcome(run.session, turns_without_commit, run.nudges, machine_fault) {
-            TurnOutcome::Close => return closed(&state, run),
+        match outcome {
+            TurnOutcome::Close => return closed(live),
             TurnOutcome::Continue => prompt = nudge(run).await,
             TurnOutcome::MachineFault(fault) => {
                 return End::Interrupt(Interruption::MachineFault(fault));
@@ -387,18 +397,27 @@ async fn first_prompt(
     let Some(prompted_ms) = record.prompted_ms else {
         return brief(loaded, run).await.map_err(failed);
     };
-    let Ok(state) = daemon.snapshot(loaded).await else {
+    let (session, nudges) = (run.session, run.nudges);
+    let machine_fault = daemon.faults.blocking_all();
+    let Ok((outcome, resume, live)) = daemon
+        .read(loaded, move |state| {
+            (
+                state.turn_outcome(session, 0, nudges, machine_fault),
+                state.resume_after_restart(session, prompted_ms),
+                session_is_live(state, session),
+            )
+        })
+        .await
+    else {
         return Err(failed("the workforce could not be read".to_string()));
     };
-    match state.turn_outcome(run.session, 0, run.nudges, daemon.faults.blocking_all()) {
+    match outcome {
         TurnOutcome::MachineFault(fault) => Err(End::Interrupt(Interruption::MachineFault(fault))),
-        TurnOutcome::Continue | TurnOutcome::GiveUp => {
-            match state.resume_after_restart(run.session, prompted_ms) {
-                Resume::AfterWait => Ok(resumed(loaded, run).await),
-                Resume::AfterRestart => Ok(restarted(loaded, run, prompted_ms).await),
-            }
-        }
-        TurnOutcome::Close => Err(closed(&state, run)),
+        TurnOutcome::Continue | TurnOutcome::GiveUp => match resume {
+            Resume::AfterWait => Ok(resumed(loaded, run).await),
+            Resume::AfterRestart => Ok(restarted(loaded, run, prompted_ms).await),
+        },
+        TurnOutcome::Close => Err(closed(live)),
         TurnOutcome::Park => match park(daemon, loaded, run, stopped, deadline).await {
             None => Ok(resumed(loaded, run).await),
             Some(end) => Err(end),
@@ -488,15 +507,18 @@ async fn branch_head(run: &Run) -> Option<CommitId> {
 
 /// How the task ends when a turn outcome says to close: the session ended already, or its item
 /// moved on under it.
-fn closed(state: &State, run: &Run) -> End {
-    let live = state
-        .session(run.session)
-        .is_some_and(|session| session.is_live());
+fn closed(live: bool) -> End {
     if live {
         End::Interrupt(Interruption::MovedOn)
     } else {
         End::Over
     }
+}
+
+fn session_is_live(state: &State, session: SessionId) -> bool {
+    state
+        .session(session)
+        .is_some_and(|session| session.is_live())
 }
 
 /// Waits until the item is ready again, keeping the harness and its conversation. `None` when it
@@ -511,13 +533,22 @@ async fn park(
     let mut heads = loaded.storage.watch_heads();
     let wake = Instant::now() + run.park_timeout;
     loop {
-        let Ok(state) = daemon.snapshot(loaded).await else {
+        let (session, nudges) = (run.session, run.nudges);
+        let Ok((outcome, live)) = daemon
+            .read(loaded, move |state| {
+                (
+                    state.turn_outcome(session, 0, nudges, None),
+                    session_is_live(state, session),
+                )
+            })
+            .await
+        else {
             return Some(End::Over);
         };
         // A parked session needs nothing of the machine: it waits, whatever is wrong with it.
-        match state.turn_outcome(run.session, 0, run.nudges, None) {
+        match outcome {
             TurnOutcome::Park | TurnOutcome::MachineFault(_) => {}
-            TurnOutcome::Close => return Some(closed(&state, run)),
+            TurnOutcome::Close => return Some(closed(live)),
             TurnOutcome::Continue | TurnOutcome::GiveUp => return None,
         }
         tokio::select! {

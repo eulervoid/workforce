@@ -3,10 +3,11 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::item::ItemView;
-use wf_core::session::SessionRole;
+use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::State;
 use wf_vcs::{GitCli, item_worktree, worktrees};
 
@@ -156,8 +157,20 @@ impl Daemon {
 
     /// While the caches in the worktrees of `workforce` take more than the budget, deletes those
     /// of the least recently used worktree that no live session runs in. Without `[storage]` in
-    /// the machine config, nothing is deleted.
+    /// the machine config, nothing is deleted. Measuring walks every cache, so it happens at most
+    /// every [`MEASURE_CACHES_EVERY`], unless the disk is full.
     pub(crate) async fn keep_caches_in_budget(&self, workforce: WorkforceId, loaded: &Loaded) {
+        let disk_full = self.faults.blocking_all() == Some(MachineFault::NoSpace);
+        {
+            let mut measured = self
+                .caches_measured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            if !due_for_measuring(measured.get(&workforce).copied(), disk_full) {
+                return;
+            }
+            measured.insert(workforce, Instant::now());
+        }
         let storage = match self.machine_config() {
             Ok(config) => config.storage,
             Err(error) => {
@@ -193,6 +206,15 @@ impl Daemon {
     }
 }
 
+/// How long the caches are left unmeasured after they were.
+const MEASURE_CACHES_EVERY: Duration = Duration::from_secs(300);
+
+/// Whether the caches are measured again: when they were last measured at least
+/// [`MEASURE_CACHES_EVERY`] ago or never, and at once while the disk is full.
+fn due_for_measuring(last_measured: Option<Instant>, disk_full: bool) -> bool {
+    disk_full || last_measured.is_none_or(|at| at.elapsed() >= MEASURE_CACHES_EVERY)
+}
+
 /// Whether a live session other than `session` works in the worktree of `item`: only work
 /// sessions do, every other role runs in a directory of its own.
 fn another_work_session_live(
@@ -215,6 +237,16 @@ fn another_work_session_live(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caches_are_measured_again_after_the_interval_or_while_the_disk_is_full() {
+        let just_now = Some(Instant::now());
+        let long_ago = Instant::now().checked_sub(MEASURE_CACHES_EVERY * 2);
+        assert!(due_for_measuring(None, false));
+        assert!(!due_for_measuring(just_now, false));
+        assert!(due_for_measuring(long_ago, false));
+        assert!(due_for_measuring(just_now, true));
+    }
 
     #[test]
     fn only_another_live_work_session_keeps_the_item_worktree_in_use() {

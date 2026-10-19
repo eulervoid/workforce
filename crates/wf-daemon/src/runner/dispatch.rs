@@ -1,10 +1,11 @@
 //! The dispatcher: queues what is ready to merge and starts agents on what they may take.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use wf_core::id::{HashId, ItemId, WorkforceId};
+use wf_core::identity::AgentId;
 use wf_core::identity::DeviceKey;
 use wf_core::item::ItemState;
 use wf_core::name::{AgentName, HarnessName};
@@ -95,15 +96,27 @@ async fn dispatch_once(
     let device = daemon.device();
     let Some(repository) = daemon.repository_of(workforce) else {
         // Nothing starts without one, but what is wrong with the harnesses is still told.
-        if let Ok(state) = daemon.snapshot(loaded).await {
-            sync_unknown_harnesses(daemon, workforce, &state, device);
+        if let Ok(harnesses) = daemon
+            .read(loaded, move |state| auto_agent_harnesses(state, device))
+            .await
+        {
+            sync_unknown_harnesses(daemon, workforce, harnesses);
         }
         return;
     };
-    let Ok(mut state) = daemon.snapshot(loaded).await else {
+    let Ok((pending, finished, principal)) = daemon
+        .read(loaded, move |state| {
+            (
+                state.pending_merges(),
+                state.finished_reviews(),
+                state.principal_of(&device),
+            )
+        })
+        .await
+    else {
         return;
     };
-    for PendingMerge { item, commit } in state.pending_merges() {
+    for PendingMerge { item, commit } in pending {
         loaded.merges.push(MergeRequest {
             item,
             commit,
@@ -111,8 +124,8 @@ async fn dispatch_once(
             attempt: Attempt::Retry,
         });
     }
-    for item in state.finished_reviews() {
-        let Ok(principal) = daemon.principal_of_device(&state) else {
+    for item in finished {
+        let Some(principal) = principal else {
             continue;
         };
         if let Err(error) = daemon
@@ -126,50 +139,49 @@ async fn dispatch_once(
             );
         }
     }
-    let Ok(fresh) = daemon.snapshot(loaded).await else {
-        return;
-    };
-    state = fresh;
 
     // An agent whose session would fail for what is wrong with the machine waits until it is
     // fine, or until it is time to try again whether it is.
     let now_ms = wf_store::now_ms();
-    let auto_agents = state.auto_agents(device);
-    sync_unknown_harnesses(daemon, workforce, &state, device);
+    let Ok((auto_agents, unknown_harnesses)) = daemon
+        .read(loaded, move |state| {
+            (
+                state
+                    .auto_agents(device)
+                    .into_iter()
+                    .map(|(agent, definition)| (agent, definition.harness.clone()))
+                    .collect::<Vec<_>>(),
+                auto_agent_harnesses(state, device),
+            )
+        })
+        .await
+    else {
+        return;
+    };
+    sync_unknown_harnesses(daemon, workforce, unknown_harnesses);
     let agents: Vec<_> = auto_agents
         .into_iter()
-        .filter(|(_, definition)| !daemon.faults.holds(&definition.harness, now_ms))
+        .filter(|(_, harness)| !daemon.faults.holds(harness, now_ms))
         .map(|(agent, _)| agent)
         .collect();
     for agent in agents {
-        while state.has_free_slot(device, &agent) {
-            let review = state
-                .reviewable(device, &agent)
-                .into_iter()
-                .find(|(item, _)| !failed.contains_key(&(*item, agent.name.clone())));
-            let supervision = state
-                .supervisable(&agent)
-                .into_iter()
-                .find(|item| !failed.contains_key(&(*item, agent.name.clone())));
-            let diagnosis = state
-                .diagnosable(device, &agent)
-                .into_iter()
-                .find(|item| !failed.contains_key(&(*item, agent.name.clone())));
-            let (item, role) = match (review, supervision, diagnosis) {
-                (Some((item, commit)), _, _) => (item, SessionRole::Review { commit }),
-                (None, Some(item), _) => (item, SessionRole::Supervise),
-                (None, None, Some(item)) => (item, SessionRole::Diagnose),
-                (None, None, None) => {
-                    let Some(item) = state
-                        .dispatchable(device, &agent)
-                        .into_iter()
-                        .map(|item| item.id())
-                        .find(|item| !failed.contains_key(&(*item, agent.name.clone())))
-                    else {
-                        break;
-                    };
-                    (item, SessionRole::Work)
-                }
+        loop {
+            let skipped: BTreeSet<ItemId> = failed
+                .keys()
+                .filter(|(_, name)| *name == agent.name)
+                .map(|(item, _)| *item)
+                .collect();
+            let candidate_of = agent.clone();
+            let Ok(candidate) = daemon
+                .read(loaded, move |state| {
+                    next_start(state, device, &candidate_of, &skipped)
+                })
+                .await
+            else {
+                return;
+            };
+            let Some((item, role)) = candidate else {
+                break;
             };
             let started = daemon
                 .start_session(
@@ -194,12 +206,54 @@ async fn dispatch_once(
                     wf_core::error_chain(&error)
                 );
             }
-            let Ok(fresh) = daemon.snapshot(loaded).await else {
-                return;
-            };
-            state = fresh;
         }
     }
+}
+
+/// What `agent` starts next on this device, unless it has no free slot or nothing to take that is
+/// not in `skipped`: a review first, then a blocker to supervise, then work to diagnose, and
+/// otherwise the first item it may take.
+fn next_start(
+    state: &State,
+    device: DeviceKey,
+    agent: &AgentId,
+    skipped: &BTreeSet<ItemId>,
+) -> Option<(ItemId, SessionRole)> {
+    if !state.has_free_slot(device, agent) {
+        return None;
+    }
+    let review = state
+        .reviewable(device, agent)
+        .into_iter()
+        .find(|(item, _)| !skipped.contains(item));
+    let supervision = state
+        .supervisable(agent)
+        .into_iter()
+        .find(|item| !skipped.contains(item));
+    let diagnosis = state
+        .diagnosable(device, agent)
+        .into_iter()
+        .find(|item| !skipped.contains(item));
+    match (review, supervision, diagnosis) {
+        (Some((item, commit)), _, _) => Some((item, SessionRole::Review { commit })),
+        (None, Some(item), _) => Some((item, SessionRole::Supervise)),
+        (None, None, Some(item)) => Some((item, SessionRole::Diagnose)),
+        (None, None, None) => state
+            .dispatchable(device, agent)
+            .into_iter()
+            .map(|item| item.id())
+            .find(|item| !skipped.contains(item))
+            .map(|item| (item, SessionRole::Work)),
+    }
+}
+
+/// The auto agents of this device with the harness each runs on.
+fn auto_agent_harnesses(state: &State, device: DeviceKey) -> Vec<(HarnessName, AgentName)> {
+    state
+        .auto_agents(device)
+        .into_iter()
+        .map(|(agent, definition)| (definition.harness.clone(), agent.name))
+        .collect()
 }
 
 /// Makes the harnesses that no command is known for, among the auto agents of `workforce` on
@@ -207,16 +261,12 @@ async fn dispatch_once(
 fn sync_unknown_harnesses(
     daemon: &Daemon,
     workforce: WorkforceId,
-    state: &State,
-    device: DeviceKey,
+    agent_harnesses: Vec<(HarnessName, AgentName)>,
 ) {
     let mut unknown: BTreeMap<HarnessName, Vec<AgentName>> = BTreeMap::new();
-    for (agent, definition) in state.auto_agents(device) {
-        if daemon.harness_command(&definition.harness).is_none() {
-            unknown
-                .entry(definition.harness.clone())
-                .or_default()
-                .push(agent.name.clone());
+    for (harness, agent) in agent_harnesses {
+        if daemon.harness_command(&harness).is_none() {
+            unknown.entry(harness).or_default().push(agent);
         }
     }
     daemon.faults.sync_unknown_harnesses(workforce, unknown);

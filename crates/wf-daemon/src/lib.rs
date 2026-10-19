@@ -244,6 +244,8 @@ pub struct Daemon {
     loaded: Mutex<BTreeMap<WorkforceId, Arc<Loaded>>>,
     /// Stores that failed to open, so each is reported once.
     failed: Mutex<std::collections::BTreeSet<WorkforceId>>,
+    /// When the caches of each workforce were last measured against the budget.
+    caches_measured: Mutex<BTreeMap<WorkforceId, std::time::Instant>>,
     /// Turns true when the daemon halts; its background tasks then return.
     halted: tokio::sync::watch::Sender<bool>,
     /// What is wrong with this machine, as what failed said.
@@ -271,6 +273,7 @@ impl Daemon {
             judges: judges::Judges::default(),
             loaded: Mutex::new(BTreeMap::new()),
             failed: Mutex::new(Default::default()),
+            caches_measured: Mutex::new(BTreeMap::new()),
             halted: tokio::sync::watch::Sender::new(false),
             faults: faults::Faults::default(),
             failing_write: Mutex::new(None),
