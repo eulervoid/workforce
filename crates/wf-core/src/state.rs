@@ -280,6 +280,8 @@ pub(crate) struct Workforce {
     pub(crate) aliases: BTreeMap<PrincipalKey, PrincipalKey>,
     pub(crate) announcements: BTreeMap<EventId, Announcement>,
     pub(crate) profiles: BTreeMap<DeviceKey, Lww<DeviceProfile>>,
+    /// Whether a policy bound to its event has been folded; from then on unbound ones are ignored.
+    pub(crate) policy_bound: bool,
     /// The policy as the latest genesis or policy event set it.
     pub(crate) policy_source: Lww<String>,
     /// The latest policy this version can read, which the workforce runs on.
@@ -295,14 +297,43 @@ impl Workforce {
         self.aliases.get(principal).copied().unwrap_or(*principal)
     }
 
-    /// Takes `source` as the policy if `stamp` is the latest; it runs only if this version can
-    /// read it.
-    pub(crate) fn set_policy(&mut self, source: String, stamp: Stamp) {
-        self.policy_source.set(source.clone(), stamp);
-        if let Ok(policy) = PolicyDoc::parse(&source) {
+    /// Takes `source` as the policy if it wins: a bound policy beats every unbound one whatever
+    /// their stamps, so a replayed old unbound policy cannot roll a bound one back; among equals
+    /// the latest `stamp` wins. It runs only if this version can read it.
+    pub(crate) fn set_policy(&mut self, source: String, stamp: Stamp, binding: PolicyBinding) {
+        let parsed = PolicyDoc::parse(&source);
+        match (binding, self.policy_bound) {
+            (PolicyBinding::Unbound, true) => return,
+            (PolicyBinding::Bound, false) => {
+                self.policy_bound = true;
+                self.policy_source = Lww::new(source, stamp);
+                self.policy = match parsed {
+                    Ok(policy) => Lww::new(policy, stamp),
+                    // Keeps the unbound policy, below any bound one that can be read.
+                    Err(_) => Lww::new(
+                        self.policy.value().clone(),
+                        Stamp {
+                            hlc: Hlc::ZERO,
+                            id: stamp.id,
+                        },
+                    ),
+                };
+                return;
+            }
+            (PolicyBinding::Unbound, false) | (PolicyBinding::Bound, true) => {}
+        }
+        self.policy_source.set(source, stamp);
+        if let Ok(policy) = parsed {
             self.policy.set(policy, stamp);
         }
     }
+}
+
+/// Whether a policy event names its own `hlc`, which keeps it from being replayed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PolicyBinding {
+    Unbound,
+    Bound,
 }
 
 /// What a pending event waits for before it can be admitted.
@@ -369,9 +400,6 @@ pub struct State {
     pub(crate) workforce: Option<Workforce>,
     pub(crate) feeds: BTreeMap<DeviceKey, Feed>,
     pub(crate) known: BTreeMap<EventId, Known>,
-    /// The policies that are bound to their event, to refuse an unbound one that follows them.
-    #[serde(default)]
-    pub(crate) bound_policies: BTreeSet<EventId>,
     /// Events that some applied event names as its `prev`.
     pub(crate) extended: BTreeSet<EventId>,
     pub(crate) heads: BTreeSet<EventId>,

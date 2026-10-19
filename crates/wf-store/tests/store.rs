@@ -192,6 +192,36 @@ fn unusable_snapshots_are_discarded_and_refolded() {
 }
 
 #[test]
+fn a_snapshot_of_the_previous_format_is_discarded_and_refolded() {
+    const PREVIOUS_FORMAT: u32 = 9;
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let expected = {
+        let mut replica = new_replica(&directory, &fixture);
+        add(&mut replica, &fixture, 10);
+        replica.state().clone()
+    };
+    let previous =
+        wf_core::encoding::encode(&(PREVIOUS_FORMAT, wf_core::refs::PARSER_VERSION, &expected))
+            .unwrap();
+    let store = open(&directory);
+    store
+        .commit(Commit {
+            snapshot: SnapshotChange::Replace(&previous),
+            ..Commit::default()
+        })
+        .unwrap();
+    let replica = Replica::open(store, fixture.workforce()).unwrap();
+    assert_eq!(replica.state(), &expected);
+    let rewritten = replica.store().snapshot().unwrap().unwrap();
+    let ((format, _), _) = postcard::take_from_bytes::<(u32, u16)>(&rewritten).unwrap();
+    assert_ne!(
+        format, PREVIOUS_FORMAT,
+        "refolding writes a snapshot of the current format"
+    );
+}
+
+#[test]
 fn out_of_order_events_are_parked_and_survive_restarts() {
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);

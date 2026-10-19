@@ -12,7 +12,7 @@ use crate::refs;
 use crate::session::{Ended, Session, Verdict};
 use crate::state::{
     AgentDefinition, Announcement, Binding, Feed, FeedHead, ForkState, Invite, Known, Member,
-    Neighbours, Origin, PolicyDoc, State, Workforce,
+    Neighbours, Origin, PolicyBinding, PolicyDoc, State, Workforce,
 };
 
 impl State {
@@ -86,6 +86,7 @@ impl State {
                 founder: genesis.founder.principal,
                 members,
                 devices,
+                policy_bound: false,
                 policy_source: Lww::new(genesis.policy.clone(), stamp),
                 policy: Lww::new(policy, stamp),
                 agents: BTreeMap::new(),
@@ -253,11 +254,14 @@ impl State {
                 }
             }
             EventBody::PolicySet(signed) => {
-                workforce.set_policy(signed.statement.policy.clone(), stamp);
+                workforce.set_policy(
+                    signed.statement.policy.clone(),
+                    stamp,
+                    PolicyBinding::Unbound,
+                );
             }
             EventBody::BoundPolicySet(signed) => {
-                self.bound_policies.insert(id);
-                workforce.set_policy(signed.statement.policy.clone(), stamp);
+                workforce.set_policy(signed.statement.policy.clone(), stamp, PolicyBinding::Bound);
             }
             EventBody::AgentDefined(_) | EventBody::AgentRemoved(_)
                 if origin == Origin::History

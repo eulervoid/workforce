@@ -357,8 +357,8 @@ proof, binds it); an agent actor is a defined agent and its session belongs to t
 device; authority bodies carry a valid principal signature of the event's actor (an owner's for
 `BoundPolicySet`, `PolicySet` and `ForkAnnounced`, a member's for `InviteCreated`); a
 `BoundPolicySet` names the `hlc` of its own event; an unbound `PolicySet` (tag 2, written before the
-bound tag existed) is still admitted, so stored logs keep loading, but is refused when a
-`BoundPolicySet` is in its causal past, since it could only be a replayed old policy; genesis is signed by its founder
+bound tag existed) is still admitted, so stored logs keep loading; the fold, not admission, keeps it from
+rolling a bound policy back (below); genesis is signed by its founder
 from a founder device, with unique principals, handles and devices; referenced items, sessions and
 agents exist; no item links to itself.
 
@@ -1228,6 +1228,11 @@ The policy is TOML text in the log, signed by an owner's principal key (`PolicyS
 follows the same one. A copy in the repository has no effect. `wf policy show | edit | apply <file>`;
 `edit` and `apply` need the principal key. The default is `crates/wf-core/src/default_policy.toml`,
 reproduced in `docs/guide/policy.md`.
+
+The policy is the latest `BoundPolicySet` by stamp. An unbound `PolicySet` (and the genesis policy) only
+counts until the first `BoundPolicySet` is folded and never again after it, whatever its parents or stamp,
+so an old owner-signed policy written into a new event cannot roll the policy back. This is a rule of the
+fold, so it does not depend on arrival order.
 
 | Key | Holds |
 |---|---|

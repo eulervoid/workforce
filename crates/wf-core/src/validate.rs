@@ -99,8 +99,6 @@ pub enum Invalid {
     NotOwner(PrincipalKey),
     #[error("the policy was signed for another event: its hlc is not the hlc of the event")]
     PolicyNotForThisEvent,
-    #[error("the policy is not bound to its event, but a policy that is bound precedes it")]
-    UnboundPolicyAfterBound,
     #[error("principal signature is invalid")]
     BadPrincipalSignature,
     #[error("unknown item {0}")]
@@ -618,15 +616,8 @@ impl State {
             EventBody::Genesis(_) => Err(Invalid::DuplicateGenesis),
             EventBody::PolicySet(signed) => {
                 self.check_signed_by_actor(signed, event, trust, Role::Owner)?;
-                // Nothing binds this policy to its event, so once a bound policy is in the
-                // event's past, an old one could be written into a new event to roll it back.
-                if self
-                    .bound_policies
-                    .iter()
-                    .any(|bound| self.in_causal_past(event, *bound))
-                {
-                    return Err(Invalid::UnboundPolicyAfterBound);
-                }
+                // Not bound to its event, so it could be an old policy written into a new
+                // event; the fold lets any bound policy beat it.
                 Ok(())
             }
             EventBody::BoundPolicySet(signed) => {

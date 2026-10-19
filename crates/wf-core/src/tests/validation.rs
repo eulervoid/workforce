@@ -473,7 +473,7 @@ fn an_old_signed_policy_cannot_be_written_into_a_new_event() {
 }
 
 #[test]
-fn an_unbound_policy_is_refused_once_a_bound_one_precedes_it() {
+fn a_bound_policy_beats_an_unbound_one_whatever_its_parents_and_stamp() {
     let fixture = Fixture::new(2);
     let mut state = fixture.state();
     let unbound = |source: &str| {
@@ -491,6 +491,7 @@ fn an_unbound_policy_is_refused_once_a_bound_one_precedes_it() {
     let before = format!("{}\n# before\n", crate::policy::DEFAULT_POLICY_TOML);
     let event = fixture.author(&state, 0, 5_000, unbound(&before));
     assert_eq!(receive(&mut state, event), Ok(Disposition::Applied));
+    let mut before_bound = state.clone();
 
     let bound = fixture.author(
         &state,
@@ -504,17 +505,23 @@ fn an_unbound_policy_is_refused_once_a_bound_one_precedes_it() {
             crate::policy::DEFAULT_POLICY_TOML,
         ),
     );
-    assert_eq!(receive(&mut state, bound), Ok(Disposition::Applied));
+    assert_eq!(receive(&mut state, bound.clone()), Ok(Disposition::Applied));
 
-    let replay = fixture.author(&state, 1, 5_200, unbound(&before));
+    // Written on parents from before the bound policy, with a later stamp.
+    let replay = fixture.author(&before_bound, 1, 5_200, unbound(&before));
     assert_eq!(
-        receive(&mut state, replay),
-        Err(Invalid::UnboundPolicyAfterBound)
+        receive(&mut state, replay.clone()),
+        Ok(Disposition::Applied)
     );
     assert_eq!(
         state.policy().unwrap().source,
         crate::policy::DEFAULT_POLICY_TOML
     );
+
+    // Folding the same events in the other order gives the same policy.
+    assert_eq!(receive(&mut before_bound, replay), Ok(Disposition::Applied));
+    assert_eq!(receive(&mut before_bound, bound), Ok(Disposition::Applied));
+    assert_eq!(before_bound.policy(), state.policy());
 }
 
 /// A policy written by a newer version, with a recovery step this version does not know.
