@@ -323,7 +323,7 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
 }
 
 pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<ActivityView> {
-    let short_commit = |commit: &CommitId| commit.to_string()[..8].to_string();
+    let short_commit = |commit: &CommitId| commit.short();
     let label = |id: &ItemId| format!("#{}", id.short());
     let body = item.body();
     let mut views: Vec<ActivityView> = Vec::new();

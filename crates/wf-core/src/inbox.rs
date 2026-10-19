@@ -232,13 +232,13 @@ impl State {
             Waiting::PrincipalReview { commit } => match commit {
                 Some(commit) => format!(
                     "review of {}: `wf item diff`, then `wf review`",
-                    &commit.to_string()[..8]
+                    commit.short()
                 ),
                 None => "review of work without commits: read it, then `wf review`".to_string(),
             },
             Waiting::Merge { commit } => format!(
                 "{} is ready to merge, but {} is checked out with changes; the daemon's comment on the item names them",
-                &commit.to_string()[..8],
+                commit.short(),
                 policy.merge.target
             ),
             Waiting::Recovery {

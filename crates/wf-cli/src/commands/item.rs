@@ -219,7 +219,7 @@ pub(super) fn item(
             emit(json, &created, |created| {
                 format!(
                     "created #{}\n{}",
-                    &created.id[..wf_core::id::SHORT_ID_LEN],
+                    wf_core::id::short(&created.id),
                     render::item_list(std::slice::from_ref(created))
                 )
             })

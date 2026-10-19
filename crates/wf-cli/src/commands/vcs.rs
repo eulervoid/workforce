@@ -149,7 +149,7 @@ pub(super) fn checkout(
         format!(
             "checked out the work of #{} at {}, detached; `wf item checkout -` goes back\n",
             id.short(),
-            &view.commit.as_deref().unwrap_or_default()[..8]
+            wf_core::session::short_commit(view.commit.as_deref().unwrap_or_default())
         )
     })
 }
@@ -171,7 +171,7 @@ pub(super) fn path(
     if !path.is_dir() {
         let merged = match workspace.state().review_status(id) {
             Some(ReviewStatus::Merged { commit }) => {
-                format!("; its work was merged as {}", &commit.to_string()[..8])
+                format!("; its work was merged as {}", commit.short())
             }
             Some(
                 ReviewStatus::Awaiting { .. }

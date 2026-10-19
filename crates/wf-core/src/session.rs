@@ -11,6 +11,7 @@ use crate::id::{ItemId, SessionId};
 use crate::identity::{Actor, AgentId, DeviceKey};
 
 const GIT_OID_LEN: usize = 20;
+const SHORT_COMMIT_LEN: usize = 8;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("a git object id is {} hexadecimal characters", GIT_OID_LEN * 2)]
@@ -95,6 +96,19 @@ impl<'de> Deserialize<'de> for GitOid {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CommitId {
     Git(GitOid),
+}
+
+impl CommitId {
+    /// The first characters of the commit, enough to tell it apart on screen.
+    pub fn short(&self) -> String {
+        let text = self.to_string();
+        short_commit(&text).to_string()
+    }
+}
+
+/// The short form of a commit already written out as text.
+pub fn short_commit(commit: &str) -> &str {
+    &commit[..commit.len().min(SHORT_COMMIT_LEN)]
 }
 
 impl fmt::Display for CommitId {

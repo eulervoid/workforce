@@ -1181,7 +1181,7 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             first.push(Span::raw(" review"));
             if let Some(commit) = commit {
                 first.push(
-                    Span::raw(format!(" {}", &commit.to_string()[..8]))
+                    Span::raw(format!(" {}", commit.short()))
                         .themed(theme::text_dimmed()),
                 );
             }

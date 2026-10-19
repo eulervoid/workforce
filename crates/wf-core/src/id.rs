@@ -9,6 +9,11 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 const HASH_LEN: usize = 32;
 pub const MIN_PREFIX_LEN: usize = 4;
 pub const SHORT_ID_LEN: usize = 6;
+
+/// The short form of an id already written out as text.
+pub fn short(id: &str) -> &str {
+    &id[..id.len().min(SHORT_ID_LEN)]
+}
 /// Comments are looked up among the comments of one item, so fewer characters tell them apart.
 pub const SHORT_COMMENT_ID_LEN: usize = 4;
 
