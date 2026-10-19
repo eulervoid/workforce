@@ -413,4 +413,40 @@ mod gossip {
         stranger.shutdown().await;
         member.shutdown().await;
     }
+
+    #[tokio::test]
+    async fn gossip_from_a_member_of_another_workforce_is_refused() {
+        let home = Fixture::new(1);
+        let other = Fixture::new(2);
+        let (home_replica, other_replica) = (replica(&home), replica(&other));
+        // Device 1 is bound in `other` only; the receiver serves both workforces.
+        let receiver = Node::start(&home.devices[0], Network::Direct)
+            .await
+            .unwrap();
+        receiver.serve(home.workforce(), home_replica.clone());
+        receiver.serve(other.workforce(), other_replica.clone());
+        let visitor = Node::start(&other.devices[1], Network::Direct)
+            .await
+            .unwrap();
+        visitor.serve(home.workforce(), replica(&home));
+        visitor.serve(other.workforce(), other_replica.clone());
+        receiver.remember(visitor.local_addr());
+        visitor.remember(receiver.local_addr());
+
+        let workforce = home.workforce();
+        let mut receiver_topic = receiver.heads_topic(&workforce, &[]).await.unwrap();
+        let visitor_topic = visitor
+            .heads_topic(&workforce, &[receiver.device()])
+            .await
+            .unwrap();
+        let heads = BTreeSet::from([EventId::of(b"head")]);
+        for _ in 0..6 {
+            visitor_topic.announce(&heads).await.unwrap();
+            let heard =
+                tokio::time::timeout(Duration::from_millis(400), receiver_topic.heard.recv()).await;
+            assert!(heard.is_err(), "a device of another workforce is not heard");
+        }
+        visitor.shutdown().await;
+        receiver.shutdown().await;
+    }
 }
