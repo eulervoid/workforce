@@ -75,11 +75,11 @@ fn follow(json: bool, workspace: &mut Workspace, only: Option<ItemId>) -> anyhow
     show(json, workspace, &events, &shown)?;
     loop {
         std::thread::sleep(POLL_EVERY);
-        workspace.refresh()?;
         let new = workspace.events_since(events.len() as u64)?;
         if new.is_empty() {
             continue;
         }
+        workspace.refresh()?;
         events.extend(new.iter().cloned());
         let shown: Vec<Event> = new
             .into_iter()

@@ -261,7 +261,7 @@ impl Workspace {
         }
     }
 
-    /// Refreshes the cached state from the daemon while a long-running command follows it.
+    /// Fetches the state again from the daemon, to show what was written or what arrived since.
     pub fn refresh(&mut self) -> anyhow::Result<()> {
         match &mut self.source {
             Source::Daemon { client, state } => {
@@ -336,18 +336,22 @@ impl Workspace {
         }
     }
 
-    /// Checks the policy rules, signs with this machine's device key and stores the event.
+    /// Checks the policy rules, signs with this machine's device key and stores the event; the
+    /// state then shows it.
     pub fn author(&mut self, body: EventBody) -> anyhow::Result<Event> {
+        let event = self.author_without_refresh(body)?;
+        self.refresh()?;
+        Ok(event)
+    }
+
+    /// Like [`Self::author`], but the state does not show the event until [`Self::refresh`]: a
+    /// command that writes several events refreshes once, after the last.
+    pub fn author_without_refresh(&mut self, body: EventBody) -> anyhow::Result<Event> {
         match &mut self.source {
             Source::Local(replica, signer) => {
                 Ok(replica.author(signer, self.actor.clone(), wf_store::now_ms(), body)?)
             }
-            Source::Daemon { client, state } => {
-                let mut client = client.borrow_mut();
-                let event = client.author(self.workforce, body)?;
-                *state = client.state(self.workforce)?;
-                Ok(event)
-            }
+            Source::Daemon { client, .. } => Ok(client.get_mut().author(self.workforce, body)?),
         }
     }
 

@@ -311,7 +311,14 @@ fn watch(
         verbosity,
         jiff::tz::TimeZone::system(),
     );
-    let mut ended = false;
+    let session_ended = |workspace: &Workspace| {
+        workspace
+            .state()
+            .session(session)
+            .is_some_and(|session| !session.is_live())
+    };
+    let mut ended = session_ended(workspace);
+    let mut seen = workspace.state().event_count() as u64;
     let mut last_refresh = std::time::Instant::now();
     loop {
         let written = reader.read()?;
@@ -321,11 +328,6 @@ fn watch(
         let entries = written.entries;
         if entries.is_empty() {
             if matches!(follow, Follow::Once) || ended {
-                let ended = ended
-                    || workspace
-                        .state()
-                        .session(session)
-                        .is_some_and(|session| !session.is_live());
                 let session = if ended {
                     transcript::Session::Ended
                 } else {
@@ -338,12 +340,13 @@ fn watch(
             anstream::print!("{}", printer.caught_up(jiff::Timestamp::now()));
             std::io::stdout().flush()?;
             if last_refresh.elapsed() >= Duration::from_secs(1) {
-                workspace.refresh()?;
-                ended = workspace
-                    .state()
-                    .session(session)
-                    .is_some_and(|session| !session.is_live());
                 last_refresh = std::time::Instant::now();
+                let new = workspace.events_since(seen)?;
+                if !new.is_empty() {
+                    seen += new.len() as u64;
+                    workspace.refresh()?;
+                    ended = session_ended(workspace);
+                }
                 // Read again after observing the end to drain the final transcript entries.
                 if ended {
                     continue;

@@ -4,15 +4,15 @@ use std::sync::Arc;
 
 use serde::Serialize;
 use tokio::net::UnixStream;
-use wf_core::id::WorkforceId;
 use wf_core::event::Event;
+use wf_core::id::WorkforceId;
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::invite::{InviteCode, InviteCodeError};
 use wf_core::lifecycle::{Interruption, SessionEnd};
 use wf_core::session::SessionRole;
 use wf_core::state::State;
-use wf_store::{RedbStore, Replica};
 use wf_net::frame::{FrameError, read_frame, write_encoded_frame, write_frame};
+use wf_store::{RedbStore, Replica};
 
 use crate::caller::Caller;
 use crate::peers::{PeerSync, peers_of, sync_all};
@@ -202,7 +202,10 @@ fn filtered_log(
             return Ok(kept);
         }
         position += page.len() as u64;
-        kept.extend(page.into_iter().filter(|event| keep(replica.state(), event)));
+        kept.extend(
+            page.into_iter()
+                .filter(|event| keep(replica.state(), event)),
+        );
     }
 }
 
@@ -245,7 +248,9 @@ async fn call(
         Call::ItemEvents(item) => {
             let events = storage
                 .with(move |replica| {
-                    filtered_log(replica, |state, event| state.can_be_activity_of(item, event))
+                    filtered_log(replica, |state, event| {
+                        state.can_be_activity_of(item, event)
+                    })
                 })
                 .await
                 .map_err(closed)?

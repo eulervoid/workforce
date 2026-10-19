@@ -37,7 +37,7 @@ pub(super) fn comment(
         .step
         .map(|number| step_numbered(workspace, id, number))
         .transpose()?;
-    let event = workspace.author(EventBody::Commented(Commented {
+    let event = workspace.author_without_refresh(EventBody::Commented(Commented {
         item: id,
         text: text.to_string(),
         kind,
@@ -46,11 +46,12 @@ pub(super) fn comment(
         lines: None,
     }))?;
     if let (Some(step), true) = (step, args.done) {
-        workspace.author(EventBody::ItemEdited(wf_core::event::ItemEdited {
+        workspace.author_without_refresh(EventBody::ItemEdited(wf_core::event::ItemEdited {
             item: id,
             changes: vec![Change::StepDone { step, done: true }],
         }))?;
     }
+    workspace.refresh()?;
     let comment = CommentId::from(event.id());
     let mut message = format!(
         "wrote {} {} on #{}",
