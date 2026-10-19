@@ -69,12 +69,24 @@ impl Scene {
 
     /// A verdict given by `reviewer` from a review session of `commit(1)`, which it then ends.
     fn agent_verdict(&mut self, item: ItemId, verdict_given: Verdict) {
+        self.step_verdict("reviewer", item, None, verdict_given);
+    }
+
+    /// A verdict given by `agent` from a review session of `commit(1)` for the step called
+    /// `step`, which it then ends.
+    fn step_verdict(
+        &mut self,
+        agent: &str,
+        item: ItemId,
+        step: Option<&str>,
+        verdict_given: Verdict,
+    ) {
         let session: SessionId = self
-            .apply(start_review("reviewer", item, commit(1)))
+            .apply(start_review_step(agent, item, commit(1), step))
             .id()
             .into();
         self.clock += 1;
-        let actor = self.fixture.agent_actor("reviewer", session);
+        let actor = self.fixture.agent_actor(agent, session);
         let body = verdict(item, commit(1), verdict_given);
         let event = self
             .fixture
@@ -83,6 +95,43 @@ impl Scene {
             .receive(event, crate::state::Trust::Untrusted)
             .expect("the verdict is valid");
         self.apply(end_session(session, EndReason::Reviewed));
+    }
+
+    /// Replaces the policy with the default one and `extra` after it.
+    fn set_policy(&mut self, extra: &str) {
+        let source = format!("{}\n{extra}", crate::policy::DEFAULT_POLICY_TOML);
+        let body = self.fixture.policy_set(
+            &self.state,
+            0,
+            self.clock + 1,
+            &self.fixture.founder,
+            &source,
+        );
+        self.apply(body);
+    }
+
+    /// Three more agents that can review, and a level `wide` of three steps at once, then the
+    /// principal.
+    fn with_wide_level() -> Self {
+        let mut scene = Scene::new();
+        for name in ["second", "third"] {
+            scene.apply(define_agent_with(name, &["review", "strong-model"]));
+        }
+        scene.set_policy(
+            r#"
+[[review]]
+name = "wide"
+steps = [
+  [
+    { name = "style", requires = ["review"], instructions = "Naming." },
+    { name = "security", requires = ["review", "strong-model"] },
+    { requires = ["review", "strong-model"] },
+  ],
+  "principal",
+]
+"#,
+        );
+        scene
     }
 
     fn status(&self, item: ItemId) -> Option<ReviewStatus> {
@@ -856,4 +905,147 @@ fn a_daemon_change_request_after_the_offer_makes_the_principal_review_stale() {
         None,
         "a new submission starts over"
     );
+}
+
+fn open_names(status: Option<ReviewStatus>) -> Vec<Option<String>> {
+    let Some(ReviewStatus::Awaiting { steps }) = status else {
+        panic!("{status:?} is not awaiting");
+    };
+    steps
+        .into_iter()
+        .map(|step| match step {
+            ReviewStep::Agent { name, .. } => name.map(|name| name.to_string()),
+            ReviewStep::Principal => Some("principal".to_string()),
+        })
+        .collect()
+}
+
+mod at_once {
+    use super::*;
+
+    fn offered(scene: &Scene, agent: &str) -> Vec<Option<String>> {
+        scene
+            .state
+            .reviewable(scene.device(), &scene.agent(agent))
+            .into_iter()
+            .map(|(_, _, step)| step.map(|name| name.to_string()))
+            .collect()
+    }
+
+    #[test]
+    fn three_steps_at_once_need_three_agents() {
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        assert_eq!(
+            open_names(scene.status(item)),
+            [Some("style".into()), Some("security".into()), None]
+        );
+        assert_eq!(
+            offered(&scene, "weak"),
+            [Some("style".to_string())],
+            "only the step it has the capabilities for"
+        );
+        assert_eq!(offered(&scene, "reviewer").len(), 3);
+
+        // A session holds the step it was started for, and no other agent is offered it.
+        scene.apply(start_review_step(
+            "reviewer",
+            item,
+            commit(1),
+            Some("security"),
+        ));
+        assert_eq!(offered(&scene, "second"), [Some("style".to_string()), None]);
+
+        scene.step_verdict("second", item, Some("style"), Verdict::Approve);
+        assert_eq!(
+            offered(&scene, "second"),
+            [],
+            "an agent that gave a verdict is not offered the item again"
+        );
+        assert_eq!(offered(&scene, "third"), [None]);
+        assert_eq!(
+            open_names(scene.status(item)),
+            [Some("security".into()), None]
+        );
+
+        scene.step_verdict("third", item, None, Verdict::Approve);
+        assert_eq!(open_names(scene.status(item)), [Some("security".into())]);
+        // A second approval of a step that is closed counts for nothing.
+        scene.step_verdict("weak", item, Some("style"), Verdict::Approve);
+        assert_eq!(open_names(scene.status(item)), [Some("security".into())]);
+    }
+
+    #[test]
+    fn the_entry_passes_when_each_step_approved() {
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        scene.step_verdict("second", item, Some("style"), Verdict::Approve);
+        scene.step_verdict("third", item, Some("security"), Verdict::Approve);
+        scene.step_verdict("reviewer", item, None, Verdict::Approve);
+        assert_eq!(scene.status(item), Some(awaiting_human()));
+        scene.apply(verdict(item, commit(1), Verdict::Approve));
+        assert_eq!(
+            scene.status(item),
+            Some(ReviewStatus::Approved {
+                commit: Some(commit(1))
+            })
+        );
+    }
+
+    #[test]
+    fn one_step_requesting_changes_sends_the_item_back() {
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        scene.step_verdict("second", item, Some("style"), Verdict::Approve);
+        scene.step_verdict("third", item, Some("security"), Verdict::RequestChanges);
+        assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+    }
+
+    #[test]
+    fn a_principal_approval_passes_the_whole_entry() {
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        scene.step_verdict("second", item, Some("style"), Verdict::Approve);
+        scene.apply(verdict(item, commit(1), Verdict::Approve));
+        assert_eq!(scene.status(item), Some(awaiting_human()));
+    }
+
+    #[test]
+    fn an_escalation_adds_a_principal_step_after_the_entry() {
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        scene.step_verdict("second", item, Some("style"), Verdict::Escalate);
+        scene.step_verdict("third", item, Some("security"), Verdict::Approve);
+        scene.step_verdict("reviewer", item, None, Verdict::Approve);
+        assert_eq!(scene.status(item), Some(awaiting_human()));
+        scene.apply(verdict(item, commit(1), Verdict::Approve));
+        assert_eq!(scene.status(item), Some(awaiting_human()), "the added one");
+        scene.apply(verdict(item, commit(1), Verdict::Approve));
+        assert!(matches!(
+            scene.status(item),
+            Some(ReviewStatus::Approved { .. })
+        ));
+    }
+
+    #[test]
+    fn approvals_under_a_policy_of_the_old_form_still_fold() {
+        let mut scene = Scene::new();
+        let old = crate::policy::DEFAULT_POLICY_TOML.replace(
+            "steps = [{ requires = [\"review\", \"strong-model\"] }, \"principal\"]",
+            "steps = [{ agent = { requires = [\"review\", \"strong-model\"] } }, \"human\"]",
+        );
+        assert!(old.contains("agent = {"));
+        let body = scene.fixture.policy_set(
+            &scene.state,
+            0,
+            scene.clock + 1,
+            &scene.fixture.founder,
+            &old,
+        );
+        scene.apply(body);
+        let item = scene.submitted("critical");
+        assert_eq!(scene.status(item), Some(awaiting_agent()));
+        scene.agent_verdict(item, Verdict::Approve);
+        assert_eq!(scene.status(item), Some(awaiting_human()));
+    }
 }

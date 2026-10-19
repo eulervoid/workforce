@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::item::ItemState;
 use crate::name::{
-    AgentName, CommandName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, ReviewStepName, TypeName,
+    AgentName, CommandName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName,
+    ReviewStepName, TypeName,
 };
 
 pub const DEFAULT_POLICY_TOML: &str = include_str!("default_policy.toml");
@@ -971,7 +972,10 @@ mod tests {
                 if name.as_str() == "style" && text == "Naming."
         ));
         let bytes = postcard::to_stdvec(wide).unwrap();
-        assert_eq!(&postcard::from_bytes::<ReviewLevelConfig>(&bytes).unwrap(), wide);
+        assert_eq!(
+            &postcard::from_bytes::<ReviewLevelConfig>(&bytes).unwrap(),
+            wide
+        );
     }
 
     #[test]

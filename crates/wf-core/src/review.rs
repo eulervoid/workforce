@@ -122,9 +122,9 @@ impl State {
             let SessionRole::Review { step: held, .. } = session.role() else {
                 continue;
             };
-            let position = open.iter().position(
-                |step| matches!(step, ReviewStep::Agent { name, .. } if *name == held),
-            );
+            let position = open
+                .iter()
+                .position(|step| matches!(step, ReviewStep::Agent { name, .. } if *name == held));
             if let Some(position) = position {
                 open.remove(position);
             }

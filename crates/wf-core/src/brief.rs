@@ -1001,9 +1001,11 @@ mod tests {
         };
         let text = brief.render();
         assert!(text.contains("```diff\n+added\n```"));
-        assert!(text.contains("Commit `abc123`")
+        assert!(
+            text.contains("Commit `abc123`")
                 && text.contains("the `security` review, one of 3 at once")
-                && text.contains("Look for injection."));
+                && text.contains("Look for injection.")
+        );
         for command in ["--approve", "--request-changes", "--escalate"] {
             assert!(text.contains(command), "{command}");
         }

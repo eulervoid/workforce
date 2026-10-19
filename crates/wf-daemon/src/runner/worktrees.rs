@@ -287,10 +287,14 @@ mod tests {
         let other_item = ItemId::from_bytes([2; 32]);
         let ended = SessionId::from_bytes([3; 32]);
         let other = SessionId::from_bytes([4; 32]);
-        let review = (item, other, SessionRole::Review {
-            commit: None,
-            step: None,
-        });
+        let review = (
+            item,
+            other,
+            SessionRole::Review {
+                commit: None,
+                step: None,
+            },
+        );
         let supervise = (item, other, SessionRole::Supervise);
         let diagnose = (item, other, SessionRole::Diagnose);
         for live in [review.clone(), supervise, diagnose] {

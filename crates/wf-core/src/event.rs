@@ -544,9 +544,9 @@ struct SessionStartedWithoutStep {
 impl SessionStarted {
     fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
         let role = match &self.role {
-            SessionRole::Review {
-                step: Some(_), ..
-            } => return Ok((tag::SESSION_STARTED_FOR_STEP, encoding::encode(self)?)),
+            SessionRole::Review { step: Some(_), .. } => {
+                return Ok((tag::SESSION_STARTED_FOR_STEP, encoding::encode(self)?));
+            }
             SessionRole::Work => SessionRoleWithoutStep::Work,
             SessionRole::Review { commit, step: None } => {
                 SessionRoleWithoutStep::Review { commit: *commit }
@@ -846,7 +846,9 @@ impl EventBody {
             tag::COMMENT => EventBody::Commented(Commented::without_lines(payload)?),
             tag::COMMENT_ON_LINES => EventBody::Commented(Commented::on_lines(payload)?),
             tag::COMMENT_CHECK_FAILURE => EventBody::Commented(Commented::check_failure(payload)?),
-            tag::SESSION_STARTED => EventBody::SessionStarted(SessionStarted::without_step(payload)?),
+            tag::SESSION_STARTED => {
+                EventBody::SessionStarted(SessionStarted::without_step(payload)?)
+            }
             tag::SESSION_STARTED_FOR_STEP => {
                 EventBody::SessionStarted(SessionStarted::for_step(payload)?)
             }

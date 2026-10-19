@@ -6,7 +6,7 @@ expression: "Envelope::new(view::item_stats_views(&state))"
   "schema": 8,
   "data": [
     {
-      "id": "tdinlpggfb2i72qhsyzhfpzah3gs6mert3ts5r3eupz5oltjyulq",
+      "id": "iuvz7damji2bepk6zs7jwstwfh53jv4yplx4ratzieath72crnsq",
       "type": "task",
       "title": "Implement feed sync",
       "state": "open",

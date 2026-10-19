@@ -123,7 +123,9 @@ impl State {
                     // Agent steps that are open come first: the principal is waited for only
                     // when no agent is.
                     Some(ReviewStatus::Awaiting { steps })
-                        if steps.iter().all(|step| matches!(step, ReviewStep::Principal)) =>
+                        if steps
+                            .iter()
+                            .all(|step| matches!(step, ReviewStep::Principal)) =>
                     {
                         let (commit, submitted) = self.submission(item.id())?;
                         Waiting::PrincipalReview {
