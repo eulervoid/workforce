@@ -10,13 +10,15 @@ use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::{Connection, presets};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
-use wf_core::id::WorkforceId;
+use wf_core::id::{ItemId, WorkforceId};
 use wf_core::identity::{DeviceKey, DeviceSigner};
 use wf_core::invite::{InviteCode, JoinRefusal};
+use wf_core::session::CommitId;
 
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::{LogError, SyncLog};
+use crate::peek::{self, Answer, PEEK_ALPN, PeekError, PeekSource, Request, read_request};
 use crate::sync::{IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
 /// Hole punching and address lookup can take a while.
@@ -46,6 +48,12 @@ pub enum NetError {
         peer: String,
         #[source]
         source: SyncError,
+    },
+    #[error("asking {peer} for work failed: {source}")]
+    Peek {
+        peer: String,
+        #[source]
+        source: PeekError,
     },
     #[error("gossip failed")]
     Gossip(#[source] SourceError),
@@ -214,6 +222,70 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for SyncHandler<L> {
     }
 }
 
+/// Where the daemon's answers to requests for work come from, once it has set one.
+type PeekSlot = Arc<RwLock<Option<Arc<dyn PeekSource>>>>;
+
+struct PeekHandler<L> {
+    registry: Registry<L>,
+    source: PeekSlot,
+}
+
+impl<L> std::fmt::Debug for PeekHandler<L> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("PeekHandler")
+    }
+}
+
+impl<L: SyncLog + Clone + 'static> ProtocolHandler for PeekHandler<L> {
+    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+        let remote = device_key(connection.remote_id());
+        match self.registry.is_member(remote).await {
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
+        }
+        let (mut send, mut recv) = connection
+            .accept_bi()
+            .await
+            .map_err(AcceptError::from_err)?;
+        let request = read_request(&mut recv, IDLE_TIMEOUT)
+            .await
+            .map_err(AcceptError::from_err)?;
+        let Request::Diff { workforce, .. } = &request;
+        let source = self
+            .source
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let (Some(log), Some(source)) = (self.registry.get(workforce), source) else {
+            connection.close(NOT_SERVED.into(), b"workforce not served");
+            return Ok(());
+        };
+        match log.is_bound(remote).await {
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
+        }
+        match peek::respond(tokio::io::join(&mut recv, &mut send), request, &*source).await {
+            Ok(()) => {
+                let _ = send.finish();
+                linger(&connection).await;
+                Ok(())
+            }
+            Err(error) => {
+                connection.close(FAILED.into(), b"peek failed");
+                Err(AcceptError::from_err(error))
+            }
+        }
+    }
+}
+
 /// Lets a protocol handler through only for devices that are bound in a workforce served here.
 struct MembersOnly<H, L> {
     inner: H,
@@ -251,6 +323,7 @@ impl<H: ProtocolHandler, L: SyncLog + Clone + 'static> ProtocolHandler for Membe
 pub struct Node<L: SyncLog + Clone + 'static> {
     router: Router,
     registry: Registry<L>,
+    peek_source: PeekSlot,
     gossip: iroh_gossip::Gossip,
     signer: DeviceSigner,
     lookup: MemoryLookup,
@@ -278,9 +351,17 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .await
             .map_err(|error| NetError::Bind(error.into()))?;
         let registry = Registry::new();
+        let peek_source = PeekSlot::default();
         let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
         let router = Router::builder(endpoint)
             .accept(SYNC_ALPN, SyncHandler(registry.clone()))
+            .accept(
+                PEEK_ALPN,
+                PeekHandler {
+                    registry: registry.clone(),
+                    source: Arc::clone(&peek_source),
+                },
+            )
             .accept(
                 GOSSIP_ALPN,
                 MembersOnly {
@@ -299,6 +380,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         Ok(Self {
             router,
             registry,
+            peek_source,
             gossip,
             signer: device.clone(),
             lookup,
@@ -359,6 +441,51 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
 
     pub fn serve(&self, workforce: WorkforceId, log: L) {
         self.registry.insert(workforce, log);
+    }
+
+    /// Answers the requests for the work of items from `source`. Until then they are refused.
+    pub fn serve_peek(&self, source: Arc<dyn PeekSource>) {
+        *self
+            .peek_source
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
+    }
+
+    /// Asks a device for the diff of an item, which it answers from its worktree.
+    pub async fn peek(
+        &self,
+        peer: impl Into<EndpointAddr>,
+        workforce: WorkforceId,
+        item: ItemId,
+        since: Option<CommitId>,
+    ) -> Result<Answer, NetError> {
+        let peer: EndpointAddr = peer.into();
+        let name = device_key(peer.id).fmt_short();
+        let connection = tokio::time::timeout(
+            self.connect_timeout,
+            self.endpoint().connect(peer.clone(), PEEK_ALPN),
+        )
+        .await
+        .map_err(|_| connect_error(&name, TimedOut))?
+        .map_err(|error| connect_error(&name, error))?;
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|error| connect_error(&name, error))?;
+        let request = Request::Diff {
+            workforce,
+            item,
+            since,
+        };
+        let answer = peek::initiate(tokio::io::join(&mut recv, &mut send), &request)
+            .await
+            .map_err(|source| NetError::Peek {
+                peer: name.clone(),
+                source,
+            })?;
+        let _ = send.finish();
+        connection.close(DONE.into(), b"done");
+        Ok(answer)
     }
 
     /// Syncs one workforce with a peer. `peer` may be a bare device key when address lookup is on.
