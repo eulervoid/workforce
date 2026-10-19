@@ -9,7 +9,7 @@ use crate::event::CommentKind;
 use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{ItemState, ItemView};
-use crate::session::{CommitId, EndReason, MachineFault, SessionRole};
+use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole};
 use crate::state::State;
 
 /// How an agent ends its session. The session ends after the agent's turn, and the agent writes
@@ -139,10 +139,7 @@ impl State {
         };
         Some(match end {
             SessionEnd::Finish(finish) => {
-                let by_agent = Actor::Agent {
-                    agent: session.agent().clone(),
-                    session: session.id(),
-                };
+                let by_agent = session.actor();
                 match finish {
                     Finish::Submit { note } => closing(
                         EndReason::Submitted { commit: submitted },
@@ -235,17 +232,9 @@ impl State {
             .filter(|session| session.item() == item && session.role() == SessionRole::Work)
             .filter_map(|session| {
                 let ended = session.ended()?;
-                match ended.reason {
-                    EndReason::Submitted { .. } => Some(ended.at()),
-                    EndReason::Reviewed
-                    | EndReason::Released
-                    | EndReason::Supervised
-                    | EndReason::TimedOut
-                    | EndReason::Failed
-                    | EndReason::Cancelled
-                    | EndReason::Interrupted
-                    | EndReason::Diagnosed
-                    | EndReason::MachineFault(_) => None,
+                match ended.reason.outcome() {
+                    Outcome::Submitted { .. } => Some(ended.at()),
+                    Outcome::Finished | Outcome::Failed | Outcome::Neither => None,
                 }
             })
             .collect();

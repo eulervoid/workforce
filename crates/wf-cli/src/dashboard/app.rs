@@ -595,7 +595,7 @@ impl Target {
                 name,
             } => format!("open {name}"),
             Target::Diff { commit, .. } => {
-                let short: String = commit.chars().take(8).collect();
+                let short = wf_core::session::short_commit(commit);
                 format!("open the diff of {short}")
             }
             Target::Key { key, what, .. } => format!("{what} ({key})"),

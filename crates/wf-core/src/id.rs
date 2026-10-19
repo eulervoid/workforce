@@ -9,8 +9,14 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 const HASH_LEN: usize = 32;
 pub const MIN_PREFIX_LEN: usize = 4;
 pub const SHORT_ID_LEN: usize = 6;
+
 /// Comments are looked up among the comments of one item, so fewer characters tell them apart.
 pub const SHORT_COMMENT_ID_LEN: usize = 4;
+
+/// The short form of an id already written out as text.
+pub fn short(id: &str) -> &str {
+    &id[..id.len().min(SHORT_ID_LEN)]
+}
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 pub enum IdError {
@@ -60,15 +66,15 @@ pub trait HashId: Copy {
     }
 }
 
-/// Reads a hash as one byte string. A tuple of 32 `u8`s costs 32 serde calls per id, which
+/// Reads a hash as one byte string. A tuple of `u8`s costs one serde call per byte, which
 /// dominates snapshot decoding.
-pub(crate) struct HashVisitor;
+pub(crate) struct HashVisitor<const LEN: usize>;
 
-impl serde::de::Visitor<'_> for HashVisitor {
-    type Value = [u8; HASH_LEN];
+impl<const LEN: usize> serde::de::Visitor<'_> for HashVisitor<LEN> {
+    type Value = [u8; LEN];
 
     fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(formatter, "{HASH_LEN} bytes")
+        write!(formatter, "{LEN} bytes")
     }
 
     fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<Self::Value, E> {
@@ -137,7 +143,7 @@ macro_rules! hash_id {
                     let text = String::deserialize(deserializer)?;
                     text.parse().map_err(serde::de::Error::custom)
                 } else {
-                    deserializer.deserialize_bytes(HashVisitor).map(Self)
+                    deserializer.deserialize_bytes(HashVisitor::<HASH_LEN>).map(Self)
                 }
             }
         }
@@ -202,27 +208,46 @@ impl From<CommentId> for EventId {
     }
 }
 
-/// Resolves a user supplied prefix like git does: unique match, at least [`MIN_PREFIX_LEN`] characters.
-pub fn resolve_prefix<T: HashId>(
+/// Ids by their base32 text, for resolving a user supplied prefix like git does: unique match, at
+/// least [`MIN_PREFIX_LEN`] characters.
+pub struct PrefixIndex<T> {
+    ids: std::collections::BTreeMap<String, T>,
+}
+
+impl<T: HashId> PrefixIndex<T> {
+    pub fn new(ids: impl IntoIterator<Item = T>) -> Self {
+        Self {
+            ids: ids.into_iter().map(|id| (id.to_base32(), id)).collect(),
+        }
+    }
+
+    pub fn resolve(&self, prefix: &str) -> Result<T, PrefixError> {
+        let prefix = prefix.to_ascii_lowercase();
+        if prefix.len() < MIN_PREFIX_LEN {
+            return Err(PrefixError::TooShort(prefix));
+        }
+        let mut matches = self
+            .ids
+            .range(prefix.clone()..)
+            .take_while(|(candidate, _)| candidate.starts_with(&prefix))
+            .map(|(_, id)| *id);
+        match (matches.next(), matches.next()) {
+            (None, _) => Err(PrefixError::NotFound(prefix)),
+            (Some(id), None) => Ok(id),
+            (Some(first), Some(second)) => Err(PrefixError::Ambiguous {
+                candidates: [first, second].iter().map(HashId::short).collect(),
+                prefix,
+            }),
+        }
+    }
+}
+
+/// Resolves a prefix among `candidates`; see [`PrefixIndex`].
+pub fn resolve_prefix<T: HashId + Copy>(
     prefix: &str,
     candidates: impl IntoIterator<Item = T>,
 ) -> Result<T, PrefixError> {
-    let normalized = prefix.to_ascii_lowercase();
-    if normalized.len() < MIN_PREFIX_LEN {
-        return Err(PrefixError::TooShort(normalized));
-    }
-    let mut matches: Vec<T> = candidates
-        .into_iter()
-        .filter(|candidate| candidate.to_base32().starts_with(&normalized))
-        .collect();
-    match matches.len() {
-        0 => Err(PrefixError::NotFound(normalized)),
-        1 => Ok(matches.remove(0)),
-        _ => Err(PrefixError::Ambiguous {
-            prefix: normalized,
-            candidates: matches.iter().map(|candidate| candidate.short()).collect(),
-        }),
-    }
+    PrefixIndex::new(candidates).resolve(prefix)
 }
 
 #[cfg(test)]

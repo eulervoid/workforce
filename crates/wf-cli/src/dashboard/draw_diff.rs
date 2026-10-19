@@ -146,7 +146,7 @@ fn comment_spans(pane: &DiffPane, shown: Shown, row: usize, numbers: usize) -> V
     let mut spans = vec![Span::raw(gap), themed("┃ ", bar)];
     let outdated = pane.is_outdated(shown);
     if row == 0 {
-        let mut header = format!("{by} · {}", comment.kind.name().replace('_', " "));
+        let mut header = format!("{by} · {}", comment.kind.label());
         if let Shown::Posted(index) = shown
             && pane.posted[index].resolved
         {

@@ -5,7 +5,7 @@ use std::fmt::Write;
 
 use crate::event::CommentKind;
 use crate::id::{CommentId, HashId, ItemId, SessionId};
-use crate::identity::{Actor, PrincipalKey};
+use crate::identity::Actor;
 use crate::item::{Item, ItemView};
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
@@ -88,7 +88,7 @@ impl Brief {
                         text: sources.text(blocker.comment).unwrap_or_default(),
                     })
                     .collect();
-                let principal = handle(state, &agent.principal);
+                let principal = state.principal_label(&agent.principal);
                 Brief::Supervise(SuperviseBrief {
                     agent: agent.name.to_string(),
                     instructions,
@@ -110,9 +110,9 @@ impl Brief {
                             EndReason::Released | EndReason::TimedOut | EndReason::Failed => {
                                 Some(format!(
                                     "{}/{} {}",
-                                    handle(state, &other.agent().principal),
+                                    state.principal_label(&other.agent().principal),
                                     other.agent().name,
-                                    ended.reason.name().replace('_', " ")
+                                    ended.reason.label()
                                 ))
                             }
                             EndReason::Submitted { .. }
@@ -152,18 +152,12 @@ impl Brief {
 /// agent, and `@daemon`. A principal who is not a member is named by its short key.
 pub fn speaker(state: &State, actor: &Actor) -> String {
     match actor {
-        Actor::Principal(principal) => handle(state, principal),
+        Actor::Principal(principal) => state.principal_label(principal),
         Actor::Daemon(_) => "@daemon".to_string(),
-        Actor::Agent { agent, .. } => format!("{}/{}", handle(state, &agent.principal), agent.name),
+        Actor::Agent { agent, .. } => {
+            format!("{}/{}", state.principal_label(&agent.principal), agent.name)
+        }
     }
-}
-
-/// `@ada`, or the short key of a principal who is not a member.
-fn handle(state: &State, principal: &PrincipalKey) -> String {
-    state.member(principal).map_or_else(
-        || principal.fmt_short(),
-        |member| format!("@{}", member.handle),
-    )
 }
 
 /// Everything said on the item, oldest first.
@@ -175,7 +169,7 @@ fn earlier(state: &State, item: &Item, sources: &impl Sources) -> Vec<Earlier> {
         .filter_map(|(id, comment)| {
             Some(Earlier {
                 by: speaker(state, &comment.by),
-                kind: comment.kind.name().replace('_', " "),
+                kind: comment.kind.label(),
                 text: sources.text(*id)?,
             })
         })

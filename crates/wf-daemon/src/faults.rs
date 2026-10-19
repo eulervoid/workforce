@@ -97,7 +97,7 @@ impl Faults {
             Some(_) | None => {
                 tracing::warn!(
                     "{harness}: {}; its agents are tried again every {}: {what}",
-                    MachineFault::from(fault).name().replace('_', " "),
+                    MachineFault::from(fault).label(),
                     humantime::format_duration(RETRY_HARNESS)
                 );
                 faults.harnesses.insert(

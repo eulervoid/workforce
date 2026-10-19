@@ -7,10 +7,11 @@ use std::str::FromStr;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 use crate::crdt::Stamp;
-use crate::id::{ItemId, SessionId};
+use crate::id::{HashVisitor, ItemId, SessionId};
 use crate::identity::{Actor, AgentId, DeviceKey};
 
 const GIT_OID_LEN: usize = 20;
+const SHORT_COMMIT_LEN: usize = 8;
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
 #[error("a git object id is {} hexadecimal characters", GIT_OID_LEN * 2)]
@@ -69,24 +70,9 @@ impl<'de> Deserialize<'de> for GitOid {
             let text = String::deserialize(deserializer)?;
             text.parse().map_err(serde::de::Error::custom)
         } else {
-            struct Visitor;
-
-            impl serde::de::Visitor<'_> for Visitor {
-                type Value = GitOid;
-
-                fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-                    write!(formatter, "{GIT_OID_LEN} bytes")
-                }
-
-                fn visit_bytes<E: serde::de::Error>(self, bytes: &[u8]) -> Result<GitOid, E> {
-                    bytes
-                        .try_into()
-                        .map(GitOid)
-                        .map_err(|_| E::invalid_length(bytes.len(), &self))
-                }
-            }
-
-            deserializer.deserialize_bytes(Visitor)
+            deserializer
+                .deserialize_bytes(HashVisitor::<GIT_OID_LEN>)
+                .map(GitOid)
         }
     }
 }
@@ -95,6 +81,19 @@ impl<'de> Deserialize<'de> for GitOid {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum CommitId {
     Git(GitOid),
+}
+
+impl CommitId {
+    /// The first characters of the commit, enough to tell it apart on screen.
+    pub fn short(&self) -> String {
+        let text = self.to_string();
+        short_commit(&text).to_string()
+    }
+}
+
+/// The short form of a commit already written out as text.
+pub fn short_commit(commit: &str) -> &str {
+    &commit[..commit.len().min(SHORT_COMMIT_LEN)]
 }
 
 impl fmt::Display for CommitId {
@@ -118,6 +117,17 @@ pub enum SessionRole {
     /// Says what went wrong in the work sessions of the item that did not finish, for the next
     /// attempt: a step of the item's recovery level.
     Diagnose,
+}
+
+impl SessionRole {
+    pub fn name(&self) -> &'static str {
+        match self {
+            SessionRole::Work => "work",
+            SessionRole::Review { .. } => "review",
+            SessionRole::Supervise => "supervise",
+            SessionRole::Diagnose => "diagnose",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -167,6 +177,11 @@ impl MachineFault {
             MachineFault::HarnessUnknown => "harness_unknown",
         }
     }
+
+    /// The name for reading: words, not an identifier.
+    pub fn label(&self) -> String {
+        self.name().replace('_', " ")
+    }
 }
 
 /// What is wrong with a harness, so that none of its sessions can run.
@@ -190,7 +205,32 @@ impl From<HarnessFault> for MachineFault {
     }
 }
 
+/// What an end reason makes of the session, for deciding what happens next and for counting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The work was handed in, with its commit.
+    Submitted { commit: Option<CommitId> },
+    /// The session did what it was started for, other than handing in work.
+    Finished,
+    /// The attempt did not finish: the agent gave up, ran out of time or failed.
+    Failed,
+    /// Interrupted by a restart, cancelled by the principal or ended by a fault of the machine:
+    /// no attempt either way.
+    Neither,
+}
+
 impl EndReason {
+    pub fn outcome(&self) -> Outcome {
+        match self {
+            EndReason::Submitted { commit } => Outcome::Submitted { commit: *commit },
+            EndReason::Reviewed | EndReason::Supervised | EndReason::Diagnosed => Outcome::Finished,
+            EndReason::Released | EndReason::TimedOut | EndReason::Failed => Outcome::Failed,
+            EndReason::Interrupted | EndReason::Cancelled | EndReason::MachineFault(_) => {
+                Outcome::Neither
+            }
+        }
+    }
+
     /// The reason's name; a fault of the machine goes by the fault's, so that a sessions list
     /// names it.
     pub fn name(&self) -> &'static str {
@@ -206,6 +246,11 @@ impl EndReason {
             EndReason::Interrupted => "interrupted",
             EndReason::Diagnosed => "diagnosed",
         }
+    }
+
+    /// The name for reading: words, not an identifier.
+    pub fn label(&self) -> String {
+        self.name().replace('_', " ")
     }
 }
 

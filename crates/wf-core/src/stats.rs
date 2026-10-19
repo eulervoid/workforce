@@ -6,7 +6,7 @@ use crate::id::ItemId;
 use crate::identity::AgentId;
 use crate::item::{Item, ItemState};
 use crate::policy::Policy;
-use crate::session::{EndReason, Session, SessionRole};
+use crate::session::{Outcome, Session, SessionRole};
 use crate::state::State;
 
 /// The span "lately" covers: the last seven days.
@@ -56,28 +56,6 @@ pub struct ItemStats {
     pub lead_ms: Option<u64>,
 }
 
-/// How a session ended, for counting.
-enum Outcome {
-    Finished,
-    Failed,
-    /// Interrupted by a restart, cancelled by the principal or ended by a fault of the machine:
-    /// no attempt either way.
-    Neither,
-}
-
-fn outcome(reason: EndReason) -> Outcome {
-    match reason {
-        EndReason::Submitted { .. }
-        | EndReason::Reviewed
-        | EndReason::Supervised
-        | EndReason::Diagnosed => Outcome::Finished,
-        EndReason::Released | EndReason::TimedOut | EndReason::Failed => Outcome::Failed,
-        EndReason::Interrupted | EndReason::Cancelled | EndReason::MachineFault(_) => {
-            Outcome::Neither
-        }
-    }
-}
-
 fn median(mut values: Vec<u64>) -> Option<u64> {
     if values.is_empty() {
         return None;
@@ -87,12 +65,6 @@ fn median(mut values: Vec<u64>) -> Option<u64> {
 }
 
 impl State {
-    fn all_items(&self) -> impl Iterator<Item = &Item> {
-        self.workforce
-            .iter()
-            .flat_map(|workforce| workforce.items.values())
-    }
-
     /// How the workforce is doing at `now_ms`, archived items included.
     pub fn project_stats(&self, now_ms: u64) -> ProjectStats {
         let mut stats = ProjectStats::default();
@@ -100,7 +72,7 @@ impl State {
             return stats;
         };
         let mut leads = Vec::new();
-        for item in self.all_items() {
+        for item in self.items_including_archived() {
             let done_at = item.state.stamp().hlc.wall_ms();
             let done = item.state(policy) == ItemState::Done;
             if done && now_ms.saturating_sub(done_at) <= RECENT_MS {
@@ -124,8 +96,8 @@ impl State {
             if session.role() != SessionRole::Work {
                 continue;
             }
-            match outcome(ended.reason) {
-                Outcome::Finished => stats.attempts += 1,
+            match ended.reason.outcome() {
+                Outcome::Submitted { .. } | Outcome::Finished => stats.attempts += 1,
                 Outcome::Failed => {
                     stats.attempts += 1;
                     stats.failed_attempts += 1;
@@ -155,7 +127,7 @@ impl State {
         {
             stats.sessions += 1;
             if let Some(ended) = session.ended()
-                && matches!(ended.reason, EndReason::Submitted { .. })
+                && matches!(ended.reason.outcome(), Outcome::Submitted { .. })
             {
                 stats.submissions += 1;
             }
@@ -187,8 +159,8 @@ impl State {
                 stats.live += 1;
                 continue;
             };
-            match outcome(ended.reason) {
-                Outcome::Finished => stats.finished += 1,
+            match ended.reason.outcome() {
+                Outcome::Submitted { .. } | Outcome::Finished => stats.finished += 1,
                 Outcome::Failed => stats.failed += 1,
                 Outcome::Neither => {}
             }

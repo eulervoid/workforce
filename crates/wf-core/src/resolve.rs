@@ -5,12 +5,11 @@
 
 use std::collections::BTreeSet;
 
-use crate::id::{
-    CommentId, HashId, ItemId, MIN_PREFIX_LEN, PrefixError, SessionId, resolve_prefix,
-};
+use crate::id::{CommentId, ItemId, PrefixError, PrefixIndex, SessionId, resolve_prefix};
 use crate::identity::{AgentId, PrincipalKey};
 use crate::item::{Item, WrittenIn};
 use crate::refs::{Mention, Token};
+use crate::session::Session;
 use crate::state::State;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -60,69 +59,30 @@ pub struct Source {
 
 pub struct Resolver<'a> {
     state: &'a State,
-    /// Base32 text of every item id, sorted, for prefix lookups.
-    items: std::collections::BTreeMap<String, ItemId>,
-    sessions: std::collections::BTreeMap<String, SessionId>,
+    items: PrefixIndex<ItemId>,
+    sessions: PrefixIndex<SessionId>,
 }
 
 impl State {
     pub fn resolver(&self) -> Resolver<'_> {
         Resolver {
             state: self,
-            items: self
-                .items_including_archived()
-                .map(|item| (item.id().to_base32(), item.id()))
-                .collect(),
-            sessions: self
-                .sessions()
-                .map(|session| (session.id().to_base32(), session.id()))
-                .collect(),
+            items: PrefixIndex::new(self.items_including_archived().map(Item::id)),
+            sessions: PrefixIndex::new(self.sessions().map(Session::id)),
         }
     }
 }
 
 impl Resolver<'_> {
-    /// Resolves an item id prefix like git: at least [`MIN_PREFIX_LEN`] characters and unique.
+    /// Resolves an item id prefix like git: at least [`crate::id::MIN_PREFIX_LEN`] characters and unique.
     /// Archived items resolve too, because dependencies on them still do.
     pub fn item(&self, prefix: &str) -> Result<ItemId, PrefixError> {
-        let prefix = prefix.to_ascii_lowercase();
-        if prefix.len() < MIN_PREFIX_LEN {
-            return Err(PrefixError::TooShort(prefix));
-        }
-        let mut matches = self
-            .items
-            .range(prefix.clone()..)
-            .take_while(|(candidate, _)| candidate.starts_with(&prefix))
-            .map(|(_, id)| *id);
-        match (matches.next(), matches.next()) {
-            (None, _) => Err(PrefixError::NotFound(prefix)),
-            (Some(id), None) => Ok(id),
-            (Some(first), Some(second)) => Err(PrefixError::Ambiguous {
-                candidates: [first, second].iter().map(HashId::short).collect(),
-                prefix,
-            }),
-        }
+        self.items.resolve(prefix)
     }
 
     /// Resolves a session id prefix the same way.
     pub fn session(&self, prefix: &str) -> Result<SessionId, PrefixError> {
-        let prefix = prefix.to_ascii_lowercase();
-        if prefix.len() < MIN_PREFIX_LEN {
-            return Err(PrefixError::TooShort(prefix));
-        }
-        let mut matches = self
-            .sessions
-            .range(prefix.clone()..)
-            .take_while(|(candidate, _)| candidate.starts_with(&prefix))
-            .map(|(_, id)| *id);
-        match (matches.next(), matches.next()) {
-            (None, _) => Err(PrefixError::NotFound(prefix)),
-            (Some(id), None) => Ok(id),
-            (Some(first), Some(second)) => Err(PrefixError::Ambiguous {
-                candidates: [first, second].iter().map(HashId::short).collect(),
-                prefix,
-            }),
-        }
+        self.sessions.resolve(prefix)
     }
 
     /// Resolves `#item/comment`: the item prefix as [`Resolver::item`] does, the comment prefix

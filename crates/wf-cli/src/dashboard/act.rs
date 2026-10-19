@@ -89,7 +89,7 @@ pub fn carry_out(
             let template = format!(
                 "{}\n{SCISSORS}\nYour {} on {} of #{}:\n\n{quote}",
                 comment.text,
-                comment.kind.name().replace('_', " "),
+                comment.kind.label(),
                 comment.lines.location(),
                 item.short()
             );
@@ -500,7 +500,7 @@ fn post_line_comment(
     }))?;
     Ok(format!(
         "wrote a {} on {location} of #{}",
-        kind.name().replace('_', " "),
+        kind.label(),
         item.short()
     ))
 }

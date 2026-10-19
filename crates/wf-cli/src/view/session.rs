@@ -15,18 +15,9 @@ pub(super) fn session_label(session: &Session) -> String {
     format!(
         "{} {} {}",
         session.agent().name,
-        role_name(session.role()),
+        session.role().name(),
         session.id().short()
     )
-}
-
-fn role_name(role: SessionRole) -> &'static str {
-    match role {
-        SessionRole::Work => "work",
-        SessionRole::Review { .. } => "review",
-        SessionRole::Supervise => "supervise",
-        SessionRole::Diagnose => "diagnose",
-    }
 }
 
 #[derive(Serialize)]
@@ -160,7 +151,7 @@ pub(super) fn session_view(
         agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),
         item: session.item().to_base32(),
         title,
-        role: role_name(session.role()).to_string(),
+        role: session.role().name().to_string(),
         status: match session.ended() {
             Some(ended) => ended.reason.name().to_string(),
             None if parked => "parked".to_string(),

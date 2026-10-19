@@ -21,9 +21,7 @@ use wf_core::inbox::InboxKind;
 use wf_core::item::ItemState;
 use wf_core::stats::ItemStats;
 
-fn short(id: &str) -> &str {
-    &id[..id.len().min(wf_core::id::SHORT_ID_LEN)]
-}
+use wf_core::id::short;
 
 /// The one place where every table's look is defined.
 fn table(header: &[&str]) -> Table {
@@ -364,7 +362,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         status.push(format!("steps {}", steps_label(Some(steps))));
     }
     if let Some(review) = &detail.review_status {
-        let short_commit = |commit: &str| commit[..commit.len().min(8)].to_string();
+        let short_commit = wf_core::session::short_commit;
         let text = match review {
             ReviewStatusView::Awaiting { step } => format!("review: awaiting {step}"),
             ReviewStatusView::ChangesRequested => "review: changes requested".to_string(),
@@ -1119,6 +1117,9 @@ pub fn agents(agents: &[AgentView]) -> String {
     format!("{table}\n")
 }
 
+/// Device ids are shown with 8 characters, as before ids got their own short length.
+const DEVICE_ID_LEN: usize = 8;
+
 pub fn devices(devices: &[DeviceView]) -> String {
     let mut table = table(&[
         "DEVICE",
@@ -1132,7 +1133,11 @@ pub fn devices(devices: &[DeviceView]) -> String {
     for device in devices {
         let name = device.name.clone().unwrap_or_else(|| "-".to_string());
         table.add_row([
-            device.device.chars().take(8).collect::<String>(),
+            device
+                .device
+                .chars()
+                .take(DEVICE_ID_LEN)
+                .collect::<String>(),
             if device.this_device {
                 format!("{name} (this)")
             } else {

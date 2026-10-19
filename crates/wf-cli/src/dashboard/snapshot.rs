@@ -10,7 +10,7 @@ use wf_core::identity::{Actor, DeviceKey};
 use wf_core::inbox::{InboxKind, Waiting as InboxWaiting};
 use wf_core::item::{ItemState, ItemView, Priority};
 use wf_core::resolve::MentionTarget;
-use wf_core::session::{CommitId, EndReason, Session, SessionRole};
+use wf_core::session::{CommitId, EndReason, Session};
 use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
 use wf_daemon::proto::HeldPermission;
@@ -499,15 +499,6 @@ fn waiting(
     waiting
 }
 
-fn role_name(role: SessionRole) -> &'static str {
-    match role {
-        SessionRole::Work => "work",
-        SessionRole::Review { .. } => "review",
-        SessionRole::Supervise => "supervise",
-        SessionRole::Diagnose => "diagnose",
-    }
-}
-
 fn session_info(
     state: &State,
     graph: &wf_core::graph::DependencyGraph,
@@ -537,7 +528,7 @@ fn session_info(
     SessionInfo {
         id: session.id(),
         agent: session.agent().name.to_string(),
-        role: role_name(session.role()),
+        role: session.role().name(),
         item: item_ref(state, session.item()),
         status,
         started_ms: session.started().hlc.wall_ms(),

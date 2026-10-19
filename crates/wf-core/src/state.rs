@@ -485,20 +485,24 @@ impl State {
         workforce.members.get(&workforce.canonical(principal))
     }
 
+    /// `@ada`, or the short key of a principal who is not a member.
+    pub fn principal_label(&self, principal: &PrincipalKey) -> String {
+        self.member(principal).map_or_else(
+            || principal.fmt_short(),
+            |member| format!("@{}", member.handle),
+        )
+    }
+
     /// `@ada` for a principal, `@ada/coder/3f9a2c` for an agent in its session, and `@daemon`.
     /// A principal who is not a member is named by its short key.
     pub fn actor_label(&self, actor: &Actor) -> String {
-        let principal = |key: &PrincipalKey| {
-            self.member(key)
-                .map_or_else(|| key.fmt_short(), |member| format!("@{}", member.handle))
-        };
         match actor {
-            Actor::Principal(key) => principal(key),
+            Actor::Principal(key) => self.principal_label(key),
             Actor::Daemon(_) => "@daemon".to_string(),
             Actor::Agent { agent, session } => {
                 format!(
                     "{}/{}/{}",
-                    principal(&agent.principal),
+                    self.principal_label(&agent.principal),
                     agent.name,
                     session.short()
                 )

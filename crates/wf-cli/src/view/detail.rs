@@ -323,7 +323,7 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
 }
 
 pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<ActivityView> {
-    let short_commit = |commit: &CommitId| commit.to_string()[..8].to_string();
+    let short_commit = |commit: &CommitId| commit.short();
     let label = |id: &ItemId| format!("#{}", id.short());
     let body = item.body();
     let mut views: Vec<ActivityView> = Vec::new();
@@ -366,7 +366,7 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     at,
                     by,
                     kind: ActivityKind::Comment,
-                    summary: kind.name().replace('_', " "),
+                    summary: kind.label(),
                     comment: Some(view),
                     text: Some(text.clone()),
                 });
@@ -485,7 +485,7 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     EndReason::MachineFault(fault) => {
                         format!(
                             "was ended by the machine: {}",
-                            fault.name().replace('_', " ")
+                            fault.label()
                         )
                     }
                 };
@@ -693,7 +693,7 @@ fn waiting_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<WaitingVi
                     if let Some(session) = state.session(last) {
                         let ended = session.ended().map_or_else(
                             || "ended".to_string(),
-                            |ended| ended.reason.name().replace('_', " "),
+                            |ended| ended.reason.label(),
                         );
                         points_to.push(format!("the last, {}: {ended}", session_label(session)));
                         if let Some((_, _, text)) = comments().rev().find(|(entry, _, _)| {

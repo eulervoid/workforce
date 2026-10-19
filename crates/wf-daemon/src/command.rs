@@ -9,7 +9,7 @@ use std::process::{ExitStatus, Stdio};
 use std::time::Duration;
 
 use wf_core::name::CommandName;
-use wf_core::session::GitOid;
+use wf_core::session::{CommitId, GitOid};
 use wf_harness::AcpAgentConfig;
 use wf_vcs::{GitCli, VcsAdapter, VcsError};
 
@@ -118,10 +118,9 @@ impl CommandRunner<'_> {
     /// The log of a run of `name` on `tree` that starts now.
     fn log_path(&self, name: &CommandName, tree: GitOid) -> PathBuf {
         let started = jiff::Timestamp::now().strftime("%Y%m%dT%H%M%S%.3fZ");
-        let tree = tree.to_string();
         self.logs
             .join(name.as_str())
-            .join(format!("{started}-{}.log", &tree[..8]))
+            .join(format!("{started}-{}.log", CommitId::Git(tree).short()))
     }
 }
 
