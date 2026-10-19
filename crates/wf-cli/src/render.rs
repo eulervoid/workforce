@@ -1368,10 +1368,7 @@ mod tests {
         let lines: Vec<&str> = output.lines().collect();
         assert!(lines.contains(&"items: 6 ready, 3 archived"), "{output}");
         assert!(lines.contains(&"waiting on you: 2"), "{output}");
-        let items_line = lines
-            .iter()
-            .find(|line| line.starts_with("items:"))
-            .unwrap();
+        let items_line = lines.iter().find(|line| line.starts_with("items:")).unwrap();
         assert!(!items_line.contains("waiting"), "{output}");
     }
 
