@@ -2,7 +2,9 @@ use std::ffi::OsStr;
 use std::io::Write;
 use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Output};
+use std::process::Command;
+use std::str::FromStr;
+use std::sync::OnceLock;
 use std::time::{Duration, SystemTime};
 
 use wf_core::session::{CommitId, GitOid};
@@ -22,12 +24,10 @@ const STALE_LOCK_AGE: Duration = Duration::from_secs(120);
 const MINIMUM_VERSION: (u32, u32) = (2, 38);
 
 /// `LESS` for a `less` that stays open on a diff shorter than the screen: the principal's `less`
-/// without `F`, which quits at once then, or git's default `FRX` without it when it is not set.
+/// config, or git's default `FRX` when it is not set, followed by `-+F`, which undoes `F`
+/// wherever it was set.
 fn less_staying_open(less: Option<&str>) -> String {
-    match less {
-        Some(less) => less.replace('F', ""),
-        None => "RX".to_owned(),
-    }
+    format!("{} -+F", less.unwrap_or("FRX"))
 }
 
 /// The revisions `git diff` compares to show `work`.
@@ -41,7 +41,10 @@ fn diff_revisions(work: &Work) -> Vec<String> {
 /// A git repository, driven through the `git` command.
 #[derive(Clone, Debug)]
 pub struct GitCli {
+    /// The main checkout.
     repository: PathBuf,
+    /// The git directory the checkouts share, where the references are.
+    git_directory: PathBuf,
 }
 
 /// `git`, kept from running code that an agent could have put in the repository's config: hooks
@@ -64,6 +67,11 @@ fn git() -> Command {
         "-c",
         "maintenance.auto=false",
     ]);
+    // A repository the caller's environment points at would win over the one asked for.
+    command
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE");
     inherit_only_stdio(&mut command);
     command
 }
@@ -84,47 +92,142 @@ fn inherit_only_stdio(command: &mut Command) {
 
 /// What `git` said, for commands whose failure is an answer and not an error.
 struct Finished {
+    /// The arguments git ran with, to say which command failed.
+    command: String,
     success: bool,
     stdout: String,
     stderr: String,
 }
 
-impl GitCli {
-    /// Opens the repository that contains `directory`, after checking the git version.
-    pub fn open(directory: &Path) -> Result<Self, VcsError> {
-        let version = Self::run_in(directory, ["--version"])?;
-        let text = version.stdout.trim();
-        let found = text
-            .strip_prefix("git version ")
-            .and_then(|rest| rest.split_whitespace().next())
-            .unwrap_or(text);
-        let mut numbers = found.split('.').map(|part| part.parse::<u32>());
-        let (Some(Ok(major)), Some(Ok(minor))) = (numbers.next(), numbers.next()) else {
-            return Err(VcsError::UnexpectedOutput {
-                command: "--version".into(),
-                output: text.into(),
-            });
-        };
-        if (major, minor) < MINIMUM_VERSION {
-            return Err(VcsError::TooOld {
-                found: found.into(),
-            });
+impl Finished {
+    /// The output of git, or the error of the command if it failed.
+    fn ok(self) -> Result<String, VcsError> {
+        if self.success {
+            Ok(self.stdout)
+        } else {
+            Err(self.error())
         }
-        let common = Self::run_in(
-            directory,
-            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
-        )?;
-        if !common.success {
+    }
+
+    /// The error of the command, whether or not it failed.
+    fn error(self) -> VcsError {
+        VcsError::Git {
+            command: self.command,
+            stderr: self.stderr.trim().to_string(),
+        }
+    }
+}
+
+/// Runs git in `directory` with `environment` set on top. Everything that runs git comes
+/// through here, so that all of it runs the same way.
+fn spawn<I, S>(
+    directory: &Path,
+    environment: &[(&str, &str)],
+    args: I,
+) -> Result<Finished, VcsError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    let args: Vec<S> = args.into_iter().collect();
+    let output = git()
+        .args(&args)
+        .envs(environment.iter().copied())
+        .current_dir(directory)
+        .env("LC_ALL", "C")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .output()
+        .map_err(VcsError::Spawn)?;
+    Ok(Finished {
+        command: describe(&args),
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// The arguments of a command as one line, without the `-c` config that only sets how it runs.
+fn describe<S: AsRef<OsStr>>(args: &[S]) -> String {
+    let mut words = args.iter().map(|arg| arg.as_ref().to_string_lossy());
+    let mut described = Vec::new();
+    while let Some(word) = words.next() {
+        if word == "-c" && described.is_empty() {
+            words.next();
+        } else {
+            described.push(word);
+        }
+    }
+    described.join(" ")
+}
+
+/// Checks the git version, once per process.
+fn check_version(directory: &Path) -> Result<(), VcsError> {
+    static CHECKED: OnceLock<()> = OnceLock::new();
+    if CHECKED.get().is_some() {
+        return Ok(());
+    }
+    let version = spawn(directory, &[], ["--version"])?.ok()?;
+    let text = version.trim();
+    let found = text
+        .strip_prefix("git version ")
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or(text);
+    let mut numbers = found.split('.').map(|part| part.parse::<u32>());
+    let (Some(Ok(major)), Some(Ok(minor))) = (numbers.next(), numbers.next()) else {
+        return Err(VcsError::UnexpectedOutput {
+            command: "--version".into(),
+            output: text.into(),
+        });
+    };
+    if (major, minor) < MINIMUM_VERSION {
+        return Err(VcsError::TooOld {
+            found: found.into(),
+        });
+    }
+    let _ = CHECKED.set(());
+    Ok(())
+}
+
+/// What `command` printed as a `T`.
+fn parse_output<T: FromStr>(command: &str, output: &str) -> Result<T, VcsError> {
+    output
+        .trim()
+        .parse()
+        .map_err(|_| VcsError::UnexpectedOutput {
+            command: command.into(),
+            output: output.trim().into(),
+        })
+}
+
+impl GitCli {
+    /// Opens the repository that contains `directory`, after checking the git version once.
+    pub fn open(directory: &Path) -> Result<Self, VcsError> {
+        check_version(directory)?;
+        // Whichever worktree `directory` is in, the first one listed is the main checkout, which
+        // stays, wherever its git directory is.
+        let listing = spawn(directory, &[], ["worktree", "list", "--porcelain", "-z"])?;
+        if !listing.success {
             return Err(VcsError::NotARepository(directory.to_path_buf()));
         }
-        // Whichever worktree `directory` is in, the repository is the main checkout, which stays.
-        let common = PathBuf::from(common.stdout.trim());
-        let repository = match common.file_name() {
-            Some(name) if name == ".git" => common.parent().map(Path::to_path_buf),
-            _ => None,
+        let main = parse_worktrees(&listing.stdout).into_iter().next();
+        let Some(Worktree {
+            path: repository, ..
+        }) = main
+        else {
+            return Err(VcsError::UnexpectedOutput {
+                command: listing.command,
+                output: listing.stdout,
+            });
         };
+        let common = spawn(
+            directory,
+            &[],
+            ["rev-parse", "--path-format=absolute", "--git-common-dir"],
+        )?
+        .ok()?;
         Ok(Self {
-            repository: repository.unwrap_or(common),
+            repository,
+            git_directory: PathBuf::from(common.trim()),
         })
     }
 
@@ -134,86 +237,33 @@ impl GitCli {
 
     /// The top of the checkout that contains `directory`: the main checkout or a worktree.
     pub fn checkout_root(directory: &Path) -> Result<PathBuf, VcsError> {
-        let top = Self::run_in(directory, ["rev-parse", "--show-toplevel"])?;
+        let top = spawn(directory, &[], ["rev-parse", "--show-toplevel"])?;
         if !top.success {
             return Err(VcsError::NotARepository(directory.to_path_buf()));
         }
         Ok(PathBuf::from(top.stdout.trim()))
     }
 
-    fn run_in<I, S>(directory: &Path, args: I) -> Result<Finished, VcsError>
-    where
-        I: IntoIterator<Item = S>,
-        S: AsRef<OsStr>,
-    {
-        Self::run_with(directory, args, &[])
-    }
-
-    /// Runs git in `directory` with `environment` set on top.
-    fn run_with<I, S>(
+    /// Runs git in `directory` with `environment` set on top, after clearing a lock left behind.
+    fn run<I, S>(
+        &self,
         directory: &Path,
-        args: I,
         environment: &[(&str, &str)],
+        args: I,
     ) -> Result<Finished, VcsError>
     where
         I: IntoIterator<Item = S>,
         S: AsRef<OsStr>,
     {
-        let output: Output = git()
-            .args(args)
-            .envs(environment.iter().copied())
-            .current_dir(directory)
-            .env("LC_ALL", "C")
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
-            .output()
-            .map_err(VcsError::Spawn)?;
-        Ok(Finished {
-            success: output.status.success(),
-            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
-            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
-        })
-    }
-
-    /// Runs git in `directory` and returns its output, or an error if it fails.
-    fn succeed_in<const N: usize>(
-        &self,
-        directory: &Path,
-        args: [&OsStr; N],
-    ) -> Result<String, VcsError> {
         self.remove_stale_packed_refs_lock();
-        let finished = Self::run_in(directory, args)?;
-        if finished.success {
-            Ok(finished.stdout)
-        } else {
-            Err(VcsError::Git {
-                command: describe(&args),
-                stderr: finished.stderr.trim().to_string(),
-            })
-        }
-    }
-
-    fn succeed<const N: usize>(&self, args: [&str; N]) -> Result<String, VcsError> {
-        self.succeed_in(&self.repository, args.map(OsStr::new))
-    }
-
-    /// The repository's `.git` directory, where the references are.
-    fn git_directory(&self) -> PathBuf {
-        let inside = self.repository.join(".git");
-        if inside.is_dir() {
-            inside
-        } else {
-            self.repository.clone()
-        }
+        spawn(directory, environment, args)
     }
 
     /// Removes a `packed-refs.lock` that has been there for longer than git holds it. A session
     /// may create that file (its sandbox allows it, so that git can fail quietly), and a
     /// lock left behind makes every git that deletes or packs a reference fail.
     fn remove_stale_packed_refs_lock(&self) {
-        let lock = self.git_directory().join("packed-refs.lock");
+        let lock = self.git_directory.join("packed-refs.lock");
         let age = std::fs::metadata(&lock)
             .and_then(|metadata| metadata.modified())
             // A modification time in the future cannot come from git, so it counts as stale.
@@ -225,23 +275,16 @@ impl GitCli {
 
     /// Whether the git config asks for commits to be signed (`commit.gpgsign`).
     fn signs_commits(&self) -> Result<bool, VcsError> {
-        let configured = self.attempt(["config", "--type=bool", "--get", "commit.gpgsign"])?;
+        let configured = self.run(
+            &self.repository,
+            &[],
+            ["config", "--type=bool", "--get", "commit.gpgsign"],
+        )?;
         Ok(configured.success && configured.stdout.trim() == "true")
     }
 
-    fn attempt<const N: usize>(&self, args: [&str; N]) -> Result<Finished, VcsError> {
-        self.remove_stale_packed_refs_lock();
-        Self::run_in(&self.repository, args)
-    }
-
     fn oid(&self, command: &str, text: &str) -> Result<CommitId, VcsError> {
-        text.trim()
-            .parse::<GitOid>()
-            .map(CommitId::Git)
-            .map_err(|_| VcsError::UnexpectedOutput {
-                command: command.into(),
-                output: text.trim().into(),
-            })
+        parse_output(command, text).map(CommitId::Git)
     }
 
     /// Adds the worktree of `branch` at `path`, unless it is there.
@@ -252,13 +295,12 @@ impl GitCli {
         target: &str,
     ) -> Result<(), VcsError> {
         self.prune_worktrees()?;
-        let reference = format!("refs/heads/{branch}");
         let existing = self.worktrees()?;
         if let Some(worktree) = existing
             .iter()
             .find(|worktree| same_path(&worktree.path, path))
         {
-            return if worktree.branch.as_deref() == Some(reference.as_str()) {
+            return if worktree.branch.as_deref() == Some(branch) {
                 Ok(())
             } else {
                 Err(VcsError::Git {
@@ -268,77 +310,61 @@ impl GitCli {
             };
         }
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
+            std::fs::create_dir_all(parent)?;
         }
         if self.branch_exists(branch)? {
-            self.succeed_in(
-                &self.repository,
-                [
-                    OsStr::new("worktree"),
-                    OsStr::new("add"),
-                    path.as_os_str(),
-                    OsStr::new(branch),
-                ],
-            )?;
+            let words = ["worktree", "add"].map(OsStr::new);
+            let args = words
+                .into_iter()
+                .chain([path.as_os_str(), OsStr::new(branch)]);
+            self.run(&self.repository, &[], args)?.ok()?;
         } else {
             if !self.branch_exists(target)? {
                 return Err(VcsError::NoBranch(target.into()));
             }
-            self.succeed_in(
-                &self.repository,
-                [
-                    OsStr::new("worktree"),
-                    OsStr::new("add"),
-                    OsStr::new("-b"),
-                    OsStr::new(branch),
-                    path.as_os_str(),
-                    OsStr::new(target),
-                ],
-            )?;
+            // The full name, or a tag of the same name would be where the branch starts.
+            let start = format!("refs/heads/{target}");
+            let words = ["worktree", "add", "-b", branch].map(OsStr::new);
+            let args = words
+                .into_iter()
+                .chain([path.as_os_str(), OsStr::new(&start)]);
+            self.run(&self.repository, &[], args)?.ok()?;
         }
         Ok(())
     }
 
     fn branch_exists(&self, branch: &str) -> Result<bool, VcsError> {
         let reference = format!("refs/heads/{branch}");
-        Ok(self
-            .attempt(["rev-parse", "--verify", "--quiet", &reference])?
-            .success)
+        let found = self.run(
+            &self.repository,
+            &[],
+            ["rev-parse", "--verify", "--quiet", &reference],
+        )?;
+        Ok(found.success)
     }
 
     /// The worktrees of the repository: where each is and which branch it has checked out.
     fn worktrees(&self) -> Result<Vec<Worktree>, VcsError> {
-        let listing = self.succeed(["worktree", "list", "--porcelain"])?;
-        let mut worktrees = Vec::new();
-        for block in listing.split("\n\n") {
-            let mut path = None;
-            let mut branch = None;
-            for line in block.lines() {
-                if let Some(found) = line.strip_prefix("worktree ") {
-                    path = Some(PathBuf::from(found));
-                } else if let Some(found) = line.strip_prefix("branch ") {
-                    branch = Some(found.to_string());
-                }
-            }
-            if let Some(path) = path {
-                worktrees.push(Worktree { path, branch });
-            }
-        }
-        Ok(worktrees)
+        let listing = self
+            .run(
+                &self.repository,
+                &[],
+                ["worktree", "list", "--porcelain", "-z"],
+            )?
+            .ok()?;
+        Ok(parse_worktrees(&listing))
     }
 
     /// The tracked files edited in `worktree`. Untracked files do not count, such as the marker
     /// `wf init` leaves: git itself refuses to overwrite one, and nothing else is at risk.
     fn changed_paths(&self, worktree: &Path) -> Result<Vec<String>, VcsError> {
-        let status = self.succeed_in(
-            worktree,
-            [
-                OsStr::new("status"),
-                OsStr::new("--porcelain"),
-                OsStr::new("-z"),
-                OsStr::new("--untracked-files=no"),
-            ],
-        )?;
+        let status = self
+            .run(
+                worktree,
+                &[],
+                ["status", "--porcelain", "-z", "--untracked-files=no"],
+            )?
+            .ok()?;
         // Each entry is `XY path`; a rename or copy is followed by the path it came from.
         let mut entries = status.split('\0').filter(|entry| !entry.is_empty());
         let mut paths = Vec::new();
@@ -364,14 +390,14 @@ impl GitCli {
     /// Moves `target` from `old` to `new`, if nothing moved it in the meantime. Where the target
     /// is checked out it must be clean and is fast-forwarded there, so the files follow.
     fn advance(&self, target: &str, old: &CommitId, new: &CommitId) -> Result<Advance, VcsError> {
-        let reference = format!("refs/heads/{target}");
         let checkout = self
             .worktrees()?
             .into_iter()
-            .find(|worktree| worktree.branch.as_deref() == Some(reference.as_str()));
-        let moved =
-            |this: &Self| -> Result<bool, VcsError> { Ok(this.rev_parse(&reference)? != *old) };
-        match checkout {
+            .find(|worktree| worktree.branch.as_deref() == Some(target));
+        let moved = |this: &Self| -> Result<bool, VcsError> {
+            Ok(this.rev_parse(&format!("refs/heads/{target}"))? != *old)
+        };
+        let finished = match checkout {
             Some(worktree) => {
                 let paths = self.changed_paths(&worktree.path)?;
                 if !paths.is_empty() {
@@ -380,35 +406,27 @@ impl GitCli {
                         paths,
                     }));
                 }
-                let finished = Self::run_in(
+                self.run(
                     &worktree.path,
+                    &[],
                     ["merge", "--ff-only", "--quiet", &new.to_string()],
-                )?;
-                if finished.success {
-                    Ok(Advance::Done)
-                } else if moved(self)? {
-                    Ok(Advance::Moved)
-                } else {
-                    Err(VcsError::Git {
-                        command: format!("merge --ff-only {new}"),
-                        stderr: finished.stderr.trim().to_string(),
-                    })
-                }
+                )?
             }
-            None => {
-                let finished =
-                    self.attempt(["update-ref", &reference, &new.to_string(), &old.to_string()])?;
-                if finished.success {
-                    Ok(Advance::Done)
-                } else if moved(self)? {
-                    Ok(Advance::Moved)
-                } else {
-                    Err(VcsError::Git {
-                        command: format!("update-ref {reference}"),
-                        stderr: finished.stderr.trim().to_string(),
-                    })
-                }
-            }
+            None => self.run(
+                &self.repository,
+                &[],
+                [
+                    "update-ref",
+                    &format!("refs/heads/{target}"),
+                    &new.to_string(),
+                    &old.to_string(),
+                ],
+            )?,
+        };
+        match finished.ok() {
+            Ok(_) => Ok(Advance::Done),
+            Err(_) if moved(self)? => Ok(Advance::Moved),
+            Err(error) => Err(error),
         }
     }
 
@@ -416,18 +434,28 @@ impl GitCli {
     /// `commit` as a parent, or `commit` itself when it came in without a merge.
     fn landed(&self, commit: CommitId, head: CommitId) -> Result<Option<CommitId>, VcsError> {
         let (commit, head) = (commit.to_string(), head.to_string());
-        let ancestor = self.attempt(["merge-base", "--is-ancestor", &commit, &head])?;
+        let ancestor = self.run(
+            &self.repository,
+            &[],
+            ["merge-base", "--is-ancestor", &commit, &head],
+        )?;
         if !ancestor.success {
             return Ok(None);
         }
         let range = format!("{commit}..{head}");
-        let listed = self.succeed([
-            "rev-list",
-            "--first-parent",
-            "--ancestry-path",
-            "--parents",
-            &range,
-        ])?;
+        let listed = self
+            .run(
+                &self.repository,
+                &[],
+                [
+                    "rev-list",
+                    "--first-parent",
+                    "--ancestry-path",
+                    "--parents",
+                    &range,
+                ],
+            )?
+            .ok()?;
         // Oldest first-parent commit after `commit`: when its first parent is `commit`, the
         // target fast-forwarded over it; otherwise it is the merge that brought `commit` in.
         let merge = listed.lines().next_back().and_then(|line| {
@@ -440,14 +468,40 @@ impl GitCli {
 
     fn rev_parse(&self, reference: &str) -> Result<CommitId, VcsError> {
         let revision = format!("{reference}^{{commit}}");
-        let output = self.succeed(["rev-parse", "--verify", &revision])?;
+        let output = self
+            .run(&self.repository, &[], ["rev-parse", "--verify", &revision])?
+            .ok()?;
         self.oid("rev-parse", &output)
     }
 }
 
 struct Worktree {
     path: PathBuf,
+    /// The short name of the branch checked out, if one is.
     branch: Option<String>,
+}
+
+/// The worktrees in the output of `git worktree list --porcelain -z`: NUL ends each attribute
+/// and an empty one ends each worktree, and paths come as they are.
+fn parse_worktrees(listing: &str) -> Vec<Worktree> {
+    let mut worktrees = Vec::new();
+    let mut path = None;
+    let mut branch = None;
+    for attribute in listing.split('\0') {
+        if let Some(found) = attribute.strip_prefix("worktree ") {
+            path = Some(PathBuf::from(found));
+        } else if let Some(found) = attribute.strip_prefix("branch ") {
+            branch = found.strip_prefix("refs/heads/").map(str::to_string);
+        } else if attribute.is_empty()
+            && let Some(path) = path.take()
+        {
+            worktrees.push(Worktree {
+                path,
+                branch: branch.take(),
+            });
+        }
+    }
+    worktrees
 }
 
 enum Advance {
@@ -462,19 +516,12 @@ fn same_path(left: &Path, right: &Path) -> bool {
     resolve(left) == resolve(right)
 }
 
-fn describe(args: &[&OsStr]) -> String {
-    args.iter()
-        .map(|arg| arg.to_string_lossy())
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
 impl GitCli {
     /// Makes sure `branch` is a loose reference, a file under `refs/heads`. Packing the
     /// references (`git gc`) removes the file and its directories, and a session that may only
     /// write its own branch's file cannot create them again.
     pub fn make_branch_loose(&self, branch: &str) -> Result<(), VcsError> {
-        let reference = self.git_directory().join("refs/heads").join(branch);
+        let reference = self.git_directory.join("refs/heads").join(branch);
         if reference.is_file() {
             return Ok(());
         }
@@ -514,18 +561,14 @@ impl GitCli {
     pub fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError> {
         self.prune_worktrees()?;
         if let Some(parent) = path.parent() {
-            std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
+            std::fs::create_dir_all(parent)?;
         }
-        self.succeed_in(
-            &self.repository,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("add"),
-                OsStr::new("--detach"),
-                path.as_os_str(),
-                OsStr::new(&commit.to_string()),
-            ],
-        )?;
+        let words = ["worktree", "add", "--detach"].map(OsStr::new);
+        let commit = commit.to_string();
+        let args = words
+            .into_iter()
+            .chain([path.as_os_str(), OsStr::new(&commit)]);
+        self.run(&self.repository, &[], args)?.ok()?;
         Ok(())
     }
 
@@ -535,108 +578,98 @@ impl GitCli {
     /// detached, when it is not there yet.
     pub fn check_out_tree(&self, path: &Path, tree: GitOid) -> Result<(), VcsError> {
         // Prune first, so a worktree whose directory was deleted is made again.
-        self.succeed(["worktree", "prune"])?;
+        self.prune_worktrees()?;
         let exists = self
             .worktrees()?
             .iter()
             .any(|worktree| same_path(&worktree.path, path));
         if !exists {
             if let Some(parent) = path.parent() {
-                std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
+                std::fs::create_dir_all(parent)?;
             }
             // The files come from the checkout below, which knows whether `tree` is a commit.
-            self.succeed_in(
-                &self.repository,
-                [
-                    OsStr::new("worktree"),
-                    OsStr::new("add"),
-                    OsStr::new("--detach"),
-                    OsStr::new("--no-checkout"),
-                    path.as_os_str(),
-                ],
-            )?;
+            let words = ["worktree", "add", "--detach", "--no-checkout"].map(OsStr::new);
+            let args = words.into_iter().chain([path.as_os_str()]);
+            self.run(&self.repository, &[], args)?.ok()?;
         }
         let tree = tree.to_string();
-        let kind = self.succeed(["cat-file", "-t", &tree])?;
+        let kind = self
+            .run(&self.repository, &[], ["cat-file", "-t", &tree])?
+            .ok()?;
         if kind.trim() == "commit" {
             // HEAD names the commit, so `git describe` and `git status` see it too.
-            self.succeed_in(
-                path,
-                ["checkout", "--quiet", "--detach", "--force", &tree].map(OsStr::new),
-            )?;
+            let args = ["checkout", "--quiet", "--detach", "--force", &tree];
+            self.run(path, &[], args)?.ok()?;
         } else {
             // A bare tree has no commit for HEAD to name; only the index and files change.
-            self.succeed_in(path, ["read-tree", "-u", "--reset", &tree].map(OsStr::new))?;
+            self.run(path, &[], ["read-tree", "-u", "--reset", &tree])?
+                .ok()?;
         }
-        self.succeed_in(path, ["clean", "-ffd", "--quiet"].map(OsStr::new))?;
+        self.run(path, &[], ["clean", "-ffd", "--quiet"])?.ok()?;
         Ok(())
     }
 
     /// Removes the worktree at `path` together with whatever is uncommitted in it.
     pub fn remove_worktree(&self, path: &Path) -> Result<(), VcsError> {
-        self.succeed_in(
-            &self.repository,
-            [
-                OsStr::new("worktree"),
-                OsStr::new("remove"),
-                OsStr::new("--force"),
-                path.as_os_str(),
-            ],
-        )?;
+        let words = ["worktree", "remove", "--force"].map(OsStr::new);
+        let args = words.into_iter().chain([path.as_os_str()]);
+        self.run(&self.repository, &[], args)?.ok()?;
         Ok(())
     }
 
     /// Forgets the worktrees whose directories are gone.
     pub fn prune_worktrees(&self) -> Result<(), VcsError> {
-        self.succeed(["worktree", "prune"])?;
+        self.run(&self.repository, &[], ["worktree", "prune"])?
+            .ok()?;
         Ok(())
     }
 
     pub fn delete_branch(&self, branch: &str) -> Result<(), VcsError> {
-        self.succeed(["branch", "-D", branch])?;
+        self.run(&self.repository, &[], ["branch", "-D", branch])?
+            .ok()?;
         Ok(())
     }
 
     /// The commit a branch points at.
     pub fn branch_head(&self, branch: &str) -> Result<CommitId, VcsError> {
-        if !self.branch_exists(branch)? {
+        let found = self.run(
+            &self.repository,
+            &[],
+            [
+                "rev-parse",
+                "--verify",
+                "--quiet",
+                &format!("refs/heads/{branch}^{{commit}}"),
+            ],
+        )?;
+        if !found.success {
             return Err(VcsError::NoBranch(branch.into()));
         }
-        self.rev_parse(&format!("refs/heads/{branch}"))
+        self.oid("rev-parse", &found.stdout)
     }
 
     /// How many commits `commit` has that `target` does not.
     pub fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError> {
         let range = format!("refs/heads/{target}..{commit}");
-        let output = self.succeed(["rev-list", "--count", &range])?;
-        output
-            .trim()
-            .parse()
-            .map_err(|_| VcsError::UnexpectedOutput {
-                command: "rev-list --count".into(),
-                output: output.trim().into(),
-            })
+        let output = self
+            .run(&self.repository, &[], ["rev-list", "--count", &range])?
+            .ok()?;
+        parse_output("rev-list --count", &output)
     }
 
     /// What `work` changes, as [`Work`] says, with `args` added to `git diff`, such as `--stat`
     /// or `-- src/`.
     pub fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError> {
         let revisions = diff_revisions(work);
-        let finished = Self::run_in(
+        self.run(
             &self.repository,
+            &[],
             ["diff"]
                 .into_iter()
                 .chain(revisions.iter().map(String::as_str))
                 .chain(args.iter().map(String::as_str)),
-        )?;
-        if finished.success {
-            Ok(finished.stdout)
-        } else {
-            Err(VcsError::Git {
-                command: format!("diff {} {}", revisions.join(" "), args.join(" ")),
-                stderr: finished.stderr.trim().to_string(),
-            })
-        }
+        )?
+        .ok()
     }
 
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
@@ -657,9 +690,6 @@ impl GitCli {
             .args(&revisions)
             .args(args)
             .current_dir(&self.repository)
-            .env_remove("GIT_DIR")
-            .env_remove("GIT_WORK_TREE")
-            .env_remove("GIT_INDEX_FILE")
             .status()
             .map_err(VcsError::Spawn)?;
         if status.success() {
@@ -677,7 +707,8 @@ impl GitCli {
         if !self.is_clean(&self.repository)? {
             return Err(VcsError::DirtyCheckout(self.repository.clone()));
         }
-        self.succeed(["checkout", "--quiet", "--detach", &commit.to_string()])?;
+        let args = ["checkout", "--quiet", "--detach", &commit.to_string()];
+        self.run(&self.repository, &[], args)?.ok()?;
         Ok(())
     }
 
@@ -686,7 +717,8 @@ impl GitCli {
         if !self.is_clean(&self.repository)? {
             return Err(VcsError::DirtyCheckout(self.repository.clone()));
         }
-        self.succeed(["checkout", "--quiet", "-"])?;
+        self.run(&self.repository, &[], ["checkout", "--quiet", "-"])?
+            .ok()?;
         Ok(())
     }
 
@@ -698,36 +730,35 @@ impl GitCli {
         if let Some(landed) = self.landed(commit, base)? {
             return Ok(MergeTree::Landed { commit: landed });
         }
-        let merged = self.attempt([
-            "merge-tree",
-            "--write-tree",
-            "--name-only",
-            "-z",
-            &base.to_string(),
-            &commit.to_string(),
-        ])?;
+        let merged = self.run(
+            &self.repository,
+            &[],
+            [
+                "merge-tree",
+                "--write-tree",
+                "--name-only",
+                "-z",
+                &base.to_string(),
+                &commit.to_string(),
+            ],
+        )?;
         // With `-z` every field ends in NUL and paths come as they are, not C-quoted: the tree,
         // the conflicted paths, an empty field, then the informational messages.
         let mut fields = merged.stdout.split('\0');
-        let tree = fields.next().unwrap_or_default().trim();
-        if !merged.success {
-            if tree.is_empty() {
-                return Err(VcsError::Git {
-                    command: "merge-tree --write-tree".into(),
-                    stderr: merged.stderr.trim().to_string(),
-                });
-            }
-            let paths = fields
-                .take_while(|field| !field.is_empty())
-                .map(str::to_string)
-                .collect();
-            return Ok(MergeTree::Conflict { paths });
+        let tree = fields.next().unwrap_or_default();
+        if merged.success {
+            let tree = parse_output("merge-tree --write-tree", tree)?;
+            return Ok(MergeTree::Clean { base, tree });
         }
-        let tree = tree.parse().map_err(|_| VcsError::UnexpectedOutput {
-            command: "merge-tree --write-tree".into(),
-            output: tree.into(),
-        })?;
-        Ok(MergeTree::Clean { base, tree })
+        // A failure that names no tree is git failing, not a conflict.
+        if tree.trim().is_empty() {
+            return Err(merged.error());
+        }
+        let paths = fields
+            .take_while(|field| !field.is_empty())
+            .map(str::to_string)
+            .collect();
+        Ok(MergeTree::Conflict { paths })
     }
 
     /// Commits `tree`, made by [`GitCli::merge_tree`], as the merge of `commit` into `target`
@@ -748,10 +779,7 @@ impl GitCli {
             CommitSigning::Key(_) => "-S",
             CommitSigning::AsConfigured | CommitSigning::Unsigned => "--no-gpg-sign",
         };
-        let mut args: Vec<String> = Vec::new();
-        for (key, value) in signing.config() {
-            args.extend(["-c".to_string(), format!("{key}={value}")]);
-        }
+        let mut args = signing.arguments();
         args.extend(
             [
                 "commit-tree",
@@ -766,15 +794,8 @@ impl GitCli {
             ]
             .map(str::to_string),
         );
-        let made = Self::run_in(&self.repository, &args)?;
-        if !made.success {
-            return Err(VcsError::Git {
-                command: "commit-tree".into(),
-                stderr: made.stderr.trim().to_string(),
-            });
-        }
-        let new = made.stdout;
-        let new = self.oid("commit-tree", &new)?;
+        let made = self.run(&self.repository, &[], &args)?.ok()?;
+        let new = self.oid("commit-tree", &made)?;
         Ok(match self.advance(target, &base, &new)? {
             Advance::Done => MergeOutcome::Merged { commit: new },
             Advance::Dirty(dirty) => MergeOutcome::DirtyCheckout(dirty),
@@ -785,14 +806,10 @@ impl GitCli {
     /// The tree of `commit`.
     pub fn tree_of(&self, commit: CommitId) -> Result<GitOid, VcsError> {
         let revision = format!("{commit}^{{tree}}");
-        let output = self.succeed(["rev-parse", "--verify", &revision])?;
-        output
-            .trim()
-            .parse()
-            .map_err(|_| VcsError::UnexpectedOutput {
-                command: "rev-parse".into(),
-                output: output.trim().into(),
-            })
+        let output = self
+            .run(&self.repository, &[], ["rev-parse", "--verify", &revision])?
+            .ok()?;
+        parse_output("rev-parse", &output)
     }
 
     /// Rebases the branch checked out in `worktree` onto `target`, the rewritten commits signed as
@@ -808,10 +825,7 @@ impl GitCli {
         signing: &CommitSigning,
         committer: &str,
     ) -> Result<Rebase, VcsError> {
-        let mut args: Vec<String> = Vec::new();
-        for (key, value) in signing.config() {
-            args.extend(["-c".to_string(), format!("{key}={value}")]);
-        }
+        let mut args = signing.arguments();
         match self.stopped_rebase(worktree)? {
             StoppedRebase::Conflict { .. } | StoppedRebase::Stopped => {
                 let unresolved: Vec<String> = self
@@ -823,7 +837,7 @@ impl GitCli {
                 if !unresolved.is_empty() {
                     return Ok(Rebase::Conflict { paths: unresolved });
                 }
-                self.succeed_in(worktree, [OsStr::new("add"), OsStr::new("--update")])?;
+                self.run(worktree, &[], ["add", "--update"])?.ok()?;
                 args.extend(["rebase", "--continue"].map(str::to_string));
             }
             StoppedRebase::NotStopped => {
@@ -831,8 +845,9 @@ impl GitCli {
                     return Err(VcsError::NoBranch(target.into()));
                 }
                 let reference = format!("refs/heads/{target}");
-                let contained = Self::run_in(
+                let contained = self.run(
                     worktree,
+                    &[],
                     ["merge-base", "--is-ancestor", reference.as_str(), "HEAD"],
                 )?;
                 if contained.success {
@@ -861,10 +876,10 @@ impl GitCli {
             }
         }
         // The editor would open for the message of a commit whose conflicts were resolved.
-        let rebased = Self::run_with(
+        let rebased = self.run(
             worktree,
-            &args,
             &[("GIT_COMMITTER_NAME", committer), ("GIT_EDITOR", "true")],
+            &args,
         )?;
         if rebased.success {
             return Ok(Rebase::Rebased);
@@ -872,10 +887,7 @@ impl GitCli {
         match self.stopped_rebase(worktree)? {
             StoppedRebase::Conflict { paths } => Ok(Rebase::Conflict { paths }),
             // Git refused before it began, or stopped for something other than a conflict.
-            StoppedRebase::Stopped | StoppedRebase::NotStopped => Err(VcsError::Git {
-                command: "rebase".into(),
-                stderr: rebased.stderr.trim().to_string(),
-            }),
+            StoppedRebase::Stopped | StoppedRebase::NotStopped => Err(rebased.error()),
         }
     }
 
@@ -883,15 +895,8 @@ impl GitCli {
     pub fn stopped_rebase(&self, worktree: &Path) -> Result<StoppedRebase, VcsError> {
         let mut stopped = false;
         for state in ["rebase-merge", "rebase-apply"] {
-            let directory = self.succeed_in(
-                worktree,
-                [
-                    OsStr::new("rev-parse"),
-                    OsStr::new("--path-format=absolute"),
-                    OsStr::new("--git-path"),
-                    OsStr::new(state),
-                ],
-            )?;
+            let args = ["rev-parse", "--path-format=absolute", "--git-path", state];
+            let directory = self.run(worktree, &[], args)?.ok()?;
             stopped |= Path::new(directory.trim()).is_dir();
         }
         if !stopped {
@@ -913,7 +918,7 @@ impl GitCli {
     /// as it was before the rebase.
     pub fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError> {
         if self.stopped_rebase(worktree)? != StoppedRebase::NotStopped {
-            self.succeed_in(worktree, [OsStr::new("rebase"), OsStr::new("--abort")])?;
+            self.run(worktree, &[], ["rebase", "--abort"])?.ok()?;
         }
         Ok(())
     }
@@ -970,14 +975,9 @@ fn has_conflict_markers(text: &[u8]) -> bool {
 impl GitCli {
     /// The files the index has unmerged in `worktree`, relative to it.
     fn conflicts(&self, worktree: &Path) -> Result<Vec<Conflict>, VcsError> {
-        let listing = self.succeed_in(
-            worktree,
-            [
-                OsStr::new("ls-files"),
-                OsStr::new("--unmerged"),
-                OsStr::new("-z"),
-            ],
-        )?;
+        let listing = self
+            .run(worktree, &[], ["ls-files", "--unmerged", "-z"])?
+            .ok()?;
         // Each entry reads `<mode> <object> <stage>\t<path>`: stage 2 is the target's version,
         // stage 3 the rebased commit's.
         let mut conflicts: Vec<Conflict> = Vec::new();
@@ -1035,9 +1035,9 @@ mod tests {
 
     #[test]
     fn less_staying_open_drops_quitting_on_one_screen() {
-        assert_eq!(less_staying_open(None), "RX");
-        assert_eq!(less_staying_open(Some("FRSX")), "RSX");
-        assert_eq!(less_staying_open(Some("-R -i")), "-R -i");
+        assert_eq!(less_staying_open(None), "FRX -+F");
+        assert_eq!(less_staying_open(Some("FRSX")), "FRSX -+F");
+        assert_eq!(less_staying_open(Some("-R -i")), "-R -i -+F");
     }
 
     /// While other threads run short commands with piped output, which on macOS create pipes
@@ -1203,6 +1203,54 @@ mod tests {
         assert_eq!(
             opened.repository().canonicalize().unwrap(),
             repo.directory().canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn a_branch_starts_at_the_target_branch_not_at_a_tag_of_its_name() {
+        let repo = TestRepo::new();
+        let first = repo.main();
+        repo.write(&repo.directory(), "file.txt", "changed\n");
+        let second = repo.commit(&repo.directory(), "second");
+        git_in(
+            &repo.directory(),
+            &["-c", "tag.gpgsign=false", "tag", "main", &first.to_string()],
+        );
+        let path = repo.worktree_path("wf/k3f9");
+        repo.git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        assert_eq!(repo.git.branch_head("wf/k3f9").unwrap(), second);
+    }
+
+    #[test]
+    fn a_separate_git_directory_is_found_from_a_worktree() {
+        let root = tempfile::TempDir::new().unwrap();
+        let repository = root.path().join("repo");
+        std::fs::create_dir(&repository).unwrap();
+        git_in(
+            &repository,
+            &[
+                "init",
+                "--quiet",
+                "--initial-branch=main",
+                "--separate-git-dir",
+                root.path().join("elsewhere").to_str().unwrap(),
+            ],
+        );
+        git_in(&repository, &["config", "user.name", "Test"]);
+        git_in(&repository, &["config", "user.email", "test@example.com"]);
+        std::fs::write(repository.join("file.txt"), "one\n").unwrap();
+        git_in(&repository, &["add", "--all"]);
+        git_in(&repository, &["commit", "--quiet", "-m", "first"]);
+        let git = GitCli::open(&repository).unwrap();
+        let path = root.path().join("worktrees/wf/k3f9");
+        git.prepare_worktree("wf/k3f9", &path, "main").unwrap();
+        // Git lists the git directory as the main worktree when it is not in `.git`.
+        let opened = GitCli::open(&path).unwrap();
+        assert_eq!(opened.repository(), git.repository());
+        assert_eq!(opened.git_directory, git.git_directory);
+        assert_eq!(
+            opened.git_directory.canonicalize().unwrap(),
+            root.path().join("elsewhere").canonicalize().unwrap()
         );
     }
 

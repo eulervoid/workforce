@@ -39,6 +39,14 @@ impl CommitSigning {
         }
     }
 
+    /// The `git` arguments that set that config: `-c key=value` for each.
+    fn arguments(&self) -> Vec<String> {
+        self.config()
+            .into_iter()
+            .flat_map(|(key, value)| ["-c".to_string(), format!("{key}={value}")])
+            .collect()
+    }
+
     /// The environment that makes git in another process, such as an agent's, sign this way.
     pub fn environment(&self) -> Vec<(String, String)> {
         let config = self.config();
