@@ -3,10 +3,11 @@
 
 use std::collections::BTreeSet;
 use std::path::PathBuf;
+use std::time::{Duration, Instant};
 
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::item::ItemView;
-use wf_core::session::SessionRole;
+use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::State;
 use wf_vcs::{GitCli, item_worktree, worktrees};
 
@@ -156,8 +157,23 @@ impl Daemon {
 
     /// While the caches in the worktrees of `workforce` take more than the budget, deletes those
     /// of the least recently used worktree that no live session runs in. Without `[storage]` in
-    /// the machine config, nothing is deleted.
+    /// the machine config, nothing is deleted. Measuring walks every cache, so it happens at most
+    /// every [`MEASURE_CACHES_EVERY`], unless the disk is full.
     pub(crate) async fn keep_caches_in_budget(&self, workforce: WorkforceId, loaded: &Loaded) {
+        let disk_full = self.faults.blocking_all() == Some(MachineFault::NoSpace);
+        {
+            let mut measured = self
+                .caches_measured
+                .lock()
+                .unwrap_or_else(|poisoned| poisoned.into_inner());
+            let recently = measured
+                .get(&workforce)
+                .is_some_and(|at| at.elapsed() < MEASURE_CACHES_EVERY);
+            if recently && !disk_full {
+                return;
+            }
+            measured.insert(workforce, Instant::now());
+        }
         let storage = match self.machine_config() {
             Ok(config) => config.storage,
             Err(error) => {
@@ -192,6 +208,9 @@ impl Daemon {
         .await;
     }
 }
+
+/// How long the caches are left unmeasured after they were.
+const MEASURE_CACHES_EVERY: Duration = Duration::from_secs(300);
 
 /// Whether a live session other than `session` works in the worktree of `item`: only work
 /// sessions do, every other role runs in a directory of its own.
