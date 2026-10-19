@@ -1,0 +1,22 @@
+---
+source: crates/wf-cli/src/dashboard/tests/items.rs
+expression: "screen(&mut app, 60, 18)"
+---
+" workforce             ▐1 Now▌  2 Items   3 Agents   4 Log  "
+" 3 live · 14 open · 3 waiting · 1 blocked · 2 devices       "
+"────────────────────────────────────────────────────────────"
+" ┌─▐keys▌───────────────────────────────────────────────┐   "
+"▎│ 1-4 tab     switch tabs, also shift-tab              │ d "
+" │ j/k g/G     move, top, end (and follow)              │   "
+" │ pgup/pgdn   a page up, down                          │   "
+" │ space       a page down in a text                    │   "
+" │ wheel       move what is under the pointer           │   "
+" │ click       pick a tab or an entry, again to open    │   "
+" │             follow a link, a key hint, a crumb       │2m "
+" │ shift-drag  select text, as without the dashboard    │0m "
+" │ enter esc   open, go back                            │2m "
+" │ H L         one pane or both, also shift ←/→         │   "
+" └──────────────────────────────────────────────────────┘ 1 "
+"────────────────────────────────────────────────────────────"
+" 07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_r"
+" any key closes                                             "

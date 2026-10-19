@@ -296,47 +296,32 @@ mod tests {
     use std::collections::BTreeMap;
     use std::os::unix::process::ExitStatusExt;
 
+    use wf_vcs::testing::{TestRepository, git_in};
+
     use super::*;
     use crate::DataDir;
 
     /// A repository with one commit, whose tree has `file.txt`, and a place for the worktree,
     /// the logs and the settings.
     struct Setup {
-        root: tempfile::TempDir,
-        git: GitCli,
+        repository: TestRepository,
         tree: GitOid,
     }
 
     impl Setup {
         fn new() -> Self {
-            let root = tempfile::tempdir().unwrap();
-            let repository = root.path().join("repo");
-            std::fs::create_dir(&repository).unwrap();
-            std::fs::write(repository.join("file.txt"), "from the tree\n").unwrap();
-            let git = |args: &[&str]| {
-                let output = std::process::Command::new("git")
-                    .args(["-c", "user.name=Test", "-c", "user.email=test@example.com"])
-                    .args(args)
-                    .current_dir(&repository)
-                    .env_remove("GIT_DIR")
-                    .output()
-                    .unwrap();
-                assert!(output.status.success(), "git {args:?}");
-                String::from_utf8(output.stdout).unwrap()
-            };
-            git(&["init", "--quiet", "--initial-branch=main"]);
-            git(&["add", "--all"]);
-            git(&["commit", "--quiet", "--no-gpg-sign", "-m", "first"]);
-            let tree = git(&["rev-parse", "HEAD^{tree}"]).trim().parse().unwrap();
-            Self {
-                git: GitCli::open(&repository).unwrap(),
-                root,
-                tree,
-            }
+            let repository = TestRepository::new();
+            let directory = repository.directory();
+            repository.write(&directory, "file.txt", "from the tree\n");
+            repository.commit(&directory, "from the tree");
+            let tree = git_in(&directory, &["rev-parse", "HEAD^{tree}"])
+                .parse()
+                .unwrap();
+            Self { repository, tree }
         }
 
         fn path(&self, name: &str) -> PathBuf {
-            self.root.path().join(name)
+            self.repository.root.path().join(name)
         }
 
         async fn run_with(
@@ -362,14 +347,14 @@ mod tests {
                 self.path("check.json"),
             );
             let runner = CommandRunner {
-                git: &self.git,
+                git: &self.repository.git,
                 confinement: Confinement::Agents {
                     access: Access {
                         worktree: &worktree,
-                        repository: self.git.repository(),
+                        repository: self.repository.git.repository(),
                         branch: None,
                         socket: Path::new("/nonexistent/daemon.sock"),
-                        data_dir: &DataDir::new(self.root.path().to_path_buf()),
+                        data_dir: &DataDir::new(self.repository.root.path().to_path_buf()),
                         machine_config: None,
                     },
                     sandbox,

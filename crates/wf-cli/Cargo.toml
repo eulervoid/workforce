@@ -15,6 +15,11 @@ path = "src/main.rs"
 [lints]
 workspace = true
 
+# The fake agent of the harness' tests, which the tests of the sessions run too.
+[[example]]
+name = "fake-acp-agent"
+path = "../wf-harness/src/bin/fake-acp-agent.rs"
+
 [dependencies]
 wf-core.workspace = true
 wf-store.workspace = true
@@ -55,4 +60,5 @@ bytesize.workspace = true
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }
+wf-vcs = { workspace = true, features = ["testing"] }
 insta = { version = "1", features = ["json"] }

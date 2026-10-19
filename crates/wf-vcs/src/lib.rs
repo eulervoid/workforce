@@ -5,6 +5,8 @@ pub mod config;
 pub mod diff;
 mod git;
 pub mod signing;
+#[cfg(any(test, feature = "testing"))]
+pub mod testing;
 
 use std::path::{Path, PathBuf};
 

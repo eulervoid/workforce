@@ -1590,12 +1590,7 @@ fn archive_by_state_takes_every_finished_item_of_every_type() {
 #[test]
 fn check_runs_the_policys_checks_on_the_checkout_and_fails_when_one_does() {
     let wf = Sandbox::new();
-    let git = std::process::Command::new("git")
-        .args(["init", "--quiet"])
-        .current_dir(&wf.repository)
-        .status()
-        .unwrap();
-    assert!(git.success());
+    wf_vcs::testing::git_in(&wf.repository, &["init", "--quiet"]);
     wf.run(&["init", "--name", "demo"]);
     assert!(wf.run(&["check"]).contains("the policy has no checks"));
 

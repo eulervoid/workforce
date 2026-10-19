@@ -1007,6 +1007,7 @@ impl GitCli {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::testing::{TestRepository as TestRepo, git_in};
 
     /// Merges `commit` into `target` with a merge commit that has both as parents, signed as
     /// `signing` says.
@@ -1026,11 +1027,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    struct TestRepo {
-        root: tempfile::TempDir,
-        git: GitCli,
     }
 
     #[test]
@@ -1089,108 +1085,6 @@ mod tests {
         Work::Unmerged {
             target: "main".into(),
             commit,
-        }
-    }
-
-    fn git_in(directory: &Path, args: &[&str]) -> String {
-        let output = Command::new("git")
-            .args(args)
-            .current_dir(directory)
-            .env_remove("GIT_DIR")
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "git {args:?}: {}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        String::from_utf8(output.stdout).unwrap().trim().to_string()
-    }
-
-    impl TestRepo {
-        /// A repository on `main` with one commit that has `file.txt`.
-        fn new() -> Self {
-            let root = tempfile::TempDir::new().unwrap();
-            let repository = root.path().join("repo");
-            std::fs::create_dir(&repository).unwrap();
-            git_in(&repository, &["init", "--quiet", "--initial-branch=main"]);
-            git_in(&repository, &["config", "user.name", "Test"]);
-            git_in(&repository, &["config", "user.email", "test@example.com"]);
-            let repo = Self {
-                git: GitCli::open(&repository).unwrap(),
-                root,
-            };
-            repo.write(&repository, "file.txt", "one\ntwo\nthree\n");
-            repo.commit(&repository, "first");
-            repo
-        }
-
-        fn directory(&self) -> PathBuf {
-            self.git.repository().to_path_buf()
-        }
-
-        fn write(&self, directory: &Path, name: &str, text: &str) {
-            std::fs::write(directory.join(name), text).unwrap();
-        }
-
-        fn commit(&self, directory: &Path, message: &str) -> CommitId {
-            git_in(directory, &["add", "--all"]);
-            git_in(directory, &["commit", "--quiet", "-m", message]);
-            self.git
-                .oid("rev-parse", &git_in(directory, &["rev-parse", "HEAD"]))
-                .unwrap()
-        }
-
-        fn worktree_path(&self, name: &str) -> PathBuf {
-            self.root.path().join("worktrees").join(name)
-        }
-
-        /// Work on `branch` in its worktree and return the commit.
-        fn work(&self, branch: &str, name: &str, text: &str) -> CommitId {
-            let path = self.worktree_path(branch);
-            self.git.prepare_worktree(branch, &path, "main").unwrap();
-            self.write(&path, name, text);
-            self.commit(&path, &format!("change {name}"))
-        }
-
-        fn main(&self) -> CommitId {
-            self.git.branch_head("main").unwrap()
-        }
-
-        /// Has the repository's config sign commits, with a stand-in for ssh-keygen that writes
-        /// a signature beside the data it gets.
-        fn sign_with_a_fake_signer(&self) {
-            let signer = self.root.path().join("fake-sign");
-            std::fs::write(
-                &signer,
-                "#!/bin/sh\nfor last; do :; done\necho 'fake signature' > \"$last.sig\"\n",
-            )
-            .unwrap();
-            std::fs::set_permissions(&signer, std::os::unix::fs::PermissionsExt::from_mode(0o755))
-                .unwrap();
-            for (key, value) in [
-                ("commit.gpgsign", "true"),
-                ("gpg.format", "ssh"),
-                ("user.signingkey", "key::ssh-ed25519 AAAAfake"),
-                ("gpg.ssh.program", signer.to_str().unwrap()),
-            ] {
-                git_in(&self.directory(), &["config", key, value]);
-            }
-        }
-
-        fn oid_of(&self, text: &str) -> CommitId {
-            self.git.oid("rev-parse", text).unwrap()
-        }
-
-        fn parents(&self, commit: CommitId) -> Vec<String> {
-            let line = git_in(
-                &self.directory(),
-                &["rev-list", "--parents", "-n", "1", &commit.to_string()],
-            );
-            line.split_whitespace()
-                .skip(1)
-                .map(str::to_string)
-                .collect()
         }
     }
 
@@ -1853,7 +1747,10 @@ mod tests {
         let head = repo.git.branch_head("wf/k3f9").unwrap();
         assert_eq!(repo.git.commits_ahead("main", head).unwrap(), 2);
         let first = git_in(&worktree, &["rev-parse", "HEAD~1"]);
-        assert_eq!(repo.parents(repo.oid_of(&first)), [target.to_string()]);
+        assert_eq!(
+            repo.parents(repo.commit_id(&first, &repo.directory())),
+            [target.to_string()]
+        );
         assert_eq!(
             git_in(&worktree, &["log", "-2", "--format=%s %cn"]),
             "change c.txt @ada/coder\nchange a.txt @ada/coder"
