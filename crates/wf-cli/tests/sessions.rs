@@ -915,6 +915,31 @@ async fn a_lapsed_login_ends_sessions_for_the_machine_and_the_inbox_says_so_once
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_usage_limit_ends_the_session_for_the_machine_and_the_inbox_says_so() {
+    let world = World::new("limit\n").await;
+    let item = world.wf.add(&["--title", "Limited", "--recovery", "none"]);
+    world.automate("coder", "default");
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "usage_limit");
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "open");
+    assert_eq!(comments(&shown), Value::Array(Vec::new()), "{shown}");
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(world.sessions().len(), 1, "the agent waits for the harness");
+    let entries = inbox(&world);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["kind"], "machine_fault");
+    assert_eq!(entries[0]["title"], "fake-coder hit its usage limit");
+    assert!(
+        entries[0]["what"]
+            .as_str()
+            .unwrap()
+            .contains("tried again at"),
+        "{entries:?}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_full_disk_ends_the_session_for_the_machine_and_the_inbox_says_so_once() {
     // The first turn of the coder lasts until the disk is full; the next would nudge it.
     let script = "sh while [ ! -e \"$(git rev-parse --git-common-dir)/disk-full\" ]; do sleep 0.1; done\nturn\n";

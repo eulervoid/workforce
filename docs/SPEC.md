@@ -623,7 +623,7 @@ it with one session.
 | `Failed` | the harness failed or went silent |
 | `Cancelled` | the principal stopped it, or its item moved on (cancelled, done, drafted, archived) |
 | `Interrupted` | the daemon stopped and could not resume it |
-| `MachineFault` | `LoginLapsed`, `NoSpace` or `HarnessUnreachable`: the machine, not the attempt |
+| `MachineFault` | `LoginLapsed`, `UsageLimit`, `NoSpace` or `HarnessUnreachable`: the machine, not the attempt |
 
 **Ending moves the item first.** `after_end` in `wf-core::lifecycle` says what happens to the item:
 back to open, to review, merge then done, or nothing. The daemon writes that move while the session
@@ -740,10 +740,12 @@ default level; an item can name another (`--recovery`).
   ends `Cancelled`; one the agent cannot resume ends `Interrupted`, which costs no recovery step.
 * **No silent stalls.** A harness has 3 minutes to start, else `HarnessUnreachable`; a turn silent for
   20 minutes with no permission request pending ends the session `Failed`; ACP `AuthRequired` is
-  `LoginLapsed`; a write that fails for lack of space is `NoSpace`. A machine fault ends the session
-  without using a recovery step, holds the harness's agents for 10 minutes (all agents while the disk
-  is full, probed each round), and shows once in `wf inbox` as `machine_fault` rather than as a
-  comment on every item. A session end that cannot be written is retried.
+  `LoginLapsed`; an error with `errorKind: "rate_limit"` is `UsageLimit`; a write that fails for lack
+  of space is `NoSpace`. A machine fault ends the session without using a recovery step, holds the
+  harness's agents for 10 minutes (all agents while the disk is full, probed each round), and shows
+  once in `wf inbox` as `machine_fault` rather than as a comment on every item. A `UsageLimit` holds
+  them until the reset its message gives (`resets 7:50pm (Europe/Berlin)`); the 10 minutes are the
+  fallback when no reset is given. A session end that cannot be written is retried.
 * **Storage.** Daemon start removes stray worktrees. With a `[storage]` budget in the machine config,
   the build caches of the least recently built idle worktrees are deleted until the rest fits.
 

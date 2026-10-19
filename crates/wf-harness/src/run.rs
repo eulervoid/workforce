@@ -69,6 +69,64 @@ impl Error {
     }
 }
 
+/// The agent says its usage limit is reached, as its harness reports `errorKind: "rate_limit"`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct UsageLimit {
+    /// When the limit resets, if the agent said.
+    pub resets_at: Option<Timestamp>,
+}
+
+impl Error {
+    /// Whether the agent says its usage limit is reached; `now` places a reset time of day, such
+    /// as `resets 7:50pm (Europe/Berlin)`, on the next time it comes.
+    pub fn usage_limit(&self, now: Timestamp) -> Option<UsageLimit> {
+        let Error::Protocol(error) = self else {
+            return None;
+        };
+        let kind = error.data.as_ref()?.get("errorKind")?.as_str()?;
+        (kind == "rate_limit").then(|| UsageLimit {
+            resets_at: parse_reset(&error.message, now),
+        })
+    }
+}
+
+/// The time `message` says a limit resets, as `resets 7:50pm (Europe/Berlin)` or `resets 7pm`:
+/// the next time of day after `now`, in the time zone named or else the machine's.
+fn parse_reset(message: &str, now: Timestamp) -> Option<Timestamp> {
+    let (_, after) = message.split_once("resets ")?;
+    let (clock, rest) = after.split_once(char::is_whitespace).unwrap_or((after, ""));
+    let (digits, is_pm) = match clock.to_ascii_lowercase().as_str() {
+        text if text.ends_with("pm") => (text.trim_end_matches("pm").to_string(), true),
+        text if text.ends_with("am") => (text.trim_end_matches("am").to_string(), false),
+        _ => return None,
+    };
+    let (hour, minute) = digits.split_once(':').unwrap_or((&digits, "0"));
+    let hour: i8 = hour.parse().ok().filter(|hour| (1..=12).contains(hour))?;
+    let minute: i8 = minute
+        .parse()
+        .ok()
+        .filter(|minute| (0..60).contains(minute))?;
+    let hour = hour % 12 + if is_pm { 12 } else { 0 };
+    let zone = rest
+        .trim()
+        .strip_prefix('(')
+        .and_then(|zone| zone.split_once(')'))
+        .and_then(|(name, _)| jiff::tz::TimeZone::get(name).ok())
+        .unwrap_or_else(jiff::tz::TimeZone::system);
+    let now = now.to_zoned(zone);
+    let today = now
+        .date()
+        .at(hour, minute, 0, 0)
+        .to_zoned(now.time_zone().clone())
+        .ok()?;
+    let reset = if today > now {
+        today
+    } else {
+        today.checked_add(jiff::Span::new().days(1)).ok()?
+    };
+    Some(reset.timestamp())
+}
+
 /// A model an agent offers, as its model option lists it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Model {
@@ -647,6 +705,93 @@ mod tests {
         for harness in KnownHarness::ALL {
             assert_eq!(KnownHarness::from_name(harness.name()), Some(harness));
         }
+    }
+
+    fn rate_limit(message: &str) -> Error {
+        let mut error = agent_client_protocol::Error::internal_error();
+        error.message = message.to_string();
+        error.data = Some(serde_json::json!({"errorKind": "rate_limit"}));
+        Error::Protocol(error)
+    }
+
+    #[test]
+    fn a_rate_limit_says_when_it_resets() {
+        let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
+        let limit = rate_limit("You've hit your session limit · resets 7:50pm (Europe/Berlin)")
+            .usage_limit(now)
+            .expect("a rate limit");
+        assert_eq!(
+            limit.resets_at,
+            Some("2026-10-19T17:50:00Z".parse().unwrap())
+        );
+        let tomorrow = rate_limit("limit · resets 7:50am (Europe/Berlin)")
+            .usage_limit(now)
+            .unwrap();
+        assert_eq!(
+            tomorrow.resets_at,
+            Some("2026-10-20T05:50:00Z".parse().unwrap())
+        );
+        let unsaid = rate_limit("slow down").usage_limit(now).unwrap();
+        assert_eq!(unsaid.resets_at, None);
+    }
+
+    #[test]
+    fn midnight_and_noon_are_12am_and_12pm() {
+        let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
+        assert_eq!(
+            parse_reset("resets 12am (UTC)", now),
+            Some("2026-10-20T00:00:00Z".parse().unwrap())
+        );
+        assert_eq!(
+            parse_reset("resets 12:30pm (UTC)", now),
+            Some("2026-10-20T12:30:00Z".parse().unwrap())
+        );
+        assert_eq!(
+            parse_reset(
+                "resets 12:30pm (UTC)",
+                "2026-10-19T11:00:00Z".parse().unwrap()
+            ),
+            Some("2026-10-19T12:30:00Z".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn a_reset_that_cannot_be_read_is_none() {
+        let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
+        for message in [
+            "limit reached",
+            "resets soon",
+            "resets 19:50",
+            "resets 13pm (UTC)",
+            "resets 0am (UTC)",
+            "resets 7:75pm (UTC)",
+            "resets x:50pm (UTC)",
+        ] {
+            assert_eq!(parse_reset(message, now), None, "{message}");
+        }
+    }
+
+    #[test]
+    fn a_reset_without_zone_is_in_the_machine_zone() {
+        let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
+        let system = jiff::tz::TimeZone::system();
+        let reset = parse_reset("resets 7:50pm", now).expect("a reset");
+        let local = reset.to_zoned(system);
+        assert_eq!((local.hour(), local.minute()), (19, 50));
+        assert!(reset > now && reset <= now + std::time::Duration::from_secs(25 * 3600));
+        assert_eq!(
+            parse_reset("resets 7:50pm (Nowhere/Land)", now),
+            Some(reset)
+        );
+    }
+
+    #[test]
+    fn other_errors_are_no_rate_limit() {
+        let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
+        let mut error = agent_client_protocol::Error::internal_error();
+        error.message = "resets 7:50pm".to_string();
+        assert_eq!(Error::Protocol(error).usage_limit(now), None);
+        assert_eq!(Error::Ended.usage_limit(now), None);
     }
 }
 

@@ -11,6 +11,6 @@ pub use permission::{
 };
 pub use run::{
     AgentSessionId, CancelHandle, Conversation, Error, KnownHarness, Launch, Model, Opening,
-    StopReason, models,
+    StopReason, UsageLimit, models,
 };
 pub use transcript::{Direction, TranscriptEntry};

@@ -14,6 +14,8 @@
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
 //! - `login`: answers the prompt `Authentication required`, as a harness whose login lapsed.
+//! - `limit`: answers the prompt with a rate limit that says no reset time, as a harness whose
+//!   usage limit is reached.
 //! - `silent`: does not answer the prompt, nor say anything.
 //! - `turn`: ends the turn.
 //! - `unstartable`, as the first line: exits before it answers `initialize`, as a harness that is
@@ -232,6 +234,7 @@ fn main() {
                 }
                 let mut stop = "end_turn";
                 let mut logged_out = false;
+                let mut limited = false;
                 for operation in operations.by_ref() {
                     done += 1;
                     if !script_path.is_empty() {
@@ -323,11 +326,24 @@ fn main() {
                             logged_out = true;
                             break;
                         }
+                        "limit" => {
+                            limited = true;
+                            break;
+                        }
                         "turn" => break,
                         other => panic!("unknown operation {other}"),
                     }
                 }
-                if logged_out {
+                if limited {
+                    send(json!({
+                        "jsonrpc": "2.0", "id": id,
+                        "error": {
+                            "code": -32603,
+                            "message": "You've hit your session limit",
+                            "data": {"errorKind": "rate_limit"},
+                        },
+                    }));
+                } else if logged_out {
                     send(json!({
                         "jsonrpc": "2.0", "id": id,
                         "error": {"code": -32000, "message": "Authentication required"},

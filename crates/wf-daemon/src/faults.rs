@@ -42,9 +42,9 @@ pub struct OutOfSpace {
     pub what: String,
 }
 
-/// A harness whose sessions cannot run. Its agents are started again every
-/// [`RETRY_HARNESS`]; the first turn it answers shows that it is fine again. Unless no command is
-/// known for it: then they wait until there is.
+/// A harness whose sessions cannot run. Its agents are started again at `retry`, [`RETRY_HARNESS`]
+/// after the failure unless the harness said when it is fine again; the first turn it answers
+/// shows that it is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessAtFault {
     pub fault: HarnessFault,
@@ -54,6 +54,17 @@ pub struct HarnessAtFault {
     pub last_ms: u64,
     /// What the harness said then.
     pub what: String,
+    /// When its agents are started again.
+    pub retry: Retry,
+}
+
+/// When the agents of a harness at fault are started again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Retry {
+    /// Not until a command is known for the harness.
+    Never,
+    /// At this time, in milliseconds since the Unix epoch.
+    At(u64),
 }
 
 /// How long the agents of a harness at fault wait before one is started again, to learn whether
@@ -94,16 +105,32 @@ impl Faults {
     }
 
     /// Remembers that a session of `harness` failed for `fault`, as `what` says.
-    pub(crate) fn note_harness(&self, harness: &HarnessName, fault: HarnessFault, what: String) {
+    /// Its agents are tried again at `resets_at_ms` if the harness said when it is fine again, else
+    /// after [`RETRY_HARNESS`].
+    pub(crate) fn note_harness(
+        &self,
+        harness: &HarnessName,
+        fault: HarnessFault,
+        what: String,
+        resets_at_ms: Option<u64>,
+    ) {
         let now_ms = wf_store::now_ms();
+        let retry_ms = u64::try_from(RETRY_HARNESS.as_millis()).unwrap_or(u64::MAX);
+        let retry = Retry::At(resets_at_ms.unwrap_or(now_ms.saturating_add(retry_ms)));
         let mut faults = self.lock();
         match faults.harnesses.get_mut(harness) {
-            Some(known) if known.fault == fault => known.last_ms = now_ms,
+            Some(known) if known.fault == fault => {
+                known.last_ms = now_ms;
+                known.retry = retry;
+            }
             Some(_) | None => {
                 tracing::warn!(
-                    "{harness}: {}; its agents are tried again every {}: {what}",
+                    "{harness}: {}; its agents are tried again {}: {what}",
                     MachineFault::from(fault).label(),
-                    humantime::format_duration(RETRY_HARNESS)
+                    match resets_at_ms {
+                        Some(_) => "at the reset".to_string(),
+                        None => format!("every {}", humantime::format_duration(RETRY_HARNESS)),
+                    }
                 );
                 faults.harnesses.insert(
                     harness.clone(),
@@ -112,6 +139,7 @@ impl Faults {
                         since_ms: now_ms,
                         last_ms: now_ms,
                         what,
+                        retry,
                     },
                 );
             }
@@ -173,6 +201,7 @@ impl Faults {
                             since_ms: now_ms,
                             last_ms: now_ms,
                             what,
+                            retry: Retry::Never,
                         },
                     );
                 }
@@ -196,16 +225,18 @@ impl Faults {
     }
 
     /// Whether an agent of `harness` is to wait before it is started: while the disk is full, for
-    /// as long as no command is known for the harness, and for [`RETRY_HARNESS`] after a session
-    /// of the harness failed for another fault of it.
+    /// as long as no command is known for the harness, and until its retry time after a session of
+    /// the harness failed for another fault of it.
     pub(crate) fn holds(&self, harness: &HarnessName, now_ms: u64) -> bool {
         let faults = self.lock();
-        let retry_ms = u64::try_from(RETRY_HARNESS.as_millis()).unwrap_or(u64::MAX);
         faults.out_of_space.is_some()
-            || faults.harnesses.get(harness).is_some_and(|at_fault| {
-                at_fault.fault == HarnessFault::Unknown
-                    || now_ms.saturating_sub(at_fault.last_ms) < retry_ms
-            })
+            || faults
+                .harnesses
+                .get(harness)
+                .is_some_and(|at_fault| match at_fault.retry {
+                    Retry::Never => true,
+                    Retry::At(at_ms) => now_ms < at_ms,
+                })
     }
 
     pub(crate) fn current(&self) -> MachineFaults {
@@ -352,9 +383,15 @@ mod tests {
             &claude,
             HarnessFault::LoginLapsed,
             "Authentication required".to_string(),
+            None,
         );
         let first = faults.current().harnesses[&claude].clone();
-        faults.note_harness(&claude, HarnessFault::LoginLapsed, "again".to_string());
+        faults.note_harness(
+            &claude,
+            HarnessFault::LoginLapsed,
+            "again".to_string(),
+            None,
+        );
         let again = faults.current().harnesses[&claude].clone();
         assert_eq!(
             (again.since_ms, again.what.as_str()),
@@ -373,5 +410,24 @@ mod tests {
 
         faults.harness_answered(&claude);
         assert!(faults.current().is_empty());
+    }
+
+    #[test]
+    fn a_usage_limit_holds_the_harness_until_the_reset() {
+        let faults = Faults::default();
+        let claude = HarnessName::new("claude-code").unwrap();
+        let reset_ms = wf_store::now_ms() + 3 * RETRY_HARNESS.as_millis() as u64;
+        faults.note_harness(
+            &claude,
+            HarnessFault::UsageLimit,
+            "session limit".to_string(),
+            Some(reset_ms),
+        );
+        assert_eq!(
+            faults.current().harnesses[&claude].retry,
+            Retry::At(reset_ms)
+        );
+        assert!(faults.holds(&claude, reset_ms - 1));
+        assert!(!faults.holds(&claude, reset_ms));
     }
 }
