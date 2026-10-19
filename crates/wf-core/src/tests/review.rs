@@ -816,10 +816,12 @@ fn a_daemon_change_request_after_the_offer_makes_the_principal_review_stale() {
         [(item, commit(1), ReviewStep::Principal)]
     );
     let stale_of = |scene: &Scene| match scene.state.inbox().as_slice() {
-        [entry] => match entry.waiting {
-            Waiting::PrincipalReview { stale, .. } => stale,
-            _ => panic!("expected a principal review"),
-        },
+        [entry] => {
+            let Waiting::PrincipalReview { stale, .. } = entry.waiting else {
+                panic!("expected a principal review")
+            };
+            stale
+        }
         other => panic!("expected one entry, found {other:?}"),
     };
     assert_eq!(stale_of(&scene), None);

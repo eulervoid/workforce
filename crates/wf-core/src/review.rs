@@ -4,11 +4,11 @@
 use std::collections::BTreeSet;
 
 use crate::crdt::Stamp;
-use crate::id::ItemId;
 use crate::event::CommentKind;
 use crate::hlc::Hlc;
-use crate::inbox::Stale;
+use crate::id::ItemId;
 use crate::identity::{Actor, AgentId, DeviceKey};
+use crate::inbox::Stale;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::name::Requirement;
 use crate::policy::ReviewStep;

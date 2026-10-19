@@ -14,6 +14,7 @@ use wf_core::session::SessionRole;
 use wf_core::state::State;
 
 use super::merge::{Attempt, MergeRequest};
+use super::offered::CheckedReviews;
 use crate::notify::Notifier;
 use crate::{Daemon, Loaded};
 
@@ -51,6 +52,7 @@ async fn dispatch_loop(
 ) {
     let mut heads = loaded.storage.watch_heads();
     let mut failed = FailedStarts::new();
+    let mut checked = CheckedReviews::new();
     let mut notifier = match daemon.upgrade() {
         Some(strong) => Notifier::load(&strong.workforce_directory(workforce)),
         None => return,
@@ -63,7 +65,7 @@ async fn dispatch_loop(
             return;
         }
         strong.faults.check_space(strong.launch.data_dir.root());
-        dispatch_once(&strong, workforce, loaded, &mut failed).await;
+        dispatch_once(&strong, workforce, loaded, &mut failed, &mut checked).await;
         notifier
             .announce(&strong, loaded, &loaded.merges.waiting())
             .await;
@@ -91,6 +93,7 @@ async fn dispatch_once(
     workforce: WorkforceId,
     loaded: &Arc<Loaded>,
     failed: &mut FailedStarts,
+    checked: &mut CheckedReviews,
 ) {
     failed.retain(|_, at| at.elapsed() < RETRY_FAILED_START);
     let device = daemon.device();
@@ -123,6 +126,16 @@ async fn dispatch_once(
             because: None,
             attempt: Attempt::Retry,
         });
+    }
+    // Before a reviewer is started on work that no longer merges.
+    if let Err(error) = daemon
+        .check_offered_reviews(loaded, &repository, checked)
+        .await
+    {
+        tracing::warn!(
+            "could not check the offered reviews: {}",
+            wf_core::error_chain(&error)
+        );
     }
     for item in finished {
         let Some(principal) = principal else {

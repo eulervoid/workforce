@@ -2985,3 +2985,42 @@ wf work submit
     let transcript = wf.run(&["session", "watch", short(&item), "--no-follow"]);
     assert!(transcript.contains("- @ada: Use humantime"), "{transcript}");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn work_that_stopped_merging_goes_back_to_work_before_the_principal_is_asked() {
+    // The reviewer approves, which would offer the review to the principal, only after main moved
+    // on and the branch conflicts with it. The second session waits to be let go.
+    let coder = "\
+sh if git diff --quiet main -- file.txt; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
+wf work submit
+";
+    let reviewer = "\
+sh while [ ! -f \"$XDG_DATA_HOME/go\" ]; do sleep 0.1; done
+wf review --approve
+";
+    let world = review_world(coder, reviewer).await;
+    let item = world
+        .wf
+        .add(&["--title", "Change the file", "--review", "critical"]);
+    world
+        .wait("the review session", |world| {
+            world
+                .sessions()
+                .iter()
+                .any(|session| session["role"] == "review")
+        })
+        .await;
+    let repository = &world.wf.repository;
+    std::fs::write(repository.join("file.txt"), "main\n").unwrap();
+    git_in(repository, &["commit", "--quiet", "-am", "main moves on"]);
+    std::fs::write(world.wf.data.join("go"), "").unwrap();
+    world
+        .wait("the change request", |world| {
+            !comments_with(world, &item, "change_request", "conflicts in file.txt").is_empty()
+        })
+        .await;
+    assert_ne!(world.item(&item)["state"], "review");
+    let inbox = world.wf.run(&["inbox"]);
+    assert!(!inbox.contains("review of"), "{inbox}");
+    std::fs::write(world.wf.data.join("again"), "").unwrap();
+}

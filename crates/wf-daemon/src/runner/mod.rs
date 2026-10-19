@@ -7,6 +7,7 @@ mod dispatch;
 mod drive;
 mod end;
 mod merge;
+mod offered;
 mod resume;
 mod start;
 mod worktrees;
