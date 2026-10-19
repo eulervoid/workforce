@@ -37,7 +37,7 @@
 - Use one line commit messages; if you'd need more than one line, your commit is too big
 
 ## Tests
-- A test that needs what the agent sandbox denies (the network for iroh, git signing) is `#[ignore = "needs the network"]` or `#[ignore = "needs git signing, ..."]`, so `cargo test` in a session passes or fails for real
+- A test that needs more than Fence allows (the network for iroh) starts with `if wf_core::testing::skip_in_fence("...") { return; }`, so `cargo test` in a session passes or fails for real and runs everything outside Fence; a test that needs git signing, which a session's `GIT_CONFIG_*` would override, runs `git` without them (`wf_vcs::testing`, `Sandbox`)
 - The `wf-cli` test `Sandbox` removes `WF_SESSION`, `WF_SESSION_TOKEN` and `WF_WORKFORCE` (which the daemon sets in sessions) from itself and from every `wf` it spawns; a new helper that spawns `wf` must go through `Sandbox::command`, or `cargo test` fails inside a session with "the local log for workforce ... is missing or does not match"
 - Any other failing test is yours to explain: never report a failure as "sandbox-only", and fix or explain it before you submit
 - The principal, or a check outside the sandbox, runs the marked tests with `cargo test --workspace -- --ignored` (the slow ones among them are marked "slow" and run in release mode)

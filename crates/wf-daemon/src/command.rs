@@ -538,8 +538,7 @@ git cat-file commit HEAD | grep -q gpgsig"#;
             "import socket; socket.socket(socket.AF_ROUTE, socket.SOCK_RAW).close()";
         // Inside a sandbox already, such as a session's, the socket is denied, and Fence cannot
         // start.
-        if std::env::var_os("FENCE_SANDBOX").is_some() {
-            eprintln!("skipped: this runs in Fence already");
+        if wf_core::testing::skip_in_fence("Fence cannot start inside Fence") {
             return;
         }
         let setup = Setup::new();

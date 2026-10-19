@@ -13,6 +13,7 @@ pub fn git_in(directory: &Path, args: &[&str]) -> String {
         .args(args)
         .current_dir(directory)
         .env_remove("GIT_DIR")
+        .env_remove("GIT_CONFIG_COUNT")
         .output()
         .unwrap();
     assert!(
@@ -28,6 +29,8 @@ pub fn init_repository(directory: &Path) {
     git_in(directory, &["init", "--quiet", "--initial-branch=main"]);
     git_in(directory, &["config", "user.name", "Test"]);
     git_in(directory, &["config", "user.email", "test@example.com"]);
+    // Not the principal's global signing, which would need their agent.
+    git_in(directory, &["config", "commit.gpgsign", "false"]);
     std::fs::write(directory.join("file.txt"), "one\ntwo\nthree\n").unwrap();
     git_in(directory, &["add", "--all"]);
     git_in(directory, &["commit", "--quiet", "-m", "first"]);

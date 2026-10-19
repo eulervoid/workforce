@@ -72,6 +72,9 @@ fn git() -> Command {
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE");
+    // A session's `commit.gpgsign=false` would win over the signing of a test repository.
+    #[cfg(any(test, feature = "testing"))]
+    command.env_remove(crate::CONFIG_COUNT);
     inherit_only_stdio(&mut command);
     command
 }
@@ -1132,6 +1135,7 @@ mod tests {
         );
         git_in(&repository, &["config", "user.name", "Test"]);
         git_in(&repository, &["config", "user.email", "test@example.com"]);
+        git_in(&repository, &["config", "commit.gpgsign", "false"]);
         std::fs::write(repository.join("file.txt"), "one\n").unwrap();
         git_in(&repository, &["add", "--all"]);
         git_in(&repository, &["commit", "--quiet", "-m", "first"]);
@@ -1481,7 +1485,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs git signing, which the session denies"]
     fn merges_are_signed_as_configured_or_not_at_all() {
         let repo = TestRepo::new();
         repo.sign_with_a_fake_signer();
@@ -1946,7 +1949,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "needs git signing, which the session denies"]
     fn rebased_commits_are_signed_as_the_signing_says() {
         let repo = TestRepo::new();
         let main = repo.directory();

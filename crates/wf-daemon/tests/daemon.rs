@@ -305,8 +305,10 @@ async fn start_peer_as(
 }
 
 #[tokio::test]
-#[ignore = "needs the network"]
 async fn daemons_of_two_devices_converge_on_their_own() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     let fixture = Fixture::new(2);
     let (_first_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
     let (_second_dir, vm, vm_socket) = start_peer(&fixture, 1).await;
@@ -407,8 +409,10 @@ async fn a_fork_that_cannot_be_founded_leaves_no_store_behind() {
 }
 
 #[tokio::test]
-#[ignore = "needs the network"]
 async fn a_daemon_follows_a_fork_with_the_history_it_already_has() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     let fixture = Fixture::new(1);
     let (_laptop_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
     let (_vm_dir, vm, vm_socket) = start_peer_as(&fixture, fixture.member_device.clone()).await;
@@ -509,8 +513,10 @@ async fn start_empty(
 }
 
 #[tokio::test]
-#[ignore = "needs the network"]
 async fn a_running_daemon_joins_a_workforce_with_its_own_key() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     use wf_core::event::{DeviceProfile, EventBody, InviteCreated, InviteKind};
     use wf_core::identity::{InviteSigner, Signed};
     use wf_core::invite::InviteCode;
