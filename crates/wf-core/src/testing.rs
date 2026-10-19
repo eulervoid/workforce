@@ -463,13 +463,24 @@ pub fn define_agent_with(name: &str, capabilities: &[&str]) -> EventBody {
     EventBody::AgentDefined(defined)
 }
 
-/// A session of `agent` that reviews `commit` of `item`.
+/// A session of `agent` that reviews `commit` of `item`, for the step without a name.
 pub fn start_review(agent: &str, item: ItemId, commit: impl Into<Option<CommitId>>) -> EventBody {
+    start_review_step(agent, item, commit, None)
+}
+
+/// A session of `agent` that reviews `commit` of `item`, for the step called `step`.
+pub fn start_review_step(
+    agent: &str,
+    item: ItemId,
+    commit: impl Into<Option<CommitId>>,
+    step: Option<&str>,
+) -> EventBody {
     EventBody::SessionStarted(SessionStarted {
         agent: AgentName::new(agent).unwrap(),
         item,
         role: SessionRole::Review {
             commit: commit.into(),
+            step: step.map(|name| crate::name::ReviewStepName::new(name).unwrap()),
         },
     })
 }

@@ -25,13 +25,13 @@ pub(crate) fn review(
             .session(id)
             .map(|session| (id, session.item(), session.role()))
     });
-    let item = match (&args.item, own_session) {
+    let item = match (&args.item, &own_session) {
         (Some(text), _) => workspace.resolve_item(text)?,
-        (None, Some((_, item, _))) => item,
+        (None, Some((_, item, _))) => *item,
         (None, None) => choose_item(workspace, mode, None, Scope::Live)?,
     };
-    let commit = match own_session {
-        Some((_, own, SessionRole::Review { commit })) if own == item => commit,
+    let commit = match &own_session {
+        Some((_, own, SessionRole::Review { commit, .. })) if *own == item => *commit,
         Some(_) | None => {
             workspace
                 .state()

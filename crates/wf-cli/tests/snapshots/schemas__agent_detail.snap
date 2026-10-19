@@ -29,9 +29,9 @@ expression: "Envelope::new(detail.unwrap())"
     },
     "sessions": [
       {
-        "id": "any3ldioxnzymqkp7dnpflkg2e5bmytfzgeqrd2qnihfbigxse3q",
+        "id": "km7c5ux5pngkcs7zkbwl3cw35gfhzawnkmh5qbldkmmx4cchkbja",
         "agent": "@ada/coder",
-        "item": "4yzehflpuecu36cosf74tjpdnuemimv7ko4nco4upfno66vwsv2a",
+        "item": "zcxsnyfhv5xlu3pip7jnyaacc4tpaiehmjgrwiosyknj673hc7aa",
         "title": "Implement feed sync",
         "role": "work",
         "status": "live",

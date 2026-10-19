@@ -9,6 +9,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::crdt::Stamp;
 use crate::id::{HashVisitor, ItemId, SessionId};
 use crate::identity::{Actor, AgentId, DeviceKey};
+use crate::name::ReviewStepName;
 
 const GIT_OID_LEN: usize = 20;
 const SHORT_COMMIT_LEN: usize = 8;
@@ -104,13 +105,15 @@ impl fmt::Display for CommitId {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum SessionRole {
     Work,
     /// A review of what a work session submitted: its commit, or `None` for work submitted
-    /// without commits.
+    /// without commits. It takes the step of the review level that has this name, or the one
+    /// without a name.
     Review {
         commit: Option<CommitId>,
+        step: Option<ReviewStepName>,
     },
     /// Answers or escalates the blockers of the item that wait on a supervisor or on this agent.
     Supervise,
@@ -314,7 +317,7 @@ impl Session {
     }
 
     pub fn role(&self) -> SessionRole {
-        self.role
+        self.role.clone()
     }
 
     /// The device the session runs on.

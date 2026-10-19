@@ -120,18 +120,20 @@ impl State {
             .filter(|item| item.state(policy) == ItemState::Review)
             .filter_map(|item| {
                 let waiting = match self.review_status(item.id()) {
-                    Some(ReviewStatus::Awaiting {
-                        step: ReviewStep::Principal,
-                    }) => {
+                    // Agent steps that are open come first: the principal is waited for only
+                    // when no agent is.
+                    Some(ReviewStatus::Awaiting { steps })
+                        if steps
+                            .iter()
+                            .all(|step| matches!(step, ReviewStep::Principal)) =>
+                    {
                         let (commit, submitted) = self.submission(item.id())?;
                         Waiting::PrincipalReview {
                             commit,
                             stale: self.stale_since(item.id(), submitted.hlc),
                         }
                     }
-                    Some(ReviewStatus::Awaiting {
-                        step: ReviewStep::Agent { .. },
-                    }) => return None,
+                    Some(ReviewStatus::Awaiting { .. }) => return None,
                     // The merge task moves it to `done`.
                     Some(ReviewStatus::Merged { .. })
                         if merges.iter().any(|pending| pending.item == item.id()) =>
@@ -175,13 +177,19 @@ impl State {
                     vec![SessionRole::Work, SessionRole::Supervise]
                 }
                 ItemState::Review => {
-                    vec![SessionRole::Review { commit: None }, SessionRole::Supervise]
+                    vec![
+                        SessionRole::Review {
+                            commit: None,
+                            step: None,
+                        },
+                        SessionRole::Supervise,
+                    ]
                 }
                 ItemState::Draft | ItemState::Done | ItemState::Cancelled => Vec::new(),
             };
             for role in roles {
                 if let Recovery::WaitsForPrincipal { failures, last } =
-                    self.recovery(item.id(), role)
+                    self.recovery(item.id(), &role)
                 {
                     entries.push((
                         item.updated(),
@@ -238,7 +246,7 @@ impl State {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return String::new();
         };
-        match entry.waiting {
+        match &entry.waiting {
             Waiting::Blocker { comment } => format!(
                 "blocker {}: answer with `wf comment {} \"...\" --resolve {}`",
                 comment.short(),
@@ -277,7 +285,7 @@ impl State {
                 role,
                 failures,
                 last,
-            } => self.recovery_waits(entry.item, role, failures, last),
+            } => self.recovery_waits(entry.item, role, *failures, *last),
         }
     }
 
@@ -286,7 +294,7 @@ impl State {
     pub fn recovery_waits(
         &self,
         item: ItemId,
-        role: SessionRole,
+        role: &SessionRole,
         failures: usize,
         last: SessionId,
     ) -> String {

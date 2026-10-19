@@ -17,7 +17,7 @@ pub const SNAPSHOT_INTERVAL: usize = 256;
 
 /// Bumped whenever the serialized shape of [`State`] changes. Snapshots are a cache: a mismatch
 /// discards the snapshot and refolds from the log.
-const SNAPSHOT_FORMAT: u32 = 12;
+const SNAPSHOT_FORMAT: u32 = 13;
 
 #[derive(Debug, thiserror::Error)]
 pub enum ReceiveError {
@@ -444,8 +444,8 @@ mod tests {
     }
 
     const GOLDEN_SNAPSHOT: (u32, usize, &str) = (
-        12,
-        23380,
-        "ehqsuvfrhwynxghqj3hk2pdxx5rb2tvkz2ft5uny7wzwttaczmuq",
+        13,
+        23198,
+        "vjkxgbcolootpjbhbda7mfqnz2367qdill4ui7xukjtvewuegtxq",
     );
 }

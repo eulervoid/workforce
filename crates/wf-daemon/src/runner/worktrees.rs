@@ -26,7 +26,7 @@ impl Daemon {
         session: SessionId,
         role: SessionRole,
     ) {
-        let directory = self.session_directory(workforce, item, session, role);
+        let directory = self.session_directory(workforce, item, session, &role);
         let removed = match role {
             SessionRole::Work => {
                 let another_live = self.snapshot(loaded).await.map_or(true, |state| {
@@ -43,7 +43,9 @@ impl Daemon {
                 }
                 return;
             }
-            SessionRole::Review { commit: Some(_) } => {
+            SessionRole::Review {
+                commit: Some(_), ..
+            } => {
                 let Some(repository) = self.repository_of(workforce) else {
                     return;
                 };
@@ -51,7 +53,7 @@ impl Daemon {
                     .await
                     .map(|removed| removed.map_err(|error| wf_core::error_chain(&error)))
             }
-            SessionRole::Review { commit: None }
+            SessionRole::Review { commit: None, .. }
             | SessionRole::Supervise
             | SessionRole::Diagnose => {
                 blocking(move || match std::fs::remove_dir_all(&directory) {
@@ -96,7 +98,7 @@ impl Daemon {
             .live_sessions()
             .filter(|session| session.device() == self.device())
             .map(|session| {
-                self.session_directory(workforce, session.item(), session.id(), session.role())
+                self.session_directory(workforce, session.item(), session.id(), &session.role())
             })
             .collect()
     }
@@ -285,10 +287,17 @@ mod tests {
         let other_item = ItemId::from_bytes([2; 32]);
         let ended = SessionId::from_bytes([3; 32]);
         let other = SessionId::from_bytes([4; 32]);
-        let review = (item, other, SessionRole::Review { commit: None });
+        let review = (
+            item,
+            other,
+            SessionRole::Review {
+                commit: None,
+                step: None,
+            },
+        );
         let supervise = (item, other, SessionRole::Supervise);
         let diagnose = (item, other, SessionRole::Diagnose);
-        for live in [review, supervise, diagnose] {
+        for live in [review.clone(), supervise, diagnose] {
             assert!(!another_work_session_live([live], item, ended));
         }
         assert!(another_work_session_live(

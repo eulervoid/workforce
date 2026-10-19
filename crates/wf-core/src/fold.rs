@@ -324,7 +324,7 @@ impl State {
                             name: started.agent.clone(),
                         },
                         item: started.item,
-                        role: started.role,
+                        role: started.role.clone(),
                         device: content.author,
                         started: stamp,
                         ended: None,

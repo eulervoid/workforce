@@ -882,7 +882,7 @@ impl State {
             }
             EventBody::Reviewed(review) => {
                 let reviewing = folded.item() == review.item
-                    && matches!(folded.role(), SessionRole::Review { commit } if commit == review.commit);
+                    && matches!(folded.role(), SessionRole::Review { commit, .. } if commit == review.commit);
                 let did_the_work = workforce.sessions.values().any(|other| {
                     other.agent() == folded.agent()
                         && other.item() == review.item

@@ -55,8 +55,8 @@ impl State {
     /// it, and for work since the last submission, for review since the submission and its
     /// latest verdict, for supervision since its open blockers were written. Each failure takes
     /// the next step of the level, and so does each diagnosis; after the last step the principal
-    /// decides. The commit of a review role does not matter.
-    pub fn recovery(&self, item: ItemId, role: SessionRole) -> Recovery {
+    /// decides. The commit and step of a review role do not matter.
+    pub fn recovery(&self, item: ItemId, role: &SessionRole) -> Recovery {
         let (Some(policy), Some(ItemEntry::Live(live))) = (
             self.policy().map(|document| &document.policy),
             self.item(item),
@@ -76,10 +76,10 @@ impl State {
                 let reason = session.ended()?.reason;
                 let at = session.ended()?.at();
                 let diagnosed =
-                    session.role() == SessionRole::Diagnose && role == SessionRole::Work;
+                    session.role() == SessionRole::Diagnose && *role == SessionRole::Work;
                 match reason.outcome() {
                     Outcome::Neither => None,
-                    Outcome::Failed if same_role(role, session.role()) => {
+                    Outcome::Failed if same_role(role, &session.role()) => {
                         Some((at, Step::Failed(session.id())))
                     }
                     Outcome::Failed | Outcome::Finished | Outcome::Submitted { .. } => {
@@ -105,7 +105,7 @@ impl State {
             }
             recovery = match (level.get(position), last) {
                 (Some(RecoveryStep::Retry), _) => Recovery::Retry { failures },
-                (Some(RecoveryStep::Agent { requires }), _) if role == SessionRole::Work => {
+                (Some(RecoveryStep::Agent { requires }), _) if *role == SessionRole::Work => {
                     Recovery::Diagnose {
                         failures,
                         requires: requires.clone(),
@@ -134,7 +134,7 @@ impl State {
             .live_items()
             .filter(|item| {
                 let Recovery::Diagnose { requires, .. } =
-                    self.recovery(item.id(), SessionRole::Work)
+                    self.recovery(item.id(), &SessionRole::Work)
                 else {
                     return false;
                 };
@@ -150,7 +150,7 @@ impl State {
     }
 
     /// Since when the sessions of `role` on `item` count for its recovery.
-    fn moved_on(&self, item: &Item, role: SessionRole) -> Option<Hlc> {
+    fn moved_on(&self, item: &Item, role: &SessionRole) -> Option<Hlc> {
         let submitted = self.submission(item.id()).map(|(_, stamp)| stamp.hlc);
         let by_role = match role {
             SessionRole::Work | SessionRole::Diagnose => submitted,
@@ -173,8 +173,8 @@ impl State {
     }
 }
 
-/// Whether two roles are the same, whatever commit a review looks at.
-fn same_role(left: SessionRole, right: SessionRole) -> bool {
+/// Whether two roles are the same, whatever commit and step a review is for.
+fn same_role(left: &SessionRole, right: &SessionRole) -> bool {
     match (left, right) {
         (SessionRole::Work, SessionRole::Work)
         | (SessionRole::Review { .. }, SessionRole::Review { .. })

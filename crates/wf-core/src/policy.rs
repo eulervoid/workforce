@@ -8,7 +8,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::item::ItemState;
 use crate::name::{
-    AgentName, CommandName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, TypeName,
+    AgentName, CommandName, LaneName, RecoveryLevelName, Requirement, ReviewLevelName,
+    ReviewStepName, TypeName,
 };
 
 pub const DEFAULT_POLICY_TOML: &str = include_str!("default_policy.toml");
@@ -60,6 +61,17 @@ pub enum PolicyError {
     UnknownRecoveryLevel {
         type_name: TypeName,
         level: RecoveryLevelName,
+    },
+    #[error("review level `{0}` has an entry without steps")]
+    EmptyReviewEntry(ReviewLevelName),
+    #[error(
+        "review level `{level}` has two steps {} in one entry that differ; steps of one entry with \
+         the same name, or both without, are the same step",
+        .name.as_ref().map_or("without a name".to_string(), |name| format!("named `{name}`"))
+    )]
+    ConflictingReviewSteps {
+        level: ReviewLevelName,
+        name: Option<ReviewStepName>,
     },
     #[error("the check `{0}` is defined twice")]
     DuplicateCheck(CommandName),
@@ -182,24 +194,181 @@ impl CheckConfig {
 }
 
 /// One step of a review level: an agent chosen by capabilities, or the principal.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReviewStep {
     Agent {
+        /// Tells the step from the others that run at once. Verdicts count for the step of their
+        /// review session's name.
+        name: Option<ReviewStepName>,
         requires: BTreeSet<Requirement>,
+        /// What this reviewer looks at, beside the instructions of the agent itself. They live in
+        /// the signed policy: a file of the repository could be changed by the reviewed work.
+        instructions: Option<String>,
     },
-    /// Policies stored before the step was renamed say `human`.
-    #[serde(alias = "human")]
     Principal,
 }
 
-/// A named sequence of review steps. Levels are listed from least to most strict. A level without
-/// steps needs no review.
+/// A named sequence of review entries, each a list of steps that run at once and must all
+/// approve before the next entry. Levels are listed from least to most strict. A level without
+/// entries needs no review. In policy text an entry of one step may be written as the step alone.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ReviewLevelConfig {
     pub name: ReviewLevelName,
-    pub steps: Vec<ReviewStep>,
+    #[serde(deserialize_with = "written_steps::deserialize")]
+    pub steps: Vec<Vec<ReviewStep>>,
+}
+
+/// How a policy writes review steps. Policies already in the log write an agent step as
+/// `{ agent = { requires } }` and the principal as `"human"`; postcard, which carries the policy
+/// between the daemon and the CLI, has the plain form of the enum.
+mod written_steps {
+    use std::collections::BTreeSet;
+
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    use super::ReviewStep;
+    use crate::name::{Requirement, ReviewStepName};
+
+    #[derive(Serialize, Deserialize)]
+    enum Binary {
+        Agent {
+            name: Option<ReviewStepName>,
+            requires: BTreeSet<Requirement>,
+            instructions: Option<String>,
+        },
+        Principal,
+    }
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct AgentStep {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name: Option<ReviewStepName>,
+        requires: BTreeSet<Requirement>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        instructions: Option<String>,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StoredAgentStep {
+        agent: StoredRequires,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct StoredRequires {
+        requires: BTreeSet<Requirement>,
+    }
+
+    #[derive(Deserialize)]
+    enum PrincipalWord {
+        #[serde(rename = "principal", alias = "human")]
+        Principal,
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Written {
+        Principal(PrincipalWord),
+        Stored(StoredAgentStep),
+        Agent(AgentStep),
+    }
+
+    #[derive(Deserialize)]
+    #[serde(untagged)]
+    enum Entry {
+        Group(Vec<ReviewStep>),
+        Single(ReviewStep),
+    }
+
+    impl Serialize for ReviewStep {
+        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+            if !serializer.is_human_readable() {
+                return match self.clone() {
+                    ReviewStep::Agent {
+                        name,
+                        requires,
+                        instructions,
+                    } => Binary::Agent {
+                        name,
+                        requires,
+                        instructions,
+                    },
+                    ReviewStep::Principal => Binary::Principal,
+                }
+                .serialize(serializer);
+            }
+            match self {
+                ReviewStep::Agent {
+                    name,
+                    requires,
+                    instructions,
+                } => AgentStep {
+                    name: name.clone(),
+                    requires: requires.clone(),
+                    instructions: instructions.clone(),
+                }
+                .serialize(serializer),
+                ReviewStep::Principal => serializer.serialize_str("principal"),
+            }
+        }
+    }
+
+    impl<'de> Deserialize<'de> for ReviewStep {
+        fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+            if !deserializer.is_human_readable() {
+                return Ok(match Binary::deserialize(deserializer)? {
+                    Binary::Agent {
+                        name,
+                        requires,
+                        instructions,
+                    } => ReviewStep::Agent {
+                        name,
+                        requires,
+                        instructions,
+                    },
+                    Binary::Principal => ReviewStep::Principal,
+                });
+            }
+            Ok(match Written::deserialize(deserializer)? {
+                Written::Principal(PrincipalWord::Principal) => ReviewStep::Principal,
+                Written::Stored(StoredAgentStep {
+                    agent: StoredRequires { requires },
+                }) => ReviewStep::Agent {
+                    name: None,
+                    requires,
+                    instructions: None,
+                },
+                Written::Agent(AgentStep {
+                    name,
+                    requires,
+                    instructions,
+                }) => ReviewStep::Agent {
+                    name,
+                    requires,
+                    instructions,
+                },
+            })
+        }
+    }
+
+    pub(super) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<Vec<Vec<ReviewStep>>, D::Error> {
+        if !deserializer.is_human_readable() {
+            return Vec::deserialize(deserializer);
+        }
+        let entries = Vec::<Entry>::deserialize(deserializer)?;
+        Ok(entries
+            .into_iter()
+            .map(|entry| match entry {
+                Entry::Group(steps) => steps,
+                Entry::Single(step) => vec![step],
+            })
+            .collect())
+    }
 }
 
 /// One step of a recovery level, taken when a session ends without finishing.
@@ -311,6 +480,27 @@ impl Policy {
             }
             if level.name.as_str() == "default" {
                 return Err(PolicyError::ReservedReviewLevel);
+            }
+            for entry in &level.steps {
+                if entry.is_empty() {
+                    return Err(PolicyError::EmptyReviewEntry(level.name.clone()));
+                }
+                // So that it never matters which of them a verdict counts for.
+                for (index, step) in entry.iter().enumerate() {
+                    let ReviewStep::Agent { name, .. } = step else {
+                        continue;
+                    };
+                    let conflicts = entry[..index].iter().any(|earlier| {
+                        matches!(earlier, ReviewStep::Agent { name: other, .. } if other == name)
+                            && earlier != step
+                    });
+                    if conflicts {
+                        return Err(PolicyError::ConflictingReviewSteps {
+                            level: level.name.clone(),
+                            name: name.clone(),
+                        });
+                    }
+                }
             }
         }
         let mut recovery_levels = BTreeSet::new();
@@ -708,7 +898,14 @@ mod tests {
             .collect();
         assert_eq!(
             critical.steps,
-            [ReviewStep::Agent { requires }, ReviewStep::Principal]
+            [
+                vec![ReviewStep::Agent {
+                    name: None,
+                    requires,
+                    instructions: None
+                }],
+                vec![ReviewStep::Principal]
+            ]
         );
         assert_eq!(policy.merge, MergeConfig::default());
         assert!(policy.lanes.contains_key(&LaneName::supervision()));
@@ -742,7 +939,66 @@ mod tests {
         let manual = policy
             .review_level(&ReviewLevelName::new("manual").unwrap())
             .unwrap();
-        assert_eq!(manual.steps, [ReviewStep::Principal]);
+        assert_eq!(manual.steps, [vec![ReviewStep::Principal]]);
+    }
+
+    #[test]
+    fn stored_policies_that_write_an_agent_step_the_old_way_still_parse() {
+        let old = DEFAULT_POLICY_TOML.replace(
+            "steps = [{ requires = [\"review\"] }]",
+            "steps = [{ agent = { requires = [\"review\"] } }]",
+        );
+        assert!(old.contains("agent = {"));
+        let policy = Policy::parse(&old).unwrap();
+        assert_eq!(policy.review, Policy::default_policy().review);
+    }
+
+    #[test]
+    fn a_review_entry_may_list_steps_that_run_at_once() {
+        let source = with_custom(
+            "[[review]]\nname = \"wide\"\nsteps = [[\n\
+             { name = \"style\", requires = [\"review\"], instructions = \"Naming.\" },\n\
+             { requires = [\"review\"] },\n], \"principal\"]\n",
+        );
+        let policy = Policy::parse(&source).unwrap();
+        let wide = policy
+            .review_level(&ReviewLevelName::new("wide").unwrap())
+            .unwrap();
+        assert_eq!(wide.steps.len(), 2);
+        assert_eq!(wide.steps[0].len(), 2);
+        assert!(matches!(
+            &wide.steps[0][0],
+            ReviewStep::Agent { name: Some(name), instructions: Some(text), .. }
+                if name.as_str() == "style" && text == "Naming."
+        ));
+        let bytes = postcard::to_stdvec(wide).unwrap();
+        assert_eq!(
+            &postcard::from_bytes::<ReviewLevelConfig>(&bytes).unwrap(),
+            wide
+        );
+    }
+
+    #[test]
+    fn rejects_review_entries_that_do_not_hold_together() {
+        let empty = with_custom("[[review]]\nname = \"empty\"\nsteps = [[]]\n");
+        assert!(matches!(
+            Policy::parse(&empty),
+            Err(PolicyError::EmptyReviewEntry(_))
+        ));
+        let differing = with_custom(
+            "[[review]]\nname = \"differing\"\nsteps = [[\n\
+             { name = \"style\", requires = [\"review\"] },\n\
+             { name = \"style\", requires = [\"gpu\"] },\n]]\n",
+        );
+        assert!(matches!(
+            Policy::parse(&differing),
+            Err(PolicyError::ConflictingReviewSteps { .. })
+        ));
+        let twins = with_custom(
+            "[[review]]\nname = \"twins\"\nsteps = [[\n\
+             { requires = [\"review\"] },\n{ requires = [\"review\"] },\n]]\n",
+        );
+        assert!(Policy::parse(&twins).is_ok());
     }
 
     #[test]

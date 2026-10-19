@@ -175,11 +175,11 @@ fn sessions_that_do_not_finish_are_retried_as_the_recovery_level_says() {
     offered.sort();
     assert_eq!(offered, ["interrupted", "released twice", "untouched"]);
     assert_eq!(
-        scene.state.recovery(twice, SessionRole::Work),
+        scene.state.recovery(twice, &SessionRole::Work),
         Recovery::Retry { failures: 2 }
     );
     assert!(matches!(
-        scene.state.recovery(thrice, SessionRole::Work),
+        scene.state.recovery(thrice, &SessionRole::Work),
         Recovery::WaitsForPrincipal { failures: 3, .. }
     ));
 
@@ -189,7 +189,7 @@ fn sessions_that_do_not_finish_are_retried_as_the_recovery_level_says() {
         "the tests need a database; use the docker one",
     ));
     assert_eq!(
-        scene.state.recovery(thrice, SessionRole::Work),
+        scene.state.recovery(thrice, &SessionRole::Work),
         Recovery::Fresh
     );
     assert!(scene.offered().contains(&"fails three times".to_string()));
@@ -212,7 +212,7 @@ fn sessions_the_machine_ended_are_not_attempts() {
         let session = scene.apply(start_session("coder", task)).id().into();
         scene.apply(end_session(session, EndReason::MachineFault(fault)));
         assert_eq!(
-            scene.state.recovery(task, SessionRole::Work),
+            scene.state.recovery(task, &SessionRole::Work),
             Recovery::Fresh,
             "{fault:?}"
         );
@@ -285,7 +285,7 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
     scene.apply(end_session(work, EndReason::Failed));
 
     assert!(matches!(
-        scene.state.recovery(item, SessionRole::Work),
+        scene.state.recovery(item, &SessionRole::Work),
         Recovery::Diagnose { failures: 1, .. }
     ));
     assert!(scene.offered().is_empty(), "no work before the diagnosis");
@@ -308,7 +308,7 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
     );
     scene.apply(end_session(diagnosis, EndReason::Diagnosed));
     assert_eq!(
-        scene.state.recovery(item, SessionRole::Work),
+        scene.state.recovery(item, &SessionRole::Work),
         Recovery::Retry { failures: 1 }
     );
     assert_eq!(scene.offered(), ["flaky"]);
@@ -316,7 +316,7 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
     let again: crate::id::SessionId = scene.apply(start_session("coder", item)).id().into();
     scene.apply(end_session(again, EndReason::Released));
     assert!(matches!(
-        scene.state.recovery(item, SessionRole::Work),
+        scene.state.recovery(item, &SessionRole::Work),
         Recovery::WaitsForPrincipal { failures: 2, .. }
     ));
 }

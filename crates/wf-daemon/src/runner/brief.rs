@@ -45,14 +45,15 @@ impl Sources for Logged<'_> {
 /// The first prompt of a session: its brief. `Err` says why there is none; a review that cannot
 /// show the change it reviews has none, so that nothing is approved unseen.
 pub(super) async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, String> {
-    let diff = match run.role {
+    let diff = match &run.role {
         SessionRole::Review {
             commit: Some(commit),
+            ..
         } => {
             let git = run.git.clone();
             let work = Work::Unmerged {
                 target: run.target.clone(),
-                commit,
+                commit: *commit,
             };
             blocking(move || git.diff(&work, &[]))
                 .await
@@ -64,7 +65,7 @@ pub(super) async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, Str
                     )
                 })?
         }
-        SessionRole::Review { commit: None }
+        SessionRole::Review { commit: None, .. }
         | SessionRole::Work
         | SessionRole::Supervise
         | SessionRole::Diagnose => String::new(),

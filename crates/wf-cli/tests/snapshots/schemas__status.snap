@@ -1,12 +1,12 @@
 ---
 source: crates/wf-cli/tests/schemas.rs
-expression: "Envelope::new(view::status(&scenario.state, view::StatusContext\n{\n    own: None, last_seen: &Default::default(), daemon: false, waiting_on_you:\n    0, refolded: false, caches: None,\n}))"
+expression: "Envelope::new(view::status(&scenario.state,\n&scenario.state.dependency_graph(), view::StatusContext\n{\n    machine_faults: &Default::default(), own: None, last_seen:\n    &Default::default(), daemon: false, waiting_on_you: 0, refolded: false,\n    caches: None,\n}))"
 ---
 {
   "schema": 8,
   "data": {
     "name": "demo",
-    "id": "nfnj57dtact7pkkcglpbebfpsjvcd3y4uybno3f2566m3nei565a",
+    "id": "pu5thppy6zqyj53pnvm73lxpaotujcc6mrlwxmwuthirenjctkua",
     "members": [
       "@grace (member)",
       "@ada (owner)"

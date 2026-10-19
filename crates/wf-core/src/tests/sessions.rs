@@ -466,6 +466,7 @@ mod reports {
                 item: task,
                 role: SessionRole::Review {
                     commit: Some(commit),
+                    step: None,
                 },
             }),
         ));

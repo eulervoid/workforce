@@ -268,7 +268,7 @@ impl State {
                     by = session_actor(session);
                     Activity::SessionStarted {
                         session,
-                        role: started.role,
+                        role: started.role.clone(),
                     }
                 }
                 EventBody::SessionEnded(ended)

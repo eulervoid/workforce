@@ -101,7 +101,7 @@ pub fn session_directory(
     workforce_directory: &Path,
     item: ItemId,
     session: SessionId,
-    role: SessionRole,
+    role: &SessionRole,
 ) -> PathBuf {
     let purpose = match role {
         SessionRole::Work => return item_worktree(workforce_directory, item),
@@ -260,18 +260,21 @@ mod tests {
         );
         let commit = Some(CommitId::Git(GitOid::from_bytes([4; 20])));
         for role in [
-            SessionRole::Review { commit },
-            SessionRole::Review { commit: None },
+            SessionRole::Review { commit, step: None },
+            SessionRole::Review {
+                commit: None,
+                step: None,
+            },
             SessionRole::Supervise,
             SessionRole::Diagnose,
         ] {
-            let directory = session_directory(workforce, item, first, role);
-            assert_ne!(directory, session_directory(workforce, item, second, role));
+            let directory = session_directory(workforce, item, first, &role);
+            assert_ne!(directory, session_directory(workforce, item, second, &role));
             assert_ne!(directory, item_worktree(workforce, item));
         }
         assert_eq!(
-            session_directory(workforce, item, first, SessionRole::Work),
-            session_directory(workforce, item, second, SessionRole::Work),
+            session_directory(workforce, item, first, &SessionRole::Work),
+            session_directory(workforce, item, second, &SessionRole::Work),
         );
     }
 }
