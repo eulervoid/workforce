@@ -26,11 +26,11 @@
 //!
 //! Each session gets an id of its own and keeps how far it got in the script in
 //! `<script>.<session>`. `FAKE_AGENT_REOPENS` set to `resume` or `load` offers that way back into a
-//! session, which goes on in the script from there. `FAKE_AGENT_DESCRIPTORS` names a file it
-//! writes the descriptors it holds to when it starts, one per line.
+//! session, which goes on in the script from there. Without a script file there is no progress to
+//! keep, and any session can be reopened.
 //!
-//! It tells on its standard error that it got a prompt. Without a script file there is no
-//! progress to keep, and any session can be reopened.
+//! `FAKE_AGENT_DESCRIPTORS` names a file it writes the descriptors it holds to when it starts, one
+//! per line. It tells on its standard error that it got a prompt.
 
 use std::io::{BufRead, Write};
 use std::process::Command;
