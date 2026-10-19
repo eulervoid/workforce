@@ -15,9 +15,9 @@ use wf_harness::Permission;
 
 use super::app::{Choice, Effect, Starter, Written};
 use super::diff::LineComment;
-use crate::commands::{edit_in_editor, edit_until_valid, item_work, repository};
+use crate::commands::{edit_in_editor, edit_until_valid, item_work};
 use crate::draft::Draft;
-use crate::workspace::{self, Workspace};
+use crate::workspace::Workspace;
 
 /// What is written above this line in `$EDITOR` counts; what is below is there to read.
 const SCISSORS: &str = "--- wf: everything below this line is left out ---";
@@ -125,9 +125,7 @@ fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
         state.item(item),
         Some(ItemView::Live(live)) if live.state(policy) == ItemState::Draft
     );
-    let principal = state
-        .principal_of(&workspace.device_key())
-        .ok_or_else(|| anyhow!("this device is not bound to a member"))?;
+    let principal = workspace.principal();
     let default = state
         .policy()
         .and_then(|stored| stored.policy.default_agent.clone());
@@ -202,12 +200,7 @@ fn done(
         | Effect::LineCommentInEditor { .. }
         | Effect::PostLineComment { .. } => Ok(String::new()),
         Effect::StartSession { item, agent } => {
-            let (file, _) = workspace::find_workforce(&std::env::current_dir()?)?;
-            let repository = file
-                .parent()
-                .ok_or_else(|| anyhow!("the workforce file has no directory"))?
-                .to_path_buf();
-            let session = workspace.start_session(agent.clone(), item, &repository)?;
+            let session = workspace.start_session(agent.clone(), item)?;
             Ok(format!(
                 "started {agent} on #{} ({})",
                 item.short(),
@@ -303,7 +296,7 @@ fn done(
         }
 
         Effect::PageDiff { item } => {
-            let git = repository()?;
+            let git = workspace.repository()?;
             let work = item_work(workspace, &git, item)?;
             // The pager stays open on a short diff too, so quitting it goes back to the dashboard.
             suspended(terminal, || {

@@ -234,9 +234,7 @@ pub(super) fn item(
                 None => None,
                 Some(name) => {
                     let device = workspace.device_key();
-                    let principal = state
-                        .principal_of(&device)
-                        .context("this device is not bound to a member")?;
+                    let principal = workspace.principal();
                     if state.agent(name, principal).is_none() {
                         bail!("{name} is not an agent of yours; see `wf agent list`");
                     }

@@ -8,7 +8,6 @@ use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::lifecycle::Finish;
 use wf_core::session::CommitId;
 
-use super::vcs::repository;
 use super::{Done, emit};
 use crate::cli::*;
 use crate::workspace::Workspace;
@@ -51,7 +50,7 @@ struct BriefView {
 
 fn brief(json: bool, workspace: &Workspace, session: SessionId) -> anyhow::Result<()> {
     // The checkout of a session is a worktree of the repository, so git works from here.
-    let git = match repository() {
+    let git = match workspace.repository() {
         Ok(git) => Some(git),
         Err(_) => wf_vcs::GitCli::open(&std::env::current_dir()?).ok(),
     };

@@ -1,6 +1,6 @@
 //! `wf diff`, `wf checkout` and `wf path`: the work of an item in git.
 
-use anyhow::{anyhow, bail};
+use anyhow::bail;
 use serde::Serialize;
 use wf_core::id::{HashId, ItemId};
 use wf_core::review::ReviewStatus;
@@ -8,7 +8,7 @@ use wf_core::review::ReviewStatus;
 use super::emit;
 use super::item::{Scope, choose_item};
 use crate::interactive::Mode;
-use crate::workspace::{self, Workspace};
+use crate::workspace::Workspace;
 
 #[derive(Serialize)]
 struct DiffView {
@@ -22,15 +22,6 @@ struct DiffView {
 }
 
 const NO_COMMITS: &str = "the agent has not made any commits";
-
-/// The repository of the workforce here: the directory of its `.workforce.toml`.
-pub(crate) fn repository() -> anyhow::Result<wf_vcs::GitCli> {
-    let (file, _) = workspace::find_workforce(&std::env::current_dir()?)?;
-    let repository = file
-        .parent()
-        .ok_or_else(|| anyhow!("the workforce file has no directory"))?;
-    Ok(wf_vcs::GitCli::open(repository)?)
-}
 
 /// The work on an item: once merged, the merge that brought it into the target; before, the head
 /// of its branch, or after the branch is gone, what was submitted.
@@ -82,7 +73,7 @@ pub(super) fn diff(
     id: ItemId,
     git_args: &[String],
 ) -> anyhow::Result<()> {
-    let git = repository()?;
+    let git = workspace.repository()?;
     let work = item_work(workspace, &git, id)?;
     let has_commits = git.has_commits(&work)?;
     match mode {
@@ -124,7 +115,7 @@ pub(super) fn checkout(
     workspace: &Workspace,
     item: Option<String>,
 ) -> anyhow::Result<()> {
-    let git = repository()?;
+    let git = workspace.repository()?;
     if item.as_deref() == Some("-") {
         git.checkout_previous()?;
         let view = CheckoutView {

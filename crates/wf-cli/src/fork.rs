@@ -122,13 +122,8 @@ pub fn fork(
         .workforce_id()
         .context("the workforce has no genesis")?;
     let own_device = workspace.device_key();
-    let own_principal = state
-        .principal_of(&own_device)
-        .context("this device is not bound")?;
+    let own_principal = workspace.principal();
     let signer = workspace.principal_signer()?;
-    if signer.key() != own_principal {
-        bail!("the principal key on this machine belongs to someone else");
-    }
 
     let mut excluded_devices = BTreeSet::new();
     let mut excluded_members = BTreeSet::new();

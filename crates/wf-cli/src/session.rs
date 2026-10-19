@@ -12,7 +12,7 @@ use crate::commands::{Scope, choose_item, emit};
 use crate::interactive::{self, Choice, Mode};
 use crate::render;
 use crate::view;
-use crate::workspace::{self, Workspace};
+use crate::workspace::Workspace;
 
 const TRANSCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 const FOLLOW_INTERVAL: Duration = Duration::from_millis(200);
@@ -22,10 +22,9 @@ pub fn session(
     mode: Mode,
     command: SessionCommand,
     workspace: &mut Workspace,
-    cwd: &Path,
 ) -> anyhow::Result<()> {
     match command {
-        SessionCommand::Start(args) => start(json, mode, workspace, args, cwd),
+        SessionCommand::Start(args) => start(json, mode, workspace, args),
         SessionCommand::List { live } => {
             let views: Vec<_> = view::session_views(workspace.state(), session_model(workspace))
                 .into_iter()
@@ -188,7 +187,6 @@ fn start(
     mode: Mode,
     workspace: &mut Workspace,
     args: SessionStartArgs,
-    cwd: &Path,
 ) -> anyhow::Result<()> {
     if args.watch && json {
         bail!("`--watch` has no --json output; the transcript is JSON lines");
@@ -204,12 +202,7 @@ fn start(
             })?,
     };
     let item = choose_item(workspace, mode, args.item, Scope::Unclaimed)?;
-    let (file, _) = workspace::find_workforce(cwd)?;
-    let repository = file
-        .parent()
-        .ok_or_else(|| anyhow!("the workforce file has no directory"))?
-        .to_path_buf();
-    let session = workspace.start_session(agent.clone(), item, &repository)?;
+    let session = workspace.start_session(agent.clone(), item)?;
     emit(
         json,
         &crate::commands::Done {

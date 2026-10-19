@@ -19,10 +19,7 @@ pub(super) fn agent(
     command: AgentCommand,
     workspace: &mut Workspace,
 ) -> anyhow::Result<()> {
-    let principal = workspace
-        .state()
-        .principal_of(&workspace.device_key())
-        .context("device is not bound")?;
+    let principal = workspace.principal();
     match command {
         AgentCommand::List => {
             let agents = view::agent_views(workspace.state());
