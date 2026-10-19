@@ -26,6 +26,9 @@ use wf_core::identity::{DeviceSigner, PrincipalSigner};
 use crate::caller::{SESSION_TOKEN_VARIABLE, Token};
 use crate::client::{ClientError, DaemonClient};
 
+/// Named once, for the path and for the glob that denies it to agents.
+const PRINCIPAL_KEY_FILE: &str = "principal.key";
+
 #[derive(Debug, thiserror::Error)]
 pub enum DataDirError {
     #[error("HOME is not set")]
@@ -103,7 +106,7 @@ impl DataDir {
 
     /// The principal key of one workforce, which lives next to its store.
     pub fn principal_key(&self, id: &WorkforceId) -> PathBuf {
-        self.workforce(id).join("principal.key")
+        self.workforce(id).join(PRINCIPAL_KEY_FILE)
     }
 
     pub fn store(&self, id: &WorkforceId) -> PathBuf {
@@ -145,7 +148,7 @@ impl DataDir {
     /// principal, and with the token it has the daemon act for the principal. The principal keys
     /// are a glob over the workforces.
     pub fn secrets(&self) -> Vec<PathBuf> {
-        vec![self.keys(), self.root.join("*").join("principal.key")]
+        vec![self.keys(), self.root.join("*").join(PRINCIPAL_KEY_FILE)]
     }
 
     /// The principal token of the daemon that runs on this directory, if this process may read it.
@@ -298,6 +301,36 @@ mod tests {
 
     fn mode(path: &Path) -> u32 {
         std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+    }
+
+    /// Whether `secret`, with `*` standing for any one component, is `path` or a parent of it.
+    fn covers(secret: &Path, path: &Path) -> bool {
+        let mut components = path.components();
+        secret.components().all(|part| {
+            components
+                .next()
+                .is_some_and(|other| part.as_os_str() == "*" || part == other)
+        })
+    }
+
+    #[test]
+    fn the_sandbox_denies_every_key_path() {
+        let data = DataDir::new(PathBuf::from("/data/workforce"));
+        let id = WorkforceId::from(wf_core::id::EventId::of(b"workforce"));
+        let secrets = data.secrets();
+        for path in [
+            data.device_key(),
+            data.device_ssh_key(),
+            data.principal_token(),
+            data.principal_key(&id),
+        ] {
+            assert!(
+                secrets.iter().any(|secret| covers(secret, &path)),
+                "{} is readable to agents",
+                path.display()
+            );
+        }
+        assert!(!secrets.iter().any(|secret| covers(secret, &data.store(&id))));
     }
 
     #[test]
