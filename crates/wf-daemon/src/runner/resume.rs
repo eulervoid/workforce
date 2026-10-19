@@ -122,7 +122,7 @@ impl Daemon {
             .session(session)
             .ok_or(SessionError::UnknownSession(session))?;
         let (agent, item, role) = (live.agent().name.clone(), live.item(), live.role());
-        let setup = self.setup(&state, workforce, agent, item, role)?;
+        let setup = self.setup(&state, workforce, agent, item, &role)?;
         // The session itself asks what is wrong with the machine, before it is prompted.
         match state.turn_outcome(session, 0, setup.definition.autonomy.nudges, None) {
             TurnOutcome::Close => return Err(NotResumed::MovedOn),
@@ -133,7 +133,7 @@ impl Daemon {
         }
         let record = AgentSessionRecord::read(&record_path(&setup.transcripts, session))
             .ok_or(NotResumed::NoRecord)?;
-        let worktree = self.session_directory(workforce, item, session, role);
+        let worktree = self.session_directory(workforce, item, session, &role);
         if !worktree.is_dir() {
             return Err(NotResumed::NoDirectory(worktree));
         }

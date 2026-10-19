@@ -238,7 +238,7 @@ fn next_start(
     let review = state
         .reviewable(device, agent)
         .into_iter()
-        .find(|(item, _)| !skipped.contains(item));
+        .find(|(item, _, _)| !skipped.contains(item));
     let supervision = state
         .supervisable(agent)
         .into_iter()
@@ -248,7 +248,7 @@ fn next_start(
         .into_iter()
         .find(|item| !skipped.contains(item));
     match (review, supervision, diagnosis) {
-        (Some((item, commit)), _, _) => Some((item, SessionRole::Review { commit })),
+        (Some((item, commit, step)), _, _) => Some((item, SessionRole::Review { commit, step })),
         (None, Some(item), _) => Some((item, SessionRole::Supervise)),
         (None, None, Some(item)) => Some((item, SessionRole::Diagnose)),
         (None, None, None) => state

@@ -528,7 +528,7 @@ async fn nudge(run: &Run) -> String {
             wf_core::brief::rebase_nudge(run.item, &run.target, &paths)
         }
         StoppedRebase::Stopped | StoppedRebase::NotStopped => {
-            wf_core::brief::nudge(run.item, run.role)
+            wf_core::brief::nudge(run.item, run.role.clone())
         }
     }
 }

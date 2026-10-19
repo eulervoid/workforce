@@ -1962,7 +1962,7 @@ async fn a_critical_item_waits_for_a_person_after_the_agent_approves() {
         .add(&["--title", "Add hello", "--review", "critical"]);
     world
         .wait("the principal step", |world| {
-            world.item(&item)["review_status"]["step"] == "principal"
+            world.item(&item)["review_status"]["steps"] == serde_json::json!(["principal"])
         })
         .await;
     tokio::time::sleep(Duration::from_millis(500)).await;
@@ -2021,7 +2021,7 @@ async fn an_escalated_review_goes_to_the_principal() {
         .add(&["--title", "Add hello", "--review", "standard"]);
     world
         .wait("the principal step", |world| {
-            world.item(&item)["review_status"]["step"] == "principal"
+            world.item(&item)["review_status"]["steps"] == serde_json::json!(["principal"])
         })
         .await;
     let refused = world

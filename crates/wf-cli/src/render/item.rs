@@ -291,7 +291,7 @@ fn status_line(detail: &ItemDetail) -> Option<String> {
 fn review_status_label(review: &ReviewStatusView) -> String {
     let short_commit = wf_core::session::short_commit;
     match review {
-        ReviewStatusView::Awaiting { step } => format!("review: awaiting {step}"),
+        ReviewStatusView::Awaiting { steps } => format!("review: awaiting {}", steps.join(" + ")),
         ReviewStatusView::ChangesRequested => "review: changes requested".to_string(),
         ReviewStatusView::Approved {
             commit: Some(commit),

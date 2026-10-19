@@ -285,8 +285,10 @@ pub struct WaitingView {
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum ReviewStatusView {
     Awaiting {
-        /// What the awaited step is: `principal`, or `agent: review, strong-model`.
-        step: String,
+        /// What each step that still waits is, as they run at once: `principal`, or
+        /// `agent: review, strong-model`, with the name of the step before the colon when it has
+        /// one, as in `agent security: review, strong-model`.
+        steps: Vec<String>,
     },
     ChangesRequested,
     Approved {
@@ -300,18 +302,22 @@ pub enum ReviewStatusView {
 
 fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
     match status {
-        ReviewStatus::Awaiting { step } => ReviewStatusView::Awaiting {
-            step: match step {
-                ReviewStep::Principal => "principal".to_string(),
-                ReviewStep::Agent { requires } => format!(
-                    "agent: {}",
-                    requires
-                        .iter()
-                        .map(ToString::to_string)
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ),
-            },
+        ReviewStatus::Awaiting { steps } => ReviewStatusView::Awaiting {
+            steps: steps
+                .into_iter()
+                .map(|step| match step {
+                    ReviewStep::Principal => "principal".to_string(),
+                    ReviewStep::Agent { name, requires, .. } => format!(
+                        "agent{}: {}",
+                        name.map_or_else(String::new, |name| format!(" {name}")),
+                        requires
+                            .iter()
+                            .map(ToString::to_string)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ),
+                })
+                .collect(),
         },
         ReviewStatus::ChangesRequested => ReviewStatusView::ChangesRequested,
         ReviewStatus::Approved { commit } => ReviewStatusView::Approved {
@@ -454,10 +460,11 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     SessionRole::Work => "started work".to_string(),
                     SessionRole::Review {
                         commit: Some(commit),
+                        ..
                     } => {
                         format!("started a review of {}", short_commit(commit))
                     }
-                    SessionRole::Review { commit: None } => "started a review".to_string(),
+                    SessionRole::Review { commit: None, .. } => "started a review".to_string(),
                     SessionRole::Supervise => "started supervising".to_string(),
                     SessionRole::Diagnose => "started looking into what went wrong".to_string(),
                 },
@@ -673,7 +680,7 @@ fn waiting_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<WaitingVi
                     ("merge waits".to_string(), named.into_iter().collect())
                 }
                 Waiting::Recovery {
-                    role,
+                    ref role,
                     failures,
                     last,
                 } => {

@@ -398,7 +398,7 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
                 Some(format!(
                     "#{} \"{title}\": {}",
                     entry.item.short(),
-                    state.recovery_waits(entry.item, role, failures, last)
+                    state.recovery_waits(entry.item, &role, failures, last)
                 ))
             }
             Waiting::Blocker { .. }

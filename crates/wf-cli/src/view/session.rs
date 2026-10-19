@@ -155,7 +155,7 @@ impl Serialize for SessionView {
             agent: &self.agent,
             item: self.item,
             title: &self.title,
-            role: self.role,
+            role: self.role.clone(),
             status: self.status.name(),
             started: self.started,
             ended,
@@ -194,7 +194,7 @@ pub fn session_view(
         Some(ItemEntry::Archived(_)) | None => "(archived)".to_string(),
     };
     let commit = match (session.role(), session.ended().map(|ended| ended.reason)) {
-        (SessionRole::Review { commit }, _) => commit.map(|commit| commit.to_string()),
+        (SessionRole::Review { commit, .. }, _) => commit.map(|commit| commit.to_string()),
         (SessionRole::Work, Some(EndReason::Submitted { commit })) => {
             commit.map(|commit| commit.to_string())
         }

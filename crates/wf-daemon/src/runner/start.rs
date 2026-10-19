@@ -94,7 +94,7 @@ impl Daemon {
         workforce: WorkforceId,
         agent: AgentName,
         item: ItemId,
-        role: SessionRole,
+        role: &SessionRole,
     ) -> Result<Setup, SessionError> {
         let principal = self.principal_of_device(state)?;
         let git_identity = git_identity(state, principal, &agent)?;
@@ -130,7 +130,7 @@ impl Daemon {
             principal,
             agent,
             item,
-            role,
+            role: role.clone(),
             definition,
             harness,
             sandbox,
@@ -149,7 +149,7 @@ impl Daemon {
         workforce: WorkforceId,
         item: ItemId,
         session: SessionId,
-        role: SessionRole,
+        role: &SessionRole,
     ) -> PathBuf {
         session_directory(&self.workforce_directory(workforce), item, session, role)
     }
@@ -179,7 +179,7 @@ impl Daemon {
             SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
         };
         let state = self.snapshot(loaded).await?;
-        let setup = self.setup(&state, workforce, agent, item, role)?;
+        let setup = self.setup(&state, workforce, agent, item, &role)?;
         if role == SessionRole::Work {
             state.ensure_unclaimed(item)?;
         }
@@ -209,24 +209,25 @@ impl Daemon {
                 EventBody::SessionStarted(SessionStarted {
                     agent: setup.agent.clone(),
                     item,
-                    role,
+                    role: role.clone(),
                 }),
             )
             .await?;
         let session = SessionId::from(started.id());
         // Once the session is in the log, a failure to set it up ends it: otherwise it would hold
         // the item and a slot until the next daemon starts.
-        let worktree = self.session_directory(workforce, item, session, role);
+        let worktree = self.session_directory(workforce, item, session, &role);
         let prepared = async {
-            match role {
+            match &role {
                 SessionRole::Work => {}
                 SessionRole::Review {
                     commit: Some(commit),
+                    ..
                 } => {
-                    let (path, git) = (worktree.clone(), git.clone());
+                    let (path, git, commit) = (worktree.clone(), git.clone(), *commit);
                     blocking(move || git.detached_worktree(&path, commit)).await??;
                 }
-                SessionRole::Review { commit: None }
+                SessionRole::Review { commit: None, .. }
                 | SessionRole::Supervise
                 | SessionRole::Diagnose => {
                     std::fs::create_dir_all(&worktree).map_err(|source| SessionError::Io {
