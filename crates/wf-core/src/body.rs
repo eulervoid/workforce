@@ -64,6 +64,8 @@ pub enum BodyPart {
     /// A checklist item. Its text is markdown and may continue over several lines.
     Step {
         text: String,
+        /// Computed from `text` when the body is parsed.
+        id: StepId,
         done: bool,
     },
 }
@@ -131,6 +133,7 @@ impl Body {
                     push_markdown(&mut parts, &text[cursor..top_level_item.start]);
                     parts.push(BodyPart::Step {
                         text: step.to_string(),
+                        id: StepId::of(step),
                         done,
                     });
                     cursor = top_level_item.end;
@@ -171,13 +174,13 @@ impl Body {
         self.parts
             .iter()
             .filter_map(|part| match part {
-                BodyPart::Step { text, done } => Some((text.as_str(), *done)),
+                BodyPart::Step { text, id, done } => Some((text.as_str(), *id, *done)),
                 BodyPart::Markdown(_) => None,
             })
             .enumerate()
-            .map(|(index, (text, done))| Step {
+            .map(|(index, (text, id, done))| Step {
                 number: index + 1,
-                id: StepId::of(text),
+                id,
                 text,
                 done,
             })
@@ -190,8 +193,8 @@ impl Body {
     /// The body with the steps ticked as `done_by_id` says; `None` keeps what is written.
     pub fn with_done(mut self, done_by_id: impl Fn(StepId) -> Option<bool>) -> Self {
         for part in &mut self.parts {
-            if let BodyPart::Step { text, done } = part
-                && let Some(marked) = done_by_id(StepId::of(text))
+            if let BodyPart::Step { id, done, .. } = part
+                && let Some(marked) = done_by_id(*id)
             {
                 *done = marked;
             }
@@ -224,7 +227,7 @@ impl Body {
             }
             match part {
                 BodyPart::Markdown(text) => out.push_str(text),
-                BodyPart::Step { text, done } => {
+                BodyPart::Step { text, done, .. } => {
                     number += 1;
                     out.push_str(if *done { "- [x]" } else { "- [ ]" });
                     out.push(' ');
@@ -261,6 +264,7 @@ mod tests {
     fn step(text: &str, done: bool) -> BodyPart {
         BodyPart::Step {
             text: text.into(),
+            id: StepId::of(text),
             done,
         }
     }

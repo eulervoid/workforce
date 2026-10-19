@@ -114,9 +114,8 @@ impl State {
     /// what finishes soonest goes first; then creation time and id.
     pub fn dispatch_order(&self, item: &Item) -> impl Ord + use<> {
         let progress = self.progress(item);
-        let body = item.body();
-        let checked = body.steps().filter(|step| step.done).count();
-        let unchecked = body.steps().count() - checked;
+        let checked = item.steps().filter(|step| step.done).count();
+        let unchecked = item.steps().count() - checked;
         let more_checked = match progress {
             Progress::Started => checked,
             Progress::SentBack | Progress::NeverStarted => 0,

@@ -100,8 +100,7 @@ fn step_numbered(
     let Some(ItemView::Live(live)) = state.item(item) else {
         bail!("#{} is archived", item.short());
     };
-    let body = live.body();
-    let steps: Vec<_> = body.steps().collect();
+    let steps: Vec<_> = live.steps().collect();
     match steps.get(number.get() - 1) {
         Some(step) => Ok(step.id),
         None if steps.is_empty() => bail!("#{} has no steps", item.short()),

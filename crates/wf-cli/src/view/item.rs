@@ -3,7 +3,6 @@
 use std::collections::BTreeMap;
 
 use serde::Serialize;
-use wf_core::body::Body;
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::ItemId;
 use wf_core::item::{Item, ItemState, ItemView, Priority};
@@ -49,8 +48,8 @@ pub struct StepsView {
     pub total: usize,
 }
 
-pub(super) fn steps_view(body: &Body) -> Option<StepsView> {
-    let (done, total) = body.steps().fold((0, 0), |(done, total), step| {
+pub(super) fn steps_view(item: &Item) -> Option<StepsView> {
+    let (done, total) = item.steps().fold((0, 0), |(done, total), step| {
         (done + usize::from(step.done), total + 1)
     });
     (total > 0).then_some(StepsView { done, total })
@@ -128,7 +127,7 @@ fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<It
 pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> ItemSummary {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let steps = match view {
-        ItemView::Live(item) => steps_view(&item.body()),
+        ItemView::Live(item) => steps_view(item),
         ItemView::Archived(_) => None,
     };
     let (priority, readiness, blocked_by, blocking, labels, lane, archived) = match view {

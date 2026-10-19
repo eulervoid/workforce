@@ -1089,7 +1089,7 @@ impl State {
                     }
                 }
                 match comment.step {
-                    Some(step) if item.body().step(step).is_none() => {
+                    Some(step) if item.step(step).is_none() => {
                         Err(PolicyViolation::UnknownStep(step))
                     }
                     Some(_) | None => Ok(()),
@@ -1184,7 +1184,7 @@ impl State {
                             Body::parse(text)?;
                         }
                         Change::StepDone { step, .. } => {
-                            if item.body().step(*step).is_none() {
+                            if item.step(*step).is_none() {
                                 return Err(PolicyViolation::UnknownStep(*step));
                             }
                         }

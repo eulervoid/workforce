@@ -626,8 +626,7 @@ fn check(json: bool, workspace: &mut Workspace, args: ItemCheckArgs) -> anyhow::
         let ItemView::Live(item) = workspace.state().item(id).expect("resolved ids exist") else {
             bail!("#{} is archived; unarchive it to edit", id.short());
         };
-        let body = item.body();
-        let steps: Vec<_> = body.steps().collect();
+        let steps: Vec<_> = item.steps().collect();
         let mut chosen = Vec::new();
         for number in args
             .numbers

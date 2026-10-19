@@ -201,7 +201,7 @@ pub fn session_view(
         (SessionRole::Work | SessionRole::Supervise | SessionRole::Diagnose, _) => None,
     };
     let steps = match state.item(session.item()) {
-        Some(ItemView::Live(item)) => steps_view(&item.body()),
+        Some(ItemView::Live(item)) => steps_view(item),
         Some(ItemView::Archived(_)) | None => None,
     };
     SessionView {
