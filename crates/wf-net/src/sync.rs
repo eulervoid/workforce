@@ -1,4 +1,4 @@
-//! `wf/sync/1`: bring two replicas of one workforce to the same set of events.
+//! `wf/sync/2`: bring two replicas of one workforce to the same set of events.
 //!
 //! 1. Both sides send their version vector.
 //! 2. Each sends the events the other lacks, in causal order, all branches of equivocated feeds.
@@ -20,7 +20,7 @@ use wf_core::sync::Versions;
 use crate::frame::{FrameError, read_frame, write_frame};
 use crate::log::{LogError, SyncLog};
 
-pub const SYNC_ALPN: &[u8] = b"wf/sync/1";
+pub const SYNC_ALPN: &[u8] = b"wf/sync/2";
 
 /// A peer that says nothing for this long has stopped answering: the session ends.
 pub const IDLE_TIMEOUT: Duration = Duration::from_secs(30);
