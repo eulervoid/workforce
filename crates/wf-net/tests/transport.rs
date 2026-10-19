@@ -39,6 +39,7 @@ async fn node(
 }
 
 #[tokio::test]
+#[ignore = "needs the network"]
 async fn two_endpoints_exchange_their_writes() {
     let fixture = Fixture::new(3);
     let (first, second, third) = (replica(&fixture), replica(&fixture), replica(&fixture));
@@ -69,6 +70,7 @@ async fn two_endpoints_exchange_their_writes() {
 }
 
 #[tokio::test]
+#[ignore = "needs the network"]
 async fn devices_that_are_not_bound_are_refused() {
     let fixture = Fixture::new(1);
     let served = replica(&fixture);
@@ -89,6 +91,7 @@ async fn devices_that_are_not_bound_are_refused() {
 }
 
 #[tokio::test]
+#[ignore = "needs the network"]
 async fn an_unserved_workforce_is_refused() {
     let fixture = Fixture::new(2);
     let first = replica(&fixture);
@@ -212,6 +215,7 @@ mod joining {
     }
 
     #[tokio::test]
+    #[ignore = "needs the network"]
     async fn a_device_joins_and_the_member_learns_of_it() {
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, far_future()).await;
@@ -233,6 +237,7 @@ mod joining {
     }
 
     #[tokio::test]
+    #[ignore = "needs the network"]
     async fn an_invite_works_once() {
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, far_future()).await;
@@ -255,6 +260,7 @@ mod joining {
     }
 
     #[tokio::test]
+    #[ignore = "needs the network"]
     async fn a_join_that_stopped_halfway_can_be_run_again_by_the_same_device() {
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, far_future()).await;
@@ -301,6 +307,7 @@ mod joining {
     }
 
     #[tokio::test]
+    #[ignore = "needs the network"]
     async fn an_expired_invite_is_refused() {
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, 6_000).await;
@@ -317,6 +324,7 @@ mod joining {
     }
 
     #[tokio::test]
+    #[ignore = "needs the network"]
     async fn a_code_with_the_wrong_secret_is_refused() {
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, far_future()).await;
@@ -349,6 +357,7 @@ mod gossip {
     use super::*;
 
     #[tokio::test]
+    #[ignore = "needs the network"]
     async fn devices_hear_each_others_heads() {
         let fixture = Fixture::new(2);
         let (first, second) = (replica(&fixture), replica(&fixture));
@@ -388,6 +397,7 @@ mod gossip {
     }
 
     #[tokio::test]
+    #[ignore = "needs the network"]
     async fn gossip_from_devices_that_are_not_bound_is_refused() {
         let fixture = Fixture::new(1);
         let served = replica(&fixture);
@@ -415,6 +425,7 @@ mod gossip {
     }
 
     #[tokio::test]
+    #[ignore = "needs the network"]
     async fn gossip_from_a_member_of_another_workforce_is_refused() {
         let home = Fixture::new(1);
         let other = Fixture::new(2);

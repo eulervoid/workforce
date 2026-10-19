@@ -952,6 +952,7 @@ fn restarting_replaces_a_running_daemon_and_starts_one_when_none_runs() {
 }
 
 #[test]
+#[ignore = "needs the network"]
 fn the_network_stays_off_until_another_device_may_join() {
     let sandbox = Sandbox::new();
     sandbox.run(&["init", "--name", "demo"]);
