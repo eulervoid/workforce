@@ -13,7 +13,7 @@ use serde::Serialize;
 use crate::body::{Body, BodyError, StepId};
 use crate::event::{
     AgentDefined, Change, CommentKind, EVENT_VERSION, Event, EventBody, Genesis, ItemCreated,
-    ItemEdited, ItemLinked, ItemMoved, Link,
+    ItemEdited, ItemLinked, ItemMoved, Link, MAX_EVENT_LEN,
 };
 use crate::hlc::HLC_TOLERANCE_MS;
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
@@ -51,6 +51,8 @@ pub enum GenesisError {
 pub enum Invalid {
     #[error("unsupported event version {0}")]
     UnsupportedVersion(u16),
+    #[error("event is longer than {MAX_EVENT_LEN} bytes")]
+    EventTooLarge,
     #[error("event signature is invalid")]
     BadSignature,
     #[error("genesis must not name a workforce")]
@@ -381,6 +383,14 @@ impl State {
         }
         if content.v != EVENT_VERSION {
             return Err(Invalid::UnsupportedVersion(content.v));
+        }
+        // Stored events were admitted before; only what comes from outside is held to the cap.
+        if trust == Trust::Untrusted
+            && event
+                .encode()
+                .map_or(true, |bytes| bytes.len() > MAX_EVENT_LEN)
+        {
+            return Err(Invalid::EventTooLarge);
         }
         if trust == Trust::Untrusted && event.verify_signature().is_err() {
             return Err(Invalid::BadSignature);

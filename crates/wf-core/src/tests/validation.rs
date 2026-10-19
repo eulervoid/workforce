@@ -48,6 +48,17 @@ fn unsupported_version() {
 }
 
 #[test]
+fn an_event_that_cannot_fit_a_sync_frame_is_refused_even_when_authored_here() {
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let long = "x".repeat(crate::event::MAX_EVENT_LEN);
+    let event = fixture.author(&state, 0, 5_000, create("task", &long));
+    assert_eq!(receive(&mut state, event), Err(Invalid::EventTooLarge));
+    let fitting = fixture.author(&state, 0, 5_000, create("task", "short"));
+    assert!(receive(&mut state, fitting).is_ok());
+}
+
+#[test]
 fn workforce_must_match() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
