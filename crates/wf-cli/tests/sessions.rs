@@ -337,6 +337,22 @@ async fn a_session_shows_the_model_it_runs_with() {
     assert!(list.contains("MODEL") && list.contains("deep"), "{list}");
 }
 
+/// Waits a few seconds for `child` to exit and kills it, naming what it was waited for, if it does not.
+async fn wait_for_exit(child: &mut std::process::Child, what: &str) -> std::process::ExitStatus {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        if let Some(status) = child.try_wait().unwrap() {
+            return status;
+        }
+        if std::time::Instant::now() >= deadline {
+            child.kill().unwrap();
+            child.wait().unwrap();
+            panic!("timed out after 10s waiting for {what} to exit");
+        }
+        tokio::time::sleep(Duration::from_millis(50)).await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn interrupting_start_watch_detaches_without_stopping_the_agent() {
     use std::process::Stdio;
@@ -390,7 +406,8 @@ async fn interrupting_start_watch_detaches_without_stopping_the_agent() {
             .unwrap()
             .success()
     );
-    watcher.wait().unwrap();
+    let status = wait_for_exit(&mut watcher, "the interrupted `wf session start --watch`").await;
+    assert!(!status.success(), "the interrupt must end the watch: {status}");
     assert_eq!(world.sessions()[0]["status"], "live");
     std::fs::write(world.wf.data.join("go"), "").unwrap();
     let ended = world.ended_session().await;
@@ -401,19 +418,12 @@ async fn interrupting_start_watch_detaches_without_stopping_the_agent() {
         .stdout(Stdio::from(std::fs::File::create(&output_path).unwrap()))
         .spawn()
         .unwrap();
-    let deadline = std::time::Instant::now() + Duration::from_secs(5);
-    loop {
-        if let Some(status) = completed_watch.try_wait().unwrap() {
-            assert!(status.success());
-            break;
-        }
-        if std::time::Instant::now() >= deadline {
-            completed_watch.kill().unwrap();
-            completed_watch.wait().unwrap();
-            panic!("watch must finish after draining an ended session");
-        }
-        tokio::time::sleep(Duration::from_millis(50)).await;
-    }
+    let status = wait_for_exit(
+        &mut completed_watch,
+        "`wf session watch` to drain the ended session",
+    )
+    .await;
+    assert!(status.success(), "{status}");
     let transcript = std::fs::read_to_string(&output_path).unwrap();
     assert!(
         transcript.contains("finished"),
