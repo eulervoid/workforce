@@ -5,6 +5,7 @@ pub mod autonomy;
 pub mod body;
 pub mod brief;
 pub mod crdt;
+pub mod diff;
 pub mod dispatch;
 pub mod encoding;
 mod error_chain;

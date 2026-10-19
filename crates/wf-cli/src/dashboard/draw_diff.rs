@@ -6,7 +6,7 @@ use ratatui::layout::Rect;
 use ratatui::style::{Color, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
-use wf_vcs::diff::{Content, DiffLine, FileChange, FileDiff};
+use wf_core::diff::{Content, DiffLine, FileChange, FileDiff};
 
 use super::diff::{self, Changes, DiffPane, DiffRow, ShownComment};
 use super::draw::{KeysAt, Themed, accent, draw_position, padded, selection_bar, themed};
