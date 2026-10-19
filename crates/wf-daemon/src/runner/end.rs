@@ -132,7 +132,11 @@ impl Daemon {
                 // submit`), unless it is approved already; either way what it committed is
                 // copied into this repository now, and checks that passed on that head are not
                 // run again.
-                let mode = if state.rebases_at_submit(session) {
+                // Checks that passed are not run again because the target moved meanwhile, nor is
+                // the branch rebased under them.
+                let mode = if state.rebases_at_submit(session)
+                    && self.submissions.passed(session).is_none()
+                {
                     ImportMode::Submission
                 } else {
                     ImportMode::InProgress

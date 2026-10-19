@@ -42,7 +42,8 @@ impl GitCli {
         let email = self.run(&self.repository, &[], ["config", "--get", "user.email"])?;
         if email.success && !email.stdout.trim().is_empty() {
             let address = email.stdout.trim().to_string();
-            self.run(path, &[], ["config", "user.email", &address])?.ok()?;
+            self.run(path, &[], ["config", "user.email", &address])?
+                .ok()?;
         }
         Ok(())
     }

@@ -682,13 +682,12 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_session_finds_its_branch_loose_again_when_the_refs_were_packed_between_two_turns() {
-    // The sandbox lets the session rewrite its branch's file but not create it.
+async fn packing_and_collecting_garbage_in_either_repository_changes_nothing() {
     let script = "\
 sh echo a > a.txt && git add a.txt && git commit -q -m a && touch \"$XDG_DATA_HOME/committed\"
 sh while [ ! -f \"$XDG_DATA_HOME/packed\" ]; do sleep 0.1; done
 turn
-sh test -f \"$(git rev-parse --git-common-dir)/refs/heads/$(git branch --show-current)\" && touch \"$XDG_DATA_HOME/loose\"
+sh git pack-refs --all && git gc -q
 sh echo b > b.txt && git add b.txt && git commit -q -m b
 wf work submit
 ";
@@ -700,15 +699,28 @@ wf work submit
             world.wf.data.join("committed").exists()
         })
         .await;
+    // The first commit is copied into the principal's repository, which packs and collects.
+    world
+        .wait("the first commit to be copied", |world| {
+            git_in(
+                &world.wf.repository,
+                &["log", "--oneline", "--branches=wf/*", "--not", "main"],
+            )
+            .contains(" a")
+        })
+        .await;
     git_in(&world.wf.repository, &["pack-refs", "--all"]);
+    git_in(&world.wf.repository, &["gc", "-q"]);
     std::fs::write(world.wf.data.join("packed"), "").unwrap();
 
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
-    assert!(
-        world.wf.data.join("loose").exists(),
-        "the branch was a loose ref again when the second turn began"
-    );
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
+    assert!(world.wf.repository.join("a.txt").is_file());
+    assert!(world.wf.repository.join("b.txt").is_file());
+    git_in(&world.wf.repository, &["fsck", "--strict"]);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -973,7 +985,7 @@ async fn a_usage_limit_ends_the_session_for_the_machine_and_the_inbox_says_so() 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_full_disk_ends_the_session_for_the_machine_and_the_inbox_says_so_once() {
     // The first turn of the coder lasts until the disk is full; the next would nudge it.
-    let script = "sh while [ ! -e \"$(git rev-parse --git-common-dir)/disk-full\" ]; do sleep 0.1; done\nturn\n";
+    let script = "sh while [ ! -e \"$XDG_DATA_HOME/disk-full\" ]; do sleep 0.1; done\nturn\n";
     let world = World::new(script).await;
     let item = world
         .wf
@@ -987,7 +999,7 @@ async fn a_full_disk_ends_the_session_for_the_machine_and_the_inbox_says_so_once
         "a transcript",
         &std::io::Error::from(std::io::ErrorKind::StorageFull)
     ));
-    std::fs::write(world.wf.repository.join(".git/disk-full"), "").unwrap();
+    std::fs::write(world.wf.data.join("disk-full"), "").unwrap();
 
     let session = world.ended_session().await;
     assert_eq!(session["status"], "no_space", "{}", world.item(&item));
@@ -1522,7 +1534,7 @@ wf work submit --note \"Already done\"
 /// An agent that submits twice once the write is armed: the second submission is the retry of
 /// the first when that failed.
 const SUBMIT_TWICE_WHEN_ARMED: &str = "\
-sh while [ ! -e \"$(git rev-parse --git-common-dir)/armed\" ]; do sleep 0.1; done
+sh while [ ! -e \"$XDG_DATA_HOME/armed\" ]; do sleep 0.1; done
 wf work submit --note \"Nothing to change\"
 wf work submit --note \"Nothing to change\"
 ";
@@ -1534,7 +1546,7 @@ async fn submit_with_a_failing_write(failing: fn(&EventBody) -> bool) -> (World,
         .add(&["--title", "Check the parser", "--review", "none"]);
     start_session(&world, &item);
     world.daemon.fail_next_write(failing);
-    std::fs::write(world.wf.repository.join(".git/armed"), "").unwrap();
+    std::fs::write(world.wf.data.join("armed"), "").unwrap();
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
     (world, item)
@@ -2251,7 +2263,7 @@ async fn approved_work_that_conflicts_goes_back_to_open_and_the_next_submission_
     // is refused for the conflict, the turn ends, and it resolves the file and submits again in
     // the next.
     let coder = "\
-sh if git diff --quiet main -- file.txt; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
+sh if [ \"$(git log -1 --format=%s)\" != branch ]; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
 wf work submit
 turn
 sh echo branch > file.txt
@@ -2482,11 +2494,7 @@ async fn the_diff_says_when_the_agent_has_not_made_any_commits() {
     start_session(&world, &item);
 
     let text = world.wf.run(&["item", "diff", short(&item)]);
-    assert!(
-        text.starts_with("the agent has not made any commits\n")
-            && text.ends_with("\nno changes\n"),
-        "{text}"
-    );
+    assert!(text == "the agent has not made any commits\n", "{text}");
     let diff = world.wf.json(&["item", "diff", short(&item)]);
     assert!(diff["committed"].is_null(), "{diff}");
 
@@ -3432,7 +3440,7 @@ async fn work_that_stopped_merging_goes_back_to_work_before_the_principal_is_ask
     // The reviewer approves, which would offer the review to the principal, only after main moved
     // on and the branch conflicts with it. The second session waits to be let go.
     let coder = "\
-sh if git diff --quiet main -- file.txt; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
+sh if [ \"$(git log -1 --format=%s)\" != branch ]; then echo branch > file.txt && git add file.txt && git commit -q -m branch; else while [ ! -f \"$XDG_DATA_HOME/again\" ]; do sleep 0.1; done; fi
 wf work submit
 ";
     let reviewer = "\

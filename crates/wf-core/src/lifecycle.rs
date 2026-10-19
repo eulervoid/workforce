@@ -295,8 +295,8 @@ impl State {
         Some((session.item(), active))
     }
 
-    /// Whether the daemon rebases the item's branch onto the target as `session` submits, before
-    /// anything is written: for work on an item that is being worked on. Nobody has approved its
+    /// Whether the item's branch is rebased onto the target as `session` submits (by `wf work
+    /// submit`, in the agent's repository), before anything is written: for work on an item that is being worked on. Nobody has approved its
     /// commits yet, so rewriting them costs nothing, and the reviewer sees them as they will land.
     /// Approved work, which waits in review for its merge, is never rewritten.
     pub fn rebases_at_submit(&self, session: SessionId) -> bool {

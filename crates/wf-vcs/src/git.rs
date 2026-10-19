@@ -730,6 +730,23 @@ impl GitCli {
     /// the index says so, that is, when whoever works there has staged the outcome with `git add`
     /// or `git rm`.
     pub fn rebase(&self, onto: CommitId) -> Result<Rebase, VcsError> {
+        // The git config the session was given in its environment (how its commits are signed)
+        // is the agent's own, so the rewritten commits are made the way its commits are.
+        let session_config = std::env::vars()
+            .filter(|(name, _)| {
+                name == crate::CONFIG_COUNT
+                    || name.starts_with(crate::CONFIG_KEY)
+                    || name.starts_with(crate::CONFIG_VALUE)
+            })
+            .collect();
+        self.rebase_with(onto, session_config)
+    }
+
+    fn rebase_with(
+        &self,
+        onto: CommitId,
+        session_config: Vec<(String, String)>,
+    ) -> Result<Rebase, VcsError> {
         let worktree = self.repository.as_path();
         let mut args = Vec::new();
         match self.stopped_rebase(worktree)? {
@@ -778,16 +795,7 @@ impl GitCli {
                 );
             }
         }
-        // The git config the session was given in its environment (how its commits are signed)
-        // is the agent's own, so the rewritten commits are made the way its commits are. The
-        // editor would open for the message of a commit whose conflicts were resolved.
-        let session_config: Vec<(String, String)> = std::env::vars()
-            .filter(|(name, _)| {
-                name == crate::CONFIG_COUNT
-                    || name.starts_with(crate::CONFIG_KEY)
-                    || name.starts_with(crate::CONFIG_VALUE)
-            })
-            .collect();
+        // The editor would open for the message of a commit whose conflicts were resolved.
         let mut environment: Vec<(&str, &str)> = session_config
             .iter()
             .map(|(name, value)| (name.as_str(), value.as_str()))
@@ -919,6 +927,14 @@ mod tests {
     use super::*;
     use crate::testing::{TestRepository as TestRepo, git_in};
     use crate::{Import, ImportMode, agent_branch_head, remove_agent_repository};
+
+    impl GitCli {
+        /// A rebase without the git config of this process's environment, which a test run in a
+        /// session has.
+        fn rebase_plain(&self, onto: CommitId) -> Result<Rebase, VcsError> {
+            self.rebase_with(onto, Vec::new())
+        }
+    }
 
     /// Merges `commit` into `target` with a merge commit that has both as parents, signed as
     /// `signing` says.
@@ -1857,6 +1873,45 @@ mod tests {
     }
 
     #[test]
+    fn an_agent_cannot_move_the_target_or_another_items_branch_through_an_import() {
+        let repo = TestRepo::new();
+        let item = ItemId::from_bytes([7; 32]);
+        let other = ItemId::from_bytes([8; 32]);
+        let other_work = repo.work(&item_branch(other), "other.txt", "other\n");
+        let path = repo.root.path().join("agent");
+        let branch = item_branch(item);
+        repo.git
+            .create_agent_repository(&path, &branch, repo.main())
+            .unwrap();
+        git_in(&path, &["config", "user.name", "Ada"]);
+        git_in(&path, &["config", "user.email", "ada@example.com"]);
+        git_in(&path, &["config", "commit.gpgsign", "false"]);
+        let head = commit_in(&path, "a.txt", "a\n");
+        // The agent points `main` and the other item's branch of its own repository anywhere.
+        git_in(&path, &["branch", "main", "HEAD"]);
+        git_in(&path, &["branch", &item_branch(other), "HEAD"]);
+        git_in(&path, &["-c", "tag.gpgsign=false", "tag", "main", "HEAD"]);
+        let main = repo.main();
+
+        let imported = repo
+            .git
+            .import_commits(&path, item, "main", ImportMode::Submission)
+            .unwrap();
+        assert_eq!(imported, Import::Imported { commit: head });
+        assert_eq!(repo.main(), main, "the target is where it was");
+        assert_eq!(
+            repo.git.branch_head(&item_branch(other)).unwrap(),
+            other_work,
+            "another item's branch is where it was"
+        );
+        assert_eq!(
+            git_in(&repo.directory(), &["tag", "--list"]),
+            "",
+            "no tag came along"
+        );
+    }
+
+    #[test]
     fn removing_the_agent_repository_keeps_the_imported_commits_and_ignores_a_missing_one() {
         let repo = TestRepo::new();
         let (path, _) = agent_repository(&repo);
@@ -1873,7 +1928,7 @@ mod tests {
         commit_in(&worktree, "c.txt", "c\n");
         let target = commit_to_main(&repo, "b.txt", "b\n");
 
-        assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
+        assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
         assert_eq!(ahead(&worktree, target), 2);
         assert_eq!(
             git_in(&worktree, &["rev-parse", "HEAD~2"]),
@@ -1886,7 +1941,7 @@ mod tests {
         assert!(worktree.join("b.txt").is_file());
 
         let head = agent.branch_head("wf/k3f9").unwrap();
-        assert_eq!(agent.rebase(target).unwrap(), Rebase::UpToDate);
+        assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::UpToDate);
         assert_eq!(agent.branch_head("wf/k3f9").unwrap(), head);
     }
 
@@ -1901,7 +1956,7 @@ mod tests {
             paths: vec!["file.txt".into()],
         };
 
-        assert_eq!(agent.rebase(target).unwrap(), conflict);
+        assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
         assert_eq!(
             agent.stopped_rebase(&worktree).unwrap(),
             StoppedRebase::Conflict {
@@ -1909,7 +1964,7 @@ mod tests {
             }
         );
         // Nothing resolved yet: the same files are named again.
-        assert_eq!(agent.rebase(target).unwrap(), conflict);
+        assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
         // Given up, the branch is checked out as it was; the next rebase stops at the same place.
         git_in(&worktree, &["rebase", "--abort"]);
         assert_eq!(
@@ -1917,13 +1972,13 @@ mod tests {
             StoppedRebase::NotStopped
         );
         assert_eq!(git_in(&worktree, &["rev-parse", "HEAD"]), work.to_string());
-        assert_eq!(agent.rebase(target).unwrap(), conflict);
+        assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
 
         // The first commit is resolved; the second conflicts in turn.
         repo.write(&worktree, "file.txt", "one\nTWO\n3\n");
-        assert_eq!(agent.rebase(target).unwrap(), conflict);
+        assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
         repo.write(&worktree, "file.txt", "one\nTWO\nTHREE\n");
-        assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
+        assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
         assert_eq!(
             agent.stopped_rebase(&worktree).unwrap(),
             StoppedRebase::NotStopped
@@ -1949,12 +2004,12 @@ mod tests {
         let conflict = Rebase::Conflict {
             paths: vec!["img.bin".into()],
         };
-        assert_eq!(agent.rebase(target).unwrap(), conflict);
+        assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
         // The worktree holds the target's version without markers; that is not a resolution.
-        assert_eq!(agent.rebase(target).unwrap(), conflict);
+        assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
         std::fs::write(worktree.join("img.bin"), b"\0work").unwrap();
         git_in(&worktree, &["add", "img.bin"]);
-        assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
+        assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
         assert_eq!(std::fs::read(worktree.join("img.bin")).unwrap(), b"\0work");
     }
 
@@ -1983,10 +2038,10 @@ mod tests {
             let conflict = Rebase::Conflict {
                 paths: vec!["gone.txt".into()],
             };
-            assert_eq!(agent.rebase(target).unwrap(), conflict);
-            assert_eq!(agent.rebase(target).unwrap(), conflict);
+            assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
+            assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
             git_in(&worktree, &["rm", "--quiet", "--force", "gone.txt"]);
-            assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
+            assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
         }
     }
 
@@ -2033,7 +2088,7 @@ mod tests {
         let target = commit_to_main(&repo, "b.txt", "b\n");
         repo.write(&worktree, "file.txt", "uncommitted\n");
         assert_eq!(
-            agent.rebase(target).unwrap(),
+            agent.rebase_plain(target).unwrap(),
             Rebase::DirtyCheckout(DirtyCheckout {
                 worktree: agent.repository().to_path_buf(),
                 paths: vec!["file.txt".into()],
@@ -2066,7 +2121,7 @@ mod tests {
             ] {
                 git_in(&worktree, &["config", key, value]);
             }
-            assert_eq!(agent.rebase(target).unwrap(), Rebase::Rebased);
+            assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
             assert_eq!(signed(), expected, "gpgsign={signing}");
         }
     }

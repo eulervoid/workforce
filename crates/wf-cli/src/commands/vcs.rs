@@ -25,37 +25,16 @@ struct DiffView {
     /// What the commits of the work change; `None` while the branch has no commits ahead of the
     /// target, empty when its commits change nothing.
     committed: Option<String>,
-    /// What the worktree of the session has changed since `commit`, new files included; absent
-    /// when no worktree was read, empty when it has no changes.
-    #[serde(skip_serializing_if = "Option::is_none")]
-    uncommitted: Option<String>,
 }
 
 const NO_COMMITS: &str = "the agent has not made any commits";
 
-/// The text of the two parts of a diff: the committed one, then the uncommitted one under a header
-/// of its own, when a worktree was read.
-fn diff_text(committed: Option<&str>, uncommitted: Option<&str>, head: &str) -> String {
-    let mut text = match committed {
+/// The text of a diff: what the commits change, or that there are none.
+fn diff_text(committed: Option<&str>) -> String {
+    match committed {
         Some(diff) => diff.to_owned(),
         None => format!("{NO_COMMITS}\n"),
-    };
-    if let Some(diff) = uncommitted {
-        let diff = if diff.is_empty() {
-            "no changes\n"
-        } else {
-            diff
-        };
-        text.push_str(&format!(
-            "\n{}\n{diff}",
-            uncommitted_header(wf_core::session::short_commit(head))
-        ));
     }
-    text
-}
-
-fn uncommitted_header(head: &str) -> String {
-    format!("uncommitted, against {head}")
 }
 
 /// The work on an item: once merged, the merge that brought it into the target; before, the head
@@ -180,7 +159,6 @@ pub(super) fn diff(
         }
     };
     let has_commits = git.has_commits(&work)?;
-    let uncommitted: Option<String> = None;
     match mode {
         Mode::Interactive if has_commits => {
             git.show_diff(&work, git_args, wf_vcs::Pager::AsConfigured)?;
@@ -200,15 +178,8 @@ pub(super) fn diff(
                 } else {
                     None
                 },
-                uncommitted,
             };
-            emit(json, &view, |view| {
-                diff_text(
-                    view.committed.as_deref(),
-                    view.uncommitted.as_deref(),
-                    &view.commit,
-                )
-            })
+            emit(json, &view, |view| diff_text(view.committed.as_deref()))
         }
     }
 }
@@ -247,7 +218,6 @@ fn device_view(
                 commit: work.head.to_string(),
                 merge: None,
                 committed: Some(work.committed),
-                uncommitted: None,
             };
             Ok((view, text))
         }
