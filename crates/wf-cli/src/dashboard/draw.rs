@@ -1174,7 +1174,10 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             first.push(themed(format!("#{}", item.id.short()), theme::id()));
             first.push(Span::raw(" review"));
             if let Some(commit) = commit {
-                first.push(Span::raw(format!(" {}", commit.short())).themed(theme::text_dimmed()));
+                first.push(
+                    Span::raw(format!(" {}", commit.short()))
+                        .themed(theme::text_dimmed()),
+                );
             }
             first.push(Span::raw(format!("  {}", item.title)));
             row.lines(first, row.keys("v").map(Line::from), Vec::new())
@@ -1513,7 +1516,11 @@ fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<L
             age(session.started_ms, now_ms)
         ),
         SessionStatus::Ended { reason, at_ms } => {
-            format!("{} {} ago", reason.label(), age(at_ms, now_ms))
+            format!(
+                "{} {} ago",
+                reason.label(),
+                age(at_ms, now_ms)
+            )
         }
     };
     row.lines(first, Some(with_context(app, session, right)), Vec::new())

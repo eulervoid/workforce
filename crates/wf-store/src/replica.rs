@@ -307,8 +307,7 @@ impl<S: EventStore> Replica<S> {
             .state
             .receive(event.clone(), Trust::Untrusted)
             .map_err(ReceiveError::from)?;
-        self.persist(&event, &received)
-            .map_err(ReceiveError::from)?;
+        self.persist(&event, &received).map_err(ReceiveError::from)?;
         Ok(event)
     }
 
