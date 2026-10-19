@@ -50,6 +50,11 @@ still checks out the work itself. While the branch has no commits ahead of the t
 agent has not made any commits; with `--json`, `diff` is then `null`, where commits that change nothing
 give an empty one.
 
+When the agent's session runs on another of your machines, `wf item diff` asks that machine through
+the daemon and prints what it has committed, saying which device it came from; `--json` has the
+device in `device`. Git's own options and pager do not apply to it. A machine that cannot be reached is
+said as such, not as a missing branch; the diff of an item with no running session is read here.
+
 Then give a verdict:
 
 ```sh
