@@ -74,7 +74,7 @@ impl State {
 }
 
 impl Resolver<'_> {
-    /// Resolves an item id prefix like git: at least [`MIN_PREFIX_LEN`] characters and unique.
+    /// Resolves an item id prefix like git: at least [`crate::id::MIN_PREFIX_LEN`] characters and unique.
     /// Archived items resolve too, because dependencies on them still do.
     pub fn item(&self, prefix: &str) -> Result<ItemId, PrefixError> {
         self.items.resolve(prefix)

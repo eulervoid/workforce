@@ -75,6 +75,9 @@ fn readiness_icon(readiness: Readiness) -> &'static str {
 }
 
 /// `2026-10-09 21:42` in the local time zone; text that is not a timestamp is kept as it is.
+/// Device ids are shown with 8 characters, as before ids got their own short length.
+const DEVICE_ID_LEN: usize = 8;
+
 fn short_time(timestamp: &str) -> String {
     local_time(timestamp, "%Y-%m-%d %H:%M")
 }
@@ -1130,7 +1133,11 @@ pub fn devices(devices: &[DeviceView]) -> String {
     for device in devices {
         let name = device.name.clone().unwrap_or_else(|| "-".to_string());
         table.add_row([
-            short(&device.device).to_string(),
+            device
+                .device
+                .chars()
+                .take(DEVICE_ID_LEN)
+                .collect::<String>(),
             if device.this_device {
                 format!("{name} (this)")
             } else {
@@ -1361,7 +1368,10 @@ mod tests {
         let lines: Vec<&str> = output.lines().collect();
         assert!(lines.contains(&"items: 6 ready, 3 archived"), "{output}");
         assert!(lines.contains(&"waiting on you: 2"), "{output}");
-        let items_line = lines.iter().find(|line| line.starts_with("items:")).unwrap();
+        let items_line = lines
+            .iter()
+            .find(|line| line.starts_with("items:"))
+            .unwrap();
         assert!(!items_line.contains("waiting"), "{output}");
     }
 

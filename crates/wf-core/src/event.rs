@@ -463,7 +463,7 @@ impl LineAnchor {
 
     /// `src/lib.rs:12-14 at a8d49484`, saying which side lines removed are numbered on.
     pub fn heading(&self) -> String {
-        let commit: String = self.commit.to_string().chars().take(8).collect();
+        let commit = self.commit.short();
         let side = match self.side {
             DiffSide::New => "",
             DiffSide::Old => ", removed, numbered as before the change,",
