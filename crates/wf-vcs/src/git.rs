@@ -1747,7 +1747,10 @@ mod tests {
         let head = repo.git.branch_head("wf/k3f9").unwrap();
         assert_eq!(repo.git.commits_ahead("main", head).unwrap(), 2);
         let first = git_in(&worktree, &["rev-parse", "HEAD~1"]);
-        assert_eq!(repo.parents(repo.commit_id(&first, &repo.directory())), [target.to_string()]);
+        assert_eq!(
+            repo.parents(repo.commit_id(&first, &repo.directory())),
+            [target.to_string()]
+        );
         assert_eq!(
             git_in(&worktree, &["log", "-2", "--format=%s %cn"]),
             "change c.txt @ada/coder\nchange a.txt @ada/coder"

@@ -1,0 +1,18 @@
+---
+source: crates/wf-cli/src/dashboard/tests/now.rs
+expression: "screen(&mut app, 130, 14)"
+---
+" workforce                                                                                   ▐1 Now▌  2 Items   3 Agents   4 Log  "
+" 3 live · 14 open · 3 waiting · 1 blocked · 2 devices                                                                             "
+"──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+" ⧗ #aibaea blocker from coder                                                                                               ↑ 1   "
+"   "Should the span live on ParseError or Location?"                                                                              "
+" ◎ #ambqga review  Archive by category                                                                                            "
+"                                                                                                                                  "
+" WORKING                                                                                                                         ›"
+" ◆ coder     #aeaqca Parse config lazily                                                                                    12m   "
+"▎◇ coder     #aibaea Fix error spans                                                                                 parked 40m   "
+" ◆ reviewer  #ambqga Archive by category                                                                                    ↓ 2   "
+"──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+" 07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_review                                                                 "
+" enter open · j/k move · ? keys                                                                                                   "

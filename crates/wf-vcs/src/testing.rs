@@ -40,6 +40,12 @@ pub struct TestRepository {
     pub git: GitCli,
 }
 
+impl Default for TestRepository {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl TestRepository {
     pub fn new() -> Self {
         let root = tempfile::TempDir::new().unwrap();

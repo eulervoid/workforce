@@ -1,7 +1,0 @@
----
-source: crates/wf-cli/src/dashboard/tests.rs
-expression: "footer(&mut app, 60)"
----
-"────────────────────────────────────────────────────────────"
-" ⚠ #aibaea back to open: merging into main confli… · 1 more "
-" enter open · j/k move · a allow · d deny · ? keys          "

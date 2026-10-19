@@ -1,0 +1,7 @@
+---
+source: crates/wf-cli/src/dashboard/tests/warnings.rs
+expression: "footer(&mut app, ROOMY)"
+---
+"──────────────────────────────────────────────────────────────────────────────────────────────────────────────"
+" 07:04  #ambqga  @ada/coder/pp74s3 · submit  ⚠ #aeaqca back to open: merging into main conflicts in README.md "
+" enter open · j/k move · a allow · d deny · ? keys                                                            "
