@@ -26,14 +26,10 @@ use crate::workspace::Workspace;
 
 /// The items, the live ones in `order` and the archived ones after them by when they were
 /// archived.
-pub(crate) fn sorted_views(
-    state: &State,
-    include_archived: bool,
-    order: ItemOrder,
-) -> Vec<ItemView<'_>> {
+pub(crate) fn sorted_views(state: &State, scope: Scope, order: ItemOrder) -> Vec<ItemView<'_>> {
     let mut views: Vec<ItemView<'_>> = state
         .items()
-        .filter(|view| include_archived || matches!(view, ItemView::Live(_)))
+        .filter(|view| scope.includes(state, view))
         .collect();
     views.sort_by(|first, second| match (first, second) {
         (ItemView::Live(first), ItemView::Live(second)) => compare_items(order, first, second),
@@ -113,9 +109,8 @@ fn pick_item(
     }
     let state = workspace.state();
     let graph = state.dependency_graph();
-    let choices = sorted_views(state, true, ItemOrder::Priority)
+    let choices = sorted_views(state, scope, ItemOrder::Priority)
         .into_iter()
-        .filter(|view| scope.includes(state, view))
         .map(|view| item_choice(&view::summary(state, &graph, view)))
         .collect();
     let picked = interactive::pick(what, choices)?;
@@ -229,7 +224,15 @@ pub(super) fn item(
             let state = workspace.state();
             check_list_filters(state, &args)?;
             let graph = state.dependency_graph();
-            let views = sorted_views(state, args.archived, args.sort);
+            let views = sorted_views(
+                state,
+                if args.archived {
+                    Scope::Any
+                } else {
+                    Scope::Live
+                },
+                args.sort,
+            );
             let dispatchable: Option<BTreeSet<ItemId>> = match &args.for_agent {
                 None => None,
                 Some(name) => {
@@ -475,7 +478,7 @@ fn archive_finished(
     let ids: Vec<ItemId> = {
         let state = workspace.state();
         let policy = &state.policy().expect("a workforce has a policy").policy;
-        sorted_views(state, false, ItemOrder::Priority)
+        sorted_views(state, Scope::Live, ItemOrder::Priority)
             .into_iter()
             .filter(|view| states.contains(&view.state(policy)))
             .map(|view| view.id())
@@ -521,40 +524,29 @@ struct ArchivedShown {
     note: &'static str,
 }
 
-#[derive(Serialize)]
-#[serde(untagged)]
-enum Shown {
-    Live(Box<view::ItemDetail>),
-    Archived(Box<ArchivedShown>),
-}
-
 fn show(json: bool, mode: Mode, workspace: &Workspace, id: ItemId) -> anyhow::Result<()> {
     let state = workspace.state();
     match state.item(id).expect("resolved ids exist") {
         ItemView::Archived(stub) => {
             let graph = state.dependency_graph();
-            let shown = Shown::Archived(Box::new(ArchivedShown {
+            let shown = ArchivedShown {
                 summary: view::summary(state, &graph, ItemView::Archived(stub)),
                 archived_at: view::timestamp(stub.archived_at()),
                 note: "archived: body and discussion load from the log on demand; `wf item unarchive` restores the item",
-            }));
-            emit_paged(json, mode, &shown, |shown| match shown {
-                Shown::Archived(archived) => format!(
+            };
+            emit_paged(json, mode, &shown, |archived| {
+                format!(
                     "{}archived {}\n{}\n",
                     render::item_list(std::slice::from_ref(&archived.summary)),
                     archived.archived_at,
                     archived.note
-                ),
-                Shown::Live(_) => unreachable!(),
+                )
             })
         }
         ItemView::Live(item) => {
             let events = workspace.events()?;
-            let shown = Shown::Live(Box::new(view::item_detail(state, item, &events)));
-            emit_paged(json, mode, &shown, |shown| match shown {
-                Shown::Live(detail) => render::item_detail(detail),
-                Shown::Archived(_) => unreachable!(),
-            })
+            let detail = view::item_detail(state, item, &events);
+            emit_paged(json, mode, &detail, render::item_detail)
         }
     }
 }
@@ -741,26 +733,16 @@ fn link(
     } else if mode == Mode::Scripted {
         bail!("missing link; pass --depends-on, --remove-depends-on or --supersedes");
     } else {
-        let action = interactive::pick(
-            "link",
-            ["depends on", "no longer depends on", "supersedes"]
-                .into_iter()
-                .map(|label| Choice {
-                    value: label.to_string(),
-                    label: label.to_string(),
-                })
-                .collect(),
-        )?;
-        match action.as_str() {
-            "depends on" => {
+        match pick_link_action()? {
+            LinkAction::DependsOn => {
                 let target = pick_item(workspace, mode, Scope::Live, "item to depend on")?;
                 depends_on(id, target)
             }
-            "no longer depends on" => {
+            LinkAction::RemoveDependsOn => {
                 let target = pick_dependency(workspace, id)?;
                 remove_depends_on(workspace, id, target)?
             }
-            _ => supersedes(
+            LinkAction::Supersedes => supersedes(
                 id,
                 pick_item(workspace, mode, Scope::Live, "item to supersede")?,
             ),
@@ -768,6 +750,47 @@ fn link(
     };
     let event = workspace.author(EventBody::ItemLinked(ItemLinked { item: id, link }))?;
     done(json, message, &event, Some(id))
+}
+
+/// What `wf item link` can do, when the picker asks.
+#[derive(Clone, Copy)]
+enum LinkAction {
+    DependsOn,
+    RemoveDependsOn,
+    Supersedes,
+}
+
+impl LinkAction {
+    const ALL: [LinkAction; 3] = [
+        LinkAction::DependsOn,
+        LinkAction::RemoveDependsOn,
+        LinkAction::Supersedes,
+    ];
+
+    fn label(self) -> &'static str {
+        match self {
+            LinkAction::DependsOn => "depends on",
+            LinkAction::RemoveDependsOn => "no longer depends on",
+            LinkAction::Supersedes => "supersedes",
+        }
+    }
+}
+
+fn pick_link_action() -> anyhow::Result<LinkAction> {
+    let picked = interactive::pick(
+        "link",
+        LinkAction::ALL
+            .into_iter()
+            .map(|action| Choice {
+                value: action.label().to_string(),
+                label: action.label().to_string(),
+            })
+            .collect(),
+    )?;
+    Ok(LinkAction::ALL
+        .into_iter()
+        .find(|action| action.label() == picked)
+        .expect("the picker returns one of its choices"))
 }
 
 fn depends_on(id: ItemId, target: ItemId) -> (Link, String) {
@@ -872,7 +895,7 @@ mod tests {
         let unprioritized = add(&mut state, "Unprioritized", None);
         let high = add(&mut state, "High", Some(Priority::P1));
         let sorted = |state: &State, order: ItemOrder| -> Vec<ItemId> {
-            sorted_views(state, false, order)
+            sorted_views(state, Scope::Live, order)
                 .into_iter()
                 .map(|view| view.id())
                 .collect()

@@ -32,13 +32,7 @@ pub(super) fn comment(
     if text.is_empty() && resolves.is_empty() {
         bail!("the comment is empty; nothing was sent");
     }
-    let kind = if args.block {
-        CommentKind::Blocker
-    } else if args.request_change {
-        CommentKind::ChangeRequest
-    } else {
-        CommentKind::Plain
-    };
+    let kind = args.kind();
     let step = args
         .step
         .map(|number| step_numbered(workspace, id, number))
@@ -194,7 +188,9 @@ pub(super) fn mentions(json: bool, workspace: &Workspace, target: &str) -> anyho
     let state = workspace.state();
     let mention = match refs::parse(target).into_iter().next() {
         Some(Token::Mention(mention)) => mention,
-        _ => bail!("`{target}` is not a mention; write it like @ada or @ada/coder"),
+        Some(Token::ItemRef(_) | Token::CommentRef { .. }) | None => {
+            bail!("`{target}` is not a mention; write it like @ada or @ada/coder")
+        }
     };
     let resolved: Option<_> = state.resolver().mention(&mention);
     let resolved = resolved.ok_or_else(|| {
@@ -212,6 +208,17 @@ pub(super) fn mentions(json: bool, workspace: &Workspace, target: &str) -> anyho
             .collect(),
     };
     emit(json, &mentions, render::mentions)
+}
+
+impl CommentArgs {
+    /// `--block` and `--request-change` exclude each other.
+    fn kind(&self) -> CommentKind {
+        match (self.block, self.request_change) {
+            (true, _) => CommentKind::Blocker,
+            (false, true) => CommentKind::ChangeRequest,
+            (false, false) => CommentKind::Plain,
+        }
+    }
 }
 
 #[cfg(test)]

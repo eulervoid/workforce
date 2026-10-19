@@ -66,7 +66,18 @@ pub fn session(
                 bail!("`wf session watch` has no --json output; the transcript is JSON lines");
             }
             let id = choose_session_or_item(workspace, mode, args.session)?;
-            watch(workspace, id, args.no_follow, args.raw, args.full)
+            let follow = if args.no_follow {
+                Follow::Once
+            } else {
+                Follow::UntilEnded
+            };
+            watch(
+                workspace,
+                id,
+                follow,
+                watch_format(args.raw),
+                watch_verbosity(args.full),
+            )
         }
     }
 }
@@ -220,7 +231,13 @@ fn start(
     )?;
     if args.watch {
         wait_for_transcript(&transcript_path(workspace, session))?;
-        watch(workspace, session, false, args.raw, args.full)?;
+        watch(
+            workspace,
+            session,
+            Follow::UntilEnded,
+            watch_format(args.raw),
+            watch_verbosity(args.full),
+        )?;
     }
     Ok(())
 }
@@ -254,24 +271,39 @@ fn session_model(workspace: &Workspace) -> impl Fn(SessionId) -> Option<String> 
     move |session| wf_daemon::session_model(&transcripts, session)
 }
 
+/// Whether `watch` waits for the transcript to grow.
+#[derive(Clone, Copy)]
+enum Follow {
+    /// Print what is there and stop.
+    Once,
+    /// Wait for more until the session has ended.
+    UntilEnded,
+}
+
+fn watch_format(raw: bool) -> Format {
+    if raw { Format::Raw } else { Format::Styled }
+}
+
+fn watch_verbosity(full: bool) -> Verbosity {
+    if full {
+        Verbosity::Full
+    } else {
+        Verbosity::Abridged
+    }
+}
+
 fn watch(
     workspace: &mut Workspace,
     session: SessionId,
-    no_follow: bool,
-    raw: bool,
-    full: bool,
+    follow: Follow,
+    format: Format,
+    verbosity: Verbosity,
 ) -> anyhow::Result<()> {
     let mut reader = transcript::Reader::open(&transcript_path(workspace, session))?;
     let agent = workspace.state().session(session).map_or_else(
         || "agent".to_owned(),
         |session| session.agent().name.to_string(),
     );
-    let format = if raw { Format::Raw } else { Format::Styled };
-    let verbosity = if full {
-        Verbosity::Full
-    } else {
-        Verbosity::Abridged
-    };
     let mut printer = Printer::new(
         &agent,
         transcript::terminal_width(),
@@ -288,7 +320,7 @@ fn watch(
         }
         let entries = written.entries;
         if entries.is_empty() {
-            if no_follow || ended {
+            if matches!(follow, Follow::Once) || ended {
                 let ended = ended
                     || workspace
                         .state()

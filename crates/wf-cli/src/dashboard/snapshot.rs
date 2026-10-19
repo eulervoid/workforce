@@ -609,7 +609,7 @@ fn agents(state: &State, graph: &DependencyGraph, own: DeviceKey) -> Vec<AgentIn
 }
 
 fn item_groups(state: &State, graph: &DependencyGraph, listing: ItemListing) -> Vec<ItemGroup> {
-    let summaries = sorted_views(state, false, listing.order)
+    let summaries = sorted_views(state, crate::commands::Scope::Live, listing.order)
         .into_iter()
         .map(|view| view::summary(state, graph, view))
         .collect();
