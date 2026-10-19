@@ -23,7 +23,12 @@ pub struct Sandbox {
 fn clear_session_identity() {
     static CLEARED: std::sync::Once = std::sync::Once::new();
     CLEARED.call_once(|| {
-        for variable in ["WF_SESSION", "WF_SESSION_TOKEN", "WF_WORKFORCE"] {
+        for variable in [
+            "WF_SESSION",
+            "WF_SESSION_TOKEN",
+            "WF_WORKFORCE",
+            "GIT_CONFIG_COUNT",
+        ] {
             // SAFETY: runs once, before the test that called it spawns or reads anything.
             unsafe { std::env::remove_var(variable) };
         }
@@ -71,7 +76,9 @@ impl Sandbox {
             // A session's own identity must not leak into the sandboxed workforce.
             .env_remove("WF_SESSION")
             .env_remove("WF_SESSION_TOKEN")
-            .env_remove("WF_WORKFORCE");
+            .env_remove("WF_WORKFORCE")
+            // A session's `commit.gpgsign=false` would win over a test repository's signing.
+            .env_remove("GIT_CONFIG_COUNT");
         command
     }
 

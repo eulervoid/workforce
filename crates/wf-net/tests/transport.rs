@@ -39,8 +39,10 @@ async fn node(
 }
 
 #[tokio::test]
-#[ignore = "needs the network"]
 async fn two_endpoints_exchange_their_writes() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     let fixture = Fixture::new(3);
     let (first, second, third) = (replica(&fixture), replica(&fixture), replica(&fixture));
     write(&first, &fixture, 0, "from the laptop");
@@ -70,8 +72,10 @@ async fn two_endpoints_exchange_their_writes() {
 }
 
 #[tokio::test]
-#[ignore = "needs the network"]
 async fn devices_that_are_not_bound_are_refused() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     let fixture = Fixture::new(1);
     let served = replica(&fixture);
     write(&served, &fixture, 0, "private");
@@ -91,8 +95,10 @@ async fn devices_that_are_not_bound_are_refused() {
 }
 
 #[tokio::test]
-#[ignore = "needs the network"]
 async fn an_unserved_workforce_is_refused() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     let fixture = Fixture::new(2);
     let first = replica(&fixture);
     let second = replica(&fixture);
@@ -215,8 +221,10 @@ mod joining {
     }
 
     #[tokio::test]
-    #[ignore = "needs the network"]
     async fn a_device_joins_and_the_member_learns_of_it() {
+        if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+            return;
+        }
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, far_future()).await;
         let vm = DeviceSigner::from_bytes(&[90; 32]).unwrap();
@@ -237,8 +245,10 @@ mod joining {
     }
 
     #[tokio::test]
-    #[ignore = "needs the network"]
     async fn an_invite_works_once() {
+        if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+            return;
+        }
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, far_future()).await;
         let first = DeviceSigner::from_bytes(&[91; 32]).unwrap();
@@ -260,8 +270,10 @@ mod joining {
     }
 
     #[tokio::test]
-    #[ignore = "needs the network"]
     async fn a_join_that_stopped_halfway_can_be_run_again_by_the_same_device() {
+        if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+            return;
+        }
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, far_future()).await;
         let vm = DeviceSigner::from_bytes(&[95; 32]).unwrap();
@@ -307,8 +319,10 @@ mod joining {
     }
 
     #[tokio::test]
-    #[ignore = "needs the network"]
     async fn an_expired_invite_is_refused() {
+        if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+            return;
+        }
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, 6_000).await;
         let vm = DeviceSigner::from_bytes(&[93; 32]).unwrap();
@@ -324,8 +338,10 @@ mod joining {
     }
 
     #[tokio::test]
-    #[ignore = "needs the network"]
     async fn a_code_with_the_wrong_secret_is_refused() {
+        if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+            return;
+        }
         let fixture = Fixture::new(1);
         let invited = invited(&fixture, far_future()).await;
         let forged = InviteCode::new(
@@ -357,8 +373,10 @@ mod gossip {
     use super::*;
 
     #[tokio::test]
-    #[ignore = "needs the network"]
     async fn devices_hear_each_others_heads() {
+        if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+            return;
+        }
         let fixture = Fixture::new(2);
         let (first, second) = (replica(&fixture), replica(&fixture));
         let laptop = node(&fixture, &fixture.devices[0], &first).await;
@@ -397,8 +415,10 @@ mod gossip {
     }
 
     #[tokio::test]
-    #[ignore = "needs the network"]
     async fn gossip_from_devices_that_are_not_bound_is_refused() {
+        if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+            return;
+        }
         let fixture = Fixture::new(1);
         let served = replica(&fixture);
         let member = node(&fixture, &fixture.devices[0], &served).await;
@@ -425,8 +445,10 @@ mod gossip {
     }
 
     #[tokio::test]
-    #[ignore = "needs the network"]
     async fn gossip_from_a_member_of_another_workforce_is_refused() {
+        if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+            return;
+        }
         let home = Fixture::new(1);
         let other = Fixture::new(2);
         let (home_replica, other_replica) = (replica(&home), replica(&other));
