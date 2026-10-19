@@ -62,6 +62,7 @@ fn a_verdict_carries_the_commit_the_diff_on_screen_shows() {
         .read(Ok(crate::dashboard::diff::ItemWork {
             commit: work_commit(),
             changes: crate::dashboard::diff::Changes::NoCommits,
+            uncommitted: None,
         }));
     press(&mut app, KeyCode::Char('R'));
     assert_eq!(

@@ -22,6 +22,10 @@ pub struct ItemWork {
     /// the merge.
     pub commit: CommitId,
     pub changes: Changes,
+    /// The files the worktree of the session has changed since `commit`, new files included;
+    /// `None` when no worktree was read. They are not part of the work that review and merge
+    /// see, so no comment on lines goes to them.
+    pub uncommitted: Option<Vec<FileDiff>>,
 }
 
 /// What the work changes against its target.
@@ -88,6 +92,8 @@ pub enum DiffRow {
     },
     /// Between two files.
     Blank,
+    /// Where the files of the uncommitted part start.
+    UncommittedHeader,
 }
 
 impl DiffRow {
@@ -104,7 +110,8 @@ impl DiffRow {
             DiffRow::Hunk { .. }
             | DiffRow::NoLines(_)
             | DiffRow::Comment { .. }
-            | DiffRow::Blank => false,
+            | DiffRow::Blank
+            | DiffRow::UncommittedHeader => false,
         }
     }
 
@@ -115,7 +122,7 @@ impl DiffRow {
             | DiffRow::Line { file, .. }
             | DiffRow::NoLines(file)
             | DiffRow::Comment { file, .. } => Some(file),
-            DiffRow::Blank => None,
+            DiffRow::Blank | DiffRow::UncommittedHeader => None,
         }
     }
 }
@@ -141,8 +148,9 @@ pub struct DiffPane {
     pub cursor: usize,
     /// The first row on screen, and whether it follows the cursor.
     pub top: FirstRow,
-    /// The files folded to their header, by path, so they stay folded as the work moves on.
-    folded: HashSet<String>,
+    /// The files folded to their header, by path and whether they are uncommitted, so they stay
+    /// folded as the work moves on.
+    folded: HashSet<(bool, String)>,
     /// The row a selection of lines started on, which reaches from there to the cursor; `None`
     /// while no lines are selected.
     pub selection: Option<usize>,
@@ -198,9 +206,13 @@ impl DiffPane {
         self.work.as_ref()
     }
 
-    /// Whether the file at `path` is folded to its header.
-    pub fn is_folded(&self, path: &str) -> bool {
-        self.folded.contains(path)
+    /// Whether the file `file` is folded to its header.
+    pub fn is_folded(&self, file: usize) -> bool {
+        self.folded.contains(&self.fold_key(file))
+    }
+
+    fn fold_key(&self, file: usize) -> (bool, String) {
+        (self.is_uncommitted(file), self.file(file).path.clone())
     }
 
     /// The comments on lines of the review being written.
@@ -245,6 +257,9 @@ impl DiffPane {
     /// Takes in the work as read again. The cursor stays on its row, as near as there is one.
     /// A selection is of lines that may be gone.
     pub fn read(&mut self, work: Result<ItemWork, String>) {
+        if self.device.is_none() && self.work.as_ref() == Some(&work) {
+            return;
+        }
         self.device = None;
         self.take_in(work);
     }
@@ -290,15 +305,26 @@ impl DiffPane {
     }
 
     fn take_in(&mut self, work: Result<ItemWork, String>) {
+        // Rows of the uncommitted part come last, so a selection and a press in the commits
+        // stay as they are while only the worktree moves.
+        let same_commits = match (&self.work, &work) {
+            (Some(Ok(known)), Ok(new)) => {
+                known.commit == new.commit && known.changes == new.changes
+            }
+            _ => false,
+        };
         self.work = Some(work);
-        self.selection = None;
-        self.pressed = None;
+        if !same_commits {
+            self.selection = None;
+            self.pressed = None;
+        }
         self.lay_out();
         let rows = self.rows();
         self.cursor = self.cursor.min(rows.len().saturating_sub(1));
         self.cursor = nearest_cursor_row(&rows, self.cursor);
     }
 
+    /// The files the commits of the work change.
     pub fn files(&self) -> &[FileDiff] {
         match &self.work {
             Some(Ok(ItemWork {
@@ -312,6 +338,58 @@ impl DiffPane {
             | Some(Err(_))
             | None => &[],
         }
+    }
+
+    /// The files the worktree changed since the head; none while no worktree was read.
+    pub fn uncommitted_files(&self) -> &[FileDiff] {
+        match &self.work {
+            Some(Ok(ItemWork {
+                uncommitted: Some(files),
+                ..
+            })) => files,
+            Some(Ok(ItemWork {
+                uncommitted: None, ..
+            }))
+            | Some(Err(_))
+            | None => &[],
+        }
+    }
+
+    /// The file of a row: the committed ones, then the uncommitted ones.
+    pub fn file(&self, file: usize) -> &FileDiff {
+        let committed = self.files();
+        match file.checked_sub(committed.len()) {
+            None => &committed[file],
+            Some(index) => &self.uncommitted_files()[index],
+        }
+    }
+
+    /// Every file shown, the committed ones first.
+    pub fn all_files(&self) -> impl Iterator<Item = &FileDiff> {
+        self.files().iter().chain(self.uncommitted_files())
+    }
+
+    /// Whether the file `file` is of the uncommitted part.
+    pub fn is_uncommitted(&self, file: usize) -> bool {
+        file >= self.files().len()
+    }
+
+    /// The commit the uncommitted part is against, as text.
+    pub fn head_label(&self) -> String {
+        self.commit()
+            .map(|commit| commit.to_string())
+            .unwrap_or_default()
+    }
+
+    /// Whether a worktree was read, so the uncommitted part is shown, even if it has no files.
+    pub fn has_uncommitted_part(&self) -> bool {
+        matches!(
+            &self.work,
+            Some(Ok(ItemWork {
+                uncommitted: Some(_),
+                ..
+            }))
+        )
     }
 
     /// The rows of the diff, from the top.
@@ -347,12 +425,15 @@ impl DiffPane {
                 }));
             }
         };
-        for (index, file) in self.files().iter().enumerate() {
+        for (index, file) in self.all_files().enumerate() {
             if index > 0 {
                 rows.push(DiffRow::Blank);
             }
+            if index == self.files().len() && self.has_uncommitted_part() {
+                rows.push(DiffRow::UncommittedHeader);
+            }
             rows.push(DiffRow::File(index));
-            if self.folded.contains(&file.path) {
+            if self.is_folded(index) {
                 continue;
             }
             if let Some(shown) = under_files.get(&index) {
@@ -463,7 +544,7 @@ impl DiffPane {
         side: DiffSide,
         number: u32,
     ) -> Option<(usize, usize, usize)> {
-        let Content::Text(hunks) = &self.files()[file].content else {
+        let Content::Text(hunks) = &self.file(file).content else {
             return None;
         };
         hunks.iter().enumerate().find_map(|(hunk_index, hunk)| {
@@ -483,6 +564,14 @@ impl DiffPane {
         let commit = self.commit()?;
         let rows = self.rows();
         let range = self.selected().unwrap_or(self.cursor..=self.cursor);
+        // Only lines of the commits can be commented on.
+        if rows
+            .get(range.clone())?
+            .iter()
+            .any(|row| row.file().is_some_and(|file| self.is_uncommitted(file)))
+        {
+            return None;
+        }
         let mut path = None;
         let lines: Vec<&DiffLine> = rows
             .get(range)?
@@ -491,7 +580,7 @@ impl DiffPane {
                 let DiffRow::Line { file, hunk, line } = *row else {
                     return None;
                 };
-                let file = &self.files()[file];
+                let file = self.file(file);
                 path = Some(file.path.clone());
                 let Content::Text(hunks) = &file.content else {
                     return None;
@@ -537,7 +626,8 @@ impl DiffPane {
             | DiffRow::Hunk { .. }
             | DiffRow::Line { .. }
             | DiffRow::NoLines(_)
-            | DiffRow::Blank => None,
+            | DiffRow::Blank
+            | DiffRow::UncommittedHeader => None,
         }
     }
 
@@ -673,9 +763,9 @@ impl DiffPane {
         let Some(file) = rows.get(self.cursor).and_then(|row| row.file()) else {
             return;
         };
-        let path = self.files()[file].path.clone();
-        if !self.folded.remove(&path) {
-            self.folded.insert(path);
+        let key = self.fold_key(file);
+        if !self.folded.remove(&key) {
+            self.folded.insert(key);
         }
         self.lay_out();
         if let Some(header) = self
@@ -714,7 +804,11 @@ fn keep_to_hunk(rows: &[DiffRow], start: usize, row: usize) -> usize {
             ..
         } => line_file == file && line_hunk == hunk,
         DiffRow::Comment { .. } => true,
-        DiffRow::File(_) | DiffRow::Hunk { .. } | DiffRow::NoLines(_) | DiffRow::Blank => false,
+        DiffRow::File(_)
+        | DiffRow::Hunk { .. }
+        | DiffRow::NoLines(_)
+        | DiffRow::Blank
+        | DiffRow::UncommittedHeader => false,
     };
     let first = (0..=start)
         .rev()

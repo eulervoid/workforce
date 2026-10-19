@@ -48,7 +48,10 @@ impl Executable {
     }
 
     fn at(path: PathBuf) -> Self {
-        let path = match path.to_str().and_then(|text| text.strip_suffix(" (deleted)")) {
+        let path = match path
+            .to_str()
+            .and_then(|text| text.strip_suffix(" (deleted)"))
+        {
             Some(trimmed) => PathBuf::from(trimmed),
             None => path,
         };

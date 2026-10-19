@@ -101,7 +101,10 @@ pub enum Reconnect {
     /// No daemon listens, as while one restarts.
     NoDaemon,
     /// The daemon speaks another protocol than this build.
-    Refused { daemon: u32, client: u32 },
+    Refused {
+        daemon: u32,
+        client: u32,
+    },
     Failed(anyhow::Error),
 }
 

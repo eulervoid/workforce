@@ -13,6 +13,7 @@ fn the_diff_says_when_the_agent_has_not_made_any_commits_or_they_change_no_files
     pane.read(Ok(crate::dashboard::diff::ItemWork {
         commit: work_commit(),
         changes: crate::dashboard::diff::Changes::NoCommits,
+        uncommitted: None,
     }));
     let screen_text = screen(&mut app, 60, 24);
     assert!(
@@ -23,6 +24,7 @@ fn the_diff_says_when_the_agent_has_not_made_any_commits_or_they_change_no_files
     pane.read(Ok(crate::dashboard::diff::ItemWork {
         commit: work_commit(),
         changes: crate::dashboard::diff::Changes::Files(Vec::new()),
+        uncommitted: None,
     }));
     let screen_text = screen(&mut app, 60, 24);
     assert!(
@@ -363,6 +365,7 @@ fn without_a_review_a_comment_on_lines_is_posted_at_once() {
         .read(Ok(crate::dashboard::diff::ItemWork {
             commit: work_commit(),
             changes: crate::dashboard::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
+            uncommitted: None,
         }));
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
@@ -439,6 +442,7 @@ fn a_diff_read_from_another_device_says_where_and_keeps_the_last_one_while_it_is
     let work = crate::dashboard::diff::ItemWork {
         commit: work_commit(),
         changes: crate::dashboard::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
+        uncommitted: None,
     };
     pane.read_from_device(device, work, now_ms.saturating_sub(120_000));
     let shown = screen(&mut app, 100, 24);
@@ -477,14 +481,74 @@ fn a_device_that_cannot_be_reached_before_any_diff_was_read_is_said_so() {
 
 #[test]
 fn a_device_asked_is_not_asked_again_within_the_interval_even_when_unreachable() {
-    use crate::dashboard::AskedDevices;
+    use crate::dashboard::Asks;
 
     let item = ItemId::from_bytes([3; 32]);
-    let mut asked = AskedDevices::default();
+    let mut asked = Asks::new(std::time::Duration::from_secs(3));
     assert!(asked.due(item));
     asked.asked(item);
     assert!(!asked.due(item));
     assert!(asked.due(ItemId::from_bytes([4; 32])));
     asked.forget(item);
     assert!(asked.due(item));
+}
+
+const UNCOMMITTED: &str = "\
+diff --git a/src/scratch.rs b/src/scratch.rs
+new file mode 100644
+index 0000000..3333333
+--- /dev/null
++++ b/src/scratch.rs
+@@ -0,0 +1,2 @@
++// not committed
++fn scratch() {}
+";
+
+#[test]
+fn the_uncommitted_part_is_a_section_after_the_committed_files_where_no_comment_is_written() {
+    let mut app = diff_app();
+    let pane = app.diff_on_top_mut().unwrap();
+    pane.read(Ok(crate::dashboard::diff::ItemWork {
+        commit: work_commit(),
+        changes: crate::dashboard::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
+        uncommitted: Some(wf_vcs::diff::parse(UNCOMMITTED)),
+    }));
+    let committed_files = pane.files().len();
+    let shown = screen(&mut app, 100, 40);
+    assert!(
+        shown.contains("comments on lines only on committed"),
+        "{shown}"
+    );
+    assert!(shown.contains("━━ uncommitted, against"), "{shown}");
+    assert!(
+        shown.contains("src/scratch.rs (new) (uncommitted)"),
+        "{shown}"
+    );
+    assert!(shown.find("src/lib.rs").unwrap() < shown.find("src/scratch.rs").unwrap());
+    assert!(!shown[..shown.find("━━ uncommitted").unwrap()].contains("(uncommitted)"));
+
+    // A line of the committed part takes a comment; one of the uncommitted part does not.
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('c'));
+    assert!(matches!(app.prompt, Some(Prompt::LineComment { .. })));
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('G'));
+    let pane = app.diff_on_top_mut().unwrap();
+    let rows = pane.rows();
+    assert!(matches!(
+        rows[pane.cursor],
+        crate::dashboard::diff::DiffRow::Line { file, .. } if file >= committed_files
+    ));
+    press(&mut app, KeyCode::Char('c'));
+    assert!(app.prompt.is_none());
+
+    // Once the worktree is gone only the commits are left.
+    let pane = app.diff_on_top_mut().unwrap();
+    pane.read(Ok(crate::dashboard::diff::ItemWork {
+        commit: work_commit(),
+        changes: crate::dashboard::diff::Changes::Files(wf_vcs::diff::parse(DIFF)),
+        uncommitted: None,
+    }));
+    let shown = screen(&mut app, 100, 40);
+    assert!(!shown.contains("uncommitted"), "{shown}");
 }
