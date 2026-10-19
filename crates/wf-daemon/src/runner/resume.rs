@@ -142,14 +142,17 @@ impl Daemon {
         let repository = self
             .repository_of(workforce)
             .ok_or(NotResumed::NoRepository)?;
+        let git = blocking(move || GitCli::open(&repository))
+            .await?
+            .map_err(SessionError::from)?;
         if role == SessionRole::Work {
             // Refs packed while the session was parked cannot be recreated from inside it.
-            let (repository, branch) = (repository.clone(), item_branch(item));
-            blocking(move || GitCli::open(&repository)?.make_branch_loose(&branch))
+            let (git, branch) = (git.clone(), item_branch(item));
+            blocking(move || git.make_branch_loose(&branch))
                 .await?
                 .map_err(SessionError::from)?;
         }
-        let run = self.run(setup, session, worktree, repository, Begin::Resume(record));
+        let run = self.run(setup, session, worktree, git, Begin::Resume(record));
         tracing::info!(
             "session {}: {} resumed on item {}{}",
             session.short(),

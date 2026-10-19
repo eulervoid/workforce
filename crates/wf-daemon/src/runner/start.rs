@@ -36,7 +36,7 @@ pub(super) fn sandboxed(
         daemon,
         &run.sandbox,
         &run.worktree,
-        &run.repository,
+        run.git.repository(),
         Some(&run.branch),
         &settings,
         agent,
@@ -183,27 +183,24 @@ impl Daemon {
         if role == SessionRole::Work {
             ensure_unclaimed(&state, item)?;
         }
-        let repository = match role {
+        let git = match role {
             SessionRole::Work => {
                 let path = item_worktree(&self.workforce_directory(workforce), item);
                 let (branch, target) = (item_branch(item), setup.target.clone());
                 blocking(move || {
                     let git = GitCli::open(&repository)?;
                     git.prepare_worktree(&branch, &path, &target)?;
-                    Ok::<_, VcsError>(git.repository().to_path_buf())
+                    Ok::<_, VcsError>(git)
                 })
                 .await??
             }
             // The directory of the others is named after the session, which is known once it is
             // written.
             SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => {
-                blocking(move || {
-                    Ok::<_, VcsError>(GitCli::open(&repository)?.repository().to_path_buf())
-                })
-                .await??
+                blocking(move || GitCli::open(&repository)).await??
             }
         };
-        self.remember_repository(workforce, &repository)?;
+        self.remember_repository(workforce, git.repository())?;
 
         let started = self
             .author(
@@ -226,9 +223,8 @@ impl Daemon {
                 SessionRole::Review {
                     commit: Some(commit),
                 } => {
-                    let (path, repository) = (worktree.clone(), repository.clone());
-                    blocking(move || GitCli::open(&repository)?.detached_worktree(&path, commit))
-                        .await??;
+                    let (path, git) = (worktree.clone(), git.clone());
+                    blocking(move || git.detached_worktree(&path, commit)).await??;
                 }
                 SessionRole::Review { commit: None }
                 | SessionRole::Supervise
@@ -277,7 +273,7 @@ impl Daemon {
             }
             return Err(error);
         }
-        let run = self.run(setup, session, worktree, repository, Begin::New);
+        let run = self.run(setup, session, worktree, git, Begin::New);
         tracing::info!(
             "session {}: {} started on item {}{}",
             session.short(),
@@ -295,7 +291,7 @@ impl Daemon {
         setup: Setup,
         session: SessionId,
         worktree: PathBuf,
-        repository: PathBuf,
+        git: GitCli,
         begin: Begin,
     ) -> Run {
         let Setup {
@@ -372,7 +368,7 @@ impl Daemon {
             begin,
             branch: item_branch(item),
             target,
-            repository,
+            git,
             nudges: autonomy.nudges,
             park_timeout: autonomy.park_timeout,
             max_duration: autonomy.max_duration,

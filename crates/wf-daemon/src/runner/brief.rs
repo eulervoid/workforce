@@ -10,7 +10,7 @@ use wf_core::item::ItemView;
 use wf_core::session::{CommitId, SessionRole};
 use wf_core::state::State;
 use wf_store::RedbStore;
-use wf_vcs::{GitCli, Work, item_branch};
+use wf_vcs::{Work, item_branch};
 
 use super::{Run, blocking};
 use crate::Loaded;
@@ -51,12 +51,12 @@ pub(super) async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, Str
         SessionRole::Review {
             commit: Some(commit),
         } => {
-            let repository = run.repository.clone();
+            let git = run.git.clone();
             let work = Work::Unmerged {
                 target: run.target.clone(),
                 commit,
             };
-            blocking(move || GitCli::open(&repository)?.diff(&work, &[]))
+            blocking(move || git.diff(&work, &[]))
                 .await
                 .map_err(|error| wf_core::error_chain(&error))?
                 .map_err(|error| {
