@@ -6,14 +6,14 @@ use ratatui::DefaultTerminal;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
 use wf_core::event::{Comment, CommentKind, EventBody, ItemEdited, ItemMoved, Review};
-use wf_core::id::{CommentId, HashId, ItemId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::item::{ItemState, ItemView};
 use wf_core::name::AgentName;
 use wf_core::session::{CommitId, Verdict};
 use wf_core::state::State;
 use wf_harness::Permission;
 
-use super::app::{Choice, Effect, Starter, Written};
+use super::app::{Choice, Effect, Request, Starter, Written};
 use super::diff::LineComment;
 use crate::commands::{edit_in_editor, edit_until_valid, item_work};
 use crate::draft::Draft;
@@ -24,6 +24,8 @@ const SCISSORS: &str = "--- wf: everything below this line is left out ---";
 
 /// What carrying out an effect came to.
 pub enum Outcome {
+    /// The loop ends.
+    Quit,
     /// What it did, to say so.
     Did(String),
     /// Something to pick before it can be done.
@@ -45,13 +47,14 @@ pub enum Outcome {
     Reviewed { item: ItemId, what: String },
 }
 
-/// Carries out `effect`. Quitting is up to the loop.
+/// Carries out `effect`.
 pub fn carry_out(
     effect: Effect,
     workspace: &mut Workspace,
     terminal: &mut DefaultTerminal,
 ) -> anyhow::Result<Outcome> {
     match effect {
+        Effect::Quit => Ok(Outcome::Quit),
         Effect::ChooseStart { item } => Ok(Outcome::Choose(starters(workspace, item)?)),
         Effect::ChooseState { item } => Ok(Outcome::Choose(states(workspace, item)?)),
         Effect::Approve {
@@ -110,7 +113,28 @@ pub fn carry_out(
         Effect::PostLineComment { item, comment } => {
             post_line_comment(workspace, item, comment).map(Outcome::Did)
         }
-        effect => done(effect, workspace, terminal).map(Outcome::Did),
+        Effect::StartSession { item, agent } => {
+            start_agent(workspace, item, agent).map(Outcome::Did)
+        }
+        Effect::StopSession { session } => stop_session(workspace, session).map(Outcome::Did),
+        Effect::Move { item, state } => move_item(workspace, item, state).map(Outcome::Did),
+        Effect::Comment { item, text } => comment(workspace, item, text).map(Outcome::Did),
+        Effect::CommentInEditor { item, text } => {
+            comment_in_editor(workspace, terminal, item, text).map(Outcome::Did)
+        }
+        Effect::Edit { item } => edit_item(workspace, terminal, item).map(Outcome::Did),
+        Effect::Permit { request, answer } => permit(workspace, request, answer).map(Outcome::Did),
+        Effect::Resolve {
+            item,
+            blocker,
+            text,
+        } => resolve(workspace, item, blocker, text).map(Outcome::Did),
+        Effect::ResolveInEditor {
+            item,
+            blocker,
+            text,
+        } => resolve_in_editor(workspace, terminal, item, blocker, text).map(Outcome::Did),
+        Effect::PageDiff { item } => page_diff(workspace, terminal, item).map(Outcome::Did),
     }
 }
 
@@ -184,127 +208,137 @@ fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     })
 }
 
-/// Carries out an effect that needs nothing more, and says what it did.
-fn done(
-    effect: Effect,
+/// Starts a session of `agent` on `item`.
+fn start_agent(
+    workspace: &mut Workspace,
+    item: ItemId,
+    agent: AgentName,
+) -> anyhow::Result<String> {
+    let session = workspace.start_session(agent.clone(), item)?;
+    Ok(format!(
+        "started {agent} on #{} ({})",
+        item.short(),
+        session.short()
+    ))
+}
+
+fn stop_session(workspace: &mut Workspace, session: SessionId) -> anyhow::Result<String> {
+    workspace.stop_session(session)?;
+    Ok(format!("stopped {}", session.short()))
+}
+
+fn move_item(workspace: &mut Workspace, item: ItemId, state: ItemState) -> anyhow::Result<String> {
+    workspace.author(EventBody::ItemMoved(ItemMoved {
+        item,
+        to: state.into(),
+        by_session: None,
+        because: None,
+    }))?;
+    Ok(format!("#{} is {state}", item.short()))
+}
+
+/// Edits `item` in `$EDITOR`, as `wf item edit` does.
+fn edit_item(
     workspace: &mut Workspace,
     terminal: &mut DefaultTerminal,
+    item: ItemId,
 ) -> anyhow::Result<String> {
-    match effect {
-        // Carried out by `carry_out`.
-        Effect::Quit
-        | Effect::ChooseStart { .. }
-        | Effect::ChooseState { .. }
-        | Effect::Approve { .. }
-        | Effect::RequestChanges { .. }
-        | Effect::LineCommentInEditor { .. }
-        | Effect::PostLineComment { .. } => Ok(String::new()),
-        Effect::StartSession { item, agent } => {
-            let session = workspace.start_session(agent.clone(), item)?;
-            Ok(format!(
-                "started {agent} on #{} ({})",
-                item.short(),
-                session.short()
-            ))
-        }
-        Effect::StopSession { session } => {
-            workspace.stop_session(session)?;
-            Ok(format!("stopped {}", session.short()))
-        }
-        Effect::Move { item, state } => {
-            workspace.author(EventBody::ItemMoved(ItemMoved {
-                item,
-                to: state.into(),
-                by_session: None,
-                because: None,
-            }))?;
-            Ok(format!("#{} is {state}", item.short()))
-        }
-        Effect::Comment { item, text } => comment(workspace, item, text),
-        Effect::Edit { item } => {
-            let draft = {
-                let ItemView::Live(live) = workspace
-                    .state()
-                    .item(item)
-                    .ok_or_else(|| anyhow!("#{} is gone", item.short()))?
-                else {
-                    bail!("#{} is archived; unarchive it to edit", item.short());
-                };
-                Draft::of(live)
-            };
-            let markdown = draft.to_markdown()?;
-            let draft = suspended(terminal, || {
-                edit_until_valid(&markdown, ".md", Draft::from_markdown)
-            })??;
-            let changes = match workspace.state().item(item) {
-                Some(ItemView::Live(live)) => draft.changes(live),
-                Some(ItemView::Archived(_)) | None => bail!("#{} is gone", item.short()),
-            };
-            if changes.is_empty() {
-                return Ok("nothing changed".to_owned());
-            }
-            workspace.author(EventBody::ItemEdited(ItemEdited { item, changes }))?;
-            Ok(format!("edited #{}", item.short()))
-        }
-        Effect::Permit { request, answer } => {
-            let held = workspace.answer_permission(request.session, request.since_ms, answer)?;
-            let verb = match answer {
-                Permission::Allow => "allowed",
-                Permission::Deny => "denied",
-            };
-            Ok(format!("{verb}: {}", held.what))
-        }
-        Effect::Resolve {
-            item,
-            blocker,
-            text,
-        } => resolve(workspace, item, blocker, text),
-        Effect::CommentInEditor { item, text } => {
-            let title = workspace
-                .state()
-                .item(item)
-                .map(|view| format!(" \"{}\"", view.title()))
-                .unwrap_or_default();
-            let template = format!(
-                "{text}\n{SCISSORS}\nYour comment on #{}{title}\n",
-                item.short()
-            );
-            let text = suspended(terminal, || edit_in_editor(&template, ".md"))??;
-            let text = above_scissors(&text);
-            if text.is_empty() {
-                return Ok("nothing written, no comment posted".to_owned());
-            }
-            comment(workspace, item, text)
-        }
-        Effect::ResolveInEditor {
-            item,
-            blocker,
-            text,
-        } => {
-            let question = blocker_text(workspace, blocker);
-            let template = format!(
-                "{text}\n{SCISSORS}\nYour answer to the blocker {} on #{}:\n\n{question}\n",
-                blocker.short(),
-                item.short()
-            );
-            let text = suspended(terminal, || edit_in_editor(&template, ".md"))??;
-            let text = above_scissors(&text);
-            if text.is_empty() {
-                return Ok("nothing written, the blocker stays open".to_owned());
-            }
-            resolve(workspace, item, blocker, text)
-        }
-
-        Effect::PageDiff { item } => {
-            let git = workspace.repository()?;
-            let work = item_work(workspace, &git, item)?;
-            // The pager stays open on a short diff too, so quitting it goes back to the dashboard.
-            suspended(terminal, || {
-                git.show_diff(&work, &[], wf_vcs::Pager::StaysOpen)
-            })??;
-            Ok(String::new())
-        }
+    let draft = {
+        let ItemView::Live(live) = workspace
+            .state()
+            .item(item)
+            .ok_or_else(|| anyhow!("#{} is gone", item.short()))?
+        else {
+            bail!("#{} is archived; unarchive it to edit", item.short());
+        };
+        Draft::of(live)
+    };
+    let markdown = draft.to_markdown()?;
+    let draft = suspended(terminal, || {
+        edit_until_valid(&markdown, ".md", Draft::from_markdown)
+    })??;
+    let changes = match workspace.state().item(item) {
+        Some(ItemView::Live(live)) => draft.changes(live),
+        Some(ItemView::Archived(_)) | None => bail!("#{} is gone", item.short()),
+    };
+    if changes.is_empty() {
+        return Ok("nothing changed".to_owned());
     }
+    workspace.author(EventBody::ItemEdited(ItemEdited { item, changes }))?;
+    Ok(format!("edited #{}", item.short()))
+}
+
+fn permit(
+    workspace: &mut Workspace,
+    request: Request,
+    answer: Permission,
+) -> anyhow::Result<String> {
+    let held = workspace.answer_permission(request.session, request.since_ms, answer)?;
+    let verb = match answer {
+        Permission::Allow => "allowed",
+        Permission::Deny => "denied",
+    };
+    Ok(format!("{verb}: {}", held.what))
+}
+
+/// Writes a comment on `item` in `$EDITOR`, starting from `text`, then posts it.
+fn comment_in_editor(
+    workspace: &mut Workspace,
+    terminal: &mut DefaultTerminal,
+    item: ItemId,
+    text: String,
+) -> anyhow::Result<String> {
+    let title = workspace
+        .state()
+        .item(item)
+        .map(|view| format!(" \"{}\"", view.title()))
+        .unwrap_or_default();
+    let template = format!(
+        "{text}\n{SCISSORS}\nYour comment on #{}{title}\n",
+        item.short()
+    );
+    let text = suspended(terminal, || edit_in_editor(&template, ".md"))??;
+    let text = above_scissors(&text);
+    if text.is_empty() {
+        return Ok("nothing written, no comment posted".to_owned());
+    }
+    comment(workspace, item, text)
+}
+
+/// Writes the comment that resolves a blocker in `$EDITOR`, starting from `text`.
+fn resolve_in_editor(
+    workspace: &mut Workspace,
+    terminal: &mut DefaultTerminal,
+    item: ItemId,
+    blocker: CommentId,
+    text: String,
+) -> anyhow::Result<String> {
+    let question = blocker_text(workspace, blocker);
+    let template = format!(
+        "{text}\n{SCISSORS}\nYour answer to the blocker {} on #{}:\n\n{question}\n",
+        blocker.short(),
+        item.short()
+    );
+    let text = suspended(terminal, || edit_in_editor(&template, ".md"))??;
+    let text = above_scissors(&text);
+    if text.is_empty() {
+        return Ok("nothing written, the blocker stays open".to_owned());
+    }
+    resolve(workspace, item, blocker, text)
+}
+
+fn page_diff(
+    workspace: &Workspace,
+    terminal: &mut DefaultTerminal,
+    item: ItemId,
+) -> anyhow::Result<String> {
+    let git = workspace.repository()?;
+    let work = item_work(workspace, &git, item)?;
+    // The pager stays open on a short diff too, so quitting it goes back to the dashboard.
+    suspended(terminal, || {
+        git.show_diff(&work, &[], wf_vcs::Pager::StaysOpen)
+    })??;
+    Ok(String::new())
 }
 
 /// Requests changes on the work of `item`, with the comments on lines drafted for its review.

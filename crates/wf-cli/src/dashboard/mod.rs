@@ -6,6 +6,7 @@ mod app;
 mod diff;
 mod draw;
 mod draw_diff;
+mod hint;
 mod links;
 mod snapshot;
 mod transcript_lines;
@@ -24,7 +25,7 @@ use ratatui::crossterm::execute;
 use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
 
-use self::app::{App, Effect, Wheel};
+use self::app::{App, Wheel};
 use self::diff::{Changes, ItemWork};
 use self::snapshot::{Detail, InView, Snapshot, Sources};
 use crate::transcript::Format;
@@ -140,7 +141,7 @@ fn event_loop(
                 // Scrolling within what is on screen needs nothing new from the workspace.
                 continue;
             }
-            if now_wanted.items == wanted.items && now_wanted.agents == wanted.agents {
+            if now_wanted.listing == wanted.listing {
                 // A move of the selection needs only the detail it comes to.
                 draw = true;
                 feed.read_transcripts(workspace, &mut app);
@@ -232,9 +233,9 @@ fn handle(
         _ => return Handled::Ignored,
     };
     match effect {
-        Some(Effect::Quit) => Handled::Quit,
         Some(effect) => {
             match act::carry_out(effect, workspace, terminal) {
+                Ok(act::Outcome::Quit) => return Handled::Quit,
                 Ok(act::Outcome::Did(what)) => app.did(what, wf_store::now_ms()),
                 Ok(act::Outcome::Choose(choice)) => app.choose(choice),
                 Ok(act::Outcome::Drafted {

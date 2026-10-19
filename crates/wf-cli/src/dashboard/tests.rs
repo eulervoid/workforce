@@ -12,13 +12,13 @@ use wf_core::name::AgentName;
 use wf_harness::{Direction, Permission, TranscriptEntry};
 
 use super::app::{
-    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, Opened, Prompt, Request, Row, STATUS_LASTS_MS,
-    Scroll, Split, Starter, Status, Tab, Target, Wheel,
+    AgentRow, App, CONFIRM_LASTS_MS, Choice, Effect, NowRow, Opened, Prompt, Request,
+    STATUS_LASTS_MS, Scroll, Split, Starter, Status, Tab, Target, Wheel,
 };
 use super::draw;
 use super::snapshot::{
-    AgentInfo, Counts, Detail, InView, ItemListing, Links, MovedBack, Place, SessionInfo, Snapshot,
-    Waiting, moves_back,
+    AgentInfo, Counts, Detail, InView, InboxEntry, ItemListing, Links, Listing, MovedBack, Place,
+    SessionInfo, Snapshot, moves_back,
 };
 use crate::view::{Flag, ItemGroup, ItemRefView, ItemSummary, SessionStatus};
 use crate::{render, theme};
@@ -107,20 +107,20 @@ fn snapshot() -> Snapshot {
             devices: 2,
         },
         waiting: vec![
-            Waiting::Permission {
+            InboxEntry::Permission {
                 session: coder.id,
                 since_ms: NOW_MS - 5_000,
                 agent: "coder".to_owned(),
                 item: Some(parse),
                 what: "rm -rf target".to_owned(),
             },
-            Waiting::Blocker {
+            InboxEntry::Blocker {
                 item: spans,
                 comment: CommentId::from_bytes([21; 32]),
                 by: "coder".to_owned(),
                 text: "Should the span live on ParseError or Location?".to_owned(),
             },
-            Waiting::Review {
+            InboxEntry::Review {
                 item: archive,
                 commit: None,
             },
@@ -146,6 +146,14 @@ fn app() -> App {
         "07:04  #ambqga  @ada/coder/pp74s3 · submitted 3e8a1c → in_review\n".to_owned(),
     ]);
     app
+}
+
+/// How the items are listed, while the Items tab is on screen.
+fn item_listing(app: &App) -> Option<ItemListing> {
+    match app.wanted().listing {
+        Some(Listing::Items(listing)) => Some(listing),
+        Some(Listing::Agents) | None => None,
+    }
 }
 
 fn press(app: &mut App, code: KeyCode) -> Option<Effect> {
@@ -207,7 +215,7 @@ fn the_now_tab_shows_what_waits_what_works_and_what_is_flagged() {
 fn a_flag_about_an_item_opens_the_item() {
     let mut app = app();
     press(&mut app, KeyCode::Char('G'));
-    assert!(matches!(app.now.selection.get(), Some(Row::Flag(_))));
+    assert!(matches!(app.now.selection.get(), Some(NowRow::Flag(_))));
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.wanted().detail, Some(Detail::Item(item(4, "Watch").id)));
 }
@@ -256,7 +264,7 @@ fn the_selection_stays_on_its_row_when_rows_come_and_go() {
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
     let review = app.now.selection.get().cloned();
-    assert!(matches!(review, Some(Row::Waiting(_))));
+    assert!(matches!(review, Some(NowRow::Waiting(_))));
     let mut answered = snapshot();
     answered.waiting.remove(0);
     app.refresh(answered);
@@ -267,7 +275,7 @@ fn the_selection_stays_on_its_row_when_rows_come_and_go() {
     // The row is gone: the selection stays where it was.
     assert_eq!(
         app.now.selection.get(),
-        Some(&Row::Session(SessionId::from_bytes([12; 32])))
+        Some(&NowRow::Session(SessionId::from_bytes([12; 32])))
     );
 }
 
@@ -387,7 +395,7 @@ fn enter_on_what_waits_opens_the_item_with_its_notice_in_view() {
     let held = item(4, "Held merge");
     let what = "75eba435 is ready to merge, but main is checked out with changes; the daemon's comment on the item names them";
     let mut snapshot = snapshot();
-    snapshot.waiting = vec![Waiting::Notice {
+    snapshot.waiting = vec![InboxEntry::Notice {
         item: held.clone(),
         kind: wf_core::inbox::InboxKind::Merge,
         what: what.to_owned(),
@@ -397,7 +405,7 @@ fn enter_on_what_waits_opens_the_item_with_its_notice_in_view() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.wanted().detail, Some(Detail::Item(held.id)));
     assert_eq!(
-        app.in_view().map(|opened| opened.scroll),
+        app.on_screen().map(|opened| opened.scroll),
         Some(Scroll::At(0))
     );
     // As `wf item show` renders it, with a long body under the notice.
@@ -541,7 +549,7 @@ fn a_permission_request_is_answered_where_it_is_listed() {
     press(&mut app, KeyCode::Char('k'));
     press(&mut app, KeyCode::Char('k'));
     press(&mut app, KeyCode::Char('k'));
-    assert_eq!(app.now.selection.get(), Some(&Row::Session(coder)));
+    assert_eq!(app.now.selection.get(), Some(&NowRow::Session(coder)));
     assert_eq!(
         press(&mut app, KeyCode::Char('d')),
         Some(Effect::Permit {
@@ -794,7 +802,7 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
     let mut app = app();
     press(&mut app, KeyCode::Char('2'));
     assert_eq!(
-        app.wanted().items.map(|listing| listing.grouping),
+        item_listing(&app).map(|listing| listing.grouping),
         Some(crate::cli::ItemGrouping::State)
     );
     app.refresh(with_items());
@@ -817,7 +825,7 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
     assert_eq!(titles, ["Parse config lazily"]);
     press(&mut app, KeyCode::Char('o'));
     assert_eq!(
-        app.wanted().items.map(|listing| listing.grouping),
+        item_listing(&app).map(|listing| listing.grouping),
         Some(crate::cli::ItemGrouping::Lane)
     );
 }
@@ -828,7 +836,7 @@ fn the_items_tab_cycles_its_order_and_shows_it_in_its_title() {
     let mut app = app();
     press(&mut app, KeyCode::Char('2'));
     app.refresh(with_items());
-    let order = |app: &App| app.wanted().items.map(|listing| listing.order);
+    let order = |app: &App| item_listing(app).map(|listing| listing.order);
     assert_eq!(order(&app), Some(ItemOrder::Priority));
     assert!(screen(&mut app, 60, 14).contains("by state · sorted by priority"));
     press(&mut app, KeyCode::Char('O'));
@@ -963,7 +971,7 @@ fn scrolled_item(width: u16) -> (App, Opened) {
         detail: Detail::Item(parse),
         scroll: Scroll::At(2),
     };
-    assert_eq!(app.in_view(), Some(scrolled.clone()));
+    assert_eq!(app.on_screen(), Some(scrolled.clone()));
     (app, scrolled)
 }
 
@@ -972,10 +980,10 @@ fn going_back_to_the_list_keeps_the_item_where_it_was_scrolled_to() {
     let (mut app, scrolled) = scrolled_item(130);
     press(&mut app, KeyCode::Char('h'));
     assert!(app.list_has_keys());
-    assert_eq!(app.in_view(), Some(scrolled.clone()));
+    assert_eq!(app.on_screen(), Some(scrolled.clone()));
     press(&mut app, KeyCode::Char('l'));
     assert!(!app.list_has_keys());
-    assert_eq!(app.in_view(), Some(scrolled.clone()));
+    assert_eq!(app.on_screen(), Some(scrolled.clone()));
     // Away from the item and back, it starts at its top.
     press(&mut app, KeyCode::Esc);
     press(&mut app, KeyCode::Char('k'));
@@ -984,9 +992,9 @@ fn going_back_to_the_list_keeps_the_item_where_it_was_scrolled_to() {
         scroll: Scroll::At(0),
         ..scrolled
     };
-    assert_eq!(app.in_view(), Some(at_top.clone()));
+    assert_eq!(app.on_screen(), Some(at_top.clone()));
     press(&mut app, KeyCode::Enter);
-    assert_eq!(app.in_view(), Some(at_top));
+    assert_eq!(app.on_screen(), Some(at_top));
 }
 
 #[test]
@@ -994,17 +1002,17 @@ fn in_a_narrow_window_the_list_comes_back_to_the_item_where_it_was() {
     let (mut app, scrolled) = scrolled_item(60);
     press(&mut app, KeyCode::Left);
     assert!(app.list_has_keys());
-    assert_eq!(app.in_view(), None);
+    assert_eq!(app.on_screen(), None);
     assert_eq!(app.path(), Vec::new());
     press(&mut app, KeyCode::Right);
-    assert_eq!(app.in_view(), Some(scrolled.clone()));
+    assert_eq!(app.on_screen(), Some(scrolled.clone()));
     // Away from the item and back, it starts at its top.
     press(&mut app, KeyCode::Char('h'));
     press(&mut app, KeyCode::Char('k'));
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('l'));
     assert_eq!(
-        app.in_view(),
+        app.on_screen(),
         Some(Opened {
             scroll: Scroll::At(0),
             ..scrolled
@@ -1019,9 +1027,9 @@ fn with_one_pane_the_list_comes_back_to_the_item_where_it_was() {
     assert_eq!(app.split, Split::One);
     press(&mut app, KeyCode::Char('h'));
     assert!(app.list_has_keys());
-    assert_eq!(app.in_view(), None);
+    assert_eq!(app.on_screen(), None);
     press(&mut app, KeyCode::Char('l'));
-    assert_eq!(app.in_view(), Some(scrolled));
+    assert_eq!(app.on_screen(), Some(scrolled));
 }
 
 #[test]
@@ -1045,7 +1053,7 @@ fn going_back_from_a_session_opened_on_an_item_leaves_the_item_as_it_was() {
     press(&mut app, KeyCode::Esc);
     assert!(!app.list_has_keys());
     assert_eq!(
-        app.in_view(),
+        app.on_screen(),
         Some(Opened {
             detail: Detail::Item(parse),
             scroll: Scroll::At(1),
@@ -1141,7 +1149,7 @@ fn a_session_is_stopped_only_when_confirmed() {
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
     press(&mut app, KeyCode::Char('j'));
-    assert_eq!(app.now.selection.get(), Some(&Row::Session(coder)));
+    assert_eq!(app.now.selection.get(), Some(&NowRow::Session(coder)));
     assert_eq!(press(&mut app, KeyCode::Char('x')), None);
     insta::assert_snapshot!("stop", screen(&mut app, 60, 6));
     assert_eq!(press(&mut app, KeyCode::Char('n')), None);
@@ -1243,7 +1251,7 @@ fn with_agents() -> Snapshot {
 fn the_agents_tab_lists_each_agent_with_its_sessions() {
     let mut app = app();
     press(&mut app, KeyCode::Char('3'));
-    assert!(app.wanted().agents);
+    assert_eq!(app.wanted().listing, Some(Listing::Agents));
     app.refresh(with_agents());
     insta::assert_snapshot!("agents", screen(&mut app, 60, 16));
     // An agent opens on its definition, a session on its transcript.
@@ -1315,7 +1323,7 @@ fn the_wheel_moves_what_is_under_the_pointer() {
     press(&mut app, KeyCode::Char('1'));
     app.refresh(snapshot());
     press(&mut app, KeyCode::Char('G'));
-    assert!(matches!(app.now.selection.get(), Some(Row::Flag(_))));
+    assert!(matches!(app.now.selection.get(), Some(NowRow::Flag(_))));
     app.wheel(100, Wheel::Down);
     assert_eq!(app.stack().len(), 1);
     assert_eq!(app.wanted().detail, Some(item.clone()));
@@ -1476,7 +1484,7 @@ fn the_list_behind_an_open_detail_takes_no_keys() {
     press(&mut app, KeyCode::Char('F'));
     press(&mut app, KeyCode::Char('/'));
     assert_eq!(
-        app.wanted().items,
+        item_listing(&app),
         Some(ItemListing {
             grouping: crate::cli::ItemGrouping::State,
             order: crate::cli::ItemOrder::Priority,
@@ -2277,7 +2285,7 @@ fn a_detail_kept_beside_the_list_has_no_crumbs_or_hints_to_click() {
             .iter()
             .any(|spot| matches!(spot.target, Target::Back { .. }))
     );
-    assert_eq!(app.in_view(), Some(scrolled));
+    assert_eq!(app.on_screen(), Some(scrolled));
 }
 
 #[test]
@@ -2628,7 +2636,7 @@ fn a_long_list_counts_the_entries_out_of_view() {
     // A click on the indicator is one on its row.
     app.click(57, 3);
     let reviewer = SessionId::from_bytes([13; 32]);
-    assert_eq!(app.now.selection.get(), Some(&Row::Session(reviewer)));
+    assert_eq!(app.now.selection.get(), Some(&NowRow::Session(reviewer)));
 }
 
 #[test]
@@ -2863,7 +2871,7 @@ fn a_click_on_a_warning_opens_its_item_and_ends_the_warning() {
     assert!(footer(&mut app, ROOMY).contains("⚠ #aibaea back to open"));
     app.click(column, row);
     assert_eq!(
-        app.in_view().map(|opened| opened.detail),
+        app.on_screen().map(|opened| opened.detail),
         Some(Detail::Item(ItemId::from_bytes([2; 32])))
     );
     // The other one is left.
@@ -3355,6 +3363,62 @@ fn a_draft_under_the_cursor_is_edited_with_e_and_dropped_with_d() {
 }
 
 #[test]
+fn a_terminal_too_short_for_the_body_draws_every_tab_without_panicking() {
+    for height in 1..=9 {
+        for width in [1, 20, 60, 130] {
+            let mut app = app();
+            app.refresh(with_items());
+            for tab in ['1', '2', '3', '4'] {
+                press(&mut app, KeyCode::Char(tab));
+                screen(&mut app, width, height);
+                // The list scrolled away from its first line has indicators above it.
+                app.wheel(0, Wheel::Down);
+                screen(&mut app, width, height);
+                press(&mut app, KeyCode::Enter);
+                screen(&mut app, width, height);
+                press(&mut app, KeyCode::Esc);
+            }
+        }
+    }
+}
+
+#[test]
+fn a_diff_is_let_go_of_once_closed_unless_a_review_is_being_written() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    app.refresh(snapshot());
+    assert!(app.diffs.contains_key(&archive), "open");
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('c'));
+    type_text(&mut app, "Why io?");
+    press(&mut app, KeyCode::Enter);
+    // Moving the selection closes what was opened from the list.
+    press(&mut app, KeyCode::Esc);
+    press(&mut app, KeyCode::Char('k'));
+    assert!(app.stack().is_empty());
+    app.refresh(snapshot());
+    assert!(app.diffs.contains_key(&archive), "its draft is kept");
+    app.reviewed(archive);
+    app.refresh(snapshot());
+    assert!(app.diffs.is_empty());
+}
+
+#[test]
+fn a_click_on_drop_in_a_diff_drops_the_draft_instead_of_denying() {
+    let mut app = diff_app();
+    let archive = ItemId::from_bytes([3; 32]);
+    press(&mut app, KeyCode::Char('j'));
+    press(&mut app, KeyCode::Char('c'));
+    type_text(&mut app, "Why io?");
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Char('j'));
+    assert_eq!(app.drafts(archive).len(), 1);
+    let (column, row) = find(&mut app, 80, 16, "d drop");
+    assert_eq!(app.click(column, row), None);
+    assert!(app.drafts(archive).is_empty());
+}
+
+#[test]
 fn without_a_review_a_comment_on_lines_is_posted_at_once() {
     let mut app = app();
     let parse = ItemId::from_bytes([1; 32]);
@@ -3588,7 +3652,7 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
         .waiting
         .iter()
         .filter_map(|entry| match entry {
-            Waiting::MachineFault { title, .. } => Some(title.as_str()),
+            InboxEntry::MachineFault { title, .. } => Some(title.as_str()),
             _ => None,
         })
         .collect();

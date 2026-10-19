@@ -16,6 +16,7 @@ use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
 use wf_daemon::proto::HeldPermission;
 
+use super::app::{Request, Scroll};
 use super::diff::{LineComment, PostedComment};
 use crate::cli::{ItemGrouping, ItemOrder};
 use crate::commands::sorted_views;
@@ -32,7 +33,7 @@ pub struct Snapshot {
     pub now_ms: u64,
     pub counts: Counts,
     /// What waits on the principal, as `wf inbox` lists it.
-    pub waiting: Vec<Waiting>,
+    pub waiting: Vec<InboxEntry>,
     /// The live sessions, the newest first.
     pub working: Vec<SessionInfo>,
     /// What `wf status` flags.
@@ -115,7 +116,7 @@ pub struct Counts {
 
 /// One thing that waits on the principal, with what it takes to answer it.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Waiting {
+pub enum InboxEntry {
     /// A session of this machine asks to do something.
     Permission {
         session: SessionId,
@@ -147,7 +148,7 @@ pub enum Waiting {
 
 /// What tells an entry that waits apart from the others, across refreshes.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum WaitingKey {
+pub enum InboxKey {
     Permission {
         session: SessionId,
         since_ms: u64,
@@ -161,25 +162,25 @@ pub enum WaitingKey {
     MachineFault(String),
 }
 
-impl Waiting {
-    pub fn key(&self) -> WaitingKey {
+impl InboxEntry {
+    pub fn key(&self) -> InboxKey {
         match self {
-            Waiting::Permission {
+            InboxEntry::Permission {
                 session, since_ms, ..
-            } => WaitingKey::Permission {
+            } => InboxKey::Permission {
                 session: *session,
                 since_ms: *since_ms,
             },
-            Waiting::Blocker { comment, .. } => WaitingKey::Blocker(*comment),
-            Waiting::Review { item, .. } => WaitingKey::Item {
+            InboxEntry::Blocker { comment, .. } => InboxKey::Blocker(*comment),
+            InboxEntry::Review { item, .. } => InboxKey::Item {
                 item: item.id,
                 kind: InboxKind::PrincipalReview,
             },
-            Waiting::Notice { item, kind, .. } => WaitingKey::Item {
+            InboxEntry::Notice { item, kind, .. } => InboxKey::Item {
                 item: item.id,
                 kind: *kind,
             },
-            Waiting::MachineFault { title, .. } => WaitingKey::MachineFault(title.clone()),
+            InboxEntry::MachineFault { title, .. } => InboxKey::MachineFault(title.clone()),
         }
     }
 }
@@ -262,10 +263,17 @@ impl InView {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Wanted {
     pub detail: Option<Detail>,
+    /// The list of the tab on screen, when that is one the workspace is asked to read.
+    pub listing: Option<Listing>,
+}
+
+/// A list read from the workspace for the tab on screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Listing {
     /// The items, listed so.
-    pub items: Option<ItemListing>,
+    Items(ItemListing),
     /// The agents and the stats.
-    pub agents: bool,
+    Agents,
 }
 
 /// How the items are listed: `wf item list --group-by --sort`.
@@ -344,20 +352,18 @@ impl Snapshot {
                 .clone()
                 .and_then(|wanted| InView::take(sources, &flagged, wanted)),
             flagged,
-            agents: if wanted.agents {
-                agents(state, &graph, own)
-            } else {
-                Vec::new()
+            agents: match wanted.listing {
+                Some(Listing::Agents) => agents(state, &graph, own),
+                Some(Listing::Items(_)) | None => Vec::new(),
             },
-            stats: if wanted.agents {
-                state.project_stats(now_ms)
-            } else {
-                ProjectStats::default()
+            stats: match wanted.listing {
+                Some(Listing::Agents) => state.project_stats(now_ms),
+                Some(Listing::Items(_)) | None => ProjectStats::default(),
             },
-            items: wanted
-                .items
-                .map(|listing| item_groups(state, &graph, listing))
-                .unwrap_or_default(),
+            items: match wanted.listing {
+                Some(Listing::Items(listing)) => item_groups(state, &graph, listing),
+                Some(Listing::Agents) | None => Vec::new(),
+            },
             links: Links::take(state),
         }
     }
@@ -399,12 +405,12 @@ fn waiting(
     events: &[Event],
     held: &[HeldPermission],
     machine_faults: &wf_daemon::MachineFaults,
-) -> Vec<Waiting> {
-    let mut waiting: Vec<Waiting> = held
+) -> Vec<InboxEntry> {
+    let mut waiting: Vec<InboxEntry> = held
         .iter()
         .map(|request| {
             let session = state.session(request.session);
-            Waiting::Permission {
+            InboxEntry::Permission {
                 session: request.session,
                 since_ms: request.since_ms,
                 agent: session.map_or_else(
@@ -438,16 +444,16 @@ fn waiting(
                         (who(state, &event.content.actor), text)
                     })
                     .unwrap_or_default();
-                Waiting::Blocker {
+                InboxEntry::Blocker {
                     item,
                     comment,
                     by,
                     text,
                 }
             }
-            InboxWaiting::PrincipalReview { commit } => Waiting::Review { item, commit },
+            InboxWaiting::PrincipalReview { commit } => InboxEntry::Review { item, commit },
             InboxWaiting::Proposal | InboxWaiting::Merge { .. } | InboxWaiting::Recovery { .. } => {
-                Waiting::Notice {
+                InboxEntry::Notice {
                     kind: entry.waiting.kind(),
                     what: state.what_waits(&entry),
                     item,
@@ -458,7 +464,7 @@ fn waiting(
     waiting.extend(
         view::machine_fault_views(machine_faults)
             .into_iter()
-            .map(|fault| Waiting::MachineFault {
+            .map(|fault| InboxEntry::MachineFault {
                 title: fault.title,
                 what: fault.what,
             }),
@@ -682,5 +688,64 @@ fn first_sentence(text: &str) -> String {
             format!("{}{}", first.to_lowercase(), &sentence[first.len_utf8()..])
         }
         _ => sentence.to_owned(),
+    }
+}
+
+impl Detail {
+    /// Where a detail starts: a transcript at its end, which is what happens now.
+    pub(super) fn start(&self) -> Scroll {
+        match self {
+            Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_) | Detail::Diff(_) => Scroll::At(0),
+            Detail::Session(_) => Scroll::END,
+        }
+    }
+}
+
+impl InboxEntry {
+    /// The blocker this is, if it is one: its item and its comment.
+    pub fn blocker(&self) -> Option<(ItemId, CommentId)> {
+        match self {
+            InboxEntry::Blocker { item, comment, .. } => Some((item.id, *comment)),
+            InboxEntry::Permission { .. }
+            | InboxEntry::Review { .. }
+            | InboxEntry::Notice { .. }
+            | InboxEntry::MachineFault { .. } => None,
+        }
+    }
+
+    /// The review this is, if it is one: its item, and the commit that was submitted.
+    pub fn review(&self) -> Option<(ItemId, Option<CommitId>)> {
+        match self {
+            InboxEntry::Review { item, commit } => Some((item.id, *commit)),
+            InboxEntry::Permission { .. }
+            | InboxEntry::Blocker { .. }
+            | InboxEntry::Notice { .. }
+            | InboxEntry::MachineFault { .. } => None,
+        }
+    }
+
+    /// The review of `item` this is, if it is one: the commit that was submitted.
+    pub fn review_of(&self, item: ItemId) -> Option<Option<CommitId>> {
+        self.review()
+            .filter(|(reviewed, _)| *reviewed == item)
+            .map(|(_, commit)| commit)
+    }
+}
+
+impl InboxEntry {
+    /// The permission request this is, if it is one.
+    pub fn request(&self) -> Option<Request> {
+        match self {
+            InboxEntry::Permission {
+                session, since_ms, ..
+            } => Some(Request {
+                session: *session,
+                since_ms: *since_ms,
+            }),
+            InboxEntry::Blocker { .. }
+            | InboxEntry::Review { .. }
+            | InboxEntry::Notice { .. }
+            | InboxEntry::MachineFault { .. } => None,
+        }
     }
 }
