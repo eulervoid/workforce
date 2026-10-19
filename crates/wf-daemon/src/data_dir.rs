@@ -122,8 +122,8 @@ impl DataDir {
     }
 
     /// The directory the sessions of a workforce on this machine run in.
-    pub fn worktrees(&self, id: &WorkforceId) -> PathBuf {
-        wf_vcs::worktrees(&self.workforce(id))
+    pub fn repositories(&self, id: &WorkforceId) -> PathBuf {
+        wf_vcs::repositories(&self.workforce(id))
     }
 
     /// The unix socket of the daemon of this machine.

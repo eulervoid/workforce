@@ -485,6 +485,13 @@ impl Workspace {
         Ok(answer)
     }
 
+    /// The commit the target branch is at, from the daemon.
+    pub fn target_commit(&mut self) -> anyhow::Result<CommitId> {
+        let workforce = self.workforce;
+        let (client, _) = self.daemon("ask for the target")?;
+        Ok(client.target_commit(workforce)?)
+    }
+
     /// Stops a session that runs in the daemon now.
     pub fn stop_session(&mut self, session: SessionId) -> anyhow::Result<()> {
         let workforce = self.workforce;

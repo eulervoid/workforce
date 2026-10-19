@@ -25,7 +25,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 19;
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -161,6 +161,9 @@ pub enum Call {
         item: ItemId,
         since: Option<CommitId>,
     },
+    /// The commit the target branch is at, for the session to rebase its work onto before it
+    /// submits; answered with a `CommitId`.
+    TargetCommit,
 }
 
 /// What a [`Call::LiveDiff`] came to.
@@ -342,11 +345,12 @@ mod tests {
             Call::MachineFaults => "MachineFaults",
             Call::CacheUsage => "CacheUsage",
             Call::LiveDiff { .. } => "LiveDiff",
+            Call::TargetCommit => "TargetCommit",
         }
     }
 
     /// The number of arms of [`golden_name`].
-    const CALL_VARIANTS: usize = 19;
+    const CALL_VARIANTS: usize = 20;
 
     /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
     /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
@@ -414,6 +418,7 @@ mod tests {
                     "0123456789abcdef0123456789abcdef01234567".parse().unwrap(),
                 )),
             },
+            Call::TargetCommit,
         ];
         assert_eq!(
             calls.len(),
@@ -450,7 +455,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_REQUESTS: [(&str, usize, &str); 19] = [
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 20] = [
         (
             "State",
             34,
@@ -546,9 +551,14 @@ mod tests {
             90,
             "toldep4z7fw5kc3t2j5zq3atdx5mxqrghkbulnwd6kq564bsasga",
         ),
+        (
+            "TargetCommit",
+            34,
+            "cmgxhicxtrff6finessdexo5yzwek5jmgkga335q3w2a5idgtp7a",
+        ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 19;
+    const GOLDEN_PROTOCOL_VERSION: u32 = 20;
     const GOLDEN_REPLIES: [(&str, usize, &str); 7] = [
         (
             "State",

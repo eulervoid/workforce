@@ -507,7 +507,7 @@ impl Daemon {
         let started = Arc::clone(&entry);
         tokio::spawn(async move {
             daemon.resume_sessions(id, &started).await;
-            daemon.remove_stray_worktrees(id, &started).await;
+            daemon.remove_stray_repositories(id, &started).await;
             daemon.keep_caches_in_budget(id, &started).await;
             let weak = Arc::downgrade(&daemon);
             drop(daemon);

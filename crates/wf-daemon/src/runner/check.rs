@@ -211,9 +211,7 @@ impl Daemon {
                 git: &git,
                 confinement: Confinement::for_checks(
                     crate::sandbox::Access {
-                        worktree: &worktree,
-                        repository,
-                        branch: None,
+                        directory: &worktree,
                         socket: &self.launch.socket,
                         data_dir: &self.launch.data_dir,
                         machine_config: self.launch.machine_config.as_deref(),

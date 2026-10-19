@@ -171,7 +171,6 @@ enum Machine<'a> {
     /// of agents, as the daemon runs them before a merge.
     Agents {
         directory: &'a Path,
-        repository: PathBuf,
         socket: PathBuf,
         data_dir: DataDir,
         config_path: PathBuf,
@@ -192,7 +191,6 @@ impl<'a> Machine<'a> {
         let config = Box::new(MachineConfig::load(&config_path)?);
         Ok(Machine::Agents {
             directory,
-            repository: wf_vcs::GitCli::open(directory)?.repository().to_path_buf(),
             socket: workspace.data.daemon_socket(),
             data_dir: workspace.data.clone(),
             config_path,
@@ -207,7 +205,6 @@ impl<'a> Machine<'a> {
             Machine::Session { directory } => Confinement::Session { directory },
             Machine::Agents {
                 directory,
-                repository,
                 socket,
                 data_dir,
                 config_path,
@@ -216,9 +213,7 @@ impl<'a> Machine<'a> {
                 git_config,
             } => Confinement::for_checks(
                 Access {
-                    worktree: directory,
-                    repository,
-                    branch: None,
+                    directory,
                     socket,
                     data_dir,
                     machine_config: Some(config_path),

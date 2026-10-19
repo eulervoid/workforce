@@ -1,6 +1,6 @@
 //! `wf work`: what an agent in a work session runs, to read its brief and end the session.
 
-use anyhow::anyhow;
+use anyhow::{anyhow, bail};
 use serde::Serialize;
 use wf_core::brief::{Brief, Sources};
 use wf_core::event::EventBody;
@@ -26,13 +26,16 @@ pub(super) fn work(
     })?;
     match command {
         WorkCommand::Brief => brief(json, workspace, session),
-        WorkCommand::Submit { note } => end(
-            json,
-            workspace,
-            session,
-            Finish::Submit { note },
-            "submitted",
-        ),
+        WorkCommand::Submit { note } => {
+            rebase_onto_target(workspace, session)?;
+            end(
+                json,
+                workspace,
+                session,
+                Finish::Submit { note },
+                "submitted",
+            )
+        }
         WorkCommand::Release { note } => end(
             json,
             workspace,
@@ -96,6 +99,46 @@ impl Sources for Here<'_> {
                 git.diff(&work, &[]).ok()
             })
             .unwrap_or_default()
+    }
+}
+
+/// Rebases the branch in the agent's repository onto the tip of the target, for work that is
+/// still being worked on: nobody has approved its commits yet, so rewriting them costs nothing,
+/// and the reviewer sees them as they will land. A conflict, or uncommitted changes the rebase
+/// would have to carry, stop the submission: the rebase stopped at the conflict waits in the
+/// repository, and the next submission stages the files that are resolved and goes on with it.
+fn rebase_onto_target(workspace: &mut Workspace, session: SessionId) -> anyhow::Result<()> {
+    if !workspace.state().rebases_at_submit(session) {
+        return Ok(());
+    }
+    let item = workspace
+        .state()
+        .session(session)
+        .expect("the session was resolved when the workspace was opened")
+        .item();
+    let target = workspace
+        .state()
+        .policy()
+        .map(|config| config.policy.merge.target.clone())
+        .unwrap_or_default();
+    let onto = workspace.target_commit()?;
+    let directory =
+        wf_vcs::item_repository(&workspace.data.workforce(&workspace.workforce()), item);
+    match wf_vcs::GitCli::open(&directory)?.rebase(onto)? {
+        wf_vcs::Rebase::UpToDate => Ok(()),
+        wf_vcs::Rebase::Rebased => Ok(()),
+        wf_vcs::Rebase::Conflict { paths } => bail!(
+            "the submission rebases the branch onto `{target}`, and the rebase stopped at a commit \
+             that conflicts in {}. Resolve the conflicts in these files, then submit again: \
+             `wf work submit` stages them and goes on with the rebase, which may stop at a later \
+             commit",
+            paths.join(", ")
+        ),
+        wf_vcs::Rebase::DirtyCheckout(dirty) => bail!(
+            "the submission rebases the branch onto `{target}`, but the repository has \
+             uncommitted changes to {}; commit or discard them, then submit again",
+            dirty.files()
+        ),
     }
 }
 

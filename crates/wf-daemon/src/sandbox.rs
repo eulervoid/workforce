@@ -1,12 +1,16 @@
-//! Runs an agent in Fence, so that it can only write in its worktree and where it has to.
+//! Runs an agent in Fence, so that it can only write in its own directory and where it has to.
+//!
+//! An agent works in a repository of its own, which it can write whole; the principal's
+//! repository is not writable at all, and the daemon copies the commits an agent submits into it.
+//! So the profile has no rule about the parts of a `.git`.
 //!
 //! The profile is Fence's `code` template (Fence 0.1.67) with three changes, written out here
 //! because a profile that extends a template can only add to its lists:
 //! - no writing to all of `~/.config` and `~/.local/share`, where wf keeps its config, keys,
-//!   stores and the worktrees of other items;
+//!   stores and the repositories of other items;
 //! - no deny on writing `**/*.key`, which kept `wf init` and the test suites from writing keys in
 //!   their temporary directories; the keys wf keeps are denied where they are instead;
-//! - the paths of wf and git that would let an agent act outside its sandbox are denied.
+//! - the paths of wf that would let an agent act outside its sandbox are denied.
 
 use std::path::{Path, PathBuf};
 
@@ -16,14 +20,10 @@ use wf_harness::AcpAgentConfig;
 use crate::data_dir::DataDir;
 use crate::machine_config::FenceConfig;
 
-/// What the agent is let to touch besides its worktree, and what of wf it must not.
+/// What the agent is let to touch besides its directory, and what of wf it must not.
 pub struct Access<'a> {
-    pub worktree: &'a Path,
-    /// The repository of the worktree: commits write their objects and refs there.
-    pub repository: &'a Path,
-    /// The branch the agent commits to, the only branch it may move. `None` where the agent has no
-    /// branch, as in checks.
-    pub branch: Option<&'a str>,
+    /// The repository or directory the agent works in, which it can write whole.
+    pub directory: &'a Path,
     /// The socket of the daemon, which `wf` in the agent talks to.
     pub socket: &'a Path,
     /// wf's data directory, which holds the keys of the device and of the principals.
@@ -38,7 +38,7 @@ pub(crate) fn fence_installed() -> bool {
         .any(|directory| directory.join("fence").is_file())
 }
 
-/// `agent`, started by Fence in the worktree. The sandbox profile Fence reads is written to `profile_file`.
+/// `agent`, started by Fence in the directory. The sandbox profile Fence reads is written to `profile_file`.
 pub(crate) fn wrap(
     config: &FenceConfig,
     access: &Access<'_>,
@@ -48,17 +48,16 @@ pub(crate) fn wrap(
     if let Some(parent) = profile_file.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let admin_directory = admin_directory(access.worktree)?;
     std::fs::write(
         profile_file,
-        serde_json::to_vec_pretty(&profile(config, access, &admin_directory))?,
+        serde_json::to_vec_pretty(&profile(config, access))?,
     )?;
-    // Fence allows writes to "." of the directory it runs in, so it has to start in the worktree.
+    // Fence allows writes to "." of the directory it runs in, so it has to start there.
     Ok(AcpAgentConfig::new("sh")
         .arg("-c")
         .arg(r#"cd "$1" && shift && exec "$@""#)
         .arg("sh")
-        .arg(access.worktree.to_string_lossy())
+        .arg(access.directory.to_string_lossy())
         .arg("fence")
         .arg("--settings")
         .arg(profile_file.to_string_lossy())
@@ -68,33 +67,10 @@ pub(crate) fn wrap(
         .envs(agent.environment()))
 }
 
-/// The admin directory git keeps for `worktree` in `.git/worktrees`, read from the `gitdir:` line
-/// of the worktree's `.git` file. Git appends a number to the name when the directory name is
-/// taken, so the name of the worktree does not say.
-fn admin_directory(worktree: &Path) -> std::io::Result<PathBuf> {
-    let file = worktree.join(".git");
-    let contents = std::fs::read_to_string(&file)?;
-    parse_gitdir(&contents).ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            format!("{} has no `gitdir:` line", file.display()),
-        )
-    })
-}
-
-fn parse_gitdir(contents: &str) -> Option<PathBuf> {
-    contents
-        .lines()
-        .find_map(|line| line.strip_prefix("gitdir:"))
-        .map(|path| PathBuf::from(path.trim()))
-}
-
 /// The sandbox profile Fence runs the agent with.
-fn profile(config: &FenceConfig, access: &Access<'_>, admin_directory: &Path) -> serde_json::Value {
-    let git_directory = access.repository.join(".git");
-    let writable: Vec<PathBuf> = [access.worktree.to_path_buf(), access.socket.to_path_buf()]
+fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
+    let writable: Vec<PathBuf> = [access.directory.to_path_buf(), access.socket.to_path_buf()]
         .into_iter()
-        .chain(git_writable(access, &git_directory, admin_directory))
         .chain(config.allow_write.iter().cloned())
         .collect();
 
@@ -107,19 +83,9 @@ fn profile(config: &FenceConfig, access: &Access<'_>, admin_directory: &Path) ->
             .and_then(Path::parent)
             .map(Path::to_path_buf),
     );
-    // With these an agent has git run its code, outside the sandbox, the next time the daemon or
-    // the principal runs git. Fence already denies `~/.gitconfig`.
-    let git_config = [
-        git_directory.join("config"),
-        git_directory.join("hooks"),
-        git_directory.join("worktrees").join("*").join("commondir"),
-        git_directory
-            .join("worktrees")
-            .join("*")
-            .join("config.worktree"),
-        access.worktree.join(".git"),
-        PathBuf::from("~/.config/git"),
-    ];
+    // With this an agent has git run its code, outside the sandbox, the next time the principal
+    // runs git. Fence already denies `~/.gitconfig`.
+    let git_config = [PathBuf::from("~/.config/git")];
 
     let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
     let deny_read: Vec<PathBuf> = [paths(DENY_READ), secrets.clone()].concat();
@@ -149,38 +115,6 @@ fn profile(config: &FenceConfig, access: &Access<'_>, admin_directory: &Path) ->
             "deny": DENIED_COMMANDS,
         },
     })
-}
-
-/// What of the repository's `.git` the agent writes, so that it can commit, rebase and fetch but
-/// not move any branch but its own, nor the target, nor touch the admin directory of another
-/// worktree. Everything else (`HEAD`, `packed-refs`, `config`, `hooks`, `refs/heads` of others)
-/// stays closed.
-fn git_writable(access: &Access<'_>, git_directory: &Path, admin_directory: &Path) -> Vec<PathBuf> {
-    let mut paths = vec![
-        git_directory.join("objects"),
-        git_directory.join("refs/remotes"),
-        // Git appends a reflog entry for every remote-tracking ref a fetch updates.
-        git_directory.join("logs/refs/remotes"),
-        git_directory.join("refs/tags"),
-        git_directory.join("FETCH_HEAD"),
-        admin_directory.to_path_buf(),
-        // Git locks `packed-refs` to delete a reference, also for the pseudorefs it removes after
-        // every commit and rebase (`ORIG_HEAD`, `AUTO_MERGE`, ...), and prints an error when it
-        // cannot. It writes nothing there unless the reference is packed, and the file itself
-        // stays closed: renaming the lock onto it is denied.
-        git_directory.join("packed-refs.lock"),
-    ];
-    if let Some(branch) = access.branch {
-        for kind in ["refs/heads", "logs/refs/heads"] {
-            let reference = git_directory.join(kind).join(branch);
-            // Git writes a reference through `<name>.lock`.
-            let mut lock = reference.clone().into_os_string();
-            lock.push(".lock");
-            paths.push(reference);
-            paths.push(lock.into());
-        }
-    }
-    paths
 }
 
 const ALLOWED_DOMAINS: &[&str] = &[
@@ -310,12 +244,9 @@ const DENY_READ: &[&str] = &[
 ];
 
 const DENIED_COMMANDS: &[&str] = &[
-    // Git commands that change remote or shared state
+    // Git commands that change remote or shared state. The agent's repository is its own, so
+    // `reset`, `clean`, `checkout --` and `rebase` only change what it can write anyway.
     "git push",
-    "git reset",
-    "git clean",
-    "git checkout --",
-    "git rebase",
     "git merge",
     // Publishing packages
     "npm publish",
@@ -356,14 +287,11 @@ mod tests {
     use super::*;
 
     const DATA: &str = "/home/ada/.local/share/workforce";
-    const ADMIN: &str = "/work/repo/.git/worktrees/k3f9";
-    const WORKTREE: &str = "/home/ada/.local/share/workforce/w1/worktrees/k3f9";
+    const REPOSITORY: &str = "/home/ada/.local/share/workforce/w1/repos/k3f9";
 
     fn access() -> Access<'static> {
         Access {
-            worktree: Path::new(WORKTREE),
-            repository: Path::new("/work/repo"),
-            branch: Some("wf/k3f9"),
+            directory: Path::new(REPOSITORY),
             socket: Path::new("/run/wf/daemon.sock"),
             data_dir: Box::leak(Box::new(DataDir::new(PathBuf::from(DATA)))),
             machine_config: Some(Path::new("/home/ada/.config/workforce/config.toml")),
@@ -379,10 +307,7 @@ mod tests {
 
     /// The patterns of `list` in the filesystem section of the profile.
     fn patterns(list: &str) -> Vec<String> {
-        serde_json::from_value(
-            profile(&config(), &access(), Path::new(ADMIN))["filesystem"][list].clone(),
-        )
-        .unwrap()
+        serde_json::from_value(profile(&config(), &access())["filesystem"][list].clone()).unwrap()
     }
 
     /// Whether a pattern of `list` covers `path`, as Fence reads it: a glob matches with `*` inside
@@ -403,17 +328,16 @@ mod tests {
     }
 
     #[test]
-    fn the_agent_starts_in_the_worktree_under_fence() {
+    fn the_agent_starts_in_its_repository_under_fence() {
         let directory = tempfile::tempdir().unwrap();
         let profile_file = directory.path().join("sandbox/session.json");
         let agent = AcpAgentConfig::new("claude-agent-acp")
             .arg("--flag")
             .env("WF_SESSION", "s1");
-        let worktree = directory.path().join("k3f9");
-        std::fs::create_dir(&worktree).unwrap();
-        std::fs::write(worktree.join(".git"), format!("gitdir: {ADMIN}\n")).unwrap();
+        let repository = directory.path().join("k3f9");
+        std::fs::create_dir(&repository).unwrap();
         let access = Access {
-            worktree: &worktree,
+            directory: &repository,
             ..access()
         };
         let wrapped = wrap(&config(), &access, &agent, &profile_file).unwrap();
@@ -422,7 +346,7 @@ mod tests {
         assert_eq!(
             wrapped.arguments()[3..],
             [
-                worktree.to_str().unwrap(),
+                repository.to_str().unwrap(),
                 "fence",
                 "--settings",
                 profile_file.to_str().unwrap(),
@@ -435,29 +359,26 @@ mod tests {
 
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&profile_file).unwrap()).unwrap();
-        assert_eq!(written, profile(&config(), &access, Path::new(ADMIN)));
+        assert_eq!(written, profile(&config(), &access));
     }
 
     #[test]
-    fn the_agent_writes_its_worktree_commits_and_talks_to_the_daemon() {
+    fn the_agent_writes_its_repository_and_talks_to_the_daemon() {
         for path in [
-            "/home/ada/.local/share/workforce/w1/worktrees/k3f9/src/main.rs",
-            "/work/repo/.git/objects/ab/cdef",
-            "/work/repo/.git/refs/heads/wf/k3f9",
-            "/work/repo/.git/refs/heads/wf/k3f9.lock",
-            "/work/repo/.git/logs/refs/heads/wf/k3f9",
-            "/work/repo/.git/refs/remotes/origin/main",
-            "/work/repo/.git/logs/refs/remotes/origin/main",
-            "/work/repo/.git/worktrees/k3f9/index",
-            "/work/repo/.git/worktrees/k3f9/HEAD",
-            "/work/repo/.git/packed-refs.lock",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/src/main.rs",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/.git/objects/ab/cdef",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/.git/refs/heads/wf/k3f9",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/.git/refs/heads/wf/k3f9.lock",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/.git/packed-refs",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/.git/config",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/.git/HEAD",
             "/run/wf/daemon.sock",
             "/opt/cache/x",
         ] {
             assert!(covers("allowWrite", path), "{path} is writable");
             assert!(!covers("denyWrite", path), "{path} is not denied");
         }
-        let profile = profile(&config(), &access(), Path::new(ADMIN));
+        let profile = profile(&config(), &access());
         let domains = profile["network"]["allowedDomains"].as_array().unwrap();
         assert!(domains.contains(&json!("*.anthropic.com")));
         assert!(domains.contains(&json!("example.com")));
@@ -482,57 +403,30 @@ mod tests {
     }
 
     #[test]
-    fn git_cannot_be_made_to_run_code() {
-        for path in [
-            "/work/repo/.git/config",
-            "/work/repo/.git/hooks/pre-commit",
-            "/work/repo/.git/worktrees/k3f9/commondir",
-            "/work/repo/.git/worktrees/k3f9/config.worktree",
-            "/home/ada/.local/share/workforce/w1/worktrees/k3f9/.git",
-            "~/.config/git/config",
-        ] {
-            assert!(covers("denyWrite", path), "{path} is not writable");
-        }
+    fn the_global_git_config_cannot_be_written() {
+        assert!(covers("denyWrite", "~/.config/git/config"));
     }
 
     #[test]
-    fn the_target_and_other_worktrees_cannot_be_moved() {
+    fn the_principals_repository_and_the_other_repositories_cannot_be_written() {
         for path in [
+            "/work/repo/.git/objects/ab/cdef",
             "/work/repo/.git/refs/heads/main",
             "/work/repo/.git/refs/heads/main.lock",
-            "/work/repo/.git/refs/heads/wf/other",
+            "/work/repo/.git/refs/heads/wf/k3f9",
             "/work/repo/.git/logs/refs/heads/main",
             "/work/repo/.git/packed-refs",
+            "/work/repo/.git/packed-refs.lock",
             "/work/repo/.git/HEAD",
+            "/work/repo/.git/config",
+            "/work/repo/.git/hooks/pre-commit",
             "/work/repo/.git/worktrees/other/HEAD",
-            "/work/repo/.git/worktrees/other/index",
+            "/work/repo/src/main.rs",
+            "/home/ada/.local/share/workforce/w1/repos/other/.git/refs/heads/wf/other",
+            "/home/ada/.local/share/workforce/w1/repos/other/src/main.rs",
         ] {
             assert!(!covers("allowWrite", path), "{path} is not writable");
         }
-    }
-
-    #[test]
-    fn the_admin_directory_is_the_one_the_gitdir_line_names() {
-        let file = "gitdir: /work/repo/.git/worktrees/k3f92\n";
-        let admin = parse_gitdir(file).unwrap();
-        assert_eq!(admin, Path::new("/work/repo/.git/worktrees/k3f92"));
-        let profile = profile(&config(), &access(), &admin);
-        let allowed = profile["filesystem"]["allowWrite"].to_string();
-        assert!(allowed.contains("/work/repo/.git/worktrees/k3f92"));
-        assert!(!allowed.contains("/work/repo/.git/worktrees/k3f9\""));
-        assert_eq!(parse_gitdir("not a worktree"), None);
-    }
-
-    #[test]
-    fn without_a_branch_no_branch_is_writable() {
-        let access = Access {
-            branch: None,
-            ..access()
-        };
-        let profile = profile(&config(), &access, Path::new(ADMIN));
-        let allowed = profile["filesystem"]["allowWrite"].to_string();
-        assert!(!allowed.contains("refs/heads"));
-        assert!(allowed.contains("/work/repo/.git/objects"));
     }
 
     #[test]
@@ -540,7 +434,7 @@ mod tests {
         for path in [
             "~/.config/workforce/config.toml",
             "~/.local/share/workforce/w1/store.redb",
-            "~/.local/share/workforce/w1/worktrees/other/src/main.rs",
+            "~/.local/share/workforce/w1/repos/other/src/main.rs",
             "~/.local/share/workforce/bin/wf",
         ] {
             assert!(!covers("allowWrite", path), "{path} is not writable");

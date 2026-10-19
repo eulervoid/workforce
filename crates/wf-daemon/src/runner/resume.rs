@@ -8,8 +8,7 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use wf_core::id::{HashId, SessionId, WorkforceId};
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
-use wf_core::session::SessionRole;
-use wf_vcs::{GitCli, item_branch};
+use wf_vcs::GitCli;
 
 use super::{Begin, SessionError, blocking};
 use crate::{Daemon, Loaded};
@@ -133,9 +132,9 @@ impl Daemon {
         }
         let record = AgentSessionRecord::read(&record_path(&setup.transcripts, session))
             .ok_or(NotResumed::NoRecord)?;
-        let worktree = self.session_directory(workforce, item, session, &role);
-        if !worktree.is_dir() {
-            return Err(NotResumed::NoDirectory(worktree));
+        let directory = self.session_directory(workforce, item, session, &role);
+        if !directory.is_dir() {
+            return Err(NotResumed::NoDirectory(directory));
         }
         let repository = self
             .repository_of(workforce)
@@ -143,14 +142,7 @@ impl Daemon {
         let git = blocking(move || GitCli::open(&repository))
             .await?
             .map_err(SessionError::from)?;
-        if role == SessionRole::Work {
-            // Refs packed while the session was parked cannot be recreated from inside it.
-            let (git, branch) = (git.clone(), item_branch(item));
-            blocking(move || git.make_branch_loose(&branch))
-                .await?
-                .map_err(SessionError::from)?;
-        }
-        let run = self.run(setup, session, worktree, git, Begin::Resume(record));
+        let run = self.run(setup, session, directory, git, Begin::Resume(record));
         tracing::info!(
             "session {}: {} resumed on item {}{}",
             session.short(),

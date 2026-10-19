@@ -72,17 +72,7 @@ pub(crate) fn item_work(
         return Ok(wf_vcs::Work::Merged { merge, commit });
     }
     let target = target(workspace);
-    // While a session works here, its worktree is read as well.
-    let worktree = workspace
-        .state()
-        .claim(id)
-        .is_some_and(|session| session.device() == workspace.device_key())
-        .then(|| wf_vcs::item_worktree(&workspace.data.workforce(&workspace.workforce()), id));
-    let found = match worktree {
-        Some(worktree) => git.working_branch_work(id, &target, &worktree)?,
-        None => git.branch_work(id, &target)?,
-    };
-    if let Some(work) = found {
+    if let Some(work) = git.branch_work(id, &target)? {
         return Ok(work);
     }
     match submission {
@@ -190,15 +180,10 @@ pub(super) fn diff(
         }
     };
     let has_commits = git.has_commits(&work)?;
-    let uncommitted = git.uncommitted_diff(&work, git_args)?;
+    let uncommitted: Option<String> = None;
     match mode {
         Mode::Interactive if has_commits => {
             git.show_diff(&work, git_args, wf_vcs::Pager::AsConfigured)?;
-            if let Some(diff) = uncommitted {
-                let head = work.commit().to_string();
-                let text = diff_text(Some(""), Some(&diff), &head);
-                print!("{text}");
-            }
             Ok(())
         }
         Mode::Interactive | Mode::Scripted => {
@@ -207,7 +192,7 @@ pub(super) fn diff(
                 device: None,
                 commit: work.commit().to_string(),
                 merge: match &work {
-                    wf_vcs::Work::Unmerged { .. } | wf_vcs::Work::Working { .. } => None,
+                    wf_vcs::Work::Unmerged { .. } => None,
                     wf_vcs::Work::Merged { merge, .. } => Some(merge.to_string()),
                 },
                 committed: if has_commits {
@@ -331,7 +316,7 @@ pub(super) fn path(
     item: Option<String>,
 ) -> anyhow::Result<()> {
     let id = choose_item(workspace, mode, item, Scope::Live)?;
-    let path = wf_vcs::item_worktree(&workspace.data.workforce(&workspace.workforce()), id);
+    let path = wf_vcs::item_repository(&workspace.data.workforce(&workspace.workforce()), id);
     if !path.is_dir() {
         let merged = match workspace.state().review_status(id) {
             Some(ReviewStatus::Merged { commit }) => {
@@ -344,7 +329,7 @@ pub(super) fn path(
             )
             | None => String::new(),
         };
-        bail!("#{} has no worktree on this machine{merged}", id.short());
+        bail!("#{} has no repository on this machine{merged}", id.short());
     }
     let view = PathView {
         item: id.to_base32(),

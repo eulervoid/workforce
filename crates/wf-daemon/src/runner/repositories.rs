@@ -1,5 +1,5 @@
-//! Tidying the worktrees of a workforce: the directories of ended sessions and of items that are
-//! finished removed, and the caches of the rest kept under the budget of the machine config.
+//! Tidying the repositories of a workforce: the directories of ended sessions and of items that
+//! are finished removed, and the caches of the rest kept under the budget of the machine config.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
@@ -9,85 +9,35 @@ use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::item::ItemEntry;
 use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::State;
-use wf_vcs::{GitCli, item_worktree, worktrees};
+use wf_vcs::{item_repository, remove_agent_repository, repositories};
 
 use super::blocking;
 use crate::{Daemon, Loaded, caches};
 
 impl Daemon {
-    /// Removes the directory an ended session ran in, unless it is the worktree of the item,
-    /// which later sessions continue: there only a rebase stopped by a refused submission is
-    /// given up, and not while another work session of the item is live.
+    /// Removes the directory an ended session ran in, unless it is the repository of the item,
+    /// which later sessions continue.
     pub(super) async fn discard_session_directory(
         &self,
         workforce: WorkforceId,
-        loaded: &Loaded,
         item: ItemId,
         session: SessionId,
         role: SessionRole,
     ) {
-        let directory = self.session_directory(workforce, item, session, &role);
-        let removed = match role {
-            SessionRole::Work => {
-                let another_live = self.snapshot(loaded).await.map_or(true, |state| {
-                    another_work_session_live(
-                        state
-                            .live_sessions()
-                            .map(|live| (live.item(), live.id(), live.role())),
-                        item,
-                        session,
-                    )
-                });
-                if !another_live {
-                    self.abort_stopped_rebase(workforce, item).await;
-                }
-                return;
-            }
-            SessionRole::Review {
-                commit: Some(_), ..
-            } => {
-                let Some(repository) = self.repository_of(workforce) else {
-                    return;
-                };
-                blocking(move || GitCli::open(&repository)?.remove_worktree(&directory))
-                    .await
-                    .map(|removed| removed.map_err(|error| wf_core::error_chain(&error)))
-            }
-            SessionRole::Review { commit: None, .. }
-            | SessionRole::Supervise
-            | SessionRole::Diagnose => {
-                blocking(move || match std::fs::remove_dir_all(&directory) {
-                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-                    removed => removed,
-                })
-                .await
-                .map(|removed| removed.map_err(|error| error.to_string()))
+        let directory = match role {
+            SessionRole::Work => return,
+            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => {
+                self.session_directory(workforce, item, session, &role)
             }
         };
-        if let Ok(Err(error)) = removed {
+        let removed = match blocking(move || remove_agent_repository(&directory)).await {
+            Ok(removed) => removed.map_err(|error| wf_core::error_chain(&error)),
+            Err(error) => Err(error.to_string()),
+        };
+        if let Err(error) = removed {
             tracing::warn!(
                 "could not remove the directory of a session on #{}: {error}",
                 item.short()
-            );
-        }
-    }
-
-    /// Gives up a rebase that a refused submission left stopped in the worktree of `item`, once
-    /// its session ended without submitting, so the next session finds the branch checked out.
-    async fn abort_stopped_rebase(&self, workforce: WorkforceId, item: ItemId) {
-        let Some(repository) = self.repository_of(workforce) else {
-            return;
-        };
-        let worktree = item_worktree(&self.workforce_directory(workforce), item);
-        if !worktree.exists() {
-            return;
-        }
-        let aborted = blocking(move || GitCli::open(&repository)?.abort_rebase(&worktree)).await;
-        if let Ok(Err(error)) = aborted {
-            tracing::warn!(
-                "could not give up the stopped rebase of #{}: {}",
-                item.short(),
-                wf_core::error_chain(&error)
             );
         }
     }
@@ -103,10 +53,9 @@ impl Daemon {
             .collect()
     }
 
-    /// Removes the directories in the worktrees of `workforce` that belong to no unfinished item
-    /// and no live session of this machine, such as those an earlier daemon left behind, and
-    /// makes git forget them.
-    pub(crate) async fn remove_stray_worktrees(&self, workforce: WorkforceId, loaded: &Loaded) {
+    /// Removes the directories in the repositories of `workforce` that belong to no unfinished
+    /// item and no live session of this machine, such as those an earlier daemon left behind.
+    pub(crate) async fn remove_stray_repositories(&self, workforce: WorkforceId, loaded: &Loaded) {
         let Ok(state) = self.snapshot(loaded).await else {
             return;
         };
@@ -120,13 +69,12 @@ impl Daemon {
         for view in state.items() {
             match view {
                 ItemEntry::Live(item) if !item.state(policy).is_terminal() => {
-                    kept.insert(item_worktree(&workforce_directory, item.id()));
+                    kept.insert(item_repository(&workforce_directory, item.id()));
                 }
                 ItemEntry::Live(_) | ItemEntry::Archived(_) => {}
             }
         }
-        let directory = worktrees(&workforce_directory);
-        let repository = self.repository_of(workforce);
+        let directory = repositories(&workforce_directory);
         let _ = blocking(move || {
             let Ok(entries) = std::fs::read_dir(&directory) else {
                 return;
@@ -137,21 +85,12 @@ impl Daemon {
                     continue;
                 }
                 match std::fs::remove_dir_all(&path) {
-                    Ok(()) => tracing::info!("removed the stray worktree {}", path.display()),
+                    Ok(()) => tracing::info!("removed the stray directory {}", path.display()),
                     Err(error) => tracing::warn!(
-                        "could not remove the stray worktree {}: {error}",
+                        "could not remove the stray directory {}: {error}",
                         path.display()
                     ),
                 }
-            }
-            if let Some(repository) = repository
-                && let Err(error) = GitCli::open(&repository).and_then(|git| git.prune_worktrees())
-            {
-                tracing::warn!(
-                    "could not prune the worktrees of {}: {}",
-                    repository.display(),
-                    wf_core::error_chain(&error)
-                );
             }
         })
         .await;
@@ -188,7 +127,7 @@ impl Daemon {
             return;
         };
         let busy = self.busy_directories(workforce, &state);
-        let directory = self.launch.data_dir.worktrees(&workforce);
+        let directory = self.launch.data_dir.repositories(&workforce);
         let budget_bytes = storage.budget.as_u64();
         let Ok(used_bytes) = blocking(move || {
             let measured = caches::measure(&directory, &storage.caches);
@@ -248,25 +187,6 @@ fn due_for_measuring(last_measured: Option<Instant>, disk_full: bool) -> bool {
     disk_full || last_measured.is_none_or(|at| at.elapsed() >= MEASURE_CACHES_EVERY)
 }
 
-/// Whether a live session other than `session` works in the worktree of `item`: only work
-/// sessions do, every other role runs in a directory of its own.
-fn another_work_session_live(
-    live: impl IntoIterator<Item = (ItemId, SessionId, SessionRole)>,
-    item: ItemId,
-    session: SessionId,
-) -> bool {
-    live.into_iter().any(|(live_item, live_session, role)| {
-        live_item == item
-            && live_session != session
-            && match role {
-                SessionRole::Work => true,
-                SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => {
-                    false
-                }
-            }
-    })
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -279,41 +199,5 @@ mod tests {
         assert!(!due_for_measuring(just_now, false));
         assert!(due_for_measuring(long_ago, false));
         assert!(due_for_measuring(just_now, true));
-    }
-
-    #[test]
-    fn only_another_live_work_session_keeps_the_item_worktree_in_use() {
-        let item = ItemId::from_bytes([1; 32]);
-        let other_item = ItemId::from_bytes([2; 32]);
-        let ended = SessionId::from_bytes([3; 32]);
-        let other = SessionId::from_bytes([4; 32]);
-        let review = (
-            item,
-            other,
-            SessionRole::Review {
-                commit: None,
-                step: None,
-            },
-        );
-        let supervise = (item, other, SessionRole::Supervise);
-        let diagnose = (item, other, SessionRole::Diagnose);
-        for live in [review.clone(), supervise, diagnose] {
-            assert!(!another_work_session_live([live], item, ended));
-        }
-        assert!(another_work_session_live(
-            [review, (item, other, SessionRole::Work)],
-            item,
-            ended
-        ));
-        assert!(!another_work_session_live(
-            [(item, ended, SessionRole::Work)],
-            item,
-            ended
-        ));
-        assert!(!another_work_session_live(
-            [(other_item, other, SessionRole::Work)],
-            item,
-            ended
-        ));
     }
 }

@@ -13,7 +13,7 @@ use wf_core::lifecycle::{Interruption, Resume, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_core::state::State;
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
-use wf_vcs::StoppedRebase;
+use wf_vcs::{ImportMode, StoppedRebase};
 
 use super::brief::{brief, restarted, resumed};
 use super::resume::AgentSessionRecord;
@@ -48,7 +48,7 @@ pub(super) async fn run_session(
         .unwrap_or(false);
     if ended {
         daemon
-            .discard_session_directory(run.workforce, &loaded, run.item, run.session, run.role)
+            .discard_session_directory(run.workforce, run.item, run.session, run.role)
             .await;
         daemon.keep_caches_in_budget(run.workforce, &loaded).await;
     }
@@ -164,7 +164,7 @@ async fn drive(
         agent,
         opening,
         model: run.model.clone(),
-        directory: run.worktree.clone(),
+        directory: run.directory.clone(),
         permissions: Arc::clone(&run.permissions),
         transcript,
         silence_limit: SILENCE_LIMIT,
@@ -280,14 +280,9 @@ async fn turns(
         Err(end) => return end,
     };
     let cancel = conversation.cancel();
-    let mut last_head = branch_head(run).await;
+    let mut last_head = branch_head(run);
     let mut turns_without_commit = 0;
     loop {
-        // Refs packed since the last turn (by the principal's git, outside the sandbox) cannot be
-        // recreated from inside the session.
-        if run.role == SessionRole::Work {
-            make_branch_loose(run).await;
-        }
         record.prompted_ms = Some(wf_store::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
             return not_kept(&daemon.faults, &run.agent_session, &error);
@@ -300,6 +295,7 @@ async fn turns(
                 if matches!(how, Stop::AfterTurn)
                     && tokio::time::timeout(GRACE, &mut turn).await.is_ok()
                 {
+                    import_progress(daemon, loaded, run).await;
                     return End::Over;
                 }
                 cancel.cancel();
@@ -348,6 +344,7 @@ async fn turns(
             }
         };
         daemon.faults.harness_answered(&run.harness);
+        import_progress(daemon, loaded, run).await;
 
         // The agent submitted and ended its turn while the checks run: nothing to say to it until
         // they are done. The daemon runs them, not the agent, so the wait does not count against
@@ -360,13 +357,13 @@ async fn turns(
         let waited = waiting_since.elapsed();
         deadline = deadline.map(|deadline| deadline + waited);
         if let Some(failures) = daemon.submissions.take_failure(run.session) {
-            last_head = branch_head(run).await;
+            last_head = branch_head(run);
             turns_without_commit = 0;
             prompt = failures;
             continue;
         }
 
-        let head = branch_head(run).await;
+        let head = branch_head(run);
         if head != last_head {
             turns_without_commit = 0;
             last_head = head;
@@ -512,8 +509,8 @@ async fn sleep_until(deadline: Option<Instant>) {
 async fn nudge(run: &Run) -> String {
     let stopped = match run.role {
         SessionRole::Work => {
-            let (git, worktree) = (run.git.clone(), run.worktree.clone());
-            blocking(move || git.stopped_rebase(&worktree))
+            let (git, directory) = (run.git.clone(), run.directory.clone());
+            blocking(move || git.stopped_rebase(&directory))
                 .await
                 .ok()
                 .and_then(Result::ok)
@@ -533,18 +530,44 @@ async fn nudge(run: &Run) -> String {
     }
 }
 
-async fn make_branch_loose(run: &Run) {
-    let (git, branch) = (run.git.clone(), run.branch.clone());
-    match blocking(move || git.make_branch_loose(&branch)).await {
-        Ok(Ok(())) => {}
-        Ok(Err(error)) => tracing::warn!("session {}: {error}", run.session),
+/// Copies the commits of a work session so far into the principal's repository, so that its
+/// branch there, and what shows the work of the item, is where the agent has got to. A session
+/// that has ended is left alone: what it submitted is under review.
+async fn import_progress(daemon: &Arc<Daemon>, loaded: &Arc<Loaded>, run: &Run) {
+    if run.role != SessionRole::Work {
+        return;
+    }
+    let session = run.session;
+    let live = daemon
+        .read(loaded, move |state| session_is_live(state, session))
+        .await
+        .unwrap_or(false);
+    if !live {
+        return;
+    }
+    let (git, directory, item, target) = (
+        run.git.clone(),
+        run.directory.clone(),
+        run.item,
+        run.target.clone(),
+    );
+    let imported =
+        blocking(move || git.import_commits(&directory, item, &target, ImportMode::InProgress))
+            .await;
+    match imported {
+        Ok(Ok(_)) => {}
+        Ok(Err(error)) => tracing::warn!(
+            "session {}: could not copy its commits: {}",
+            run.session,
+            wf_core::error_chain(&error)
+        ),
         Err(error) => tracing::warn!("session {}: {error}", run.session),
     }
 }
 
-async fn branch_head(run: &Run) -> Option<CommitId> {
-    let (git, branch) = (run.git.clone(), run.branch.clone());
-    blocking(move || git.branch_head(&branch)).await.ok()?.ok()
+/// The head of the branch of the item in the agent's own repository.
+fn branch_head(run: &Run) -> Option<CommitId> {
+    wf_vcs::agent_branch_head(&run.directory, &run.branch)
 }
 
 /// How the task ends when a turn outcome says to close: the session ended already, or its item

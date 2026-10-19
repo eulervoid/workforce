@@ -10,10 +10,9 @@ use wf_core::item::{ItemEntry, ItemState};
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
 use wf_core::session::{CommitId, EndReason};
 use wf_core::state::State;
-use wf_vcs::{GitCli, Rebase, VcsError, item_branch, item_worktree};
+use wf_vcs::{GitCli, Import, ImportMode, VcsError, item_branch, item_repository};
 
 use super::merge::{Attempt, MergeRequest, Reservation};
-use super::start::git_identity;
 use super::submit::Submission;
 use super::{SessionError, Stop, blocking};
 use crate::proto::EndAnswer;
@@ -129,21 +128,16 @@ impl Daemon {
         let role = folded.role();
         let submitted = match &end {
             SessionEnd::Finish(Finish::Submit { .. }) => {
-                // Checks that passed on the head are not run again, nor is the branch rebased
-                // under them.
-                let checked = match self.submissions.passed(session) {
-                    Some(passed) => {
-                        self.submitted_commit(workforce, &state, item).await? == Some(passed)
-                    }
-                    None => false,
+                // The agent rebased the branch onto the target before it submitted (`wf work
+                // submit`), unless it is approved already; either way what it committed is
+                // copied into this repository now, and checks that passed on that head are not
+                // run again.
+                let mode = if state.rebases_at_submit(session) {
+                    ImportMode::Submission
+                } else {
+                    ImportMode::InProgress
                 };
-                if state.rebases_at_submit(session) && !checked {
-                    let agent = folded.agent();
-                    let committer = git_identity(&state, agent.principal, &agent.name)?;
-                    self.rebase_at_submit(workforce, &state, item, committer)
-                        .await?;
-                }
-                self.submitted_commit(workforce, &state, item).await?
+                self.import_commits(workforce, &state, item, mode).await?
             }
             SessionEnd::Finish(
                 Finish::Release { .. } | Finish::Reviewed | Finish::Supervised | Finish::Diagnosed,
@@ -260,7 +254,7 @@ impl Daemon {
         let running = self.runners.is_running(session);
         self.runners.stop(session, how);
         if !running {
-            self.discard_session_directory(workforce, loaded, item, session, role)
+            self.discard_session_directory(workforce, item, session, role)
                 .await;
         }
         if matches!(reason, EndReason::Submitted { commit: None }) {
@@ -270,16 +264,16 @@ impl Daemon {
         Ok(EndAnswer::Ended)
     }
 
-    /// Removes the worktree and the branch of an item whose work left nothing to keep.
+    /// Removes the agent's repository and the branch of an item whose work left nothing to keep.
     async fn discard_branch(&self, workforce: WorkforceId, item: ItemId) {
         let Some(repository) = self.repository_of(workforce) else {
             return;
         };
         let branch = item_branch(item);
-        let worktree = item_worktree(&self.workforce_directory(workforce), item);
+        let directory = item_repository(&self.workforce_directory(workforce), item);
         let removed = blocking(move || {
             let git = GitCli::open(&repository)?;
-            git.remove_worktree(&worktree)?;
+            wf_vcs::remove_agent_repository(&directory)?;
             git.delete_branch(&branch)
         })
         .await;
@@ -302,58 +296,55 @@ impl Daemon {
         }
     }
 
-    /// Rebases the branch of `item` onto the target as its work is submitted, the commits signed
-    /// as the agent's own are. A conflict, or uncommitted changes the rebase would have to carry,
-    /// refuse the submission before anything is written: the session goes on, and the rebase
-    /// stopped at the conflict waits in the worktree for the next submission to go on with it.
-    async fn rebase_at_submit(
+    /// The commit the target branch is at in the principal's repository.
+    pub(crate) async fn target_commit(
         &self,
         workforce: WorkforceId,
-        state: &State,
-        item: ItemId,
-        committer: String,
-    ) -> Result<(), SessionError> {
+        loaded: &Loaded,
+    ) -> Result<CommitId, SessionError> {
+        let state = self.snapshot(loaded).await?;
+        let target = target_of(&state)?;
         let repository = self
             .repository_of(workforce)
             .ok_or(SessionError::NoRepository)?;
-        let target = target_of(state)?;
-        let worktree = item_worktree(&self.workforce_directory(workforce), item);
-        let signing = self.machine_config()?.commits.agent_signing.signing();
-        let onto = target.clone();
-        let rebased = blocking(move || {
-            GitCli::open(&repository)?.rebase(&worktree, &onto, &signing, &committer)
-        })
-        .await??;
-        match rebased {
-            Rebase::UpToDate => Ok(()),
-            Rebase::Rebased => {
-                tracing::info!("rebased the branch of #{} onto {target}", item.short());
-                Ok(())
-            }
-            Rebase::Conflict { paths } => Err(SessionError::RebaseConflict { target, paths }),
-            Rebase::DirtyCheckout(dirty) => Err(SessionError::RebaseDirty { target, dirty }),
-        }
+        Ok(blocking(move || GitCli::open(&repository)?.branch_head(&target)).await??)
     }
 
-    /// The head of the branch of `item`, if it has commits of its own.
-    async fn submitted_commit(
+    /// Copies the commits of the agent's repository for `item` into the principal's, as `mode`
+    /// says, and returns the head of the branch of `item` there if it has commits of its own. A
+    /// submission that lacks the tip of the target is refused before anything is written: the
+    /// session goes on and rebases again.
+    pub(super) async fn import_commits(
         &self,
         workforce: WorkforceId,
         state: &State,
         item: ItemId,
+        mode: ImportMode,
     ) -> Result<Option<CommitId>, SessionError> {
         let repository = self
             .repository_of(workforce)
             .ok_or(SessionError::NoRepository)?;
         let target = target_of(state)?;
+        let agent_repository = item_repository(&self.workforce_directory(workforce), item);
         let branch = item_branch(item);
-        let commit = blocking(move || {
+        let onto = target.clone();
+        let imported = blocking(move || {
             let git = GitCli::open(&repository)?;
-            let head = git.branch_head(&branch)?;
-            Ok::<_, VcsError>((git.commits_ahead(&target, head)? > 0).then_some(head))
+            let import = git.import_commits(&agent_repository, item, &onto, mode)?;
+            let head = match import {
+                Import::Imported { commit } => commit,
+                Import::BehindTarget => return Ok(Err(())),
+                // Nothing in the agent's repository: what an earlier session imported stays.
+                Import::NoCommits => match git.branch_head(&branch) {
+                    Ok(head) => head,
+                    Err(VcsError::NoBranch(_)) => return Ok(Ok(None)),
+                    Err(error) => return Err(error),
+                },
+            };
+            Ok::<_, VcsError>(Ok((git.commits_ahead(&onto, head)? > 0).then_some(head)))
         })
         .await??;
-        Ok(commit)
+        imported.map_err(|()| SessionError::BehindTarget { target })
     }
 }
 

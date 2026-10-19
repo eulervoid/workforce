@@ -10,7 +10,7 @@ use std::sync::{Arc, Weak};
 use wf_core::id::{ItemId, WorkforceId};
 use wf_core::session::CommitId;
 use wf_net::{DiffAnswer, SourceError, Work};
-use wf_vcs::{GitCli, VcsError, item_worktree};
+use wf_vcs::{GitCli, VcsError, item_repository};
 
 use crate::proto::LiveDiff;
 use crate::{Daemon, StorageClosed};
@@ -54,7 +54,7 @@ impl Daemon {
             })
             .await?
             .ok_or(LiveDiffError::NoPolicy)?;
-        let worktree = item_worktree(&self.workforce_directory(workforce), item);
+        let worktree = item_repository(&self.workforce_directory(workforce), item);
         let Some(repository) = self.repository_of(workforce) else {
             return Ok(DiffAnswer::NotHere);
         };
