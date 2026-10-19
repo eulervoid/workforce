@@ -1120,6 +1120,9 @@ pub fn agents(agents: &[AgentView]) -> String {
     format!("{table}\n")
 }
 
+/// Device ids are shown with 8 characters, as before ids got their own short length.
+const DEVICE_ID_LEN: usize = 8;
+
 pub fn devices(devices: &[DeviceView]) -> String {
     let mut table = table(&[
         "DEVICE",
@@ -1368,10 +1371,7 @@ mod tests {
         let lines: Vec<&str> = output.lines().collect();
         assert!(lines.contains(&"items: 6 ready, 3 archived"), "{output}");
         assert!(lines.contains(&"waiting on you: 2"), "{output}");
-        let items_line = lines
-            .iter()
-            .find(|line| line.starts_with("items:"))
-            .unwrap();
+        let items_line = lines.iter().find(|line| line.starts_with("items:")).unwrap();
         assert!(!items_line.contains("waiting"), "{output}");
     }
 
