@@ -232,6 +232,15 @@ pub enum Role {
     Member,
 }
 
+impl Role {
+    pub fn name(&self) -> &'static str {
+        match self {
+            Role::Owner => "owner",
+            Role::Member => "member",
+        }
+    }
+}
+
 /// An agent is named by its principal and role name: `@ada/coder`.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub struct AgentId {

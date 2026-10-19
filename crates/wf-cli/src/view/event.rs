@@ -2,10 +2,11 @@
 
 use std::collections::HashMap;
 
+use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::activity::Entry;
 use wf_core::event::{Change, Event, EventBody, Link};
-use wf_core::id::{CommentId, HashId, ItemId};
+use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::item::ItemView;
 use wf_core::session::{EndReason, Verdict};
 use wf_core::state::State;
@@ -17,7 +18,7 @@ use super::timestamp;
 #[derive(Serialize)]
 pub struct EventLineView {
     pub event: String,
-    pub item: Option<String>,
+    pub item: Option<ItemId>,
     pub title: Option<String>,
     #[serde(flatten)]
     pub activity: ActivityView,
@@ -46,7 +47,7 @@ pub fn event_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<EventL
                 for activity in activity_views(state, item, &entries) {
                     lines.push(EventLineView {
                         event: event.id().to_string(),
-                        item: Some(item.id().to_base32()),
+                        item: Some(item.id()),
                         title: Some(item.title().to_string()),
                         activity,
                     });
@@ -54,13 +55,13 @@ pub fn event_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<EventL
             }
             None => lines.push(EventLineView {
                 event: event.id().to_string(),
-                item: state.item_of(event).map(|id| id.to_base32()),
+                item: state.item_of(event),
                 title: None,
                 activity: ActivityView {
                     at: timestamp(event.content.hlc),
                     by: super::actor_view(state, &event.content.actor),
                     kind: ActivityKind::Workforce,
-                    summary: describe(state, &event.content.body),
+                    summary: describe(&event.content.body),
                     comment: None,
                     text: None,
                 },
@@ -77,10 +78,10 @@ pub struct EventView {
     pub seq: u64,
     pub device: String,
     pub actor: String,
-    pub at: String,
+    pub at: Timestamp,
     pub kind: String,
     /// The item the event is about, and its title.
-    pub item: Option<String>,
+    pub item: Option<ItemId>,
     pub title: Option<String>,
     pub summary: String,
     /// How a review or a session came out.
@@ -99,7 +100,7 @@ pub enum OutcomeView {
         because: Option<String>,
     },
     SessionEnded {
-        session: String,
+        session: SessionId,
         /// `submitted`, `released`, `failed` and so on.
         reason: &'static str,
         /// The commit submitted, for a submission with commits.
@@ -126,7 +127,7 @@ impl From<Verdict> for VerdictView {
     }
 }
 
-pub fn describe(state: &State, body: &EventBody) -> String {
+pub fn describe(body: &EventBody) -> String {
     let item = |id: &ItemId| format!("#{}", id.short());
     match body {
         EventBody::Genesis(signed) => format!("workforce \"{}\"", signed.statement.name),
@@ -201,7 +202,6 @@ pub fn describe(state: &State, body: &EventBody) -> String {
         }
         EventBody::Merged(merged) => format!("{} merged as {}", item(&merged.item), merged.commit),
         EventBody::Unknown { tag, .. } => {
-            let _ = state;
             format!("unknown body {tag}")
         }
     }
@@ -223,7 +223,7 @@ pub fn event_view(
             because: because(review.because),
         }),
         EventBody::SessionEnded(ended) => Some(OutcomeView::SessionEnded {
-            session: ended.session.to_string(),
+            session: ended.session,
             reason: ended.reason.name(),
             commit: match ended.reason {
                 EndReason::Submitted { commit } => commit.map(|commit| commit.to_string()),
@@ -266,11 +266,11 @@ pub fn event_view(
         actor: state.actor_label(&event.content.actor),
         at: timestamp(event.content.hlc),
         kind: event.content.body.name().to_string(),
-        item: item.map(|id| id.to_base32()),
+        item,
         title: item
             .and_then(|id| state.item(id))
             .map(|view| view.title().to_string()),
-        summary: describe(state, &event.content.body),
+        summary: describe(&event.content.body),
         outcome,
         verified,
     }

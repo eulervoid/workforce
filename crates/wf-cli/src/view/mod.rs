@@ -42,15 +42,16 @@ impl<T> Envelope<T> {
     }
 }
 
-pub fn timestamp(hlc: Hlc) -> String {
+pub fn timestamp(hlc: Hlc) -> Timestamp {
     timestamp_ms(hlc.wall_ms())
 }
 
-pub fn timestamp_ms(millis: u64) -> String {
+/// A wall clock beyond the last year jiff counts is clamped to it.
+pub fn timestamp_ms(millis: u64) -> Timestamp {
     i64::try_from(millis)
         .ok()
         .and_then(|millis| Timestamp::from_millisecond(millis).ok())
-        .map_or_else(|| "unknown".to_string(), |time| time.to_string())
+        .unwrap_or(Timestamp::MAX)
 }
 
 /// Who did something: what to call them, and which kind of actor they are, for the color.
@@ -92,8 +93,8 @@ pub fn device_label(state: &State, device: wf_core::identity::DeviceKey) -> Stri
     }
 }
 
-pub fn timestamp_now() -> String {
-    Timestamp::now().to_string()
+pub fn timestamp_now() -> Timestamp {
+    Timestamp::now()
 }
 
 pub fn mention_view(state: &State, target: &MentionTarget) -> ActorView {

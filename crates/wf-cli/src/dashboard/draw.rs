@@ -18,16 +18,16 @@ use super::app::{
 };
 use super::draw_diff;
 use super::links;
-use super::snapshot::{
-    AgentInfo, InView, ItemRef, MovedBack, Place, SessionInfo, SessionStatus, Waiting,
-};
-use super::snapshot::{Detail, ItemRow};
+use super::snapshot::Detail;
+use super::snapshot::{AgentInfo, InView, MovedBack, Place, SessionInfo, Waiting};
 use super::transcript_lines::TranscriptLines;
 use crate::cli::{ItemGrouping, ItemOrder};
 use crate::render;
 use crate::text::{duration, prefix_within};
 use crate::theme;
 use crate::transcript::{self, Format, Now, Transcript, Usage};
+use crate::view::{AgentView, ItemSummary, SessionStatus};
+use wf_core::id::ItemId;
 use wf_core::stats::ProjectStats;
 
 /// `text` in a style of the theme.
@@ -497,7 +497,7 @@ fn draw_prompt(frame: &mut Frame, app: &App, prompt: &Prompt, area: Rect) {
                 .iter()
                 .find(|working| working.id == *session)
                 .map_or_else(String::new, |working| {
-                    format!("{} on #{} ", working.agent, working.item.id.short())
+                    format!("{} on #{} ", working.agent_name, working.item.short())
                 });
             let mut line = question(format!(" stop {agent}now? "));
             line.extend(answer_keys(&["y/n"]));
@@ -1113,11 +1113,11 @@ fn cut_spans(spans: Vec<Span<'static>>, room: usize) -> Vec<Span<'static>> {
     kept
 }
 
-fn item_spans(item: &ItemRef) -> Vec<Span<'static>> {
+fn item_spans(id: ItemId, title: &str) -> Vec<Span<'static>> {
     vec![
-        themed(format!("#{}", item.id.short()), theme::id()),
+        themed(format!("#{}", id.short()), theme::id()),
         Span::raw(" "),
-        Span::raw(item.title.clone()),
+        Span::raw(title.to_owned()),
     ]
 }
 
@@ -1174,17 +1174,14 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
             first.push(themed(format!("#{}", item.id.short()), theme::id()));
             first.push(Span::raw(" review"));
             if let Some(commit) = commit {
-                first.push(
-                    Span::raw(format!(" {}", commit.short()))
-                        .themed(theme::text_dimmed()),
-                );
+                first.push(Span::raw(format!(" {}", commit.short())).themed(theme::text_dimmed()));
             }
             first.push(Span::raw(format!("  {}", item.title)));
             row.lines(first, row.keys("v").map(Line::from), Vec::new())
         }
         Waiting::Notice { item, kind, what } => {
             let mut first = vec![themed("• ", theme::attention())];
-            first.extend(item_spans(item));
+            first.extend(item_spans(item.id, &item.title));
             let more = Line::from(format!("  {kind}: {what}")).themed(theme::text_dimmed());
             row.lines(first, None, vec![more])
         }
@@ -1196,8 +1193,9 @@ fn waiting_lines(entry: &Waiting, row: RowLines) -> Vec<Line<'static>> {
     }
 }
 
-/// How long ago `since_ms` was: `12m`, `3h05m` or `2d`.
-fn age(since_ms: u64, now_ms: u64) -> String {
+/// How long ago `since` was: `12m`, `3h05m` or `2d`.
+fn age(since: jiff::Timestamp, now_ms: u64) -> String {
+    let since_ms = u64::try_from(since.as_millisecond()).unwrap_or(0);
     duration(now_ms.saturating_sub(since_ms))
 }
 
@@ -1231,11 +1229,14 @@ fn session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<Line<'s
     };
     let mut first = vec![
         glyph,
-        themed(format!("{:<9}", session.agent), theme::agent()),
+        themed(
+            format!("{:<9}", session.agent_name.as_str()),
+            theme::agent(),
+        ),
         Span::raw(" "),
     ];
-    first.extend(item_spans(&session.item));
-    let mut right = age(session.started_ms, app.snapshot.now_ms);
+    first.extend(item_spans(session.item, &session.title));
+    let mut right = age(session.started, app.snapshot.now_ms);
     if session.status == SessionStatus::Parked {
         right = format!("parked {right}");
     }
@@ -1404,7 +1405,7 @@ fn items_heading(app: &App) -> Line<'static> {
     Line::from(format!(" {}", parts.join(" · "))).themed(theme::text_dimmed())
 }
 
-fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
+fn item_row_lines(item: &ItemSummary, row: RowLines) -> Vec<Line<'static>> {
     let icon = render::item_icon(item.state, item.readiness);
     let first = vec![
         themed(format!("{icon} "), icon_style(item)),
@@ -1418,7 +1419,7 @@ fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
         Some(Readiness::Stranded) => annotations.push("stranded".to_owned()),
         Some(Readiness::Ready | Readiness::Claimed) | None => {}
     }
-    if let Some((done, total)) = item.steps {
+    if let Some(crate::view::StepsView { done, total }) = item.steps {
         annotations.push(format!("{done}/{total}"));
     }
     // The annotations dim, the priority in its own style, as `wf item list` shows it.
@@ -1437,7 +1438,7 @@ fn item_row_lines(item: &ItemRow, row: RowLines) -> Vec<Line<'static>> {
 }
 
 /// The style of an item's icon: its state's, or a warning while the item is stranded.
-fn icon_style(item: &ItemRow) -> anstyle::Style {
+fn icon_style(item: &ItemSummary) -> anstyle::Style {
     match item.readiness {
         Some(Readiness::Stranded) => theme::readiness(Readiness::Stranded),
         Some(Readiness::Ready | Readiness::Claimed | Readiness::Blocked) | None => {
@@ -1480,11 +1481,19 @@ fn stats_lines(stats: &ProjectStats, width: u16) -> Vec<Line<'static>> {
         .collect()
 }
 
+/// `claude-code · opus`
+fn runs_on(agent: &AgentView) -> String {
+    match &agent.model {
+        Some(model) => format!("{} · {model}", agent.harness),
+        None => agent.harness.clone(),
+    }
+}
+
 /// `coder  claude-code · opus  2/2 busy`, `1/2 live` while there is room, `0/2 idle`
 fn agent_lines(agent: &AgentInfo, row: RowLines) -> Vec<Line<'static>> {
     let first = vec![
         Span::raw(agent.id.name.to_string()).themed(theme::text_bold()),
-        Span::raw(format!("  {}", agent.runs_on)).themed(theme::text_dimmed()),
+        Span::raw(format!("  {}", runs_on(&agent.view))).themed(theme::text_dimmed()),
     ];
     let live = agent.stats.live;
     let load = match agent.capacity {
@@ -1506,21 +1515,17 @@ fn agent_session_lines(app: &App, session: &SessionInfo, row: RowLines) -> Vec<L
         SessionStatus::Ended { .. } => Span::raw("  · ").themed(theme::text_dimmed()),
     };
     let mut first = vec![glyph];
-    first.extend(item_spans(&session.item));
+    first.extend(item_spans(session.item, &session.title));
     let now_ms = app.snapshot.now_ms;
     let right = match session.status {
-        SessionStatus::Live => format!("{} {}", session.role, age(session.started_ms, now_ms)),
+        SessionStatus::Live => format!("{} {}", session.role.name(), age(session.started, now_ms)),
         SessionStatus::Parked => format!(
             "{} parked {}",
-            session.role,
-            age(session.started_ms, now_ms)
+            session.role.name(),
+            age(session.started, now_ms)
         ),
-        SessionStatus::Ended { reason, at_ms } => {
-            format!(
-                "{} {} ago",
-                reason.label(),
-                age(at_ms, now_ms)
-            )
+        SessionStatus::Ended { reason, at } => {
+            format!("{} {} ago", reason.label(), age(at, now_ms))
         }
     };
     row.lines(first, Some(with_context(app, session, right)), Vec::new())
@@ -1660,7 +1665,7 @@ fn draw_detail(
                 return None;
             };
             let scroll = draw_session(frame, app, session, opened.scroll, body, spots);
-            (scroll, Some(session.item.id))
+            (scroll, Some(session.item))
         }
         // Code is no text with links in it.
         Detail::Diff(id) => {
@@ -1706,7 +1711,7 @@ fn draw_session(
             ),
             (Place::Here, Some(transcript)) => {
                 let layout = transcript::Layout::new(
-                    &session.agent,
+                    session.agent_name.as_str(),
                     usize::from(padded(body).width).max(20),
                     Format::Styled,
                     app.verbosity,
@@ -1794,7 +1799,7 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
                     Detail::Item(before) | Detail::Diff(before) => before == item,
                     Detail::Session(session) => app
                         .session_info(*session)
-                        .is_some_and(|session| session.item.id == *item),
+                        .is_some_and(|session| session.item == *item),
                     Detail::Agent(_) | Detail::Flag(_) => false,
                 });
                 if !through_item {
@@ -1808,7 +1813,7 @@ fn draw_breadcrumb(frame: &mut Frame, app: &App, area: Rect) -> Vec<Spot> {
                     continue;
                 };
                 // A session is about an item: named, unless the way here went through it.
-                let item = session.item.id;
+                let item = session.item;
                 if crumbs
                     .last()
                     .and_then(|(crumb, _)| crumb.first())
@@ -1900,9 +1905,9 @@ fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'static>> {
     vec![
         Span::raw(format!(
             "{} · {} · {}",
-            session.agent,
-            session.role,
-            age(session.started_ms, app.snapshot.now_ms)
+            session.agent_name,
+            session.role.name(),
+            age(session.started, app.snapshot.now_ms)
         )),
         status,
     ]

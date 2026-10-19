@@ -1,8 +1,10 @@
 //! Sessions and agents, as `wf session list` and `wf agent list` show them.
 
-use serde::Serialize;
+use jiff::Timestamp;
+use serde::ser::SerializeMap;
+use serde::{Serialize, Serializer};
 use wf_core::graph::DependencyGraph;
-use wf_core::id::{HashId, SessionId};
+use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::item::ItemView;
 use wf_core::resolve::MentionTarget;
@@ -21,7 +23,7 @@ pub(super) fn session_label(session: &Session) -> String {
     )
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct AgentView {
     pub id: String,
     pub harness: String,
@@ -45,7 +47,7 @@ pub fn agent_views(state: &State) -> Vec<AgentView> {
         .collect()
 }
 
-pub(super) fn agent_view(state: &State, id: &AgentId, definition: &AgentDefinition) -> AgentView {
+pub fn agent_view(state: &State, id: &AgentId, definition: &AgentDefinition) -> AgentView {
     AgentView {
         id: mention_label(state, &MentionTarget::Agent(id.clone())),
         harness: definition.harness.to_string(),
@@ -69,18 +71,68 @@ pub(super) fn agent_view(state: &State, id: &AgentId, definition: &AgentDefiniti
     }
 }
 
-#[derive(Serialize)]
+/// Where a session is in its life.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SessionStatus {
+    Live,
+    /// Live, but its item waits on a dependency or an open blocker.
+    Parked,
+    Ended {
+        reason: EndReason,
+        at: Timestamp,
+    },
+}
+
+impl SessionStatus {
+    pub fn is_live(&self) -> bool {
+        match self {
+            SessionStatus::Live | SessionStatus::Parked => true,
+            SessionStatus::Ended { .. } => false,
+        }
+    }
+
+    /// `live`, `parked` or why the session ended.
+    pub fn name(&self) -> &'static str {
+        match self {
+            SessionStatus::Live => "live",
+            SessionStatus::Parked => "parked",
+            SessionStatus::Ended { reason, .. } => reason.name(),
+        }
+    }
+}
+
+impl Serialize for SessionStatus {
+    /// `status` is `live`, `parked` or why the session ended, which `ended` says when.
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        let mut map = serializer.serialize_map(None)?;
+        map.serialize_entry("status", self.name())?;
+        if let SessionStatus::Ended { at, .. } = self {
+            map.serialize_entry("ended", at)?;
+        }
+        map.end()
+    }
+}
+
+fn serialize_role_name<S: Serializer>(
+    role: &SessionRole,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    serializer.serialize_str(role.name())
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct SessionView {
-    pub id: String,
+    pub id: SessionId,
     pub agent: String,
-    pub item: String,
+    pub item: ItemId,
     pub title: String,
-    /// `work` or `review`.
-    pub role: String,
-    /// `live`, `parked` while it waits for an answer, or why it ended.
-    pub status: String,
-    pub started: String,
-    pub ended: Option<String>,
+    /// Written as its name: `work`, `review`, `supervise` or `diagnose`.
+    #[serde(serialize_with = "serialize_role_name")]
+    pub role: SessionRole,
+    /// Written as `status`, and `ended` once it ended.
+    #[serde(flatten)]
+    pub status: SessionStatus,
+    pub started: Timestamp,
     /// The model the session runs with, as the agent reported it; `None` when that is not known
     /// on this machine.
     pub model: Option<String>,
@@ -106,7 +158,7 @@ pub fn session_views(
 }
 
 /// One session, as `wf session list` shows it, running with `model` where that is known.
-pub(super) fn session_view(
+pub fn session_view(
     state: &State,
     graph: &DependencyGraph,
     session: &Session,
@@ -127,22 +179,31 @@ pub(super) fn session_view(
         Some(ItemView::Live(item)) => steps_view(&item.body()),
         Some(ItemView::Archived(_)) | None => None,
     };
-    let parked = state.session_waits(session.id(), graph);
     SessionView {
-        id: session.id().to_base32(),
+        id: session.id(),
         agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),
-        item: session.item().to_base32(),
+        item: session.item(),
         title,
-        role: session.role().name().to_string(),
-        status: match session.ended() {
-            Some(ended) => ended.reason.name().to_string(),
-            None if parked => "parked".to_string(),
-            None => "live".to_string(),
-        },
+        role: session.role(),
+        status: session_status(state, graph, session),
         started: timestamp(session.started().hlc),
-        ended: session.ended().map(|ended| timestamp(ended.at())),
         model,
         commit,
         steps,
+    }
+}
+
+pub(super) fn session_status(
+    state: &State,
+    graph: &DependencyGraph,
+    session: &Session,
+) -> SessionStatus {
+    match session.ended() {
+        Some(ended) => SessionStatus::Ended {
+            reason: ended.reason,
+            at: timestamp(ended.at()),
+        },
+        None if state.session_waits(session.id(), graph) => SessionStatus::Parked,
+        None => SessionStatus::Live,
     }
 }

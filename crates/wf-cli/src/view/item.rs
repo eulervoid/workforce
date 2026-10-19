@@ -5,16 +5,16 @@ use std::collections::BTreeMap;
 use serde::Serialize;
 use wf_core::body::Body;
 use wf_core::graph::{DependencyGraph, Readiness};
-use wf_core::id::HashId;
+use wf_core::id::ItemId;
 use wf_core::item::{Item, ItemState, ItemView, Priority};
 use wf_core::state::State;
 use wf_core::stats::ItemStats;
 
 use crate::cli::ItemGrouping;
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ItemRefView {
-    pub id: String,
+    pub id: ItemId,
     #[serde(rename = "type")]
     pub item_type: String,
     pub title: String,
@@ -22,9 +22,9 @@ pub struct ItemRefView {
     pub priority: Option<Priority>,
 }
 
-#[derive(Clone, Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ItemSummary {
-    pub id: String,
+    pub id: ItemId,
     #[serde(rename = "type")]
     pub item_type: String,
     pub title: String,
@@ -43,7 +43,7 @@ pub struct ItemSummary {
     pub archived: bool,
 }
 
-#[derive(Clone, Copy, Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
 pub struct StepsView {
     pub done: usize,
     pub total: usize,
@@ -56,14 +56,14 @@ pub(super) fn steps_view(body: &Body) -> Option<StepsView> {
     (total > 0).then_some(StepsView { done, total })
 }
 
-fn item_ref_view(state: &State, view: ItemView<'_>) -> ItemRefView {
+pub fn item_ref_view(state: &State, view: ItemView<'_>) -> ItemRefView {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let priority = match view {
         ItemView::Live(item) => item.priority(),
         ItemView::Archived(_) => None,
     };
     ItemRefView {
-        id: view.id().to_base32(),
+        id: view.id(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
         state: view.state(policy),
@@ -153,7 +153,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
         ItemView::Archived(_) => (None, None, Vec::new(), Vec::new(), Vec::new(), None, true),
     };
     ItemSummary {
-        id: view.id().to_base32(),
+        id: view.id(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
         state: view.state(policy),
@@ -169,7 +169,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemView<'_>) -> It
 }
 
 /// One group of `wf item list --group-by`; `group` names the state, readiness or label the items share.
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct ItemGroup {
     pub group: String,
     pub items: Vec<ItemSummary>,
@@ -183,13 +183,13 @@ enum ReadinessGroup {
 }
 
 fn collect_groups<Key: Ord>(
-    entries: Vec<(ItemView<'_>, ItemSummary)>,
-    key: impl Fn(ItemView<'_>, &ItemSummary) -> Key,
+    entries: Vec<ItemSummary>,
+    key: impl Fn(&ItemSummary) -> Key,
     label: impl Fn(&Key) -> String,
 ) -> Vec<ItemGroup> {
     let mut groups: BTreeMap<Key, Vec<ItemSummary>> = BTreeMap::new();
-    for (view, summary) in entries {
-        groups.entry(key(view, &summary)).or_default().push(summary);
+    for summary in entries {
+        groups.entry(key(&summary)).or_default().push(summary);
     }
     groups
         .into_iter()
@@ -222,9 +222,9 @@ fn assigned_name(key: &Assigned<String>, unassigned: &str) -> String {
 }
 
 /// An item with several labels is listed under each of them.
-fn group_by_label(entries: Vec<(ItemView<'_>, ItemSummary)>) -> Vec<ItemGroup> {
+fn group_by_label(entries: Vec<ItemSummary>) -> Vec<ItemGroup> {
     let mut groups: BTreeMap<Assigned<String>, Vec<ItemSummary>> = BTreeMap::new();
-    for (_, summary) in entries {
+    for summary in entries {
         if summary.labels.is_empty() {
             groups
                 .entry(Assigned::Unassigned)
@@ -249,35 +249,30 @@ fn group_by_label(entries: Vec<(ItemView<'_>, ItemSummary)>) -> Vec<ItemGroup> {
 }
 
 /// Groups `entries`, keeping their order inside each group.
-pub fn group_items(
-    grouping: ItemGrouping,
-    entries: Vec<(ItemView<'_>, ItemSummary)>,
-) -> Vec<ItemGroup> {
+pub fn group_items(grouping: ItemGrouping, entries: Vec<ItemSummary>) -> Vec<ItemGroup> {
     match grouping {
         ItemGrouping::Label => group_by_label(entries),
         ItemGrouping::Type => collect_groups(
             entries,
-            |_, summary| summary.item_type.clone(),
+            |summary| summary.item_type.clone(),
             |item_type| item_type.clone(),
         ),
         ItemGrouping::Lane => collect_groups(
             entries,
-            |_, summary| Assigned::from(summary.lane.clone()),
+            |summary| Assigned::from(summary.lane.clone()),
             |lane| assigned_name(lane, "no_lane"),
         ),
         ItemGrouping::Priority => collect_groups(
             entries,
-            |_, summary| Assigned::from(summary.priority.map(|priority| priority.to_string())),
+            |summary| Assigned::from(summary.priority.map(|priority| priority.to_string())),
             |priority| assigned_name(priority, "no_priority"),
         ),
-        ItemGrouping::State => collect_groups(
-            entries,
-            |_, summary| summary.state,
-            |state| state.to_string(),
-        ),
+        ItemGrouping::State => {
+            collect_groups(entries, |summary| summary.state, |state| state.to_string())
+        }
         ItemGrouping::Readiness => collect_groups(
             entries,
-            |_, summary| match summary.readiness {
+            |summary| match summary.readiness {
                 Some(readiness) => ReadinessGroup::Open(readiness),
                 None => ReadinessGroup::NotOpen,
             },

@@ -1,7 +1,7 @@
 //! `wf inbox`: what waits on the principal.
 
 use serde::Serialize;
-use wf_core::id::HashId;
+use wf_core::id::{ItemId, SessionId};
 use wf_core::inbox::{InboxKind, permission_waits};
 use wf_core::session::HarnessFault;
 use wf_core::state::State;
@@ -11,8 +11,8 @@ use wf_daemon::{MachineFaults, RETRY_HARNESS};
 #[derive(Serialize)]
 pub struct InboxEntryView {
     pub kind: InboxKind,
-    pub item: Option<String>,
-    pub session: Option<String>,
+    pub item: Option<ItemId>,
+    pub session: Option<SessionId>,
     pub title: String,
     pub what: String,
     /// Permission requests only: why each decider of the machine passed it on, as `decider: why`.
@@ -31,7 +31,7 @@ pub fn inbox_views(
         .into_iter()
         .map(|entry| InboxEntryView {
             kind: entry.waiting.kind(),
-            item: Some(entry.item.to_base32()),
+            item: Some(entry.item),
             session: None,
             title: state.inbox_title(entry.item),
             what: state.what_waits(&entry),
@@ -42,8 +42,8 @@ pub fn inbox_views(
         let session = state.session(request.session);
         InboxEntryView {
             kind: InboxKind::Permission,
-            item: session.map(|session| session.item().to_base32()),
-            session: Some(request.session.to_base32()),
+            item: session.map(|session| session.item()),
+            session: Some(request.session),
             title: session.map_or_else(String::new, |session| state.inbox_title(session.item())),
             what: permission_waits(
                 session.map(|session| session.agent().name.as_str()),

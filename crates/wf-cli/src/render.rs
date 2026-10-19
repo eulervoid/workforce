@@ -14,14 +14,14 @@ use crate::transcript::Format;
 use crate::view::{
     ActivityKind, ActorKind, ActorView, AgentDetail, AgentView, BodyPartView, CommentKindView,
     EventView, Flag, InboxEntryView, ItemDetail, ItemGroup, ItemStatsView, ItemSummary,
-    MentionsView, ReviewStatusView, SessionView, SourceView, StatusView, StepRefView, StepsView,
+    MentionsView, ReviewStatusView, SessionStatus, SessionView, SourceView, StatusView,
+    StepRefView, StepsView,
 };
 use wf_core::graph::Readiness;
+use wf_core::id::{HashId, ItemId};
 use wf_core::inbox::InboxKind;
 use wf_core::item::ItemState;
 use wf_core::stats::ItemStats;
-
-use wf_core::id::short;
 
 /// The one place where every table's look is defined.
 fn table(header: &[&str]) -> Table {
@@ -74,21 +74,17 @@ fn readiness_icon(readiness: Readiness) -> &'static str {
     }
 }
 
-/// `2026-10-09 21:42` in the local time zone; text that is not a timestamp is kept as it is.
-fn short_time(timestamp: &str) -> String {
+/// `2026-10-09 21:42` in the local time zone.
+fn short_time(timestamp: jiff::Timestamp) -> String {
     local_time(timestamp, "%Y-%m-%d %H:%M")
 }
 
 /// A timestamp of a view, in the time zone of this machine and the given format.
-fn local_time(timestamp: &str, format: &str) -> String {
-    timestamp.parse::<jiff::Timestamp>().map_or_else(
-        |_| timestamp.to_string(),
-        |time| {
-            time.to_zoned(jiff::tz::TimeZone::system())
-                .strftime(format)
-                .to_string()
-        },
-    )
+fn local_time(timestamp: jiff::Timestamp, format: &str) -> String {
+    timestamp
+        .to_zoned(jiff::tz::TimeZone::system())
+        .strftime(format)
+        .to_string()
 }
 
 /// The icon of an item: its state's icon, or a warning icon when the item is stranded.
@@ -111,7 +107,7 @@ pub fn item_choice(summary: &ItemSummary) -> String {
     format!(
         "{} #{} ({}:{state})  {}",
         item_icon(summary.state, summary.readiness),
-        short(&summary.id),
+        summary.id.short(),
         summary.item_type,
         summary.title,
     )
@@ -120,7 +116,7 @@ pub fn item_choice(summary: &ItemSummary) -> String {
 /// `○ #q7x2 (task:open) `, the icon and state colored by the state. A stranded item gets a warning
 /// icon instead. `suffix` follows the state.
 fn item_label(
-    id: &str,
+    id: ItemId,
     item_type: &str,
     state: ItemState,
     readiness: Option<Readiness>,
@@ -142,8 +138,8 @@ fn item_label(
     )
 }
 
-fn id_label(id: &str) -> String {
-    paint(theme::id(), format!("#{}", short(id)))
+fn id_label(id: ItemId) -> String {
+    paint(theme::id(), format!("#{}", id.short()))
 }
 
 const ITEM_COLUMNS: [&str; 5] = [
@@ -162,21 +158,15 @@ fn item_row(item: &ItemSummary) -> [String; 5] {
     );
     let blocking = match item.blocking.split_first() {
         None => String::new(),
-        Some((first, [])) => id_label(&first.id),
+        Some((first, [])) => id_label(first.id),
         Some((first, rest)) => format!(
             "{} {}",
-            id_label(&first.id),
+            id_label(first.id),
             paint(theme::text_dimmed(), format!("+{}", rest.len()))
         ),
     };
     [
-        item_label(
-            &item.id,
-            &item.item_type,
-            item.state,
-            item.readiness,
-            suffix,
-        ),
+        item_label(item.id, &item.item_type, item.state, item.readiness, suffix),
         priority,
         item.title.clone(),
         steps_label(item.steps),
@@ -321,7 +311,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
     };
     let archived = if summary.archived { "[archived]" } else { "" };
     let label = item_label(
-        &summary.id,
+        summary.id,
         &summary.item_type,
         summary.state,
         summary.readiness,
@@ -380,7 +370,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         let ids: Vec<String> = summary
             .blocked_by
             .iter()
-            .map(|blocker| id_label(&blocker.id))
+            .map(|blocker| id_label(blocker.id))
             .collect();
         status.push(format!("blocked by {}", ids.join(", ")));
     }
@@ -395,11 +385,11 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
                 paint_actor(&detail.author),
                 paint(
                     theme::text_dimmed(),
-                    format!("created {}", short_time(&detail.created))
+                    format!("created {}", short_time(detail.created))
                 ),
                 paint(
                     theme::text_dimmed(),
-                    format!("updated {}", short_time(&detail.updated))
+                    format!("updated {}", short_time(detail.updated))
                 ),
             ]
             .join(&format!(" {} ", paint(theme::text_dimmed(), "·")))
@@ -448,7 +438,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
             line(
                 format!(
                     "  ↳ {label} {} \"{}\"{}",
-                    item_label(&link.id, &link.item_type, link.state, None, ""),
+                    item_label(link.id, &link.item_type, link.state, None, ""),
                     link.title,
                     if link.ignored {
                         " [ignored: cycle]"
@@ -469,7 +459,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         line(
             format!(
                 "  ↳ references {what}{} \"{}\"",
-                item_label(&link.id, &link.item_type, link.state, None, ""),
+                item_label(link.id, &link.item_type, link.state, None, ""),
                 link.title,
             ),
             LINK_INDENT,
@@ -483,7 +473,7 @@ pub fn item_detail_for(detail: &ItemDetail, width: Option<usize>, format: Format
         line(
             format!(
                 "  ↳ {what}referenced by {} \"{}\"",
-                id_label(&backlink.item),
+                id_label(backlink.item),
                 backlink.title
             ),
             LINK_INDENT,
@@ -623,7 +613,7 @@ pub fn item_stats_list(views: &[ItemStatsView]) -> String {
         let suffix = if view.archived { " · archived" } else { "" };
         table.add_row([
             item_label(
-                &view.item.id,
+                view.item.id,
                 &view.item.item_type,
                 view.item.state,
                 None,
@@ -819,40 +809,34 @@ fn agent_load(detail: &AgentDetail) -> String {
 /// A session of an agent: `◆ #k3j1ab Parse config lazily · work 12m · @ada/coder/s4k2ab`, how
 /// long ago it started, or how it ended and how long ago, as of `now`.
 fn agent_session(session: &SessionView, now: jiff::Timestamp, separator: &str) -> String {
-    let age = |timestamp: &str| {
-        timestamp.parse::<jiff::Timestamp>().map_or_else(
-            |_| timestamp.to_string(),
-            |time| {
-                let millis = now.as_millisecond().saturating_sub(time.as_millisecond());
-                crate::text::duration(u64::try_from(millis).unwrap_or(0))
-            },
-        )
+    let age = |timestamp: jiff::Timestamp| {
+        let millis = now
+            .as_millisecond()
+            .saturating_sub(timestamp.as_millisecond());
+        crate::text::duration(u64::try_from(millis).unwrap_or(0))
     };
-    let (icon, state) = match (session.status.as_str(), &session.ended) {
-        ("live", None) => (
+    let role = session.role.name();
+    let (icon, state) = match session.status {
+        SessionStatus::Live => (
             paint(theme::live(), "◆"),
-            format!("{} {}", session.role, age(&session.started)),
+            format!("{role} {}", age(session.started)),
         ),
-        ("parked", None) => (
+        SessionStatus::Parked => (
             paint(theme::live(), "◇"),
-            format!("{} parked {}", session.role, age(&session.started)),
+            format!("{role} parked {}", age(session.started)),
         ),
-        (reason, ended) => (
+        SessionStatus::Ended { reason, at } => (
             paint(theme::text_dimmed(), "·"),
-            format!(
-                "{} {} ago",
-                reason.replace('_', " "),
-                age(ended.as_deref().unwrap_or(&session.started))
-            ),
+            format!("{} {} ago", reason.name().replace('_', " "), age(at)),
         ),
     };
     let label = paint_actor(&ActorView {
         kind: ActorKind::Agent,
-        label: format!("{}/{}", session.agent, short(&session.id)),
+        label: format!("{}/{}", session.agent, session.id.short()),
     });
     format!(
         "  {icon} {} {}{separator}{}{separator}{label}",
-        id_label(&session.item),
+        id_label(session.item),
         session.title,
         paint(theme::text_dimmed(), state),
     )
@@ -864,7 +848,7 @@ fn activity(entries: &[crate::view::ActivityView], width: Option<usize>, format:
     let mut out = String::new();
     let mut day = None;
     for entry in entries {
-        let (date, time) = local_date_and_time(&entry.at);
+        let (date, time) = local_date_and_time(entry.at);
         if day.as_ref() != Some(&date) {
             match day {
                 None => {
@@ -977,9 +961,9 @@ pub fn event_line_for(
     width: Option<usize>,
     format: Format,
 ) -> String {
-    let (_, time) = local_date_and_time(&line.activity.at);
+    let (_, time) = local_date_and_time(line.activity.at);
     let item = match &line.item {
-        Some(item) => format!("{}  ", id_label(item)),
+        Some(item) => format!("{}  ", id_label(*item)),
         None => String::new(),
     };
     let lead = format!("{}  {item}", paint(theme::text_dimmed(), time));
@@ -993,17 +977,12 @@ pub fn event_line_for(
 }
 
 /// The date and the time of a timestamp in the local time zone.
-fn local_date_and_time(timestamp: &str) -> (String, String) {
-    match timestamp.parse::<jiff::Timestamp>() {
-        Ok(time) => {
-            let local = time.to_zoned(jiff::tz::TimeZone::system());
-            (
-                local.strftime("%Y-%m-%d").to_string(),
-                local.strftime("%H:%M").to_string(),
-            )
-        }
-        Err(_) => (timestamp.to_string(), String::new()),
-    }
+fn local_date_and_time(timestamp: jiff::Timestamp) -> (String, String) {
+    let local = timestamp.to_zoned(jiff::tz::TimeZone::system());
+    (
+        local.strftime("%Y-%m-%d").to_string(),
+        local.strftime("%H:%M").to_string(),
+    )
 }
 
 /// Marks a blocker or change request: `⧗` waits on someone else, `△` waits on the work.
@@ -1068,7 +1047,7 @@ pub fn mentions(view: &MentionsView) -> String {
     let mut table = table(&["ITEM", "TITLE", "IN"]);
     for source in &view.sources {
         table.add_row([
-            format!("#{}", short(&source.item)),
+            format!("#{}", source.item.short()),
             source.title.clone(),
             written_in(source).to_string(),
         ]);
@@ -1141,10 +1120,7 @@ pub fn devices(devices: &[DeviceView]) -> String {
             if device.this_device {
                 "now".to_string()
             } else {
-                device
-                    .last_seen
-                    .as_deref()
-                    .map_or_else(|| "-".to_string(), short_time)
+                device.last_seen.map_or_else(|| "-".to_string(), short_time)
             },
             device.flags.join(", "),
         ]);
@@ -1157,7 +1133,7 @@ pub fn members(members: &[MemberView]) -> String {
     for member in members {
         table.add_row([
             member.handle.clone(),
-            member.role.clone(),
+            member.role.name().to_string(),
             member.devices.join(", "),
         ]);
     }
@@ -1168,10 +1144,10 @@ pub fn log(events: &[EventView]) -> String {
     let mut table = table(&["EVENT", "DEVICE", "SEQ", "AT", "KIND", "ACTOR", "SUMMARY"]);
     for event in events {
         table.add_row([
-            short(&event.id).to_string(),
+            event.id.to_string(),
             event.device.to_string(),
             event.seq.to_string(),
-            local_time(&event.at, "%Y-%m-%d %H:%M:%S"),
+            local_time(event.at, "%Y-%m-%d %H:%M:%S"),
             event.kind.to_string(),
             event.actor.to_string(),
             event.summary.to_string(),
@@ -1198,7 +1174,7 @@ pub fn status(view: &StatusView) -> String {
         .iter()
         .map(|device| match (&device.last_seen, device.this_device) {
             (_, true) => format!("{} (this)", device.name),
-            (Some(seen), false) => format!("{} (seen {})", device.name, short_time(seen)),
+            (Some(seen), false) => format!("{} (seen {})", device.name, short_time(*seen)),
             (None, false) => device.name.clone(),
         })
         .collect();
@@ -1248,15 +1224,15 @@ pub fn sessions(sessions: &[SessionView]) -> String {
     ]);
     for session in sessions {
         table.add_row([
-            short(&session.id).to_string(),
+            session.id.short().to_string(),
             session.agent.clone(),
             session.model.clone().unwrap_or_default(),
-            format!("#{}", short(&session.item)),
+            format!("#{}", session.item.short()),
             session.title.clone(),
             steps_label(session.steps),
-            session.role.clone(),
-            session.status.clone(),
-            short_time(&session.started),
+            session.role.name().to_string(),
+            session.status.name().to_string(),
+            short_time(session.started),
         ]);
     }
     format!("{table}\n")
@@ -1266,10 +1242,10 @@ pub fn sessions(sessions: &[SessionView]) -> String {
 pub fn session_choice(session: &SessionView) -> String {
     format!(
         "{} {} on #{} ({})  {}",
-        short(&session.id),
+        session.id.short(),
         session.agent,
-        short(&session.item),
-        session.status,
+        session.item.short(),
+        session.status.name(),
         session.title
     )
 }
@@ -1277,19 +1253,19 @@ pub fn session_choice(session: &SessionView) -> String {
 pub fn session(session: &SessionView) -> String {
     let mut out = format!(
         "session {} of {} on #{} {}\n",
-        short(&session.id),
+        session.id.short(),
         session.agent,
-        short(&session.item),
+        session.item.short(),
         session.title
     );
-    let _ = writeln!(out, "  role     {}", session.role);
+    let _ = writeln!(out, "  role     {}", session.role.name());
     if let Some(model) = &session.model {
         let _ = writeln!(out, "  model    {model}");
     }
-    let _ = writeln!(out, "  status   {}", session.status);
-    let _ = writeln!(out, "  started  {}", short_time(&session.started));
-    if let Some(ended) = &session.ended {
-        let _ = writeln!(out, "  ended    {}", short_time(ended));
+    let _ = writeln!(out, "  status   {}", session.status.name());
+    let _ = writeln!(out, "  started  {}", short_time(session.started));
+    if let SessionStatus::Ended { at, .. } = session.status {
+        let _ = writeln!(out, "  ended    {}", short_time(at));
     }
     if let Some(commit) = &session.commit {
         let _ = writeln!(out, "  commit   {commit}");
@@ -1307,8 +1283,7 @@ pub fn inbox(entries: &[InboxEntryView]) -> String {
             entry.kind.to_string(),
             entry
                 .item
-                .as_deref()
-                .map_or_else(String::new, |item| format!("#{}", short(item))),
+                .map_or_else(String::new, |item| format!("#{}", item.short())),
             entry.title.clone(),
             std::iter::once(entry.what.clone())
                 .chain(entry.passed.iter().map(|why| format!("  passed by {why}")))
@@ -1358,7 +1333,10 @@ mod tests {
         let lines: Vec<&str> = output.lines().collect();
         assert!(lines.contains(&"items: 6 ready, 3 archived"), "{output}");
         assert!(lines.contains(&"waiting on you: 2"), "{output}");
-        let items_line = lines.iter().find(|line| line.starts_with("items:")).unwrap();
+        let items_line = lines
+            .iter()
+            .find(|line| line.starts_with("items:"))
+            .unwrap();
         assert!(!items_line.contains("waiting"), "{output}");
     }
 
@@ -1430,7 +1408,7 @@ mod tests {
 
     fn checked_step(text: &str) -> crate::view::ActivityView {
         crate::view::ActivityView {
-            at: "not a timestamp".to_string(),
+            at: jiff::Timestamp::UNIX_EPOCH,
             by: crate::view::ActorView {
                 kind: crate::view::ActorKind::Agent,
                 label: "@ada/coder/bh2m".to_string(),
@@ -1476,6 +1454,11 @@ mod tests {
         );
     }
 
+    /// An item id that starts with `prefix`.
+    fn test_id(prefix: &str) -> ItemId {
+        format!("{prefix:a<52}").parse().unwrap()
+    }
+
     fn detail_with_a_reference(title: &str, referenced: &str) -> ItemDetail {
         let author = crate::view::ActorView {
             kind: crate::view::ActorKind::Agent,
@@ -1483,7 +1466,7 @@ mod tests {
         };
         ItemDetail {
             summary: crate::view::ItemSummary {
-                id: "dm3q4jpcwtdq".to_string(),
+                id: test_id("dm3q4j"),
                 item_type: "task".to_string(),
                 title: title.to_string(),
                 state: ItemState::Open,
@@ -1498,8 +1481,8 @@ mod tests {
             },
             body: Vec::new(),
             author,
-            created: "not a timestamp".to_string(),
-            updated: "not a timestamp".to_string(),
+            created: jiff::Timestamp::UNIX_EPOCH,
+            updated: jiff::Timestamp::UNIX_EPOCH,
             review: None,
             review_status: None,
             recovery: None,
@@ -1511,7 +1494,7 @@ mod tests {
             supersedes: None,
             references: vec![crate::view::ReferenceView {
                 item: crate::view::LinkView {
-                    id: "kvb7vjaaaaaa".to_string(),
+                    id: test_id("kvb7vj"),
                     item_type: "task".to_string(),
                     title: referenced.to_string(),
                     state: ItemState::Open,
@@ -1536,24 +1519,30 @@ mod tests {
         let shown =
             anstream::adapter::strip_str(&item_detail_for(&detail, Some(40), Format::Styled))
                 .to_string();
+        let time = short_time(jiff::Timestamp::UNIX_EPOCH);
+        let (date, clock) = time.split_once(' ').unwrap();
         assert_eq!(
             shown,
-            "○ #dm3q4j (task:open) Wrap the header of\n\
-             \x20                     wf item show under\n\
-             \x20                     its indent\n\
-             \x20 @ada/coder/bh2m · created not a\n\
-             \x20 timestamp · updated not a timestamp\n\
-             \x20 ↳ references ○ #kvb7vj (task:open)\n\
-             \x20   \"Wrap long activity lines under\n\
-             \x20   their indent\"\n"
+            format!(
+                "○ #dm3q4j (task:open) Wrap the header of\n\
+                 \x20                     wf item show under\n\
+                 \x20                     its indent\n\
+                 \x20 @ada/coder/bh2m · created {date}\n\
+                 \x20 {clock} · updated {time}\n\
+                 \x20 ↳ references ○ #kvb7vj (task:open)\n\
+                 \x20   \"Wrap long activity lines under\n\
+                 \x20   their indent\"\n"
+            )
         );
         let shown =
             anstream::adapter::strip_str(&item_detail_for(&detail, None, Format::Raw)).to_string();
         assert_eq!(
             shown,
-            "○ #dm3q4j (task:open) Wrap the header of wf item show under its indent\n\
-             \x20 @ada/coder/bh2m · created not a timestamp · updated not a timestamp\n\
-             \x20 ↳ references ○ #kvb7vj (task:open) \"Wrap long activity lines under their indent\"\n"
+            format!(
+                "○ #dm3q4j (task:open) Wrap the header of wf item show under its indent\n\
+                 \x20 @ada/coder/bh2m · created {time} · updated {time}\n\
+                 \x20 ↳ references ○ #kvb7vj (task:open) \"Wrap long activity lines under their indent\"\n"
+            )
         );
     }
 
@@ -1638,7 +1627,7 @@ mod tests {
             label: "@ada/coder/bh2m".to_string(),
         };
         let entry = crate::view::ActivityView {
-            at: "not a timestamp".to_string(),
+            at: jiff::Timestamp::UNIX_EPOCH,
             by: by.clone(),
             kind: ActivityKind::Comment,
             summary: "commented".to_string(),
@@ -1647,7 +1636,7 @@ mod tests {
                 short: "nn73".to_string(),
                 kind: CommentKindView::Comment,
                 by,
-                at: "not a timestamp".to_string(),
+                at: jiff::Timestamp::UNIX_EPOCH,
                 session: None,
                 step: None,
                 resolves: Vec::new(),

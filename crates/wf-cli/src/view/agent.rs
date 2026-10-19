@@ -186,7 +186,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     use wf_core::event::{AgentRemoved, DeviceProfile, EventBody};
-    use wf_core::id::HashId;
+    use wf_core::id::SessionId;
     use wf_core::name::AgentName;
     use wf_core::session::EndReason;
     use wf_core::testing::*;
@@ -269,18 +269,12 @@ mod tests {
                 "defined it again, unchanged",
             ]
         );
-        let sessions: Vec<(&str, &str)> = detail
+        let sessions: Vec<(SessionId, &str)> = detail
             .sessions
             .iter()
-            .map(|session| (session.id.as_str(), session.status.as_str()))
+            .map(|session| (session.id, session.status.name()))
             .collect();
-        assert_eq!(
-            sessions,
-            [
-                (live.to_base32().as_str(), "live"),
-                (ended.to_base32().as_str(), "submitted")
-            ]
-        );
+        assert_eq!(sessions, [(live, "live"), (ended, "submitted")]);
         assert_eq!(detail.stats.sessions, 2);
         assert_eq!(detail.older_sessions, 0);
         let hosts: Vec<(&str, u32, bool)> = detail
