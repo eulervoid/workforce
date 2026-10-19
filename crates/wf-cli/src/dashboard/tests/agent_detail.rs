@@ -2,7 +2,6 @@
 
 use super::support::*;
 use crate::dashboard::snapshot::Detail;
-use ratatui::crossterm::event::KeyCode;
 use wf_core::id::{ItemId, SessionId};
 
 #[test]
@@ -29,7 +28,7 @@ fn in_a_narrow_window_the_agent_detail_wraps_off_the_right_edge() {
 }
 
 #[test]
-fn a_click_on_an_item_or_a_session_of_an_agent_opens_it() {
+fn a_click_on_an_item_or_a_session_of_an_agent_opens_it_in_place_and_ctrl_o_comes_back() {
     let mut app = app_with_agent(80, &coder_detail(true));
     let agent = Detail::Agent(coder_agent());
     let opens = [
@@ -42,8 +41,8 @@ fn a_click_on_an_item_or_a_session_of_an_agent_opens_it() {
     for (text, detail) in opens {
         let (column, row) = find(&mut app, 80, 30, text);
         assert_eq!(app.click(column + 1, row), None);
-        assert_eq!(app.path(), vec![agent.clone(), detail], "{text}");
-        press(&mut app, KeyCode::Esc);
+        assert_eq!(app.path(), vec![detail], "{text}");
+        jump_back(&mut app);
         assert_eq!(app.path(), vec![agent.clone()]);
     }
 }

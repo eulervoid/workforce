@@ -215,8 +215,11 @@ pub enum Split {
 /// What a tab of a list shows besides its selection.
 #[derive(Clone, Debug)]
 pub struct Panes {
-    /// The details opened from the list, the latest on top.
+    /// The details opened from the list, the latest on top: the way along `l` to the one on
+    /// screen.
     pub stack: Vec<Opened>,
+    /// The stacks left by following a link, the latest last, for `ctrl+o` to go back to.
+    pub jumped_from: Vec<Vec<Opened>>,
     /// In a wide window, which of the list and the detail opened beside it has the keys.
     pub keys: Pane,
     /// The first line of the list on screen, and whether it follows the selection.
@@ -287,6 +290,7 @@ impl<Key> Default for ListTab<Key> {
             selection: Selection::default(),
             panes: Panes {
                 stack: Vec::new(),
+                jumped_from: Vec::new(),
                 keys: Pane::Detail,
                 list_top: FirstRow::Follows(0),
             },

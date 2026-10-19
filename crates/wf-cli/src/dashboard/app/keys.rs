@@ -65,6 +65,9 @@ impl App {
             Acted::Unhandled => {}
         }
         match key.code {
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                self.jump_back();
+            }
             KeyCode::Char('q') => return Some(Effect::Quit),
             KeyCode::Char('?') => self.prompt = Some(Prompt::Keys),
             KeyCode::Char('1') => self.tab = Tab::Now,
@@ -370,6 +373,7 @@ impl App {
         };
         if navigated == Navigated::Moved {
             self.stack_mut().clear();
+            self.jumped_from_mut().clear();
             // A list scrolled away from the selection comes back to show it.
             if let Some(panes) = self.panes_mut() {
                 panes.list_top = panes.list_top.follow();

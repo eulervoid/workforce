@@ -86,6 +86,7 @@ session that is open.
 | `pgup`/`pgdn`, `space` | a page up, down |
 | `enter`, `l`, `→` | open; on an item, its session; on a session, the diff of its item |
 | `esc`, `h`, `←` | go back |
+| `ctrl+o` | back to where you followed a link |
 | `H`, `L` (or `shift ←/→`) | only the list, both, or only the detail, in a wide window |
 | `a` / `d` | allow / deny a permission request |
 | `r` / `R` | answer a blocker in the footer / in `$EDITOR` |
@@ -133,8 +134,10 @@ header of their file, outdated, with the lines they quote.
 ### Mouse
 
 The wheel scrolls what is under the pointer. A click picks a tab or an entry, and a second click opens
-it. `#item`, `@you/agent`, sessions and commits are links. The footer's key hints and the breadcrumb at
-the top of a detail are clickable too. Allowing a request by click needs a second click on it within
+it. `#item`, `@you/agent`, sessions and commits are links. A link opens in place of the detail it is
+in, so the breadcrumb at the top of a detail shows only the way along `l`: item, session, diff. `esc`
+goes back along that way and `ctrl+o` back to where the link was followed. The footer's key hints and
+the breadcrumb are clickable too. Allowing a request by click needs a second click on it within
 three seconds; denying acts at once. In the diff, a click moves the cursor and a drag selects lines.
 To select text, hold shift while dragging.
 

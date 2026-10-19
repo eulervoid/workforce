@@ -162,6 +162,8 @@ pub struct LogTab {
     pub filter: String,
     /// The details opened from links in the log, the latest on top, in its place.
     pub stack: Vec<Opened>,
+    /// The stacks left by following a link from a detail, the latest last, for `ctrl+o`.
+    pub jumped_from: Vec<Vec<Opened>>,
     /// Counts the lines taken in, so that what was made of them is known to be current.
     revision: u64,
     /// The lines that pass the filter as drawn, kept until they or the filter change.
@@ -264,6 +266,7 @@ impl App {
                 scroll: Scroll::END,
                 filter: String::new(),
                 stack: Vec::new(),
+                jumped_from: Vec::new(),
                 revision: 0,
                 shown: ShownLog::default(),
             },
@@ -345,15 +348,23 @@ impl App {
         self.keep_diffs();
     }
 
-    /// Lets go of the diffs that are not open in any tab, but for those with a review being
-    /// written: its comments are not to be lost to a closed diff.
+    /// Lets go of the diffs that are not open in any tab, nor left there by following a link,
+    /// but for those with a review being written: its comments are not to be lost to a closed
+    /// diff.
     fn keep_diffs(&mut self) {
-        let stacks = [
-            &self.now.panes.stack,
-            &self.items.list.panes.stack,
-            &self.agents.panes.stack,
-            &self.log.stack,
+        let opened = [
+            (&self.now.panes.stack, &self.now.panes.jumped_from),
+            (
+                &self.items.list.panes.stack,
+                &self.items.list.panes.jumped_from,
+            ),
+            (&self.agents.panes.stack, &self.agents.panes.jumped_from),
+            (&self.log.stack, &self.log.jumped_from),
         ];
+        let stacks: Vec<&Vec<Opened>> = opened
+            .into_iter()
+            .flat_map(|(stack, jumped_from)| std::iter::once(stack).chain(jumped_from))
+            .collect();
         self.diffs.retain(|item, pane| {
             !pane.drafts().is_empty()
                 || stacks.iter().any(|stack| {
@@ -673,6 +684,25 @@ impl App {
         }
     }
 
+    fn jumped_from_mut(&mut self) -> &mut Vec<Vec<Opened>> {
+        match self.tab {
+            Tab::Now => &mut self.now.panes.jumped_from,
+            Tab::Items => &mut self.items.list.panes.jumped_from,
+            Tab::Agents => &mut self.agents.panes.jumped_from,
+            Tab::Log => &mut self.log.jumped_from,
+        }
+    }
+
+    /// The stacks left by following a link on the tab on screen, for `ctrl+o` to go back to.
+    pub fn jumped_from(&self) -> &Vec<Vec<Opened>> {
+        match self.tab {
+            Tab::Now => &self.now.panes.jumped_from,
+            Tab::Items => &self.items.list.panes.jumped_from,
+            Tab::Agents => &self.agents.panes.jumped_from,
+            Tab::Log => &self.log.jumped_from,
+        }
+    }
+
     pub fn panes(&self) -> Option<&Panes> {
         match self.tab {
             Tab::Now => Some(&self.now.panes),
@@ -939,12 +969,7 @@ impl App {
     /// opened before. Those opened from the list on `detail` before are given the keys back as
     /// they were left.
     fn open(&mut self, detail: Detail) {
-        if let Detail::Item(item) = detail {
-            self.moved_back.retain(|moved| moved.item != item);
-        }
-        if let Detail::Diff(item) = detail {
-            self.diffs.entry(item).or_default();
-        }
+        self.opening(&detail);
         let from_list = self.list_has_keys();
         if let Some(panes) = self.panes_mut() {
             panes.keys = Pane::Detail;
@@ -955,10 +980,57 @@ impl App {
                 return;
             }
             stack.clear();
+            self.jumped_from_mut().clear();
         } else if stack.last().is_some_and(|opened| opened.detail == detail) {
             return;
         }
-        stack.push(Opened {
+        self.push(detail);
+    }
+
+    /// Follows a link to `detail`: from the list as `open` does; from a detail, in place of the
+    /// stack, which `ctrl+o` goes back to, so the breadcrumb shows only the way along `l`.
+    fn open_link(&mut self, detail: Detail) {
+        if self.list_has_keys() {
+            self.open(detail);
+            return;
+        }
+        if self
+            .stack()
+            .last()
+            .is_some_and(|opened| opened.detail == detail)
+        {
+            return;
+        }
+        self.opening(&detail);
+        let left = std::mem::take(self.stack_mut());
+        self.jumped_from_mut().push(left);
+        self.push(detail);
+    }
+
+    /// `ctrl+o`: back to the stack left by the latest link followed, with the keys.
+    fn jump_back(&mut self) {
+        let Some(stack) = self.jumped_from_mut().pop() else {
+            return;
+        };
+        *self.stack_mut() = stack;
+        if let Some(panes) = self.panes_mut() {
+            panes.keys = Pane::Detail;
+        }
+    }
+
+    /// An item opened is warned of no more; a diff opened keeps its cursor and comments.
+    fn opening(&mut self, detail: &Detail) {
+        if let Detail::Item(item) = detail {
+            self.moved_back.retain(|moved| moved.item != *item);
+        }
+        if let Detail::Diff(item) = detail {
+            self.diffs.entry(*item).or_default();
+        }
+    }
+
+    /// Puts `detail` on top of the stack.
+    fn push(&mut self, detail: Detail) {
+        self.stack_mut().push(Opened {
             scroll: detail.start(),
             detail,
         });
@@ -978,7 +1050,9 @@ impl App {
             return;
         }
         stack.pop();
-        self.open(Detail::Item(item));
+        let detail = Detail::Item(item);
+        self.opening(&detail);
+        self.push(detail);
     }
 
     /// What the snapshot has read for `detail`; nothing while it still shows another detail.

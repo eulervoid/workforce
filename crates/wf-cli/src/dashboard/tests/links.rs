@@ -7,7 +7,7 @@ use ratatui::crossterm::event::KeyCode;
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 
 #[test]
-fn a_click_on_an_item_id_an_agent_or_a_session_opens_it_and_esc_comes_back() {
+fn a_click_on_an_item_id_an_agent_or_a_session_opens_it_in_place_and_ctrl_o_comes_back() {
     let mut app = app_with_links();
     let spans = Detail::Item(ItemId::from_bytes([2; 32]));
     let opens = [
@@ -21,8 +21,9 @@ fn a_click_on_an_item_id_an_agent_or_a_session_opens_it_and_esc_comes_back() {
     for (text, detail) in opens {
         let (column, row) = find(&mut app, 60, 24, text);
         assert_eq!(app.click(column + 1, row), None);
-        assert_eq!(app.path(), vec![spans.clone(), detail], "{text}");
-        press(&mut app, KeyCode::Esc);
+        // The breadcrumb shows only the way along `l`, which the link leaves.
+        assert_eq!(app.path(), vec![detail], "{text}");
+        jump_back(&mut app);
         assert_eq!(app.path(), vec![spans.clone()]);
     }
     // A principal has no detail, and the item on screen is no link to itself.
@@ -112,24 +113,51 @@ fn a_click_on_a_key_hint_does_what_its_key_does() {
 fn a_click_on_a_part_of_the_breadcrumb_goes_back_to_it() {
     let mut app = app_with_links();
     let spans = Detail::Item(ItemId::from_bytes([2; 32]));
-    let open_parse = |app: &mut App| {
-        let (column, row) = find(app, 60, 24, "#aeaqca,");
-        app.click(column, row);
-        assert_eq!(app.path().len(), 2);
+    let open_diff = |app: &mut App| {
+        press(app, KeyCode::Char('l'));
+        assert_eq!(
+            app.path(),
+            vec![spans.clone(), Detail::Diff(ItemId::from_bytes([2; 32]))]
+        );
     };
-    open_parse(&mut app);
+    open_diff(&mut app);
     // The detail on top is where the breadcrumb is already.
-    let (column, row) = find(&mut app, 60, 24, "#aeaqca▌");
+    let (column, row) = find(&mut app, 60, 24, "diff▌");
     app.click(column, row);
     assert_eq!(app.path().len(), 2);
     let (column, row) = find(&mut app, 60, 24, "#aibaea ›");
     app.click(column + 6, row);
-    assert_eq!(app.path(), vec![spans]);
-    open_parse(&mut app);
+    assert_eq!(app.path(), vec![spans.clone()]);
+    open_diff(&mut app);
     let (column, row) = find(&mut app, 60, 24, "Now ›");
     app.click(column, row);
     assert!(app.stack().is_empty());
     assert!(app.list_has_keys());
+}
+
+#[test]
+fn after_a_link_esc_goes_back_along_l_and_ctrl_o_through_the_links_followed() {
+    let mut app = app_with_links();
+    let spans = Detail::Item(ItemId::from_bytes([2; 32]));
+    let parse = Detail::Item(ItemId::from_bytes([1; 32]));
+    let (column, row) = find(&mut app, 60, 24, "#aeaqca,");
+    app.click(column, row);
+    assert_eq!(app.path(), vec![parse.clone()]);
+    assert!(screen(&mut app, 60, 24).contains("ctrl+o back from link"));
+    press(&mut app, KeyCode::Char('l'));
+    assert_eq!(app.path().len(), 2);
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(app.path(), vec![parse]);
+    // The way left by the link is kept while the list has the keys.
+    press(&mut app, KeyCode::Esc);
+    assert!(app.list_has_keys());
+    jump_back(&mut app);
+    assert_eq!(app.path(), vec![spans]);
+    assert!(!app.list_has_keys());
+    // Nothing more to go back to.
+    jump_back(&mut app);
+    assert_eq!(app.path().len(), 1);
+    assert!(!screen(&mut app, 60, 24).contains("ctrl+o"));
 }
 
 #[test]

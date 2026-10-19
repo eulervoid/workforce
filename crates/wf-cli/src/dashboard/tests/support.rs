@@ -12,7 +12,7 @@ use jiff::tz::TimeZone;
 use ratatui::Terminal;
 use ratatui::backend::TestBackend;
 use ratatui::buffer::Buffer;
-use ratatui::crossterm::event::{KeyCode, KeyEvent};
+use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::style::{Color, Style};
 use serde_json::json;
 use wf_core::graph::Readiness;
@@ -221,6 +221,11 @@ pub(super) fn item_listing(app: &App) -> Option<ItemListing> {
 
 pub(super) fn press(app: &mut App, code: KeyCode) -> Option<Effect> {
     app.key(KeyEvent::from(code))
+}
+
+/// `ctrl+o`: back to where a link was followed.
+pub(super) fn jump_back(app: &mut App) -> Option<Effect> {
+    app.key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::CONTROL))
 }
 
 pub(super) fn entry(

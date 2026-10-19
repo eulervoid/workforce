@@ -65,6 +65,7 @@ pub const REVIEW_IN_DIFF: Hint = Hint::key("R", KeyCode::Char('R'), "review");
 pub const DIFF: Hint = Hint::key("D", KeyCode::Char('D'), "diff");
 
 pub const BACK: Hint = Hint::key("esc", KeyCode::Esc, "back");
+pub const JUMP_BACK: Hint = Hint::keys("ctrl+o", "back from link");
 pub const UNSELECT: Hint = Hint::key("esc", KeyCode::Esc, "unselect");
 pub const CLEAR_FILTER: Hint = Hint::key("esc", KeyCode::Esc, "clear");
 pub const OPEN: Hint = Hint::key("enter", KeyCode::Enter, "open");
@@ -102,6 +103,7 @@ pub const HELP: &[Hint] = &[
     Hint::keys("", "follow a link, a key hint, a crumb"),
     Hint::keys("shift-drag", "select text, as without the dashboard"),
     Hint::keys("enter esc", "open, go back"),
+    Hint::keys("ctrl+o", "back to where a link was followed"),
     Hint::keys("H L", "one pane or both, also shift ←/→"),
     Hint::keys("a d", "allow, deny a permission request"),
     Hint::keys("", "a click on allow asks for a second"),

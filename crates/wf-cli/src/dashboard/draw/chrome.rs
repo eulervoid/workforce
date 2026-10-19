@@ -12,8 +12,8 @@ use super::{KeysAt, Themed, accent, ansi_text, highlight_ends, themed};
 use crate::dashboard::app::{App, Scroll, Spot, Status, Tab, Target};
 use crate::dashboard::hint::{
     ALLOW, ANSWER, ANSWER_IN_EDITOR, BACK, CHANGE, CHANGE_FILTER, CLEAR_FILTER, COMMENT, DENY,
-    DIFF, DROP, EDIT, EXTEND, FILE, FILTER, FOLD, FOLLOW, FULL, GROUP, Hint, ITEM, KEYS, MOVE,
-    OPEN, OPEN_DIFF, OPEN_SESSION, PAGER, READINESS, REVIEW, REVIEW_IN_DIFF, SCROLL, SELECT,
+    DIFF, DROP, EDIT, EXTEND, FILE, FILTER, FOLD, FOLLOW, FULL, GROUP, Hint, ITEM, JUMP_BACK, KEYS,
+    MOVE, OPEN, OPEN_DIFF, OPEN_SESSION, PAGER, READINESS, REVIEW, REVIEW_IN_DIFF, SCROLL, SELECT,
     UNSELECT,
 };
 use crate::dashboard::snapshot::Detail;
@@ -431,6 +431,9 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
     let mut hints = navigation.to_vec();
     if let Some(Scroll::At(_)) = followed {
         hints.push(FOLLOW);
+    }
+    if !app.jumped_from().is_empty() {
+        hints.push(JUMP_BACK);
     }
     hints.extend(acts);
     hints.push(KEYS);

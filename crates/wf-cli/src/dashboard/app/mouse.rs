@@ -135,18 +135,18 @@ impl App {
     ) -> Option<Effect> {
         match target {
             Target::Open { detail, .. } => {
-                // On top of the detail it is in, so esc goes back to it.
+                // In place of the detail it is in, so ctrl+o goes back to it.
                 if in_detail {
                     self.keys_to_detail();
                 }
-                self.open(detail);
+                self.open_link(detail);
                 None
             }
             Target::Diff { item, .. } => {
                 if in_detail {
                     self.keys_to_detail();
                 }
-                self.open(Detail::Diff(item));
+                self.open_link(Detail::Diff(item));
                 None
             }
             Target::Key { code, .. } => self.key(KeyEvent::from(code)),
@@ -278,6 +278,7 @@ impl App {
             // screen from now on.
             Some(Picked::Moved) => {
                 panes.stack.clear();
+                panes.jumped_from.clear();
                 panes.list_top = panes.list_top.follow();
             }
         }
