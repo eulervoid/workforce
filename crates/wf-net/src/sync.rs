@@ -135,9 +135,13 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
         }
         let theirs = match self.receive(VERSIONS_FRAME_LEN).await? {
             Message::Versions(versions) => versions,
-            other => {
-                return Err(other.unexpected("versions"));
-            }
+            other @ Message::Open(_)
+            | other @ Message::Events(_)
+            | other @ Message::EndOfEvents
+            | other @ Message::Want(_)
+            | other @ Message::EndOfWants
+            | other @ Message::Have(_)
+            | other @ Message::EndOfHave => return Err(other.unexpected("versions")),
         };
         if let Role::Responder = role {
             self.send(Message::Versions(mine)).await?;
@@ -168,9 +172,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
             match self.receive(MAX_FRAME_LEN).await? {
                 Message::Events(events) => self.apply(events).await?,
                 Message::EndOfEvents => return Ok(()),
-                other => {
-                    return Err(other.unexpected("events"));
-                }
+                other @ Message::Open(_)
+                | other @ Message::Versions(_)
+                | other @ Message::Want(_)
+                | other @ Message::EndOfWants
+                | other @ Message::Have(_)
+                | other @ Message::EndOfHave => return Err(other.unexpected("events")),
             }
         }
     }
@@ -204,9 +211,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
                 match self.receive(MAX_FRAME_LEN).await? {
                     Message::Have(events) => self.apply(events).await?,
                     Message::EndOfHave => break,
-                    other => {
-                        return Err(other.unexpected("have"));
-                    }
+                    other @ Message::Open(_)
+                    | other @ Message::Versions(_)
+                    | other @ Message::Events(_)
+                    | other @ Message::EndOfEvents
+                    | other @ Message::Want(_)
+                    | other @ Message::EndOfWants => return Err(other.unexpected("have")),
                 }
             }
         }
@@ -225,9 +235,12 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
                     self.send_batches(&events, Message::Have).await?;
                     self.send(Message::EndOfHave).await?;
                 }
-                other => {
-                    return Err(other.unexpected("want"));
-                }
+                other @ Message::Open(_)
+                | other @ Message::Versions(_)
+                | other @ Message::Events(_)
+                | other @ Message::EndOfEvents
+                | other @ Message::Have(_)
+                | other @ Message::EndOfHave => return Err(other.unexpected("want")),
             }
         }
     }
