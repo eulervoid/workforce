@@ -144,7 +144,7 @@ pub enum EndReason {
     TimedOut,
     /// The harness exited or failed, or the daemon could not run it.
     Failed,
-    /// Stopped by the principal, or the claim went to another session.
+    /// Stopped by the principal, or its item moved on.
     Cancelled,
     /// The daemon that ran it stopped, such as for a restart. Not a failure of the attempt.
     Interrupted,

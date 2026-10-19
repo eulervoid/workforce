@@ -88,8 +88,10 @@ wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine,
 **The daemon owns the store when it runs.** redb is single-process. The CLI reads and writes through
 a `Workspace`, which asks the daemon or, when none runs, opens the store itself. In the daemon one
 storage task owns each store and takes writes over a channel. Agents and the dashboard need the
-daemon. The CLI fetches the whole folded `State` per command, the dashboard twice a second. *Planned:*
-when that grows too slow, an `events_since` call with a local fold cache, or a subscription.
+daemon. The CLI fetches the whole folded `State` per command, the dashboard twice a second. The
+daemon answers `Call::Events { from }` with a page of the log from a position, which the dashboard
+polls with. *Planned:* when folding the whole `State` grows too slow, a local fold cache on top of
+it, or a subscription.
 
 ### Files
 
@@ -275,10 +277,11 @@ re-encoding, never taken from received bytes (the decoder does not insist on min
 | `CommitId` | `Git(oid)`: variant 0, then the 20-byte oid, length-prefixed |
 | names (`Handle`, `AgentName`, `TypeName`, `LaneName`, `HarnessName`, `Label`, `Requirement`, `ReviewLevelName`, `RecoveryLevelName`, `CommandName`) | strings validated on decode: `a-z 0-9 - _` (labels and requirements also `:` `.`), starting with a letter or digit, at most 64 characters |
 
-**Signatures** have three domains: the device signature covers `wf/event/1\0` + `EventContent`; a
+**Signatures** have four domains: the device signature covers `wf/event/1\0` + `EventContent`; a
 principal signature in an authority body covers `wf/authority/1\0` + `(workforce, statement)`, so a
 statement cannot be replayed into another workforce; an invite proof covers `wf/invite/1\0` +
-`(workforce, invite, device)`. The key types are distinct in code for the same reason.
+`(workforce, invite, device)`; a gossip announcement covers `wf/heads/1\0` + `(topic, digest, time)`
+(section 14). The key types are distinct in code for the same reason.
 
 ### Bodies
 
@@ -305,6 +308,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 23 | `Merged` | `item`, `reviewed`, `commit` |
 | 24 | retired | (`Report`, now a comment) |
 | 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
+| 26 | `Commented` | as tag 16, plus `lines: LineAnchor`, the lines of the diff it is about (section 11); a comment without lines is written under tag 16 |
 | 28 | `BoundPolicySet` | `Signed<BoundPolicySet>`: `policy`, and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
 
 * `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.
@@ -518,8 +522,8 @@ threads into decisions is ordinary work in `distill` items, so there is no separ
 A field only of types that list it (by default `task`): `P0` (drop everything), `P1` (this cycle),
 `P2` (normal, the default), `P3` (when nothing else waits). The author check requires one where the
 type has the field and refuses one where it has not; an item whose type gained the field later sorts
-last until one is set. `item list` orders by priority, then age, then id. *Not decided:* inheriting
-the highest priority of the items an item blocks.
+last until one is set. `item list` orders by priority, then creation, then id (`--sort`, section
+16). *Not decided:* inheriting the highest priority of the items an item blocks.
 
 ### Relations
 
@@ -1192,8 +1196,12 @@ mDNS for LAN-only use.
   One side writes at a time. A peer that neither sends nor accepts a byte for 30 s ends the session, and `Open`, `Versions`, wants and the join messages have small size limits. An event of more than 1 MiB is refused at admission, so every event fits a frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`; `3`: `Have` is ended by `EndOfHave`), so mismatched peers refuse at the handshake.
 * **Gossip** on a topic derived from the workforce id announces a digest of each device's heads after
   writes and every 60 s; a digest that differs from its own makes a device sync with that peer. One
-  task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes. Presence ("last
-  seen") is kept in memory.
+  task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes.
+  Each announcement carries the device key, the digest and the time (seconds since the epoch),
+  signed by the device key under the `wf/heads/1` domain over the topic, the digest and the time. A
+  receiver drops an announcement whose signature does not hold, whose time is more than 5 minutes
+  from its own, or whose device is not bound in the workforce of that topic; this is why presence
+  ("last seen", kept in memory) can be trusted.
 * **Members only**: each protocol handler rejects endpoints that are not bound devices of a workforce
   the node serves; sync checks again once the workforce is named. Join is open, and checks the invite.
 * **The network is off until it is needed.** A daemon starts no endpoint and no gossip for a
@@ -1263,7 +1271,7 @@ they check.
 wf [--item <item>]                                  # the dashboard at a terminal; piped, the help
 wf init | status [--refold] | stats | members | log [--follow] [--item] | export | import <file>
 wf policy show | edit | apply <file>
-wf item add [--draft] | list | show | edit | link | check | archive | unarchive | diff | checkout | path
+wf item add [--draft] | list [--sort priority|created|merged] [--group-by state|readiness|label|type|lane|priority] | show | edit | link | check | archive | unarchive | diff | checkout | path
 wf item open | draft | done <item>... | cancel <item>       # [--note]
 wf comment <item> [<text>] [--block | --request-change] [--resolve <c>... | --resolve-blockers |
            --resolve-change-requests] [--step <n> [--done]]
@@ -1275,7 +1283,7 @@ wf agent add | list | show | edit | remove;  wf harness models <harness>
 wf session start [--watch] | list [--live] | show | stop | watch | allow | deny
 wf work brief | submit | release                            # agents, inside a session
 wf permissions test [--command <cmd>]
-wf daemon start | stop | restart | status | run
+wf daemon start | stop | restart | status | log | run
 wf sync [--serve] | invite device | join <code> | device list | edit | allowed-signers
 wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | fork list
 ```

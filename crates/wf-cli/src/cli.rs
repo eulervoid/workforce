@@ -792,7 +792,7 @@ pub enum ItemOrder {
 pub enum ItemGrouping {
     /// By state, in the order `draft`, `open`, `active`, `review`, `done`, `cancelled`.
     State,
-    /// Open items by `ready`, `blocked` and `stranded`; the rest as `not_open`.
+    /// Open items by `ready`, `claimed`, `blocked` and `stranded`; the rest as `not_open`.
     Readiness,
     /// By label, alphabetically; an item with several labels appears under each, and items
     /// without one under `unlabeled`.
