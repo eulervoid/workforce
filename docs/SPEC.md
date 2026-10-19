@@ -53,7 +53,7 @@ named, never required.
 | P8 | Harness-agnostic through ACP. |
 | P9 | Forkable: any member can start a new workforce from a frozen point of an old one. |
 | P10 | Indirect communication: agents coordinate through items and comments, not messages. |
-| P11 | Derivable: all workforce state is derivable from the log plus the repository. What a machine keeps besides (transcripts, check passes) is local and never needed by another. |
+| P11 | Derivable: all workforce state is derivable from the log plus the repository. What a machine keeps besides (transcripts, check passes) is local and never needed by another; a live view of it (the diff of a worktree) is asked of the one device that has it and never stored. |
 
 ## 3. Non-goals for v1
 
@@ -1222,6 +1222,15 @@ mDNS for LAN-only use.
   `{author → (max seq, tips)}` (tips for equivocated feeds); each streams what the other lacks, in
   `(hlc, id)` order, in frames of at most 256 events and 8 MiB; then missing parents and wanted history are fetched by id, answered in `Have` frames and an `EndOfHave`.
   One side writes at a time. A peer that neither sends nor accepts a byte for 30 s ends the session, and `Open`, `Versions`, wants and the join messages have small size limits. An event of more than 1 MiB is refused at admission, so every event fits a frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`; `3`: `Have` is ended by `EndOfHave`), so mismatched peers refuse at the handshake.
+* **`wf/peek/1`**: a device asks another for the live diff of an item, which only the device with
+  its branch and worktree has. One `Request::Diff { workforce, item, since }` (the head commit the
+  asker last saw), one answer: `Unchanged` (the head is still `since`, so polling is one small
+  frame), `Work` (the target, the head commit and its files against the target) or `NotHere` (no
+  branch or worktree of the item on this device). A request is at most 1 KiB, an answer at most
+  32 MiB, and a peer silent for 30 s ends the exchange. The uncommitted part (the worktree against
+  the head) is kept apart from the committed one, and joins `Work` with a bumped ALPN. A live view
+  is asked of one device and never stored or synced; iroh-docs would replicate every snapshot to
+  every replica whether anyone looks. *Planned:* a `Transcript` request.
 * **Gossip** on a topic derived from the workforce id announces a digest of each device's heads after
   writes and every 60 s; a digest that differs from its own makes a device sync with that peer. One
   task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes.
