@@ -1,4 +1,4 @@
-//! `wf/join/1`: a new device redeems an invite with a member that serves the workforce.
+//! `wf/join/2`: a new device redeems an invite with a member that serves the workforce.
 //!
 //! The connection authenticates the joiner's device key. The member checks the proof, reserves
 //! the invite so a second device cannot use it while this join is in progress, and streams the
@@ -7,6 +7,7 @@
 
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use iroh::Signature;
 use iroh::endpoint::Connection;
@@ -16,12 +17,16 @@ use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::DeviceKey;
 use wf_core::invite::JoinRefusal;
 
-use crate::frame::{read_frame, write_frame};
+use crate::frame::{read_frame_within, write_frame_within};
 use crate::log::SyncLog;
-use crate::node::{FAILED, Registry, SourceError, device_key};
-use crate::sync::{IDLE_TIMEOUT, initiate, read_open, respond};
+use crate::node::{FAILED, Registry, SourceError, device_key, linger};
+use crate::sync::{IDLE_TIMEOUT, SyncError, initiate_within, read_open, respond};
 
-pub const JOIN_ALPN: &[u8] = b"wf/join/1";
+/// The request is about 150 bytes and comes from a device that is not a member yet.
+const REQUEST_FRAME_LEN: u32 = 1024;
+const REPLY_FRAME_LEN: u32 = 256;
+
+pub const JOIN_ALPN: &[u8] = b"wf/join/2";
 
 #[derive(Serialize, Deserialize)]
 pub(crate) struct JoinRequest {
@@ -87,28 +92,30 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for JoinHandler<L> {
             .accept_bi()
             .await
             .map_err(AcceptError::from_err)?;
-        let request: JoinRequest = tokio::time::timeout(IDLE_TIMEOUT, read_frame(&mut recv))
+        let request: JoinRequest = read_frame_within(&mut recv, REQUEST_FRAME_LEN, IDLE_TIMEOUT)
             .await
-            .map_err(AcceptError::from_err)?
             .map_err(AcceptError::from_err)?;
         let log = match self.decide(&request, joiner).await {
             Ok(accepted) => accepted,
             Err(refusal) => {
-                write_frame(&mut send, &JoinReply::Refused(refusal))
+                write_frame_within(&mut send, &JoinReply::Refused(refusal), IDLE_TIMEOUT)
                     .await
                     .map_err(AcceptError::from_err)?;
                 let _ = send.finish();
-                connection.closed().await;
+                linger(&connection).await;
                 return Ok(());
             }
         };
-        write_frame(&mut send, &JoinReply::Accepted)
+        write_frame_within(&mut send, &JoinReply::Accepted, IDLE_TIMEOUT)
             .await
             .map_err(AcceptError::from_err)?;
         // The log goes out first, then the joiner's own events come in.
         for _ in 0..2 {
             let result = async {
-                read_open(&mut recv).await?;
+                let opened = read_open(&mut recv, IDLE_TIMEOUT).await?;
+                if opened != request.workforce {
+                    return Err(SyncError::OtherWorkforce);
+                }
                 respond(tokio::io::join(&mut recv, &mut send), &log).await
             }
             .await;
@@ -118,16 +125,18 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for JoinHandler<L> {
             }
         }
         let _ = send.finish();
-        connection.closed().await;
+        linger(&connection).await;
         Ok(())
     }
 }
 
-/// The joiner's half, on a stream the member accepted.
+/// The joiner's half, on a stream the member accepted. The member is given up on when it is
+/// silent for `idle`.
 pub(crate) async fn run_join<S, L, E, Fut>(
     stream: &mut S,
     request: JoinRequest,
     log: &L,
+    idle: Duration,
     author: impl FnOnce() -> Fut,
 ) -> Result<(), JoinFailure<E>>
 where
@@ -136,21 +145,21 @@ where
     Fut: std::future::Future<Output = Result<(), E>>,
 {
     let workforce = request.workforce;
-    write_frame(stream, &request)
+    write_frame_within(stream, &request, idle)
         .await
         .map_err(|error| JoinFailure::Net(error.into()))?;
-    match read_frame(stream)
+    match read_frame_within(stream, REPLY_FRAME_LEN, idle)
         .await
         .map_err(|error| JoinFailure::Net(error.into()))?
     {
         JoinReply::Accepted => {}
         JoinReply::Refused(refusal) => return Err(JoinFailure::Refused(refusal)),
     }
-    initiate(&mut *stream, workforce, log)
+    initiate_within(&mut *stream, workforce, log, idle)
         .await
         .map_err(|error| JoinFailure::Net(error.into()))?;
     author().await.map_err(JoinFailure::Author)?;
-    initiate(&mut *stream, workforce, log)
+    initiate_within(&mut *stream, workforce, log, idle)
         .await
         .map_err(|error| JoinFailure::Net(error.into()))?;
     Ok(())
@@ -165,6 +174,71 @@ pub(crate) enum JoinFailure<E> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::frame::FrameError;
+    use crate::log::LogError;
+    use wf_core::event::Event;
+    use wf_core::identity::Signature;
+    use wf_core::sync::{BatchReceived, Versions};
+
+    /// A log for runs that end before the log is asked for anything.
+    struct UntouchedLog;
+
+    impl SyncLog for UntouchedLog {
+        async fn versions(&self) -> Result<Versions, LogError> {
+            unimplemented!()
+        }
+        async fn events_after(&self, _: &Versions) -> Result<Vec<Event>, LogError> {
+            unimplemented!()
+        }
+        async fn events_by_id(&self, _: &[EventId]) -> Result<Vec<Event>, LogError> {
+            unimplemented!()
+        }
+        async fn receive(&self, _: Vec<Event>) -> Result<BatchReceived, LogError> {
+            unimplemented!()
+        }
+        async fn is_bound(&self, _: DeviceKey) -> Result<bool, LogError> {
+            unimplemented!()
+        }
+        async fn check_join(
+            &self,
+            _: EventId,
+            _: DeviceKey,
+            _: Signature,
+        ) -> Result<Result<(), JoinRefusal>, LogError> {
+            unimplemented!()
+        }
+        async fn fill_history(&self) -> Result<(), LogError> {
+            unimplemented!()
+        }
+        async fn missing_parents(&self) -> Result<Vec<EventId>, LogError> {
+            unimplemented!()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_member_that_never_replies_to_the_request_is_given_up_on() {
+        let request = JoinRequest {
+            workforce: WorkforceId::from(EventId::of(b"workforce")),
+            invite: EventId::of(b"invite"),
+            proof: Signature::from_bytes(&[0; 64]),
+        };
+        let (mut joiner, _silent_member) = tokio::io::duplex(8192);
+        let result = run_join(
+            &mut joiner,
+            request,
+            &UntouchedLog,
+            Duration::from_millis(100),
+            || std::future::ready(Ok::<(), std::convert::Infallible>(())),
+        )
+        .await;
+        assert!(matches!(
+            result,
+            Err(JoinFailure::Net(error)) if matches!(
+                error.downcast_ref::<FrameError>(),
+                Some(FrameError::TimedOut)
+            )
+        ));
+    }
 
     #[test]
     fn an_invite_is_served_to_the_first_device_only() {

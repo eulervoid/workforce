@@ -1,6 +1,6 @@
 //! Gossip on `heads`: after a write and every minute each device announces a digest of its
 //! heads on a topic of the workforce. Messages carry hashes only, never events: a device whose
-//! digest differs syncs with the announcer over `wf/sync/2`. Hearing from a device is also
+//! digest differs syncs with the announcer over `wf/sync/3`. Hearing from a device is also
 //! what "last seen" is made of.
 
 use std::collections::BTreeSet;
@@ -91,8 +91,14 @@ impl HeadsTopic {
     }
 }
 
+/// Passes on what the topic hears until the topic is dropped, which leaves the gossip topic too.
 async fn relay_messages(mut receiver: GossipReceiver, relay: mpsc::Sender<Heard>) {
-    while let Some(event) = receiver.next().await {
+    loop {
+        let event = tokio::select! {
+            _ = relay.closed() => return,
+            event = receiver.next() => event,
+        };
+        let Some(event) = event else { return };
         let Ok(Event::Received(message)) = event else {
             continue;
         };

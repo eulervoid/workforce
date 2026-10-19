@@ -17,7 +17,7 @@ use wf_core::invite::{InviteCode, JoinRefusal};
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::SyncLog;
-use crate::sync::{SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
+use crate::sync::{IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
 /// Hole punching and address lookup can take a while.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
@@ -66,6 +66,12 @@ pub enum Network {
     InternetWithRelay(RelayUrl),
     /// Direct connections to the addresses given only: no relay, no address lookup.
     Direct,
+}
+
+/// Waits for the peer to close the connection, which tells us it has read what we sent. A peer
+/// that never does is let go of after [`IDLE_TIMEOUT`].
+pub(crate) async fn linger(connection: &Connection) {
+    let _ = tokio::time::timeout(IDLE_TIMEOUT, connection.closed()).await;
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -155,7 +161,9 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for SyncHandler<L> {
             .accept_bi()
             .await
             .map_err(AcceptError::from_err)?;
-        let workforce = read_open(&mut recv).await.map_err(AcceptError::from_err)?;
+        let workforce = read_open(&mut recv, IDLE_TIMEOUT)
+            .await
+            .map_err(AcceptError::from_err)?;
         let Some(log) = self.0.get(&workforce) else {
             connection.close(NOT_SERVED.into(), b"workforce not served");
             return Ok(());
@@ -168,7 +176,7 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for SyncHandler<L> {
         match result {
             Ok(_) => {
                 let _ = send.finish();
-                connection.closed().await;
+                linger(&connection).await;
                 Ok(())
             }
             Err(error) => {
@@ -380,6 +388,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             &mut tokio::io::join(&mut recv, &mut send),
             request,
             log,
+            IDLE_TIMEOUT,
             author,
         )
         .await;

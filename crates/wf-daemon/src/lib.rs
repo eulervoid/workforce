@@ -180,6 +180,8 @@ fn install_wf(binary: &Path, directory: &Path) -> Result<(), DaemonError> {
 
 /// Workforces created or joined while the daemon runs are picked up this often.
 const RESCAN_EVERY: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long the accept loop waits after the socket fails to accept.
+const ACCEPT_RETRY_DELAY: std::time::Duration = std::time::Duration::from_millis(250);
 
 async fn rescan(daemon: std::sync::Weak<Daemon>) {
     loop {
@@ -605,7 +607,11 @@ impl Daemon {
             tokio::select! {
                 _ = &mut shutdown => break,
                 accepted = listener.accept() => {
-                    let Ok((stream, _)) = accepted else { continue };
+                    let Ok((stream, _)) = accepted else {
+                        // Out of file descriptors, say: retrying at once would spin.
+                        tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
+                        continue;
+                    };
                     tokio::spawn(server::handle(Arc::clone(&self), stream));
                 }
             }

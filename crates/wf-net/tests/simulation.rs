@@ -117,7 +117,10 @@ impl Cluster {
         let (first, second) =
             tokio::join!(initiate(left, workforce, &self.peers[a].replica), async {
                 let mut right = right;
-                assert_eq!(read_open(&mut right).await.unwrap(), workforce);
+                assert_eq!(
+                    read_open(&mut right, wf_net::IDLE_TIMEOUT).await.unwrap(),
+                    workforce
+                );
                 respond(right, &self.peers[b].replica).await
             });
         first.unwrap();

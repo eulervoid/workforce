@@ -23,7 +23,10 @@ async fn sync(
     let (left, right) = tokio::io::duplex(8192);
     let (first, second) = tokio::join!(initiate(left, workforce, from), async {
         let mut right = right;
-        assert_eq!(read_open(&mut right).await.unwrap(), workforce);
+        assert_eq!(
+            read_open(&mut right, wf_net::IDLE_TIMEOUT).await.unwrap(),
+            workforce
+        );
         respond(right, to).await
     });
     (first.unwrap(), second.unwrap())

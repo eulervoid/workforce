@@ -24,6 +24,9 @@ use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 
 pub const EVENT_VERSION: u16 = 1;
 
+/// Longer events are refused at admission, so every event fits a sync frame with room to spare.
+pub const MAX_EVENT_LEN: usize = 1024 * 1024;
+
 #[derive(Debug, thiserror::Error)]
 pub enum EventError {
     #[error(transparent)]
