@@ -60,7 +60,7 @@ wf item diff k3f7                # the diff, through git: your pager, colors and
 wf item diff k3f7 --stat         # anything after the item goes to `git diff`, such as `-- src/`
 wf item checkout k3f7            # put your main checkout on the work, detached, to build and try it
 wf item checkout -               # and back to where it was
-cd $(wf item path k3f7)          # or go to the item's worktree
+cd $(wf item path k3f7)          # or go to the repository its agent works in
 ```
 
 `wf item diff` shows what the work changes since it left the target. Once the item is merged, it shows
@@ -69,13 +69,10 @@ still checks out the work itself. While the branch has no commits ahead of the t
 agent has not made any commits; with `--json`, `committed` is then `null`, where commits that change nothing
 give an empty one.
 
-While an agent works on the item on this machine, the diff has two parts, never one: the committed
-part above, and under it, headed `uncommitted, against <head>`, what the worktree has changed since
-the branch head, new files included. Only commits carry over to a later session and are what review
-and merge see, and a comment on lines is anchored to a commit, so the uncommitted part is for
-looking at only. A file changed in both shows in both. With `--json`, `uncommitted` holds the second
-part, and is absent, not empty, when no worktree was read, as when no session is running. Git's own
-options, such as `--stat`, apply to both parts.
+While an agent works on the item on this machine, the diff shows what it has committed so far:
+the daemon copies the agent's commits into your repository at the end of every turn. What the
+agent has not committed shows nowhere, as wf does not run git in the agent's repository. Only
+commits carry over to a later session and are what review and merge see.
 
 When the agent's session runs on another of your machines, `wf item diff` asks that machine through
 the daemon and prints what it has committed, saying which device it came from; `--json` has the
@@ -115,7 +112,7 @@ Once the last step approves, the daemon merges the reviewed commit into the targ
 policy, `main` by default. It builds the merge commit without touching any checkout,
 `Merge #k3f7ab: Parse durations in policy`, and moves the branch. If the target is checked out, in
 your main checkout for example, that checkout is fast-forwarded so your files follow. Then it removes
-the item's worktree and its `wf/<item>` branch, and the item is done; what depended on it can start.
+the agent's repository and the item's `wf/<item>` branch, and the item is done; what depended on it can start.
 
 Work on an item whose level has no steps is merged as soon as the session submits.
 
