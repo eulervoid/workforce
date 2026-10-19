@@ -6080,7 +6080,6 @@ dependencies = [
  "tokio",
  "wf-core",
  "wf-store",
- "wf-vcs",
 ]
 
 [[package]]
@@ -6098,7 +6097,6 @@ name = "wf-vcs"
 version = "0.0.0"
 dependencies = [
  "close_fds",
- "serde",
  "ssh-key",
  "tempfile",
  "thiserror 2.0.21",

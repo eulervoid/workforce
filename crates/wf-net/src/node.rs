@@ -18,7 +18,7 @@ use wf_core::session::CommitId;
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::{LogError, SyncLog};
-use crate::status::{self, Answer, Request, STATUS_ALPN, StatusError, StatusSource, read_request};
+use crate::query::{self, DiffAnswer, QUERY_ALPN, Query, QueryError, QuerySource, read_query};
 use crate::sync::{IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
 /// Hole punching and address lookup can take a while.
@@ -50,10 +50,10 @@ pub enum NetError {
         source: SyncError,
     },
     #[error("asking {peer} for work failed: {source}")]
-    Status {
+    Query {
         peer: String,
         #[source]
-        source: StatusError,
+        source: QueryError,
     },
     #[error("gossip failed")]
     Gossip(#[source] SourceError),
@@ -223,20 +223,20 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for SyncHandler<L> {
 }
 
 /// Where the daemon's answers to requests for work come from, once it has set one.
-type StatusSlot = Arc<RwLock<Option<Arc<dyn StatusSource>>>>;
+type QuerySlot = Arc<RwLock<Option<Arc<dyn QuerySource>>>>;
 
-struct StatusHandler<L> {
+struct QueryHandler<L> {
     registry: Registry<L>,
-    source: StatusSlot,
+    source: QuerySlot,
 }
 
-impl<L> std::fmt::Debug for StatusHandler<L> {
+impl<L> std::fmt::Debug for QueryHandler<L> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("StatusHandler")
+        formatter.write_str("QueryHandler")
     }
 }
 
-impl<L: SyncLog + Clone + 'static> ProtocolHandler for StatusHandler<L> {
+impl<L: SyncLog + Clone + 'static> ProtocolHandler for QueryHandler<L> {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         let remote = device_key(connection.remote_id());
         match self.registry.is_member(remote).await {
@@ -251,10 +251,10 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for StatusHandler<L> {
             .accept_bi()
             .await
             .map_err(AcceptError::from_err)?;
-        let request = read_request(&mut recv, IDLE_TIMEOUT)
+        let request = read_query(&mut recv, IDLE_TIMEOUT)
             .await
             .map_err(AcceptError::from_err)?;
-        let Request::Diff { workforce, .. } = &request;
+        let Query::Diff { workforce, .. } = &request;
         let source = self
             .source
             .read()
@@ -272,14 +272,14 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for StatusHandler<L> {
             }
             Err(error) => return Err(close_unreadable(&connection, error)),
         }
-        match status::respond(tokio::io::join(&mut recv, &mut send), request, &*source).await {
+        match query::respond(tokio::io::join(&mut recv, &mut send), request, &*source).await {
             Ok(()) => {
                 let _ = send.finish();
                 linger(&connection).await;
                 Ok(())
             }
             Err(error) => {
-                connection.close(FAILED.into(), b"status failed");
+                connection.close(FAILED.into(), b"query failed");
                 Err(AcceptError::from_err(error))
             }
         }
@@ -323,7 +323,7 @@ impl<H: ProtocolHandler, L: SyncLog + Clone + 'static> ProtocolHandler for Membe
 pub struct Node<L: SyncLog + Clone + 'static> {
     router: Router,
     registry: Registry<L>,
-    status_source: StatusSlot,
+    query_source: QuerySlot,
     gossip: iroh_gossip::Gossip,
     signer: DeviceSigner,
     lookup: MemoryLookup,
@@ -351,15 +351,15 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .await
             .map_err(|error| NetError::Bind(error.into()))?;
         let registry = Registry::new();
-        let status_source = StatusSlot::default();
+        let query_source = QuerySlot::default();
         let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
         let router = Router::builder(endpoint)
             .accept(SYNC_ALPN, SyncHandler(registry.clone()))
             .accept(
-                STATUS_ALPN,
-                StatusHandler {
+                QUERY_ALPN,
+                QueryHandler {
                     registry: registry.clone(),
-                    source: Arc::clone(&status_source),
+                    source: Arc::clone(&query_source),
                 },
             )
             .accept(
@@ -380,7 +380,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         Ok(Self {
             router,
             registry,
-            status_source,
+            query_source,
             gossip,
             signer: device.clone(),
             lookup,
@@ -444,26 +444,26 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
     }
 
     /// Answers the requests for the work of items from `source`. Until then they are refused.
-    pub fn serve_status(&self, source: Arc<dyn StatusSource>) {
+    pub fn serve_query(&self, source: Arc<dyn QuerySource>) {
         *self
-            .status_source
+            .query_source
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
     }
 
     /// Asks a device for the diff of an item, which it answers from its worktree.
-    pub async fn status(
+    pub async fn query_diff(
         &self,
         peer: impl Into<EndpointAddr>,
         workforce: WorkforceId,
         item: ItemId,
         since: Option<CommitId>,
-    ) -> Result<Answer, NetError> {
+    ) -> Result<DiffAnswer, NetError> {
         let peer: EndpointAddr = peer.into();
         let name = device_key(peer.id).fmt_short();
         let connection = tokio::time::timeout(
             self.connect_timeout,
-            self.endpoint().connect(peer.clone(), STATUS_ALPN),
+            self.endpoint().connect(peer.clone(), QUERY_ALPN),
         )
         .await
         .map_err(|_| connect_error(&name, TimedOut))?
@@ -472,14 +472,14 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .open_bi()
             .await
             .map_err(|error| connect_error(&name, error))?;
-        let request = Request::Diff {
+        let request = Query::Diff {
             workforce,
             item,
             since,
         };
-        let answer = status::initiate(tokio::io::join(&mut recv, &mut send), &request)
+        let answer = query::initiate(tokio::io::join(&mut recv, &mut send), &request)
             .await
-            .map_err(|source| NetError::Status {
+            .map_err(|source| NetError::Query {
                 peer: name.clone(),
                 source,
             })?;

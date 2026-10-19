@@ -1,4 +1,4 @@
-//! `wf/status/1` in memory, and between two real endpoints.
+//! `wf/query/1` in memory, and between two real endpoints.
 
 mod common;
 
@@ -8,17 +8,17 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use n0_future::boxed::BoxFuture;
+use wf_core::diff::{Content, DiffLine, FileChange, FileDiff, Hunk};
 use wf_core::id::{EventId, ItemId, WorkforceId};
 use wf_core::identity::DeviceSigner;
 use wf_core::session::{CommitId, GitOid};
 use wf_core::testing::*;
 use wf_net::frame::{FrameError, MAX_FRAME_LEN};
 use wf_net::{
-    Answer, Network, Node, Request, SourceError, StatusError, StatusSource, Work, read_request,
-    status_initiate, status_initiate_within, status_respond, status_respond_within,
+    DiffAnswer, Network, Node, Query, QueryError, QuerySource, SourceError, Work, query_initiate,
+    query_initiate_within, query_respond, query_respond_within, read_query,
 };
 use wf_store::{RedbStore, Replica};
-use wf_vcs::diff::{Content, DiffLine, FileChange, FileDiff, Hunk};
 
 fn item() -> ItemId {
     ItemId::from(EventId::of(b"item"))
@@ -55,24 +55,24 @@ fn work(head: CommitId) -> Work {
 /// The work of the item in the worktree, if the device has one.
 struct Worktree(Option<Work>);
 
-impl StatusSource for Worktree {
+impl QuerySource for Worktree {
     fn diff(
         &self,
         _: WorkforceId,
         _: ItemId,
         since: Option<CommitId>,
-    ) -> BoxFuture<Result<Answer, SourceError>> {
+    ) -> BoxFuture<Result<DiffAnswer, SourceError>> {
         let answer = match &self.0 {
-            None => Answer::NotHere,
-            Some(work) if since == Some(work.head) => Answer::Unchanged,
-            Some(work) => Answer::Work(work.clone()),
+            None => DiffAnswer::NotHere,
+            Some(work) if since == Some(work.head) => DiffAnswer::Unchanged,
+            Some(work) => DiffAnswer::Work(work.clone()),
         };
         Box::pin(async move { Ok(answer) })
     }
 }
 
-fn request(workforce: WorkforceId, since: Option<CommitId>) -> Request {
-    Request::Diff {
+fn request(workforce: WorkforceId, since: Option<CommitId>) -> Query {
+    Query::Diff {
         workforce,
         item: item(),
         since,
@@ -80,16 +80,16 @@ fn request(workforce: WorkforceId, since: Option<CommitId>) -> Request {
 }
 
 /// Runs the request against `source` over an in-memory stream.
-async fn ask(source: &Worktree, since: Option<CommitId>) -> Answer {
+async fn ask(source: &Worktree, since: Option<CommitId>) -> DiffAnswer {
     let fixture = Fixture::new(1);
     let (left, mut right) = tokio::io::duplex(8192);
     let asked = request(fixture.workforce(), since);
     let responder = async {
-        let request = read_request(&mut right, Duration::from_secs(5)).await?;
+        let request = read_query(&mut right, Duration::from_secs(5)).await?;
         assert_eq!(request, asked);
-        status_respond(right, request, source).await
+        query_respond(right, request, source).await
     };
-    let (answer, served) = tokio::join!(status_initiate(left, &asked), responder);
+    let (answer, served) = tokio::join!(query_initiate(left, &asked), responder);
     served.unwrap();
     answer.unwrap()
 }
@@ -97,22 +97,22 @@ async fn ask(source: &Worktree, since: Option<CommitId>) -> Answer {
 #[tokio::test]
 async fn a_diff_is_answered_with_the_work() {
     let source = Worktree(Some(work(commit(1))));
-    assert_eq!(ask(&source, None).await, Answer::Work(work(commit(1))));
+    assert_eq!(ask(&source, None).await, DiffAnswer::Work(work(commit(1))));
     assert_eq!(
         ask(&source, Some(commit(2))).await,
-        Answer::Work(work(commit(1)))
+        DiffAnswer::Work(work(commit(1)))
     );
 }
 
 #[tokio::test]
 async fn the_same_head_is_unchanged() {
     let source = Worktree(Some(work(commit(1))));
-    assert_eq!(ask(&source, Some(commit(1))).await, Answer::Unchanged);
+    assert_eq!(ask(&source, Some(commit(1))).await, DiffAnswer::Unchanged);
 }
 
 #[tokio::test]
 async fn an_item_without_work_here_is_not_here() {
-    assert_eq!(ask(&Worktree(None), None).await, Answer::NotHere);
+    assert_eq!(ask(&Worktree(None), None).await, DiffAnswer::NotHere);
 }
 
 #[tokio::test]
@@ -133,7 +133,7 @@ async fn a_large_diff_fits_the_answer() {
         })
         .collect();
     let source = Worktree(Some(big.clone()));
-    assert_eq!(ask(&source, None).await, Answer::Work(big));
+    assert_eq!(ask(&source, None).await, DiffAnswer::Work(big));
 }
 
 #[tokio::test]
@@ -147,21 +147,21 @@ async fn work_above_the_largest_answer_is_told_apart_from_a_broken_connection() 
         }],
     }]);
     let source = Worktree(Some(huge));
-    assert_eq!(ask(&source, None).await, Answer::TooLarge);
+    assert_eq!(ask(&source, None).await, DiffAnswer::TooLarge);
 }
 
 #[tokio::test]
 async fn an_initiator_gives_up_on_a_peer_that_goes_silent() {
     let fixture = Fixture::new(1);
     let (left, _silent) = tokio::io::duplex(8192);
-    let result = status_initiate_within(
+    let result = query_initiate_within(
         left,
         &request(fixture.workforce(), None),
         Duration::from_millis(100),
     )
     .await;
     assert!(
-        matches!(result, Err(StatusError::Frame(FrameError::TimedOut))),
+        matches!(result, Err(QueryError::Frame(FrameError::TimedOut))),
         "{result:?}"
     );
 }
@@ -171,7 +171,7 @@ async fn a_responder_gives_up_on_a_peer_that_does_not_read() {
     let fixture = Fixture::new(1);
     // A buffer of one byte that nobody drains: the answer cannot be written.
     let (_silent, right) = tokio::io::duplex(1);
-    let result = status_respond_within(
+    let result = query_respond_within(
         right,
         request(fixture.workforce(), None),
         &Worktree(Some(work(commit(1)))),
@@ -179,7 +179,7 @@ async fn a_responder_gives_up_on_a_peer_that_does_not_read() {
     )
     .await;
     assert!(
-        matches!(result, Err(StatusError::Frame(FrameError::TimedOut))),
+        matches!(result, Err(QueryError::Frame(FrameError::TimedOut))),
         "{result:?}"
     );
 }
@@ -203,17 +203,17 @@ async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
     }
     let fixture = Fixture::new(2);
     let holder = node(&fixture, &fixture.devices[0]).await;
-    holder.serve_status(Arc::new(Worktree(Some(work(commit(1))))));
+    holder.serve_query(Arc::new(Worktree(Some(work(commit(1))))));
     let member = node(&fixture, &fixture.devices[1]).await;
     let stranger = node(&fixture, &DeviceSigner::from_bytes(&[200; 32]).unwrap()).await;
 
     let answer = member
-        .status(holder.local_addr(), fixture.workforce(), item(), None)
+        .query_diff(holder.local_addr(), fixture.workforce(), item(), None)
         .await
         .unwrap();
-    assert_eq!(answer, Answer::Work(work(commit(1))));
+    assert_eq!(answer, DiffAnswer::Work(work(commit(1))));
     let answer = member
-        .status(
+        .query_diff(
             holder.local_addr(),
             fixture.workforce(),
             item(),
@@ -221,10 +221,10 @@ async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
         )
         .await
         .unwrap();
-    assert_eq!(answer, Answer::Unchanged);
+    assert_eq!(answer, DiffAnswer::Unchanged);
 
     let refused = stranger
-        .status(holder.local_addr(), fixture.workforce(), item(), None)
+        .query_diff(holder.local_addr(), fixture.workforce(), item(), None)
         .await;
     let error = refused.expect_err("a stranger is refused");
     assert!(
@@ -238,7 +238,7 @@ async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
 }
 
 #[tokio::test]
-async fn a_node_that_serves_no_status_refuses_instead_of_hanging() {
+async fn a_node_that_serves_no_query_refuses_instead_of_hanging() {
     if wf_core::testing::skip_in_fence("iroh needs the route socket") {
         return;
     }
@@ -248,7 +248,7 @@ async fn a_node_that_serves_no_status_refuses_instead_of_hanging() {
 
     let refused = tokio::time::timeout(
         Duration::from_secs(20),
-        member.status(holder.local_addr(), fixture.workforce(), item(), None),
+        member.query_diff(holder.local_addr(), fixture.workforce(), item(), None),
     )
     .await
     .expect("the request is refused, not left hanging");

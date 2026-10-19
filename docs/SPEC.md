@@ -1222,9 +1222,10 @@ mDNS for LAN-only use.
   `{author → (max seq, tips)}` (tips for equivocated feeds); each streams what the other lacks, in
   `(hlc, id)` order, in frames of at most 256 events and 8 MiB; then missing parents and wanted history are fetched by id, answered in `Have` frames and an `EndOfHave`.
   One side writes at a time. A peer that neither sends nor accepts a byte for 30 s ends the session, and `Open`, `Versions`, wants and the join messages have small size limits. An event of more than 1 MiB is refused at admission, so every event fits a frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`; `3`: `Have` is ended by `EndOfHave`), so mismatched peers refuse at the handshake.
-* **`wf/status/1`**: a device asks another for the live diff of an item, which only the device with
-  its branch and worktree has. One `Request::Diff { workforce, item, since }` (the head commit the
-  asker last saw), one answer: `Unchanged` (the head is still `since`, so polling is one small
+* **`wf/query/1`**: a device asks another for what only it has, read from its current state and
+  changing and storing nothing. Today that is the live diff of an item, which only the device with
+  its branch and worktree has. One `Query::Diff { workforce, item, since }` (the head commit the
+  asker last saw), one answer of its own type, here `DiffAnswer`: `Unchanged` (the head is still `since`, so polling is one small
   frame), `Work` (the target, the head commit and its files against the target), `NotHere` (no
   branch or worktree of the item on this device) or `TooLarge` (the work does not fit the answer,
   told apart from a broken connection). A request is at most 1 KiB, an answer at most
