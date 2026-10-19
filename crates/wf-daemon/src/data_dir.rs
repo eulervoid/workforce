@@ -330,11 +330,7 @@ mod tests {
                 path.display()
             );
         }
-        assert!(
-            !secrets
-                .iter()
-                .any(|secret| covers(secret, &data.store(&id)))
-        );
+        assert!(!secrets.iter().any(|secret| covers(secret, &data.store(&id))));
     }
 
     #[test]

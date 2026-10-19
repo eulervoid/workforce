@@ -1,19 +1,16 @@
 //! The scripted ACP agent of the tests of the harness and of the runner: the one fake agent.
 //!
 //! `FAKE_AGENT_SCRIPT` names a file with one operation per line. Without it the script is
-//! [`DEFAULT_SCRIPT`]. Each prompt runs the operations
-//! up to the next `turn` and answers `end_turn`; the next prompt goes on from there. Without
-//! operations left a prompt ends at once.
+//! [`DEFAULT_SCRIPT`]. Each prompt runs the operations up to the next `turn` and answers
+//! `end_turn`; the next prompt goes on from there. Without operations left a prompt ends at once.
 //!
 //! - `say <text>`: an agent message.
 //! - `sh <command>`: runs the command with `sh -c` in the directory of the session.
 //! - `wf <args>`: runs `$WF_BIN` with the arguments; double quotes group words.
-//!
-//! In `sh` and `wf` lines, `{item}` is the item named in the prompt, as in `item #k3f9ab`.
 //! - `tool <title>`: announces a tool call.
 //! - `permission`: asks for a permission and says what the answer was. A cancel while it waits
 //!   ends the turn once the request is answered, and so does a request answered `cancelled`.
-//! - `permission <command>`: asks to run the command, with `{item}` replaced.
+//! - `permission <command>`: asks to run the command.
 //! - `hang`: does nothing until the turn is cancelled, then answers `cancelled`.
 //! - `crash`: exits with an error.
 //! - `login`: answers the prompt `Authentication required`, as a harness whose login lapsed.
@@ -21,6 +18,9 @@
 //! - `turn`: ends the turn.
 //! - `unstartable`, as the first line: exits before it answers `initialize`, as a harness that is
 //!   not installed.
+//!
+//! In `sh`, `wf` and `permission` lines, `{item}` is the item named in the prompt, as in
+//! `item #k3f9ab`.
 //!
 //! New sessions offer two models, `fast` and `deep`; `fast` is the default.
 //!
@@ -156,7 +156,7 @@ fn main() {
     {
         std::process::exit(127);
     }
-    let mut operations = all.clone().into_iter();
+    let mut operations = all.iter();
     let mut session = String::new();
     let mut done = 0;
     let mut lines = std::io::stdin().lock().lines();
@@ -214,7 +214,7 @@ fn main() {
                     };
                     done = progress.trim().parse().unwrap();
                 }
-                operations = all.clone().into_iter();
+                operations = all.iter();
                 operations.by_ref().take(done).for_each(drop);
                 if method == "session/load" {
                     say("what was said before");
