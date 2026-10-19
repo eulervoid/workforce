@@ -22,10 +22,8 @@ pub fn device_note(pane: &DiffPane, now_ms: u64) -> Option<String> {
     let device = reading.device.fmt_short();
     let age = age(now_ms.saturating_sub(reading.answered_ms));
     Some(match &reading.unreachable {
-        None => format!("committed on device {device}, read {age}"),
-        Some(reason) => format!(
-            "committed on device {device}, read {age}; it cannot be reached now: {reason}"
-        ),
+        None => format!("committed on {device}, {age}"),
+        Some(reason) => format!("{device} unreachable, as of {age}: {reason}"),
     })
 }
 

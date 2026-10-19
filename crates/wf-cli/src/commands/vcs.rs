@@ -92,41 +92,37 @@ pub(crate) fn item_diff(
     );
     if let (Some(device), false) = (session_device, merged)
         && let Some(live) = workspace.live_diff(id, since)?
+        && let Some(diff) = device_answer(id, device, live)?
     {
-        match live {
-            LiveDiff::Answer(DiffAnswer::Work(work)) => {
-                return Ok(ItemDiff::Device {
-                    device,
-                    diff: DeviceDiff::Work(work),
-                });
-            }
-            LiveDiff::Answer(DiffAnswer::Unchanged) => {
-                return Ok(ItemDiff::Device {
-                    device,
-                    diff: DeviceDiff::Unchanged,
-                });
-            }
-            LiveDiff::Unreachable { device, reason } => {
-                return Ok(ItemDiff::Device {
-                    device,
-                    diff: DeviceDiff::Unreachable(reason),
-                });
-            }
-            LiveDiff::Answer(DiffAnswer::NotHere) => bail!(
-                "the device of the session of #{}, {}, has no branch or worktree of it",
-                id.short(),
-                device.fmt_short()
-            ),
-            LiveDiff::Answer(DiffAnswer::TooLarge) => bail!(
-                "the work of #{} on {} is too large to show from there",
-                id.short(),
-                device.fmt_short()
-            ),
-            // The session ended since the state was read.
-            LiveDiff::NoSession => {}
-        }
+        return Ok(diff);
     }
     Ok(ItemDiff::Local(item_work(workspace, git, id)?))
+}
+
+/// What the daemon's answer for the session of `id` on `device` shows; `None` when the session
+/// is over, so the work is read here.
+fn device_answer(
+    id: ItemId,
+    device: DeviceKey,
+    live: LiveDiff,
+) -> anyhow::Result<Option<ItemDiff>> {
+    let shown = |device, diff| Ok(Some(ItemDiff::Device { device, diff }));
+    match live {
+        LiveDiff::Answer(DiffAnswer::Work(work)) => shown(device, DeviceDiff::Work(work)),
+        LiveDiff::Answer(DiffAnswer::Unchanged) => shown(device, DeviceDiff::Unchanged),
+        LiveDiff::Unreachable { device, reason } => shown(device, DeviceDiff::Unreachable(reason)),
+        LiveDiff::Answer(DiffAnswer::NotHere) => bail!(
+            "the device of the session of #{}, {}, has no branch or worktree of it",
+            id.short(),
+            device.fmt_short()
+        ),
+        LiveDiff::Answer(DiffAnswer::TooLarge) => bail!(
+            "the work of #{} on {} is too large to show from there",
+            id.short(),
+            device.fmt_short()
+        ),
+        LiveDiff::NoSession => Ok(None),
+    }
 }
 
 fn target(workspace: &Workspace) -> String {
@@ -212,7 +208,9 @@ fn device_diff(
                 id.short()
             )
         }
-        DeviceDiff::Unchanged => bail!("{label} answered that nothing changed, which was not asked"),
+        DeviceDiff::Unchanged => {
+            bail!("{label} answered that nothing changed, which was not asked")
+        }
     }
 }
 
@@ -289,4 +287,80 @@ pub(super) fn path(
         path: path.display().to_string(),
     };
     emit(json, &view, |view| format!("{}\n", view.path))
+}
+
+#[cfg(test)]
+mod tests {
+    use wf_core::identity::DeviceSigner;
+    use wf_daemon::proto::LiveDiff;
+    use wf_net::{DiffAnswer, Work};
+
+    use super::*;
+
+    fn device() -> DeviceKey {
+        DeviceSigner::generate([1; 32]).key()
+    }
+
+    fn commit() -> CommitId {
+        CommitId::Git("a8d4948400000000000000000000000000000000".parse().unwrap())
+    }
+
+    #[test]
+    fn the_answer_of_the_device_of_the_session_is_the_diff_shown() {
+        let id = ItemId::from_bytes([2; 32]);
+        let work = Work {
+            target: "main".to_owned(),
+            head: commit(),
+            committed: "diff --git a/f b/f\n".to_owned(),
+        };
+        let shown = device_answer(
+            id,
+            device(),
+            LiveDiff::Answer(DiffAnswer::Work(work.clone())),
+        )
+        .unwrap();
+        let Some(ItemDiff::Device {
+            device: from,
+            diff: DeviceDiff::Work(read),
+        }) = shown
+        else {
+            panic!("expected the work of the device");
+        };
+        assert_eq!(from, device());
+        assert_eq!(read, work);
+    }
+
+    #[test]
+    fn an_unreachable_device_is_not_a_missing_branch() {
+        let id = ItemId::from_bytes([2; 32]);
+        let live = LiveDiff::Unreachable {
+            device: device(),
+            reason: "timed out".to_owned(),
+        };
+        let Some(ItemDiff::Device {
+            diff: DeviceDiff::Unreachable(reason),
+            ..
+        }) = device_answer(id, device(), live).unwrap()
+        else {
+            panic!("expected an unreachable device");
+        };
+        assert_eq!(reason, "timed out");
+    }
+
+    #[test]
+    fn a_device_without_the_branch_or_without_a_session_is_not_an_unreachable_one() {
+        let id = ItemId::from_bytes([2; 32]);
+        let error = device_answer(id, device(), LiveDiff::Answer(DiffAnswer::NotHere)).err();
+        assert!(
+            error
+                .unwrap()
+                .to_string()
+                .contains("has no branch or worktree")
+        );
+        assert!(
+            device_answer(id, device(), LiveDiff::NoSession)
+                .unwrap()
+                .is_none()
+        );
+    }
 }

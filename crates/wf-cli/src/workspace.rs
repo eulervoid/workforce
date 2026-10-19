@@ -401,9 +401,11 @@ impl Workspace {
     ) -> anyhow::Result<Option<LiveDiff>> {
         match &self.source {
             Source::Local(..) => Ok(None),
-            Source::Daemon { client, .. } => {
-                Ok(Some(client.borrow_mut().live_diff(self.workforce, item, since)?))
-            }
+            Source::Daemon { client, .. } => Ok(Some(client.borrow_mut().live_diff(
+                self.workforce,
+                item,
+                since,
+            )?)),
         }
     }
 

@@ -29,9 +29,9 @@ use wf_daemon::proto::HeldPermission;
 use self::app::{App, Wheel};
 use self::diff::{Changes, ItemWork};
 use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
+use crate::commands::{DeviceDiff, ItemDiff};
 use crate::transcript::Format;
 use crate::workspace::Workspace;
-use crate::commands::{DeviceDiff, ItemDiff};
 use crate::{commands, render, transcript, view};
 
 /// How often the daemon is asked for what is new.

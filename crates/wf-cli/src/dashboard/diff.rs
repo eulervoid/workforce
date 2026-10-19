@@ -276,7 +276,10 @@ impl DiffPane {
                 reading.unreachable = Some(reason);
             }
             _ => {
-                self.read(Err(format!("{} cannot be reached: {reason}", device.fmt_short())));
+                self.read(Err(format!(
+                    "{} cannot be reached: {reason}",
+                    device.fmt_short()
+                )));
             }
         }
     }
