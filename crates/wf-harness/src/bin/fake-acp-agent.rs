@@ -238,7 +238,7 @@ fn main() {
                         std::fs::write(progress_file(&script_path, &session), done.to_string())
                             .unwrap();
                     }
-                    let (name, rest) = operation.split_once(' ').unwrap_or((&operation, ""));
+                    let (name, rest) = operation.split_once(' ').unwrap_or((operation, ""));
                     match name {
                         "say" => say(rest),
                         "tool" => tool_call(rest),
