@@ -13,7 +13,7 @@ use wf_core::name::AgentName;
 use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::{AgentDefinition, State};
 use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
-use wf_vcs::{GitCli, VcsAdapter, VcsError, item_branch, item_worktree, session_directory};
+use wf_vcs::{GitCli, VcsError, item_branch, item_worktree, session_directory};
 
 use super::drive::run_session;
 use super::{Begin, Run, SessionError, blocking, ensure_unclaimed};

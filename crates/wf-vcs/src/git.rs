@@ -7,9 +7,10 @@ use std::time::{Duration, SystemTime};
 
 use wf_core::session::{CommitId, GitOid};
 
+use crate::diff;
 use crate::{
-    CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Pager, Rebase, StoppedRebase,
-    VcsAdapter, VcsError, Work,
+    CommitSigning, DirtyCheckout, MergeOutcome, MergeTree, Pager, Rebase, StoppedRebase, VcsError,
+    Work,
 };
 
 /// How long a `packed-refs.lock` may stay before it counts as left behind. Age alone decides,
@@ -468,8 +469,11 @@ fn describe(args: &[&OsStr]) -> String {
         .join(" ")
 }
 
-impl VcsAdapter for GitCli {
-    fn make_branch_loose(&self, branch: &str) -> Result<(), VcsError> {
+impl GitCli {
+    /// Makes sure `branch` is a loose reference, a file under `refs/heads`. Packing the
+    /// references (`git gc`) removes the file and its directories, and a session that may only
+    /// write its own branch's file cannot create them again.
+    pub fn make_branch_loose(&self, branch: &str) -> Result<(), VcsError> {
         let reference = self.git_directory().join("refs/heads").join(branch);
         if reference.is_file() {
             return Ok(());
@@ -494,12 +498,20 @@ impl VcsAdapter for GitCli {
         Ok(())
     }
 
-    fn prepare_worktree(&self, branch: &str, path: &Path, target: &str) -> Result<(), VcsError> {
+    /// Makes `branch` (created at the tip of `target` when it does not exist yet) and checks it
+    /// out in a worktree at `path`. Does nothing if that worktree is already there.
+    pub fn prepare_worktree(
+        &self,
+        branch: &str,
+        path: &Path,
+        target: &str,
+    ) -> Result<(), VcsError> {
         self.add_worktree_if_missing(branch, path, target)?;
         self.make_branch_loose(branch)
     }
 
-    fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError> {
+    /// Checks `commit` out, detached, in a new worktree at `path`, for a reviewer.
+    pub fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError> {
         self.prune_worktrees()?;
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(VcsError::Spawn)?;
@@ -517,7 +529,11 @@ impl VcsAdapter for GitCli {
         Ok(())
     }
 
-    fn check_out_tree(&self, path: &Path, tree: GitOid) -> Result<(), VcsError> {
+    /// Makes the worktree at `path` hold the files of `tree`, a tree or a commit, and nothing
+    /// else: tracked files are reset and untracked ones removed. Ignored files, such as build
+    /// output, stay. A commit is checked out with HEAD detached at it. The worktree is made,
+    /// detached, when it is not there yet.
+    pub fn check_out_tree(&self, path: &Path, tree: GitOid) -> Result<(), VcsError> {
         // Prune first, so a worktree whose directory was deleted is made again.
         self.succeed(["worktree", "prune"])?;
         let exists = self
@@ -556,7 +572,8 @@ impl VcsAdapter for GitCli {
         Ok(())
     }
 
-    fn remove_worktree(&self, path: &Path) -> Result<(), VcsError> {
+    /// Removes the worktree at `path` together with whatever is uncommitted in it.
+    pub fn remove_worktree(&self, path: &Path) -> Result<(), VcsError> {
         self.succeed_in(
             &self.repository,
             [
@@ -569,24 +586,27 @@ impl VcsAdapter for GitCli {
         Ok(())
     }
 
-    fn prune_worktrees(&self) -> Result<(), VcsError> {
+    /// Forgets the worktrees whose directories are gone.
+    pub fn prune_worktrees(&self) -> Result<(), VcsError> {
         self.succeed(["worktree", "prune"])?;
         Ok(())
     }
 
-    fn delete_branch(&self, branch: &str) -> Result<(), VcsError> {
+    pub fn delete_branch(&self, branch: &str) -> Result<(), VcsError> {
         self.succeed(["branch", "-D", branch])?;
         Ok(())
     }
 
-    fn branch_head(&self, branch: &str) -> Result<CommitId, VcsError> {
+    /// The commit a branch points at.
+    pub fn branch_head(&self, branch: &str) -> Result<CommitId, VcsError> {
         if !self.branch_exists(branch)? {
             return Err(VcsError::NoBranch(branch.into()));
         }
         self.rev_parse(&format!("refs/heads/{branch}"))
     }
 
-    fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError> {
+    /// How many commits `commit` has that `target` does not.
+    pub fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError> {
         let range = format!("refs/heads/{target}..{commit}");
         let output = self.succeed(["rev-list", "--count", &range])?;
         output
@@ -598,7 +618,9 @@ impl VcsAdapter for GitCli {
             })
     }
 
-    fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError> {
+    /// What `work` changes, as [`Work`] says, with `args` added to `git diff`, such as `--stat`
+    /// or `-- src/`.
+    pub fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError> {
         let revisions = diff_revisions(work);
         let finished = Self::run_in(
             &self.repository,
@@ -617,7 +639,9 @@ impl VcsAdapter for GitCli {
         }
     }
 
-    fn show_diff(&self, work: &Work, args: &[String], pager: Pager) -> Result<(), VcsError> {
+    /// The same diff, written to the terminal by git itself, so its pager and diff settings
+    /// apply as for `git diff`, except where `pager` says otherwise.
+    pub fn show_diff(&self, work: &Work, args: &[String], pager: Pager) -> Result<(), VcsError> {
         let revisions = diff_revisions(work);
         // The principal's environment stays as it is, so the pager, colors and locale are theirs.
         let mut command = git();
@@ -648,7 +672,8 @@ impl VcsAdapter for GitCli {
         }
     }
 
-    fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError> {
+    /// Checks `commit` out, detached, in the main checkout, which has to be clean.
+    pub fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError> {
         if !self.is_clean(&self.repository)? {
             return Err(VcsError::DirtyCheckout(self.repository.clone()));
         }
@@ -656,7 +681,8 @@ impl VcsAdapter for GitCli {
         Ok(())
     }
 
-    fn checkout_previous(&self) -> Result<(), VcsError> {
+    /// Goes back to what the main checkout had before the last checkout: `git checkout -`.
+    pub fn checkout_previous(&self) -> Result<(), VcsError> {
         if !self.is_clean(&self.repository)? {
             return Err(VcsError::DirtyCheckout(self.repository.clone()));
         }
@@ -664,23 +690,8 @@ impl VcsAdapter for GitCli {
         Ok(())
     }
 
-    fn merge(
-        &self,
-        target: &str,
-        commit: CommitId,
-        message: &str,
-        signing: &CommitSigning,
-    ) -> Result<MergeOutcome, VcsError> {
-        match self.merge_tree(target, commit)? {
-            MergeTree::Landed { commit } => Ok(MergeOutcome::Merged { commit }),
-            MergeTree::Conflict { paths } => Ok(MergeOutcome::Conflict { paths }),
-            MergeTree::Clean { base, tree } => {
-                self.commit_merge(target, base, tree, commit, message, signing)
-            }
-        }
-    }
-
-    fn merge_tree(&self, target: &str, commit: CommitId) -> Result<MergeTree, VcsError> {
+    /// What merging `commit` into `target` makes, without committing it or moving `target`.
+    pub fn merge_tree(&self, target: &str, commit: CommitId) -> Result<MergeTree, VcsError> {
         let base = self.branch_head(target)?;
         // Merged already, by a merge whose event was never written: merging again would only add
         // an empty merge commit.
@@ -719,7 +730,10 @@ impl VcsAdapter for GitCli {
         Ok(MergeTree::Clean { base, tree })
     }
 
-    fn commit_merge(
+    /// Commits `tree`, made by [`GitCli::merge_tree`], as the merge of `commit` into `target`
+    /// at `base`, signed as `signing` says, and moves `target` to it. Never a conflict: the
+    /// outcome is the merge, a checkout of `target` with changes, or `target` no longer at `base`.
+    pub fn commit_merge(
         &self,
         target: &str,
         base: CommitId,
@@ -768,7 +782,8 @@ impl VcsAdapter for GitCli {
         })
     }
 
-    fn tree_of(&self, commit: CommitId) -> Result<GitOid, VcsError> {
+    /// The tree of `commit`.
+    pub fn tree_of(&self, commit: CommitId) -> Result<GitOid, VcsError> {
         let revision = format!("{commit}^{{tree}}");
         let output = self.succeed(["rev-parse", "--verify", &revision])?;
         output
@@ -780,7 +795,13 @@ impl VcsAdapter for GitCli {
             })
     }
 
-    fn rebase(
+    /// Rebases the branch checked out in `worktree` onto `target`, the rewritten commits signed as
+    /// `signing` says and committed by `committer`. A rebase stopped there earlier is not begun
+    /// again: the conflicting files are staged once they are resolved, and the rebase goes on. A
+    /// text file with content from both sides is resolved when no conflict markers are left in
+    /// it; any other conflict (binary, or a file one side deleted) only when the index says so,
+    /// that is, when whoever works there has staged the outcome with `git add` or `git rm`.
+    pub fn rebase(
         &self,
         worktree: &Path,
         target: &str,
@@ -858,7 +879,8 @@ impl VcsAdapter for GitCli {
         }
     }
 
-    fn stopped_rebase(&self, worktree: &Path) -> Result<StoppedRebase, VcsError> {
+    /// Whether a rebase is stopped in `worktree`, and at which files.
+    pub fn stopped_rebase(&self, worktree: &Path) -> Result<StoppedRebase, VcsError> {
         let mut stopped = false;
         for state in ["rebase-merge", "rebase-apply"] {
             let directory = self.succeed_in(
@@ -887,11 +909,29 @@ impl VcsAdapter for GitCli {
         })
     }
 
-    fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError> {
+    /// Gives up the rebase stopped in `worktree`, if one is, which checks the branch out again
+    /// as it was before the rebase.
+    pub fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError> {
         if self.stopped_rebase(worktree)? != StoppedRebase::NotStopped {
             self.succeed_in(worktree, [OsStr::new("rebase"), OsStr::new("--abort")])?;
         }
         Ok(())
+    }
+
+    /// Whether `work` has commits of its own: merged work has; unmerged work once its commit is
+    /// ahead of the target, which a branch just started is not.
+    pub fn has_commits(&self, work: &Work) -> Result<bool, VcsError> {
+        match work {
+            Work::Unmerged { target, commit } => Ok(self.commits_ahead(target, *commit)? > 0),
+            Work::Merged { .. } => Ok(true),
+        }
+    }
+
+    /// The same diff as data: the files it changes, their hunks and their lines, whatever the
+    /// git config says about how a diff looks.
+    pub fn file_diffs(&self, work: &Work) -> Result<Vec<diff::FileDiff>, VcsError> {
+        let args = diff::ARGS.map(String::from);
+        Ok(diff::parse(&self.diff(work, &args)?))
     }
 }
 
@@ -967,6 +1007,26 @@ impl GitCli {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Merges `commit` into `target` with a merge commit that has both as parents, signed as
+    /// `signing` says.
+    impl GitCli {
+        fn merge(
+            &self,
+            target: &str,
+            commit: CommitId,
+            message: &str,
+            signing: &CommitSigning,
+        ) -> Result<MergeOutcome, VcsError> {
+            match self.merge_tree(target, commit)? {
+                MergeTree::Landed { commit } => Ok(MergeOutcome::Merged { commit }),
+                MergeTree::Conflict { paths } => Ok(MergeOutcome::Conflict { paths }),
+                MergeTree::Clean { base, tree } => {
+                    self.commit_merge(target, base, tree, commit, message, signing)
+                }
+            }
+        }
+    }
 
     struct TestRepo {
         root: tempfile::TempDir,

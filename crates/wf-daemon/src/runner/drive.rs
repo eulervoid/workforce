@@ -12,7 +12,7 @@ use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
-use wf_vcs::{GitCli, StoppedRebase, VcsAdapter};
+use wf_vcs::{GitCli, StoppedRebase};
 
 use super::brief::{brief, restarted, resumed};
 use super::resume::AgentSessionRecord;

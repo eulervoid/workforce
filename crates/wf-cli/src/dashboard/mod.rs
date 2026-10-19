@@ -369,8 +369,8 @@ impl Feed {
             if pane.commit() == Some(commit) {
                 return Ok(None);
             }
-            let changes = if wf_vcs::VcsAdapter::has_commits(git, &work)? {
-                Changes::Files(wf_vcs::VcsAdapter::file_diffs(git, &work)?)
+            let changes = if git.has_commits(&work)? {
+                Changes::Files(git.file_diffs(&work)?)
             } else {
                 Changes::NoCommits
             };

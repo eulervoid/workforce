@@ -11,7 +11,7 @@ use std::time::Duration;
 use wf_core::name::CommandName;
 use wf_core::session::GitOid;
 use wf_harness::AcpAgentConfig;
-use wf_vcs::{GitCli, VcsAdapter, VcsError};
+use wf_vcs::{GitCli, VcsError};
 
 use crate::machine_config::{EnvironmentConfig, SandboxConfig};
 pub use crate::sandbox::Access;

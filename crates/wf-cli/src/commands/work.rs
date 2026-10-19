@@ -93,7 +93,7 @@ impl Sources for Here<'_> {
                     target: target.to_owned(),
                     commit,
                 };
-                wf_vcs::VcsAdapter::diff(git, &work, &[]).ok()
+                git.diff(&work, &[]).ok()
             })
             .unwrap_or_default()
     }

@@ -10,7 +10,7 @@ use wf_core::item::ItemView;
 use wf_core::session::{CommitId, SessionRole};
 use wf_core::state::State;
 use wf_store::RedbStore;
-use wf_vcs::{GitCli, VcsAdapter, Work, item_branch};
+use wf_vcs::{GitCli, Work, item_branch};
 
 use super::{Run, blocking};
 use crate::Loaded;

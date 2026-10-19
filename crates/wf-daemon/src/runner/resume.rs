@@ -9,7 +9,7 @@ use serde::{Deserialize, Serialize};
 use wf_core::id::{HashId, SessionId, WorkforceId};
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
 use wf_core::session::SessionRole;
-use wf_vcs::{GitCli, VcsAdapter, item_branch};
+use wf_vcs::{GitCli, item_branch};
 
 use super::{Begin, SessionError, blocking};
 use crate::{Daemon, Loaded};

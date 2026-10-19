@@ -49,7 +49,7 @@ pub(crate) fn item_work(
         target: target(workspace),
         commit,
     };
-    match wf_vcs::VcsAdapter::branch_head(git, &wf_vcs::item_branch(id)) {
+    match git.branch_head(&wf_vcs::item_branch(id)) {
         Ok(commit) => return Ok(unmerged(commit)),
         Err(wf_vcs::VcsError::NoBranch(_)) => {}
         Err(error) => return Err(error.into()),
@@ -84,14 +84,11 @@ pub(super) fn diff(
 ) -> anyhow::Result<()> {
     let git = repository()?;
     let work = item_work(workspace, &git, id)?;
-    let has_commits = wf_vcs::VcsAdapter::has_commits(&git, &work)?;
+    let has_commits = git.has_commits(&work)?;
     match mode {
-        Mode::Interactive if has_commits => Ok(wf_vcs::VcsAdapter::show_diff(
-            &git,
-            &work,
-            git_args,
-            wf_vcs::Pager::AsConfigured,
-        )?),
+        Mode::Interactive if has_commits => {
+            Ok(git.show_diff(&work, git_args, wf_vcs::Pager::AsConfigured)?)
+        }
         Mode::Interactive | Mode::Scripted => {
             let view = DiffView {
                 item: id.to_base32(),
@@ -101,7 +98,7 @@ pub(super) fn diff(
                     wf_vcs::Work::Merged { merge, .. } => Some(merge.to_string()),
                 },
                 diff: if has_commits {
-                    Some(wf_vcs::VcsAdapter::diff(&git, &work, git_args)?)
+                    Some(git.diff(&work, git_args)?)
                 } else {
                     None
                 },
@@ -129,7 +126,7 @@ pub(super) fn checkout(
 ) -> anyhow::Result<()> {
     let git = repository()?;
     if item.as_deref() == Some("-") {
-        wf_vcs::VcsAdapter::checkout_previous(&git)?;
+        git.checkout_previous()?;
         let view = CheckoutView {
             item: None,
             commit: None,
@@ -140,7 +137,7 @@ pub(super) fn checkout(
     }
     let id = choose_item(workspace, mode, item, Scope::Live)?;
     let commit = item_work(workspace, &git, id)?.commit();
-    wf_vcs::VcsAdapter::checkout_detached(&git, commit)?;
+    git.checkout_detached(commit)?;
     let view = CheckoutView {
         item: Some(id.to_base32()),
         commit: Some(commit.to_string()),
