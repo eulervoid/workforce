@@ -10,7 +10,7 @@ use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::lifecycle::AfterFailedChecks;
 use wf_core::policy::CheckConfig;
 use wf_core::session::{CommitId, GitOid};
-use wf_vcs::{GitCli, VcsAdapter};
+use wf_vcs::GitCli;
 
 use super::merge::Attempt;
 use super::{SessionError, blocking};

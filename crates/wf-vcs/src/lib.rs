@@ -1,6 +1,7 @@
 //! The version control the work happens in: one branch and worktree per item, and the merge of
 //! reviewed work into the target branch. Git is the only system, called as the `git` CLI.
 
+pub mod config;
 pub mod diff;
 mod git;
 pub mod signing;
@@ -11,6 +12,11 @@ use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::session::{CommitId, GitOid, SessionRole};
 
 pub use git::GitCli;
+
+/// The variables that give git config through the environment: how many, then each key and value.
+const CONFIG_COUNT: &str = "GIT_CONFIG_COUNT";
+const CONFIG_KEY: &str = "GIT_CONFIG_KEY_";
+const CONFIG_VALUE: &str = "GIT_CONFIG_VALUE_";
 
 /// Whether and how commits are signed.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -39,16 +45,24 @@ impl CommitSigning {
         }
     }
 
+    /// The `git` arguments that set that config: `-c key=value` for each.
+    fn arguments(&self) -> Vec<String> {
+        self.config()
+            .into_iter()
+            .flat_map(|(key, value)| ["-c".to_string(), format!("{key}={value}")])
+            .collect()
+    }
+
     /// The environment that makes git in another process, such as an agent's, sign this way.
     pub fn environment(&self) -> Vec<(String, String)> {
         let config = self.config();
         if config.is_empty() {
             return Vec::new();
         }
-        let mut environment = vec![("GIT_CONFIG_COUNT".to_string(), config.len().to_string())];
+        let mut environment = vec![(CONFIG_COUNT.to_string(), config.len().to_string())];
         for (index, (key, value)) in config.into_iter().enumerate() {
-            environment.push((format!("GIT_CONFIG_KEY_{index}"), key.to_string()));
-            environment.push((format!("GIT_CONFIG_VALUE_{index}"), value));
+            environment.push((format!("{CONFIG_KEY}{index}"), key.to_string()));
+            environment.push((format!("{CONFIG_VALUE}{index}"), value));
         }
         environment
     }
@@ -228,120 +242,6 @@ impl DirtyCheckout {
             more => format!("{named} and {more} more"),
         }
     }
-}
-
-pub trait VcsAdapter {
-    /// Makes `branch` (created at the tip of `target` when it does not exist yet) and checks it
-    /// out in a worktree at `path`. Does nothing if that worktree is already there.
-    fn prepare_worktree(&self, branch: &str, path: &Path, target: &str) -> Result<(), VcsError>;
-
-    /// Makes sure `branch` is a loose reference, a file under `refs/heads`. Packing the
-    /// references (`git gc`) removes the file and its directories, and a session that may only
-    /// write its own branch's file cannot create them again.
-    fn make_branch_loose(&self, branch: &str) -> Result<(), VcsError>;
-
-    /// Checks `commit` out, detached, in a new worktree at `path`, for a reviewer.
-    fn detached_worktree(&self, path: &Path, commit: CommitId) -> Result<(), VcsError>;
-
-    /// Makes the worktree at `path` hold the files of `tree`, a tree or a commit, and nothing
-    /// else: tracked files are reset and untracked ones removed. Ignored files, such as build
-    /// output, stay. A commit is checked out with HEAD detached at it. The worktree is made,
-    /// detached, when it is not there yet.
-    fn check_out_tree(&self, path: &Path, tree: GitOid) -> Result<(), VcsError>;
-
-    /// Removes the worktree at `path` together with whatever is uncommitted in it.
-    fn remove_worktree(&self, path: &Path) -> Result<(), VcsError>;
-
-    /// Forgets the worktrees whose directories are gone.
-    fn prune_worktrees(&self) -> Result<(), VcsError>;
-
-    fn delete_branch(&self, branch: &str) -> Result<(), VcsError>;
-
-    /// The commit a branch points at.
-    fn branch_head(&self, branch: &str) -> Result<CommitId, VcsError>;
-
-    /// How many commits `commit` has that `target` does not.
-    fn commits_ahead(&self, target: &str, commit: CommitId) -> Result<usize, VcsError>;
-
-    /// Whether `work` has commits of its own: merged work has; unmerged work once its commit is
-    /// ahead of the target, which a branch just started is not.
-    fn has_commits(&self, work: &Work) -> Result<bool, VcsError> {
-        match work {
-            Work::Unmerged { target, commit } => Ok(self.commits_ahead(target, *commit)? > 0),
-            Work::Merged { .. } => Ok(true),
-        }
-    }
-
-    /// What `work` changes, as [`Work`] says, with `args` added to `git diff`, such as `--stat`
-    /// or `-- src/`.
-    fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError>;
-
-    /// The same diff as data: the files it changes, their hunks and their lines, whatever the
-    /// git config says about how a diff looks.
-    fn file_diffs(&self, work: &Work) -> Result<Vec<diff::FileDiff>, VcsError> {
-        let args = diff::ARGS.map(String::from);
-        Ok(diff::parse(&self.diff(work, &args)?))
-    }
-
-    /// The same diff, written to the terminal by git itself, so its pager and diff settings
-    /// apply as for `git diff`, except where `pager` says otherwise.
-    fn show_diff(&self, work: &Work, args: &[String], pager: Pager) -> Result<(), VcsError>;
-
-    /// Checks `commit` out, detached, in the main checkout, which has to be clean.
-    fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError>;
-
-    /// Goes back to what the main checkout had before the last checkout: `git checkout -`.
-    fn checkout_previous(&self) -> Result<(), VcsError>;
-
-    /// Merges `commit` into `target` with a merge commit that has both as parents, signed as
-    /// `signing` says.
-    fn merge(
-        &self,
-        target: &str,
-        commit: CommitId,
-        message: &str,
-        signing: &CommitSigning,
-    ) -> Result<MergeOutcome, VcsError>;
-
-    /// What merging `commit` into `target` makes, without committing it or moving `target`.
-    fn merge_tree(&self, target: &str, commit: CommitId) -> Result<MergeTree, VcsError>;
-
-    /// Commits `tree`, made by [`VcsAdapter::merge_tree`], as the merge of `commit` into `target`
-    /// at `base`, signed as `signing` says, and moves `target` to it. Never a conflict: the
-    /// outcome is the merge, a checkout of `target` with changes, or `target` no longer at `base`.
-    fn commit_merge(
-        &self,
-        target: &str,
-        base: CommitId,
-        tree: GitOid,
-        commit: CommitId,
-        message: &str,
-        signing: &CommitSigning,
-    ) -> Result<MergeOutcome, VcsError>;
-
-    /// The tree of `commit`.
-    fn tree_of(&self, commit: CommitId) -> Result<GitOid, VcsError>;
-
-    /// Rebases the branch checked out in `worktree` onto `target`, the rewritten commits signed as
-    /// `signing` says and committed by `committer`. A rebase stopped there earlier is not begun
-    /// again: the conflicting files are staged once they are resolved, and the rebase goes on. A
-    /// text file with content from both sides is resolved when no conflict markers are left in
-    /// it; any other conflict (binary, or a file one side deleted) only when the index says so,
-    /// that is, when whoever works there has staged the outcome with `git add` or `git rm`.
-    fn rebase(
-        &self,
-        worktree: &Path,
-        target: &str,
-        signing: &CommitSigning,
-        committer: &str,
-    ) -> Result<Rebase, VcsError>;
-
-    /// Whether a rebase is stopped in `worktree`, and at which files.
-    fn stopped_rebase(&self, worktree: &Path) -> Result<StoppedRebase, VcsError>;
-
-    /// Gives up the rebase stopped in `worktree`, if one is, which checks the branch out again
-    /// as it was before the rebase.
-    fn abort_rebase(&self, worktree: &Path) -> Result<(), VcsError>;
 }
 
 #[cfg(test)]

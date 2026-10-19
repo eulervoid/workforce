@@ -11,7 +11,7 @@ use std::time::Duration;
 use wf_core::name::CommandName;
 use wf_core::session::{CommitId, GitOid};
 use wf_harness::AcpAgentConfig;
-use wf_vcs::{GitCli, VcsAdapter, VcsError};
+use wf_vcs::{GitCli, VcsError};
 
 use crate::machine_config::{EnvironmentConfig, SandboxConfig};
 pub use crate::sandbox::Access;
@@ -49,7 +49,7 @@ pub enum Confinement<'a> {
         environment: &'a EnvironmentConfig,
         /// Where Fence's settings for the command are written.
         settings: &'a Path,
-        /// Where the git config the command runs with is written: see [`git_config`].
+        /// Where the git config the command runs with is written: see [`wf_vcs::config::write_unsigned_global_config`].
         git_config: &'a Path,
     },
     /// As this process is, which runs in a session and so in the sandbox and environment of its
@@ -212,7 +212,7 @@ impl Confinement<'_> {
     }
 
     /// `command` in the sandbox, with the environment of agents but without the cargo target
-    /// directory of the machine's, and with the git config of [`git_config`].
+    /// directory of the machine's, and with the git config of [`wf_vcs::config::write_unsigned_global_config`].
     fn confined(&self, command: AcpAgentConfig) -> Result<AcpAgentConfig, CommandError> {
         let Confinement::Agents {
             access,
@@ -228,10 +228,7 @@ impl Confinement<'_> {
             path: git_config_path.to_path_buf(),
             source,
         };
-        if let Some(parent) = git_config_path.parent() {
-            std::fs::create_dir_all(parent).map_err(io_error)?;
-        }
-        std::fs::write(git_config_path, git_config(&global_git_configs())).map_err(io_error)?;
+        wf_vcs::config::write_unsigned_global_config(git_config_path).map_err(io_error)?;
         let command = match sandbox {
             SandboxConfig::Fence(_) if !crate::sandbox::fence_installed() => {
                 return Err(CommandError::NoFence);
@@ -250,7 +247,7 @@ impl Confinement<'_> {
         environment.set.remove(CARGO_TARGET_DIR);
         environment.inherit.retain(|name| name != CARGO_TARGET_DIR);
         environment.set.insert(
-            GIT_CONFIG_GLOBAL.to_string(),
+            wf_vcs::config::GLOBAL_CONFIG_VARIABLE.to_string(),
             git_config_path.to_string_lossy().into_owned(),
         );
         Ok(crate::environment::confine(
@@ -259,43 +256,6 @@ impl Confinement<'_> {
             crate::environment::daemon_variables(),
         ))
     }
-}
-
-/// The variable that names the file git reads as its global config.
-const GIT_CONFIG_GLOBAL: &str = "GIT_CONFIG_GLOBAL";
-
-/// The global git config a command runs with: the machine's, with signing off. A command must
-/// not sign with the principal's key, and could not reach it in the sandbox anyway; a repository
-/// that turns signing on in its own config, as tests of signing do, still signs.
-fn git_config(global: &[PathBuf]) -> String {
-    let mut config = String::new();
-    for path in global {
-        let path = path
-            .to_string_lossy()
-            .replace('\\', "\\\\")
-            .replace('"', "\\\"");
-        config.push_str(&format!("[include]\n\tpath = \"{path}\"\n"));
-    }
-    config.push_str("[commit]\n\tgpgsign = false\n[tag]\n\tgpgsign = false\n");
-    config
-}
-
-/// The files git reads as the global config of the daemon's environment, in its order.
-fn global_git_configs() -> Vec<PathBuf> {
-    if let Some(path) = std::env::var_os(GIT_CONFIG_GLOBAL) {
-        return vec![PathBuf::from(path)];
-    }
-    let home = std::env::var_os("HOME").map(PathBuf::from);
-    let xdg = std::env::var_os("XDG_CONFIG_HOME")
-        .map(PathBuf::from)
-        .or_else(|| home.as_ref().map(|home| home.join(".config")));
-    [
-        xdg.map(|config| config.join("git").join("config")),
-        home.map(|home| home.join(".gitconfig")),
-    ]
-    .into_iter()
-    .flatten()
-    .collect()
 }
 
 /// The last [`TAIL_LINES`] lines of the log.
@@ -562,34 +522,6 @@ git cat-file commit HEAD | grep -q gpgsig"#;
             )
             .await;
         assert!(matches!(run.outcome, Outcome::Failed(_)), "{}", run.tail);
-    }
-
-    #[test]
-    fn the_git_config_of_a_command_is_the_global_one_without_signing() {
-        let directory = tempfile::tempdir().unwrap();
-        let global = directory.path().join("my \"git\" config");
-        std::fs::write(
-            &global,
-            "[user]\n\tname = Ada\n[commit]\n\tgpgsign = true\n[tag]\n\tgpgsign = true\n",
-        )
-        .unwrap();
-        let missing = directory.path().join("missing");
-        let config = directory.path().join("command.gitconfig");
-        std::fs::write(&config, git_config(&[missing, global])).unwrap();
-        let get = |key: &str| {
-            let output = std::process::Command::new("git")
-                .args(["config", "--get", key])
-                .current_dir(directory.path())
-                .env("GIT_CONFIG_GLOBAL", &config)
-                .env("GIT_CONFIG_NOSYSTEM", "1")
-                .env_remove("GIT_CONFIG_COUNT")
-                .output()
-                .unwrap();
-            String::from_utf8(output.stdout).unwrap().trim().to_string()
-        };
-        assert_eq!(get("user.name"), "Ada");
-        assert_eq!(get("commit.gpgsign"), "false");
-        assert_eq!(get("tag.gpgsign"), "false");
     }
 
     /// iroh watches the routes through an `AF_ROUTE` socket, which Fence denies on macOS whatever

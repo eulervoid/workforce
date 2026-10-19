@@ -31,7 +31,7 @@ use wf_core::session::SessionRole;
 use wf_core::state::State;
 use wf_harness::{AcpAgentConfig, Permissions};
 use wf_store::{AuthorError, ReceiveError};
-use wf_vcs::{DirtyCheckout, VcsError};
+use wf_vcs::{DirtyCheckout, GitCli, VcsError};
 
 use crate::command::CommandError;
 use crate::machine_config::{MachineConfig, MachineConfigError, SandboxConfig};
@@ -303,7 +303,8 @@ struct Run {
     begin: Begin,
     branch: String,
     target: String,
-    repository: PathBuf,
+    /// The repository, opened once for the whole run.
+    git: GitCli,
     nudges: u32,
     park_timeout: Duration,
     max_duration: Option<Duration>,

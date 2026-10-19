@@ -307,7 +307,7 @@ fn done(
             let work = item_work(workspace, &git, item)?;
             // The pager stays open on a short diff too, so quitting it goes back to the dashboard.
             suspended(terminal, || {
-                wf_vcs::VcsAdapter::show_diff(&git, &work, &[], wf_vcs::Pager::StaysOpen)
+                git.show_diff(&work, &[], wf_vcs::Pager::StaysOpen)
             })??;
             Ok(String::new())
         }

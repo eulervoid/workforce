@@ -10,7 +10,7 @@ use wf_core::item::{ItemState, ItemView};
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
 use wf_core::session::{CommitId, EndReason};
 use wf_core::state::State;
-use wf_vcs::{GitCli, Rebase, VcsAdapter, VcsError, item_branch, item_worktree};
+use wf_vcs::{GitCli, Rebase, VcsError, item_branch, item_worktree};
 
 use super::merge::{Attempt, MergeRequest, Reservation};
 use super::start::git_identity;

@@ -8,7 +8,7 @@ use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::item::ItemView;
 use wf_core::session::SessionRole;
 use wf_core::state::State;
-use wf_vcs::{GitCli, VcsAdapter, item_worktree, worktrees};
+use wf_vcs::{GitCli, item_worktree, worktrees};
 
 use super::blocking;
 use crate::{Daemon, Loaded, caches};

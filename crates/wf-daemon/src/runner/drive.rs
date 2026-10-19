@@ -12,7 +12,7 @@ use wf_core::item::ItemView;
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
-use wf_vcs::{GitCli, StoppedRebase, VcsAdapter};
+use wf_vcs::StoppedRebase;
 
 use super::brief::{brief, restarted, resumed};
 use super::resume::AgentSessionRecord;
@@ -476,8 +476,8 @@ async fn sleep_until(deadline: Option<Instant>) {
 async fn nudge(run: &Run) -> String {
     let stopped = match run.role {
         SessionRole::Work => {
-            let (repository, worktree) = (run.repository.clone(), run.worktree.clone());
-            blocking(move || GitCli::open(&repository)?.stopped_rebase(&worktree))
+            let (git, worktree) = (run.git.clone(), run.worktree.clone());
+            blocking(move || git.stopped_rebase(&worktree))
                 .await
                 .ok()
                 .and_then(Result::ok)
@@ -498,8 +498,8 @@ async fn nudge(run: &Run) -> String {
 }
 
 async fn make_branch_loose(run: &Run) {
-    let (repository, branch) = (run.repository.clone(), run.branch.clone());
-    match blocking(move || GitCli::open(&repository)?.make_branch_loose(&branch)).await {
+    let (git, branch) = (run.git.clone(), run.branch.clone());
+    match blocking(move || git.make_branch_loose(&branch)).await {
         Ok(Ok(())) => {}
         Ok(Err(error)) => tracing::warn!("session {}: {error}", run.session),
         Err(error) => tracing::warn!("session {}: {error}", run.session),
@@ -507,11 +507,8 @@ async fn make_branch_loose(run: &Run) {
 }
 
 async fn branch_head(run: &Run) -> Option<CommitId> {
-    let (repository, branch) = (run.repository.clone(), run.branch.clone());
-    blocking(move || GitCli::open(&repository)?.branch_head(&branch))
-        .await
-        .ok()?
-        .ok()
+    let (git, branch) = (run.git.clone(), run.branch.clone());
+    blocking(move || git.branch_head(&branch)).await.ok()?.ok()
 }
 
 enum Parked {

@@ -13,9 +13,7 @@ use wf_core::lifecycle::MergeFailure;
 use wf_core::policy::MergeMode;
 use wf_core::review::PendingMerge;
 use wf_core::session::CommitId;
-use wf_vcs::{
-    CommitSigning, GitCli, MergeOutcome, MergeTree, VcsAdapter, item_branch, item_worktree,
-};
+use wf_vcs::{CommitSigning, GitCli, MergeOutcome, MergeTree, item_branch, item_worktree};
 
 use super::{SessionError, blocking};
 use crate::machine_config::MergeSigningConfig;
