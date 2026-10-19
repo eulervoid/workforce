@@ -86,7 +86,7 @@ fn live_item_detail() {
         panic!()
     };
     let events: Vec<_> = scenario.events.values().cloned().collect();
-    let detail = view::item_detail(state, item, &events);
+    let detail = view::item_detail(state, &state.dependency_graph(), item, &events);
     insta::assert_json_snapshot!("item_detail", Envelope::new(&detail));
 }
 
@@ -98,7 +98,7 @@ fn dependency_detail_shows_backlinks_and_dependents() {
         panic!()
     };
     let events: Vec<_> = scenario.events.values().cloned().collect();
-    let detail = view::item_detail(state, item, &events);
+    let detail = view::item_detail(state, &state.dependency_graph(), item, &events);
     insta::assert_json_snapshot!("dependency_detail", Envelope::new(&detail));
 }
 
@@ -116,6 +116,7 @@ fn events_and_status() {
         "status",
         Envelope::new(view::status(
             &scenario.state,
+            &scenario.state.dependency_graph(),
             view::StatusContext {
                 machine_faults: &Default::default(),
                 own: None,

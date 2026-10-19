@@ -18,7 +18,7 @@ const TAB: &str = "    ";
 
 /// Draws the diff of `pane` in `area`; returns the first row it drew and the row of the cursor.
 pub fn draw_diff(frame: &mut Frame, app: &App, pane: &DiffPane, area: Rect) -> (usize, usize) {
-    let note = match &pane.work {
+    let note = match pane.work() {
         None => Some(" reading the diff…".to_owned()),
         Some(Err(error)) => Some(format!(" {error}")),
         Some(Ok(work)) => match &work.changes {
@@ -106,7 +106,7 @@ fn row_spans(pane: &DiffPane, row: DiffRow, numbers: usize, room: usize) -> Vec<
         DiffRow::Blank => Vec::new(),
         DiffRow::File(index) => {
             let file = &files[index];
-            file_header(file, pane.folded.contains(&file.path), room)
+            file_header(file, pane.is_folded(&file.path), room)
         }
         DiffRow::Comment { shown, row, .. } => comment_spans(pane, shown, row, numbers),
         DiffRow::NoLines(index) => {
@@ -146,14 +146,14 @@ fn comment_spans(
     let comment = pane.comment(shown);
     let (bar, by) = match shown {
         ShownComment::Draft(_) => (theme::attention(), "✎ draft".to_owned()),
-        ShownComment::Posted(index) => (theme::text_dimmed(), pane.posted[index].by.clone()),
+        ShownComment::Posted(index) => (theme::text_dimmed(), pane.posted()[index].by.clone()),
     };
     let mut spans = vec![Span::raw(gap), themed("┃ ", bar)];
     let outdated = pane.is_outdated(shown);
     if row == 0 {
         let mut header = format!("{by} · {}", comment.kind.label());
         if let ShownComment::Posted(index) = shown
-            && pane.posted[index].resolved
+            && pane.posted()[index].resolved
         {
             header.push_str(" · resolved");
         }

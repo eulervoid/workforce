@@ -24,10 +24,11 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
+use wf_daemon::proto::HeldPermission;
 
 use self::app::{App, Wheel};
 use self::diff::{Changes, ItemWork};
-use self::snapshot::{Detail, InView, Snapshot, Sources};
+use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
 use crate::transcript::Format;
 use crate::workspace::Workspace;
 use crate::{commands, render, transcript, view};
@@ -102,8 +103,9 @@ fn event_loop(
     }
     feed.read_transcripts(workspace, &mut app);
     feed.read_diff(workspace, &mut app);
-    let snapshot = feed.snapshot(workspace, &app)?;
-    app.refresh(snapshot);
+    if let Some(snapshot) = feed.snapshot(workspace, &app)? {
+        app.refresh(snapshot);
+    }
     let mut refreshed = Instant::now();
     let mut draw = true;
     loop {
@@ -154,8 +156,10 @@ fn event_loop(
         draw = true;
         feed.read_transcripts(workspace, &mut app);
         feed.read_diff(workspace, &mut app);
-        let snapshot = feed.snapshot(workspace, &app)?;
-        app.refresh(snapshot);
+        match feed.snapshot(workspace, &app)? {
+            Some(snapshot) => app.refresh(snapshot),
+            None => app.tick(wf_store::now_ms()),
+        }
     }
 }
 
@@ -275,6 +279,8 @@ struct Feed {
     readers: HashMap<SessionId, transcript::Reader>,
     /// The repository the diffs are read from, once one was.
     git: Option<wf_vcs::GitCli>,
+    /// What the snapshot on screen was taken from.
+    taken: Option<Taken>,
 }
 
 impl Feed {
@@ -287,6 +293,7 @@ impl Feed {
             events,
             readers: HashMap::new(),
             git: None,
+            taken: None,
         })
     }
 
@@ -387,36 +394,82 @@ impl Feed {
         }
     }
 
-    fn sources<'a>(&'a self, workspace: &'a Workspace, app: &App) -> Sources<'a> {
-        Sources {
-            state: workspace.state(),
-            events: &self.events,
-            own: workspace.device_key(),
-            now_ms: wf_store::now_ms(),
+    /// Takes the snapshot, unless nothing it is taken from changed since the last one: the same
+    /// events, permission requests, machine faults, devices heard from and wanted, or the minute. Then only the
+    /// clock moves, and `None` says to keep the snapshot on screen.
+    fn snapshot(&mut self, workspace: &Workspace, app: &App) -> anyhow::Result<Option<Snapshot>> {
+        let now_ms = wf_store::now_ms();
+        let taken = Taken {
+            minute: now_ms / MINUTE_MS,
+            events: self.events.len(),
+            held: workspace.held_permissions()?,
+            machine_faults: workspace.machine_faults()?,
+            last_seen: workspace.last_seen()?,
+            wanted: app.wanted(),
             detail_width: app.detail_width(),
+        };
+        if self.taken.as_ref() == Some(&taken) {
+            return Ok(None);
         }
-    }
-
-    fn snapshot(&self, workspace: &Workspace, app: &App) -> anyhow::Result<Snapshot> {
-        let held = workspace.held_permissions()?;
-        let machine_faults = workspace.machine_faults()?;
-        let last_seen = workspace.last_seen()?;
-        let sources = self.sources(workspace, app);
-        Ok(Snapshot::take(
+        let state = workspace.state();
+        let graph = state.dependency_graph();
+        let sources = Sources {
+            state,
+            graph: &graph,
+            events: &self.events,
+            event: &|id| workspace.event(&id).ok().flatten(),
+            own: workspace.device_key(),
+            now_ms,
+            detail_width: taken.detail_width,
+        };
+        let snapshot = Snapshot::take(
             &sources,
-            &held,
-            &machine_faults,
-            &last_seen,
-            app.wanted(),
-        ))
+            &taken.held,
+            &taken.machine_faults,
+            &taken.last_seen,
+            taken.wanted.clone(),
+        );
+        self.taken = Some(taken);
+        Ok(Some(snapshot))
     }
 
     /// What the detail on screen shows, read against what the snapshot on screen flags.
-    fn in_view(&self, workspace: &Workspace, app: &App) -> Option<InView> {
+    fn in_view(&mut self, workspace: &Workspace, app: &App) -> Option<InView> {
+        // The snapshot on screen is taken to show this detail from now on.
+        if let Some(taken) = &mut self.taken {
+            taken.wanted = app.wanted();
+        }
         let detail = app.wanted().detail?;
-        let sources = self.sources(workspace, app);
+        let state = workspace.state();
+        let graph = state.dependency_graph();
+        let sources = Sources {
+            state,
+            graph: &graph,
+            events: &self.events,
+            event: &|_| None,
+            own: workspace.device_key(),
+            now_ms: wf_store::now_ms(),
+            detail_width: app.detail_width(),
+        };
         InView::take(&sources, &app.snapshot.flagged, detail)
     }
+}
+
+const MINUTE_MS: u64 = 60_000;
+
+/// What the last snapshot was taken from.
+#[derive(PartialEq)]
+struct Taken {
+    /// The minute the snapshot was taken in: the ages and stats in it are worded in minutes at
+    /// the finest, so they go stale when it turns.
+    minute: u64,
+    /// How many events the log had.
+    events: usize,
+    held: Vec<HeldPermission>,
+    machine_faults: wf_daemon::MachineFaults,
+    last_seen: crate::devices::LastSeen,
+    wanted: Wanted,
+    detail_width: u16,
 }
 
 /// What the `new` events did, as `wf log --follow` prints it, read against all `events`, for a window

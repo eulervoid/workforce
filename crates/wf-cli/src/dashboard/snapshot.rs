@@ -299,7 +299,11 @@ pub enum Detail {
 /// What a snapshot or a detail is taken from.
 pub struct Sources<'a> {
     pub state: &'a State,
+    /// The dependencies of `state`, built once for everything taken from it.
+    pub graph: &'a DependencyGraph,
     pub events: &'a [Event],
+    /// Looks an event up by its id, without going through the log.
+    pub event: &'a dyn Fn(EventId) -> Option<Event>,
     pub own: DeviceKey,
     pub now_ms: u64,
     /// How many columns the text of a detail has.
@@ -318,12 +322,14 @@ impl Snapshot {
     ) -> Self {
         let Sources {
             state,
-            events,
+            graph,
+            events: _,
+            event,
             own,
             now_ms,
             detail_width: _,
         } = *sources;
-        let waiting = waiting(state, events, held, machine_faults);
+        let waiting = waiting(state, event, held, machine_faults);
         let context = view::StatusContext {
             machine_faults,
             own: Some(own),
@@ -334,18 +340,17 @@ impl Snapshot {
             // Measuring them walks the caches, too slow for every frame.
             caches: None,
         };
-        let graph = state.dependency_graph();
         let mut live: Vec<&Session> = state.live_sessions().collect();
         live.sort_by_key(|session| std::cmp::Reverse(session.started()));
-        let flagged = view::status(state, context).flagged;
+        let flagged = view::status(state, graph, context).flagged;
         Snapshot {
             name: state.name().unwrap_or("workforce").to_owned(),
             now_ms,
-            counts: counts(state),
+            counts: counts(state, graph),
             waiting,
             working: live
                 .into_iter()
-                .map(|session| session_info(state, &graph, own, session))
+                .map(|session| session_info(state, graph, own, session))
                 .collect(),
             in_view: wanted
                 .detail
@@ -353,7 +358,7 @@ impl Snapshot {
                 .and_then(|wanted| InView::take(sources, &flagged, wanted)),
             flagged,
             agents: match wanted.listing {
-                Some(Listing::Agents) => agents(state, &graph, own),
+                Some(Listing::Agents) => agents(state, graph, own),
                 Some(Listing::Items(_)) | None => Vec::new(),
             },
             stats: match wanted.listing {
@@ -361,7 +366,7 @@ impl Snapshot {
                 Some(Listing::Items(_)) | None => ProjectStats::default(),
             },
             items: match wanted.listing {
-                Some(Listing::Items(listing)) => item_groups(state, &graph, listing),
+                Some(Listing::Items(listing)) => item_groups(state, graph, listing),
                 Some(Listing::Agents) | None => Vec::new(),
             },
             links: Links::take(state),
@@ -369,9 +374,8 @@ impl Snapshot {
     }
 }
 
-fn counts(state: &State) -> Counts {
+fn counts(state: &State, graph: &DependencyGraph) -> Counts {
     let policy = &state.policy().expect("a workforce has a policy").policy;
-    let graph = state.dependency_graph();
     let mut counts = Counts {
         live_sessions: state.live_sessions().count(),
         devices: state.devices().count(),
@@ -381,7 +385,7 @@ fn counts(state: &State) -> Counts {
         if item.state(policy) == ItemState::Open {
             counts.open_items += 1;
         }
-        if state.readiness(&graph, item) == Some(Readiness::Blocked) {
+        if state.readiness(graph, item) == Some(Readiness::Blocked) {
             counts.blocked_items += 1;
         }
     }
@@ -402,7 +406,7 @@ fn who(state: &State, actor: &Actor) -> String {
 
 fn waiting(
     state: &State,
-    events: &[Event],
+    event: &dyn Fn(EventId) -> Option<Event>,
     held: &[HeldPermission],
     machine_faults: &wf_daemon::MachineFaults,
 ) -> Vec<InboxEntry> {
@@ -430,10 +434,7 @@ fn waiting(
         waiting.push(match entry.waiting {
             InboxWaiting::Blocker { comment } => {
                 let id = EventId::from(comment);
-                let (by, text) = events
-                    .iter()
-                    .rev()
-                    .find(|event| event.id() == id)
+                let (by, text) = event(id)
                     .map(|event| {
                         // A blocker is a comment; anything else has no text to quote.
                         let text = if let EventBody::Commented(blocker) = &event.content.body {
@@ -500,7 +501,9 @@ impl InView {
     pub fn take(sources: &Sources, flagged: &[Flag], wanted: Detail) -> Option<InView> {
         let Sources {
             state,
+            graph,
             events,
+            event: _,
             own,
             now_ms,
             detail_width: width,
@@ -510,7 +513,7 @@ impl InView {
                 let item = state.item(id)?;
                 let text = match item {
                     ItemEntry::Live(live) => render::item_detail_for(
-                        &view::item_detail(state, live, events),
+                        &view::item_detail(state, graph, live, events),
                         Some(usize::from(width).min(100)),
                         Format::Styled,
                     ),
@@ -528,8 +531,7 @@ impl InView {
             }
             Detail::Session(id) => {
                 let session = state.session(id)?;
-                let graph = state.dependency_graph();
-                Some(InView::Session(session_info(state, &graph, own, session)))
+                Some(InView::Session(session_info(state, graph, own, session)))
             }
             Detail::Agent(id) => {
                 let detail = view::agent_detail(state, &id, events, Some(own))?;

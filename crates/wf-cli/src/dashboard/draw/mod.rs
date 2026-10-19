@@ -161,6 +161,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     app.resize(area.width, area.height);
     app.lay_out_transcript();
+    app.lay_out_log();
     let drawn = draw_all(frame, app);
     app.shown(drawn);
 }
@@ -427,9 +428,57 @@ pub fn list_top(
     top
 }
 
+/// `line` wrapped into rows of at most `width` columns, each character keeping its style.
+pub(super) fn break_line(line: Line<'static>, width: usize) -> Vec<Line<'static>> {
+    if line.width() <= width {
+        return vec![line];
+    }
+    let styled: Vec<(char, Style)> = line
+        .spans
+        .iter()
+        .flat_map(|span| {
+            span.content
+                .chars()
+                .map(|character| (character, span.style))
+        })
+        .collect();
+    let plain: String = styled.iter().map(|(character, _)| character).collect();
+    let mut rest = styled.into_iter().peekable();
+    textwrap::wrap(
+        &plain,
+        textwrap::Options::new(width)
+            .wrap_algorithm(textwrap::WrapAlgorithm::FirstFit)
+            .word_separator(textwrap::WordSeparator::AsciiSpace),
+    )
+    .iter()
+    .map(|row| {
+        let mut spans: Vec<Span<'static>> = Vec::new();
+        for character in row.chars() {
+            // The whitespace the wrap dropped between rows has no place in the next one.
+            let (kept, style) = loop {
+                match rest.next() {
+                    Some((kept, style)) if kept == character => break (kept, style),
+                    Some(_) => {}
+                    None => break (character, Style::new()),
+                }
+            };
+            match spans.last_mut() {
+                Some(last) if last.style == style => last.content.to_mut().push(kept),
+                _ => spans.push(Span::styled(kept.to_string(), style)),
+            }
+        }
+        Line::from(spans).style(line.style)
+    })
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use ratatui::style::{Color, Style};
+    use ratatui::text::{Line, Span};
     use tui_input::Input;
+
+    use super::break_line;
 
     use super::popups::visible_input;
 
@@ -450,5 +499,33 @@ mod tests {
         let (typed, cursor) = visible_input(&input, 4);
         assert_eq!(typed, "efgh");
         assert_eq!(cursor, 4);
+    }
+
+    #[test]
+    fn a_wide_styled_line_breaks_into_rows_that_fit_and_keep_their_styles() {
+        let red = Style::new().fg(Color::Red);
+        let blue = Style::new().fg(Color::Blue);
+        let line = Line::from(vec![
+            Span::styled("alpha beta ", red),
+            Span::styled("gamma delta", blue),
+        ]);
+        let rows = break_line(line, 11);
+        assert!(rows.len() > 1);
+        assert!(rows.iter().all(|row| row.width() <= 11));
+        let cells: Vec<(String, Style)> = rows
+            .iter()
+            .flat_map(|row| {
+                row.spans
+                    .iter()
+                    .map(|span| (span.content.to_string(), span.style))
+            })
+            .collect();
+        assert_eq!(
+            cells,
+            vec![
+                ("alpha beta".to_owned(), red),
+                ("gamma delta".to_owned(), blue),
+            ]
+        );
     }
 }

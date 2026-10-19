@@ -4,6 +4,7 @@
 
 use std::collections::{HashMap, HashSet};
 use std::ops::RangeInclusive;
+use std::rc::Rc;
 
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
@@ -122,13 +123,13 @@ impl DiffRow {
 #[derive(Clone, Debug)]
 pub struct DiffPane {
     /// The work as last read, or why it could not be; `None` until it is read.
-    pub work: Option<Result<ItemWork, String>>,
+    work: Option<Result<ItemWork, String>>,
     /// The row the cursor is on.
     pub cursor: usize,
     /// The first row on screen, and whether it follows the cursor.
     pub top: FirstRow,
     /// The files folded to their header, by path, so they stay folded as the work moves on.
-    pub folded: HashSet<String>,
+    folded: HashSet<String>,
     /// The row a selection of lines started on, which reaches from there to the cursor; `None`
     /// while no lines are selected.
     pub selection: Option<usize>,
@@ -138,9 +139,22 @@ pub struct DiffPane {
     /// screen.
     pub area: Option<Rect>,
     /// The comments on lines of the review being written, which the verdict sends.
-    pub drafts: Vec<LineComment>,
+    drafts: Vec<LineComment>,
     /// The comments on lines of the item in the log, the oldest first.
-    pub posted: Vec<PostedComment>,
+    posted: Vec<PostedComment>,
+    /// What the rows depend on, laid out again whenever one of the above it depends on changes.
+    layout: Layout,
+}
+
+/// The rows of a diff and the wrapped text of its comments, kept until the work, the folds or
+/// the comments change.
+#[derive(Clone, Debug, Default)]
+struct Layout {
+    rows: Rc<[DiffRow]>,
+    /// The rows of each draft under its header, by place among the drafts.
+    drafts: Vec<Vec<String>>,
+    /// The same of each posted comment.
+    posted: Vec<Vec<String>>,
 }
 
 impl Default for DiffPane {
@@ -161,6 +175,48 @@ impl DiffPane {
             area: None,
             drafts: Vec::new(),
             posted: Vec::new(),
+            layout: Layout::default(),
+        }
+    }
+
+    /// The work as last read, or why it could not be; `None` until it is read.
+    pub fn work(&self) -> Option<&Result<ItemWork, String>> {
+        self.work.as_ref()
+    }
+
+    /// Whether the file at `path` is folded to its header.
+    pub fn is_folded(&self, path: &str) -> bool {
+        self.folded.contains(path)
+    }
+
+    /// The comments on lines of the review being written.
+    pub fn drafts(&self) -> &[LineComment] {
+        &self.drafts
+    }
+
+    /// Lets go of all drafts, as when the review is sent or dropped.
+    pub fn clear_drafts(&mut self) {
+        self.drafts.clear();
+        self.lay_out();
+    }
+
+    /// Lets go of the first `count` drafts, as when they were posted.
+    pub fn drop_first_drafts(&mut self, count: usize) {
+        self.drafts.drain(..count.min(self.drafts.len()));
+        self.lay_out();
+    }
+
+    /// The comments on lines of the item in the log.
+    pub fn posted(&self) -> &[PostedComment] {
+        &self.posted
+    }
+
+    /// Takes in the comments on lines of the item in the log, laying out again only if they
+    /// differ from those known.
+    pub fn set_posted(&mut self, posted: &[PostedComment]) {
+        if self.posted != posted {
+            self.posted = posted.to_vec();
+            self.lay_out();
         }
     }
 
@@ -178,6 +234,7 @@ impl DiffPane {
         self.work = Some(work);
         self.selection = None;
         self.pressed = None;
+        self.lay_out();
         let rows = self.rows();
         self.cursor = self.cursor.min(rows.len().saturating_sub(1));
         self.cursor = nearest_cursor_row(&rows, self.cursor);
@@ -199,7 +256,26 @@ impl DiffPane {
     }
 
     /// The rows of the diff, from the top.
-    pub fn rows(&self) -> Vec<DiffRow> {
+    pub fn rows(&self) -> Rc<[DiffRow]> {
+        Rc::clone(&self.layout.rows)
+    }
+
+    /// Lays the rows and the comments out again.
+    fn lay_out(&mut self) {
+        let bodies = |comments: &mut dyn Iterator<Item = ShownComment>| -> Vec<Vec<String>> {
+            comments.map(|shown| self.wrapped_comment(shown)).collect()
+        };
+        let drafts = bodies(&mut (0..self.drafts.len()).map(ShownComment::Draft));
+        let posted = bodies(&mut (0..self.posted.len()).map(ShownComment::Posted));
+        self.layout = Layout {
+            rows: Rc::default(),
+            drafts,
+            posted,
+        };
+        self.layout.rows = self.build_rows().into();
+    }
+
+    fn build_rows(&self) -> Vec<DiffRow> {
         let (under_lines, under_files) = self.placed_comments();
         let mut rows = Vec::new();
         let comment_rows = |rows: &mut Vec<DiffRow>, file: usize, shown: &[ShownComment]| {
@@ -263,7 +339,14 @@ impl DiffPane {
 
     /// The rows of a comment under its header: the lines it quotes when they are of another
     /// commit, then its text, wrapped.
-    pub fn comment_body(&self, shown: ShownComment) -> Vec<String> {
+    pub fn comment_body(&self, shown: ShownComment) -> &[String] {
+        match shown {
+            ShownComment::Draft(index) => &self.layout.drafts[index],
+            ShownComment::Posted(index) => &self.layout.posted[index],
+        }
+    }
+
+    fn wrapped_comment(&self, shown: ShownComment) -> Vec<String> {
         let comment = self.comment(shown);
         let mut body = Vec::new();
         if self.is_outdated(shown) {
@@ -407,12 +490,14 @@ impl DiffPane {
             None => self.drafts.push(comment),
         }
         self.selection = None;
+        self.lay_out();
     }
 
     /// Drops the draft `index`; the cursor stays where it is, as near as there is a row.
     pub fn drop_draft(&mut self, index: usize) {
         if index < self.drafts.len() {
             self.drafts.remove(index);
+            self.lay_out();
         }
         let rows = self.rows();
         self.cursor = nearest_cursor_row(&rows, self.cursor.min(rows.len().saturating_sub(1)));
@@ -533,6 +618,7 @@ impl DiffPane {
         if !self.folded.remove(&path) {
             self.folded.insert(path);
         }
+        self.lay_out();
         if let Some(header) = self
             .rows()
             .iter()

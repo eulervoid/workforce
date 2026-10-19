@@ -323,7 +323,7 @@ impl App {
             KeyCode::Char('e') => {
                 let pane = self.diffs.get(&item)?;
                 let index = pane.draft_at_cursor()?;
-                let draft = pane.drafts[index].clone();
+                let draft = pane.drafts()[index].clone();
                 self.prompt = Some(Prompt::LineComment {
                     item,
                     kind: draft.kind,

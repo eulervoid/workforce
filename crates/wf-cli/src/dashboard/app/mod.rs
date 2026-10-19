@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use jiff::tz::TimeZone;
 use ratatui::layout::Position;
 use ratatui::style::Style;
+use ratatui::text::Line;
 use wf_core::graph::Readiness;
 use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::session::CommitId;
@@ -161,6 +162,25 @@ pub struct LogTab {
     pub filter: String,
     /// The details opened from links in the log, the latest on top, in its place.
     pub stack: Vec<Opened>,
+    /// Counts the lines taken in, so that what was made of them is known to be current.
+    revision: u64,
+    /// The lines that pass the filter as drawn, kept until they or the filter change.
+    shown: ShownLog,
+}
+
+/// The lines of the Log tab that pass its filter, parsed for drawing.
+#[derive(Clone, Debug, Default)]
+pub struct ShownLog {
+    /// The revision of the lines, the filter and the width these were made for; `None` before the
+    /// first.
+    made_for: Option<(u64, String, usize)>,
+    lines: Vec<Line<'static>>,
+}
+
+impl ShownLog {
+    pub fn lines(&self) -> &[Line<'static>] {
+        &self.lines
+    }
 }
 
 /// How long the footer says what an action did or why it failed, unless a key is pressed first.
@@ -244,6 +264,8 @@ impl App {
                 scroll: Scroll::END,
                 filter: String::new(),
                 stack: Vec::new(),
+                revision: 0,
+                shown: ShownLog::default(),
             },
             prompt: None,
             verbosity: Verbosity::Abridged,
@@ -272,6 +294,17 @@ impl App {
 
     pub fn refresh(&mut self, snapshot: Snapshot) {
         self.snapshot = snapshot;
+        self.settle();
+    }
+
+    /// Moves the clock of the snapshot on screen when nothing else changed.
+    pub fn tick(&mut self, now_ms: u64) {
+        self.snapshot.now_ms = now_ms;
+        self.settle();
+    }
+
+    /// Lets what the app keeps follow the snapshot on screen.
+    fn settle(&mut self) {
         self.take_posted();
         match self.status {
             Some(
@@ -322,7 +355,7 @@ impl App {
             &self.log.stack,
         ];
         self.diffs.retain(|item, pane| {
-            !pane.drafts.is_empty()
+            !pane.drafts().is_empty()
                 || stacks.iter().any(|stack| {
                     stack
                         .iter()
@@ -342,7 +375,7 @@ impl App {
         if let Some(InView::Diff { id, comments }) = &self.snapshot.in_view
             && let Some(pane) = self.diffs.get_mut(id)
         {
-            pane.posted.clone_from(comments);
+            pane.set_posted(comments);
         }
     }
 
@@ -487,6 +520,36 @@ impl App {
         self.log.lines.extend(lines);
         let over = self.log.lines.len().saturating_sub(LOG_LINES);
         self.log.lines.drain(..over);
+        self.log.revision += 1;
+    }
+
+    /// Parses the lines of the Log tab that pass its filter, and breaks those wider than the tab
+    /// into rows, unless that was done for these lines, this filter and this window already.
+    pub fn lay_out_log(&mut self) {
+        // The tab is the window less the margin on its left and the column kept off its right.
+        let width = usize::from(self.width.saturating_sub(2)).max(1);
+        if let Some((revision, filter, made_width)) = &self.log.shown.made_for
+            && *revision == self.log.revision
+            && filter == &self.log.filter
+            && *made_width == width
+        {
+            return;
+        }
+        let text: String = self.log_lines().map(String::as_str).collect();
+        let lines = draw::ansi_text(&text)
+            .lines
+            .into_iter()
+            .flat_map(|line| draw::break_line(line, width))
+            .collect();
+        self.log.shown = ShownLog {
+            made_for: Some((self.log.revision, self.log.filter.clone(), width)),
+            lines,
+        };
+    }
+
+    /// The lines of the Log tab that pass its filter, as [`App::lay_out_log`] parsed them.
+    pub fn shown_log(&self) -> &ShownLog {
+        &self.log.shown
     }
 
     /// The lines of the Log tab that pass its filter.
@@ -963,7 +1026,7 @@ impl App {
     /// screen shows (none for work without commits), or without a diff read, the one the review
     /// waiting in the inbox is of.
     fn reviewed_commit(&self, item: ItemId) -> Option<CommitId> {
-        let shown = self.diffs.get(&item).and_then(|pane| match &pane.work {
+        let shown = self.diffs.get(&item).and_then(|pane| match pane.work() {
             Some(Ok(work)) => Some(match work.changes {
                 Changes::NoCommits => None,
                 Changes::Files(_) => Some(work.commit),
@@ -981,9 +1044,7 @@ impl App {
 
     /// The comments on lines of the review of `item` being written.
     pub fn drafts(&self, item: ItemId) -> &[LineComment] {
-        self.diffs
-            .get(&item)
-            .map_or(&[], |pane| pane.drafts.as_slice())
+        self.diffs.get(&item).map_or(&[], |pane| pane.drafts())
     }
 
     /// Takes in a comment on lines written in `$EDITOR`: a draft of the review of `item`, in
@@ -997,7 +1058,7 @@ impl App {
     /// The review of `item` was sent, with its drafts.
     pub fn reviewed(&mut self, item: ItemId) {
         if let Some(pane) = self.diffs.get_mut(&item) {
-            pane.drafts.clear();
+            pane.clear_drafts();
         }
     }
 
@@ -1005,7 +1066,7 @@ impl App {
     /// given: they are not drafts any more, and the rest still are.
     pub fn drafts_posted(&mut self, item: ItemId, posted: usize) {
         if let Some(pane) = self.diffs.get_mut(&item) {
-            pane.drafts.drain(..posted.min(pane.drafts.len()));
+            pane.drop_first_drafts(posted);
         }
     }
 
