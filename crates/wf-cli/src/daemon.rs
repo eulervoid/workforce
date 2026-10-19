@@ -13,8 +13,8 @@ use wf_net::Network;
 
 use crate::cli::{DaemonArgs, DaemonCommand};
 use crate::commands::emit;
-use crate::data_dir::DataDir;
 use crate::network::network_for;
+use wf_daemon::DataDir;
 
 /// How long `wf daemon start` waits for the daemon to answer.
 const START_WAIT: Duration = Duration::from_secs(30);
@@ -211,14 +211,14 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
     let mut panics = wf_daemon::watch_panics();
 
     let device = data
-        .device(false)?
+        .device()?
         .context("no device key; run `wf init` or `wf join` first")?;
     let socket = data.daemon_socket();
     if answers(&socket) {
         bail!("a daemon is already listening on {}", socket.display());
     }
     let config = wf_daemon::Config {
-        data_dir: data.root().to_path_buf(),
+        data_dir: data.clone(),
         socket: socket.clone(),
         network: if args.no_network {
             Network::Direct

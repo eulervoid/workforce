@@ -46,9 +46,7 @@ impl AgentSessionRecord {
     /// Replaces the record through a rename, so that a daemon that stops halfway leaves the old
     /// one.
     pub(crate) fn write(&self, path: &Path) -> std::io::Result<()> {
-        let partial = path.with_extension("partial");
-        std::fs::write(&partial, serde_json::to_vec(self)?)?;
-        std::fs::rename(partial, path)
+        crate::data_dir::write_private(path, &serde_json::to_vec(self)?)
     }
 }
 

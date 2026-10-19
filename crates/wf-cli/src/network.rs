@@ -19,10 +19,10 @@ use wf_store::{RedbStore, Replica};
 
 use crate::cli::{InviteDeviceArgs, JoinArgs, SyncArgs};
 use crate::commands::emit;
-use crate::data_dir::DataDir;
 use crate::interactive::Mode;
 use crate::view::{device_label, timestamp_now};
 use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
+use wf_daemon::DataDir;
 
 pub(crate) async fn sync_devices(
     node: &Arc<Node<StorageHandle>>,
@@ -349,13 +349,11 @@ pub fn join(
     if let Some(mut client) = data.connect_daemon()? {
         client.join(code.workforce, &code, profile)?;
         let state = client.state(code.workforce)?;
-        let device = data
-            .device(false)?
-            .context("the daemon has no device key")?;
+        let device = data.device()?.context("the daemon has no device key")?;
         return finish_join(json, &state, device.key(), &code, name);
     }
 
-    let device = data.device(true)?.expect("created on demand");
+    let device = data.device_or_create()?;
     let store = workspace::store_path(&data, &code.workforce)?;
     let replica = Replica::open(RedbStore::open(&store)?, code.workforce)?;
     if replica::joined(&replica, device.key(), code.invite) == Joined::Otherwise {

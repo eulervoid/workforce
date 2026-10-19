@@ -24,7 +24,6 @@ use wf_core::id::{HashId, ItemId};
 use wf_core::name::Handle;
 
 use crate::cli::*;
-use crate::data_dir::DataDir;
 use crate::harness;
 use crate::interactive::{self, Mode};
 use crate::render;
@@ -37,6 +36,7 @@ use init::init;
 use item::item;
 use log::log;
 use policy::policy;
+use wf_daemon::DataDir;
 use work::work;
 
 pub(crate) fn emit<T: Serialize>(
@@ -209,7 +209,7 @@ fn cache_usage(workspace: &Workspace) -> Option<view::CacheUsage> {
     let storage = wf_daemon::machine_config::MachineConfig::load(&path)
         .ok()?
         .storage?;
-    let worktrees = wf_vcs::worktrees(&workspace.data.workforce(&workspace.workforce()));
+    let worktrees = workspace.data.worktrees(&workspace.workforce());
     let measured = wf_daemon::caches::measure(&worktrees, &storage.caches);
     Some(view::CacheUsage {
         used_bytes: wf_daemon::caches::total(&measured),

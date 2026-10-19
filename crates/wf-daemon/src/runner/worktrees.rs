@@ -172,7 +172,7 @@ impl Daemon {
             return;
         };
         let busy = self.busy_directories(workforce, &state);
-        let directory = worktrees(&self.workforce_directory(workforce));
+        let directory = self.config.data_dir.worktrees(&workforce);
         let _ = blocking(move || {
             let measured = caches::measure(&directory, &storage.caches);
             for worktree in caches::over_budget(&measured, storage.budget.as_u64(), &busy) {

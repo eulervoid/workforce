@@ -13,10 +13,10 @@ use wf_store::{RedbStore, Replica};
 
 use super::{emit, handle_from_environment};
 use crate::cli::*;
-use crate::data_dir::DataDir;
 use crate::harness;
 use crate::interactive::{self, Mode};
 use crate::workspace::{self, WORKFORCE_FILE, WorkforceFile};
+use wf_daemon::DataDir;
 
 #[derive(Serialize)]
 struct InitView {
@@ -58,7 +58,7 @@ pub(super) fn init(
         None => handle_from_environment(),
     };
     let principal = PrincipalSigner::generate(rand::random());
-    let device = data.device(true)?.expect("created on demand");
+    let device = data.device_or_create()?;
 
     let genesis = Genesis {
         name: name.clone(),

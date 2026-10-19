@@ -153,7 +153,7 @@ impl WorkforceJudges {
         let environment = machine_config.environment_of(agent);
         let workforce = daemon.workforce_directory(self.workforce);
         let directory = workforce.join("judges").join(agent.as_str());
-        let transcripts = workforce.join("transcripts");
+        let transcripts = daemon.config.data_dir.transcripts(&self.workforce);
         for path in [&directory, &transcripts] {
             std::fs::create_dir_all(path)
                 .map_err(|error| format!("{}: {error}", path.display()))?;

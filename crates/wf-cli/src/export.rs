@@ -11,8 +11,8 @@ use wf_core::id::WorkforceId;
 use wf_store::{RedbStore, Replica};
 
 use crate::commands::emit;
-use crate::data_dir::DataDir;
 use crate::workspace::{self, Workspace};
+use wf_daemon::DataDir;
 
 /// One line of an export. `content` is there to be read; `event` is what an import reads.
 #[derive(Serialize, Deserialize)]

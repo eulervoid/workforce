@@ -6,6 +6,7 @@ pub mod caches;
 pub mod caller;
 pub mod client;
 pub mod command;
+pub mod data_dir;
 pub mod decide;
 mod environment;
 mod faults;
@@ -35,13 +36,12 @@ use wf_net::replica::bind_device;
 use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
+pub use data_dir::DataDir;
 pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS};
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, ensure_unclaimed, session_model};
 pub use wf_net::{StorageClosed, StorageHandle};
-
-pub const STORE_FILE: &str = "store.redb";
 
 /// The file in the directory of a workforce that says where its repository is on this machine.
 pub const REPOSITORY_FILE: &str = "repository";
@@ -57,9 +57,7 @@ pub fn remember_repository(
     if std::fs::read_to_string(&path).is_ok_and(|current| current.trim() == text) {
         return Ok(());
     }
-    let temporary = workforce_directory.join(format!("{REPOSITORY_FILE}.{}", std::process::id()));
-    std::fs::write(&temporary, text.as_bytes())?;
-    std::fs::rename(temporary, path)
+    data_dir::write_private(&path, text.as_bytes())
 }
 
 pub(crate) fn now_ms() -> u64 {
@@ -102,7 +100,7 @@ pub enum DaemonError {
 
 pub struct Config {
     /// Holds one directory per workforce, named by its id.
-    pub data_dir: PathBuf,
+    pub data_dir: DataDir,
     pub socket: PathBuf,
     pub network: Network,
     /// Commands for harnesses, in place of the ones wf knows by name. Tests start fake agents
@@ -171,9 +169,6 @@ async fn go_online_when_needed(
     drop(daemon);
     peers::run_peer_loop(node, id, storage, presence).await;
 }
-
-/// Where in the data directory the daemon keeps the `wf` its agents run.
-const BIN_DIR: &str = "bin";
 
 /// Copies `binary` to `<directory>/wf`. Through a rename, so an agent that runs the old copy at
 /// that moment keeps it. Not a hard link: in the tests, macOS killed runs of the binary while
@@ -263,7 +258,7 @@ pub struct Daemon {
 impl Daemon {
     pub async fn start(config: Config, device: DeviceSigner) -> Result<Arc<Self>, DaemonError> {
         if let Some(binary) = &config.wf_binary {
-            install_wf(binary, &config.data_dir.join(BIN_DIR))?;
+            install_wf(binary, &config.data_dir.bin())?;
         }
         let daemon = Arc::new(Self {
             config,
@@ -335,7 +330,7 @@ impl Daemon {
         self.config
             .wf_binary
             .as_ref()
-            .map(|_| self.config.data_dir.join(BIN_DIR))
+            .map(|_| self.config.data_dir.bin())
     }
 
     /// The network node of this machine, started on first use.
@@ -351,7 +346,7 @@ impl Daemon {
     }
 
     fn load_stored_workforces(self: &Arc<Self>) {
-        let Ok(entries) = std::fs::read_dir(&self.config.data_dir) else {
+        let Ok(entries) = std::fs::read_dir(self.config.data_dir.root()) else {
             return;
         };
         for entry in entries.flatten() {
@@ -362,7 +357,7 @@ impl Daemon {
             else {
                 continue;
             };
-            if !entry.path().join(STORE_FILE).is_file() {
+            if !self.config.data_dir.store(&id).is_file() {
                 continue;
             }
             if self.loaded_workforce(&id).is_some() {
@@ -375,7 +370,7 @@ impl Daemon {
                     .unwrap_or_else(|poisoned| poisoned.into_inner())
                     .insert(id);
                 if first_time {
-                    let store = self.config.data_dir.join(id.to_string()).join(STORE_FILE);
+                    let store = self.config.data_dir.store(&id);
                     let hint = if let DaemonError::Store(StoreError::Corrupt(_)) = &error {
                         format!(
                             "; move {} away, then `wf import` an export of the workforce, or join it again from another device",
@@ -406,7 +401,7 @@ impl Daemon {
             }
             None => {}
         }
-        let path = self.config.data_dir.join(id.to_string()).join(STORE_FILE);
+        let path = self.config.data_dir.store(&id);
         if !path.is_file() {
             return Err(DaemonError::UnknownWorkforce(id));
         }
@@ -479,12 +474,12 @@ impl Daemon {
     /// Like [`Daemon::workforce`], and creates the workforce empty when this machine does not
     /// have it yet, so it can be taken in from other devices.
     pub(crate) fn follow(self: &Arc<Self>, id: WorkforceId) -> Result<Arc<Loaded>, DaemonError> {
-        let directory = self.config.data_dir.join(id.to_string());
+        let directory = self.config.data_dir.workforce(&id);
         std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
             path: directory.clone(),
             source,
         })?;
-        drop(RedbStore::open(directory.join(STORE_FILE))?);
+        drop(RedbStore::open(self.config.data_dir.store(&id))?);
         self.workforce(id)
     }
 
@@ -497,12 +492,12 @@ impl Daemon {
         genesis: Event,
     ) -> Result<(), DaemonError> {
         let child = WorkforceId::from(genesis.id());
-        let directory = self.config.data_dir.join(child.to_string());
+        let directory = self.config.data_dir.workforce(&child);
         std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
             path: directory.clone(),
             source,
         })?;
-        let path = directory.join(STORE_FILE);
+        let path = self.config.data_dir.store(&child);
         let created = {
             let path = path.clone();
             parent
@@ -585,18 +580,14 @@ impl Daemon {
     }
 
     async fn bind_socket(&self) -> Result<UnixListener, DaemonError> {
-        use std::os::unix::fs::{DirBuilderExt, PermissionsExt};
+        use std::os::unix::fs::PermissionsExt;
 
         let socket_error = |source| DaemonError::Socket {
             path: self.config.socket.clone(),
             source,
         };
         if let Some(parent) = self.config.socket.parent() {
-            std::fs::DirBuilder::new()
-                .recursive(true)
-                .mode(0o700)
-                .create(parent)
-                .map_err(socket_error)?;
+            data_dir::create_private_directory(parent).map_err(socket_error)?;
         }
         if self.config.socket.exists() {
             if tokio::net::UnixStream::connect(&self.config.socket)
@@ -612,7 +603,7 @@ impl Daemon {
         self.callers
             .publish(&self.config.data_dir)
             .map_err(|source| DaemonError::Io {
-                path: caller::principal_token_path(&self.config.data_dir),
+                path: self.config.data_dir.principal_token(),
                 source,
             })?;
         let listener = UnixListener::bind(&self.config.socket).map_err(socket_error)?;
@@ -638,7 +629,7 @@ mod tests {
     fn the_installed_wf_stays_when_the_original_changes() {
         let root = tempfile::tempdir().unwrap();
         let original = root.path().join("wf");
-        let bin = root.path().join("data").join(BIN_DIR);
+        let bin = DataDir::new(root.path().join("data")).bin();
         std::fs::write(&original, "first build").unwrap();
         install_wf(&original, &bin).unwrap();
         std::fs::write(&original, "second build").unwrap();

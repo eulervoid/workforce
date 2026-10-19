@@ -61,7 +61,7 @@ async fn dispatch_loop(
         if *strong.halted.borrow() {
             return;
         }
-        strong.faults.check_space(&strong.config.data_dir);
+        strong.faults.check_space(strong.config.data_dir.root());
         dispatch_once(&strong, workforce, loaded, &mut failed).await;
         notifier
             .announce(&strong, loaded, &loaded.merges.waiting())

@@ -410,7 +410,7 @@ impl Daemon {
     }
 
     pub(crate) fn workforce_directory(&self, workforce: WorkforceId) -> PathBuf {
-        self.config.data_dir.join(workforce.to_string())
+        self.config.data_dir.workforce(&workforce)
     }
 
     /// Where the repository of a workforce is on this machine, as the last `wf` run there said.

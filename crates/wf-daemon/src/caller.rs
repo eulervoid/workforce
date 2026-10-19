@@ -7,9 +7,6 @@
 //! reading, as it does the keys. An agent without a sandbox can read it, as it can read the keys.
 
 use std::collections::BTreeMap;
-use std::io::Write;
-use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
-use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Mutex;
 
@@ -17,23 +14,20 @@ use data_encoding::HEXLOWER;
 use serde::{Deserialize, Serialize};
 use wf_core::id::{SessionId, WorkforceId};
 
+use crate::data_dir::DataDir;
+
 /// Set by the runner for the processes of a session, next to `WF_SESSION`: the token that makes
 /// a connection to the socket act as the session's agent.
 pub const SESSION_TOKEN_VARIABLE: &str = "WF_SESSION_TOKEN";
 
-/// `<data>/keys/principal.token`: the token that makes a connection act as the principal.
-pub fn principal_token_path(data_dir: &Path) -> PathBuf {
-    data_dir.join("keys").join("principal.token")
-}
+/// Set by the runner for the processes of an agent session: what they write is the session's.
+/// With a daemon, the daemon says whom a process acts for, from the token it presents.
+pub const SESSION_VARIABLE: &str = "WF_SESSION";
 
-/// The principal token of the daemon that runs on `data_dir`, if this process may read it.
-pub fn read_principal_token(data_dir: &Path) -> Option<Token> {
-    std::fs::read_to_string(principal_token_path(data_dir))
-        .ok()?
-        .trim()
-        .parse()
-        .ok()
-}
+/// Set by the runner for the processes of an agent session: the workforce the session is in. The
+/// checkout of a session carries the workforce file as it was committed, which names an older
+/// workforce when this one was created after the commit.
+pub const WORKFORCE_VARIABLE: &str = "WF_WORKFORCE";
 
 /// A secret the daemon hands out, which a client presents to act for someone.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -103,22 +97,11 @@ impl Default for Callers {
 impl Callers {
     /// Writes the principal token to the keys directory of `data_dir`, where only the
     /// principal's processes can read it.
-    pub(crate) fn publish(&self, data_dir: &Path) -> std::io::Result<()> {
-        let path = principal_token_path(data_dir);
-        let keys = path.parent().expect("the token is in the keys directory");
-        std::fs::DirBuilder::new()
-            .recursive(true)
-            .mode(0o700)
-            .create(keys)?;
-        let staged = keys.join(format!(".principal.token.{}", std::process::id()));
-        let _ = std::fs::remove_file(&staged);
-        let mut file = std::fs::OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&staged)?;
-        writeln!(file, "{}", self.principal)?;
-        std::fs::rename(&staged, &path)
+    pub(crate) fn publish(&self, data_dir: &DataDir) -> std::io::Result<()> {
+        crate::data_dir::write_private(
+            &data_dir.principal_token(),
+            format!("{}\n", self.principal).as_bytes(),
+        )
     }
 
     fn sessions(&self) -> std::sync::MutexGuard<'_, BTreeMap<Token, (WorkforceId, SessionId)>> {
@@ -165,22 +148,23 @@ mod tests {
 
     #[test]
     fn the_principal_token_is_written_for_the_principal_and_recognized() {
-        let data = tempfile::tempdir().unwrap();
+        let directory = tempfile::tempdir().unwrap();
+        let data = DataDir::new(directory.path().to_path_buf());
         let callers = Callers::default();
-        callers.publish(data.path()).unwrap();
-        let token = read_principal_token(data.path()).expect("the principal token");
+        callers.publish(&data).unwrap();
+        let token = data.read_principal_token().expect("the principal token");
         assert_eq!(callers.recognize(&token), Some(Caller::Principal));
 
         use std::os::unix::fs::PermissionsExt;
-        let mode = std::fs::metadata(principal_token_path(data.path()))
+        let mode = std::fs::metadata(data.principal_token())
             .unwrap()
             .permissions()
             .mode();
         assert_eq!(mode & 0o777, 0o600);
 
         let restarted = Callers::default();
-        restarted.publish(data.path()).unwrap();
-        assert_ne!(read_principal_token(data.path()), Some(token.clone()));
+        restarted.publish(&data).unwrap();
+        assert_ne!(data.read_principal_token(), Some(token.clone()));
         assert_eq!(
             restarted.recognize(&token),
             None,
