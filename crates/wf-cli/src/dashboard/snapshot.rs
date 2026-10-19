@@ -661,7 +661,7 @@ fn agents(state: &State, graph: &DependencyGraph, own: DeviceKey) -> Vec<AgentIn
 fn item_groups(state: &State, graph: &DependencyGraph, listing: ItemListing) -> Vec<ItemGroup> {
     let entries: Vec<_> = sorted_views(state, false, listing.order)
         .into_iter()
-        .map(|view| (view, view::summary(state, graph, view)))
+        .map(|view| view::summary(state, graph, view))
         .collect();
     view::group_items(listing.grouping, entries)
         .into_iter()

@@ -252,31 +252,31 @@ pub(super) fn item(
                     )
                 }
             };
-            let entries: Vec<(ItemView<'_>, ItemSummary)> = views
+            let entries: Vec<ItemSummary> = views
                 .into_iter()
-                .map(|view| (view, view::summary(state, &graph, view)))
-                .filter(|(_, summary)| {
+                .map(|view| view::summary(state, &graph, view))
+                .filter(|summary| {
                     args.item_type
                         .as_ref()
                         .is_none_or(|wanted| summary.item_type == wanted.as_str())
                 })
-                .filter(|(_, summary)| args.state.is_empty() || args.state.contains(&summary.state))
-                .filter(|(_, summary)| args.accepts(summary.readiness))
-                .filter(|(_, summary)| {
+                .filter(|summary| args.state.is_empty() || args.state.contains(&summary.state))
+                .filter(|summary| args.accepts(summary.readiness))
+                .filter(|summary| {
                     args.label
                         .as_ref()
                         .is_none_or(|wanted| summary.labels.contains(&wanted.to_string()))
                 })
-                .filter(|(_, summary)| {
+                .filter(|summary| {
                     args.lane
                         .as_ref()
                         .is_none_or(|wanted| summary.lane.as_deref() == Some(wanted.as_str()))
                 })
-                .filter(|(_, summary)| {
+                .filter(|summary| {
                     args.priority
                         .is_none_or(|wanted| summary.priority == Some(wanted))
                 })
-                .filter(|(_, summary)| {
+                .filter(|summary| {
                     dispatchable
                         .as_ref()
                         .is_none_or(|offered| offered.contains(&summary.id))
@@ -284,9 +284,7 @@ pub(super) fn item(
                 .collect();
             match args.group_by {
                 None => {
-                    let items: Vec<ItemSummary> =
-                        entries.into_iter().map(|(_, summary)| summary).collect();
-                    emit(json, &items, |items| render::item_list(items))
+                    emit(json, &entries, |items| render::item_list(items))
                 }
                 Some(grouping) => {
                     let groups = view::group_items(grouping, entries);

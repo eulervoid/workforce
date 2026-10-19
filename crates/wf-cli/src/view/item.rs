@@ -183,13 +183,13 @@ enum ReadinessGroup {
 }
 
 fn collect_groups<Key: Ord>(
-    entries: Vec<(ItemView<'_>, ItemSummary)>,
-    key: impl Fn(ItemView<'_>, &ItemSummary) -> Key,
+    entries: Vec<ItemSummary>,
+    key: impl Fn(&ItemSummary) -> Key,
     label: impl Fn(&Key) -> String,
 ) -> Vec<ItemGroup> {
     let mut groups: BTreeMap<Key, Vec<ItemSummary>> = BTreeMap::new();
-    for (view, summary) in entries {
-        groups.entry(key(view, &summary)).or_default().push(summary);
+    for summary in entries {
+        groups.entry(key(&summary)).or_default().push(summary);
     }
     groups
         .into_iter()
@@ -222,9 +222,9 @@ fn assigned_name(key: &Assigned<String>, unassigned: &str) -> String {
 }
 
 /// An item with several labels is listed under each of them.
-fn group_by_label(entries: Vec<(ItemView<'_>, ItemSummary)>) -> Vec<ItemGroup> {
+fn group_by_label(entries: Vec<ItemSummary>) -> Vec<ItemGroup> {
     let mut groups: BTreeMap<Assigned<String>, Vec<ItemSummary>> = BTreeMap::new();
-    for (_, summary) in entries {
+    for summary in entries {
         if summary.labels.is_empty() {
             groups
                 .entry(Assigned::Unassigned)
@@ -251,33 +251,33 @@ fn group_by_label(entries: Vec<(ItemView<'_>, ItemSummary)>) -> Vec<ItemGroup> {
 /// Groups `entries`, keeping their order inside each group.
 pub fn group_items(
     grouping: ItemGrouping,
-    entries: Vec<(ItemView<'_>, ItemSummary)>,
+    entries: Vec<ItemSummary>,
 ) -> Vec<ItemGroup> {
     match grouping {
         ItemGrouping::Label => group_by_label(entries),
         ItemGrouping::Type => collect_groups(
             entries,
-            |_, summary| summary.item_type.clone(),
+            |summary| summary.item_type.clone(),
             |item_type| item_type.clone(),
         ),
         ItemGrouping::Lane => collect_groups(
             entries,
-            |_, summary| Assigned::from(summary.lane.clone()),
+            |summary| Assigned::from(summary.lane.clone()),
             |lane| assigned_name(lane, "no_lane"),
         ),
         ItemGrouping::Priority => collect_groups(
             entries,
-            |_, summary| Assigned::from(summary.priority.map(|priority| priority.to_string())),
+            |summary| Assigned::from(summary.priority.map(|priority| priority.to_string())),
             |priority| assigned_name(priority, "no_priority"),
         ),
         ItemGrouping::State => collect_groups(
             entries,
-            |_, summary| summary.state,
+            |summary| summary.state,
             |state| state.to_string(),
         ),
         ItemGrouping::Readiness => collect_groups(
             entries,
-            |_, summary| match summary.readiness {
+            |summary| match summary.readiness {
                 Some(readiness) => ReadinessGroup::Open(readiness),
                 None => ReadinessGroup::NotOpen,
             },

@@ -60,7 +60,7 @@ pub fn event_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<EventL
                     at: timestamp(event.content.hlc),
                     by: super::actor_view(state, &event.content.actor),
                     kind: ActivityKind::Workforce,
-                    summary: describe(state, &event.content.body),
+                    summary: describe(&event.content.body),
                     comment: None,
                     text: None,
                 },
@@ -126,7 +126,7 @@ impl From<Verdict> for VerdictView {
     }
 }
 
-pub fn describe(state: &State, body: &EventBody) -> String {
+pub fn describe(body: &EventBody) -> String {
     let item = |id: &ItemId| format!("#{}", id.short());
     match body {
         EventBody::Genesis(signed) => format!("workforce \"{}\"", signed.statement.name),
@@ -201,7 +201,6 @@ pub fn describe(state: &State, body: &EventBody) -> String {
         }
         EventBody::Merged(merged) => format!("{} merged as {}", item(&merged.item), merged.commit),
         EventBody::Unknown { tag, .. } => {
-            let _ = state;
             format!("unknown body {tag}")
         }
     }
@@ -270,7 +269,7 @@ pub fn event_view(
         title: item
             .and_then(|id| state.item(id))
             .map(|view| view.title().to_string()),
-        summary: describe(state, &event.content.body),
+        summary: describe(&event.content.body),
         outcome,
         verified,
     }
