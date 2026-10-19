@@ -1481,6 +1481,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs git signing, which the session denies"]
     fn merges_are_signed_as_configured_or_not_at_all() {
         let repo = TestRepo::new();
         repo.sign_with_a_fake_signer();
@@ -1945,6 +1946,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "needs git signing, which the session denies"]
     fn rebased_commits_are_signed_as_the_signing_says() {
         let repo = TestRepo::new();
         let main = repo.directory();

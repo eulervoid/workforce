@@ -35,3 +35,8 @@
 ## Commits
 - Work in small commits, one feature at a time
 - Use one line commit messages; if you'd need more than one line, your commit is too big
+
+## Tests
+- A test that needs what the agent sandbox denies (the network for iroh, git signing) is `#[ignore = "needs the network"]` or `#[ignore = "needs git signing, ..."]`, so `cargo test` in a session passes or fails for real
+- Any other failing test is yours to explain: never report a failure as "sandbox-only", and fix or explain it before you submit
+- The principal, or a check outside the sandbox, runs the marked tests with `cargo test --workspace -- --ignored` (the slow ones among them are marked "slow" and run in release mode)

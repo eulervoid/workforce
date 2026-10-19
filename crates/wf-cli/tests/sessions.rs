@@ -540,6 +540,7 @@ wf work submit --note \"all done\"
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[ignore = "needs git signing, which the session denies"]
 async fn agents_commit_unsigned_and_the_merge_is_signed_as_git_is_configured() {
     let script = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m \"add hello\"
