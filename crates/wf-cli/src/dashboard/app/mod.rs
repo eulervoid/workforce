@@ -6,6 +6,7 @@ use std::collections::HashMap;
 use jiff::tz::TimeZone;
 use ratatui::layout::Position;
 use ratatui::style::Style;
+use ratatui::text::Line;
 use wf_core::graph::Readiness;
 use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::session::CommitId;
@@ -161,6 +162,31 @@ pub struct LogTab {
     pub filter: String,
     /// The details opened from links in the log, the latest on top, in its place.
     pub stack: Vec<Opened>,
+    /// Counts the lines taken in, so that what was made of them is known to be current.
+    revision: u64,
+    /// The lines that pass the filter as drawn, kept until they or the filter change.
+    shown: ShownLog,
+}
+
+/// The lines of the Log tab that pass its filter, parsed for drawing.
+#[derive(Clone, Debug, Default)]
+pub struct ShownLog {
+    /// The revision of the lines and the filter these were made for; `None` before the first.
+    made_for: Option<(u64, String)>,
+    lines: Vec<Line<'static>>,
+    /// The width of the widest of them.
+    widest: usize,
+}
+
+impl ShownLog {
+    pub fn lines(&self) -> &[Line<'static>] {
+        &self.lines
+    }
+
+    /// Whether none of the lines is wider than `width` columns, so that none wraps.
+    pub fn fits(&self, width: usize) -> bool {
+        self.widest <= width
+    }
 }
 
 /// How long the footer says what an action did or why it failed, unless a key is pressed first.
@@ -244,6 +270,8 @@ impl App {
                 scroll: Scroll::END,
                 filter: String::new(),
                 stack: Vec::new(),
+                revision: 0,
+                shown: ShownLog::default(),
             },
             prompt: None,
             verbosity: Verbosity::Abridged,
@@ -498,6 +526,28 @@ impl App {
         self.log.lines.extend(lines);
         let over = self.log.lines.len().saturating_sub(LOG_LINES);
         self.log.lines.drain(..over);
+        self.log.revision += 1;
+    }
+
+    /// Parses the lines of the Log tab that pass its filter, unless that was done for these lines
+    /// and this filter already.
+    pub fn lay_out_log(&mut self) {
+        let made_for = (self.log.revision, self.log.filter.clone());
+        if self.log.shown.made_for.as_ref() == Some(&made_for) {
+            return;
+        }
+        let text: String = self.log_lines().map(String::as_str).collect();
+        let lines = draw::ansi_text(&text).lines;
+        self.log.shown = ShownLog {
+            made_for: Some(made_for),
+            widest: lines.iter().map(Line::width).max().unwrap_or(0),
+            lines,
+        };
+    }
+
+    /// The lines of the Log tab that pass its filter, as [`App::lay_out_log`] parsed them.
+    pub fn shown_log(&self) -> &ShownLog {
+        &self.log.shown
     }
 
     /// The lines of the Log tab that pass its filter.

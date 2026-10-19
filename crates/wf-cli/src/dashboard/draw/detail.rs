@@ -234,8 +234,8 @@ pub(super) fn draw_log(
         width: area.width.saturating_sub(1),
         ..area
     };
-    let text: String = app.log_lines().map(String::as_str).collect();
-    if text.is_empty() {
+    let shown = app.shown_log();
+    if shown.lines().is_empty() {
         let empty = if app.log.filter.is_empty() {
             "no events yet"
         } else {
@@ -244,8 +244,13 @@ pub(super) fn draw_log(
         frame.render_widget(Paragraph::new(empty).themed(theme::text_dimmed()), area);
         return None;
     }
-    let text = ansi_text(&text);
-    let scroll = draw_scrolled(frame, text, app.log.scroll, area, app.base);
+    // Lines were wrapped to the window when taken in, so they rarely wrap again.
+    let scroll = if shown.fits(usize::from(padded(area).width)) {
+        draw_lines(frame, shown.lines(), &[], app.log.scroll, area, app.base)
+    } else {
+        let text = Text::from(shown.lines().to_vec());
+        draw_scrolled(frame, text, app.log.scroll, area, app.base)
+    };
     spots.extend(links::find(
         frame.buffer_mut(),
         area,

@@ -161,6 +161,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     let area = frame.area();
     app.resize(area.width, area.height);
     app.lay_out_transcript();
+    app.lay_out_log();
     let drawn = draw_all(frame, app);
     app.shown(drawn);
 }
