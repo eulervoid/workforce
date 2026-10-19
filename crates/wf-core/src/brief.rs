@@ -437,10 +437,10 @@ impl WorkBrief {
         if let Some(checks) = checks(&self.checks) {
             let _ = writeln!(
                 text,
-                "- Before you submit, run the checks the merge runs ({checks}): `wf check`. Fix \
-                 what fails; `wf check <name>` runs one again. Tests that cannot run in your \
-                 sandbox are run by the checks of the merge, not by the principal. Run what you \
-                 can, and say in your note what you could not run here."
+                "- While you work, build and run the tests near your change; do not run the whole \
+                 suite. Submitting runs the checks of the merge ({checks}) in your sandbox and \
+                 tells you what failed, so you fix it and submit again. `wf check` runs them \
+                 yourself, for when that is worth it."
             );
         }
         let _ = writeln!(
@@ -538,9 +538,11 @@ impl ReviewBrief {
              - Your principal has to decide: `wf review --escalate --note \"<what they have to decide>\"`\n\
              {AGAIN}",
             checks = checks(&self.checks).map_or_else(String::new, |checks| format!(
-                "- Tests that cannot run in your sandbox are run by the checks of the merge \
-                 ({checks}) before the work lands, not by your principal: do not escalate for \
-                 them. Say in your note what you could not run here.\n"
+                "- The checks of the merge ({checks}) passed in the sandbox before this review, \
+                 on the merge of the work into {target}: do not run them again, and do not \
+                 escalate for tests that cannot run in your sandbox. Say in your note what you \
+                 could not run here.\n",
+                target = self.target
             )),
         );
         text
@@ -705,6 +707,19 @@ pub fn rebase_nudge(item: ItemId, target: &str, paths: &[String]) -> String {
          yourself with `git add` or `git rm` once it is as it should be.\n\n{}",
         paths.join(", "),
         nudge(item, SessionRole::Work)
+    )
+}
+
+/// The prompt that goes out when the checks of the policy failed on the merge of the work of
+/// `item` as it was submitted: `failures` says which and how, `comment` is the short id of the
+/// change request that tells the same, and the agent fixes them and submits again.
+pub fn checks_failed_nudge(item: ItemId, comment: &str, failures: &str) -> String {
+    format!(
+        "Your submission was not sent to review: its checks failed.\n\n{failures}\n\n\
+         Fix them, resolve the change request with `wf comment {item} \"<what you did>\" --resolve {comment}`, \
+         then submit again.\n\n{}",
+        nudge(item, SessionRole::Work),
+        item = HashId::short(&item),
     )
 }
 
@@ -893,7 +908,7 @@ mod tests {
         assert!(text.contains("- c4d2e1 by @ada/reviewer: Exit with 2 on a missing file"));
         assert!(text.contains("--resolve <id>"));
         assert!(
-            text.contains("run the checks the merge runs (`fmt`, `test`): `wf check`"),
+            text.contains("Submitting runs the checks of the merge (`fmt`, `test`) in your sandbox"),
             "{text}"
         );
     }
@@ -950,7 +965,7 @@ mod tests {
     }
 
     #[test]
-    fn the_checks_run_what_a_session_cannot_and_not_the_principal() {
+    fn the_checks_run_at_submission_and_before_the_review() {
         let work = WorkBrief {
             agent: "coder".into(),
             instructions: None,
@@ -977,15 +992,14 @@ mod tests {
             earlier: vec![],
             diff: "+added".into(),
         };
-        for text in [work.render(), review.render()] {
-            assert!(
-                text.contains(
-                    "Tests that cannot run in your sandbox are run by the checks of the merge"
-                ),
-                "{text}"
-            );
-            assert!(text.contains("not by"), "{text}");
-        }
+        let text = work.render();
+        assert!(text.contains("do not run the whole suite"), "{text}");
+        assert!(!text.contains("Before you submit, run"), "{text}");
+        let text = review.render();
+        assert!(
+            text.contains("passed in the sandbox before this review"),
+            "{text}"
+        );
 
         // Without checks, nobody runs them, and the brief does not say otherwise.
         let unchecked = [
