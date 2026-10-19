@@ -166,10 +166,7 @@ impl Daemon {
                 .caches_measured
                 .lock()
                 .unwrap_or_else(|poisoned| poisoned.into_inner());
-            let recently = measured
-                .get(&workforce)
-                .is_some_and(|at| at.elapsed() < MEASURE_CACHES_EVERY);
-            if recently && !disk_full {
+            if !due_for_measuring(measured.get(&workforce).copied(), disk_full) {
                 return;
             }
             measured.insert(workforce, Instant::now());
@@ -212,6 +209,12 @@ impl Daemon {
 /// How long the caches are left unmeasured after they were.
 const MEASURE_CACHES_EVERY: Duration = Duration::from_secs(300);
 
+/// Whether the caches are measured again: when they were last measured at least
+/// [`MEASURE_CACHES_EVERY`] ago or never, and at once while the disk is full.
+fn due_for_measuring(last_measured: Option<Instant>, disk_full: bool) -> bool {
+    disk_full || last_measured.is_none_or(|at| at.elapsed() >= MEASURE_CACHES_EVERY)
+}
+
 /// Whether a live session other than `session` works in the worktree of `item`: only work
 /// sessions do, every other role runs in a directory of its own.
 fn another_work_session_live(
@@ -234,6 +237,16 @@ fn another_work_session_live(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn caches_are_measured_again_after_the_interval_or_while_the_disk_is_full() {
+        let just_now = Some(Instant::now());
+        let long_ago = Instant::now().checked_sub(MEASURE_CACHES_EVERY * 2);
+        assert!(due_for_measuring(None, false));
+        assert!(!due_for_measuring(just_now, false));
+        assert!(due_for_measuring(long_ago, false));
+        assert!(due_for_measuring(just_now, true));
+    }
 
     #[test]
     fn only_another_live_work_session_keeps_the_item_worktree_in_use() {
