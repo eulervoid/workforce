@@ -13,5 +13,6 @@ mod paint;
 mod permissions;
 mod pointer;
 mod refresh;
+mod restart;
 mod support;
 mod warnings;

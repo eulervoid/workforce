@@ -821,6 +821,34 @@ fn the_cli_gives_the_same_output_through_the_daemon_as_through_the_store() {
     assert_eq!(list.as_array().unwrap().len(), 2);
 }
 
+/// What the dashboard relies on: a workspace whose daemon restarted fails on the dead
+/// connection, and reads again once it connects again.
+#[test]
+fn a_workspace_reads_again_after_it_reconnects_to_a_restarted_daemon() {
+    use wf_cli::workspace::{Workspace, connection_broke};
+    let sandbox = Sandbox::new();
+    sandbox.run(&["init", "--name", "demo"]);
+    let first = sandbox.start_daemon();
+    // SAFETY: the only test of this binary that reads the environment of a session, which a
+    // connection in a session would present.
+    unsafe {
+        std::env::set_var("XDG_RUNTIME_DIR", sandbox.root.path().join("run"));
+        for variable in ["WF_SESSION", "WF_SESSION_TOKEN", "WF_WORKFORCE"] {
+            std::env::remove_var(variable);
+        }
+    }
+    let data = wf_daemon::DataDir::new(sandbox.data.join("workforce"));
+    let mut workspace = Workspace::open(data, &sandbox.repository, false).unwrap();
+    let known = workspace.events().unwrap().len() as u64;
+    first.stop();
+    let error = workspace.events_since(known).unwrap_err();
+    assert!(connection_broke(&error), "{error:#}");
+    let _second = sandbox.start_daemon();
+    workspace.reconnect().unwrap();
+    sandbox.add(&["--title", "Written after the restart"]);
+    assert_eq!(workspace.events_since(known).unwrap().len(), 1);
+}
+
 #[test]
 fn a_second_daemon_is_refused() {
     let sandbox = Sandbox::new();

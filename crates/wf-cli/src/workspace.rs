@@ -14,8 +14,9 @@ use wf_core::state::State;
 use wf_daemon::MachineFaults;
 use wf_daemon::caches::CacheUsage;
 use wf_daemon::caller::Caller;
-use wf_daemon::client::DaemonClient;
-use wf_daemon::proto::{EndAnswer, HeldPermission, LiveDiff};
+use wf_daemon::client::{ClientError, DaemonClient};
+use wf_daemon::data_dir::DataDirError;
+use wf_daemon::proto::{EndAnswer, HeldPermission, LiveDiff, ProtoError};
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
@@ -92,6 +93,25 @@ pub struct Workspace {
     actor: Actor,
     /// The directory of the workforce file, if there is one.
     repository: Option<PathBuf>,
+}
+
+/// Why [`Workspace::reconnect`] did not connect.
+#[derive(Debug)]
+pub enum Reconnect {
+    /// No daemon listens, as while one restarts.
+    NoDaemon,
+    /// The daemon speaks another protocol than this build.
+    Refused { daemon: u32, client: u32 },
+    Failed(anyhow::Error),
+}
+
+/// Whether `error` is the connection to the daemon breaking, as when the daemon stops, rather
+/// than the daemon refusing a call.
+pub fn connection_broke(error: &anyhow::Error) -> bool {
+    matches!(
+        error.downcast_ref::<ClientError>(),
+        Some(ClientError::Proto(ProtoError::Io(_) | ProtoError::Frame(_)))
+    )
 }
 
 /// The replica of a command that talks to the network itself, or the daemon that does.
@@ -261,6 +281,28 @@ impl Workspace {
             Source::Local(replica, _) => replica.state(),
             Source::Daemon { state, .. } => state,
         }
+    }
+
+    /// Connects to the daemon again, after the connection broke because it restarted, and reads
+    /// the state anew.
+    pub fn reconnect(&mut self) -> Result<(), Reconnect> {
+        let Source::Daemon { client, state } = &mut self.source else {
+            return Ok(());
+        };
+        let mut fresh = match self.data.connect_daemon() {
+            Ok(Some(fresh)) => fresh,
+            Ok(None) => return Err(Reconnect::NoDaemon),
+            Err(DataDirError::Client(ClientError::Proto(ProtoError::VersionMismatch {
+                daemon,
+                client,
+            }))) => return Err(Reconnect::Refused { daemon, client }),
+            Err(error) => return Err(Reconnect::Failed(error.into())),
+        };
+        *state = fresh
+            .state(self.workforce)
+            .map_err(|error| Reconnect::Failed(error.into()))?;
+        *client.get_mut() = fresh;
+        Ok(())
     }
 
     /// Fetches the state again from the daemon, to show what was written or what arrived since.

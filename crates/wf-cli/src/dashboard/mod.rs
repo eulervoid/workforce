@@ -8,13 +8,16 @@ mod draw;
 mod draw_diff;
 mod hint;
 mod links;
+mod restart;
 mod snapshot;
 mod transcript_lines;
 
 use std::collections::HashMap;
 use std::io::Write;
+use std::os::unix::process::CommandExt;
 use std::time::{Duration, Instant};
 
+use anyhow::anyhow;
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::event::{
     self, DisableBracketedPaste, DisableFocusChange, DisableMouseCapture, EnableBracketedPaste,
@@ -28,10 +31,11 @@ use wf_daemon::proto::HeldPermission;
 
 use self::app::{App, Wheel};
 use self::diff::{Changes, ItemWork};
+use self::restart::{Executable, Mismatch};
 use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
 use crate::commands::{DeviceDiff, ItemDiff};
 use crate::transcript::Format;
-use crate::workspace::Workspace;
+use crate::workspace::{self, Reconnect, Workspace};
 use crate::{commands, render, transcript, view};
 
 /// How often the daemon is asked for what is new.
@@ -45,6 +49,8 @@ const ASK_DEVICE_EVERY: Duration = Duration::from_secs(3);
 const BACKLOG: usize = 200;
 
 pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
+    let executable = Executable::start()?;
+    let rebuilt = executable.path().to_path_buf();
     let mut terminal = ratatui::init();
     // A panic restores the terminal through ratatui's hook, which leaves the mouse and the focus
     // reported.
@@ -55,10 +61,26 @@ pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()
     }));
     let result = start_reports()
         .map_err(anyhow::Error::from)
-        .and_then(|()| event_loop(&mut terminal, workspace, only));
+        .and_then(|()| event_loop(&mut terminal, workspace, only, executable));
     let _ = stop_reports();
     ratatui::restore();
-    result
+    match result? {
+        Exit::Quit => Ok(()),
+        Exit::RunRebuilt => {
+            // Only returns when the executable could not be run.
+            let error = std::process::Command::new(rebuilt)
+                .args(std::env::args_os().skip(1))
+                .exec();
+            Err(anyhow::Error::from(error).context("running the rebuilt wf"))
+        }
+    }
+}
+
+/// How the dashboard ended.
+enum Exit {
+    Quit,
+    /// The daemon is a newer build: the executable that replaced this one takes over.
+    RunRebuilt,
 }
 
 /// Asks the terminal to report presses of the mouse and its wheel, so a click picks and the wheel
@@ -87,6 +109,7 @@ pub(super) fn stop_reports() -> std::io::Result<()> {
 /// What an event from the terminal came to.
 enum Handled {
     Quit,
+    RunRebuilt,
     /// Something moved on screen: draw it again, and ask the workspace about what came into view.
     Moved,
     /// The workforce or the window changed: ask the workspace again, and draw.
@@ -98,11 +121,12 @@ fn event_loop(
     terminal: &mut DefaultTerminal,
     workspace: &mut Workspace,
     only: Option<ItemId>,
-) -> anyhow::Result<()> {
+    executable: Executable,
+) -> anyhow::Result<Exit> {
     let mut app = App::new(Snapshot::default(), jiff::tz::TimeZone::system());
     let size = terminal.size()?;
     app.resize(size.width, size.height);
-    let mut feed = Feed::new(workspace, &mut app)?;
+    let mut feed = Feed::new(workspace, &mut app, executable)?;
     if let Some(item) = only {
         app.open_item(item);
     }
@@ -126,7 +150,8 @@ fn event_loop(
         while event::poll(wait)? {
             wait = Duration::ZERO;
             match handle(event::read()?, &mut app, &mut feed, workspace, terminal) {
-                Handled::Quit => return Ok(()),
+                Handled::Quit => return Ok(Exit::Quit),
+                Handled::RunRebuilt => return Ok(Exit::RunRebuilt),
                 Handled::Moved => draw = true,
                 Handled::Changed => changed = true,
                 Handled::Ignored => {}
@@ -134,8 +159,9 @@ fn event_loop(
         }
         if refreshed.elapsed() >= REFRESH_EVERY {
             refreshed = Instant::now();
-            match feed.refresh(workspace, &mut app) {
-                Ok(()) => app.refreshed(),
+            match feed.refresh_through_restart(workspace, &mut app) {
+                Ok(Refreshed::Read) => app.refreshed(),
+                Ok(Refreshed::RunRebuilt) => return Ok(Exit::RunRebuilt),
                 Err(error) => {
                     app.refresh_failed(&error);
                     draw = true;
@@ -267,8 +293,9 @@ fn handle(
                 Err(error) => app.action_failed(&error, wf_store::now_ms()),
             }
             // Show what the action changed right away.
-            match feed.refresh(workspace, app) {
-                Ok(()) => app.refreshed(),
+            match feed.refresh_through_restart(workspace, app) {
+                Ok(Refreshed::Read) => app.refreshed(),
+                Ok(Refreshed::RunRebuilt) => return Handled::RunRebuilt,
                 Err(error) => app.refresh_failed(&error),
             }
             Handled::Changed
@@ -288,6 +315,15 @@ struct Feed {
     taken: Option<Taken>,
     /// When each diff was last asked of the device of its session.
     asked_devices: AskedDevices,
+    /// The executable as it was when the dashboard started.
+    executable: Executable,
+}
+
+/// What came of a refresh.
+enum Refreshed {
+    Read,
+    /// The daemon is a newer build, and the executable was rebuilt to speak to it.
+    RunRebuilt,
 }
 
 /// When each diff was last asked of the device of its session, however that came out, so a
@@ -314,7 +350,7 @@ impl AskedDevices {
 
 impl Feed {
     /// Reads the log so far, and hands the app the lines of its latest events.
-    fn new(workspace: &Workspace, app: &mut App) -> anyhow::Result<Self> {
+    fn new(workspace: &Workspace, app: &mut App, executable: Executable) -> anyhow::Result<Self> {
         let events = workspace.events()?;
         let backlog = &events[events.len().saturating_sub(BACKLOG)..];
         app.logged(log_lines(workspace.state(), &events, backlog, app.width));
@@ -324,7 +360,43 @@ impl Feed {
             git: None,
             taken: None,
             asked_devices: AskedDevices::default(),
+            executable,
         })
+    }
+
+    /// [`Feed::refresh`], and when the connection to the daemon broke because it restarted,
+    /// connects again, on every refresh until the daemon answers. A newer daemon than this build
+    /// is met by the rebuilt executable if there is one, and otherwise says which side to restart.
+    fn refresh_through_restart(
+        &mut self,
+        workspace: &mut Workspace,
+        app: &mut App,
+    ) -> anyhow::Result<Refreshed> {
+        let error = match self.refresh(workspace, app) {
+            Ok(()) => return Ok(Refreshed::Read),
+            Err(error) => error,
+        };
+        if !workspace::connection_broke(&error) {
+            return Err(error);
+        }
+        match workspace.reconnect() {
+            Ok(()) => self.refresh(workspace, app).map(|()| Refreshed::Read),
+            Err(Reconnect::NoDaemon) => Err(anyhow!("the daemon is restarting")),
+            Err(Reconnect::Failed(error)) => Err(error),
+            Err(Reconnect::Refused { daemon, client }) => {
+                match restart::on_mismatch(daemon, client, self.executable.changed()) {
+                    Mismatch::RunRebuilt => Ok(Refreshed::RunRebuilt),
+                    Mismatch::RestartDaemon => Err(anyhow!(
+                        "the daemon speaks protocol {daemon}, older than this build's {client}; \
+                         restart it with `wf daemon restart`"
+                    )),
+                    Mismatch::RebuildAndStart => Err(anyhow!(
+                        "the daemon speaks protocol {daemon}, newer than this build's {client}; \
+                         rebuild wf and start it again"
+                    )),
+                }
+            }
+        }
     }
 
     /// Asks the daemon for the new events, and for the state when there are some, and hands the
