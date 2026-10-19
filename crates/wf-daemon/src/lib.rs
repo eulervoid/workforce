@@ -232,9 +232,9 @@ pub struct Daemon {
     starting: runner::ItemLocks,
     /// Taken while a session ends, so that two ends of one session, such as the agent's submit
     /// and a timeout, do not both act; ends of other sessions do not wait.
-    ending: keyed_locks::KeyedLocks<SessionId>,
+    ending: Arc<keyed_locks::KeyedLocks<SessionId>>,
     /// Taken while a workforce is opened, because its store can be open only once.
-    opening: keyed_locks::KeyedLocks<WorkforceId>,
+    opening: Arc<keyed_locks::KeyedLocks<WorkforceId>>,
     held: Arc<permissions::Held>,
     /// Whom each connection to the socket acts for.
     callers: caller::Callers,
@@ -392,6 +392,18 @@ impl Daemon {
         if let Some(existing) = self.loaded_workforce(&id) {
             return Ok(existing);
         }
+        // The open runs as a task of its own, so a caller that gives up halfway cannot leave a
+        // finished open behind that nobody inserts, with the lock released.
+        let daemon = Arc::clone(self);
+        tokio::spawn(async move { daemon.open_workforce(id).await })
+            .await
+            .map_err(|error| DaemonError::Io {
+                path: self.config.data_dir.store(&id),
+                source: std::io::Error::other(error),
+            })?
+    }
+
+    async fn open_workforce(self: &Arc<Self>, id: WorkforceId) -> Result<Arc<Loaded>, DaemonError> {
         // Opening folds the whole log, so it runs outside the `loaded` lock, which every lookup
         // takes. A store can be open only once, so opens of one workforce wait for each other.
         let _opening = self.opening.lock(id).await;
@@ -476,10 +488,12 @@ impl Daemon {
     ) -> Result<Arc<Loaded>, DaemonError> {
         let directory = self.config.data_dir.workforce(&id);
         let store = self.config.data_dir.store(&id);
-        {
+        // A task of its own, like the open in `workforce`, so it finishes whatever the caller does.
+        let daemon = Arc::clone(self);
+        tokio::spawn(async move {
             // Redb allows one open, so the pre-create waits for a concurrent `workforce` open.
-            let _opening = self.opening.lock(id).await;
-            if self.loaded_workforce(&id).is_none() {
+            let _opening = daemon.opening.lock(id).await;
+            if daemon.loaded_workforce(&id).is_none() {
                 tokio::task::spawn_blocking(move || {
                     std::fs::create_dir_all(&directory).map_err(|source| DaemonError::Io {
                         path: directory.clone(),
@@ -490,11 +504,17 @@ impl Daemon {
                 })
                 .await
                 .map_err(|error| DaemonError::Io {
-                    path: self.config.data_dir.store(&id),
+                    path: daemon.config.data_dir.store(&id),
                     source: std::io::Error::other(error),
                 })??;
             }
-        }
+            Ok::<_, DaemonError>(())
+        })
+        .await
+        .map_err(|error| DaemonError::Io {
+            path: self.config.data_dir.store(&id),
+            source: std::io::Error::other(error),
+        })??;
         self.workforce(id).await
     }
 
