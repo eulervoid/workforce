@@ -12,10 +12,9 @@ use wf_core::identity::{Actor, DeviceKey, InviteSigner, Signed};
 use wf_core::invite::InviteCode;
 use wf_core::name::AgentName;
 use wf_core::state::State;
-use wf_daemon::{PeerOutcome, PeerSync, peers_of, sync_all};
-use wf_net::replica::{self, Joined};
-use wf_net::{NetError, Network, Node, StorageHandle};
-use wf_store::{RedbStore, Replica};
+use wf_daemon::{PeerOutcome, PeerSync, StorageHandle, peers_of, sync_all};
+use wf_net::{NetError, Network, Node};
+use wf_store::{DeviceBinding, RedbStore, Replica};
 
 use crate::cli::{InviteDeviceArgs, JoinArgs, SyncArgs};
 use crate::commands::emit;
@@ -137,9 +136,9 @@ pub fn sync(json: bool, workspace: Workspace, args: SyncArgs) -> anyhow::Result<
         .into_iter()
         .map(|peer| (peer, device_label(replica.state(), peer)))
         .collect();
-    let storage = StorageHandle::spawn(replica, move |_| {
-        Replica::open(RedbStore::open(&store)?, workforce)
-    });
+    // The storage task opens the store again, which only one replica can hold at a time.
+    drop(replica);
+    let storage = StorageHandle::open(store, workforce, || None, |_| {})?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -356,13 +355,11 @@ pub fn join(
     let device = data.device_or_create()?;
     let store = workspace::store_path(&data, &code.workforce)?;
     let replica = Replica::open(RedbStore::open(&store)?, code.workforce)?;
-    if replica::joined(&replica, device.key(), code.invite) == Joined::Otherwise {
+    if replica.binding_of(device.key(), code.invite) == DeviceBinding::BoundWithoutInvite {
         bail!("this machine has already joined the workforce");
     }
-    let workforce = code.workforce;
-    let storage = StorageHandle::spawn(replica, move |_| {
-        Replica::open(RedbStore::open(&store)?, workforce)
-    });
+    drop(replica);
+    let storage = StorageHandle::open(store, code.workforce, || None, |_| {})?;
 
     let runtime = tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -383,8 +380,7 @@ pub fn join(
                 move || async move {
                     storage
                         .with(move |replica| {
-                            replica::bind_device(
-                                replica,
+                            replica.bind_device(
                                 &signer,
                                 invite,
                                 proof,

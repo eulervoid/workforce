@@ -2,18 +2,19 @@
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, anyhow, bail};
 use serde::Serialize;
-use wf_core::event::{EventBody, ForkAnnounced, ForkPoint, Genesis};
-use wf_core::id::WorkforceId;
+use wf_core::event::{Event, EventBody, ForkAnnounced, ForkPoint, Genesis};
+use wf_core::id::{EventId, WorkforceId};
 use wf_core::identity::{
     Actor, DeviceKey, MemberSeed, PrincipalKey, PrincipalSigner, Role, Signed,
 };
 use wf_core::state::State;
-use wf_net::{Node, StorageHandle};
-use wf_store::{RedbStore, Replica};
+use wf_daemon::StorageHandle;
+use wf_net::Node;
+use wf_store::{HistorySource, RedbStore, Replica};
 
 use crate::cli::ForkArgs;
 use crate::commands::emit;
@@ -21,6 +22,20 @@ use crate::network::{network_for, sync_devices};
 use crate::view::device_label;
 use crate::workspace::{self, Replicated, WORKFORCE_FILE, WorkforceFile, Workspace};
 use wf_daemon::DataDir;
+
+/// The workforce the fork was made from, opened in this process, as the place its replica looks
+/// for history before it asks a peer.
+struct ParentReplica(Arc<Mutex<Box<Replica<RedbStore>>>>);
+
+impl HistorySource for ParentReplica {
+    fn history_behind(&self, parent: WorkforceId, wanted: &BTreeSet<EventId>) -> Vec<Event> {
+        let replica = self
+            .0
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        replica.history_behind(parent, wanted)
+    }
+}
 
 /// The directory of a fork that is being made, removed again unless the fork is completed.
 struct Unfinished(Option<PathBuf>);
@@ -335,11 +350,9 @@ pub fn accept(
         }
         Replicated::Local(parent, device) => {
             let store = workspace::store_path(&data, &child)?;
-            let mut replica = Replica::open(RedbStore::open(&store)?, child)?;
-            replica.set_history_source(parent);
-            let storage = StorageHandle::spawn(replica, move |_| {
-                Replica::open(RedbStore::open(&store)?, child)
-            });
+            let parent = Arc::new(Mutex::new(parent));
+            let history = move || Some(Box::new(ParentReplica(Arc::clone(&parent))) as Box<_>);
+            let storage = StorageHandle::open(store, child, history, |_| {})?;
             let runtime = tokio::runtime::Builder::new_multi_thread()
                 .enable_all()
                 .build()?;

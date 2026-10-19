@@ -88,11 +88,11 @@ async fn a_new_device_takes_in_a_fork_and_its_history() {
         forked.forker.lock().state().event_count(),
         forked.history.len() + 1
     );
-    assert!(forked.forker.missing().await.unwrap().is_empty());
+    assert!(forked.forker.missing_parents().await.unwrap().is_empty());
 
     let device = replica(forked.child);
     sync(&device, &forked.forker, forked.child).await;
-    assert!(device.missing().await.unwrap().is_empty());
+    assert!(device.missing_parents().await.unwrap().is_empty());
     assert_eq!(encoded(&device), encoded(&forked.forker));
     assert_eq!(device.lock().state().items().count(), 40);
     let items = |state: &wf_core::state::State| -> Vec<(String, Option<wf_core::item::Priority>)> {
@@ -138,7 +138,7 @@ async fn the_history_is_served_only_when_asked_for_by_id() {
     let forked = forked(10);
     // What the fork would send unprompted contains only events written in the fork.
     let theirs = std::collections::BTreeMap::new();
-    let sent = wf_net::replica::events_after(&forked.forker.lock(), &theirs).unwrap();
+    let sent = forked.forker.lock().events_after(&theirs).unwrap();
     assert_eq!(sent.len(), 1, "just the genesis of the fork");
 
     let head = *forked
@@ -206,7 +206,7 @@ async fn a_device_that_has_the_parent_takes_in_the_history_from_it() {
         forker.sent, 1,
         "only the genesis of the fork crossed the network"
     );
-    assert!(device.missing().await.unwrap().is_empty());
+    assert!(device.missing_parents().await.unwrap().is_empty());
     assert_eq!(encoded(&device), encoded(&forked.forker));
 }
 
@@ -220,7 +220,7 @@ async fn a_device_behind_the_fork_point_gets_the_rest_from_a_peer() {
 
     let (_, forker) = sync(&device, &forked.forker, forked.child).await;
     assert!(forker.sent > 1, "the history it lacked came from the peer");
-    assert!(device.missing().await.unwrap().is_empty());
+    assert!(device.missing_parents().await.unwrap().is_empty());
     assert_eq!(encoded(&device), encoded(&forked.forker));
 }
 

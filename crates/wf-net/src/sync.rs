@@ -52,8 +52,9 @@ enum Message {
     Versions(Versions),
     Events(Vec<Event>),
     EndOfEvents,
-    /// Ids the sender needs. Empty ends the exchange of wants.
+    /// Ids the sender needs.
     Want(Vec<EventId>),
+    EndOfWants,
     Have(Vec<Event>),
 }
 
@@ -65,6 +66,7 @@ impl Message {
             Message::Events(_) => "events",
             Message::EndOfEvents => "end of events",
             Message::Want(_) => "want",
+            Message::EndOfWants => "end of wants",
             Message::Have(_) => "have",
         }
     }
@@ -76,6 +78,14 @@ pub struct SyncReport {
     pub sent: usize,
     pub applied: usize,
     pub rejected: usize,
+}
+
+/// Which side of the stream a session is.
+#[derive(Clone, Copy)]
+enum Role {
+    /// Opened the stream, and goes first at every step.
+    Initiator,
+    Responder,
 }
 
 struct Session<'a, S, L> {
@@ -97,9 +107,9 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
             .map_err(SyncError::from)
     }
 
-    async fn exchange_versions(&mut self, send_first: bool) -> Result<Versions, SyncError> {
+    async fn exchange_versions(&mut self, role: Role) -> Result<Versions, SyncError> {
         let mine = self.log.versions().await?;
-        if send_first {
+        if let Role::Initiator = role {
             self.send(Message::Versions(mine.clone())).await?;
         }
         let theirs = match self.receive().await? {
@@ -111,7 +121,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
                 });
             }
         };
-        if !send_first {
+        if let Role::Responder = role {
             self.send(Message::Versions(mine)).await?;
         }
         Ok(theirs)
@@ -154,14 +164,14 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
         loop {
             let wanted: Vec<EventId> = self
                 .log
-                .missing()
+                .missing_parents()
                 .await?
                 .into_iter()
                 .filter(|id| !asked.contains(id))
                 .take(IDS_PER_WANT)
                 .collect();
             if wanted.is_empty() {
-                return self.send(Message::Want(Vec::new())).await;
+                return self.send(Message::EndOfWants).await;
             }
             asked.extend(wanted.iter().copied());
             self.send(Message::Want(wanted)).await?;
@@ -180,7 +190,7 @@ impl<S: AsyncRead + AsyncWrite + Unpin, L: SyncLog> Session<'_, S, L> {
     async fn answer_wants(&mut self) -> Result<(), SyncError> {
         loop {
             match self.receive().await? {
-                Message::Want(ids) if ids.is_empty() => return Ok(()),
+                Message::EndOfWants => return Ok(()),
                 Message::Want(ids) if ids.len() > IDS_PER_WANT => {
                     return Err(SyncError::WantTooLarge(ids.len()));
                 }
@@ -249,7 +259,7 @@ where
         report: SyncReport::default(),
         idle,
     };
-    let theirs = session.exchange_versions(true).await?;
+    let theirs = session.exchange_versions(Role::Initiator).await?;
     session.push_events(&theirs).await?;
     session.accept_events().await?;
     session.pull_missing().await?;
@@ -282,7 +292,7 @@ where
         report: SyncReport::default(),
         idle,
     };
-    let theirs = session.exchange_versions(false).await?;
+    let theirs = session.exchange_versions(Role::Responder).await?;
     session.accept_events().await?;
     session.push_events(&theirs).await?;
     session.answer_wants().await?;

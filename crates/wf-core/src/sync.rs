@@ -18,6 +18,14 @@ pub struct FeedVersion {
     pub tips: Vec<FeedHead>,
 }
 
+/// What a batch of received events did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BatchReceived {
+    pub applied: usize,
+    /// Events that are invalid. A peer may send them; they are dropped.
+    pub rejected: usize,
+}
+
 pub type Versions = BTreeMap<DeviceKey, FeedVersion>;
 
 /// What to send of one author's feed: every event above `after_seq`, and these specific events,

@@ -112,7 +112,6 @@ mod joining {
     use wf_core::event::DeviceProfile;
     use wf_core::identity::InviteSigner;
     use wf_core::invite::{InviteCode, JoinRefusal};
-    use wf_net::replica::bind_device;
 
     use super::*;
 
@@ -183,8 +182,7 @@ mod joining {
                 invited.member.local_addr(),
                 local,
                 move || async move {
-                    bind_device(
-                        &mut author_replica.lock(),
+                    author_replica.lock().bind_device(
                         &signer_for_author,
                         invite,
                         proof,

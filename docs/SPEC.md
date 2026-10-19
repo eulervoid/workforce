@@ -78,11 +78,11 @@ wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine,
 | Crate | Role |
 |---|---|
 | `wf-core` | events, encoding, identity, admission, fold, items, policy, sessions, lifecycle, recovery, briefs. Pure: no IO, no async, no clock or randomness except through parameters |
-| `wf-store` | the redb event store, snapshots, the `Replica` (store plus state) |
+| `wf-store` | the redb event store, snapshots, the `Replica` (store plus state), the questions a sync peer asks of it, binding a device to a workforce |
 | `wf-net` | sync, join and gossip over generic streams and a `SyncLog` trait, so convergence is tested in memory; iroh only carries them |
 | `wf-vcs` | git |
 | `wf-harness` | the ACP client |
-| `wf-daemon` | socket, runner, machine config, sandbox, deciders, network |
+| `wf-daemon` | socket, runner, machine config, sandbox, deciders, the storage task that owns each replica and serves it to the network |
 | `wf-cli` | the `wf` binary: commands, views, the dashboard |
 
 **The daemon owns the store when it runs.** redb is single-process. The CLI reads and writes through
