@@ -220,7 +220,32 @@ impl From<HarnessFault> for MachineFault {
     }
 }
 
+/// What an end reason makes of the session, for deciding what happens next and for counting.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// The work was handed in, with its commit.
+    Submitted { commit: Option<CommitId> },
+    /// The session did what it was started for, other than handing in work.
+    Finished,
+    /// The attempt did not finish: the agent gave up, ran out of time or failed.
+    Failed,
+    /// Interrupted by a restart, cancelled by the principal or ended by a fault of the machine:
+    /// no attempt either way.
+    Neither,
+}
+
 impl EndReason {
+    pub fn outcome(&self) -> Outcome {
+        match self {
+            EndReason::Submitted { commit } => Outcome::Submitted { commit: *commit },
+            EndReason::Reviewed | EndReason::Supervised | EndReason::Diagnosed => Outcome::Finished,
+            EndReason::Released | EndReason::TimedOut | EndReason::Failed => Outcome::Failed,
+            EndReason::Interrupted | EndReason::Cancelled | EndReason::MachineFault(_) => {
+                Outcome::Neither
+            }
+        }
+    }
+
     /// The reason's name; a fault of the machine goes by the fault's, so that a sessions list
     /// names it.
     pub fn name(&self) -> &'static str {

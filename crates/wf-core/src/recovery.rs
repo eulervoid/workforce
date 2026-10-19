@@ -9,7 +9,7 @@ use crate::identity::{AgentId, DeviceKey};
 use crate::item::{Item, ItemView};
 use crate::name::Requirement;
 use crate::policy::RecoveryStep;
-use crate::session::{EndReason, Session, SessionRole};
+use crate::session::{Outcome, Session, SessionRole};
 use crate::state::State;
 
 /// Where an item stands after the sessions of one role that ended without finishing since it
@@ -76,25 +76,16 @@ impl State {
             .filter_map(|session| {
                 let reason = session.ended()?.reason;
                 let at = session.ended()?.at();
-                match (same_role(role, session.role()), session.role(), reason) {
-                    (true, _, EndReason::Released | EndReason::TimedOut | EndReason::Failed) => {
+                let diagnosed =
+                    session.role() == SessionRole::Diagnose && role == SessionRole::Work;
+                match reason.outcome() {
+                    Outcome::Neither => None,
+                    Outcome::Failed if same_role(role, session.role()) => {
                         Some((at, Step::Failed(session.id())))
                     }
-                    (false, SessionRole::Diagnose, reason) if role == SessionRole::Work => {
-                        match reason {
-                            EndReason::Interrupted
-                            | EndReason::Cancelled
-                            | EndReason::MachineFault(_) => None,
-                            EndReason::Diagnosed
-                            | EndReason::Released
-                            | EndReason::TimedOut
-                            | EndReason::Failed
-                            | EndReason::Submitted { .. }
-                            | EndReason::Reviewed
-                            | EndReason::Supervised => Some((at, Step::Diagnosed)),
-                        }
+                    Outcome::Failed | Outcome::Finished | Outcome::Submitted { .. } => {
+                        diagnosed.then_some((at, Step::Diagnosed))
                     }
-                    _ => None,
                 }
             })
             .collect();

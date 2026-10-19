@@ -9,7 +9,7 @@ use crate::identity::{Actor, AgentId, DeviceKey};
 use crate::item::{Item, ItemState, ItemView};
 use crate::name::Requirement;
 use crate::policy::ReviewStep;
-use crate::session::{CommitId, EndReason, SessionRole, Verdict};
+use crate::session::{CommitId, Outcome, SessionRole, Verdict};
 use crate::state::State;
 
 /// Work the daemon merges into the target, then moves its item to `done`.
@@ -43,17 +43,9 @@ impl State {
             .filter(|session| session.item() == item && session.role() == SessionRole::Work)
             .filter_map(|session| {
                 let ended = session.ended()?;
-                match ended.reason {
-                    EndReason::Submitted { commit } => Some((commit, ended.stamp)),
-                    EndReason::Reviewed
-                    | EndReason::Released
-                    | EndReason::Supervised
-                    | EndReason::TimedOut
-                    | EndReason::Failed
-                    | EndReason::Cancelled
-                    | EndReason::Interrupted
-                    | EndReason::Diagnosed
-                    | EndReason::MachineFault(_) => None,
+                match ended.reason.outcome() {
+                    Outcome::Submitted { commit } => Some((commit, ended.stamp)),
+                    Outcome::Finished | Outcome::Failed | Outcome::Neither => None,
                 }
             })
             .max_by_key(|(_, stamp)| *stamp)
