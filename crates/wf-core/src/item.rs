@@ -199,7 +199,7 @@ impl Comment {
     }
 }
 
-/// A verdict on one commit of an item, by a review session or a person.
+/// A verdict on one commit of an item, by a review session or the principal.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Review {
     pub commit: Option<CommitId>,

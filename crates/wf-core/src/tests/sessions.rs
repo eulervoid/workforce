@@ -398,7 +398,7 @@ mod reports {
             3_002,
             comment(task, "halfway"),
         );
-        fixture.apply(&mut state, 0, 3_003, comment(task, "a person's remark"));
+        fixture.apply(&mut state, 0, 3_003, comment(task, "the principal's remark"));
         let reports = reports(&state, task);
         assert_eq!(reports.len(), 2);
         assert!(reports.contains(&(Some(session), Some(step))));

@@ -232,7 +232,7 @@ mod supervision {
         assert_eq!(
             waits_on(&state, task),
             [WaitsOn::Principal(fixture.founder.key())],
-            "without a supervisor it goes back to a person"
+            "without a supervisor it goes back to the principal"
         );
 
         fixture.apply(&mut state, 0, 2_003, define_supervisor("boss"));

@@ -1,4 +1,4 @@
-//! What waits on a person, worked out from the state.
+//! What waits on the principal, worked out from the state.
 
 use serde::{Deserialize, Serialize};
 
@@ -14,12 +14,12 @@ use crate::supervision::WaitsOn;
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Waiting {
-    /// A blocker on the item waits on this person: resolving it is the answer.
+    /// A blocker on the item waits on the principal: resolving it is the answer.
     Blocker { comment: CommentId },
     /// The item waits in its review state without submitted work, such as a proposed decision.
     /// Moving it on decides.
     Proposal,
-    /// The review of the work has reached a step for a person: `wf review`.
+    /// The review of the work has reached a step for the principal: `wf review`.
     PrincipalReview { commit: Option<CommitId> },
     /// The work is ready to merge, but the target branch is checked out with changes.
     Merge { commit: CommitId },
@@ -95,7 +95,7 @@ pub fn permission_waits(agent: Option<&str>, what: &str, session: SessionId) -> 
 }
 
 impl State {
-    /// What waits on a person, the item changed last first. Permission requests are held by the
+    /// What waits on the principal, the item changed last first. Permission requests are held by the
     /// daemon and are not part of the state.
     pub fn inbox(&self) -> Vec<InboxEntry> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
