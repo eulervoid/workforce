@@ -275,6 +275,11 @@ async fn turns(
     let mut last_head = branch_head(run).await;
     let mut turns_without_commit = 0;
     loop {
+        // Refs packed since the last turn (by the principal's git, outside the sandbox) cannot be
+        // recreated from inside the session.
+        if run.role == SessionRole::Work {
+            make_branch_loose(run).await;
+        }
         record.prompted_ms = Some(crate::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
             return not_kept(&daemon.faults, &run.agent_session, &error);
@@ -489,6 +494,15 @@ async fn nudge(run: &Run) -> String {
         StoppedRebase::Stopped | StoppedRebase::NotStopped => {
             wf_core::brief::nudge(run.item, run.role)
         }
+    }
+}
+
+async fn make_branch_loose(run: &Run) {
+    let (repository, branch) = (run.repository.clone(), run.branch.clone());
+    match blocking(move || GitCli::open(&repository)?.make_branch_loose(&branch)).await {
+        Ok(Ok(())) => {}
+        Ok(Err(error)) => tracing::warn!("session {}: {error}", run.session),
+        Err(error) => tracing::warn!("session {}: {error}", run.session),
     }
 }
 

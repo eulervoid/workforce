@@ -45,6 +45,12 @@ pub struct GitCli {
 
 /// `git`, kept from running code that an agent could have put in the repository's config: hooks
 /// and an fsmonitor run outside the agent's sandbox, with the privileges of whoever runs git.
+///
+/// Nor does git pack the references behind a session's back: `gc --auto` after a porcelain
+/// command such as the rebase at submit would remove the loose file of the branch that a
+/// sandboxed session can only rewrite, not create. The daemon never runs maintenance itself; the
+/// references stay as they are until the principal packs them, and every turn of a work session
+/// starts with `make_branch_loose`.
 fn git() -> Command {
     let mut command = Command::new("git");
     command.args([
@@ -52,6 +58,10 @@ fn git() -> Command {
         "core.hooksPath=/dev/null",
         "-c",
         "core.fsmonitor=false",
+        "-c",
+        "gc.auto=0",
+        "-c",
+        "maintenance.auto=false",
     ]);
     inherit_only_stdio(&mut command);
     command
@@ -460,11 +470,11 @@ fn describe(args: &[&OsStr]) -> String {
 
 impl VcsAdapter for GitCli {
     fn make_branch_loose(&self, branch: &str) -> Result<(), VcsError> {
-        let commit = self.branch_head(branch)?;
         let reference = self.git_directory().join("refs/heads").join(branch);
         if reference.is_file() {
             return Ok(());
         }
+        let commit = self.branch_head(branch)?;
         if let Some(parent) = reference.parent() {
             std::fs::create_dir_all(parent)?;
         }
