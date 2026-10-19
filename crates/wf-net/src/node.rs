@@ -18,7 +18,7 @@ use wf_core::session::CommitId;
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::{LogError, SyncLog};
-use crate::peek::{self, Answer, PEEK_ALPN, PeekError, PeekSource, Request, read_request};
+use crate::status::{self, Answer, Request, STATUS_ALPN, StatusError, StatusSource, read_request};
 use crate::sync::{IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
 /// Hole punching and address lookup can take a while.
@@ -50,10 +50,10 @@ pub enum NetError {
         source: SyncError,
     },
     #[error("asking {peer} for work failed: {source}")]
-    Peek {
+    Status {
         peer: String,
         #[source]
-        source: PeekError,
+        source: StatusError,
     },
     #[error("gossip failed")]
     Gossip(#[source] SourceError),
@@ -223,20 +223,20 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for SyncHandler<L> {
 }
 
 /// Where the daemon's answers to requests for work come from, once it has set one.
-type PeekSlot = Arc<RwLock<Option<Arc<dyn PeekSource>>>>;
+type StatusSlot = Arc<RwLock<Option<Arc<dyn StatusSource>>>>;
 
-struct PeekHandler<L> {
+struct StatusHandler<L> {
     registry: Registry<L>,
-    source: PeekSlot,
+    source: StatusSlot,
 }
 
-impl<L> std::fmt::Debug for PeekHandler<L> {
+impl<L> std::fmt::Debug for StatusHandler<L> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("PeekHandler")
+        formatter.write_str("StatusHandler")
     }
 }
 
-impl<L: SyncLog + Clone + 'static> ProtocolHandler for PeekHandler<L> {
+impl<L: SyncLog + Clone + 'static> ProtocolHandler for StatusHandler<L> {
     async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
         let remote = device_key(connection.remote_id());
         match self.registry.is_member(remote).await {
@@ -272,14 +272,14 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for PeekHandler<L> {
             }
             Err(error) => return Err(close_unreadable(&connection, error)),
         }
-        match peek::respond(tokio::io::join(&mut recv, &mut send), request, &*source).await {
+        match status::respond(tokio::io::join(&mut recv, &mut send), request, &*source).await {
             Ok(()) => {
                 let _ = send.finish();
                 linger(&connection).await;
                 Ok(())
             }
             Err(error) => {
-                connection.close(FAILED.into(), b"peek failed");
+                connection.close(FAILED.into(), b"status failed");
                 Err(AcceptError::from_err(error))
             }
         }
@@ -323,7 +323,7 @@ impl<H: ProtocolHandler, L: SyncLog + Clone + 'static> ProtocolHandler for Membe
 pub struct Node<L: SyncLog + Clone + 'static> {
     router: Router,
     registry: Registry<L>,
-    peek_source: PeekSlot,
+    status_source: StatusSlot,
     gossip: iroh_gossip::Gossip,
     signer: DeviceSigner,
     lookup: MemoryLookup,
@@ -351,15 +351,15 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .await
             .map_err(|error| NetError::Bind(error.into()))?;
         let registry = Registry::new();
-        let peek_source = PeekSlot::default();
+        let status_source = StatusSlot::default();
         let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
         let router = Router::builder(endpoint)
             .accept(SYNC_ALPN, SyncHandler(registry.clone()))
             .accept(
-                PEEK_ALPN,
-                PeekHandler {
+                STATUS_ALPN,
+                StatusHandler {
                     registry: registry.clone(),
-                    source: Arc::clone(&peek_source),
+                    source: Arc::clone(&status_source),
                 },
             )
             .accept(
@@ -380,7 +380,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         Ok(Self {
             router,
             registry,
-            peek_source,
+            status_source,
             gossip,
             signer: device.clone(),
             lookup,
@@ -444,15 +444,15 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
     }
 
     /// Answers the requests for the work of items from `source`. Until then they are refused.
-    pub fn serve_peek(&self, source: Arc<dyn PeekSource>) {
+    pub fn serve_status(&self, source: Arc<dyn StatusSource>) {
         *self
-            .peek_source
+            .status_source
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
     }
 
     /// Asks a device for the diff of an item, which it answers from its worktree.
-    pub async fn peek(
+    pub async fn status(
         &self,
         peer: impl Into<EndpointAddr>,
         workforce: WorkforceId,
@@ -463,7 +463,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         let name = device_key(peer.id).fmt_short();
         let connection = tokio::time::timeout(
             self.connect_timeout,
-            self.endpoint().connect(peer.clone(), PEEK_ALPN),
+            self.endpoint().connect(peer.clone(), STATUS_ALPN),
         )
         .await
         .map_err(|_| connect_error(&name, TimedOut))?
@@ -477,9 +477,9 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             item,
             since,
         };
-        let answer = peek::initiate(tokio::io::join(&mut recv, &mut send), &request)
+        let answer = status::initiate(tokio::io::join(&mut recv, &mut send), &request)
             .await
-            .map_err(|source| NetError::Peek {
+            .map_err(|source| NetError::Status {
                 peer: name.clone(),
                 source,
             })?;

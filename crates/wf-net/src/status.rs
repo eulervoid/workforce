@@ -1,4 +1,4 @@
-//! `wf/peek/1`: ask the device that has the worktree of an item what its agent is changing.
+//! `wf/status/1`: ask the device that has the worktree of an item what its agent is changing.
 //!
 //! The initiator sends one [`Request`] and the responder answers with one [`Answer`]. A live diff
 //! is local data nobody needs to keep (P11), so it is asked of the one device that has it and
@@ -16,13 +16,13 @@ use crate::frame::{FrameError, MAX_FRAME_LEN, read_frame_within, write_frame_wit
 use crate::node::SourceError;
 use crate::sync::IDLE_TIMEOUT;
 
-pub const PEEK_ALPN: &[u8] = b"wf/peek/1";
+pub const STATUS_ALPN: &[u8] = b"wf/status/1";
 
 /// A request is a few ids; a peer that sends more is not speaking the protocol.
 const REQUEST_FRAME_LEN: u32 = 1024;
 
 #[derive(Debug, thiserror::Error)]
-pub enum PeekError {
+pub enum StatusError {
     #[error(transparent)]
     Frame(#[from] FrameError),
     #[error("the device could not read the work of the item")]
@@ -63,7 +63,7 @@ pub struct Work {
 }
 
 /// What the responder reads the work of an item from, which the daemon implements with git.
-pub trait PeekSource: Send + Sync {
+pub trait StatusSource: Send + Sync {
     /// The answer to a request for the diff of `item`: [`Answer::Unchanged`] when its head is
     /// `since`, [`Answer::NotHere`] when this device has no work on it.
     fn diff(
@@ -76,7 +76,7 @@ pub trait PeekSource: Send + Sync {
 
 /// Reads the request of the initiator, giving up when nothing arrives for `idle`. The responder
 /// checks the workforce, then calls [`respond`].
-pub async fn read_request<S>(stream: &mut S, idle: Duration) -> Result<Request, PeekError>
+pub async fn read_request<S>(stream: &mut S, idle: Duration) -> Result<Request, StatusError>
 where
     S: AsyncRead + Unpin,
 {
@@ -84,7 +84,7 @@ where
 }
 
 /// Asks for the answer to `request` over `stream`.
-pub async fn initiate<S>(stream: S, request: &Request) -> Result<Answer, PeekError>
+pub async fn initiate<S>(stream: S, request: &Request) -> Result<Answer, StatusError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -96,7 +96,7 @@ pub async fn initiate_within<S>(
     mut stream: S,
     request: &Request,
     idle: Duration,
-) -> Result<Answer, PeekError>
+) -> Result<Answer, StatusError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -108,8 +108,8 @@ where
 pub async fn respond<S>(
     stream: S,
     request: Request,
-    source: &dyn PeekSource,
-) -> Result<(), PeekError>
+    source: &dyn StatusSource,
+) -> Result<(), StatusError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -120,9 +120,9 @@ where
 pub async fn respond_within<S>(
     mut stream: S,
     request: Request,
-    source: &dyn PeekSource,
+    source: &dyn StatusSource,
     idle: Duration,
-) -> Result<(), PeekError>
+) -> Result<(), StatusError>
 where
     S: AsyncRead + AsyncWrite + Unpin,
 {
@@ -134,7 +134,7 @@ where
         } => source
             .diff(workforce, item, since)
             .await
-            .map_err(PeekError::Source)?,
+            .map_err(StatusError::Source)?,
     };
     Ok(write_frame_within(&mut stream, &answer, idle).await?)
 }

@@ -1,4 +1,4 @@
-//! `wf/peek/1` in memory, and between two real endpoints.
+//! `wf/status/1` in memory, and between two real endpoints.
 
 mod common;
 
@@ -14,8 +14,8 @@ use wf_core::session::{CommitId, GitOid};
 use wf_core::testing::*;
 use wf_net::frame::FrameError;
 use wf_net::{
-    Answer, Network, Node, PeekError, PeekSource, Request, SourceError, Work, peek_initiate,
-    peek_initiate_within, peek_respond, peek_respond_within, read_request,
+    Answer, Network, Node, Request, SourceError, StatusError, StatusSource, Work, read_request,
+    status_initiate, status_initiate_within, status_respond, status_respond_within,
 };
 use wf_store::{RedbStore, Replica};
 use wf_vcs::diff::{Content, DiffLine, FileChange, FileDiff, Hunk};
@@ -55,7 +55,7 @@ fn work(head: CommitId) -> Work {
 /// The work of the item in the worktree, if the device has one.
 struct Worktree(Option<Work>);
 
-impl PeekSource for Worktree {
+impl StatusSource for Worktree {
     fn diff(
         &self,
         _: WorkforceId,
@@ -87,9 +87,9 @@ async fn ask(source: &Worktree, since: Option<CommitId>) -> Answer {
     let responder = async {
         let request = read_request(&mut right, Duration::from_secs(5)).await?;
         assert_eq!(request, asked);
-        peek_respond(right, request, source).await
+        status_respond(right, request, source).await
     };
-    let (answer, served) = tokio::join!(peek_initiate(left, &asked), responder);
+    let (answer, served) = tokio::join!(status_initiate(left, &asked), responder);
     served.unwrap();
     answer.unwrap()
 }
@@ -140,14 +140,14 @@ async fn a_large_diff_fits_the_answer() {
 async fn an_initiator_gives_up_on_a_peer_that_goes_silent() {
     let fixture = Fixture::new(1);
     let (left, _silent) = tokio::io::duplex(8192);
-    let result = peek_initiate_within(
+    let result = status_initiate_within(
         left,
         &request(fixture.workforce(), None),
         Duration::from_millis(100),
     )
     .await;
     assert!(
-        matches!(result, Err(PeekError::Frame(FrameError::TimedOut))),
+        matches!(result, Err(StatusError::Frame(FrameError::TimedOut))),
         "{result:?}"
     );
 }
@@ -157,7 +157,7 @@ async fn a_responder_gives_up_on_a_peer_that_does_not_read() {
     let fixture = Fixture::new(1);
     // A buffer of one byte that nobody drains: the answer cannot be written.
     let (_silent, right) = tokio::io::duplex(1);
-    let result = peek_respond_within(
+    let result = status_respond_within(
         right,
         request(fixture.workforce(), None),
         &Worktree(Some(work(commit(1)))),
@@ -165,7 +165,7 @@ async fn a_responder_gives_up_on_a_peer_that_does_not_read() {
     )
     .await;
     assert!(
-        matches!(result, Err(PeekError::Frame(FrameError::TimedOut))),
+        matches!(result, Err(StatusError::Frame(FrameError::TimedOut))),
         "{result:?}"
     );
 }
@@ -183,23 +183,23 @@ async fn node(fixture: &Fixture, signer: &DeviceSigner) -> Node<SharedReplica<Re
 }
 
 #[tokio::test]
-async fn a_bound_device_peeks_and_a_stranger_is_refused() {
+async fn a_bound_device_statuss_and_a_stranger_is_refused() {
     if wf_core::testing::skip_in_fence("iroh needs the route socket") {
         return;
     }
     let fixture = Fixture::new(2);
     let holder = node(&fixture, &fixture.devices[0]).await;
-    holder.serve_peek(Arc::new(Worktree(Some(work(commit(1))))));
+    holder.serve_status(Arc::new(Worktree(Some(work(commit(1))))));
     let member = node(&fixture, &fixture.devices[1]).await;
     let stranger = node(&fixture, &DeviceSigner::from_bytes(&[200; 32]).unwrap()).await;
 
     let answer = member
-        .peek(holder.local_addr(), fixture.workforce(), item(), None)
+        .status(holder.local_addr(), fixture.workforce(), item(), None)
         .await
         .unwrap();
     assert_eq!(answer, Answer::Work(work(commit(1))));
     let answer = member
-        .peek(
+        .status(
             holder.local_addr(),
             fixture.workforce(),
             item(),
@@ -210,7 +210,7 @@ async fn a_bound_device_peeks_and_a_stranger_is_refused() {
     assert_eq!(answer, Answer::Unchanged);
 
     let refused = stranger
-        .peek(holder.local_addr(), fixture.workforce(), item(), None)
+        .status(holder.local_addr(), fixture.workforce(), item(), None)
         .await;
     assert!(refused.is_err(), "{refused:?}");
 
