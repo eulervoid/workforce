@@ -153,7 +153,7 @@ impl State {
                     .is_some_and(|lane| definition.lanes.contains(lane))
             })
             .filter(|item| item.requires().values().all(|need| offered.contains(need)))
-            .filter(|item| self.recovery(item.id(), SessionRole::Work).allows_attempt())
+            .filter(|item| self.recovery(item.id(), &SessionRole::Work).allows_attempt())
             .collect();
         dispatchable.sort_by_cached_key(|item| self.dispatch_order(item));
         dispatchable

@@ -156,6 +156,11 @@ name_type!(
     ReviewLevelName, "review level", SLUG, is_slug_char
 );
 name_type!(
+    /// The name of an agent step of a review level, such as `security`. Steps of one entry that
+    /// run at once are told apart by it.
+    ReviewStepName, "review step name", SLUG, is_slug_char
+);
+name_type!(
     /// A recovery level of the policy, such as `default`.
     RecoveryLevelName, "recovery level", SLUG, is_slug_char
 );

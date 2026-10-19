@@ -15,15 +15,15 @@ steps = []
 
 [[review]]
 name = "light"
-steps = [{ agent = { requires = ["review"] } }]
+steps = [{ requires = ["review"] }]
 
 [[review]]
 name = "standard"
-steps = [{ agent = { requires = ["review", "strong-model"] } }]
+steps = [{ requires = ["review", "strong-model"] }]
 
 [[review]]
 name = "critical"
-steps = [{ agent = { requires = ["review", "strong-model"] } }, "principal"]
+steps = [{ requires = ["review", "strong-model"] }, "principal"]
 
 [[review]]
 name = "manual"

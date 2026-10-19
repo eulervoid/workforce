@@ -98,7 +98,7 @@ impl State {
                 .iter()
                 .any(|session| session.is_live() && session.role() == SessionRole::Supervise);
             let allowed = self
-                .recovery(item.id(), SessionRole::Supervise)
+                .recovery(item.id(), &SessionRole::Supervise)
                 .allows_attempt();
             if !worked_on && !supervised_now && allowed {
                 items.push((oldest, item.id()));

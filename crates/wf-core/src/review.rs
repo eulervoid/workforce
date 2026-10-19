@@ -6,11 +6,11 @@ use std::collections::BTreeSet;
 use crate::crdt::Stamp;
 use crate::event::CommentKind;
 use crate::hlc::Hlc;
-use crate::id::ItemId;
+use crate::id::{ItemId, SessionId};
 use crate::identity::{Actor, AgentId, DeviceKey};
 use crate::inbox::Stale;
 use crate::item::{Item, ItemEntry, ItemState};
-use crate::name::Requirement;
+use crate::name::{Requirement, ReviewStepName};
 use crate::policy::ReviewStep;
 use crate::session::{CommitId, Outcome, SessionRole, Verdict};
 use crate::state::State;
@@ -24,9 +24,9 @@ pub struct PendingMerge {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ReviewStatus {
-    /// The next step without a verdict.
+    /// The steps of the current entry that still have no approval; they run at once.
     Awaiting {
-        step: ReviewStep,
+        steps: Vec<ReviewStep>,
     },
     ChangesRequested,
     Approved {
@@ -72,8 +72,7 @@ impl State {
             });
         }
         let level = policy.review_level(live.effective_review_level(policy)?)?;
-        let mut steps = level.steps.clone();
-        let mut index = 0;
+        let mut progress = Progress::new(level.steps.clone());
         let mut verdicts: Vec<_> = live
             .verdicts()
             .values()
@@ -81,52 +80,77 @@ impl State {
             .collect();
         verdicts.sort_by_key(|verdict| verdict.stamp);
         for verdict in verdicts {
-            if index >= steps.len() {
+            if progress.is_done() {
                 break;
             }
-            let by_agent = matches!(verdict.by, Actor::Agent { .. });
-            let by_principal = matches!(verdict.by, Actor::Principal(_));
-            match (verdict.verdict, steps[index].clone()) {
-                // A principal decides in place of any step, an agent only for an agent step.
-                (Verdict::Approve, ReviewStep::Agent { .. }) if by_agent || by_principal => {
-                    index += 1;
-                }
-                (Verdict::Approve, ReviewStep::Principal) if by_principal => index += 1,
+            match (verdict.verdict, &verdict.by) {
                 (Verdict::RequestChanges, _) => return Some(ReviewStatus::ChangesRequested),
-                (Verdict::Escalate, ReviewStep::Agent { .. }) if by_agent => {
-                    index += 1;
-                    steps.insert(index, ReviewStep::Principal);
+                // A principal decides for the whole entry.
+                (Verdict::Approve, Actor::Principal(_)) => progress.decided_by_principal(),
+                (Verdict::Approve, Actor::Agent { session, .. }) => {
+                    progress.close(self.step_of(*session), false);
                 }
-                // Such as an agent verdict on a principal step: it counts for no step.
+                (Verdict::Escalate, Actor::Agent { session, .. }) => {
+                    progress.close(self.step_of(*session), true);
+                }
+                // Such as an escalation by a principal, or a verdict of the daemon: it counts for
+                // no step.
                 (Verdict::Approve | Verdict::Escalate, _) => {}
             }
         }
-        Some(match steps.get(index) {
-            Some(step) => ReviewStatus::Awaiting { step: step.clone() },
-            None => ReviewStatus::Approved { commit },
+        Some(if progress.is_done() {
+            ReviewStatus::Approved { commit }
+        } else {
+            ReviewStatus::Awaiting {
+                steps: progress.open,
+            }
         })
     }
 
-    /// The review steps on offer: items in `review` with submitted commits whose next step
-    /// has no verdict yet, and no review session is on. These are the items whose branch the
-    /// daemon checks against the target before anyone spends a review on it.
+    /// The name of the step a review session was started for.
+    fn step_of(&self, session: SessionId) -> Option<ReviewStepName> {
+        match self.session(session)?.role() {
+            SessionRole::Review { step, .. } => step,
+            SessionRole::Work | SessionRole::Supervise | SessionRole::Diagnose => None,
+        }
+    }
+
+    /// The open steps of `item` that no live review session holds: each holds one open agent step
+    /// of its name.
+    fn unheld(&self, item: ItemId, mut open: Vec<ReviewStep>) -> Vec<ReviewStep> {
+        for session in self.sessions_of(item).filter(|session| session.is_live()) {
+            let SessionRole::Review { step: held, .. } = session.role() else {
+                continue;
+            };
+            let position = open.iter().position(
+                |step| matches!(step, ReviewStep::Agent { name, .. } if *name == held),
+            );
+            if let Some(position) = position {
+                open.remove(position);
+            }
+        }
+        open
+    }
+
+    /// The review steps on offer: items in `review` with submitted commits that have an open step
+    /// no review session holds. Each item is offered once, with its first such step. These are the
+    /// items whose branch the daemon checks against the target before anyone spends a review on it.
     pub fn offered_reviews(&self) -> Vec<(ItemId, CommitId, ReviewStep)> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
         self.live_items()
             .filter(|item| item.state(policy) == ItemState::Review)
-            .filter(|item| {
-                !self.sessions_of(item.id()).any(|session| {
-                    session.is_live() && matches!(session.role(), SessionRole::Review { .. })
-                })
-            })
             .filter_map(|item| {
                 let (Some(commit), _) = self.submission(item.id())? else {
                     return None;
                 };
                 match self.review_status(item.id())? {
-                    ReviewStatus::Awaiting { step } => Some((item.id(), commit, step)),
+                    ReviewStatus::Awaiting { steps } => self
+                        .unheld(item.id(), steps)
+                        .into_iter()
+                        .next()
+                        .map(|step| (item.id(), commit, step)),
                     ReviewStatus::ChangesRequested
                     | ReviewStatus::Approved { .. }
                     | ReviewStatus::Merged { .. } => None,
@@ -239,28 +263,29 @@ impl State {
         self.live_items()
             .filter(|item| item.state(policy) == ItemState::Review)
             .filter(|item| {
-                let Some(ReviewStatus::Awaiting {
-                    step: ReviewStep::Agent { requires },
-                }) = self.review_status(item.id())
-                else {
+                let Some(ReviewStatus::Awaiting { steps }) = self.review_status(item.id()) else {
                     return false;
                 };
-                !staff
-                    .iter()
-                    .any(|offered| requires.iter().all(|need| offered.contains(need)))
+                steps.iter().any(|step| match step {
+                    ReviewStep::Agent { requires, .. } => !staff
+                        .iter()
+                        .any(|offered| requires.iter().all(|need| offered.contains(need))),
+                    ReviewStep::Principal => false,
+                })
             })
             .map(Item::id)
             .collect()
     }
 
-    /// Items waiting for a review step that `agent` could take on `device`: the agent's
-    /// capabilities and the device's hardware meet what the step requires, the agent never did
-    /// the work on the item, and no review session holds the step.
+    /// The review steps `agent` could take on `device`, with the item and commit they are for: the
+    /// agent's capabilities and the device's hardware meet what the step requires, and no review
+    /// session holds the step. Not offered an item are agents that did its work or gave a verdict
+    /// on the submitted commit. Steps of the same name are one step, offered once.
     pub fn reviewable(
         &self,
         device: DeviceKey,
         agent: &AgentId,
-    ) -> Vec<(ItemId, Option<CommitId>)> {
+    ) -> Vec<(ItemId, Option<CommitId>, Option<ReviewStepName>)> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
         };
@@ -268,34 +293,128 @@ impl State {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
-        let mut found: Vec<(&Item, Option<CommitId>)> = self
+        let mut found: Vec<(&Item, Option<CommitId>, Option<ReviewStepName>)> = Vec::new();
+        for item in self
             .live_items()
             .filter(|item| item.state(policy) == ItemState::Review)
-            .filter_map(|item| {
-                let (commit, _) = self.submission(item.id())?;
-                let Some(ReviewStatus::Awaiting {
-                    step: ReviewStep::Agent { requires },
-                }) = self.review_status(item.id())
-                else {
-                    return None;
+        {
+            let Some((commit, submitted)) = self.submission(item.id()) else {
+                continue;
+            };
+            let Some(ReviewStatus::Awaiting { steps }) = self.review_status(item.id()) else {
+                continue;
+            };
+            let did_the_work = self
+                .sessions_of(item.id())
+                .any(|session| session.agent() == agent && session.role() == SessionRole::Work);
+            let gave_a_verdict = item.verdicts().values().any(|verdict| {
+                verdict.commit == commit
+                    && verdict.stamp > submitted
+                    && matches!(&verdict.by, Actor::Agent { agent: by, .. } if by == agent)
+            });
+            if did_the_work || gave_a_verdict {
+                continue;
+            }
+            let mut offered_names = BTreeSet::new();
+            for step in self.unheld(item.id(), steps) {
+                let ReviewStep::Agent { name, requires, .. } = step else {
+                    continue;
                 };
                 let capable = requires.iter().all(|need| offered.contains(need));
-                let did_the_work = self
-                    .sessions_of(item.id())
-                    .any(|session| session.agent() == agent && session.role() == SessionRole::Work);
-                let held = self.sessions_of(item.id()).any(|session| {
-                    session.is_live() && matches!(session.role(), SessionRole::Review { .. })
-                });
                 let allowed = self
-                    .recovery(item.id(), SessionRole::Review { commit })
+                    .recovery(
+                        item.id(),
+                        &SessionRole::Review {
+                            commit,
+                            step: name.clone(),
+                        },
+                    )
                     .allows_attempt();
-                (capable && !did_the_work && !held && allowed).then_some((item, commit))
-            })
-            .collect();
-        found.sort_by_key(|(item, _)| (item.created(), item.id()));
+                if capable && allowed && offered_names.insert(name.clone()) {
+                    found.push((item, commit, name));
+                }
+            }
+        }
+        found.sort_by_key(|(item, _, _)| (item.created(), item.id()));
         found
             .into_iter()
-            .map(|(item, commit)| (item.id(), commit))
+            .map(|(item, commit, step)| (item.id(), commit, step))
             .collect()
+    }
+}
+
+/// Where the verdicts have got to in the entries of a review level.
+struct Progress {
+    entries: Vec<Vec<ReviewStep>>,
+    /// The entry the verdicts are for.
+    index: usize,
+    /// The steps of that entry without an approval.
+    open: Vec<ReviewStep>,
+    /// A step of the entry escalated: a principal step follows the entry.
+    escalated: bool,
+}
+
+impl Progress {
+    fn new(entries: Vec<Vec<ReviewStep>>) -> Self {
+        let mut progress = Self {
+            open: Vec::new(),
+            entries,
+            index: 0,
+            escalated: false,
+        };
+        progress.enter();
+        progress
+    }
+
+    fn is_done(&self) -> bool {
+        self.index >= self.entries.len()
+    }
+
+    /// Opens the steps of the entry at `index`, skipping entries without any.
+    fn enter(&mut self) {
+        while let Some(entry) = self.entries.get(self.index) {
+            if !entry.is_empty() {
+                self.open = entry.clone();
+                return;
+            }
+            self.index += 1;
+        }
+        self.open.clear();
+    }
+
+    fn next_entry(&mut self) {
+        self.index += 1;
+        self.enter();
+    }
+
+    /// Closes an open agent step of this name, if there is one, and notes that it escalated.
+    fn close(&mut self, name: Option<ReviewStepName>, escalating: bool) {
+        let position = self
+            .open
+            .iter()
+            .position(|step| matches!(step, ReviewStep::Agent { name: open, .. } if *open == name));
+        let Some(position) = position else {
+            return;
+        };
+        self.open.remove(position);
+        self.escalated |= escalating;
+        self.advance_when_closed();
+    }
+
+    /// Moves on to the next entry once every step is closed; an escalation adds a principal entry.
+    fn advance_when_closed(&mut self) {
+        if !self.open.is_empty() {
+            return;
+        }
+        self.index += 1;
+        if std::mem::take(&mut self.escalated) {
+            self.entries.insert(self.index, vec![ReviewStep::Principal]);
+        }
+        self.enter();
+    }
+
+    fn decided_by_principal(&mut self) {
+        self.escalated = false;
+        self.next_entry();
     }
 }

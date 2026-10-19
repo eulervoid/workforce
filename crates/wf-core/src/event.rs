@@ -524,6 +524,75 @@ pub struct SessionStarted {
     pub role: SessionRole,
 }
 
+/// The wire form of `SessionRole` before a review took the step of a name.
+#[derive(Serialize, Deserialize)]
+enum SessionRoleWithoutStep {
+    Work,
+    Review { commit: Option<CommitId> },
+    Supervise,
+    Diagnose,
+}
+
+/// The wire form of `SessionStarted` before a review took the step of a name.
+#[derive(Serialize, Deserialize)]
+struct SessionStartedWithoutStep {
+    agent: AgentName,
+    item: ItemId,
+    role: SessionRoleWithoutStep,
+}
+
+impl SessionStarted {
+    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        let role = match &self.role {
+            SessionRole::Review {
+                step: Some(_), ..
+            } => return Ok((tag::SESSION_STARTED_FOR_STEP, encoding::encode(self)?)),
+            SessionRole::Work => SessionRoleWithoutStep::Work,
+            SessionRole::Review { commit, step: None } => {
+                SessionRoleWithoutStep::Review { commit: *commit }
+            }
+            SessionRole::Supervise => SessionRoleWithoutStep::Supervise,
+            SessionRole::Diagnose => SessionRoleWithoutStep::Diagnose,
+        };
+        Ok((
+            tag::SESSION_STARTED,
+            encoding::encode(&SessionStartedWithoutStep {
+                agent: self.agent.clone(),
+                item: self.item,
+                role,
+            })?,
+        ))
+    }
+
+    /// One that is not a review for a step would encode to other bytes than were signed.
+    fn for_step(payload: &[u8]) -> Result<Self, EncodingError> {
+        let started: SessionStarted = encoding::decode(payload)?;
+        match started.role {
+            SessionRole::Review { step: Some(_), .. } => Ok(started),
+            SessionRole::Work
+            | SessionRole::Review { step: None, .. }
+            | SessionRole::Supervise
+            | SessionRole::Diagnose => Err(EncodingError::malformed()),
+        }
+    }
+
+    fn without_step(payload: &[u8]) -> Result<Self, EncodingError> {
+        let old: SessionStartedWithoutStep = encoding::decode(payload)?;
+        Ok(SessionStarted {
+            agent: old.agent,
+            item: old.item,
+            role: match old.role {
+                SessionRoleWithoutStep::Work => SessionRole::Work,
+                SessionRoleWithoutStep::Review { commit } => {
+                    SessionRole::Review { commit, step: None }
+                }
+                SessionRoleWithoutStep::Supervise => SessionRole::Supervise,
+                SessionRoleWithoutStep::Diagnose => SessionRole::Diagnose,
+            },
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SessionEnded {
     pub session: SessionId,
@@ -639,6 +708,8 @@ mod tag {
     /// `Commented` as written before it could be about lines, and still for one that is not.
     pub const COMMENT: u16 = 16;
     pub const ITEM_CREATED: u16 = 17;
+    /// `SessionStarted` as written before a review took the step of a name, and still for any
+    /// start but that of a review for a step.
     pub const SESSION_STARTED: u16 = 20;
     /// `SessionEnded` as written before it named the comment that says why, and still for an end
     /// without one.
@@ -654,6 +725,8 @@ mod tag {
     pub const COMMENT_CHECK_FAILURE: u16 = 27;
     /// `PolicySet` as written once it carried the hlc of its event; tag 2 is the unbound one.
     pub const BOUND_POLICY_SET: u16 = 28;
+    /// `SessionStarted` of a review for the step of a name.
+    pub const SESSION_STARTED_FOR_STEP: u16 = 29;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -740,7 +813,7 @@ impl EventBody {
             EventBody::ItemArchived(body) => (tag::ITEM_ARCHIVED, encoding::encode(body)?),
             EventBody::ItemUnarchived(body) => (tag::ITEM_UNARCHIVED, encoding::encode(body)?),
             EventBody::Commented(body) => body.to_tagged()?,
-            EventBody::SessionStarted(body) => (tag::SESSION_STARTED, encoding::encode(body)?),
+            EventBody::SessionStarted(body) => body.to_tagged()?,
             EventBody::SessionEnded(body) => body.to_tagged()?,
             EventBody::Reviewed(body) => (tag::REVIEW, encoding::encode(body)?),
             EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
@@ -773,7 +846,10 @@ impl EventBody {
             tag::COMMENT => EventBody::Commented(Commented::without_lines(payload)?),
             tag::COMMENT_ON_LINES => EventBody::Commented(Commented::on_lines(payload)?),
             tag::COMMENT_CHECK_FAILURE => EventBody::Commented(Commented::check_failure(payload)?),
-            tag::SESSION_STARTED => EventBody::SessionStarted(encoding::decode(payload)?),
+            tag::SESSION_STARTED => EventBody::SessionStarted(SessionStarted::without_step(payload)?),
+            tag::SESSION_STARTED_FOR_STEP => {
+                EventBody::SessionStarted(SessionStarted::for_step(payload)?)
+            }
             tag::SESSION_ENDED_WITHOUT_COMMENT => {
                 EventBody::SessionEnded(SessionEnded::without_comment(payload)?)
             }
@@ -1004,6 +1080,7 @@ mod tests {
                 item,
                 role: SessionRole::Review {
                     commit: Some(commit),
+                    step: None,
                 },
             }),
             EventBody::SessionEnded(SessionEnded {

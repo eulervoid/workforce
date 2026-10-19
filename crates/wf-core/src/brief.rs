@@ -7,6 +7,7 @@ use crate::event::CommentKind;
 use crate::id::{CommentId, HashId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Comment, Item, ItemEntry};
+use crate::name::ReviewStepName;
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, SessionRole};
@@ -64,7 +65,7 @@ impl Brief {
                 change_requests: open_change_requests(state, item, sources),
                 earlier: earlier(state, item, sources),
             }),
-            SessionRole::Review { commit } => Brief::Review(ReviewBrief {
+            SessionRole::Review { commit, step } => Brief::Review(ReviewBrief {
                 agent: agent.name.to_string(),
                 instructions: instructions.clone(),
                 item: HashId::short(&item.id()),
@@ -74,7 +75,7 @@ impl Brief {
                 diff: commit.map_or_else(String::new, |commit| sources.diff(&target, commit)),
                 target,
                 checks,
-                step: review_step(state, item.id()),
+                step: review_step(state, item.id(), &step),
                 earlier: earlier(state, item, sources),
             }),
             SessionRole::Supervise => {
@@ -313,28 +314,34 @@ fn dependencies(state: &State, item: &Item, sources: &impl Sources) -> Vec<Depen
         .collect()
 }
 
-/// Which step of the review level a review session is, in words.
-fn review_step(state: &State, item: ItemId) -> String {
-    match state.review_status(item) {
-        Some(ReviewStatus::Awaiting {
-            step: ReviewStep::Agent { requires },
-        }) => format!(
-            "the review by an agent with {}",
-            requires
-                .iter()
-                .map(ToString::to_string)
-                .collect::<Vec<_>>()
-                .join(", ")
-        ),
+/// Which step of the review level a review session is: the open step of its name, and how many
+/// run with it.
+fn review_step(state: &State, item: ItemId, name: &Option<ReviewStepName>) -> StepBrief {
+    let (requires, instructions, at_once) = match state.review_status(item) {
+        Some(ReviewStatus::Awaiting { steps }) => {
+            let own = steps.iter().find_map(|step| match step {
+                ReviewStep::Agent {
+                    name: open,
+                    requires,
+                    instructions,
+                } if open == name => Some((requires.clone(), instructions.clone())),
+                ReviewStep::Agent { .. } | ReviewStep::Principal => None,
+            });
+            let (requires, instructions) = own.unwrap_or_default();
+            (requires, instructions, steps.len())
+        }
         Some(
-            ReviewStatus::Awaiting {
-                step: ReviewStep::Principal,
-            }
-            | ReviewStatus::ChangesRequested
+            ReviewStatus::ChangesRequested
             | ReviewStatus::Approved { .. }
             | ReviewStatus::Merged { .. },
         )
-        | None => "a review".to_string(),
+        | None => Default::default(),
+    };
+    StepBrief {
+        name: name.as_ref().map(ToString::to_string),
+        requires: requires.iter().map(ToString::to_string).collect(),
+        instructions,
+        at_once,
     }
 }
 
@@ -459,6 +466,34 @@ impl WorkBrief {
 /// The diff is part of the brief up to this many bytes; beyond that the reviewer reads it itself.
 pub const MAX_DIFF_LEN: usize = 60_000;
 
+/// The step of a review level a review session takes.
+#[derive(Default)]
+pub struct StepBrief {
+    /// The name of the step in the policy, if it has one.
+    pub name: Option<String>,
+    /// The capabilities the step requires of the agent.
+    pub requires: Vec<String>,
+    /// What the policy tells this reviewer to look at, beside the instructions of the agent.
+    pub instructions: Option<String>,
+    /// How many steps run at once, this one included.
+    pub at_once: usize,
+}
+
+impl StepBrief {
+    /// The step in words.
+    fn words(&self) -> String {
+        let mut words = match (&self.name, self.requires.is_empty()) {
+            (Some(name), _) => format!("the `{name}` review"),
+            (None, false) => format!("the review by an agent with {}", self.requires.join(", ")),
+            (None, true) => "a review".to_string(),
+        };
+        if self.at_once > 1 {
+            let _ = write!(words, ", one of {} at once", self.at_once);
+        }
+        words
+    }
+}
+
 /// The brief of a review session.
 pub struct ReviewBrief {
     /// The name of the agent of the session.
@@ -474,8 +509,8 @@ pub struct ReviewBrief {
     pub target: String,
     /// The names of the checks that run on the merge before the target moves.
     pub checks: Vec<String>,
-    /// Which step of the review level this is, in words.
-    pub step: String,
+    /// Which step of the review level this is.
+    pub step: StepBrief,
     pub earlier: Vec<Earlier>,
     pub diff: String,
 }
@@ -490,6 +525,13 @@ impl ReviewBrief {
         );
         instructions(&mut text, self.instructions.as_deref());
         task(&mut text, &self.body);
+        if let Some(step_instructions) = &self.step.instructions {
+            let _ = writeln!(
+                text,
+                "## What to look at in this review\n\n{}\n",
+                step_instructions.trim()
+            );
+        }
         text.push_str("## The work\n\n");
         match &self.commit {
             Some(commit) => {
@@ -498,7 +540,7 @@ impl ReviewBrief {
                     text,
                     "- Commit `{commit}` is checked out here. It is meant to go into `{target}`.\n\
                      - This is {step}.\n",
-                    step = self.step,
+                    step = self.step.words(),
                 );
                 if self.diff.len() <= MAX_DIFF_LEN {
                     let _ = writeln!(text, "```diff\n{}\n```\n", self.diff.trim_end());
@@ -516,7 +558,7 @@ impl ReviewBrief {
                      nothing has to change. What the author said is in the history below.\n\
                      - Nothing is checked out here.\n\
                      - This is {step}.\n",
-                    step = self.step,
+                    step = self.step.words(),
                 );
             }
         }
@@ -926,7 +968,7 @@ mod tests {
             commit: None,
             target: "main".into(),
             checks: vec![],
-            step: "a review".into(),
+            step: StepBrief::default(),
             earlier: vec![],
             diff: String::new(),
         };
@@ -948,13 +990,20 @@ mod tests {
             commit: Some("abc123".into()),
             target: "main".into(),
             checks: vec![],
-            step: "step 1 of 2".into(),
+            step: StepBrief {
+                name: Some("security".into()),
+                requires: vec![],
+                instructions: Some("Look for injection.".into()),
+                at_once: 3,
+            },
             earlier: vec![],
             diff: "+added".into(),
         };
         let text = brief.render();
         assert!(text.contains("```diff\n+added\n```"));
-        assert!(text.contains("Commit `abc123`") && text.contains("step 1 of 2"));
+        assert!(text.contains("Commit `abc123`")
+                && text.contains("the `security` review, one of 3 at once")
+                && text.contains("Look for injection."));
         for command in ["--approve", "--request-changes", "--escalate"] {
             assert!(text.contains(command), "{command}");
         }
@@ -990,7 +1039,7 @@ mod tests {
             commit: Some("abc123".into()),
             target: "main".into(),
             checks: vec!["fmt".into(), "test".into()],
-            step: "a review".into(),
+            step: StepBrief::default(),
             earlier: vec![],
             diff: "+added".into(),
         };

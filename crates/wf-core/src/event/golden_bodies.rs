@@ -9,13 +9,13 @@
 
 use super::*;
 use crate::identity::{InviteSigner, PrincipalSigner};
-use crate::name::Handle;
+use crate::name::{Handle, ReviewStepName};
 
 const FIXTURE: &str = include_str!("golden_bodies.txt");
 
 /// Every tag of `mod tag` (24 is retired). A tag missing here is not covered; the test below fails for one
 /// that has no line.
-const ALL_TAGS: [u16; 24] = [
+const ALL_TAGS: [u16; 25] = [
     tag::GENESIS,
     tag::POLICY_SET,
     tag::AGENT_DEFINED,
@@ -40,6 +40,7 @@ const ALL_TAGS: [u16; 24] = [
     tag::COMMENT_ON_LINES,
     tag::COMMENT_CHECK_FAILURE,
     tag::BOUND_POLICY_SET,
+    tag::SESSION_STARTED_FOR_STEP,
 ];
 
 fn fixture_lines() -> Vec<(u16, Vec<u8>)> {
@@ -224,10 +225,19 @@ fn bodies() -> Vec<EventBody> {
             ..created
         }),
         EventBody::SessionStarted(SessionStarted {
-            agent,
+            agent: agent.clone(),
             item,
             role: SessionRole::Review {
                 commit: Some(commit),
+                step: None,
+            },
+        }),
+        EventBody::SessionStarted(SessionStarted {
+            agent: agent.clone(),
+            item,
+            role: SessionRole::Review {
+                commit: Some(commit),
+                step: Some(ReviewStepName::new("security").unwrap()),
             },
         }),
         EventBody::SessionEnded(SessionEnded {

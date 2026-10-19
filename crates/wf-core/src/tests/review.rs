@@ -103,18 +103,24 @@ impl Scene {
 
 fn awaiting_agent() -> ReviewStatus {
     ReviewStatus::Awaiting {
-        step: ReviewStep::Agent {
-            requires: ["review", "strong-model"]
-                .into_iter()
-                .map(|name| crate::name::Requirement::new(name).unwrap())
-                .collect(),
-        },
+        steps: vec![agent_step(None, &["review", "strong-model"], None)],
     }
 }
 
 fn awaiting_human() -> ReviewStatus {
     ReviewStatus::Awaiting {
-        step: ReviewStep::Principal,
+        steps: vec![ReviewStep::Principal],
+    }
+}
+
+fn agent_step(name: Option<&str>, requires: &[&str], instructions: Option<&str>) -> ReviewStep {
+    ReviewStep::Agent {
+        name: name.map(|name| crate::name::ReviewStepName::new(name).unwrap()),
+        requires: requires
+            .iter()
+            .map(|name| crate::name::Requirement::new(*name).unwrap())
+            .collect(),
+        instructions: instructions.map(str::to_string),
     }
 }
 
@@ -340,7 +346,7 @@ fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
     let item = scene.submitted("standard");
     let offered =
         |scene: &Scene, name: &str| scene.state.reviewable(scene.device(), &scene.agent(name));
-    assert_eq!(offered(&scene, "reviewer"), [(item, Some(commit(1)))]);
+    assert_eq!(offered(&scene, "reviewer"), [(item, Some(commit(1)), None)]);
     assert!(offered(&scene, "weak").is_empty(), "missing strong-model");
     assert!(
         offered(&scene, "coder").is_empty(),
@@ -358,7 +364,7 @@ fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
     scene.apply(end_session(held, EndReason::Reviewed));
     assert_eq!(
         offered(&scene, "reviewer"),
-        [(item, Some(commit(1)))],
+        [(item, Some(commit(1)), None)],
         "after changes a reviewer looks again"
     );
 }
@@ -377,7 +383,7 @@ fn the_hardware_of_the_device_counts_for_a_review_step() {
         agents: [(AgentName::new("weak").unwrap(), 1)].into(),
         max_sessions: 1,
     }));
-    assert_eq!(offered(&scene), [(item, Some(commit(1)))]);
+    assert_eq!(offered(&scene), [(item, Some(commit(1)), None)]);
 }
 
 #[test]
@@ -392,7 +398,7 @@ fn reviewers_that_do_not_finish_are_retried_until_the_principal_decides() {
     for attempt in 1..=3 {
         assert_eq!(
             offered(&scene),
-            [(item, Some(commit(1)))],
+            [(item, Some(commit(1)), None)],
             "attempt {attempt}"
         );
         let session: SessionId = scene
