@@ -25,7 +25,7 @@ use ratatui::crossterm::execute;
 use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
 
-use self::app::{App, Effect, Wheel};
+use self::app::{App, Wheel};
 use self::diff::{Changes, ItemWork};
 use self::snapshot::{Detail, InView, Snapshot, Sources};
 use crate::transcript::Format;
@@ -233,9 +233,9 @@ fn handle(
         _ => return Handled::Ignored,
     };
     match effect {
-        Some(Effect::Quit) => Handled::Quit,
         Some(effect) => {
             match act::carry_out(effect, workspace, terminal) {
+                Ok(act::Outcome::Quit) => return Handled::Quit,
                 Ok(act::Outcome::Did(what)) => app.did(what, wf_store::now_ms()),
                 Ok(act::Outcome::Choose(choice)) => app.choose(choice),
                 Ok(act::Outcome::Drafted {

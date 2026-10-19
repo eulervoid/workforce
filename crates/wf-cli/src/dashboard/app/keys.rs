@@ -13,6 +13,23 @@ use super::{App, GROUPINGS, ORDERS, Split, Status, Tab};
 use crate::dashboard::snapshot::{Detail, InView};
 use crate::transcript::Verbosity;
 
+/// What the keys that act on what waits made of a key.
+pub(super) enum Acted {
+    /// It asks this of the workforce.
+    Effect(Effect),
+    /// It did something to the dashboard itself: opened a prompt or a detail.
+    Handled,
+    /// It is not one of those keys, or there is nothing for it to act on: the keys of the
+    /// screen are tried next.
+    Unhandled,
+}
+
+impl From<Option<Effect>> for Acted {
+    fn from(effect: Option<Effect>) -> Self {
+        effect.map_or(Acted::Unhandled, Acted::Effect)
+    }
+}
+
 impl App {
     pub fn key(&mut self, key: KeyEvent) -> Option<Effect> {
         if key.modifiers.contains(KeyModifiers::CONTROL) && key.code == KeyCode::Char('c') {
@@ -38,11 +55,10 @@ impl App {
         if matches!(key.code, KeyCode::Char('v' | 'c' | 'r' | 'e' | 'd')) && self.diff_has_keys() {
             return self.detail_key(key);
         }
-        if let Some(effect) = self.act(key) {
-            return Some(effect);
-        }
-        if self.prompt.is_some() {
-            return None;
+        match self.act(key) {
+            Acted::Effect(effect) => return Some(effect),
+            Acted::Handled => return None,
+            Acted::Unhandled => {}
         }
         match key.code {
             KeyCode::Char('q') => return Some(Effect::Quit),
@@ -101,7 +117,7 @@ impl App {
     }
 
     /// The keys that act on what waits, on items and on sessions, for whatever is on screen.
-    pub(super) fn act(&mut self, key: KeyEvent) -> Option<Effect> {
+    pub(super) fn act(&mut self, key: KeyEvent) -> Acted {
         let subjects = self.subjects();
         let permission = subjects.iter().find_map(|entry| entry.request());
         let blocker = subjects.iter().find_map(|entry| entry.blocker());
@@ -109,56 +125,73 @@ impl App {
             .iter()
             .find_map(|entry| entry.review().map(|(item, _)| item));
         match key.code {
-            KeyCode::Char('a') => permission.map(|request| Effect::Permit {
+            KeyCode::Char('a') => Acted::from(permission.map(|request| Effect::Permit {
                 request,
                 answer: Permission::Allow,
-            }),
-            KeyCode::Char('d') => permission.map(|request| Effect::Permit {
+            })),
+            KeyCode::Char('d') => Acted::from(permission.map(|request| Effect::Permit {
                 request,
                 answer: Permission::Deny,
-            }),
+            })),
             KeyCode::Char('r') => {
-                let (item, blocker) = blocker?;
+                let Some((item, blocker)) = blocker else {
+                    return Acted::Unhandled;
+                };
                 self.prompt = Some(Prompt::Answer {
                     item,
                     blocker,
                     input: Input::default(),
                 });
-                None
+                Acted::Handled
             }
             KeyCode::Char('R') => {
-                let (item, blocker) = blocker?;
-                Some(Effect::ResolveInEditor {
+                Acted::from(blocker.map(|(item, blocker)| Effect::ResolveInEditor {
                     item,
                     blocker,
                     text: String::new(),
-                })
+                }))
             }
             KeyCode::Char('v') => {
-                self.prompt = Some(Prompt::Verdict { item: review? });
-                None
+                let Some(item) = review else {
+                    return Acted::Unhandled;
+                };
+                self.prompt = Some(Prompt::Verdict { item });
+                Acted::Handled
             }
             KeyCode::Char('D') => {
-                self.open(Detail::Diff(self.item_with_work()?));
-                None
+                let Some(item) = self.item_with_work() else {
+                    return Acted::Unhandled;
+                };
+                self.open(Detail::Diff(item));
+                Acted::Handled
             }
-            KeyCode::Char('s') => self.item_subject().map(|item| Effect::ChooseStart { item }),
-            KeyCode::Char('m') => self.item_subject().map(|item| Effect::ChooseState { item }),
-            KeyCode::Char('e') => self.item_subject().map(|item| Effect::Edit { item }),
+            KeyCode::Char('s') => {
+                Acted::from(self.item_subject().map(|item| Effect::ChooseStart { item }))
+            }
+            KeyCode::Char('m') => {
+                Acted::from(self.item_subject().map(|item| Effect::ChooseState { item }))
+            }
+            KeyCode::Char('e') => {
+                Acted::from(self.item_subject().map(|item| Effect::Edit { item }))
+            }
             KeyCode::Char('c') => {
+                let Some(item) = self.item_subject() else {
+                    return Acted::Unhandled;
+                };
                 self.prompt = Some(Prompt::Comment {
-                    item: self.item_subject()?,
+                    item,
                     input: Input::default(),
                 });
-                None
+                Acted::Handled
             }
             KeyCode::Char('x') => {
-                self.prompt = Some(Prompt::Stop {
-                    session: self.session_subject()?,
-                });
-                None
+                let Some(session) = self.session_subject() else {
+                    return Acted::Unhandled;
+                };
+                self.prompt = Some(Prompt::Stop { session });
+                Acted::Handled
             }
-            _ => None,
+            _ => Acted::Unhandled,
         }
     }
 
