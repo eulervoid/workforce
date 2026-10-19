@@ -494,3 +494,50 @@ pub fn check_failure(item: ItemId, text: &str) -> EventBody {
         ..Commented::plain(item, text)
     })
 }
+
+/// A state that holds one of each kind of thing the encoding of [`State`] has a field for, from
+/// fixed keys and clocks. The golden tests that pin `SNAPSHOT_FORMAT` and `PROTOCOL_VERSION`
+/// encode it; extend it when `State` grows something it does not reach.
+pub fn golden_state() -> State {
+    let fixture = Fixture::new(2);
+    let mut state = fixture.state();
+    let task: ItemId = fixture
+        .apply(&mut state, 0, 2_000, create("task", "Parse durations"))
+        .id()
+        .into();
+    let other: ItemId = fixture
+        .apply(&mut state, 0, 2_001, create("task", "Print durations"))
+        .id()
+        .into();
+    let archived: ItemId = fixture
+        .apply(&mut state, 1, 2_002, create("task", "Forgotten"))
+        .id()
+        .into();
+    fixture.apply(&mut state, 0, 2_003, depends_on(task, other));
+    fixture.apply(&mut state, 0, 2_004, comment(task, "Start with seconds"));
+    fixture.apply(&mut state, 0, 2_005, blocker(task, "Which units?"));
+    fixture.apply(&mut state, 0, 2_006, change_request(other, "Add tests"));
+    fixture.apply(&mut state, 0, 2_007, check_failure(other, "fmt failed"));
+    fixture.apply(&mut state, 0, 2_008, archive(archived));
+    fixture.apply(&mut state, 0, 2_009, define_agent("coder"));
+    let session: SessionId = fixture
+        .apply(&mut state, 0, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    fixture.apply(&mut state, 0, 3_001, start_session("coder", other));
+    fixture.apply(
+        &mut state,
+        0,
+        3_002,
+        end_session(session, EndReason::Released),
+    );
+    let policy = fixture.policy_set(
+        &state,
+        0,
+        4_000,
+        &fixture.founder,
+        "[merge]\ntarget = \"main\"\n",
+    );
+    fixture.apply(&mut state, 0, 4_000, policy);
+    state
+}
