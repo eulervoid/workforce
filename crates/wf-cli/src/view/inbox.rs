@@ -99,6 +99,10 @@ pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
                 format!("The login of {harness} has lapsed"),
                 format!("log in to {harness} again on this machine"),
             ),
+            HarnessFault::UsageLimit => (
+                format!("{harness} hit its usage limit"),
+                format!("wait for the usage limit of {harness} to reset, or raise it"),
+            ),
             HarnessFault::Unknown => (
                 format!("{harness} is not a harness wf knows how to start"),
                 format!(
@@ -117,6 +121,10 @@ pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
                 "{todo}; {}. Since {}: {}",
                 match fault.fault {
                     HarnessFault::Unknown => "its agents do not start until then".to_string(),
+                    HarnessFault::UsageLimit => match fault.retry_at_ms {
+                        Some(at_ms) => format!("its agents are tried again at {}", since(at_ms)),
+                        None => format!("its agents are tried again every {retried}"),
+                    },
                     HarnessFault::LoginLapsed | HarnessFault::Unreachable =>
                         format!("its agents are tried again every {retried}"),
                 },

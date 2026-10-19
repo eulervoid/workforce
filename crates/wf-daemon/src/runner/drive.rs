@@ -5,6 +5,7 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 
+use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
 use wf_core::id::SessionId;
@@ -190,6 +191,9 @@ async fn drive(
                 wf_core::error_chain(&error),
             );
         }
+        Err(error) if error.usage_limit(Timestamp::now()).is_some() => {
+            return usage_limit(daemon, run, &error);
+        }
         // The agent could not take the conversation up again: the session ends as any session an
         // earlier daemon left behind.
         Err(error) if matches!(run.begin, Begin::Resume(_)) => {
@@ -316,6 +320,9 @@ async fn turns(
                     HarnessFault::LoginLapsed,
                     wf_core::error_chain(&error),
                 );
+            }
+            Err(error) if error.usage_limit(Timestamp::now()).is_some() => {
+                return usage_limit(daemon, run, &error);
             }
             Err(wf_harness::Error::Transcript(error)) => {
                 return transcript_failed(&daemon.faults, &run.transcript, &error);
@@ -454,8 +461,25 @@ fn transcript_failed(faults: &Faults, path: &Path, error: &std::io::Error) -> En
 /// The harness of the session cannot carry it, as `what` says: the session ends for `fault`, and
 /// the agents of the harness wait until it is tried again.
 fn harness_fault(daemon: &Daemon, run: &Run, fault: HarnessFault, what: String) -> End {
-    daemon.faults.note_harness(&run.harness, fault, what);
+    daemon.faults.note_harness(&run.harness, fault, what, None);
     End::Interrupt(Interruption::MachineFault(fault.into()))
+}
+
+/// The harness of the session says its usage limit is reached, as `error` tells: the session
+/// ends for it, and the agents of the harness wait until the reset, or until they are tried
+/// again when `error` gives none.
+fn usage_limit(daemon: &Daemon, run: &Run, error: &wf_harness::Error) -> End {
+    let resets_at_ms = error
+        .usage_limit(Timestamp::now())
+        .and_then(|limit| limit.resets_at)
+        .and_then(|at| u64::try_from(at.as_millisecond()).ok());
+    daemon.faults.note_harness(
+        &run.harness,
+        HarnessFault::UsageLimit,
+        wf_core::error_chain(error),
+        resets_at_ms,
+    );
+    End::Interrupt(Interruption::MachineFault(MachineFault::UsageLimit))
 }
 
 async fn sleep_until(deadline: Option<Instant>) {

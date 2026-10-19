@@ -162,6 +162,8 @@ pub enum MachineFault {
     LoginLapsed,
     /// The disk is full.
     NoSpace,
+    /// The harness says its usage limit is reached.
+    UsageLimit,
     /// The harness could not be started.
     HarnessUnreachable,
     /// No command is known that starts the harness.
@@ -172,6 +174,7 @@ impl MachineFault {
     pub fn name(&self) -> &'static str {
         match self {
             MachineFault::LoginLapsed => "login_lapsed",
+            MachineFault::UsageLimit => "usage_limit",
             MachineFault::NoSpace => "no_space",
             MachineFault::HarnessUnreachable => "harness_unreachable",
             MachineFault::HarnessUnknown => "harness_unknown",
@@ -189,6 +192,8 @@ impl MachineFault {
 pub enum HarnessFault {
     /// The harness says its login has lapsed.
     LoginLapsed,
+    /// The harness says its usage limit is reached; it is fine again at the reset.
+    UsageLimit,
     /// The harness could not be started.
     Unreachable,
     /// No command is known that starts the harness: neither the machine config nor wf has one.
@@ -199,6 +204,7 @@ impl From<HarnessFault> for MachineFault {
     fn from(fault: HarnessFault) -> Self {
         match fault {
             HarnessFault::LoginLapsed => MachineFault::LoginLapsed,
+            HarnessFault::UsageLimit => MachineFault::UsageLimit,
             HarnessFault::Unreachable => MachineFault::HarnessUnreachable,
             HarnessFault::Unknown => MachineFault::HarnessUnknown,
         }
