@@ -154,12 +154,14 @@ steps = [
 fn awaiting_agent() -> ReviewStatus {
     ReviewStatus::Awaiting {
         steps: vec![agent_step(None, &["review", "strong-model"], None)],
+        approved: Vec::new(),
     }
 }
 
 fn awaiting_human() -> ReviewStatus {
     ReviewStatus::Awaiting {
         steps: vec![ReviewStep::Principal],
+        approved: Vec::new(),
     }
 }
 
@@ -654,7 +656,11 @@ fn a_review_step_nobody_hosted_can_take_is_noticed() {
 
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
-    assert_eq!(scene.state.unstaffed_reviews(), [item], "nobody is hosted");
+    assert_eq!(
+        scene.state.unstaffed_reviews(),
+        [(item, Vec::new())],
+        "nobody is hosted"
+    );
 
     let reviewer = AgentDefined {
         name: AgentName::new("reviewer").unwrap(),
@@ -674,7 +680,7 @@ fn a_review_step_nobody_hosted_can_take_is_noticed() {
     scene.apply(EventBody::AgentDefined(reviewer));
     assert_eq!(
         scene.state.unstaffed_reviews(),
-        [item],
+        [(item, Vec::new())],
         "defined, not hosted"
     );
 
@@ -909,7 +915,7 @@ fn a_daemon_change_request_after_the_offer_makes_the_principal_review_stale() {
 }
 
 fn open_names(status: Option<ReviewStatus>) -> Vec<Option<String>> {
-    let Some(ReviewStatus::Awaiting { steps }) = status else {
+    let Some(ReviewStatus::Awaiting { steps, .. }) = status else {
         panic!("{status:?} is not awaiting");
     };
     steps

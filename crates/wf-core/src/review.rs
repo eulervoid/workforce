@@ -27,6 +27,8 @@ pub enum ReviewStatus {
     /// The steps of the current entry that still have no approval; they run at once.
     Awaiting {
         steps: Vec<ReviewStep>,
+        /// The names of the agent steps of that entry that approved already.
+        approved: Vec<Option<ReviewStepName>>,
     },
     ChangesRequested,
     Approved {
@@ -126,6 +128,7 @@ impl State {
         } else {
             ReviewStatus::Awaiting {
                 steps: progress.open,
+                approved: progress.approved,
             }
         })
     }
@@ -169,7 +172,7 @@ impl State {
                     return None;
                 };
                 match self.review_status(item.id())? {
-                    ReviewStatus::Awaiting { steps } => self
+                    ReviewStatus::Awaiting { steps, .. } => self
                         .unheld(item.id(), steps)
                         .into_iter()
                         .next()
@@ -193,7 +196,7 @@ impl State {
             return None;
         }
         let (commit, _) = self.submission(item)?;
-        let ReviewStatus::Awaiting { steps } = self.review_status(item)? else {
+        let ReviewStatus::Awaiting { steps, .. } = self.review_status(item)? else {
             return None;
         };
         let names = self
@@ -311,8 +314,8 @@ impl State {
     }
 
     /// Items that wait for a review step by an agent that no hosted agent the dispatcher starts has
-    /// the capabilities for.
-    pub fn unstaffed_reviews(&self) -> Vec<ItemId> {
+    /// the capabilities for, with the names of those steps; steps without a name are not listed.
+    pub fn unstaffed_reviews(&self) -> Vec<(ItemId, Vec<ReviewStepName>)> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
@@ -333,18 +336,24 @@ impl State {
             .collect();
         self.live_items()
             .filter(|item| item.state(policy) == ItemState::Review)
-            .filter(|item| {
-                let Some(ReviewStatus::Awaiting { steps }) = self.review_status(item.id()) else {
-                    return false;
+            .filter_map(|item| {
+                let Some(ReviewStatus::Awaiting { steps, .. }) = self.review_status(item.id())
+                else {
+                    return None;
                 };
-                steps.iter().any(|step| match step {
-                    ReviewStep::Agent { requires, .. } => !staff
-                        .iter()
-                        .any(|offered| requires.iter().all(|need| offered.contains(need))),
-                    ReviewStep::Principal => false,
-                })
+                let unstaffed: Vec<_> = steps
+                    .into_iter()
+                    .filter_map(|step| match step {
+                        ReviewStep::Agent { name, requires, .. } => (!staff
+                            .iter()
+                            .any(|offered| requires.iter().all(|need| offered.contains(need))))
+                        .then_some(name),
+                        ReviewStep::Principal => None,
+                    })
+                    .collect();
+                (!unstaffed.is_empty())
+                    .then(|| (item.id(), unstaffed.into_iter().flatten().collect()))
             })
-            .map(Item::id)
             .collect()
     }
 
@@ -372,7 +381,7 @@ impl State {
             let Some((commit, submitted)) = self.submission(item.id()) else {
                 continue;
             };
-            let Some(ReviewStatus::Awaiting { steps }) = self.review_status(item.id()) else {
+            let Some(ReviewStatus::Awaiting { steps, .. }) = self.review_status(item.id()) else {
                 continue;
             };
             let did_the_work = self
@@ -421,6 +430,8 @@ struct Progress {
     index: usize,
     /// The steps of that entry without an approval.
     open: Vec<ReviewStep>,
+    /// The agent steps of that entry that approved.
+    approved: Vec<Option<ReviewStepName>>,
     /// A step of the entry escalated: a principal step follows the entry.
     escalated: bool,
 }
@@ -429,6 +440,7 @@ impl Progress {
     fn new(entries: Vec<Vec<ReviewStep>>) -> Self {
         let mut progress = Self {
             open: Vec::new(),
+            approved: Vec::new(),
             entries,
             index: 0,
             escalated: false,
@@ -443,6 +455,7 @@ impl Progress {
 
     /// Opens the steps of the entry at `index`, skipping entries without any.
     fn enter(&mut self) {
+        self.approved.clear();
         while let Some(entry) = self.entries.get(self.index) {
             if !entry.is_empty() {
                 self.open = entry.clone();
@@ -468,6 +481,9 @@ impl Progress {
             return;
         };
         self.open.remove(position);
+        if !escalating {
+            self.approved.push(name);
+        }
         self.escalated |= escalating;
         self.advance_when_closed();
     }

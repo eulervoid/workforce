@@ -291,7 +291,23 @@ fn status_line(detail: &ItemDetail) -> Option<String> {
 fn review_status_label(review: &ReviewStatusView) -> String {
     let short_commit = wf_core::session::short_commit;
     match review {
-        ReviewStatusView::Awaiting { steps } => format!("review: awaiting {}", steps.join(" + ")),
+        ReviewStatusView::Awaiting {
+            steps,
+            open,
+            approved,
+        } => {
+            if steps.len() < 2 && approved.is_empty() {
+                format!("review: awaiting {}", steps.join(" + "))
+            } else if approved.is_empty() {
+                format!("review: awaiting {}", open.join(", "))
+            } else {
+                format!(
+                    "review: awaiting {}; {} approved",
+                    open.join(", "),
+                    approved.join(", ")
+                )
+            }
+        }
         ReviewStatusView::ChangesRequested => "review: changes requested".to_string(),
         ReviewStatusView::Approved {
             commit: Some(commit),
@@ -621,6 +637,30 @@ mod tests {
     }
 
     /// An item id that starts with `prefix`.
+    #[test]
+    fn steps_that_run_at_once_are_told_by_name() {
+        let strings = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
+        let awaiting = |steps: &[&str], open: &[&str], approved: &[&str]| {
+            review_status_label(&ReviewStatusView::Awaiting {
+                steps: strings(steps),
+                open: strings(open),
+                approved: strings(approved),
+            })
+        };
+        assert_eq!(
+            awaiting(&["agent: review"], &["unnamed"], &[]),
+            "review: awaiting agent: review"
+        );
+        assert_eq!(
+            awaiting(
+                &["agent security: review", "agent style: review"],
+                &["security", "style"],
+                &["general"]
+            ),
+            "review: awaiting security, style; general approved"
+        );
+    }
+
     fn test_id(prefix: &str) -> ItemId {
         format!("{prefix:a<52}").parse().unwrap()
     }

@@ -10,7 +10,7 @@ use wf_core::id::{HashId, ItemId};
 use wf_core::identity::Actor;
 use wf_core::inbox::Waiting;
 use wf_core::item::ItemEntry;
-use wf_core::name::AgentName;
+use wf_core::name::{AgentName, ReviewStepName};
 use wf_core::session::HarnessFault;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
@@ -75,6 +75,8 @@ pub enum Flag {
     /// The review of the item waits for a step no agent that starts by itself can take.
     UnstaffedReview {
         item: ItemId,
+        /// The named steps nobody can take.
+        steps: Vec<ReviewStepName>,
     },
     AgentWithoutLane {
         agent: AgentName,
@@ -102,6 +104,22 @@ pub enum Flag {
         by: String,
         to: String,
     },
+}
+
+/// What a flag or an item says the review waits for: the named steps, or just an agent step.
+pub fn unstaffed_steps(steps: &[ReviewStepName]) -> String {
+    match steps {
+        [] => "an agent step".to_string(),
+        [only] => format!("the agent step `{only}`"),
+        several => format!(
+            "the agent steps {}",
+            several
+                .iter()
+                .map(|step| format!("`{step}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    }
 }
 
 impl Flag {
@@ -146,9 +164,10 @@ impl Flag {
                 "#{} \"{title}\" is stranded: a dependency was cancelled",
                 item.short()
             ),
-            Flag::UnstaffedReview { item } => format!(
-                "the review of #{} waits for an agent step that no agent started on this workforce can take",
-                item.short()
+            Flag::UnstaffedReview { item, steps } => format!(
+                "the review of #{} waits for {} that no agent started on this workforce can take",
+                item.short(),
+                unstaffed_steps(steps)
             ),
             Flag::AgentWithoutLane { agent } => format!(
                 "agent {agent} starts automatically but has no lane, so it never takes an item"
@@ -201,7 +220,7 @@ impl Flag {
             | Flag::UnknownType { item, .. }
             | Flag::UnusedState { item, .. }
             | Flag::Stranded { item, .. }
-            | Flag::UnstaffedReview { item }
+            | Flag::UnstaffedReview { item, .. }
             | Flag::IgnoredDependency { from: item, .. } => Some(*item),
             Flag::AgentWithoutLane { .. }
             | Flag::AgentWithoutDevice { .. }
@@ -307,8 +326,8 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
             }
         }
     }
-    for item in state.unstaffed_reviews() {
-        flagged.push(Flag::UnstaffedReview { item });
+    for (item, steps) in state.unstaffed_reviews() {
+        flagged.push(Flag::UnstaffedReview { item, steps });
     }
     for (id, definition) in state.agents() {
         if definition.autonomy.start != StartMode::Auto {
