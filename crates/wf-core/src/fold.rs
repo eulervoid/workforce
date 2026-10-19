@@ -93,6 +93,7 @@ impl State {
                 agents: BTreeMap::new(),
                 items: BTreeMap::new(),
                 sessions: BTreeMap::new(),
+                sessions_by_item: BTreeMap::new(),
                 invites: BTreeMap::new(),
                 profiles: BTreeMap::new(),
                 fork: genesis
@@ -309,6 +310,11 @@ impl State {
             }
             EventBody::SessionStarted(started) => {
                 let session = SessionId::from(id);
+                workforce
+                    .sessions_by_item
+                    .entry(started.item)
+                    .or_default()
+                    .insert(session);
                 workforce.sessions.insert(
                     session,
                     Session {

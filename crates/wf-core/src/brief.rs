@@ -102,8 +102,8 @@ impl Brief {
             }
             SessionRole::Diagnose => {
                 let attempts = state
-                    .sessions()
-                    .filter(|other| other.item() == item.id() && other.role() == SessionRole::Work)
+                    .sessions_of(item.id())
+                    .filter(|other| other.role() == SessionRole::Work)
                     .filter_map(|other| {
                         let ended = other.ended()?;
                         match ended.reason {

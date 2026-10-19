@@ -147,7 +147,7 @@ impl<'de> Deserialize<'de> for ItemState {
 
 use std::collections::BTreeMap;
 
-use crate::body::{Body, StepId};
+use crate::body::{Body, Step, StepId};
 use crate::crdt::{AddWinsSet, Lww, Stamp};
 use crate::event::{CommentKind, WrittenState};
 use crate::hlc::Hlc;
@@ -297,6 +297,23 @@ impl Item {
                 .filter(|mark| mark.stamp() > body_stamp)
                 .map(|mark| *mark.value())
         })
+    }
+
+    /// The steps of the body ticked as of the latest ticks, without copying the body.
+    pub fn steps(&self) -> impl Iterator<Item = Step<'_>> {
+        let body_stamp = self.body.stamp();
+        self.body.value().steps().map(move |step| Step {
+            done: self
+                .step_marks
+                .get(&step.id)
+                .filter(|mark| mark.stamp() > body_stamp)
+                .map_or(step.done, |mark| *mark.value()),
+            ..step
+        })
+    }
+
+    pub fn step(&self, id: StepId) -> Option<Step<'_>> {
+        self.steps().find(|step| step.id == id)
     }
 
     pub fn body_tokens(&self) -> &Vec<Token> {

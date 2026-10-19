@@ -24,3 +24,8 @@ toml.workspace = true
 [dev-dependencies]
 proptest.workspace = true
 serde_json.workspace = true
+
+[[bench]]
+name = "queries"
+harness = false
+required-features = ["testing"]

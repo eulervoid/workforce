@@ -292,6 +292,8 @@ pub(crate) struct Workforce {
     pub(crate) agents: BTreeMap<AgentId, Lww<Option<AgentDefinition>>>,
     pub(crate) items: BTreeMap<ItemId, Item>,
     pub(crate) sessions: BTreeMap<SessionId, Session>,
+    /// The ids of the sessions of each item, kept by the fold next to `sessions`.
+    pub(crate) sessions_by_item: BTreeMap<ItemId, BTreeSet<SessionId>>,
 }
 
 impl Workforce {
@@ -459,9 +461,7 @@ impl State {
     }
 
     pub fn policy(&self) -> Option<&PolicyDoc> {
-        self.workforce
-            .as_ref()
-            .map(Workforce::running_policy)
+        self.workforce.as_ref().map(Workforce::running_policy)
     }
 
     /// Why this version cannot read the policy the workforce set last, if it cannot. The
@@ -620,6 +620,18 @@ impl State {
             .flat_map(|workforce| workforce.sessions.values())
     }
 
+    /// The sessions of one item, live or ended, ordered by id.
+    pub fn sessions_of(&self, item: ItemId) -> impl Iterator<Item = &Session> {
+        self.workforce.iter().flat_map(move |workforce| {
+            workforce
+                .sessions_by_item
+                .get(&item)
+                .into_iter()
+                .flatten()
+                .filter_map(|id| workforce.sessions.get(id))
+        })
+    }
+
     pub fn live_sessions(&self) -> impl Iterator<Item = &Session> {
         self.sessions().filter(|session| session.is_live())
     }
@@ -627,8 +639,8 @@ impl State {
     /// The session that holds the claim on an item: the earliest live work session by
     /// `(hlc, event id)`. A later one is meant to cancel itself.
     pub fn claim(&self, item: ItemId) -> Option<&Session> {
-        self.live_sessions()
-            .filter(|session| session.item() == item && session.role() == SessionRole::Work)
+        self.sessions_of(item)
+            .filter(|session| session.is_live() && session.role() == SessionRole::Work)
             .min_by_key(|session| session.started())
     }
 

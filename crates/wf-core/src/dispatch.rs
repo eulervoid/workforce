@@ -5,6 +5,7 @@ use std::cmp::Reverse;
 use std::collections::BTreeSet;
 
 use crate::autonomy::StartMode;
+use crate::crdt::Lww;
 use crate::event::DeviceProfile;
 use crate::identity::{AgentId, DeviceKey};
 use crate::item::Item;
@@ -28,9 +29,11 @@ pub enum Progress {
 impl State {
     /// What the device says about itself, if it has said anything.
     pub fn device_profile(&self, device: DeviceKey) -> Option<&DeviceProfile> {
-        self.devices()
-            .find(|info| info.device == device)
-            .and_then(|info| info.profile)
+        let workforce = self.workforce.as_ref()?;
+        if !workforce.devices.contains_key(&device) {
+            return None;
+        }
+        workforce.profiles.get(&device).map(Lww::value)
     }
 
     /// The agents of the principal of `device` that the device hosts and that the dispatcher
@@ -97,8 +100,8 @@ impl State {
             return Progress::SentBack;
         }
         let worked_on = self
-            .sessions()
-            .any(|session| session.item() == item.id() && session.role() == SessionRole::Work);
+            .sessions_of(item.id())
+            .any(|session| session.role() == SessionRole::Work);
         if worked_on {
             Progress::Started
         } else {
@@ -111,9 +114,8 @@ impl State {
     /// what finishes soonest goes first; then creation time and id.
     pub fn dispatch_order(&self, item: &Item) -> impl Ord + use<> {
         let progress = self.progress(item);
-        let body = item.body();
-        let checked = body.steps().filter(|step| step.done).count();
-        let unchecked = body.steps().count() - checked;
+        let checked = item.steps().filter(|step| step.done).count();
+        let unchecked = item.steps().count() - checked;
         let more_checked = match progress {
             Progress::Started => checked,
             Progress::SentBack | Progress::NeverStarted => 0,

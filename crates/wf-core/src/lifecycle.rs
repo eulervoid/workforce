@@ -279,8 +279,8 @@ impl State {
         };
         let since = live.principal_touched();
         let submissions: Vec<_> = self
-            .sessions()
-            .filter(|session| session.item() == item && session.role() == SessionRole::Work)
+            .sessions_of(item)
+            .filter(|session| session.role() == SessionRole::Work)
             .filter_map(|session| {
                 let ended = session.ended()?;
                 match ended.reason.outcome() {

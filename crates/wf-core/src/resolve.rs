@@ -73,6 +73,36 @@ impl State {
     }
 }
 
+impl State {
+    /// `@ada` is a principal. Without a matching handle, a short `@coder` names an agent if
+    /// exactly one agent has that name. Sessions arrive in M2 and never resolve yet.
+    pub fn mention(&self, mention: &Mention) -> Option<MentionTarget> {
+        match mention {
+            Mention::Short(name) => {
+                if let Some((principal, _)) = self
+                    .members()
+                    .find(|(_, member)| member.handle.as_str() == name)
+                {
+                    return Some(MentionTarget::Principal(*principal));
+                }
+                let mut agents = self.agents().filter(|(id, _)| id.name.as_str() == name);
+                match (agents.next(), agents.next()) {
+                    (Some((id, _)), None) => Some(MentionTarget::Agent(id.clone())),
+                    _ => None,
+                }
+            }
+            Mention::Agent { principal, agent } => {
+                let (principal, _) = self
+                    .members()
+                    .find(|(_, member)| member.handle.as_str() == principal)?;
+                self.agents()
+                    .find(|(id, _)| id.principal == *principal && id.name.as_str() == agent)
+                    .map(|(id, _)| MentionTarget::Agent(id.clone()))
+            }
+        }
+    }
+}
+
 impl Resolver<'_> {
     /// Resolves an item id prefix like git: at least [`crate::id::MIN_PREFIX_LEN`] characters and unique.
     /// Archived items resolve too, because dependencies on them still do.
@@ -114,38 +144,9 @@ impl Resolver<'_> {
         }
     }
 
-    /// `@ada` is a principal. Without a matching handle, a short `@coder` names an agent if
-    /// exactly one agent has that name. Sessions arrive in M2 and never resolve yet.
+    /// See [`State::mention`].
     pub fn mention(&self, mention: &Mention) -> Option<MentionTarget> {
-        match mention {
-            Mention::Short(name) => {
-                if let Some((principal, _)) = self
-                    .state
-                    .members()
-                    .find(|(_, member)| member.handle.as_str() == name)
-                {
-                    return Some(MentionTarget::Principal(*principal));
-                }
-                let mut agents = self
-                    .state
-                    .agents()
-                    .filter(|(id, _)| id.name.as_str() == name);
-                match (agents.next(), agents.next()) {
-                    (Some((id, _)), None) => Some(MentionTarget::Agent(id.clone())),
-                    _ => None,
-                }
-            }
-            Mention::Agent { principal, agent } => {
-                let (principal, _) = self
-                    .state
-                    .members()
-                    .find(|(_, member)| member.handle.as_str() == principal)?;
-                self.state
-                    .agents()
-                    .find(|(id, _)| id.principal == *principal && id.name.as_str() == agent)
-                    .map(|(id, _)| MentionTarget::Agent(id.clone()))
-            }
-        }
+        self.state.mention(mention)
     }
 }
 

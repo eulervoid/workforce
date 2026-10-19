@@ -223,7 +223,7 @@ pub fn body_parts(body: &Body) -> Vec<BodyPartView> {
         .iter()
         .map(|part| match part {
             BodyPart::Markdown(text) => BodyPartView::Markdown { text: text.clone() },
-            BodyPart::Step { text, done } => {
+            BodyPart::Step { text, done, .. } => {
                 number += 1;
                 BodyPartView::Step {
                     number,
