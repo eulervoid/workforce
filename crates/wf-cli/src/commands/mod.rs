@@ -52,8 +52,8 @@ pub(crate) fn emit<T: Serialize>(
     Ok(())
 }
 
-/// Like [`emit`], but long text goes through the pager when a person is at the terminal.
-/// One JSON object per line with `--json`, so a reader can follow; otherwise `text`.
+/// Like [`emit`], but one JSON object per line with `--json`, so a reader can follow, and flushed
+/// at once.
 pub(crate) fn emit_line<T: Serialize>(
     json: bool,
     data: &T,
@@ -68,6 +68,7 @@ pub(crate) fn emit_line<T: Serialize>(
     Ok(())
 }
 
+/// Like [`emit`], but long text goes through the pager when a person is at the terminal.
 fn emit_paged<T: Serialize>(
     json: bool,
     mode: Mode,

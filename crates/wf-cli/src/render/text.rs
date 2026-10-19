@@ -6,7 +6,7 @@ use crate::transcript::Format;
 use crate::view::ActorView;
 use wf_core::id::{HashId, ItemId};
 
-pub(super) fn paint(style: anstyle::Style, text: impl std::fmt::Display) -> String {
+pub(crate) fn paint(style: anstyle::Style, text: impl std::fmt::Display) -> String {
     format!("{style}{text}{style:#}")
 }
 

@@ -16,3 +16,4 @@ pub use item::{
 };
 pub use status::{session, session_choice, status};
 pub use table::{agents, devices, inbox, item_stats_list, log, members, mentions, sessions};
+pub(crate) use text::paint;

@@ -362,7 +362,7 @@ impl Daemon {
             command: harness,
             model: definition.model.clone(),
             worktree,
-            transcript: transcripts.join(format!("{session}.jsonl")),
+            transcript: self.config.data_dir.transcript(&workforce, session),
             agent_session: super::resume::record_path(&transcripts, session),
             begin,
             branch: item_branch(item),

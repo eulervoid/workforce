@@ -12,6 +12,7 @@ use wf_daemon::command::{Access, CommandRun, Confinement, Outcome};
 use wf_daemon::machine_config::MachineConfig;
 
 use super::emit;
+use crate::render;
 use crate::theme;
 use crate::workspace::Workspace;
 
@@ -241,30 +242,21 @@ impl<'a> Machine<'a> {
 fn render(view: &CheckView) -> String {
     let (why, tail, log) = match &view.result {
         CheckResult::Passed => {
-            return format!(
-                "{}✓{} {}\n",
-                theme::success().render(),
-                theme::success().render_reset(),
-                view.name
-            );
+            return format!("{} {}\n", render::paint(theme::success(), "✓"), view.name);
         }
         CheckResult::Failed { status, tail, log } => (status.clone(), tail, log),
         CheckResult::TimedOut { timeout, tail, log } => {
             (format!("stopped after {timeout}"), tail, log)
         }
     };
-    let (dim, dim_reset) = (
-        theme::text_dimmed().render(),
-        theme::text_dimmed().render_reset(),
-    );
+    let dimmed = |text: String| render::paint(theme::text_dimmed(), text);
     format!(
-        "{}✗{} {}  {dim}{why}{dim_reset}\n  {}{}{}\n\n{tail}\n\n  {dim}log: {log}{dim_reset}\n",
-        theme::error().render(),
-        theme::error().render_reset(),
+        "{} {}  {}\n  {}\n\n{tail}\n\n  {}\n",
+        render::paint(theme::error(), "✗"),
         view.name,
-        theme::code().render(),
-        view.command.join(" "),
-        theme::code().render_reset(),
+        dimmed(why),
+        render::paint(theme::code(), view.command.join(" ")),
+        dimmed(format!("log: {log}")),
     )
 }
 
