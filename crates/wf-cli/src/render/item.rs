@@ -636,7 +636,6 @@ mod tests {
         assert_eq!(backlinks, expected);
     }
 
-    /// An item id that starts with `prefix`.
     #[test]
     fn steps_that_run_at_once_are_told_by_name() {
         let strings = |names: &[&str]| names.iter().map(ToString::to_string).collect::<Vec<_>>();
@@ -661,6 +660,7 @@ mod tests {
         );
     }
 
+    /// An item id that starts with `prefix`.
     fn test_id(prefix: &str) -> ItemId {
         format!("{prefix:a<52}").parse().unwrap()
     }
