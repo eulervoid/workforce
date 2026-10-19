@@ -314,6 +314,14 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn request_json_keeps_the_hook_fields_at_the_top_level() {
+        let json = serde_json::to_value(request()).unwrap();
+        assert_eq!(json["hook"], "permission");
+        assert_eq!(json["version"], 1);
+        assert_eq!(json["tool"]["kind"], "execute");
+    }
+
+    #[test]
     fn answers_are_json() {
         assert_eq!(
             read_answer(r#"{"permission": "allow", "reason": "reads only"}"#),
