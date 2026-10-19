@@ -395,10 +395,12 @@ impl Feed {
     }
 
     /// Takes the snapshot, unless nothing it is taken from changed since the last one: the same
-    /// events, permission requests, machine faults, devices heard from and wanted. Then only the
+    /// events, permission requests, machine faults, devices heard from and wanted, or the minute. Then only the
     /// clock moves, and `None` says to keep the snapshot on screen.
     fn snapshot(&mut self, workspace: &Workspace, app: &App) -> anyhow::Result<Option<Snapshot>> {
+        let now_ms = wf_store::now_ms();
         let taken = Taken {
+            minute: now_ms / MINUTE_MS,
             events: self.events.len(),
             held: workspace.held_permissions()?,
             machine_faults: workspace.machine_faults()?,
@@ -417,7 +419,7 @@ impl Feed {
             events: &self.events,
             event: &|id| workspace.event(&id).ok().flatten(),
             own: workspace.device_key(),
-            now_ms: wf_store::now_ms(),
+            now_ms,
             detail_width: taken.detail_width,
         };
         let snapshot = Snapshot::take(
@@ -453,9 +455,14 @@ impl Feed {
     }
 }
 
+const MINUTE_MS: u64 = 60_000;
+
 /// What the last snapshot was taken from.
 #[derive(PartialEq)]
 struct Taken {
+    /// The minute the snapshot was taken in: the ages and stats in it are worded in minutes at
+    /// the finest, so they go stale when it turns.
+    minute: u64,
     /// How many events the log had.
     events: usize,
     held: Vec<HeldPermission>,
