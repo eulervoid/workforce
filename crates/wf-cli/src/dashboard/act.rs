@@ -214,7 +214,7 @@ fn start_agent(
     item: ItemId,
     agent: AgentName,
 ) -> anyhow::Result<String> {
-    let session = workspace.start_session(agent.clone(), item)?;
+    let session = workspace.start_session(agent.clone(), item, None)?;
     Ok(format!(
         "started {agent} on #{} ({})",
         item.short(),

@@ -411,11 +411,12 @@ impl Workspace {
         &mut self,
         agent: wf_core::name::AgentName,
         item: ItemId,
+        step: Option<wf_core::name::ReviewStepName>,
     ) -> anyhow::Result<SessionId> {
         let repository = self.repository()?.repository().to_path_buf();
         let workforce = self.workforce;
         let (client, state) = self.daemon("start sessions")?;
-        let session = client.start_session(workforce, agent, item, &repository)?;
+        let session = client.start_session(workforce, agent, item, step, &repository)?;
         *state = client.state(workforce)?;
         Ok(session)
     }

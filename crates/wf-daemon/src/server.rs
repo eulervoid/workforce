@@ -5,7 +5,7 @@ use std::sync::Arc;
 use serde::Serialize;
 use tokio::net::UnixStream;
 use wf_core::event::Event;
-use wf_core::id::WorkforceId;
+use wf_core::id::{HashId, WorkforceId};
 use wf_core::identity::{Actor, DeviceKey};
 use wf_core::invite::{InviteCode, InviteCodeError};
 use wf_core::lifecycle::{Interruption, SessionEnd};
@@ -348,17 +348,25 @@ async fn call(
         Call::StartSession {
             agent,
             item,
+            step,
             repository,
         } => {
+            let state = daemon
+                .snapshot(loaded)
+                .await
+                .map_err(|error| wf_core::error_chain(&error))?;
+            let role = match state.review_to_start(item, step.as_ref()) {
+                Some(role) => role.map_err(|error| error.to_string())?,
+                None if step.is_some() => {
+                    return Err(format!(
+                        "#{} awaits no review, so there is no step to review",
+                        item.short()
+                    ));
+                }
+                None => SessionRole::Work,
+            };
             let session = daemon
-                .start_session(
-                    workforce,
-                    loaded,
-                    agent,
-                    item,
-                    SessionRole::Work,
-                    repository,
-                )
+                .start_session(workforce, loaded, agent, item, role, repository)
                 .await
                 .map_err(|error| wf_core::error_chain(&error))?;
             reply(session)
@@ -428,6 +436,7 @@ mod tests {
             Call::StartSession {
                 agent: wf_core::name::AgentName::new("coder").unwrap(),
                 item: wf_core::id::ItemId::from(EventId::of(b"item")),
+                step: None,
                 repository: "/repository".into(),
             },
         ];

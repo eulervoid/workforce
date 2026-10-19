@@ -1057,6 +1057,63 @@ mod at_once {
     }
 
     #[test]
+    fn a_review_started_by_hand_takes_the_step_asked_for() {
+        use crate::review::ReviewStartError;
+        use crate::session::SessionRole;
+
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        let step = |name: &str| Some(crate::name::ReviewStepName::new(name).unwrap());
+        let review_of = |scene: &Scene, name: Option<&str>| {
+            scene
+                .state
+                .review_to_start(item, name.and_then(step).as_ref())
+        };
+        assert_eq!(
+            review_of(&scene, Some("security")),
+            Some(Ok(SessionRole::Review {
+                commit: Some(commit(1)),
+                step: step("security")
+            }))
+        );
+        assert_eq!(
+            review_of(&scene, None),
+            Some(Ok(SessionRole::Review {
+                commit: Some(commit(1)),
+                step: None
+            })),
+            "no name is the unnamed step"
+        );
+        assert!(matches!(
+            review_of(&scene, Some("perf")),
+            Some(Err(ReviewStartError::NoSuchStep { .. }))
+        ));
+
+        scene.apply(start_review_step(
+            "reviewer",
+            item,
+            commit(1),
+            Some("security"),
+        ));
+        assert!(
+            matches!(
+                review_of(&scene, Some("security")),
+                Some(Err(ReviewStartError::NoSuchStep { .. })),
+            ),
+            "a held step is not offered"
+        );
+        scene.apply(start_review_step("second", item, commit(1), None));
+        assert_eq!(
+            review_of(&scene, None),
+            Some(Ok(SessionRole::Review {
+                commit: Some(commit(1)),
+                step: step("style")
+            })),
+            "the only one open is taken without a name"
+        );
+    }
+
+    #[test]
     fn a_principal_approval_passes_the_whole_entry() {
         let mut scene = Scene::with_wide_level();
         let item = scene.submitted("wide");

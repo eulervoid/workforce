@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use crate::transcript::{self, Format, Printer, Verbosity};
 use anyhow::{anyhow, bail};
-use wf_core::id::{HashId, SessionId};
+use wf_core::id::{HashId, ItemId, SessionId};
+use wf_core::name::ReviewStepName;
+use wf_core::review::step_names;
 use wf_harness::Permission;
 
 use crate::cli::{SessionCommand, SessionStartArgs};
@@ -216,7 +218,11 @@ fn start(
             })?,
     };
     let item = choose_item(workspace, mode, args.item, Scope::Unclaimed)?;
-    let session = workspace.start_session(agent.clone(), item)?;
+    let step = match args.step {
+        Some(step) => Some(step),
+        None => pick_review_step(workspace, mode, item)?,
+    };
+    let session = workspace.start_session(agent.clone(), item, step)?;
     emit(
         json,
         &crate::commands::Done {
@@ -243,6 +249,31 @@ fn start(
         )?;
     }
     Ok(())
+}
+
+/// The step to review when `item` awaits a review with several steps open: the one picked at a
+/// terminal. Otherwise the daemon decides, and tells the open steps when it cannot.
+fn pick_review_step(
+    workspace: &Workspace,
+    mode: Mode,
+    item: ItemId,
+) -> anyhow::Result<Option<ReviewStepName>> {
+    let Some((_, open)) = workspace.state().startable_reviews(item) else {
+        return Ok(None);
+    };
+    if open.len() < 2 || mode == Mode::Scripted {
+        return Ok(None);
+    }
+    let choices = open
+        .iter()
+        .map(|step| Choice {
+            value: step.as_ref().map_or_else(String::new, ToString::to_string),
+            label: step_names(std::slice::from_ref(step)),
+        })
+        .collect();
+    let picked = interactive::pick("review step", choices)?;
+    // The step without a name is picked as an empty value, and is the one no name stands for.
+    Ok(ReviewStepName::new(picked).ok())
 }
 
 /// The agent writes its transcript once it is up, which can be a moment after the session starts.

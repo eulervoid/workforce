@@ -38,6 +38,29 @@ pub enum ReviewStatus {
     },
 }
 
+/// Why no review session starts for an item that awaits a review.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ReviewStartError {
+    #[error("every open review step is held by a session or waits for the principal")]
+    NoOpenStep,
+    #[error("several review steps are open ({}); name one with --step", step_names(.open))]
+    Ambiguous { open: Vec<Option<ReviewStepName>> },
+    #[error("no open review step is called `{step}`; open: {}", step_names(.open))]
+    NoSuchStep {
+        step: ReviewStepName,
+        open: Vec<Option<ReviewStepName>>,
+    },
+}
+
+/// The names of review steps for a message; the step without one is `unnamed`.
+pub fn step_names(steps: &[Option<ReviewStepName>]) -> String {
+    steps
+        .iter()
+        .map(|step| step.as_ref().map_or("unnamed", |name| name.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
+
 impl State {
     /// What the latest submitted work session of the item handed in, and when it ended: its
     /// commit, or `None` when the branch had no commits, as for a finding that nothing has to change.
@@ -157,6 +180,54 @@ impl State {
                 }
             })
             .collect()
+    }
+
+    /// The commit under review and the names of the agent steps a review session could be started
+    /// for by hand: the open steps of the item that no live review session holds. `None` when the
+    /// item is not in `review` with submitted work that awaits a verdict.
+    pub fn startable_reviews(
+        &self,
+        item: ItemId,
+    ) -> Option<(Option<CommitId>, Vec<Option<ReviewStepName>>)> {
+        if self.live_state(item)? != ItemState::Review {
+            return None;
+        }
+        let (commit, _) = self.submission(item)?;
+        let ReviewStatus::Awaiting { steps } = self.review_status(item)? else {
+            return None;
+        };
+        let names = self
+            .unheld(item, steps)
+            .into_iter()
+            .filter_map(|step| match step {
+                ReviewStep::Agent { name, .. } => Some(name),
+                ReviewStep::Principal => None,
+            })
+            .collect();
+        Some((commit, names))
+    }
+
+    /// The review session to start by hand on `item`, for `step` when the entry has several steps
+    /// open; no `step` stands for the unnamed one. `None` when the item awaits no review, so that a work session starts.
+    pub fn review_to_start(
+        &self,
+        item: ItemId,
+        step: Option<&ReviewStepName>,
+    ) -> Option<Result<SessionRole, ReviewStartError>> {
+        let (commit, open) = self.startable_reviews(item)?;
+        let chosen = match (step, open.as_slice()) {
+            (_, []) => Err(ReviewStartError::NoOpenStep),
+            (None, [only]) => Ok(only.clone()),
+            // Without a name, the step without one.
+            (None, _) if open.contains(&None) => Ok(None),
+            (None, _) => Err(ReviewStartError::Ambiguous { open }),
+            (Some(wanted), _) if open.contains(&Some(wanted.clone())) => Ok(Some(wanted.clone())),
+            (Some(wanted), _) => Err(ReviewStartError::NoSuchStep {
+                step: wanted.clone(),
+                open,
+            }),
+        };
+        Some(chosen.map(|step| SessionRole::Review { commit, step }))
     }
 
     /// When the daemon found, after `submitted`, that the work of `item` no longer merges into
