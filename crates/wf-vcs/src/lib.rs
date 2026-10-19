@@ -141,6 +141,13 @@ pub enum VcsError {
 pub enum Work {
     /// Not merged yet: `commit` changes the target from where it left it, `<target>...<commit>`.
     Unmerged { target: String, commit: CommitId },
+    /// Unmerged, and a session works on it in `worktree` on this machine: what the worktree has
+    /// changed since `commit` is the uncommitted part of the work, which only this machine has.
+    Working {
+        target: String,
+        commit: CommitId,
+        worktree: PathBuf,
+    },
     /// Merged as `merge`, whose first parent is the target: what it brought in is
     /// `<merge>^1 <merge>`, however far the target moved since. `commit` is the merged work.
     Merged { merge: CommitId, commit: CommitId },
@@ -150,14 +157,16 @@ impl Work {
     /// The latest commit of the work itself, the one to check out.
     pub fn commit(&self) -> CommitId {
         match self {
-            Work::Unmerged { commit, .. } | Work::Merged { commit, .. } => *commit,
+            Work::Unmerged { commit, .. }
+            | Work::Working { commit, .. }
+            | Work::Merged { commit, .. } => *commit,
         }
     }
 
     /// The commit whose files the diff of the work shows on its new side.
     pub fn shown(&self) -> CommitId {
         match self {
-            Work::Unmerged { commit, .. } => *commit,
+            Work::Unmerged { commit, .. } | Work::Working { commit, .. } => *commit,
             Work::Merged { merge, .. } => *merge,
         }
     }
