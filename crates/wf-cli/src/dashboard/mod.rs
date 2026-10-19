@@ -362,7 +362,7 @@ impl Feed {
         let mut read = || -> anyhow::Result<Option<ItemWork>> {
             let git = match &self.git {
                 Some(git) => git,
-                None => self.git.insert(commands::repository()?),
+                None => self.git.insert(workspace.repository()?),
             };
             let work = commands::item_work(workspace, git, item)?;
             let commit = work.shown();

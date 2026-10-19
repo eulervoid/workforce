@@ -202,9 +202,6 @@ pub fn invite_device(
 ) -> anyhow::Result<()> {
     let principal = workspace.principal_signer()?;
     let device = workspace.device_key();
-    if workspace.state().principal_of(&device) != Some(principal.key()) {
-        bail!("the principal key on this machine belongs to someone else");
-    }
     let workforce = workspace
         .state()
         .workforce_id()

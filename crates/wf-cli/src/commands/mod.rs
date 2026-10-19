@@ -13,7 +13,7 @@ mod work;
 
 pub(crate) use item::{Scope, choose_item, sorted_views};
 pub(crate) use review::review;
-pub(crate) use vcs::{item_work, repository};
+pub(crate) use vcs::item_work;
 
 use std::path::Path;
 
@@ -52,8 +52,8 @@ pub(crate) fn emit<T: Serialize>(
     Ok(())
 }
 
-/// Like [`emit`], but long text goes through the pager when a person is at the terminal.
-/// One JSON object per line with `--json`, so a reader can follow; otherwise `text`.
+/// Like [`emit`], but one JSON object per line with `--json`, so a reader can follow, and flushed
+/// at once.
 pub(crate) fn emit_line<T: Serialize>(
     json: bool,
     data: &T,
@@ -68,6 +68,7 @@ pub(crate) fn emit_line<T: Serialize>(
     Ok(())
 }
 
+/// Like [`emit`], but long text goes through the pager when a person is at the terminal.
 fn emit_paged<T: Serialize>(
     json: bool,
     mode: Mode,
@@ -155,7 +156,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 | Command::Harness(_)
                 | Command::Status { .. } => unreachable!("handled above"),
                 Command::Session(command) => {
-                    crate::session::session(json, mode, command, &mut workspace, cwd)
+                    crate::session::session(json, mode, command, &mut workspace)
                 }
                 Command::Work(command) => work(json, command, &mut workspace),
                 Command::Review(args) => review(json, mode, &mut workspace, args),

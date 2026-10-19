@@ -7,7 +7,7 @@ use anyhow::{Context, anyhow, bail};
 use serde::{Deserialize, Serialize};
 use wf_core::event::{Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, DeviceKey, DeviceSigner, PrincipalSigner};
+use wf_core::identity::{Actor, DeviceKey, DeviceSigner, PrincipalKey, PrincipalSigner};
 use wf_core::lifecycle::Finish;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
@@ -85,7 +85,11 @@ pub struct Workspace {
     pub data: DataDir,
     workforce: WorkforceId,
     device: DeviceKey,
+    /// The member this machine belongs to; `actor` is the principal or a session of theirs.
+    principal: PrincipalKey,
     actor: Actor,
+    /// The directory of the workforce file, if there is one.
+    repository: Option<PathBuf>,
 }
 
 /// The replica of a command that talks to the network itself, or the daemon that does.
@@ -116,10 +120,13 @@ impl Workspace {
             || WORKFORCE_VARIABLE.to_string(),
             |file| file.display().to_string(),
         );
-        // The checkouts of sessions have the workforce file too, but they come and go.
-        if let Some(repository) = file
+        let repository = file
             .as_deref()
             .and_then(Path::parent)
+            .map(Path::to_path_buf);
+        // The checkouts of sessions have the workforce file too, but they come and go.
+        if let Some(repository) = repository
+            .as_deref()
             .filter(|directory| directory.join(".git").is_dir())
         {
             data.remember_repository(&id, repository);
@@ -138,6 +145,7 @@ impl Workspace {
                 data,
                 id,
                 device,
+                repository,
             );
         }
         let signer = data
@@ -155,7 +163,13 @@ impl Workspace {
             );
         }
         let device = signer.key();
-        Self::bound(Source::Local(replica, Box::new(signer)), data, id, device)
+        Self::bound(
+            Source::Local(replica, Box::new(signer)),
+            data,
+            id,
+            device,
+            repository,
+        )
     }
 
     fn bound(
@@ -163,6 +177,7 @@ impl Workspace {
         data: DataDir,
         workforce: WorkforceId,
         device: DeviceKey,
+        repository: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         let state = match &source {
             Source::Local(replica, _) => replica.state(),
@@ -186,7 +201,9 @@ impl Workspace {
             data,
             workforce,
             device,
+            principal,
             actor,
+            repository,
         })
     }
 
@@ -209,6 +226,20 @@ impl Workspace {
 
     pub fn device_key(&self) -> DeviceKey {
         self.device
+    }
+
+    /// The member this machine belongs to, checked when the workspace was opened.
+    pub fn principal(&self) -> PrincipalKey {
+        self.principal
+    }
+
+    /// The repository of the workforce: the directory of its `.workforce.toml`.
+    pub fn repository(&self) -> anyhow::Result<wf_vcs::GitCli> {
+        let directory = self
+            .repository
+            .as_deref()
+            .ok_or_else(|| anyhow!("no {WORKFORCE_FILE} found here or in a parent directory"))?;
+        Ok(wf_vcs::GitCli::open(directory)?)
     }
 
     /// When devices were last heard from. Only a running daemon knows.
@@ -299,11 +330,11 @@ impl Workspace {
         &mut self,
         agent: wf_core::name::AgentName,
         item: ItemId,
-        repository: &Path,
     ) -> anyhow::Result<SessionId> {
+        let repository = self.repository()?.repository().to_path_buf();
         let workforce = self.workforce;
         let (client, state) = self.daemon("start sessions")?;
-        let session = client.start_session(workforce, agent, item, repository)?;
+        let session = client.start_session(workforce, agent, item, &repository)?;
         *state = client.state(workforce)?;
         Ok(session)
     }
@@ -381,10 +412,15 @@ impl Workspace {
         }
     }
 
+    /// The key that signs what only the principal may change.
     pub fn principal_signer(&self) -> anyhow::Result<PrincipalSigner> {
-        self.data.principal(&self.workforce)?.ok_or_else(|| {
+        let signer = self.data.principal(&self.workforce)?.ok_or_else(|| {
             anyhow!("this machine has no principal key for this workforce, so it cannot sign policy changes")
-        })
+        })?;
+        if signer.key() != self.principal {
+            bail!("the principal key on this machine belongs to someone else");
+        }
+        Ok(signer)
     }
 
     pub fn resolve_item(&self, text: &str) -> anyhow::Result<ItemId> {

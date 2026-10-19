@@ -40,13 +40,7 @@ pub(crate) fn review(
                 .0
         }
     };
-    let verdict = if args.approve {
-        Verdict::Approve
-    } else if args.request_changes {
-        Verdict::RequestChanges
-    } else {
-        Verdict::Escalate
-    };
+    let verdict = args.verdict();
     let because = comment_why(workspace, item, args.note)?;
     let event = workspace.author(EventBody::Reviewed(wf_core::event::Review {
         item,
@@ -63,4 +57,15 @@ pub(crate) fn review(
         Verdict::Escalate => format!("escalated #{} to the principal", item.short()),
     };
     done(json, message, &event, Some(item))
+}
+
+impl ReviewArgs {
+    /// The verdict flag that was given; clap requires exactly one.
+    fn verdict(&self) -> Verdict {
+        match (self.approve, self.request_changes) {
+            (true, _) => Verdict::Approve,
+            (false, true) => Verdict::RequestChanges,
+            (false, false) => Verdict::Escalate,
+        }
+    }
 }
