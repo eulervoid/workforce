@@ -38,7 +38,7 @@ use wf_net::{NetError, Network, Node};
 use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
 pub use data_dir::DataDir;
-pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS};
+pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS, Retry};
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, session_model};

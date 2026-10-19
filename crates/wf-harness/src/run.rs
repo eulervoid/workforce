@@ -736,6 +736,56 @@ mod tests {
     }
 
     #[test]
+    fn midnight_and_noon_are_12am_and_12pm() {
+        let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
+        assert_eq!(
+            parse_reset("resets 12am (UTC)", now),
+            Some("2026-10-20T00:00:00Z".parse().unwrap())
+        );
+        assert_eq!(
+            parse_reset("resets 12:30pm (UTC)", now),
+            Some("2026-10-20T12:30:00Z".parse().unwrap())
+        );
+        assert_eq!(
+            parse_reset(
+                "resets 12:30pm (UTC)",
+                "2026-10-19T11:00:00Z".parse().unwrap()
+            ),
+            Some("2026-10-19T12:30:00Z".parse().unwrap())
+        );
+    }
+
+    #[test]
+    fn a_reset_that_cannot_be_read_is_none() {
+        let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
+        for message in [
+            "limit reached",
+            "resets soon",
+            "resets 19:50",
+            "resets 13pm (UTC)",
+            "resets 0am (UTC)",
+            "resets 7:75pm (UTC)",
+            "resets x:50pm (UTC)",
+        ] {
+            assert_eq!(parse_reset(message, now), None, "{message}");
+        }
+    }
+
+    #[test]
+    fn a_reset_without_zone_is_in_the_machine_zone() {
+        let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
+        let system = jiff::tz::TimeZone::system();
+        let reset = parse_reset("resets 7:50pm", now).expect("a reset");
+        let local = reset.to_zoned(system);
+        assert_eq!((local.hour(), local.minute()), (19, 50));
+        assert!(reset > now && reset <= now + std::time::Duration::from_secs(25 * 3600));
+        assert_eq!(
+            parse_reset("resets 7:50pm (Nowhere/Land)", now),
+            Some(reset)
+        );
+    }
+
+    #[test]
     fn other_errors_are_no_rate_limit() {
         let now: Timestamp = "2026-10-19T17:32:00Z".parse().unwrap();
         let mut error = agent_client_protocol::Error::internal_error();

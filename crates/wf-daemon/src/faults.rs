@@ -42,9 +42,9 @@ pub struct OutOfSpace {
     pub what: String,
 }
 
-/// A harness whose sessions cannot run. Its agents are started again at `retry_at_ms`, every
-/// [`RETRY_HARNESS`] unless the harness said when it is fine again; the first turn it answers
-/// shows that it is. Unless no command is known for it: then they wait until there is.
+/// A harness whose sessions cannot run. Its agents are started again at `retry`, [`RETRY_HARNESS`]
+/// after the failure unless the harness said when it is fine again; the first turn it answers
+/// shows that it is.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HarnessAtFault {
     pub fault: HarnessFault,
@@ -54,9 +54,17 @@ pub struct HarnessAtFault {
     pub last_ms: u64,
     /// What the harness said then.
     pub what: String,
-    /// When its agents are started again, in milliseconds since the Unix epoch; `None` while no
-    /// command is known for the harness.
-    pub retry_at_ms: Option<u64>,
+    /// When its agents are started again.
+    pub retry: Retry,
+}
+
+/// When the agents of a harness at fault are started again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Retry {
+    /// Not until a command is known for the harness.
+    Never,
+    /// At this time, in milliseconds since the Unix epoch.
+    At(u64),
 }
 
 /// How long the agents of a harness at fault wait before one is started again, to learn whether
@@ -108,12 +116,12 @@ impl Faults {
     ) {
         let now_ms = wf_store::now_ms();
         let retry_ms = u64::try_from(RETRY_HARNESS.as_millis()).unwrap_or(u64::MAX);
-        let retry_at_ms = Some(resets_at_ms.unwrap_or(now_ms.saturating_add(retry_ms)));
+        let retry = Retry::At(resets_at_ms.unwrap_or(now_ms.saturating_add(retry_ms)));
         let mut faults = self.lock();
         match faults.harnesses.get_mut(harness) {
             Some(known) if known.fault == fault => {
                 known.last_ms = now_ms;
-                known.retry_at_ms = retry_at_ms;
+                known.retry = retry;
             }
             Some(_) | None => {
                 tracing::warn!(
@@ -131,7 +139,7 @@ impl Faults {
                         since_ms: now_ms,
                         last_ms: now_ms,
                         what,
-                        retry_at_ms,
+                        retry,
                     },
                 );
             }
@@ -193,7 +201,7 @@ impl Faults {
                             since_ms: now_ms,
                             last_ms: now_ms,
                             what,
-                            retry_at_ms: None,
+                            retry: Retry::Never,
                         },
                     );
                 }
@@ -225,7 +233,10 @@ impl Faults {
             || faults
                 .harnesses
                 .get(harness)
-                .is_some_and(|at_fault| at_fault.retry_at_ms.is_none_or(|at_ms| now_ms < at_ms))
+                .is_some_and(|at_fault| match at_fault.retry {
+                    Retry::Never => true,
+                    Retry::At(at_ms) => now_ms < at_ms,
+                })
     }
 
     pub(crate) fn current(&self) -> MachineFaults {
@@ -413,8 +424,8 @@ mod tests {
             Some(reset_ms),
         );
         assert_eq!(
-            faults.current().harnesses[&claude].retry_at_ms,
-            Some(reset_ms)
+            faults.current().harnesses[&claude].retry,
+            Retry::At(reset_ms)
         );
         assert!(faults.holds(&claude, reset_ms - 1));
         assert!(!faults.holds(&claude, reset_ms));

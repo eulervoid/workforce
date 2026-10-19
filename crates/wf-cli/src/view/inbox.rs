@@ -6,7 +6,7 @@ use wf_core::inbox::{InboxKind, permission_waits};
 use wf_core::session::HarnessFault;
 use wf_core::state::State;
 use wf_daemon::proto::HeldPermission;
-use wf_daemon::{MachineFaults, RETRY_HARNESS};
+use wf_daemon::{MachineFaults, Retry};
 
 #[derive(Serialize)]
 pub struct InboxEntryView {
@@ -77,7 +77,6 @@ pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
         what,
         passed: Vec::new(),
     };
-    let retried = humantime::format_duration(RETRY_HARNESS);
     let mut entries: Vec<InboxEntryView> = faults
         .out_of_space
         .iter()
@@ -87,7 +86,7 @@ pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
                 format!(
                     "free space on this machine, such as with `cargo clean` in old worktrees; \
                      nothing is started until there is. Since {}, the daemon could not write {}",
-                    since(full.since_ms),
+                    timestamp(full.since_ms),
                     full.what
                 ),
             )
@@ -119,16 +118,12 @@ pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
             title,
             format!(
                 "{todo}; {}. Since {}: {}",
-                match fault.fault {
-                    HarnessFault::Unknown => "its agents do not start until then".to_string(),
-                    HarnessFault::UsageLimit => match fault.retry_at_ms {
-                        Some(at_ms) => format!("its agents are tried again at {}", since(at_ms)),
-                        None => format!("its agents are tried again every {retried}"),
-                    },
-                    HarnessFault::LoginLapsed | HarnessFault::Unreachable =>
-                        format!("its agents are tried again every {retried}"),
+                match fault.retry {
+                    Retry::Never => "its agents do not start until then".to_string(),
+                    Retry::At(at_ms) =>
+                        format!("its agents are tried again at {}", timestamp(at_ms)),
                 },
-                since(fault.since_ms),
+                timestamp(fault.since_ms),
                 fault.what
             ),
         )
@@ -136,7 +131,7 @@ pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
     entries
 }
 
-fn since(at_ms: u64) -> String {
+fn timestamp(at_ms: u64) -> String {
     jiff::Timestamp::from_millisecond(i64::try_from(at_ms).unwrap_or(i64::MAX))
         .map_or_else(|_| at_ms.to_string(), |at| at.to_string())
 }
