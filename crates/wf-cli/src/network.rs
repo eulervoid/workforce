@@ -443,13 +443,14 @@ fn finish_join(
 
 /// The name of this machine, for the device profile.
 pub(crate) fn host_name() -> String {
-    std::env::var("HOSTNAME")
-        .ok()
-        .filter(|name| !name.trim().is_empty())
-        .or_else(|| {
-            let output = std::process::Command::new("hostname").output().ok()?;
-            let name = String::from_utf8(output.stdout).ok()?.trim().to_string();
-            (!name.is_empty()).then_some(name)
-        })
-        .unwrap_or_else(|| "this-machine".to_string())
+    let name = rustix::system::uname()
+        .nodename()
+        .to_string_lossy()
+        .trim()
+        .to_owned();
+    if name.is_empty() {
+        "this-machine".to_owned()
+    } else {
+        name
+    }
 }
