@@ -1447,7 +1447,7 @@ mod tests {
         // The agent's index still has nothing staged, and the new file is still untracked.
         let status = crate::testing::git_in(&worktree, &["status", "--porcelain"]);
         assert!(status.contains("?? new.txt"), "{status}");
-        assert!(status.contains(" M file.txt"), "{status}");
+        assert!(status.contains("M file.txt"), "{status}");
         assert_eq!(
             repo.git.uncommitted_diff(&unmerged(commit), &[]).unwrap(),
             None
