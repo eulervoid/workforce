@@ -32,7 +32,10 @@ pub const EVENTS_PER_PAGE: usize = 512;
 pub enum ProtoError {
     #[error("socket failed")]
     Io(#[from] std::io::Error),
-    #[error("message does not decode")]
+    #[error(
+        "message does not decode; the daemon may be another build than this one, \
+         restart it with `wf daemon restart`"
+    )]
     Encoding(#[from] encoding::EncodingError),
     #[error(transparent)]
     Frame(#[from] FrameError),
@@ -182,4 +185,119 @@ pub fn write_message<W: Write, T: Serialize>(
 
 pub fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, ProtoError> {
     Ok(frame::read_frame(reader)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use wf_core::id::EventId;
+    use wf_core::identity::DeviceSigner;
+    use wf_core::testing::golden_state;
+
+    use super::*;
+    use crate::caches::CacheUsage;
+    use crate::faults::MachineFaults;
+    use crate::peers::{PeerOutcome, PeerSync};
+
+    /// The CLI decodes replies by the type each call names, and postcard is not self-describing,
+    /// so a reply of another shape decodes into garbage or fails obscurely. The bytes below are
+    /// the replies of one fixed fixture, one hash per call that carries a structure of its own.
+    #[test]
+    fn golden_reply_bytes() {
+        let device = DeviceSigner::from_bytes(&[2; 32]).unwrap().key();
+        let held = HeldPermission {
+            session: SessionId::from_bytes([3; 32]),
+            what: "bash: cargo test".into(),
+            passed: vec!["rules: no rule".into()],
+            since_ms: 5_000,
+        };
+        let peers = vec![
+            PeerSync {
+                device,
+                label: "laptop".into(),
+                outcome: PeerOutcome::Synced {
+                    sent: 1,
+                    received: 2,
+                    rejected: 3,
+                },
+            },
+            PeerSync {
+                device,
+                label: "server".into(),
+                outcome: PeerOutcome::Unreachable("timed out".into()),
+            },
+        ];
+        let usage = Some(CacheUsage {
+            used_bytes: 10,
+            budget_bytes: 20,
+        });
+        let state = encoding::encode(&golden_state()).unwrap();
+        let replies: Vec<(&str, Vec<u8>)> = vec![
+            ("State", encoding::encode(&Reply::Ok(state)).unwrap()),
+            (
+                "Permissions",
+                encoding::encode(&Reply::Ok(vec![held])).unwrap(),
+            ),
+            ("SyncNow", encoding::encode(&Reply::Ok(peers)).unwrap()),
+            (
+                "MachineFaults",
+                encoding::encode(&Reply::Ok(MachineFaults::default())).unwrap(),
+            ),
+            ("CacheUsage", encoding::encode(&Reply::Ok(usage)).unwrap()),
+            (
+                "failure",
+                encoding::encode(&Reply::<()>::Err("no".into())).unwrap(),
+            ),
+        ];
+        let hashes: Vec<(&str, usize, String)> = replies
+            .iter()
+            .map(|(call, bytes)| (*call, bytes.len(), EventId::of(bytes).to_string()))
+            .collect();
+        let pinned = GOLDEN_REPLIES.to_vec();
+        let found: Vec<(&str, usize, &str)> = hashes
+            .iter()
+            .map(|(call, len, hash)| (*call, *len, hash.as_str()))
+            .collect();
+        assert_eq!(
+            (PROTOCOL_VERSION, found),
+            (GOLDEN_PROTOCOL_VERSION, pinned),
+            "the encoded shape of a daemon reply or of `State` changed. Bump `PROTOCOL_VERSION` \
+             and `SNAPSHOT_FORMAT` in wf-store/src/replica.rs, then update \
+             `GOLDEN_PROTOCOL_VERSION` and `GOLDEN_REPLIES` here and `GOLDEN_SNAPSHOT` there to \
+             what these tests print"
+        );
+    }
+
+    const GOLDEN_PROTOCOL_VERSION: u32 = 16;
+    const GOLDEN_REPLIES: [(&str, usize, &str); 6] = [
+        (
+            "State",
+            9257,
+            "auxjzbopdblpqvaxempnrgr45f4ecnjhyhnyigek6yualjr74eiq",
+        ),
+        (
+            "Permissions",
+            70,
+            "7qisyjr6gciokcbsilk3l2jk7slnlgqqrum4urcz47hx3c3kj5hq",
+        ),
+        (
+            "SyncNow",
+            97,
+            "abj77avwgitaa6azyfeh3vz77lq5uvwz37oqwukwng4qpagtqz7a",
+        ),
+        (
+            "MachineFaults",
+            3,
+            "sfjf74akg5k2rx4tyytllh3og3hqehmf5pgozxw4hdz7dcikcx6a",
+        ),
+        (
+            "CacheUsage",
+            4,
+            "4jbsfkwgblpmpv53kehzpspv6karstuuedmhfclxlcsqy7rt4whq",
+        ),
+        (
+            "failure",
+            4,
+            "qegpakx3omc3v743mvdau33u7m5upwr7iolhjkxzg3jk3fgeqfwq",
+        ),
+    ];
 }
