@@ -333,7 +333,7 @@ impl App {
             &self.log.stack,
         ];
         self.diffs.retain(|item, pane| {
-            !pane.drafts.is_empty()
+            !pane.drafts().is_empty()
                 || stacks.iter().any(|stack| {
                     stack
                         .iter()
@@ -353,7 +353,7 @@ impl App {
         if let Some(InView::Diff { id, comments }) = &self.snapshot.in_view
             && let Some(pane) = self.diffs.get_mut(id)
         {
-            pane.posted.clone_from(comments);
+            pane.set_posted(comments);
         }
     }
 
@@ -974,7 +974,7 @@ impl App {
     /// screen shows (none for work without commits), or without a diff read, the one the review
     /// waiting in the inbox is of.
     fn reviewed_commit(&self, item: ItemId) -> Option<CommitId> {
-        let shown = self.diffs.get(&item).and_then(|pane| match &pane.work {
+        let shown = self.diffs.get(&item).and_then(|pane| match pane.work() {
             Some(Ok(work)) => Some(match work.changes {
                 Changes::NoCommits => None,
                 Changes::Files(_) => Some(work.commit),
@@ -992,9 +992,7 @@ impl App {
 
     /// The comments on lines of the review of `item` being written.
     pub fn drafts(&self, item: ItemId) -> &[LineComment] {
-        self.diffs
-            .get(&item)
-            .map_or(&[], |pane| pane.drafts.as_slice())
+        self.diffs.get(&item).map_or(&[], |pane| pane.drafts())
     }
 
     /// Takes in a comment on lines written in `$EDITOR`: a draft of the review of `item`, in
@@ -1008,7 +1006,7 @@ impl App {
     /// The review of `item` was sent, with its drafts.
     pub fn reviewed(&mut self, item: ItemId) {
         if let Some(pane) = self.diffs.get_mut(&item) {
-            pane.drafts.clear();
+            pane.clear_drafts();
         }
     }
 
@@ -1016,7 +1014,7 @@ impl App {
     /// given: they are not drafts any more, and the rest still are.
     pub fn drafts_posted(&mut self, item: ItemId, posted: usize) {
         if let Some(pane) = self.diffs.get_mut(&item) {
-            pane.drafts.drain(..posted.min(pane.drafts.len()));
+            pane.drop_first_drafts(posted);
         }
     }
 
