@@ -1,12 +1,15 @@
 //! Deterministic fixtures for tests in this and downstream crates (feature `testing`).
 
+use std::collections::BTreeMap;
+
 use crate::autonomy::Autonomy;
 use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::event::{
-    AgentDefined, BoundPolicySet, Change, CommentKind, Commented, DeviceBound, Event, EventBody,
-    EventBuilder, ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated, ItemEdited,
-    ItemLinked, ItemMoved, ItemRef, Link, SessionEnded, SessionStarted, WrittenState,
+    AgentDefined, BoundPolicySet, Change, CommentKind, Commented, DeviceBound, DeviceProfile,
+    Event, EventBody, EventBuilder, ForkAnnounced, ForkPoint, Genesis, InviteCreated, InviteKind,
+    ItemCreated, ItemEdited, ItemLinked, ItemMoved, ItemRef, Link, SessionEnded, SessionStarted,
+    WrittenState,
 };
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
@@ -238,7 +241,7 @@ impl Fixture {
     }
 
     /// A policy signed by `signer` for the event that `device` would write next on `state` at
-    /// `now_ms`.
+    /// `now_ms`, for the workforce of `state`.
     pub fn policy_set(
         &self,
         state: &State,
@@ -258,7 +261,7 @@ impl Fixture {
         EventBody::BoundPolicySet(
             Signed::sign(
                 signer,
-                Some(self.workforce()),
+                state.workforce_id(),
                 BoundPolicySet {
                     policy: source.into(),
                     hlc,
@@ -493,4 +496,294 @@ pub fn check_failure(item: ItemId, text: &str) -> EventBody {
         kind: CommentKind::CheckFailure,
         ..Commented::plain(item, text)
     })
+}
+
+fn golden_commit(byte: u8) -> CommitId {
+    CommitId::Git(format!("{byte:02x}").repeat(20).parse().unwrap())
+}
+
+/// A state that holds one of each kind of thing the encoding of [`State`] has a field for, from
+/// fixed keys and clocks: a fork of a parent workforce that was taken in completely (so it has
+/// aliases and history), with an invite, a device bound by it, device profiles, a fork
+/// announcement, both policy registers, agents, sessions of each role, a reviewed and merged
+/// item, and items with links, edits, supersession, steps and every kind of comment. The golden
+/// tests that pin `SNAPSHOT_FORMAT` and `PROTOCOL_VERSION` encode it together with
+/// [`golden_forking_state`]; extend them when `State` grows something they do not reach.
+pub fn golden_state() -> State {
+    let fixture = Fixture::new(2);
+    let mut parent = fixture.state();
+    let mut history = vec![fixture.genesis.clone()];
+    let mut apply = |state: &mut State, device, now_ms, body| {
+        let event = fixture.apply(state, device, now_ms, body);
+        history.push(event.clone());
+        event
+    };
+    let step_text = "Pick the units";
+    let task: ItemId = apply(
+        &mut parent,
+        0,
+        2_000,
+        create_with_body("task", "Parse durations", &format!("- [ ] {step_text}\n")),
+    )
+    .id()
+    .into();
+    let other: ItemId = apply(&mut parent, 0, 2_001, create("task", "Print durations"))
+        .id()
+        .into();
+    let archived: ItemId = apply(&mut parent, 1, 2_002, create("task", "Forgotten"))
+        .id()
+        .into();
+    let replaced: ItemId = apply(&mut parent, 1, 2_003, create("task", "Old way"))
+        .id()
+        .into();
+    apply(&mut parent, 0, 2_004, depends_on(task, other));
+    apply(&mut parent, 0, 2_005, supersedes(task, replaced));
+    apply(&mut parent, 0, 2_006, comment(task, "Start with seconds"));
+    apply(&mut parent, 0, 2_007, blocker(task, "Which units?"));
+    apply(&mut parent, 0, 2_008, change_request(other, "Add tests"));
+    apply(&mut parent, 0, 2_009, check_failure(other, "fmt failed"));
+    apply(
+        &mut parent,
+        0,
+        2_010,
+        edit(task, Change::Title("Parse durations (units)".into())),
+    );
+    apply(&mut parent, 0, 2_011, moved(other, ItemState::Open));
+    apply(&mut parent, 0, 2_012, archive(archived));
+    apply(
+        &mut parent,
+        0,
+        2_013,
+        EventBody::DeviceProfile(DeviceProfile {
+            name: "laptop".into(),
+            hardware: "gpu, os:linux".into(),
+            agents: BTreeMap::from([(AgentName::new("coder").unwrap(), 2)]),
+            max_sessions: 3,
+        }),
+    );
+
+    // A new principal founds the fork, so the old one becomes an alias.
+    let fork_founder = PrincipalSigner::from_bytes(&[200; 32]).unwrap();
+    let genesis = fixture.fork(&parent, &fork_founder, 5_000);
+    let mut state = State::new();
+    state.receive(genesis, Trust::Untrusted).unwrap();
+    loop {
+        let wanted = state.missing_parents();
+        if wanted.is_empty() {
+            break;
+        }
+        let mut batch: Vec<&Event> = history
+            .iter()
+            .filter(|event| wanted.contains(&event.id()))
+            .collect();
+        batch.sort_by_key(|event| std::cmp::Reverse((event.content.hlc, event.id())));
+        for event in batch {
+            state.receive(event.clone(), Trust::Untrusted).unwrap();
+        }
+    }
+
+    let fork_actor = Actor::Principal(fork_founder.key());
+    let act = |state: &mut State, device, now_ms, body| {
+        let event = fixture.author_as(state, device, fork_actor.clone(), now_ms, body);
+        state.receive(event.clone(), Trust::Untrusted).unwrap();
+        event
+    };
+    act(&mut state, 0, 6_000, define_agent("coder"));
+    act(
+        &mut state,
+        0,
+        6_001,
+        define_agent_with("reviewer", &["review", "strong-model"]),
+    );
+    let session: SessionId = act(&mut state, 0, 6_002, start_session("coder", task))
+        .id()
+        .into();
+    act(
+        &mut state,
+        0,
+        6_003,
+        on_step(task, "chose seconds", StepId::of(step_text)),
+    );
+    act(
+        &mut state,
+        0,
+        6_004,
+        edit(
+            task,
+            Change::StepDone {
+                step: StepId::of(step_text),
+                done: true,
+            },
+        ),
+    );
+    act(&mut state, 0, 6_005, start_session("coder", other));
+    act(
+        &mut state,
+        0,
+        6_006,
+        end_session(session, EndReason::Released),
+    );
+
+    let reviewed: ItemId = act(
+        &mut state,
+        0,
+        7_000,
+        create_reviewed("task", "Reviewed work", "critical"),
+    )
+    .id()
+    .into();
+    let coding: SessionId = act(&mut state, 0, 7_001, start_session("coder", reviewed))
+        .id()
+        .into();
+    act(&mut state, 0, 7_002, moved(reviewed, ItemState::Review));
+    act(
+        &mut state,
+        0,
+        7_003,
+        end_session(
+            coding,
+            EndReason::Submitted {
+                commit: Some(golden_commit(1)),
+            },
+        ),
+    );
+    let reviewing: SessionId = act(
+        &mut state,
+        0,
+        7_004,
+        start_review("reviewer", reviewed, golden_commit(1)),
+    )
+    .id()
+    .into();
+    let by_reviewer = fixture.author_as(
+        &state,
+        0,
+        Actor::Agent {
+            agent: AgentId {
+                principal: fork_founder.key(),
+                name: AgentName::new("reviewer").unwrap(),
+            },
+            session: reviewing,
+        },
+        7_005,
+        verdict(reviewed, golden_commit(1), Verdict::Approve),
+    );
+    state.receive(by_reviewer, Trust::Untrusted).unwrap();
+    act(
+        &mut state,
+        0,
+        7_006,
+        end_session(reviewing, EndReason::Reviewed),
+    );
+    act(
+        &mut state,
+        0,
+        7_007,
+        merged(reviewed, golden_commit(1), golden_commit(9)),
+    );
+
+    let child_workforce: WorkforceId = state.workforce_id().unwrap();
+    let secret = InviteSigner::generate([3; 32]);
+    let invite = act(
+        &mut state,
+        0,
+        8_000,
+        EventBody::InviteCreated(
+            Signed::sign(
+                &fork_founder,
+                Some(child_workforce),
+                InviteCreated {
+                    kind: InviteKind::Device,
+                    invite: secret.key(),
+                    expires_ms: 9_000_000,
+                },
+            )
+            .unwrap(),
+        ),
+    );
+    let joiner = DeviceSigner::from_bytes(&[50; 32]).unwrap();
+    let proof = secret
+        .prove(child_workforce, invite.id(), joiner.key())
+        .unwrap();
+    let bound = state
+        .builder(joiner.key(), fork_actor.clone(), 8_001)
+        .unwrap()
+        .depending_on(invite.id())
+        .sign(
+            &joiner,
+            EventBody::DeviceBound(DeviceBound {
+                invite: invite.id(),
+                proof,
+            }),
+        )
+        .unwrap();
+    state.receive(bound, Trust::Untrusted).unwrap();
+    let announcement = EventBody::ForkAnnounced(
+        Signed::sign(
+            &fork_founder,
+            Some(child_workforce),
+            ForkAnnounced {
+                to: WorkforceId::from(EventId::of(b"a later fork")),
+                members: vec![fork_founder.key(), fixture.member.key()],
+            },
+        )
+        .unwrap(),
+    );
+    act(&mut state, 0, 8_002, announcement);
+    let bound_policy = fixture.policy_set(&state, 0, 8_004, &fork_founder, DEFAULT_POLICY_TOML);
+    act(&mut state, 0, 8_004, bound_policy);
+    state
+}
+
+/// A fork that has not yet taken in the history it names: the other variant of its fork state.
+pub fn golden_forking_state() -> State {
+    let fixture = Fixture::new(2);
+    let parent = fixture.state();
+    let genesis = fixture.fork(&parent, &fixture.founder, 5_000);
+    let mut state = State::new();
+    state.receive(genesis, Trust::Untrusted).unwrap();
+    state
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::state::ForkState;
+
+    use super::*;
+
+    /// The golden tests only pin what the golden states hold, so none of it may go missing.
+    #[test]
+    fn the_golden_state_reaches_every_part_of_the_state() {
+        let state = golden_state();
+        let workforce = state.workforce.as_ref().unwrap();
+        assert!(matches!(workforce.fork, Some(ForkState::Complete { .. })));
+        assert!(!workforce.aliases.is_empty());
+        assert!(!workforce.profiles.is_empty());
+        assert!(!workforce.announcements.is_empty());
+        assert!(workforce.bound_policy.is_some());
+        assert!(
+            workforce
+                .invites
+                .values()
+                .any(|invite| !invite.redeemed_by.is_empty())
+        );
+        assert!(!workforce.sessions.is_empty());
+        assert!(!workforce.sessions_by_item.is_empty());
+        assert!(
+            state
+                .review_status(
+                    state
+                        .items()
+                        .find(|item| item.title() == "Reviewed work")
+                        .unwrap()
+                        .id()
+                )
+                .is_some()
+        );
+        let forking = golden_forking_state();
+        assert!(matches!(
+            forking.workforce.as_ref().unwrap().fork,
+            Some(ForkState::TakingIn { .. })
+        ));
+    }
 }

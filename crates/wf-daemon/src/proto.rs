@@ -32,7 +32,10 @@ pub const EVENTS_PER_PAGE: usize = 512;
 pub enum ProtoError {
     #[error("socket failed")]
     Io(#[from] std::io::Error),
-    #[error("message does not decode")]
+    #[error(
+        "message does not decode; the daemon may be another build than this one, \
+         restart it with `wf daemon restart`"
+    )]
     Encoding(#[from] encoding::EncodingError),
     #[error(transparent)]
     Frame(#[from] FrameError),
@@ -182,4 +185,336 @@ pub fn write_message<W: Write, T: Serialize>(
 
 pub fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, ProtoError> {
     Ok(frame::read_frame(reader)?)
+}
+
+#[cfg(test)]
+mod tests {
+    use wf_core::id::EventId;
+    use wf_core::identity::DeviceSigner;
+    use wf_core::testing::{golden_forking_state, golden_state};
+
+    use super::*;
+    use crate::caches::CacheUsage;
+    use crate::faults::MachineFaults;
+    use crate::peers::{PeerOutcome, PeerSync};
+
+    /// The CLI decodes replies by the type each call names, and postcard is not self-describing,
+    /// so a reply of another shape decodes into garbage or fails obscurely. The bytes below are
+    /// the replies of one fixed fixture, one hash per call that carries a structure of its own.
+    #[test]
+    fn golden_reply_bytes() {
+        let device = DeviceSigner::from_bytes(&[2; 32]).unwrap().key();
+        let held = HeldPermission {
+            session: SessionId::from_bytes([3; 32]),
+            what: "bash: cargo test".into(),
+            passed: vec!["rules: no rule".into()],
+            since_ms: 5_000,
+        };
+        let peers = vec![
+            PeerSync {
+                device,
+                label: "laptop".into(),
+                outcome: PeerOutcome::Synced {
+                    sent: 1,
+                    received: 2,
+                    rejected: 3,
+                },
+            },
+            PeerSync {
+                device,
+                label: "server".into(),
+                outcome: PeerOutcome::Unreachable("timed out".into()),
+            },
+        ];
+        let usage = Some(CacheUsage {
+            used_bytes: 10,
+            budget_bytes: 20,
+        });
+        let state = encoding::encode(&(golden_state(), golden_forking_state())).unwrap();
+        let replies: Vec<(&str, Vec<u8>)> = vec![
+            ("State", encoding::encode(&Reply::Ok(state)).unwrap()),
+            (
+                "Permissions",
+                encoding::encode(&Reply::Ok(vec![held])).unwrap(),
+            ),
+            ("SyncNow", encoding::encode(&Reply::Ok(peers)).unwrap()),
+            (
+                "MachineFaults",
+                encoding::encode(&Reply::Ok(MachineFaults::default())).unwrap(),
+            ),
+            ("CacheUsage", encoding::encode(&Reply::Ok(usage)).unwrap()),
+            (
+                "failure",
+                encoding::encode(&Reply::<()>::Err("no".into())).unwrap(),
+            ),
+        ];
+        let hashes: Vec<(&str, usize, String)> = replies
+            .iter()
+            .map(|(call, bytes)| (*call, bytes.len(), EventId::of(bytes).to_string()))
+            .collect();
+        let pinned = GOLDEN_REPLIES.to_vec();
+        let found: Vec<(&str, usize, &str)> = hashes
+            .iter()
+            .map(|(call, len, hash)| (*call, *len, hash.as_str()))
+            .collect();
+        assert_eq!(
+            (PROTOCOL_VERSION, found),
+            (GOLDEN_PROTOCOL_VERSION, pinned),
+            "the encoded shape of a daemon reply or of `State` changed. Bump `PROTOCOL_VERSION` \
+             and `SNAPSHOT_FORMAT` in wf-store/src/replica.rs, then update \
+             `GOLDEN_PROTOCOL_VERSION` and `GOLDEN_REPLIES` here and `GOLDEN_SNAPSHOT` there to \
+             what these tests print"
+        );
+    }
+
+    /// Names each `Call` variant for the golden requests. The match has no wildcard, so a new
+    /// variant fails to compile here: add its arm, raise `CALL_VARIANTS` and add a request for
+    /// it to `golden_request_bytes`.
+    fn golden_name(call: &Call) -> &'static str {
+        match call {
+            Call::State => "State",
+            Call::Event(_) => "Event",
+            Call::Events { .. } => "Events",
+            Call::ItemEvents(_) => "ItemEvents",
+            Call::AgentEvents(_) => "AgentEvents",
+            Call::Author { .. } => "Author",
+            Call::SyncNow => "SyncNow",
+            Call::Fork(_) => "Fork",
+            Call::Join { .. } => "Join",
+            Call::Follow(_) => "Follow",
+            Call::LastSeen => "LastSeen",
+            Call::StartSession { .. } => "StartSession",
+            Call::EndSession { .. } => "EndSession",
+            Call::StopSession(_) => "StopSession",
+            Call::Permissions => "Permissions",
+            Call::AnswerPermission { .. } => "AnswerPermission",
+            Call::MachineFaults => "MachineFaults",
+            Call::CacheUsage => "CacheUsage",
+        }
+    }
+
+    /// The number of arms of [`golden_name`].
+    const CALL_VARIANTS: usize = 18;
+
+    /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
+    /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
+    /// One request per call, from fixed keys; the events inside are pinned by their own tests.
+    #[test]
+    fn golden_request_bytes() {
+        use wf_core::event::DeviceProfile;
+        use wf_core::identity::PrincipalSigner;
+        use wf_core::testing::{Fixture, comment};
+
+        let fixture = Fixture::new(2);
+        let state = fixture.state();
+        let item = ItemId::from_bytes([1; 32]);
+        let device = DeviceSigner::from_bytes(&[2; 32]).unwrap().key();
+        let fork = fixture.fork(&state, &PrincipalSigner::generate([9; 32]), 3_000);
+        let profile = DeviceProfile {
+            name: "laptop".into(),
+            hardware: "gpu, os:linux".into(),
+            agents: [(AgentName::new("claude").unwrap(), 2)].into(),
+            max_sessions: 4,
+        };
+        let calls: Vec<Call> = vec![
+            Call::State,
+            Call::Event(EventId::from_bytes([4; 32])),
+            Call::Events { from: 7 },
+            Call::ItemEvents(item),
+            Call::AgentEvents(AgentId {
+                principal: PrincipalSigner::generate([9; 32]).key(),
+                name: AgentName::new("claude").unwrap(),
+            }),
+            Call::Author {
+                body: Box::new(comment(item, "why")),
+            },
+            Call::SyncNow,
+            Call::Fork(Box::new(fork)),
+            Call::Join {
+                code: "wfi1abc".into(),
+                profile,
+            },
+            Call::Follow(vec![device]),
+            Call::LastSeen,
+            Call::StartSession {
+                agent: AgentName::new("claude").unwrap(),
+                item,
+                repository: "/repo".into(),
+            },
+            Call::EndSession {
+                finish: Finish::Submit {
+                    note: Some("done".into()),
+                },
+            },
+            Call::StopSession(SessionId::from_bytes([3; 32])),
+            Call::Permissions,
+            Call::AnswerPermission {
+                session: SessionId::from_bytes([3; 32]),
+                since_ms: 5_000,
+                answer: Permission::Allow,
+            },
+            Call::MachineFaults,
+            Call::CacheUsage,
+        ];
+        assert_eq!(
+            calls.len(),
+            CALL_VARIANTS,
+            "`Call` has a variant without a request in `golden_request_bytes`"
+        );
+        let names: std::collections::BTreeSet<_> = calls.iter().map(golden_name).collect();
+        assert_eq!(
+            names.len(),
+            CALL_VARIANTS,
+            "two requests are for the same call"
+        );
+        let hashes: Vec<(&str, usize, String)> = calls
+            .into_iter()
+            .map(|call| {
+                let name = golden_name(&call);
+                let request = Request {
+                    workforce: fixture.workforce(),
+                    call,
+                };
+                let bytes = encoding::encode(&request).unwrap();
+                (name, bytes.len(), EventId::of(&bytes).to_string())
+            })
+            .collect();
+        let found: Vec<(&str, usize, &str)> = hashes
+            .iter()
+            .map(|(call, len, hash)| (*call, *len, hash.as_str()))
+            .collect();
+        assert_eq!(
+            (PROTOCOL_VERSION, found),
+            (GOLDEN_PROTOCOL_VERSION, GOLDEN_REQUESTS.to_vec()),
+            "the encoded shape of a `Request` changed. Bump `PROTOCOL_VERSION`, then update \
+             `GOLDEN_PROTOCOL_VERSION` and `GOLDEN_REQUESTS` here to what this test prints"
+        );
+    }
+
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 18] = [
+        (
+            "State",
+            34,
+            "rwod3o6kmzhclbg4vmggbkxubs3qxy4oikqsgxpzgnc2aidnnfva",
+        ),
+        (
+            "Event",
+            67,
+            "vfmbc5hdevm24ohyxlhvwj4sqzciku3f6ww5nsfkzlxyxzmo4zra",
+        ),
+        (
+            "Events",
+            35,
+            "szwf5qplrttkeszvqnyusj7tfrzoueuqjnwjd7cevkarhgbguxqq",
+        ),
+        (
+            "ItemEvents",
+            67,
+            "cqs4u6vupdlgrelbvs555vut6q4fine6lcnbkug2xqben5ph4t3q",
+        ),
+        (
+            "AgentEvents",
+            74,
+            "7at2zkvfhh5muitehip7wzqhxnofy2bqveep24x4cruyeadn53xa",
+        ),
+        (
+            "Author",
+            76,
+            "sppriks3gifpm2x37rt7kjgoi7hurgekndouuncq2apu3ldurh2q",
+        ),
+        (
+            "SyncNow",
+            34,
+            "v5luf6ogxl6t6zx7qbdbax7zaf7lb4c75k6f6kjvz66guaofr7ca",
+        ),
+        (
+            "Fork",
+            2150,
+            "u4arqufcknq2l5qfnhibcm6e6edezeo4cyzarucab2ioayhr5nia",
+        ),
+        (
+            "Join",
+            73,
+            "7dvbhhqk2b4kqgu56xvgmfnurqo6kgi7y5eulb3ncyp5ws3hezea",
+        ),
+        (
+            "Follow",
+            68,
+            "7xuwmrhpsnbxwqiw4npsnym3m3vyh3fzvomekdw6qdgdezkvdnla",
+        ),
+        (
+            "LastSeen",
+            34,
+            "4yzdxuhm7vmgtv2p6puua5dk5mo7m6y6dlankpwpumr2ldjorqra",
+        ),
+        (
+            "StartSession",
+            80,
+            "3w56pkagoeq3kfp4dglbqsmaizplarxpyxe7nzra2qimc2isb7wq",
+        ),
+        (
+            "EndSession",
+            41,
+            "cdl3goyy6actulwynoznk5xtr53zm4cxe2dth2dtwsljge4lkona",
+        ),
+        (
+            "StopSession",
+            67,
+            "cawkc6w4asw2ngvwkvksmhjrryqbpiiktrlfwc5df5zdf2qjbotq",
+        ),
+        (
+            "Permissions",
+            34,
+            "3ple4audlypkcdsfdz74z4qb5gowtksipkseo66b7wpeuz4qrciq",
+        ),
+        (
+            "AnswerPermission",
+            70,
+            "buiv5v6wig2angyzvhla4v76j5rvxbyybu3yyavpgj5jdlh6nnia",
+        ),
+        (
+            "MachineFaults",
+            34,
+            "yg5ntdbc727c4osihghi3qqxw6stmbov6frj6yngan535l2eem6a",
+        ),
+        (
+            "CacheUsage",
+            34,
+            "ytabkzyokvnpzluoivm3fn5zmjkp3extlk6yvdx2lufejibufa6a",
+        ),
+    ];
+
+    const GOLDEN_PROTOCOL_VERSION: u32 = 16;
+    const GOLDEN_REPLIES: [(&str, usize, &str); 6] = [
+        (
+            "State",
+            23384,
+            "vtqexdqz2vfoa5bqskvtyv4ehu44nn6zvlvqiy57qic7amp4gzxq",
+        ),
+        (
+            "Permissions",
+            70,
+            "7qisyjr6gciokcbsilk3l2jk7slnlgqqrum4urcz47hx3c3kj5hq",
+        ),
+        (
+            "SyncNow",
+            97,
+            "abj77avwgitaa6azyfeh3vz77lq5uvwz37oqwukwng4qpagtqz7a",
+        ),
+        (
+            "MachineFaults",
+            3,
+            "sfjf74akg5k2rx4tyytllh3og3hqehmf5pgozxw4hdz7dcikcx6a",
+        ),
+        (
+            "CacheUsage",
+            4,
+            "4jbsfkwgblpmpv53kehzpspv6karstuuedmhfclxlcsqy7rt4whq",
+        ),
+        (
+            "failure",
+            4,
+            "qegpakx3omc3v743mvdau33u7m5upwr7iolhjkxzg3jk3fgeqfwq",
+        ),
+    ];
 }

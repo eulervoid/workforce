@@ -420,3 +420,32 @@ pub fn now_ms() -> u64 {
             u64::try_from(elapsed.as_millis()).unwrap_or(u64::MAX)
         })
 }
+
+#[cfg(test)]
+mod tests {
+    use wf_core::id::EventId;
+    use wf_core::testing::{golden_forking_state, golden_state};
+
+    use super::*;
+
+    /// Postcard is not self-describing, so a snapshot of another shape can decode into a wrong
+    /// `State` instead of failing. The pin below is of the encoded `golden_state()` and `golden_forking_state()`.
+    #[test]
+    fn golden_snapshot_bytes() {
+        let encoded = wf_core::encoding::encode(&(golden_state(), golden_forking_state())).unwrap();
+        let hash = EventId::of(&encoded).to_string();
+        assert_eq!(
+            (SNAPSHOT_FORMAT, encoded.len(), hash.as_str()),
+            GOLDEN_SNAPSHOT,
+            "the encoded shape of `State` changed. Bump `SNAPSHOT_FORMAT` here and \
+             `PROTOCOL_VERSION` in wf-daemon/src/proto.rs, then update `GOLDEN_SNAPSHOT` here \
+             and `GOLDEN_REPLIES` in wf-daemon/src/proto.rs to what these tests print"
+        );
+    }
+
+    const GOLDEN_SNAPSHOT: (u32, usize, &str) = (
+        12,
+        23380,
+        "ehqsuvfrhwynxghqj3hk2pdxx5rb2tvkz2ft5uny7wzwttaczmuq",
+    );
+}
