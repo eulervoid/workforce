@@ -1,12 +1,15 @@
 //! Offered reviews: work is checked against the target branch before a reviewer spends a review
 //! on it, because another item may have merged since the work was submitted.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use wf_core::event::{CommentKind, Commented, EventBody};
 use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::identity::Actor;
+use wf_core::inbox::Stale;
+use wf_core::item::ItemState;
+use wf_core::lifecycle::MergeFailure;
 use wf_core::policy::ReviewStep;
 use wf_core::session::CommitId;
 use wf_vcs::{GitCli, MergeTree};
@@ -20,6 +23,10 @@ use crate::{Daemon, Loaded};
 /// Only principal steps are remembered: an agent step never waits in the inbox.
 pub(super) struct CheckedReviews {
     seen: BTreeSet<(ItemId, CommitId)>,
+    /// What merging an offered commit into the target made, and the head of the target it was
+    /// made against. It only changes when the commit or the head does, so `merge-tree` runs once
+    /// for each pair.
+    merges: BTreeMap<(ItemId, CommitId), (CommitId, MergeTree)>,
     first_pass: bool,
 }
 
@@ -27,9 +34,21 @@ impl CheckedReviews {
     pub(super) fn new() -> Self {
         Self {
             seen: BTreeSet::new(),
+            merges: BTreeMap::new(),
             first_pass: true,
         }
     }
+}
+
+/// An offered review with what the check needs to know of its item.
+struct Offer {
+    item: ItemId,
+    commit: CommitId,
+    step: ReviewStep,
+    /// The open change request of the daemon that says the work stopped merging.
+    stale: Option<Stale>,
+    /// Where the item goes back to when its work does not merge.
+    after_conflict: Option<ItemState>,
 }
 
 impl Daemon {
@@ -45,25 +64,78 @@ impl Daemon {
         repository: &Path,
         checked: &mut CheckedReviews,
     ) -> Result<(), SessionError> {
-        let state = self.snapshot(loaded).await?;
-        let Some(target) = state
-            .policy()
-            .map(|document| document.policy.merge.target.clone())
+        let device = self.device();
+        let Some((target, principal, offers)) = self
+            .read(loaded, move |state| {
+                let target = state.policy()?.policy.merge.target.clone();
+                let principal = state.principal_of(&device)?;
+                let offers: Vec<Offer> = state
+                    .offered_reviews()
+                    .into_iter()
+                    .map(|(item, commit, step)| Offer {
+                        item,
+                        commit,
+                        step,
+                        stale: state
+                            .submission(item)
+                            .and_then(|(_, submitted)| state.stale_since(item, submitted.hlc)),
+                        after_conflict: state.after_failed_merge(item, MergeFailure::Conflict),
+                    })
+                    .collect();
+                Some((target, principal, offers))
+            })
+            .await?
         else {
             return Ok(());
         };
-        let principal = self.principal_of_device(&state)?;
-        let offered = state.offered_reviews();
+        let head = {
+            let (repository, target) = (repository.to_path_buf(), target.clone());
+            blocking(move || GitCli::open(&repository)?.branch_head(&target)).await?
+        };
+        let head = match head {
+            Ok(head) => head,
+            Err(error) => {
+                tracing::warn!(
+                    "could not check the offered reviews against {target}: {}",
+                    wf_core::error_chain(&error)
+                );
+                return Ok(());
+            }
+        };
         let after_restart = std::mem::take(&mut checked.first_pass);
-        checked.seen.retain(|(item, commit)| {
-            offered
+        let is_offered = |item: ItemId, commit: CommitId| {
+            offers
                 .iter()
-                .any(|(offered, offered_commit, _)| offered == item && offered_commit == commit)
-        });
-        for (item, commit, step) in offered {
-            let merges = {
-                let (repository, target) = (repository.to_path_buf(), target.clone());
-                blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit)).await?
+                .any(|offer| offer.item == item && offer.commit == commit)
+        };
+        checked
+            .seen
+            .retain(|(item, commit)| is_offered(*item, *commit));
+        checked
+            .merges
+            .retain(|(item, commit), _| is_offered(*item, *commit));
+        for Offer {
+            item,
+            commit,
+            step,
+            stale,
+            after_conflict,
+        } in offers
+        {
+            let merges = match checked.merges.get(&(item, commit)) {
+                Some((checked_head, merges)) if *checked_head == head => Ok(merges.clone()),
+                _ => {
+                    let (repository, target) = (repository.to_path_buf(), target.clone());
+                    let merges =
+                        blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit))
+                            .await?;
+                    if let Ok(merges) = &merges {
+                        checked
+                            .merges
+                            .insert((item, commit), (head, merges.clone()));
+                    }
+                    merges
+                }
             };
             let paths = match merges {
                 Ok(MergeTree::Landed { .. } | MergeTree::Clean { .. }) => {
@@ -73,9 +145,7 @@ impl Daemon {
                         self.reviews_found_merging
                             .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                     }
-                    if let Some((_, submitted)) = state.submission(item)
-                        && let Some(stale) = state.stale_since(item, submitted.hlc)
-                    {
+                    if let Some(stale) = stale {
                         self.author(
                             loaded,
                             Actor::Daemon(principal),
@@ -102,10 +172,7 @@ impl Daemon {
                 matches!(step, ReviewStep::Principal) && checked.seen.insert((item, commit));
             let stale = match step {
                 ReviewStep::Principal if after_restart || !first_offer => {
-                    let Some((_, submitted)) = state.submission(item) else {
-                        continue;
-                    };
-                    if state.stale_since(item, submitted.hlc).is_some() {
+                    if stale.is_some() {
                         continue;
                     }
                     true
@@ -130,9 +197,7 @@ impl Daemon {
             if stale {
                 continue;
             }
-            if let Some(open) =
-                state.after_failed_merge(item, wf_core::lifecycle::MergeFailure::Conflict)
-            {
+            if let Some(open) = after_conflict {
                 let because = Some(CommentId::from(written.id()));
                 self.move_item(loaded, principal, item, open, because, None)
                     .await?;
