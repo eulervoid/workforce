@@ -104,6 +104,18 @@ pub enum AfterEnd {
     },
 }
 
+/// What to do for a request to merge the reviewed work of an item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MergePlan {
+    /// The item is done: another request finished the merge, or the item was finished otherwise.
+    Nothing,
+    /// The commit is in the target branch already, as when the daemon stopped before it moved
+    /// the item: move the item to `done`.
+    MoveToDone,
+    /// Merge the commit into the target branch, clean up the branch and move the item to `done`.
+    Merge,
+}
+
 /// What to do when a turn of a session has ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum TurnOutcome {
@@ -360,14 +372,7 @@ impl State {
         if let Some(fault) = machine_fault {
             return TurnOutcome::MachineFault(fault);
         }
-        let blocked_by_comment = match self.item(item) {
-            Some(ItemView::Live(live)) => live.has_open_blocker(),
-            Some(ItemView::Archived(_)) | None => false,
-        };
-        let waits_on_dependency = !self
-            .unfinished_dependencies(&self.dependency_graph(), item)
-            .is_empty();
-        if working && (blocked_by_comment || waits_on_dependency) {
+        if self.session_waits(session) {
             return TurnOutcome::Park;
         }
         if nudges_used > nudges_allowed {
@@ -375,6 +380,47 @@ impl State {
         } else {
             TurnOutcome::Continue
         }
+    }
+
+    /// Whether `session` is a live work session whose item waits on a dependency or on an open
+    /// blocker, such as the session's own question. The runner parks such a session after its
+    /// turn, and the dashboards show it as parked.
+    pub fn session_waits(&self, session: SessionId) -> bool {
+        let Some(folded) = self.session(session) else {
+            return false;
+        };
+        if !folded.is_live() || folded.role() != SessionRole::Work {
+            return false;
+        }
+        let item = folded.item();
+        let blocked_by_comment = match self.item(item) {
+            Some(ItemView::Live(live)) => live.has_open_blocker(),
+            Some(ItemView::Archived(_)) | None => false,
+        };
+        blocked_by_comment
+            || !self
+                .unfinished_dependencies(&self.dependency_graph(), item)
+                .is_empty()
+    }
+
+    /// What the daemon does for a request to merge `commit` of `item`, the commit that was
+    /// reviewed. `None` for an item that does not exist or is archived.
+    pub fn merge_plan(&self, item: ItemId, commit: CommitId) -> Option<MergePlan> {
+        let policy = &self.policy()?.policy;
+        let ItemView::Live(live) = self.item(item)? else {
+            return None;
+        };
+        Some(if live.state(policy) == ItemState::Done {
+            MergePlan::Nothing
+        } else if live
+            .merges()
+            .values()
+            .any(|merged| merged.reviewed == commit)
+        {
+            MergePlan::MoveToDone
+        } else {
+            MergePlan::Merge
+        })
     }
 
     /// The state of a live item; `None` for an archived one.

@@ -59,7 +59,6 @@ pub fn agent_detail(
             })
         })
         .collect();
-    let graph = state.dependency_graph();
     let mut sessions: Vec<&Session> = state
         .sessions()
         .filter(|session| session.agent() == agent)
@@ -74,7 +73,7 @@ pub fn agent_detail(
         older_sessions: sessions.len() - shown,
         sessions: sessions[..shown]
             .iter()
-            .map(|session| session_view(state, &graph, session, None))
+            .map(|session| session_view(state, session, None))
             .collect(),
         activity: agent_activity(state, agent, events),
     })

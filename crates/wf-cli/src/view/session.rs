@@ -89,47 +89,22 @@ pub struct SessionView {
     pub steps: Option<StepsView>,
 }
 
-/// Whether `session` is a live work session whose item waits on a dependency or on an open
-/// blocker, such as its own question.
-pub(crate) fn is_parked(
-    state: &State,
-    graph: &wf_core::graph::DependencyGraph,
-    session: &wf_core::session::Session,
-) -> bool {
-    let blocked = match state.item(session.item()) {
-        Some(ItemView::Live(item)) => item.has_open_blocker(),
-        Some(ItemView::Archived(_)) | None => false,
-    };
-    session.is_live()
-        && session.role() == SessionRole::Work
-        && (blocked
-            || !state
-                .unfinished_dependencies(graph, session.item())
-                .is_empty())
-}
-
 /// Live sessions first, then the others, each the newest first. `model_of` tells the model a
 /// session runs with, where this machine knows it.
 pub fn session_views(
     state: &State,
     model_of: impl Fn(SessionId) -> Option<String>,
 ) -> Vec<SessionView> {
-    let graph = state.dependency_graph();
     let mut sessions: Vec<_> = state.sessions().collect();
     sessions.sort_by_key(|session| (!session.is_live(), std::cmp::Reverse(session.started())));
     sessions
         .into_iter()
-        .map(|session| session_view(state, &graph, session, model_of(session.id())))
+        .map(|session| session_view(state, session, model_of(session.id())))
         .collect()
 }
 
 /// One session, as `wf session list` shows it, running with `model` where that is known.
-pub(super) fn session_view(
-    state: &State,
-    graph: &wf_core::graph::DependencyGraph,
-    session: &Session,
-    model: Option<String>,
-) -> SessionView {
+pub(super) fn session_view(state: &State, session: &Session, model: Option<String>) -> SessionView {
     let title = match state.item(session.item()) {
         Some(ItemView::Live(item)) => item.title().to_string(),
         Some(ItemView::Archived(_)) | None => "(archived)".to_string(),
@@ -145,7 +120,7 @@ pub(super) fn session_view(
         Some(ItemView::Live(item)) => steps_view(&item.body()),
         Some(ItemView::Archived(_)) | None => None,
     };
-    let parked = is_parked(state, graph, session);
+    let parked = state.session_waits(session.id());
     SessionView {
         id: session.id().to_base32(),
         agent: mention_label(state, &MentionTarget::Agent(session.agent().clone())),

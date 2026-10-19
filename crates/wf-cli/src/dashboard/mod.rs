@@ -411,8 +411,7 @@ impl Feed {
     fn in_view(&self, workspace: &Workspace, app: &App) -> Option<InView> {
         let detail = app.wanted().detail?;
         let sources = self.sources(workspace, app);
-        let graph = workspace.state().dependency_graph();
-        InView::take(&sources, &graph, &app.snapshot.flagged, detail)
+        InView::take(&sources, &app.snapshot.flagged, detail)
     }
 }
 

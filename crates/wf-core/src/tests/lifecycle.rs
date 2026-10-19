@@ -2,8 +2,8 @@ use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::ItemState;
 use crate::lifecycle::{
-    AfterEnd, AfterFailedChecks, Closing, Finish, Interruption, MergeFailure, SessionEnd,
-    TurnOutcome,
+    AfterEnd, AfterFailedChecks, Closing, Finish, Interruption, MergeFailure, MergePlan,
+    SessionEnd, TurnOutcome,
 };
 use crate::session::{CommitId, EndReason, MachineFault, Verdict};
 use crate::state::State;
@@ -531,4 +531,46 @@ fn work_with_an_open_blocker_waits_to_merge_and_the_inbox_shows_the_blocker() {
 
     scene.apply(resolving(task, "fixed on main", &[blocker.id().into()]));
     assert_eq!(scene.state.pending_merges().len(), 1);
+}
+
+#[test]
+fn a_merge_is_planned_from_what_the_item_already_went_through() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    assert_eq!(
+        scene.state.merge_plan(task, commit()),
+        Some(MergePlan::Merge)
+    );
+
+    scene.apply(merged(task, commit(), commit()));
+    assert_eq!(
+        scene.state.merge_plan(task, commit()),
+        Some(MergePlan::MoveToDone)
+    );
+
+    scene.apply(moved(task, ItemState::Done));
+    assert_eq!(
+        scene.state.merge_plan(task, commit()),
+        Some(MergePlan::Nothing)
+    );
+}
+
+#[test]
+fn only_a_live_work_session_with_a_waiting_item_waits() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    scene.apply(moved(task, ItemState::Active));
+    assert!(!scene.state.session_waits(session));
+
+    let first = scene.item(create("task", "pick a database"));
+    scene.apply(depends_on(task, first));
+    assert!(scene.state.session_waits(session));
+    assert_eq!(
+        scene.state.turn_outcome(session, 0, 3, None),
+        TurnOutcome::Park
+    );
+
+    scene.end(session, EndReason::Released);
+    assert!(!scene.state.session_waits(session));
 }
