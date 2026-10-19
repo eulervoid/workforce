@@ -78,6 +78,18 @@ pub(super) fn draw_detail(
         // Code is no text with links in it.
         Detail::Diff(id) => {
             let pane = app.diffs.get(id)?;
+            let body = match draw_diff::device_note(pane, app.snapshot.now_ms) {
+                Some(note) => {
+                    let [line, rest] =
+                        Layout::vertical([Constraint::Length(1), Constraint::Fill(1)]).areas(body);
+                    frame.render_widget(
+                        Paragraph::new(Line::from(note).themed(theme::text_dimmed())),
+                        line,
+                    );
+                    rest
+                }
+                None => body,
+            };
             let (top, cursor) = draw_diff::draw_diff(frame, app, pane, body);
             return Some(DrawnDetail::Diff {
                 area: body,

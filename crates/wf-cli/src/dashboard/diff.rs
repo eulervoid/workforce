@@ -9,6 +9,7 @@ use std::rc::Rc;
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::layout::{Position, Rect};
 use wf_core::event::{CommentKind, DiffSide, LineAnchor};
+use wf_core::identity::DeviceKey;
 use wf_core::session::CommitId;
 use wf_vcs::diff::{Content, DiffLine, FileDiff};
 
@@ -119,11 +120,23 @@ impl DiffRow {
     }
 }
 
+/// A diff read from the device of the session of the item rather than from this repository.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DeviceReading {
+    pub device: DeviceKey,
+    /// When the device last answered, in milliseconds since the Unix epoch.
+    pub answered_ms: u64,
+    /// Why the device could not be asked since, while the diff shown is the last one it sent.
+    pub unreachable: Option<String>,
+}
+
 /// The diff of an item on screen, and where the cursor is in it.
 #[derive(Clone, Debug)]
 pub struct DiffPane {
     /// The work as last read, or why it could not be; `None` until it is read.
     work: Option<Result<ItemWork, String>>,
+    /// The device `work` was read from; `None` when it was read here.
+    device: Option<DeviceReading>,
     /// The row the cursor is on.
     pub cursor: usize,
     /// The first row on screen, and whether it follows the cursor.
@@ -167,6 +180,7 @@ impl DiffPane {
     pub fn new() -> Self {
         Self {
             work: None,
+            device: None,
             cursor: 0,
             top: FirstRow::Follows(0),
             folded: HashSet::new(),
@@ -231,6 +245,48 @@ impl DiffPane {
     /// Takes in the work as read again. The cursor stays on its row, as near as there is one.
     /// A selection is of lines that may be gone.
     pub fn read(&mut self, work: Result<ItemWork, String>) {
+        self.device = None;
+        self.take_in(work);
+    }
+
+    /// Takes in the work as `device` showed it at `now_ms`.
+    pub fn read_from_device(&mut self, device: DeviceKey, work: ItemWork, now_ms: u64) {
+        self.take_in(Ok(work));
+        self.device = Some(DeviceReading {
+            device,
+            answered_ms: now_ms,
+            unreachable: None,
+        });
+    }
+
+    /// Notes that `device` answered at `now_ms` that its work is still what is shown.
+    pub fn device_unchanged(&mut self, device: DeviceKey, now_ms: u64) {
+        self.device = Some(DeviceReading {
+            device,
+            answered_ms: now_ms,
+            unreachable: None,
+        });
+    }
+
+    /// Notes that `device` could not be asked. The diff it last sent stays on screen; without one
+    /// the reason is all there is to show.
+    pub fn device_unreachable(&mut self, device: DeviceKey, reason: String) {
+        match (&self.work, &mut self.device) {
+            (Some(Ok(_)), Some(reading)) if reading.device == device => {
+                reading.unreachable = Some(reason);
+            }
+            _ => {
+                self.read(Err(format!("{} cannot be reached: {reason}", device.fmt_short())));
+            }
+        }
+    }
+
+    /// The device the diff on screen was read from, and when it last answered.
+    pub fn device(&self) -> Option<&DeviceReading> {
+        self.device.as_ref()
+    }
+
+    fn take_in(&mut self, work: Result<ItemWork, String>) {
         self.work = Some(work);
         self.selection = None;
         self.pressed = None;

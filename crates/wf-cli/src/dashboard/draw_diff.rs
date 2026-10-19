@@ -16,6 +16,29 @@ use crate::theme;
 /// How many columns a tab in a line takes.
 const TAB: &str = "    ";
 
+/// Where the diff on screen was read, when not here, and how old it is.
+pub fn device_note(pane: &DiffPane, now_ms: u64) -> Option<String> {
+    let reading = pane.device()?;
+    let device = reading.device.fmt_short();
+    let age = age(now_ms.saturating_sub(reading.answered_ms));
+    Some(match &reading.unreachable {
+        None => format!("committed on device {device}, read {age}"),
+        Some(reason) => format!(
+            "committed on device {device}, read {age}; it cannot be reached now: {reason}"
+        ),
+    })
+}
+
+/// `just now`, `12 s ago`, `3 min ago` or `2 h ago`.
+fn age(elapsed_ms: u64) -> String {
+    match elapsed_ms / 1000 {
+        0..=4 => "just now".to_owned(),
+        seconds @ 5..=59 => format!("{seconds} s ago"),
+        seconds @ 60..=3599 => format!("{} min ago", seconds / 60),
+        seconds => format!("{} h ago", seconds / 3600),
+    }
+}
+
 /// Draws the diff of `pane` in `area`; returns the first row it drew and the row of the cursor.
 pub fn draw_diff(frame: &mut Frame, app: &App, pane: &DiffPane, area: Rect) -> (usize, usize) {
     let note = match pane.work() {
