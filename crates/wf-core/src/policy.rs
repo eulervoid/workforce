@@ -631,10 +631,10 @@ mod tests {
     #[test]
     fn rejects_missing_supervision_lane() {
         let source = DEFAULT_POLICY_TOML.replace("[lanes.supervision]", "[lanes.oversight]");
-        assert!(matches!(
+        assert_eq!(
             Policy::parse(&source),
-            Err(PolicyError::BuiltinLaneMissing(_) | PolicyError::UnknownLane { .. })
-        ));
+            Err(PolicyError::BuiltinLaneMissing(LaneName::supervision()))
+        );
     }
 
     #[test]
