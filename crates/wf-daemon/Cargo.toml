@@ -33,8 +33,6 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 shellexpand = { version = "3.1.2", default-features = false, features = ["base-0"] }
 bytesize = { workspace = true, features = ["serde"] }
 walkdir = "2.5.0"
-anstyle.workspace = true
-anstyle-git = "1.1.5"
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }

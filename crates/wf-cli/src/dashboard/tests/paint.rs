@@ -2,9 +2,9 @@
 
 use super::support::*;
 use crate::dashboard::draw;
+use crate::theme::Background;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::{Color, Style};
-use wf_daemon::machine_config::Background;
 
 #[test]
 fn a_background_colour_and_the_text_are_under_every_cell_popups_included() {

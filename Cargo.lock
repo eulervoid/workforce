@@ -5963,6 +5963,7 @@ dependencies = [
  "ansi-to-tui",
  "anstream",
  "anstyle",
+ "anstyle-git",
  "anyhow",
  "bytesize",
  "clap",
@@ -6019,8 +6020,6 @@ dependencies = [
 name = "wf-daemon"
 version = "0.0.0"
 dependencies = [
- "anstyle",
- "anstyle-git",
  "blake3",
  "bytesize",
  "close_fds",

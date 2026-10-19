@@ -44,6 +44,7 @@ rustix = { version = "1", features = ["process", "system"] }
 terminal_size = "0.4.4"
 nucleo-picker = "0.12"
 anstyle.workspace = true
+anstyle-git = "1.1.5"
 anstream = "1.0.0"
 pulldown-cmark.workspace = true
 rand.workspace = true

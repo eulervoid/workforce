@@ -10,9 +10,14 @@ use anstyle::{AnsiColor, Color, RgbColor, Style};
 use wf_core::graph::Readiness;
 use wf_core::item::{ItemState, Priority};
 
-use wf_daemon::machine_config::{Background, MachineConfig, ThemeConfig};
+use wf_daemon::machine_config::MachineConfig;
 
 use crate::view::ActorKind;
+
+mod config;
+pub use config::{
+    Background, PriorityThemeConfig, ReadinessThemeConfig, StateThemeConfig, ThemeConfig,
+};
 
 /// Every style wf draws with.
 #[derive(Debug, Clone, PartialEq)]
@@ -170,7 +175,7 @@ pub fn load() {
     };
     match ThemeConfig::load(&path) {
         Ok(config) => set(Theme::new(&config)),
-        Err(error) => eprintln!("warning: {error}\nwarning: using the built-in theme"),
+        Err(error) => eprintln!("warning: {error:#}\nwarning: using the built-in theme"),
     }
 }
 
@@ -343,7 +348,6 @@ pub fn priority(priority: Priority) -> Style {
 
 #[cfg(test)]
 mod tests {
-    use wf_daemon::machine_config::{PriorityThemeConfig, ReadinessThemeConfig, StateThemeConfig};
 
     use super::*;
 

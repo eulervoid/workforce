@@ -1,10 +1,36 @@
-//! `[theme]`: the colours of the CLI and the dashboard on this machine. The daemon never reads
-//! it; the CLI builds its theme from it.
+//! `[theme]` of the machine config: the colours of the CLI and the dashboard on this machine. The
+//! daemon never reads it; the CLI builds its theme from it.
 //!
 //! Values use git's color syntax, such as `"bold red"`, `"#1e50a0"` or `"brightblue dim"`.
 
+use std::path::Path;
+
 use anstyle::{Color, Style};
+use anyhow::Context as _;
 use serde::{Deserialize, Deserializer};
+
+impl ThemeConfig {
+    /// Reads only `[theme]` of the machine config at `path`, so a mistake elsewhere leaves the
+    /// colours alone; a missing file sets nothing.
+    pub fn load(path: &Path) -> anyhow::Result<Self> {
+        /// The machine config, seen only for its theme.
+        #[derive(Deserialize)]
+        struct OnlyTheme {
+            #[serde(default)]
+            theme: ThemeConfig,
+        }
+        let text = match std::fs::read_to_string(path) {
+            Ok(text) => text,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(Self::default());
+            }
+            Err(error) => return Err(error).with_context(|| path.display().to_string()),
+        };
+        toml::from_str::<OnlyTheme>(&text)
+            .map(|config| config.theme)
+            .with_context(|| path.display().to_string())
+    }
+}
 
 /// What `[theme]` sets; what it leaves out keeps the built-in style.
 #[derive(Debug, Clone, Default, PartialEq, Deserialize)]
@@ -271,5 +297,17 @@ mod tests {
 
         let error = parse("colour = \"red\"").unwrap_err().to_string();
         assert!(error.contains("colour"), "{error}");
+    }
+
+    #[test]
+    fn the_theme_is_read_whatever_is_wrong_elsewhere() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        std::fs::write(&path, "[notify]\ncommand = []\n\n[theme]\nid = \"red\"\n").unwrap();
+        assert!(ThemeConfig::load(&path).unwrap().id.is_some());
+        assert_eq!(
+            ThemeConfig::load(&dir.path().join("missing.toml")).unwrap(),
+            ThemeConfig::default()
+        );
     }
 }
