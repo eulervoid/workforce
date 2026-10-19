@@ -1954,6 +1954,222 @@ sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" comme
     );
 }
 
+/// A coder and three reviewers, all started by the dispatcher, and a review level `wide` of three
+/// steps at once.
+async fn wide_review_world(reviewers: [&str; 3]) -> World {
+    let world = World::agents(&[
+        ("coder", COMMIT_AND_SUBMIT),
+        ("alpha", reviewers[0]),
+        ("beta", reviewers[1]),
+        ("gamma", reviewers[2]),
+    ])
+    .await;
+    world.automate("coder", "default");
+    let mut device = vec![
+        "device",
+        "edit",
+        "--max-sessions",
+        "4",
+        "--agent",
+        "coder=1",
+    ];
+    let hosted = ["alpha=1", "beta=1", "gamma=1"];
+    for (name, hosted) in ["alpha", "beta", "gamma"].into_iter().zip(hosted) {
+        world.wf.run(&[
+            "agent",
+            "edit",
+            name,
+            "--start",
+            "auto",
+            "--lane",
+            "meta",
+            "--capability",
+            "review",
+        ]);
+        device.extend(["--agent", hosted]);
+    }
+    world.wf.run(&device);
+    let policy = world.wf.run(&["policy", "show"]);
+    let path = world.wf.root.path().join("wide-policy.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "{policy}\n[[review]]\nname = \"wide\"\nsteps = [[\n  \
+             {{ name = \"security\", requires = [\"review\"] }},\n  \
+             {{ name = \"style\", requires = [\"review\"] }},\n  \
+             {{ name = \"general\", requires = [\"review\"] }},\n]]\n"
+        ),
+    )
+    .unwrap();
+    world.wf.run(&["policy", "apply", path.to_str().unwrap()]);
+    world
+}
+
+fn live_reviews(world: &World) -> Vec<Value> {
+    world
+        .sessions()
+        .into_iter()
+        .filter(|session| session["role"] == "review" && session["status"] == "live")
+        .collect()
+}
+
+const APPROVE_WHEN_LET: &str = "\
+sh while [ ! -f \"$XDG_DATA_HOME/go\" ]; do sleep 0.1; done
+wf review --approve
+";
+
+#[tokio::test(flavor = "multi_thread")]
+async fn steps_that_run_at_once_start_three_sessions_and_merge_after_the_last_approval() {
+    let world = wide_review_world([APPROVE_WHEN_LET; 3]).await;
+    let item = world.wf.add(&["--title", "Add hello", "--review", "wide"]);
+    world
+        .wait("three reviews at once", |world| {
+            live_reviews(world).len() == 3
+        })
+        .await;
+    let mut agents: Vec<String> = live_reviews(&world)
+        .iter()
+        .map(|session| session["agent"].as_str().unwrap().to_string())
+        .collect();
+    agents.sort();
+    agents.dedup();
+    assert_eq!(agents.len(), 3, "one agent for each step: {agents:?}");
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "review");
+    assert_eq!(
+        shown["review_status"]["open"],
+        serde_json::json!(["security", "style", "general"])
+    );
+
+    std::fs::write(world.wf.data.join("go"), "").unwrap();
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+    assert_eq!(world.item(&item)["review_status"]["status"], "merged");
+    assert!(world.wf.repository.join("hello.txt").is_file());
+    let reviewed = statuses(&world)
+        .into_iter()
+        .filter(|status| status.ends_with("reviewed"))
+        .count();
+    assert_eq!(reviewed, 3);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_change_request_from_one_step_sends_the_item_back_while_the_others_finish() {
+    let requesting = "\
+sh while [ ! -f \"$XDG_DATA_HOME/changes\" ]; do sleep 0.1; done
+sh \"$WF_BIN\" comment {item} \"add a test\" --request-change && \"$WF_BIN\" review --request-changes
+";
+    let world = wide_review_world([requesting, APPROVE_WHEN_LET, APPROVE_WHEN_LET]).await;
+    let item = world.wf.add(&["--title", "Add hello", "--review", "wide"]);
+    world
+        .wait("three reviews at once", |world| {
+            live_reviews(world).len() == 3
+        })
+        .await;
+    // The sent-back item would start the coder again.
+    world
+        .wf
+        .run(&["agent", "edit", "coder", "--start", "manual"]);
+    std::fs::write(world.wf.data.join("changes"), "").unwrap();
+    world
+        .wait("the item sent back", |world| {
+            world.item(&item)["state"] == "open"
+        })
+        .await;
+    assert_eq!(
+        world.item(&item)["review_status"]["status"],
+        "changes_requested"
+    );
+    assert_eq!(live_reviews(&world).len(), 2, "the others go on");
+
+    std::fs::write(world.wf.data.join("go"), "").unwrap();
+    world
+        .wait("the other reviews finished", |world| {
+            live_reviews(world).is_empty()
+        })
+        .await;
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "open", "{shown}");
+    assert_eq!(shown["review_status"]["status"], "changes_requested");
+    let reviewed = statuses(&world)
+        .into_iter()
+        .filter(|status| status.ends_with("reviewed"))
+        .count();
+    assert_eq!(reviewed, 3, "{:?}", statuses(&world));
+    assert!(!world.wf.repository.join("hello.txt").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_review_started_by_hand_takes_the_step_asked_for() {
+    let world = wide_review_world([APPROVE_WHEN_LET; 3]).await;
+    for name in ["alpha", "beta", "gamma"] {
+        world.wf.run(&["agent", "edit", name, "--start", "manual"]);
+    }
+    let item = world.wf.add(&["--title", "Add hello", "--review", "wide"]);
+    world
+        .wait("the item in review", |world| {
+            world.item(&item)["state"] == "review"
+        })
+        .await;
+    let unclear = world
+        .wf
+        .fail(&["session", "start", short(&item), "-a", "alpha"]);
+    assert!(
+        unclear.contains("several review steps are open (security, style, general)"),
+        "{unclear}"
+    );
+    let unknown = world.wf.fail(&[
+        "session",
+        "start",
+        short(&item),
+        "-a",
+        "alpha",
+        "--step",
+        "perf",
+    ]);
+    assert!(
+        unknown.contains("no open review step is called `perf`"),
+        "{unknown}"
+    );
+
+    world.wf.run(&[
+        "session",
+        "start",
+        short(&item),
+        "-a",
+        "alpha",
+        "--step",
+        "style",
+    ]);
+    world
+        .wait("the review", |world| live_reviews(world).len() == 1)
+        .await;
+    let held = world.wf.fail(&[
+        "session",
+        "start",
+        short(&item),
+        "-a",
+        "beta",
+        "--step",
+        "style",
+    ]);
+    assert!(
+        held.contains("no open review step is called `style`"),
+        "{held}"
+    );
+    std::fs::write(world.wf.data.join("go"), "").unwrap();
+    world
+        .wait("the review ended", |world| live_reviews(world).is_empty())
+        .await;
+    assert_eq!(
+        world.item(&item)["review_status"]["approved"],
+        serde_json::json!(["style"])
+    );
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_critical_item_waits_for_a_person_after_the_agent_approves() {
     let world = review_world(COMMIT_AND_SUBMIT, "wf review --approve\n").await;

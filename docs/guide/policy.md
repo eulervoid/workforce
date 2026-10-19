@@ -166,6 +166,11 @@ the policy, which is signed, and never in a file of the repository, which the re
 change. Steps of one entry with the same name, or both without one, have to be identical. Any
 reviewer requesting changes sends the work back; your approval satisfies the whole entry.
 
+The daemon starts one session for each step of the entry, so this level needs three agents that can
+review; the others finish their reviews after one asked for changes, and their approvals count for
+nothing. `wf item show` says `awaiting security, style; general approved`, and `wf status` names the
+steps no agent can take. See [steps at once](review-and-merge.md#steps-at-once).
+
 See [review-and-merge.md](review-and-merge.md) for how a review goes.
 
 ## Recovery levels

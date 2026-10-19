@@ -2,6 +2,7 @@ use crate::event::EventBody;
 use crate::id::{ItemId, SessionId};
 use crate::identity::AgentId;
 use crate::item::ItemState;
+use crate::lifecycle::TurnOutcome;
 use crate::name::AgentName;
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
@@ -153,12 +154,14 @@ steps = [
 fn awaiting_agent() -> ReviewStatus {
     ReviewStatus::Awaiting {
         steps: vec![agent_step(None, &["review", "strong-model"], None)],
+        approved: Vec::new(),
     }
 }
 
 fn awaiting_human() -> ReviewStatus {
     ReviewStatus::Awaiting {
         steps: vec![ReviewStep::Principal],
+        approved: Vec::new(),
     }
 }
 
@@ -653,7 +656,11 @@ fn a_review_step_nobody_hosted_can_take_is_noticed() {
 
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
-    assert_eq!(scene.state.unstaffed_reviews(), [item], "nobody is hosted");
+    assert_eq!(
+        scene.state.unstaffed_reviews(),
+        [(item, Vec::new())],
+        "nobody is hosted"
+    );
 
     let reviewer = AgentDefined {
         name: AgentName::new("reviewer").unwrap(),
@@ -673,7 +680,7 @@ fn a_review_step_nobody_hosted_can_take_is_noticed() {
     scene.apply(EventBody::AgentDefined(reviewer));
     assert_eq!(
         scene.state.unstaffed_reviews(),
-        [item],
+        [(item, Vec::new())],
         "defined, not hosted"
     );
 
@@ -908,7 +915,7 @@ fn a_daemon_change_request_after_the_offer_makes_the_principal_review_stale() {
 }
 
 fn open_names(status: Option<ReviewStatus>) -> Vec<Option<String>> {
-    let Some(ReviewStatus::Awaiting { steps }) = status else {
+    let Some(ReviewStatus::Awaiting { steps, .. }) = status else {
         panic!("{status:?} is not awaiting");
     };
     steps
@@ -999,6 +1006,117 @@ mod at_once {
         scene.step_verdict("second", item, Some("style"), Verdict::Approve);
         scene.step_verdict("third", item, Some("security"), Verdict::RequestChanges);
         assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+    }
+
+    #[test]
+    fn the_other_steps_finish_after_one_requested_changes() {
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        let security: SessionId = scene
+            .apply(start_review_step(
+                "third",
+                item,
+                commit(1),
+                Some("security"),
+            ))
+            .id()
+            .into();
+        scene.step_verdict("second", item, Some("style"), Verdict::RequestChanges);
+        assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+        assert_eq!(
+            scene.state.turn_outcome(security, 0, 3, None),
+            TurnOutcome::Continue,
+            "its session goes on until it gives a verdict"
+        );
+
+        // Its approval is written and counts for nothing.
+        let actor = scene.fixture.agent_actor("third", security);
+        scene.clock += 1;
+        let approval = scene.fixture.author_as(
+            &scene.state,
+            0,
+            actor,
+            scene.clock,
+            verdict(item, commit(1), Verdict::Approve),
+        );
+        scene
+            .state
+            .receive(approval, crate::state::Trust::Untrusted)
+            .expect("the approval is valid");
+        assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+
+        // Once new work replaced the commit, its review has nothing left to judge.
+        let late: SessionId = scene
+            .apply(start_review_step(
+                "reviewer",
+                item,
+                commit(1),
+                Some("security"),
+            ))
+            .id()
+            .into();
+        scene.submit(item, commit(2));
+        assert_eq!(
+            scene.state.turn_outcome(late, 0, 3, None),
+            TurnOutcome::Close
+        );
+    }
+
+    #[test]
+    fn a_review_started_by_hand_takes_the_step_asked_for() {
+        use crate::review::ReviewStartError;
+        use crate::session::SessionRole;
+
+        let mut scene = Scene::with_wide_level();
+        let item = scene.submitted("wide");
+        let step = |name: &str| Some(crate::name::ReviewStepName::new(name).unwrap());
+        let review_of = |scene: &Scene, name: Option<&str>| {
+            scene
+                .state
+                .review_to_start(item, name.and_then(step).as_ref())
+        };
+        assert_eq!(
+            review_of(&scene, Some("security")),
+            Some(Ok(SessionRole::Review {
+                commit: Some(commit(1)),
+                step: step("security")
+            }))
+        );
+        assert_eq!(
+            review_of(&scene, None),
+            Some(Ok(SessionRole::Review {
+                commit: Some(commit(1)),
+                step: None
+            })),
+            "no name is the unnamed step"
+        );
+        assert!(matches!(
+            review_of(&scene, Some("perf")),
+            Some(Err(ReviewStartError::NoSuchStep { .. }))
+        ));
+
+        scene.apply(start_review_step(
+            "reviewer",
+            item,
+            commit(1),
+            Some("security"),
+        ));
+        assert!(
+            matches!(
+                review_of(&scene, Some("security")),
+                Some(Err(ReviewStartError::NoSuchStep { .. })),
+            ),
+            "a held step is not offered"
+        );
+        scene.apply(start_review_step("second", item, commit(1), None));
+        assert_eq!(
+            review_of(&scene, None),
+            Some(Ok(SessionRole::Review {
+                commit: Some(commit(1)),
+                step: step("style")
+            })),
+            "the only one open is taken without a name"
+        );
     }
 
     #[test]

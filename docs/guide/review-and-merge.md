@@ -22,7 +22,26 @@ the level of the item it works on, never lower it. You can change the levels, or
 
 A review step for an agent is taken by one of your agents whose capabilities meet it, with `--start
 auto` and a free slot. It never reviews an item it worked on. If no agent can take a step, `wf status`
-says so.
+says so, and names the step when it has a name.
+
+### Steps at once
+
+When a level has an entry of several steps, the daemon starts one review session for each open step,
+as agents and machines have room, so three steps need three agents (an agent never takes two steps of
+one entry). `wf item show` and the dashboard tell where they stand:
+
+```
+review: awaiting security, style; general approved
+```
+
+If one reviewer requests changes, the item goes back to open at once. The reviewers still at work
+are not stopped: they finish, their change requests reach the next work session along with the first
+one's, and their approvals are recorded but count for nothing. After the new submission the whole
+entry is reviewed again, and a review of the replaced commit is closed.
+
+To review a step yourself, or to start an agent on it, `wf session start k3f7 --agent grace --step
+security` starts the review of that step. Without `--step` it takes the only step that is open and
+free, and at a terminal it offers the steps in a picker when several are.
 
 ## Your review
 

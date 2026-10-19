@@ -386,6 +386,14 @@ impl State {
         if working && moved_on {
             return TurnOutcome::Close;
         }
+        // A review of a commit that new work replaced has no verdict left to give.
+        if let SessionRole::Review { commit, .. } = folded.role()
+            && self
+                .submission(item)
+                .is_none_or(|(submitted, _)| submitted != commit)
+        {
+            return TurnOutcome::Close;
+        }
         if let Some(fault) = machine_fault {
             return TurnOutcome::MachineFault(fault);
         }

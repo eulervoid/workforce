@@ -651,7 +651,9 @@ Each daemon dispatches for the agents its device hosts, woken by new events, end
 commits. Then, for each agent with `start = auto` and a free slot, it starts the first of:
 
 1. a **review** of an item waiting on a step the agent can take: its capabilities meet the step's
-   `requires`, and it never worked on the item;
+   `requires`, it never worked on the item, and no live review session holds the step. The steps of
+   an entry that run at once are started one session each, on as many agents and devices as have a
+   slot; an agent that gave a verdict on the commit is not offered the item again;
 2. a **supervise** session for a blocker waiting on the agent (section 11), on an item it never
    worked on and without a live supervise session;
 3. a **diagnose** session for an item whose recovery level asks for one the agent can take;
@@ -668,8 +670,11 @@ requests still open, then other started work, then work never started; within ea
 steps first (more checked steps first when equal), then oldest, then id. A plain sort key, no weights.
 `wf item list --ready` keeps its own order; `--for <agent>` applies the dispatcher's filter.
 
-`wf session start <item> [--agent]` starts a work session by hand, for any agent (by default the
-policy's `default_agent`). Reviews, supervision and diagnosis need hosted `start = auto` agents.
+`wf session start <item> [--agent] [--step <name>]` starts a session by hand, for any agent (by
+default the policy's `default_agent`): a review when the item awaits one, otherwise work. The review
+is of the step named by `--step`; without it, of the only open step that no live session holds, or
+else of the unnamed one. When several are open and none fits, a terminal offers them in a picker, and
+a script is told the open steps. Supervision and diagnosis need hosted `start = auto` agents.
 
 **Planned (M3): across devices.** The dispatch target stays an agent; any device that hosts it with a
 free slot may run it. A device with capacity asks the anchor, which signs `Assigned{item, agent,
@@ -785,12 +790,15 @@ default for tasks).
   ends `Submitted` and the item moves to `review`.
 * Entries run in order, the steps of one at once. A review session records the name of the step it
   was started for, and its verdict counts for an open step of that name in the current entry. The
-  status (`Awaiting{steps}` with the steps still open, `ChangesRequested`, `Approved`, `Merged`) is
+  status (`Awaiting{steps, approved}` with the steps of the entry still open and those that approved,
+  `ChangesRequested`, `Approved`, `Merged`) is
   computed from the latest submitted commit, the level and the verdicts on that commit. A new
   submission starts the level over; what was reviewed is what gets merged.
 * **Verdicts** (`wf review <item>`; in a review session it also ends the session `Reviewed`) name the
   commit and are refused on any other one:
-  * `Approve` moves on to the next step; refused while a change request is open. A principal step is
+  * `Approve` moves on to the next step; refused while a change request is open, unless a step of
+    this round requested changes: the other steps' sessions finish their reviews, and their approvals
+    are recorded and count for nothing. A principal step is
     satisfied only by a principal's verdict; a principal's `Approve` may also stand in for an agent step.
     An agent verdict that cannot satisfy the current step (an `Approve` or `Escalate` on a principal
     step, as from review sessions started concurrently on two devices) is ignored, not counted for a
@@ -799,8 +807,11 @@ default for tasks).
     back to its open state in the same event. The next work session continues the branch and resolves
     them; a resolution the reviewer does not accept gets a new change request.
   * `Escalate` (agents only) inserts a principal step after the current entry.
-  * `RequestChanges` from any step of an entry sends the work back; a principal's `Approve`
-    satisfies the whole entry.
+  * `RequestChanges` from any step of an entry sends the work back. The other review sessions on
+    that commit are not stopped: they finish, and their change requests go to the next work session
+    with the first one's, if it has not submitted yet. Once new work replaces the commit, a review
+    of the old one has nothing left to judge and is closed. A principal's `Approve` satisfies the
+    whole entry.
   * A verdict may carry a plain comment as its `because`.
 * Before a review step is offered the daemon builds the merge of the work into the target
   (`git merge-tree`). Work that conflicts goes back to its open state with a change request from
@@ -809,6 +820,9 @@ default for tasks).
   (the inbox and the dashboard both show it). When the work merges again the daemon resolves that
   change request. A daemon that restarted cannot tell which principal reviews it offered, so its
   first check keeps the conflicting ones in the inbox as stale rather than sending them back.
+* `wf item show` and the dashboard show an entry of several steps as the open ones and those that
+  approved: `awaiting security, style; general approved`. The flag for a review no hosted agent can
+  take names the steps.
 * Principal steps wait in `wf inbox` as `principal_review`. `wf item diff` shows the work through git
   (the principal's pager and diff settings apply); `wf item checkout` puts the main checkout on it,
   detached, since the branch is checked out in the item's worktree.
@@ -1326,7 +1340,7 @@ wf review <item> --approve | --request-changes | --escalate [--note]
 wf check [<name>...]
 wf inbox
 wf agent add | list | show | edit | remove;  wf harness models <harness>
-wf session start [--watch] | list [--live] | show | stop | watch | allow | deny
+wf session start [--step <name>] [--watch] | list [--live] | show | stop | watch | allow | deny
 wf work brief | submit | release                            # agents, inside a session
 wf permissions test [--command <cmd>]
 wf daemon start | stop | restart | status | log | run

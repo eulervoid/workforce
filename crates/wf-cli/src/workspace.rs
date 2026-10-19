@@ -101,7 +101,10 @@ pub enum Reconnect {
     /// No daemon listens, as while one restarts.
     NoDaemon,
     /// The daemon speaks another protocol than this build.
-    Refused { daemon: u32, client: u32 },
+    Refused {
+        daemon: u32,
+        client: u32,
+    },
     Failed(anyhow::Error),
 }
 
@@ -408,11 +411,12 @@ impl Workspace {
         &mut self,
         agent: wf_core::name::AgentName,
         item: ItemId,
+        step: Option<wf_core::name::ReviewStepName>,
     ) -> anyhow::Result<SessionId> {
         let repository = self.repository()?.repository().to_path_buf();
         let workforce = self.workforce;
         let (client, state) = self.daemon("start sessions")?;
-        let session = client.start_session(workforce, agent, item, &repository)?;
+        let session = client.start_session(workforce, agent, item, step, &repository)?;
         *state = client.state(workforce)?;
         Ok(session)
     }

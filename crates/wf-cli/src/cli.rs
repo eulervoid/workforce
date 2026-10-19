@@ -8,7 +8,7 @@ use wf_core::graph::Readiness;
 use wf_core::item::{ItemState, Priority};
 use wf_core::name::{
     AgentName, CommandName, HarnessName, Label, LaneName, RecoveryLevelName, Requirement,
-    ReviewLevelName, TypeName,
+    ReviewLevelName, ReviewStepName, TypeName,
 };
 
 #[derive(Parser)]
@@ -290,6 +290,10 @@ pub struct SessionStartArgs {
     /// One of your agents, as listed by `wf agent list`. Defaults to the policy's `default_agent`.
     #[arg(short, long)]
     pub agent: Option<AgentName>,
+    /// The review step to take, when the item awaits a review with several steps open. Without
+    /// one, pick at a terminal.
+    #[arg(short, long)]
+    pub step: Option<ReviewStepName>,
     /// Follow the transcript right after starting. Quitting the watch leaves the session running.
     #[arg(long)]
     pub watch: bool,

@@ -122,7 +122,7 @@ impl State {
                 let waiting = match self.review_status(item.id()) {
                     // Agent steps that are open come first: the principal is waited for only
                     // when no agent is.
-                    Some(ReviewStatus::Awaiting { steps })
+                    Some(ReviewStatus::Awaiting { steps, .. })
                         if steps
                             .iter()
                             .all(|step| matches!(step, ReviewStep::Principal)) =>

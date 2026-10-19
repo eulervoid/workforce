@@ -10,7 +10,7 @@ use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::invite::InviteCode;
 use wf_core::lifecycle::Finish;
-use wf_core::name::AgentName;
+use wf_core::name::{AgentName, ReviewStepName};
 use wf_core::state::State;
 use wf_harness::Permission;
 
@@ -200,17 +200,20 @@ impl DaemonClient {
         self.call(workforce, Call::Follow(devices))
     }
 
-    /// Has the daemon start a work session of `agent` on `item`.
+    /// Has the daemon start a session of `agent` on `item`: a review of `step` when the item
+    /// awaits one, otherwise work.
     pub fn start_session(
         &mut self,
         workforce: WorkforceId,
         agent: AgentName,
         item: ItemId,
+        step: Option<ReviewStepName>,
         repository: &Path,
     ) -> Result<SessionId, ClientError> {
         let call = Call::StartSession {
             agent,
             item,
+            step,
             repository: repository.to_path_buf(),
         };
         self.call(workforce, call)

@@ -318,7 +318,7 @@ fn dependencies(state: &State, item: &Item, sources: &impl Sources) -> Vec<Depen
 /// run with it.
 fn review_step(state: &State, item: ItemId, name: &Option<ReviewStepName>) -> StepBrief {
     let (requires, instructions, at_once) = match state.review_status(item) {
-        Some(ReviewStatus::Awaiting { steps }) => {
+        Some(ReviewStatus::Awaiting { steps, .. }) => {
             let own = steps.iter().find_map(|step| match step {
                 ReviewStep::Agent {
                     name: open,

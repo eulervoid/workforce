@@ -73,7 +73,8 @@ wf item add --title "Parse durations in policy" --review standard
 * **Workers** take items from their lanes whose `requires` their capabilities (and the machine's
   hardware) meet.
 * **Reviewers** are agents whose capabilities meet a review step's `requires`. A reviewer never
-  reviews an item it worked on.
+  reviews an item it worked on. When a review level has steps that run at once, the daemon starts
+  a session of a different agent for each, told the step's name and instructions in its brief.
 * **Supervisors** are agents in the `supervision` lane. When an agent asks a question with a blocker
   that mentions no one, a supervisor that never worked on the item gets it, with the item's history.
   It answers, or escalates the question to you. Without a supervisor, questions come to you.
@@ -101,6 +102,7 @@ but that no machine runs.
 ```sh
 wf session start k3f7 --agent grace          # needs the daemon
 wf session start k3f7 --watch                # and follow the transcript
+wf session start k3f7 --agent ada --step security   # review the step `security` of an item in review
 ```
 
 ```

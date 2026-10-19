@@ -27,6 +27,8 @@ pub enum ReviewStatus {
     /// The steps of the current entry that still have no approval; they run at once.
     Awaiting {
         steps: Vec<ReviewStep>,
+        /// The names of the agent steps of that entry that approved already.
+        approved: Vec<Option<ReviewStepName>>,
     },
     ChangesRequested,
     Approved {
@@ -36,6 +38,29 @@ pub enum ReviewStatus {
     Merged {
         commit: CommitId,
     },
+}
+
+/// Why no review session starts for an item that awaits a review.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum ReviewStartError {
+    #[error("every open review step is held by a session or waits for the principal")]
+    NoOpenStep,
+    #[error("several review steps are open ({}); name one with --step", step_names(.open))]
+    Ambiguous { open: Vec<Option<ReviewStepName>> },
+    #[error("no open review step is called `{step}`; open: {}", step_names(.open))]
+    NoSuchStep {
+        step: ReviewStepName,
+        open: Vec<Option<ReviewStepName>>,
+    },
+}
+
+/// The names of review steps for a message; the step without one is `unnamed`.
+pub fn step_names(steps: &[Option<ReviewStepName>]) -> String {
+    steps
+        .iter()
+        .map(|step| step.as_ref().map_or("unnamed", |name| name.as_str()))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 impl State {
@@ -103,6 +128,7 @@ impl State {
         } else {
             ReviewStatus::Awaiting {
                 steps: progress.open,
+                approved: progress.approved,
             }
         })
     }
@@ -146,7 +172,7 @@ impl State {
                     return None;
                 };
                 match self.review_status(item.id())? {
-                    ReviewStatus::Awaiting { steps } => self
+                    ReviewStatus::Awaiting { steps, .. } => self
                         .unheld(item.id(), steps)
                         .into_iter()
                         .next()
@@ -157,6 +183,54 @@ impl State {
                 }
             })
             .collect()
+    }
+
+    /// The commit under review and the names of the agent steps a review session could be started
+    /// for by hand: the open steps of the item that no live review session holds. `None` when the
+    /// item is not in `review` with submitted work that awaits a verdict.
+    pub fn startable_reviews(
+        &self,
+        item: ItemId,
+    ) -> Option<(Option<CommitId>, Vec<Option<ReviewStepName>>)> {
+        if self.live_state(item)? != ItemState::Review {
+            return None;
+        }
+        let (commit, _) = self.submission(item)?;
+        let ReviewStatus::Awaiting { steps, .. } = self.review_status(item)? else {
+            return None;
+        };
+        let names = self
+            .unheld(item, steps)
+            .into_iter()
+            .filter_map(|step| match step {
+                ReviewStep::Agent { name, .. } => Some(name),
+                ReviewStep::Principal => None,
+            })
+            .collect();
+        Some((commit, names))
+    }
+
+    /// The review session to start by hand on `item`, for `step` when the entry has several steps
+    /// open; no `step` stands for the unnamed one. `None` when the item awaits no review, so that a work session starts.
+    pub fn review_to_start(
+        &self,
+        item: ItemId,
+        step: Option<&ReviewStepName>,
+    ) -> Option<Result<SessionRole, ReviewStartError>> {
+        let (commit, open) = self.startable_reviews(item)?;
+        let chosen = match (step, open.as_slice()) {
+            (_, []) => Err(ReviewStartError::NoOpenStep),
+            (None, [only]) => Ok(only.clone()),
+            // Without a name, the step without one.
+            (None, _) if open.contains(&None) => Ok(None),
+            (None, _) => Err(ReviewStartError::Ambiguous { open }),
+            (Some(wanted), _) if open.contains(&Some(wanted.clone())) => Ok(Some(wanted.clone())),
+            (Some(wanted), _) => Err(ReviewStartError::NoSuchStep {
+                step: wanted.clone(),
+                open,
+            }),
+        };
+        Some(chosen.map(|step| SessionRole::Review { commit, step }))
     }
 
     /// When the daemon found, after `submitted`, that the work of `item` no longer merges into
@@ -240,8 +314,8 @@ impl State {
     }
 
     /// Items that wait for a review step by an agent that no hosted agent the dispatcher starts has
-    /// the capabilities for.
-    pub fn unstaffed_reviews(&self) -> Vec<ItemId> {
+    /// the capabilities for, with the names of those steps; steps without a name are not listed.
+    pub fn unstaffed_reviews(&self) -> Vec<(ItemId, Vec<ReviewStepName>)> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
@@ -262,18 +336,24 @@ impl State {
             .collect();
         self.live_items()
             .filter(|item| item.state(policy) == ItemState::Review)
-            .filter(|item| {
-                let Some(ReviewStatus::Awaiting { steps }) = self.review_status(item.id()) else {
-                    return false;
+            .filter_map(|item| {
+                let Some(ReviewStatus::Awaiting { steps, .. }) = self.review_status(item.id())
+                else {
+                    return None;
                 };
-                steps.iter().any(|step| match step {
-                    ReviewStep::Agent { requires, .. } => !staff
-                        .iter()
-                        .any(|offered| requires.iter().all(|need| offered.contains(need))),
-                    ReviewStep::Principal => false,
-                })
+                let unstaffed: Vec<_> = steps
+                    .into_iter()
+                    .filter_map(|step| match step {
+                        ReviewStep::Agent { name, requires, .. } => (!staff
+                            .iter()
+                            .any(|offered| requires.iter().all(|need| offered.contains(need))))
+                        .then_some(name),
+                        ReviewStep::Principal => None,
+                    })
+                    .collect();
+                (!unstaffed.is_empty())
+                    .then(|| (item.id(), unstaffed.into_iter().flatten().collect()))
             })
-            .map(Item::id)
             .collect()
     }
 
@@ -301,7 +381,7 @@ impl State {
             let Some((commit, submitted)) = self.submission(item.id()) else {
                 continue;
             };
-            let Some(ReviewStatus::Awaiting { steps }) = self.review_status(item.id()) else {
+            let Some(ReviewStatus::Awaiting { steps, .. }) = self.review_status(item.id()) else {
                 continue;
             };
             let did_the_work = self
@@ -350,6 +430,8 @@ struct Progress {
     index: usize,
     /// The steps of that entry without an approval.
     open: Vec<ReviewStep>,
+    /// The agent steps of that entry that approved.
+    approved: Vec<Option<ReviewStepName>>,
     /// A step of the entry escalated: a principal step follows the entry.
     escalated: bool,
 }
@@ -358,6 +440,7 @@ impl Progress {
     fn new(entries: Vec<Vec<ReviewStep>>) -> Self {
         let mut progress = Self {
             open: Vec::new(),
+            approved: Vec::new(),
             entries,
             index: 0,
             escalated: false,
@@ -372,6 +455,7 @@ impl Progress {
 
     /// Opens the steps of the entry at `index`, skipping entries without any.
     fn enter(&mut self) {
+        self.approved.clear();
         while let Some(entry) = self.entries.get(self.index) {
             if !entry.is_empty() {
                 self.open = entry.clone();
@@ -397,6 +481,9 @@ impl Progress {
             return;
         };
         self.open.remove(position);
+        if !escalating {
+            self.approved.push(name);
+        }
         self.escalated |= escalating;
         self.advance_when_closed();
     }

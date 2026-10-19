@@ -17,7 +17,7 @@ use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{AgentId, DeviceKey};
 use wf_core::lifecycle::Finish;
-use wf_core::name::AgentName;
+use wf_core::name::{AgentName, ReviewStepName};
 use wf_core::session::CommitId;
 use wf_harness::Permission;
 use wf_net::DiffAnswer;
@@ -25,7 +25,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 18;
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -124,11 +124,13 @@ pub enum Call {
     /// When each device was last heard from, in milliseconds since the epoch, as
     /// `Vec<(DeviceKey, u64)>`.
     LastSeen,
-    /// Starts a work session of `agent` on `item`, in a worktree of the repository at
-    /// `repository` on this machine; answered with its `SessionId`.
+    /// Starts a session of `agent` on `item` by hand, with `repository` on this machine: a review
+    /// of the named `step` (or of the only one open) when the item awaits a review, and a work
+    /// session in a worktree otherwise. Answered with its `SessionId`.
     StartSession {
         agent: AgentName,
         item: ItemId,
+        step: Option<ReviewStepName>,
         repository: PathBuf,
     },
     /// Ends the session the connection acts for after the agent's turn, as the agent says, and
@@ -389,6 +391,7 @@ mod tests {
             Call::StartSession {
                 agent: AgentName::new("claude").unwrap(),
                 item,
+                step: None,
                 repository: "/repo".into(),
             },
             Call::EndSession {
@@ -505,8 +508,8 @@ mod tests {
         ),
         (
             "StartSession",
-            80,
-            "cyjj7b2fhtj6bpohwxyz2b2ivahzjqqtwvryxlx3ky4r3xcyzhmq",
+            81,
+            "iuworek3slgxmh5dzcc6ohtafpcmefvmdh4vacbqflthrnf2t2ya",
         ),
         (
             "EndSession",
@@ -545,7 +548,7 @@ mod tests {
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 18;
+    const GOLDEN_PROTOCOL_VERSION: u32 = 19;
     const GOLDEN_REPLIES: [(&str, usize, &str); 7] = [
         (
             "State",

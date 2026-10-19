@@ -14,7 +14,7 @@ use wf_core::identity::Actor;
 use wf_core::inbox::{InboxKind, Waiting};
 use wf_core::item::{Item, ItemEntry, ItemState, WrittenIn};
 use wf_core::policy::{Field, ReviewStep};
-use wf_core::review::ReviewStatus;
+use wf_core::review::{ReviewStatus, step_names};
 use wf_core::session::{CommitId, EndReason, SessionRole, Verdict};
 use wf_core::state::State;
 use wf_core::stats::ItemStats;
@@ -22,6 +22,7 @@ use wf_core::supervision::WaitsOn;
 
 use super::item::{ItemSummary, summary};
 use super::session::session_label;
+use super::status::unstaffed_steps;
 use super::{ActorView, actor_view, mention_view, set_change, timestamp};
 
 #[derive(Serialize)]
@@ -289,6 +290,11 @@ pub enum ReviewStatusView {
         /// `agent: review, strong-model`, with the name of the step before the colon when it has
         /// one, as in `agent security: review, strong-model`.
         steps: Vec<String>,
+        /// The names of those steps, `unnamed` for an agent step without one.
+        open: Vec<String>,
+        /// The names of the steps of that entry that approved already, `unnamed` for a step
+        /// without one. Empty for an entry of one step.
+        approved: Vec<String>,
     },
     ChangesRequested,
     Approved {
@@ -302,7 +308,18 @@ pub enum ReviewStatusView {
 
 fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
     match status {
-        ReviewStatus::Awaiting { steps } => ReviewStatusView::Awaiting {
+        ReviewStatus::Awaiting { steps, approved } => ReviewStatusView::Awaiting {
+            open: steps
+                .iter()
+                .map(|step| match step {
+                    ReviewStep::Principal => "principal".to_string(),
+                    ReviewStep::Agent { name, .. } => step_names(std::slice::from_ref(name)),
+                })
+                .collect(),
+            approved: approved
+                .iter()
+                .map(|step| step_names(std::slice::from_ref(step)))
+                .collect(),
             steps: steps
                 .into_iter()
                 .map(|step| match step {
@@ -786,11 +803,15 @@ pub fn item_detail(
                 .to_string(),
         );
     }
-    if state.unstaffed_reviews().contains(&item.id()) {
-        flags.push(
-            "the review waits for an agent step that no agent started on this workforce can take"
-                .to_string(),
-        );
+    if let Some((_, steps)) = state
+        .unstaffed_reviews()
+        .into_iter()
+        .find(|(unstaffed, _)| *unstaffed == item.id())
+    {
+        flags.push(format!(
+            "the review waits for {} that no agent started on this workforce can take",
+            unstaffed_steps(&steps)
+        ));
     }
 
     let entries = state.activity(item.id(), events);
@@ -906,7 +927,7 @@ mod tests {
             &mut state,
             end_session(session, EndReason::Submitted { commit: None }),
         );
-        assert_eq!(state.unstaffed_reviews(), [item]);
+        assert_eq!(state.unstaffed_reviews(), [(item, Vec::new())]);
         assert!(flags(&state, item).contains(&UNSTAFFED.to_string()));
 
         apply(
