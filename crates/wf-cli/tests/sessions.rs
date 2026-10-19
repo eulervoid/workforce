@@ -660,6 +660,36 @@ wf work submit
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_session_finds_its_branch_loose_again_when_the_refs_were_packed_between_two_turns() {
+    // The sandbox lets the session rewrite its branch's file but not create it.
+    let script = "\
+sh echo a > a.txt && git add a.txt && git commit -q -m a && touch \"$XDG_DATA_HOME/committed\"
+sh while [ ! -f \"$XDG_DATA_HOME/packed\" ]; do sleep 0.1; done
+turn
+sh test -f \"$(git rev-parse --git-common-dir)/refs/heads/$(git branch --show-current)\" && touch \"$XDG_DATA_HOME/loose\"
+sh echo b > b.txt && git add b.txt && git commit -q -m b
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Two turns"]);
+    start_session(&world, &item);
+    world
+        .wait("the first commit", |world| {
+            world.wf.data.join("committed").exists()
+        })
+        .await;
+    git(&world.wf.repository, &["pack-refs", "--all"]);
+    std::fs::write(world.wf.data.join("packed"), "").unwrap();
+
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+    assert!(
+        world.wf.data.join("loose").exists(),
+        "the branch was a loose ref again when the second turn began"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn releasing_reopens_the_item_and_keeps_the_branch() {
     let script = "\
 sh echo wip > wip.txt && git add wip.txt && git commit -q -m wip
