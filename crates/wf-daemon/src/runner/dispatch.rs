@@ -68,6 +68,8 @@ async fn dispatch_loop(
             return;
         }
         strong.faults.check_space(strong.launch.data_dir.root());
+        // Before anything starts on what a sync just brought.
+        strong.end_lost_claims(workforce, loaded).await;
         dispatch_once(&strong, workforce, loaded, &mut failed, &mut checked).await;
         notifier.announce(&strong, loaded).await;
         let halted = async { strong.until_halted().await };

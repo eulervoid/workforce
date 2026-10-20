@@ -3,6 +3,7 @@
 
 mod brief;
 mod check;
+mod claims;
 mod dispatch;
 mod drive;
 mod end;
