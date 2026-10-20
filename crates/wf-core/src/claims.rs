@@ -50,6 +50,11 @@ impl Presence {
         }
     }
 
+    /// When the daemon started, in milliseconds since the epoch.
+    pub fn started_ms(&self) -> u64 {
+        self.started_ms
+    }
+
     /// Notes that `device` was heard from at `at_ms`.
     pub fn saw(&mut self, device: DeviceKey, at_ms: u64) {
         self.heard_ms.insert(device, at_ms);

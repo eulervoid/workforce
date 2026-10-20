@@ -323,6 +323,23 @@ impl Daemon {
         self.faults.note_space(what, error)
     }
 
+    /// Has this daemon start, and hear what it heard, `by` earlier. For the tests, which cannot
+    /// wait out a lease.
+    #[doc(hidden)]
+    pub fn backdate_presence(&self, by: std::time::Duration) {
+        let by_ms = u64::try_from(by.as_millis()).unwrap_or(u64::MAX);
+        let mut presence = self
+            .presence
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *presence = Presence::new(
+            presence.started_ms().saturating_sub(by_ms),
+            presence
+                .heard_ms()
+                .map(|(device, at)| (device, at.saturating_sub(by_ms))),
+        );
+    }
+
     /// Has the next write of an event that `matching` accepts fail once, as a write fails on a
     /// full disk. For the tests, which cannot fill a disk.
     #[doc(hidden)]
