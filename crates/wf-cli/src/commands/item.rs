@@ -43,16 +43,9 @@ pub(crate) fn sorted_views(state: &State, scope: Scope, order: ItemOrder) -> Vec
 }
 
 fn compare_items(order: ItemOrder, first: &Item, second: &Item) -> Ordering {
-    let by_priority = |item: &Item| {
-        (
-            item.priority().is_none(),
-            item.priority(),
-            item.created(),
-            item.id(),
-        )
-    };
+    let by_priority = |first: &Item, second: &Item| first.cmp_by_priority(second);
     match order {
-        ItemOrder::Priority => by_priority(first).cmp(&by_priority(second)),
+        ItemOrder::Priority => by_priority(first, second),
         ItemOrder::Created => (first.created(), first.id()).cmp(&(second.created(), second.id())),
         ItemOrder::Merged => {
             let merged_at = |item: &Item| item.latest_merge().map(Merge::merged_at);
@@ -62,7 +55,7 @@ fn compare_items(order: ItemOrder, first: &Item, second: &Item) -> Ordering {
                 }
                 (Some(_), None) => Ordering::Less,
                 (None, Some(_)) => Ordering::Greater,
-                (None, None) => by_priority(first).cmp(&by_priority(second)),
+                (None, None) => by_priority(first, second),
             }
         }
     }

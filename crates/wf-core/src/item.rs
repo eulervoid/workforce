@@ -288,6 +288,20 @@ impl Item {
         self.title.value()
     }
 
+    /// The order of `wf item list`: by priority, `P0` first and items without one last, then by
+    /// creation.
+    pub fn cmp_by_priority(&self, other: &Item) -> std::cmp::Ordering {
+        let key = |item: &Item| {
+            (
+                item.priority().is_none(),
+                item.priority(),
+                item.created(),
+                item.id(),
+            )
+        };
+        key(self).cmp(&key(other))
+    }
+
     /// The body with the steps ticked as of the latest ticks.
     pub fn body(&self) -> Body {
         let body_stamp = self.body.stamp();

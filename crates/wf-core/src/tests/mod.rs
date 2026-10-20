@@ -7,6 +7,7 @@ mod fork;
 mod items;
 mod lifecycle;
 mod review;
+mod search;
 mod sessions;
 mod stats;
 mod validation;
