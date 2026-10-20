@@ -36,8 +36,8 @@ members and their machines are trusted (section 5).
 Across all stages: the only thing peers must agree on is **project state** (items, sessions,
 comments, membership, policy). Authorization replicates with it and is checkable offline. "No
 infrastructure" means none the principal has to run: public relays and discovery are defaults that
-can be swapped. Someone must be online to hold data; that role is the **anchor** (Planned, M3),
-named, never required.
+can be swapped. No device is special: each keeps a full replica and passes on what it has, so
+whichever is online holds the data for the others.
 
 ## 2. Properties
 
@@ -48,7 +48,7 @@ named, never required.
 | P3 | Event-sourced: truth is an append-only log of signed events; state is a deterministic fold. |
 | P4 | Authorization is data in the log, verifiable offline. |
 | P5 | Principals own delegated device keys; every action resolves to a principal. |
-| P6 | Deterministic conflict resolution, with an optional coordinator (Planned: the anchor). |
+| P6 | Deterministic conflict resolution without a coordinator: of two concurrent claims or moves, the earliest by `(hlc, EventId)` wins. |
 | P7 | Git first, behind one crate, so another VCS can be added later. |
 | P8 | Harness-agnostic through ACP. |
 | P9 | Forkable: any member can start a new workforce from a frozen point of an old one. |
@@ -212,9 +212,6 @@ A principal cannot `Escalate` (it decides instead).
 Membership then still only grows, so "was the author a member at a causally earlier point?" stays
 independent of arrival order.
 
-**Planned (M3): anchor.** An owner may designate one device as anchor. It may only assign work, so a
-compromised anchor can reorder assignments, not change policy or roles.
-
 ## 6. Event log
 
 Each device writes an append-only, gapless feed; events also name what their author had seen.
@@ -325,7 +322,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused. *Planned (M3):* `Assigned`, `Claim` (of an item's work or of its merge),
+* Tags are never reused. *Planned (M3):* `Claim` (of an item's merge), the end reasons `Expired` and `Outclaimed`,
   `TargetMoved{commit, onto}`; `onto: CommitId` on `Merged` (section 10).
 
 ### Store
@@ -425,7 +422,7 @@ folded state is a valid base for any later event, even one arriving months late.
   stamp, add tag and comment text. It covers every event of the item in its causal past, a version
   vector since feeds are chains. Applying it merges by stamp; a set tag the checkpoint covers but
   lacks is removed. A peer holding the covered events refolds and compares, flagging a mismatch
-  (a flag, not admission: a joiner cannot check). The anchor writes checkpoints for items quiet for
+  (a flag, not admission: a joiner cannot check). Any device writes checkpoints for items quiet for
   the policy's `[compaction] after`; duplicates are harmless. Equivocating feeds are never covered.
 * **Frontier**: a version vector below which a device dropped events. It may rise when everything
   below is covered or kept: authority bodies, the newest checkpoint per item, uncovered events and
@@ -628,6 +625,8 @@ it with one session.
 | `Cancelled` | the principal stopped it, or its item moved on (cancelled, done, drafted, archived) |
 | `Interrupted` | the daemon stopped and could not resume it |
 | `MachineFault` | `LoginLapsed`, `UsageLimit`, `NoSpace` or `HarnessUnreachable`: the machine, not the attempt |
+| `Expired` (*Planned, M3*) | another device took the item over after the lease of this session's device ran out |
+| `Outclaimed` (*Planned, M3*) | an earlier claim on the item arrived |
 
 **Ending moves the item first.** `after_end` in `wf-core::lifecycle` says what happens to the item:
 back to open, to review, merge then done, or nothing. The daemon writes that move while the session
@@ -638,20 +637,29 @@ verdict, answer, diagnosis) is the agent's, and waits up to 20 s for its turn to
 command it ran waits for the answer; an `Interruption` (stop, moved on, timeout, failure, giving up,
 machine fault) is the daemon's and acts at once.
 
-**Claims.** On one machine the claim of an item is its earliest live work session; starts take a
-per-item lock and refuse an item with a live work session. Across devices (*Planned, M3*) liveness
-comes from a lease, and the lease of a session is the presence of its device: a session that dies on
-a running device is ended by that device's daemon, as on one machine, so the only death others must
-notice is the device's, which gossip already announces (section 14). A device not heard from for the
-policy's `lease` (default 3 minutes, measured by the receiver's clock from the last announcement it
-accepted, so two lost announcements do not expire it) counts as gone, and the claims of its live work
-sessions expire: the item can be assigned again. Nothing is written per renewal; liveness is computed
-at query time and never stored. Of two concurrent claims, the earliest by `(hlc, EventId)` wins and
-the other cancels itself. A device that comes back after its claim was given away therefore finds
-the newer claim and cancels its session: the overlap is accepted, not prevented, so for a few
-minutes two sessions may work on one item. The heads the cancelled one named reach every device
-like any other (section 10), and the next session's brief names them, to rebase onto if both
-committed.
+**Claims.** The claim of an item is its earliest live work session by `(hlc, EventId)`. Starts take a
+per-item lock and refuse an item that a live work session holds. A session is live until its
+`SessionEnded`, so liveness is read from the log alone, the same on every device.
+
+**Planned (M3): leases.** Across devices nothing coordinates a start: `SessionStarted` is the claim.
+Two devices that start one item before they sync find the earlier claim once they do, and the later
+session ends itself `Outclaimed`. A session that dies on a running device is ended by that device's
+daemon, as on one machine, so the only death others must notice is the device's, which gossip
+already announces (section 14). The lease of a session is therefore the presence of its device: a
+device not heard from for the policy's `[claims] lease` (default 3 minutes, measured by the
+receiver's clock from the last announcement it accepted, so two lost announcements do not expire it)
+counts as gone, once the receiver's daemon has itself run that long, so a daemon that just started
+does not count every device as gone. Nothing is written per renewal.
+
+A device that would start on an item held by a gone device's session first ends that session
+`Expired`, then writes its own `SessionStarted`, under the same lock. The end is the takeover, so
+every device agrees on who holds the item, whatever it heard from whom. A review session holding a
+step and a supervise session holding a blocker are taken over the same way. Only a daemon of the
+principal ends a session of another device, and only as `Expired`. A device that comes back finds its
+sessions ended, stops them, and names the last head of each in a comment, so what they committed
+reaches every device (section 10) and the brief of the next session names it, to rebase onto. The
+overlap is accepted, not prevented: for a few minutes two sessions may work on one item. `Expired`
+and `Outclaimed`, like `Interrupted`, cost no recovery step.
 
 One branch per item: every work session on it (after a release, a crash or requested changes)
 continues `wf/<item>`. Context carries over within a session in the conversation, and across sessions
@@ -691,11 +699,8 @@ else of the unnamed one. When several are open and none fits, a terminal offers 
 a script is told the open steps. Supervision and diagnosis need hosted `start = auto` agents.
 
 **Planned (M3): across devices.** The dispatch target stays an agent; any device that hosts it with a
-free slot may run it. A device with capacity asks the anchor, which signs `Assigned{item, agent,
-device, lease}`; the device starts the session, and the lease holds while the device's gossip
-announcements arrive. Without a reachable
-anchor, a policy `fallback` decides: `optimistic` (start with an unconfirmed `Claim`) or `wait`. Until
-then, two daemons do not coordinate, so each agent should be hosted on one machine.
+free slot may run it, and claims (above) keep two devices from working on one item for
+long. Until then, two daemons do not coordinate, so each agent should be hosted on one machine.
 
 ### Briefs
 
@@ -1439,8 +1444,8 @@ causal conflict resolution (P3, P4, P6, P9), while removing only `wf/sync/3`. We
 which also keeps the log independent of transport. Keep the shape compatible with Willow ideas (author
 as subspace, `kind/id` as path) in case that matures.
 
-Built by us on top: authorization, members-only gossip, ordering, and (*Planned*) store-and-forward
-through the anchor, compaction, search and blob access control.
+Built by us on top: authorization, members-only gossip, ordering, and (*Planned*) compaction, search
+and blob access control.
 
 ## 15. Policy
 
@@ -1473,7 +1478,7 @@ already do, with no secrets: at submission in the agents' sandbox, at the merge 
 machine's config gives checks, so each machine's principal decides what they may do. Being in the policy puts them out of reach of the work
 they check.
 
-*Planned:* `[compaction] after` (M6), `[assignment]` with `mode`, `fallback` and `lease` (M3),
+*Planned:* `[compaction] after` (M6), `[claims] lease` (M3, section 9),
 `[merge] requires` and `after_device` (M3, section 10),
 `[transcripts] publish` (M7), `[governance]` (advisory, M7), `wf policy diff`. *Open:* whether
 `default_agent`, a convenience of one principal, belongs in the machine config instead.
@@ -1581,7 +1586,7 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 | M2.2 | Daily use on one machine (**stage 1**): recovery levels, machine faults, resume after restart, daemon management, export and import, network off for one device, notifications | built |
 | M2.3 | The dashboard | built |
 | — | Since: merge checks and `wf check`, rebase at submit, fixed states with verbs, commit signing, storage budget, `[theme]`, `wf stats` | built |
-| M3 | Sessions across devices (**stage 2**): anchor dispatch, claims and leases, repositories across devices (`wf/git/1`, `<wf>/git`), `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
+| M3 | Sessions across devices (**stage 2**): claims and leases, repositories across devices (`wf/git/1`, `<wf>/git`), `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
 | M4 | Decision ratification, distill items, hybrid search | |
 | M5 | Several principals, member invites, threads, scopes, `wf attach` (**stage 3**) | |
 | M6 | `seen` and compaction | |
