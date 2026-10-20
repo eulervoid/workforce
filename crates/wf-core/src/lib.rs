@@ -4,6 +4,7 @@ pub mod activity;
 pub mod autonomy;
 pub mod body;
 pub mod brief;
+pub mod commits;
 pub mod crdt;
 pub mod dispatch;
 pub mod encoding;

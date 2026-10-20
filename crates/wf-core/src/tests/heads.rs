@@ -1,7 +1,9 @@
+use crate::commits::Naming;
 use crate::event::{Commented, EventBody};
-use crate::id::{ItemId, SessionId};
+use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::session::{CommitId, EndReason, SessionRole};
+use crate::item::ItemState;
+use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::{State, Trust};
 use crate::testing::*;
 use crate::validate::Invalid;
@@ -196,4 +198,140 @@ fn a_head_is_named_only_on_a_comment_of_a_work_session_on_its_item() {
         end_session_at(supervising, EndReason::Supervised, commit(1)),
     );
     assert_eq!(refused, Err(Invalid::HeadNotOfItsWorkSession));
+}
+
+fn named(scene: &Scene) -> Vec<(CommitId, Naming)> {
+    let mut named: Vec<_> = scene
+        .state
+        .named_commits()
+        .into_iter()
+        .map(|named| (named.commit, named.naming))
+        .collect();
+    named.sort_by_key(|(commit, _)| commit.to_string());
+    named
+}
+
+#[test]
+fn the_log_names_heads_verdicts_and_merges_with_the_device_that_wrote_them() {
+    let mut scene = Scene::new();
+    let item = scene.item();
+    let session = scene.start(item, SessionRole::Work);
+    scene.comment_naming(session, item, commit(1));
+    scene.apply(verdict(item, commit(1), Verdict::Approve));
+    scene.apply(merged(item, commit(1), commit(2)));
+
+    assert_eq!(
+        named(&scene),
+        vec![
+            (commit(1), Naming::Head { session }),
+            (commit(1), Naming::Reviewed),
+            (commit(1), Naming::Merged),
+            (commit(2), Naming::Merged),
+        ]
+    );
+    let device = scene.fixture.devices[0].key();
+    assert!(
+        scene
+            .state
+            .named_commits()
+            .iter()
+            .all(|named| named.author == device)
+    );
+}
+
+#[test]
+fn a_cancelled_item_names_no_commits() {
+    let mut scene = Scene::new();
+    let item = scene.item();
+    let session = scene.start(item, SessionRole::Work);
+    scene.comment_naming(session, item, commit(1));
+    assert_eq!(named(&scene).len(), 1);
+    scene.apply(moved(item, ItemState::Cancelled));
+    assert_eq!(named(&scene), vec![]);
+}
+
+#[test]
+fn the_branch_is_at_the_head_of_the_session_holding_the_claim_and_the_others_are_kept_apart() {
+    let mut scene = Scene::new();
+    let item = scene.item();
+    let first = scene.start(item, SessionRole::Work);
+    scene.comment_naming(first, item, commit(1));
+    // A second work session that started later has lost the claim.
+    let second = scene.start(item, SessionRole::Work);
+    scene.comment_naming(second, item, commit(2));
+
+    let heads = scene.state.item_heads();
+    let [heads] = heads.as_slice() else {
+        panic!("one item: {heads:?}");
+    };
+    let holder = heads.holder.expect("a holder");
+    assert_eq!((holder.session, holder.commit), (first, commit(1)));
+    let others: Vec<_> = heads.others.iter().map(|head| head.session).collect();
+    assert_eq!(others, vec![second]);
+    assert!(!heads.finished);
+
+    // Once the holder is gone the latest named head is the branch, and nothing is apart.
+    scene.apply(end_session(first, EndReason::Released));
+    let heads = &scene.state.item_heads()[0];
+    assert_eq!(heads.holder.map(|head| head.commit), Some(commit(2)));
+    assert_eq!(
+        heads
+            .others
+            .iter()
+            .map(|head| head.commit)
+            .collect::<Vec<_>>(),
+        vec![commit(1)]
+    );
+}
+
+#[test]
+fn a_finished_item_says_so() {
+    let mut scene = Scene::new();
+    let item = scene.item();
+    scene.apply(moved(item, ItemState::Cancelled));
+    assert!(scene.state.item_heads()[0].finished);
+}
+
+/// Sources that keep the work of one session apart.
+struct Apart(SessionId);
+
+impl crate::brief::Sources for Apart {
+    fn text(&self, _: crate::id::CommentId) -> Option<String> {
+        None
+    }
+
+    fn branch(&self, _: ItemId) -> String {
+        "wf/item".into()
+    }
+
+    fn diff(&self, _: &str, _: CommitId) -> String {
+        String::new()
+    }
+
+    fn diverged(&self, session: SessionId) -> Option<String> {
+        (session == self.0).then(|| format!("refs/wf/diverged/{}", session.short()))
+    }
+}
+
+#[test]
+fn the_brief_of_a_work_session_names_the_work_set_apart() {
+    let mut scene = Scene::new();
+    let item = scene.item();
+    let lost = scene.start(item, SessionRole::Work);
+    scene.comment_naming(lost, item, commit(1));
+    scene.apply(end_session(lost, EndReason::Released));
+    let next = scene.start(item, SessionRole::Work);
+
+    let brief = crate::brief::Brief::of(&scene.state, next, &Apart(lost))
+        .unwrap()
+        .render();
+    let reference = format!("refs/wf/diverged/{}", lost.short());
+    assert!(brief.contains("## Work set apart"), "{brief}");
+    assert!(brief.contains(&reference), "{brief}");
+    assert!(brief.contains(&commit(1).to_string()), "{brief}");
+
+    let none = crate::brief::Brief::of(&scene.state, next, &Apart(next))
+        .unwrap()
+        .render();
+    assert!(!none.contains("Work set apart"), "{none}");
 }
