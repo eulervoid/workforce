@@ -1,6 +1,6 @@
 ---
 source: crates/wf-cli/tests/schemas.rs
-expression: "Envelope::new(view::status(&scenario.state,\n&scenario.state.dependency_graph(), view::StatusContext\n{\n    machine_faults: &Default::default(), own: None, last_seen:\n    &Default::default(), daemon: false, waiting_on_you: 0, refolded: false,\n    caches: None,\n}))"
+expression: "Envelope::new(view::status(&scenario.state,\n&scenario.state.dependency_graph(), view::StatusContext\n{\n    machine_faults: &Default::default(), awaited: &[], own: None, last_seen:\n    &Default::default(), daemon: false, waiting_on_you: 0, refolded: false,\n    caches: None,\n}))"
 ---
 {
   "schema": 8,
@@ -38,6 +38,7 @@ expression: "Envelope::new(view::status(&scenario.state,\n&scenario.state.depend
     "flagged": [],
     "next": "1 ready item, but no agent starts on its own: `wf agent edit <name> --start auto`",
     "refolded": false,
-    "caches": null
+    "caches": null,
+    "awaiting_commits": []
   }
 }

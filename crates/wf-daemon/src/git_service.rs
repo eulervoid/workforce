@@ -81,14 +81,60 @@ impl GitSource for UploadPack {
 }
 
 impl Daemon {
-    /// Fetches `commit` of `workforce` from `device` into the bare repository. `git fetch` runs
-    /// the `wf` binary of this daemon as its `ext::` bridge, which pipes to a socket in a private
-    /// directory; this side pipes that socket over iroh to the device.
+    /// Builds the bare repository of a workforce just joined from the device it was joined
+    /// through: its target and item branches. A failure is only logged: the commits the log names
+    /// are fetched from the devices as they are met, whatever happens here.
+    pub(crate) async fn build_repository_from(
+        self: &Arc<Self>,
+        workforce: WorkforceId,
+        device: DeviceKey,
+        storage: &crate::StorageHandle,
+    ) {
+        self.ensure_bare_repository(workforce, storage).await;
+        if let Err(error) = self.fetch_branches_from(workforce, device).await {
+            tracing::warn!(
+                "could not build the repository of workforce {workforce} from {}: {}",
+                device.fmt_short(),
+                wf_core::error_chain(&error)
+            );
+        }
+    }
+
+    /// Fetches `commit` of `workforce` from `device` into the bare repository.
     pub(crate) async fn fetch_commit_from(
         self: &Arc<Self>,
         workforce: WorkforceId,
         device: DeviceKey,
         commit: CommitId,
+    ) -> Result<(), FetchError> {
+        self.fetch_through_bridge(workforce, device, move |git, bridge| {
+            git.fetch_commit(&bridge, commit)
+        })
+        .await
+    }
+
+    /// Fetches the branches of `device` into the bare repository of `workforce`: what a device
+    /// that has just joined through it starts with.
+    pub(crate) async fn fetch_branches_from(
+        self: &Arc<Self>,
+        workforce: WorkforceId,
+        device: DeviceKey,
+    ) -> Result<(), FetchError> {
+        self.fetch_through_bridge(workforce, device, |git, bridge| {
+            git.fetch_branches_through(&bridge)
+        })
+        .await
+    }
+
+    /// Runs `fetch`, a `git fetch` in the bare repository of `workforce` through the bridge it is
+    /// given, while this side pipes the bridge over iroh to `device`. `git fetch` runs the `wf`
+    /// binary of this daemon as its `ext::` bridge, which pipes to a socket in a private
+    /// directory.
+    async fn fetch_through_bridge(
+        self: &Arc<Self>,
+        workforce: WorkforceId,
+        device: DeviceKey,
+        fetch: impl FnOnce(GitCli, Vec<String>) -> Result<(), VcsError> + Send + 'static,
     ) -> Result<(), FetchError> {
         let binary = self
             .bin_dir()
@@ -105,9 +151,8 @@ impl Daemon {
             socket.display().to_string(),
         ];
         let repository = self.bare_repository(workforce);
-        let mut fetch = tokio::task::spawn_blocking(move || {
-            GitCli::open(&repository)?.fetch_commit(&bridge, commit)
-        });
+        let mut fetch =
+            tokio::task::spawn_blocking(move || fetch(GitCli::open(&repository)?, bridge));
         let relay = async {
             let (stream, _) = listener.accept().await?;
             node.git_connect(wf_net::endpoint_id(device), workforce, stream)

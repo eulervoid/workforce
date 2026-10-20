@@ -254,6 +254,9 @@ pub struct JoinView {
     pub name: String,
     pub principal: String,
     pub events: usize,
+    /// wf's repository of the workforce on this machine, which a checkout takes the remote `wf`
+    /// from.
+    pub repository: String,
 }
 
 /// The operating system and architecture of this machine, as requirements items can name.
@@ -346,7 +349,7 @@ pub fn join(
         client.join(code.workforce, &code, profile)?;
         let state = client.state(code.workforce)?;
         let device = data.device()?.context("the daemon has no device key")?;
-        return finish_join(json, &state, device.key(), &code, name);
+        return finish_join(json, &state, device.key(), &code, name, &data);
     }
 
     let device = data.device_or_create()?;
@@ -407,7 +410,7 @@ pub fn join(
         }
         anyhow::Ok(storage.with(|replica| replica.state().clone()).await?)
     })?;
-    finish_join(json, &state, device.key(), &code, name)
+    finish_join(json, &state, device.key(), &code, name, &data)
 }
 
 fn finish_join(
@@ -416,6 +419,7 @@ fn finish_join(
     device: DeviceKey,
     code: &InviteCode,
     name: String,
+    data: &DataDir,
 ) -> anyhow::Result<()> {
     let principal = state
         .principal_of(&device)
@@ -428,11 +432,22 @@ fn finish_join(
             name,
             principal: state.actor_label(&Actor::Principal(principal)),
             events: state.event_count(),
+            repository: wf_vcs::bare_repository(&data.workforce(&code.workforce))
+                .display()
+                .to_string(),
         },
         |view| {
             format!(
-                "joined workforce {} as {} ({}) with {} events\n",
-                view.workforce, view.name, view.principal, view.events
+                "joined workforce {} as {} ({}) with {} events\n\
+                 wf's repository is {}; the daemon keeps it current with the other devices. \
+                 To work from a checkout of the project, in it run:\n  \
+                 git remote add wf {}\n  git fetch wf\n",
+                view.workforce,
+                view.name,
+                view.principal,
+                view.events,
+                view.repository,
+                view.repository
             )
         },
     )

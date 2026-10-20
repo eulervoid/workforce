@@ -681,7 +681,11 @@ impl Daemon {
                 .join(code, wf_net::endpoint_id(*bootstrap), &storage, author)
                 .await
             {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    self.build_repository_from(code.workforce, *bootstrap, &storage)
+                        .await;
+                    return Ok(());
+                }
                 Err(error @ (NetError::JoinRefused { .. } | NetError::JoinAuthoring(_))) => {
                     return Err(error.into());
                 }

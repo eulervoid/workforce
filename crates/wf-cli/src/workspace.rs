@@ -466,6 +466,16 @@ impl Workspace {
         }
     }
 
+    /// The commits the log names that the daemon has not got yet; none without a daemon.
+    pub fn awaited_commits(&self) -> anyhow::Result<Vec<wf_core::commits::NamedCommit>> {
+        match &self.source {
+            Source::Local(..) => Ok(Vec::new()),
+            Source::Daemon { client, .. } => {
+                Ok(client.borrow_mut().awaited_commits(self.workforce)?)
+            }
+        }
+    }
+
     pub fn answer_permission(
         &mut self,
         session: SessionId,

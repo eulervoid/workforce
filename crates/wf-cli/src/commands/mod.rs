@@ -130,8 +130,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 &workspace.held_permissions()?,
                 &machine_faults,
             );
+            let awaited = workspace.awaited_commits()?;
             let context = view::StatusContext {
                 machine_faults: &machine_faults,
+                awaited: &awaited,
                 own: Some(workspace.device_key()),
                 last_seen: &workspace.last_seen()?,
                 daemon: workspace.follows_daemon(),

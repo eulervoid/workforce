@@ -140,6 +140,7 @@ fn events_and_status() {
             &scenario.state.dependency_graph(),
             view::StatusContext {
                 machine_faults: &Default::default(),
+                awaited: &[],
                 own: None,
                 last_seen: &Default::default(),
                 daemon: false,

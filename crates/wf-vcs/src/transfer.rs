@@ -74,6 +74,17 @@ impl GitCli {
     /// output to a device's `git upload-pack`. Every object is checked (`fetch.fsckObjects`). No
     /// ref is made: the caller points one at the commit, or the commit stays an object.
     pub fn fetch_commit(&self, bridge: &[String], commit: CommitId) -> Result<(), VcsError> {
+        self.fetch_through(bridge, &commit.to_string())
+    }
+
+    /// Fetches every branch of the repository the `bridge` talks to, and what they reach, as
+    /// branches of this one: how a device that joins starts with the target and the item
+    /// branches of the device it joined through.
+    pub fn fetch_branches_through(&self, bridge: &[String]) -> Result<(), VcsError> {
+        self.fetch_through(bridge, "+refs/heads/*:refs/heads/*")
+    }
+
+    fn fetch_through(&self, bridge: &[String], what: &str) -> Result<(), VcsError> {
         let words: Vec<String> = bridge.iter().map(|word| escape_ext(word)).collect();
         let url = format!("ext::{}", words.join(" "));
         let args = [
@@ -86,7 +97,7 @@ impl GitCli {
             "--no-tags",
             "--no-write-fetch-head",
             &url,
-            &commit.to_string(),
+            what,
         ];
         self.run(&self.repository, &[], args)?.ok()?;
         Ok(())
@@ -290,6 +301,17 @@ mod tests {
         let unknown = CommitId::Git(wf_core::session::GitOid::from_bytes([9; 20]));
         let (fetched, _) = fetch_from(&served, unknown);
         assert!(fetched.is_err(), "what the server lacks is served");
+    }
+
+    #[test]
+    fn the_branches_of_a_device_are_fetched_as_branches() {
+        let served = served();
+        let into = fetcher(served.repository.root.path());
+        let bridge = Bridge::to(&served.server);
+        into.fetch_branches_through(&bridge.command()).unwrap();
+        bridge.finish();
+        assert_eq!(into.branch_head("main").unwrap(), served.second);
+        assert_eq!(into.branch_head("wf/item").unwrap(), served.second);
     }
 
     #[test]
