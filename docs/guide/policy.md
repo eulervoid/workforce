@@ -171,6 +171,26 @@ review; the others finish their reviews after one asked for changes, and their a
 nothing. `wf item show` says `awaiting security, style; general approved`, and `wf status` names the
 steps no agent can take. See [steps at once](review-and-merge.md#steps-at-once).
 
+### Limiting the rounds
+
+Work can go back and forth between an agent and its reviewer for as long as one keeps asking for
+changes the other does not make. `max_rounds` stops that after a number of rounds:
+
+```toml
+[[review]]
+name = "standard"
+steps = [{ requires = ["review", "strong-model"] }]
+max_rounds = 3
+```
+
+A round is a submission that an agent's review sent back with `request changes`; your own change
+requests, and those of the daemon for a conflict, do not count. Once the item has had `max_rounds`
+of them since you last acted on it, the next request for changes does not send it back: the item
+stays in review and waits for you in `wf inbox`, with the open change requests and the number of
+rounds. Approve it, send it back with `wf review <item> --request-changes`, edit it, or cancel it;
+whatever you do starts the count over. A level without `max_rounds` sends the work back every time.
+`max_rounds` is a positive number.
+
 See [review-and-merge.md](review-and-merge.md) for how a review goes.
 
 ## Recovery levels
