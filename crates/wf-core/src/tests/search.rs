@@ -118,16 +118,16 @@ fn matches_name_their_field_and_highlight_the_words() {
     assert_eq!(matches.len(), 3);
     assert_eq!(matches[0].field, MatchedField::Title);
     assert_eq!(matches[0].context, "Nudges");
-    assert_eq!(matches[0].highlights, [0..6]);
+    assert_eq!(matches[0].highlights, vec![0..6]);
     assert_eq!(matches[1].field, MatchedField::Body);
     assert_eq!(matches[1].context, "second has Packed-Refs and nudges");
-    assert_eq!(matches[1].highlights, [11..22, 27..33]);
+    assert_eq!(matches[1].highlights, vec![11..22, 27..33]);
     assert!(matches!(
         &matches[2].field,
         MatchedField::Comment { id, .. } if *id == comment
     ));
     assert_eq!(matches[2].context, "a nudge? no: NUDGES");
-    assert_eq!(matches[2].highlights, [13..19]);
+    assert_eq!(matches[2].highlights, vec![13..19]);
 }
 
 #[test]
