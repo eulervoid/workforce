@@ -1,8 +1,9 @@
 use crate::event::Event;
 use crate::id::{ItemId, SessionId};
+use crate::identity::Actor;
 use crate::item::{ItemEntry, ItemState};
 use crate::name::ReviewLevelName;
-use crate::session::EndReason;
+use crate::session::{EndReason, SessionRole};
 use crate::state::{State, Trust};
 use crate::testing::*;
 use crate::validate::Invalid;
@@ -53,22 +54,30 @@ fn a_session_is_live_until_it_ends() {
 fn the_earliest_end_counts() {
     let (fixture, mut state, task) = with_task();
     let session = session_id(&fixture.apply(&mut state, 0, 3_000, start_session("coder", task)));
-    let cancelled = fixture.author(&state, 1, 3_001, end_session(session, EndReason::Cancelled));
+    // The other device takes the session over while its own device ends it.
+    let daemon = Actor::Daemon(fixture.founder.key());
+    let taken_over = fixture.author_as(
+        &state,
+        1,
+        daemon,
+        3_001,
+        end_session(session, EndReason::LeaseExpired),
+    );
     let failed = fixture.author(&state, 0, 3_002, end_session(session, EndReason::Failed));
     let mut forward = state.clone();
     let mut backward = state;
-    for event in [&cancelled, &failed] {
+    for event in [&taken_over, &failed] {
         forward.receive((*event).clone(), Trust::Untrusted).unwrap();
     }
-    for event in [&failed, &cancelled] {
+    for event in [&failed, &taken_over] {
         backward
             .receive((*event).clone(), Trust::Untrusted)
             .unwrap();
     }
     assert_eq!(forward, backward);
     let reason = forward.session(session).unwrap().ended().unwrap().reason;
-    let earlier = if cancelled.content.hlc < failed.content.hlc {
-        EndReason::Cancelled
+    let earlier = if taken_over.content.hlc < failed.content.hlc {
+        EndReason::LeaseExpired
     } else {
         EndReason::Failed
     };
@@ -99,7 +108,10 @@ fn the_claim_belongs_to_the_earliest_live_work_session() {
     } else {
         &first
     };
-    assert_eq!(state.claim(task).unwrap().id(), session_id(earlier));
+    assert_eq!(
+        state.holder(task, &SessionRole::Work).unwrap().id(),
+        session_id(earlier)
+    );
 
     fixture.apply(
         &mut state,
@@ -107,7 +119,10 @@ fn the_claim_belongs_to_the_earliest_live_work_session() {
         4_000,
         end_session(session_id(earlier), EndReason::Cancelled),
     );
-    assert_eq!(state.claim(task).unwrap().id(), session_id(later));
+    assert_eq!(
+        state.holder(task, &SessionRole::Work).unwrap().id(),
+        session_id(later)
+    );
 }
 
 #[test]

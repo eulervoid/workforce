@@ -157,8 +157,9 @@ fn a_head_is_named_only_from_the_device_that_runs_the_work_session() {
     let session = scene.start(item, SessionRole::Work);
     let ending = end_session_at(session, EndReason::Released, commit(1));
 
-    // The principal's other device does not run the session.
-    let refused = scene.try_as(1, scene.daemon(), ending.clone());
+    // The principal's other device does not run the session: taking it over, it names no head.
+    let taking_over = end_session_at(session, EndReason::LeaseExpired, commit(1));
+    let refused = scene.try_as(1, scene.daemon(), taking_over);
     assert_eq!(refused, Err(Invalid::HeadNotOfItsWorkSession));
     assert_eq!(scene.state.session(session).unwrap().head(), None);
     scene.try_as(0, scene.daemon(), ending).unwrap();

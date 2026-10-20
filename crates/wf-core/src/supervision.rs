@@ -76,7 +76,7 @@ impl State {
     }
 
     /// The items with a blocker `agent` can answer in a supervise session, oldest blocker first:
-    /// the agent never worked on the item, no supervise session is live on it, and the agent did
+    /// the agent never worked on the item, no supervise session holds it, and the agent did
     /// not give up on supervising it since the blocker was written.
     pub fn supervisable(&self, agent: &AgentId) -> Vec<ItemId> {
         let mut items: Vec<(crate::hlc::Hlc, ItemId)> = Vec::new();
@@ -90,13 +90,10 @@ impl State {
             else {
                 continue;
             };
-            let sessions: Vec<_> = self.sessions_of(item.id()).collect();
-            let worked_on = sessions
-                .iter()
+            let worked_on = self
+                .sessions_of(item.id())
                 .any(|session| session.agent() == agent && session.role() == SessionRole::Work);
-            let supervised_now = sessions
-                .iter()
-                .any(|session| session.is_live() && session.role() == SessionRole::Supervise);
+            let supervised_now = self.holder(item.id(), &SessionRole::Supervise).is_some();
             let allowed = self
                 .recovery(item.id(), &SessionRole::Supervise)
                 .allows_attempt();

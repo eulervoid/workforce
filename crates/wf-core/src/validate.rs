@@ -22,7 +22,7 @@ use crate::item::ItemState;
 use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, TypeName};
 use crate::policy::Field;
 use crate::review::ReviewStatus;
-use crate::session::{SessionRole, Verdict};
+use crate::session::{EndReason, SessionRole, Verdict};
 use crate::state::{
     Disposition, ForkState, MAX_PENDING, MAX_PENDING_BINDINGS, Origin, PendingOn, Received, State,
     Trust,
@@ -110,6 +110,10 @@ pub enum Invalid {
     UnknownSession(SessionId),
     #[error("session {0} is not a session of this agent on this device")]
     SessionMismatch(SessionId),
+    #[error(
+        "session {0} runs on another device: only a daemon of its principal ends it, and only as `LeaseExpired`"
+    )]
+    EndsSessionOfAnotherDevice(SessionId),
     #[error(
         "only the device that runs a work session names a head, on a comment on its item or at its end"
     )]
@@ -671,10 +675,16 @@ impl State {
                     .sessions
                     .get(&ended.session)
                     .ok_or(Invalid::UnknownSession(ended.session))?;
-                let names_head_elsewhere = ended.head.is_some()
-                    && (session.role() != SessionRole::Work
-                        || session.device() != event.content.author);
-                if names_head_elsewhere {
+                let elsewhere = session.device() != event.content.author;
+                // A takeover after the lease of the session's device ran out (section 9).
+                let takes_over = matches!(event.content.actor, Actor::Daemon(_))
+                    && ended.reason == EndReason::LeaseExpired
+                    && self.principal_of(&session.device())
+                        == self.principal_of(&event.content.author);
+                if elsewhere && !takes_over {
+                    Err(Invalid::EndsSessionOfAnotherDevice(ended.session))
+                } else if ended.head.is_some() && (session.role() != SessionRole::Work || elsewhere)
+                {
                     Err(Invalid::HeadNotOfItsWorkSession)
                 } else {
                     Ok(())

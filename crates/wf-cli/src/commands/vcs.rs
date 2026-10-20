@@ -5,7 +5,7 @@ use serde::Serialize;
 use wf_core::id::{HashId, ItemId};
 use wf_core::identity::DeviceKey;
 use wf_core::review::ReviewStatus;
-use wf_core::session::CommitId;
+use wf_core::session::{CommitId, SessionRole};
 use wf_daemon::proto::LiveDiff;
 use wf_net::DiffAnswer;
 
@@ -91,7 +91,7 @@ pub(crate) fn item_diff(
 ) -> anyhow::Result<ItemDiff> {
     let session_device = workspace
         .state()
-        .claim(id)
+        .holder(id, &SessionRole::Work)
         .map(|session| session.device())
         .filter(|device| *device != workspace.device_key());
     let merged = matches!(

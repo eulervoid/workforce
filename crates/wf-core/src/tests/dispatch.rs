@@ -221,6 +221,27 @@ fn sessions_the_machine_ended_are_not_attempts() {
 }
 
 #[test]
+fn sessions_that_lost_their_claim_are_not_attempts() {
+    let mut scene = Scene::new();
+    scene.apply(agent("coder", &["default"], &[], StartMode::Auto));
+    let task: ItemId = scene.apply(create("task", "contested")).id().into();
+    scene.apply(edit(
+        task,
+        crate::event::Change::RecoveryLevel(Some("none".parse().unwrap())),
+    ));
+    for reason in [EndReason::LeaseExpired, EndReason::Outclaimed] {
+        let session = scene.apply(start_session("coder", task)).id().into();
+        scene.apply(end_session(session, reason));
+        assert_eq!(
+            scene.state.recovery(task, &SessionRole::Work),
+            Recovery::Fresh,
+            "{reason:?}"
+        );
+    }
+    assert_eq!(scene.offered(), ["contested"]);
+}
+
+#[test]
 fn a_slot_is_free_while_neither_the_device_nor_the_agent_is_full() {
     let mut scene = Scene::new();
     scene.apply(agent("coder", &["default"], &[], StartMode::Auto));

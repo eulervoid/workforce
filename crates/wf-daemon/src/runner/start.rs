@@ -167,9 +167,7 @@ impl Daemon {
         };
         let state = self.snapshot(loaded).await?;
         let setup = self.setup(&state, workforce, agent, item, &role)?;
-        if role == SessionRole::Work {
-            state.ensure_unclaimed(item)?;
-        }
+        state.ensure_unclaimed(item, &role)?;
         self.ensure_bare_repository(workforce, &loaded.storage)
             .await;
         // What the log names as the start of the work, or as the work to review, has to be here.

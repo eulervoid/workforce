@@ -147,21 +147,25 @@ impl State {
         }
     }
 
-    /// The open steps of `item` that no live review session holds: each holds one open agent step
-    /// of its name.
-    fn unheld(&self, item: ItemId, mut open: Vec<ReviewStep>) -> Vec<ReviewStep> {
-        for session in self.sessions_of(item).filter(|session| session.is_live()) {
-            let SessionRole::Review { step: held, .. } = session.role() else {
-                continue;
-            };
-            let position = open
-                .iter()
-                .position(|step| matches!(step, ReviewStep::Agent { name, .. } if *name == held));
-            if let Some(position) = position {
-                open.remove(position);
-            }
-        }
-        open
+    /// The open steps of the review of `commit` of `item` that no live review session holds.
+    fn unheld(
+        &self,
+        item: ItemId,
+        commit: Option<CommitId>,
+        open: Vec<ReviewStep>,
+    ) -> Vec<ReviewStep> {
+        open.into_iter()
+            .filter(|step| match step {
+                ReviewStep::Agent { name, .. } => {
+                    let role = SessionRole::Review {
+                        commit,
+                        step: name.clone(),
+                    };
+                    self.holder(item, &role).is_none()
+                }
+                ReviewStep::Principal => true,
+            })
+            .collect()
     }
 
     /// The review steps on offer: items in `review` with submitted commits that have an open step
@@ -179,7 +183,7 @@ impl State {
                 };
                 match self.review_status(item.id())? {
                     ReviewStatus::Awaiting { steps, .. } => self
-                        .unheld(item.id(), steps)
+                        .unheld(item.id(), Some(commit), steps)
                         .into_iter()
                         .next()
                         .map(|step| (item.id(), commit, step)),
@@ -206,7 +210,7 @@ impl State {
             return None;
         };
         let names = self
-            .unheld(item, steps)
+            .unheld(item, commit, steps)
             .into_iter()
             .filter_map(|step| match step {
                 ReviewStep::Agent { name, .. } => Some(name),
@@ -402,7 +406,7 @@ impl State {
                 continue;
             }
             let mut offered_names = BTreeSet::new();
-            for step in self.unheld(item.id(), steps) {
+            for step in self.unheld(item.id(), commit, steps) {
                 let ReviewStep::Agent { name, requires, .. } = step else {
                     continue;
                 };

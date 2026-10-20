@@ -340,18 +340,30 @@ impl Simulation {
                         EndReason::Failed,
                         EndReason::Cancelled,
                         EndReason::Submitted,
-                    ][usize::from(first) % 4];
-                    // The daemon of the device names the head of a session it runs.
-                    let body = match self.replicas[device].session(session) {
+                        EndReason::Outclaimed,
+                    ][usize::from(first) % 5];
+                    let this_device = self.fixture.devices[device].key();
+                    match self.replicas[device].session(session) {
+                        // The daemon of the device names the head of a session it runs.
                         Some(folded)
                             if folded.role() == SessionRole::Work
-                                && folded.device() == self.fixture.devices[device].key() =>
+                                && folded.device() == this_device =>
                         {
-                            end_session_at(session, reason, commit(second % 3))
+                            self.submit(
+                                device,
+                                end_session_at(session, reason, commit(second % 3)),
+                            );
                         }
-                        Some(_) | None => end_session(session, reason),
-                    };
-                    self.submit(device, body);
+                        Some(folded) if folded.device() == this_device => {
+                            self.submit(device, end_session(session, reason));
+                        }
+                        // Another device's session it takes over, as after its lease ran out.
+                        Some(_) | None => {
+                            let daemon = Actor::Daemon(self.fixture.founder.key());
+                            let body = end_session(session, EndReason::LeaseExpired);
+                            self.submit_event_as(device, daemon, body);
+                        }
+                    }
                 }
             }
             (14, _) if second % 4 == 1 => {

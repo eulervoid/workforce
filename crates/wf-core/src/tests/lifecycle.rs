@@ -5,7 +5,7 @@ use crate::lifecycle::{
     AfterEnd, AfterFailedChecks, Closing, Finish, Interruption, MergeFailure, MergePlan,
     SessionEnd, TurnOutcome,
 };
-use crate::session::{CommitId, EndReason, MachineFault, Verdict};
+use crate::session::{CommitId, EndReason, MachineFault, SessionRole, Verdict};
 use crate::state::State;
 use crate::testing::*;
 
@@ -170,6 +170,42 @@ fn an_item_another_session_holds_is_not_reopened() {
         Some(AfterEnd::Nothing),
         "the earlier session holds the item, the later one gives way"
     );
+}
+
+#[test]
+fn a_session_that_lost_its_claim_ends_like_an_interruption() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    scene.apply(moved(task, ItemState::Active));
+    let first = scene.start(task);
+    let second = scene.start(task);
+    assert_eq!(
+        scene.state.after_end(second, EndReason::Outclaimed, None),
+        Some(AfterEnd::Nothing),
+        "the earlier session holds the work"
+    );
+    scene.apply(end_session(second, EndReason::Outclaimed));
+    assert_eq!(
+        scene
+            .state
+            .after_end(first, EndReason::LeaseExpired, Some(commit())),
+        Some(AfterEnd::MoveTo(ItemState::Open)),
+        "nothing holds the work once it is taken over"
+    );
+    let closing = scene
+        .state
+        .closing(
+            first,
+            &SessionEnd::Interruption(Interruption::LeaseExpired),
+            Some(commit()),
+        )
+        .unwrap();
+    assert_eq!(closing.reason, EndReason::LeaseExpired);
+    assert_eq!(
+        closing.head, None,
+        "another device takes the session over and cannot name its branch"
+    );
+    assert!(matches!(closing.actor, Actor::Daemon(_)));
 }
 
 #[test]
@@ -579,7 +615,10 @@ fn only_a_live_work_session_with_a_waiting_item_waits() {
 fn a_refusal_names_the_item_short_and_the_session_that_holds_it() {
     let mut scene = Scene::new();
     let item = scene.item(create("task", "Busy"));
-    assert_eq!(scene.state.ensure_unclaimed(item), Ok(()));
+    assert_eq!(
+        scene.state.ensure_unclaimed(item, &SessionRole::Work),
+        Ok(())
+    );
     let session = scene.start(item);
     let holder = scene
         .state
@@ -589,9 +628,13 @@ fn a_refusal_names_the_item_short_and_the_session_that_holds_it() {
         "{holder}"
     );
     assert_eq!(
-        scene.state.ensure_unclaimed(item).unwrap_err().to_string(),
+        scene
+            .state
+            .ensure_unclaimed(item, &SessionRole::Work)
+            .unwrap_err()
+            .to_string(),
         format!(
-            "#{} already has a live session, {holder}; stop it first",
+            "#{} already has a live work session, {holder}; stop it first",
             item.short()
         )
     );

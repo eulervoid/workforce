@@ -25,7 +25,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 22;
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -566,12 +566,12 @@ mod tests {
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 22;
+    const GOLDEN_PROTOCOL_VERSION: u32 = 23;
     const GOLDEN_REPLIES: [(&str, usize, &str); 7] = [
         (
             "State",
-            23241,
-            "myyuyre35xjpl6oiyygirbpb5ywddizb5g4z4xitrchmwnpiqyaa",
+            23250,
+            "kwfzxevgr7mfceperiwbzwouksoojhqnqszr6crp2ky33n4wca6q",
         ),
         (
             "Permissions",

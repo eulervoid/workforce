@@ -225,3 +225,10 @@ policy, it is out of reach of the work it checks: a branch cannot turn its own c
 runs them on your checkout. The daemon runs them when an agent submits, in the agents' sandbox, so
 the agent hears what fails before anyone reviews, and again before the merge; what happens when one
 fails is in [review-and-merge.md](review-and-merge.md#checks).
+
+## Claims
+
+A session claims what it alone works on: the item, its review step, its blockers or its diagnosis.
+`[claims] lease` is how long a device may go unheard before what its sessions claim can be taken
+over, `3m` by default and at least that: devices announce themselves every minute, and two lost
+announcements must not give a claim away.

@@ -3023,7 +3023,10 @@ async fn an_item_with_a_live_session_is_not_started_twice() {
     assert_eq!(sessions.len(), 1);
     let session = sessions[0]["id"].as_str().unwrap();
     assert!(
-        message.contains(&format!("#{} already has a live session, @", short(&item))),
+        message.contains(&format!(
+            "#{} already has a live work session, @",
+            short(&item)
+        )),
         "{message}"
     );
     assert!(

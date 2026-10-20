@@ -77,6 +77,13 @@ pub enum PolicyError {
     DuplicateCheck(CommandName),
     #[error("the check `{0}` runs nothing: `run` names the program and its arguments")]
     EmptyCheck(CommandName),
+    #[error(
+        "`[claims] lease` is {}, shorter than {}: devices announce themselves every minute, and \
+         two lost announcements must not give their claims away",
+        humantime_serde::re::humantime::format_duration(*.0),
+        humantime_serde::re::humantime::format_duration(ClaimsConfig::MIN_LEASE)
+    )]
+    LeaseTooShort(Duration),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -170,6 +177,33 @@ impl Default for MergeConfig {
             mode: MergeMode::default(),
             target: Self::default_target(),
             checks: Vec::new(),
+        }
+    }
+}
+
+/// How claims outlive the devices that hold them: `[claims]`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimsConfig {
+    /// A device not heard from for this long, such as `"3m"`, is gone, and what its sessions claim
+    /// can be taken over.
+    #[serde(default = "ClaimsConfig::default_lease", with = "humantime_serde")]
+    pub lease: Duration,
+}
+
+impl ClaimsConfig {
+    /// Three announcements a minute apart, so that two lost ones do not give a claim away.
+    pub const MIN_LEASE: Duration = Duration::from_secs(3 * 60);
+
+    fn default_lease() -> Duration {
+        Self::MIN_LEASE
+    }
+}
+
+impl Default for ClaimsConfig {
+    fn default() -> Self {
+        Self {
+            lease: Self::default_lease(),
         }
     }
 }
@@ -405,6 +439,8 @@ pub struct Policy {
     pub lanes: BTreeMap<LaneName, LaneConfig>,
     #[serde(default)]
     pub merge: MergeConfig,
+    #[serde(default)]
+    pub claims: ClaimsConfig,
     /// Ordered from least to most strict: the position is what lowering and raising mean.
     #[serde(default)]
     pub review: Vec<ReviewLevelConfig>,
@@ -520,6 +556,9 @@ impl Policy {
             if check.run.is_empty() {
                 return Err(PolicyError::EmptyCheck(check.name.clone()));
             }
+        }
+        if self.claims.lease < ClaimsConfig::MIN_LEASE {
+            return Err(PolicyError::LeaseTooShort(self.claims.lease));
         }
         if let Some(name) = DEFAULT_POLICY
             .types
@@ -1148,5 +1187,42 @@ timeout = \"20m\"
                 CommandName::new("nothing").unwrap()
             ))
         );
+    }
+
+    fn with_lease(lease: &str) -> String {
+        with_custom(&format!("[claims]\n{lease}\n"))
+    }
+
+    #[test]
+    fn a_claim_lasts_three_minutes_after_its_device_went_silent_unless_the_policy_says_longer() {
+        let three_minutes = Duration::from_secs(3 * 60);
+        assert_eq!(Policy::default_policy().claims.lease, three_minutes);
+        let unsaid = Policy::parse(&with_lease("")).unwrap();
+        assert_eq!(unsaid.claims.lease, three_minutes);
+        let longer = Policy::parse(&with_lease("lease = \"10m\"")).unwrap();
+        assert_eq!(longer.claims.lease, Duration::from_secs(10 * 60));
+        let bytes = postcard::to_stdvec(&longer).unwrap();
+        assert_eq!(postcard::from_bytes::<Policy>(&bytes).unwrap(), longer);
+    }
+
+    #[test]
+    fn a_lease_two_lost_announcements_would_end_is_refused() {
+        let error = Policy::parse(&with_lease("lease = \"2m 59s\"")).unwrap_err();
+        assert_eq!(
+            error,
+            PolicyError::LeaseTooShort(Duration::from_secs(2 * 60 + 59))
+        );
+        assert!(
+            error.to_string().contains("is 2m 59s, shorter than 3m"),
+            "{error}"
+        );
+        assert!(matches!(
+            Policy::parse(&with_lease("lease = \"soon\"")),
+            Err(PolicyError::Parse(_))
+        ));
+        assert!(matches!(
+            Policy::parse(&with_lease("lease = \"3m\"\nrenew = \"1m\"")),
+            Err(PolicyError::Parse(_))
+        ));
     }
 }

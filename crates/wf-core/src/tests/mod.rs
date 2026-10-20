@@ -1,4 +1,5 @@
 mod activity;
+mod claims;
 mod comments;
 mod convergence;
 mod devices;

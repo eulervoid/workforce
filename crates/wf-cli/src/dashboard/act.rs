@@ -9,7 +9,7 @@ use wf_core::event::{CommentKind, Commented, EventBody, ItemEdited, ItemMoved, R
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::name::AgentName;
-use wf_core::session::{CommitId, Verdict};
+use wf_core::session::{CommitId, SessionRole, Verdict};
 use wf_core::state::State;
 use wf_harness::Permission;
 
@@ -143,7 +143,7 @@ pub fn carry_out(
 /// refused right away, before a starter is picked for nothing.
 fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
-    state.ensure_unclaimed(item)?;
+    state.ensure_unclaimed(item, &SessionRole::Work)?;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let draft = matches!(
         state.item(item),

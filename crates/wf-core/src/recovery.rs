@@ -139,9 +139,7 @@ impl State {
                     return false;
                 };
                 let capable = requires.iter().all(|need| offered.contains(need));
-                let held = self.live_sessions().any(|session| {
-                    session.item() == item.id() && session.role() == SessionRole::Diagnose
-                });
+                let held = self.holder(item.id(), &SessionRole::Diagnose).is_some();
                 capable && !held
             })
             .collect();

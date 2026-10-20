@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::CommentKind;
 use crate::graph::DependencyGraph;
-use crate::id::{HashId, ItemId, SessionId};
+use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::Policy;
@@ -46,6 +46,11 @@ pub enum Interruption {
     /// The machine cannot carry the session. Nothing is commented: the inbox says once what is
     /// wrong with the machine, for all the sessions it ends.
     MachineFault(MachineFault),
+    /// Its device was gone for longer than the lease, and a daemon of its principal takes over
+    /// what it claimed.
+    LeaseExpired,
+    /// An earlier claim on the same thing arrived.
+    Outclaimed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,15 +112,6 @@ pub enum AfterEnd {
     },
 }
 
-/// A work session cannot start on an item that a live session holds.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("#{} already has a live session, {holder}; stop it first", .item.short())]
-pub struct ItemClaimed {
-    pub item: ItemId,
-    /// The session that holds the item, as [`State::actor_label`] names it.
-    pub holder: String,
-}
-
 /// What a session that continues after the daemon restarted is told first.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Resume {
@@ -175,7 +171,8 @@ pub enum TurnOutcome {
 
 impl State {
     /// What is written when `session` ends. `head` is the head of the session's branch when the
-    /// branch has commits of its own; a work session records it, whatever the reason it ends for.
+    /// branch has commits of its own; a work session records it, whatever the reason it ends for,
+    /// except a takeover: another device writes `LeaseExpired` and cannot know the branch.
     /// `None` for a session that does not exist or a device that is not bound.
     pub fn closing(
         &self,
@@ -184,9 +181,12 @@ impl State {
         head: Option<CommitId>,
     ) -> Option<Closing> {
         let session = self.session(session)?;
-        let head = match session.role() {
-            SessionRole::Work => head,
-            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
+        let head = match (session.role(), end) {
+            (_, SessionEnd::Interruption(Interruption::LeaseExpired)) => None,
+            (SessionRole::Work, _) => head,
+            (SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose, _) => {
+                None
+            }
         };
         let closing = |reason, actor, note| Closing {
             reason,
@@ -217,6 +217,8 @@ impl State {
                     }
                     Interruption::TimedOut => closing(EndReason::TimedOut, by_daemon, None),
                     Interruption::Interrupted => closing(EndReason::Interrupted, by_daemon, None),
+                    Interruption::LeaseExpired => closing(EndReason::LeaseExpired, by_daemon, None),
+                    Interruption::Outclaimed => closing(EndReason::Outclaimed, by_daemon, None),
                     Interruption::MachineFault(fault) => {
                         closing(EndReason::MachineFault(*fault), by_daemon, None)
                     }
@@ -355,9 +357,11 @@ impl State {
             | EndReason::Failed
             | EndReason::Cancelled
             | EndReason::Interrupted
-            | EndReason::MachineFault(_) => {
+            | EndReason::MachineFault(_)
+            | EndReason::LeaseExpired
+            | EndReason::Outclaimed => {
                 let held_by_another = self
-                    .claim(item)
+                    .holder(item, &SessionRole::Work)
                     .is_some_and(|holder| holder.id() != session.id());
                 // Only an item that is being worked on goes back: one that was moved on, to done
                 // or to review, stays where it is.
@@ -435,17 +439,6 @@ impl State {
             Some(ItemEntry::Archived(_)) | None => false,
         };
         blocked_by_comment || !self.unfinished_dependencies(graph, item).is_empty()
-    }
-
-    /// Refuses a work session on `item` while a live one holds it.
-    pub fn ensure_unclaimed(&self, item: ItemId) -> Result<(), ItemClaimed> {
-        match self.claim(item) {
-            Some(holder) => Err(ItemClaimed {
-                item,
-                holder: self.actor_label(&holder.actor()),
-            }),
-            None => Ok(()),
-        }
     }
 
     /// What `session` is told first after a restart of the daemon, which last prompted it at

@@ -235,7 +235,9 @@ pub fn event_view(
                 | EndReason::Cancelled
                 | EndReason::Interrupted
                 | EndReason::Diagnosed
-                | EndReason::MachineFault(_) => None,
+                | EndReason::MachineFault(_)
+                | EndReason::LeaseExpired
+                | EndReason::Outclaimed => None,
             },
             because: because(ended.because),
         }),

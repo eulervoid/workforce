@@ -309,6 +309,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 26 | `Commented` | as tag 16, plus `lines: LineAnchor`, the lines of the diff it is about (section 11); a comment without lines is written under tag 16 |
 | 30 | `Commented` | as tag 16, 26 or 27 (by lines and kind), plus `head: CommitId`, where the branch of the work session that comments was (section 10); a comment without a head keeps its older tag |
 | 31 | `SessionEnded` | as tag 21 or 25, plus `head: CommitId`, where the branch of the work session was when it ended (section 10), for an end other than a submission; a submission is written under tag 21 or 25 with its commit in `Submitted{commit}`, read as the end's head, so ends written before heads keep their bytes, and an end without a head keeps its older tag |
+| 32 | `SessionEnded` | as tag 31, with `head` optional, for the ends that lost their claim (`LeaseExpired`, `Outclaimed`), so peers that predate them carry the event as unknown instead of failing to decode it |
 | 28 | `BoundPolicySet` | `Signed<BoundPolicySet>`: `policy`, and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
 
 * `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.
@@ -322,8 +323,8 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused. *Planned (M3):* `MergeClaimed{item, commit}`, the end reasons `LeaseExpired` and `Outclaimed`,
-  `TargetMoved{commit, onto}`; `onto: CommitId` on `Merged` (section 10).
+* Tags are never reused. *Planned (M3):* `MergeClaimed{item, commit}`, `TargetMoved{commit, onto}`;
+  `onto: CommitId` on `Merged` (section 10).
 
 ### Store
 
@@ -639,20 +640,21 @@ machine fault) is the daemon's and acts at once.
 
 **Claims.** A session claims what it alone may work on: a work session the item's work, a review
 session its step of the submitted commit, a supervise session the item's open blockers, a diagnose
-session the item's diagnosis. Its `SessionStarted` is the claim; no other event is written for it.
-Of two live claims on the same thing, the earliest by `(hlc, EventId)` holds it. Starts take a
-per-item lock and refuse what a live session already claims. A session is live until its
-`SessionEnded`, so liveness is read from the log alone, the same on every device.
+session the item's diagnosis (`wf-core::claims`). Its `SessionStarted` is the claim; no other
+event is written for it. Of two live claims on the same thing, the earliest by `(hlc, EventId)`
+holds it. Starts take a per-item lock and refuse what a live session already claims. A session is
+live until its `SessionEnded`, so liveness is read from the log alone, the same on every device.
 
 **Planned (M3): leases.** Across devices nothing coordinates a start. Two devices that claim one
 thing before they sync find the earlier claim once they do, and the later session ends itself
 `Outclaimed`. A session that dies on a running device is ended by that device's daemon, as on one
 machine, so the only death others must notice is the device's, which gossip already announces
 (section 14). The lease of a claim is therefore the presence of its session's device: a device not
-heard from for the policy's `[claims] lease` (default 3 minutes, measured by the receiver's clock
-from the last announcement it accepted, so two lost announcements do not expire it) counts as gone,
-once the receiver's daemon has itself run that long, so a daemon that just started does not count
-every device as gone. Nothing is written per renewal.
+heard from for the policy's `[claims] lease` (default and least 3 minutes, measured by the
+receiver's clock from the last announcement it accepted, so two lost announcements do not expire it)
+counts as gone, once the receiver's daemon has itself run that long, so a daemon that just started
+does not count every device as gone. Nothing is written per renewal; `State::claimable` takes the
+presence of devices and the time as parameters.
 
 A device that would claim what a gone device's session claims first ends that session
 `LeaseExpired`, then writes its own `SessionStarted`, under the same lock. The end is the takeover,
@@ -1490,6 +1492,7 @@ fold, so it does not depend on arrival order.
 | `[[recovery]]` | `name`, `steps`: `"retry"`, `{ agent = { requires = [...] } }` or `"principal"` (section 9) |
 | `[merge]` | `mode = "local"`, `target` (default `main`) |
 | `[[merge.check]]` | `name` (unique), `run` (argv, no shell, not empty), `timeout` (default 30m) |
+| `[claims]` | `lease` (default and least `3m`): how long a device may be silent before its claims can be taken over (section 9) |
 
 Validation: the built-in types must be present; level and check names are unique, and `default` is
 reserved; types name existing types and levels; the state rules of section 8. A policy that does not
@@ -1500,7 +1503,7 @@ already do, with no secrets: at submission in the agents' sandbox, at the merge 
 machine's config gives checks, so each machine's principal decides what they may do. Being in the policy puts them out of reach of the work
 they check.
 
-*Planned:* `[compaction] after` (M6), `[claims] lease` (M3, section 9),
+*Planned:* `[compaction] after` (M6),
 `[merge] requires` and `after_device` (M3, section 10),
 `[transcripts] publish` (M7), `[governance]` (advisory, M7), `wf policy diff`. *Open:* whether
 `default_agent`, a convenience of one principal, belongs in the machine config instead.

@@ -12,6 +12,7 @@ use wf_core::id::{HashId, ItemId};
 use wf_core::item::{Item, ItemEntry, ItemState, Merge, Priority};
 use wf_core::policy::Field;
 use wf_core::search::{Query, SearchScope, search as search_state};
+use wf_core::session::SessionRole;
 use wf_core::state::State;
 use wf_core::validate::OneOf;
 
@@ -75,7 +76,9 @@ pub(crate) enum Scope {
 impl Scope {
     fn includes(self, state: &State, view: &ItemEntry<'_>) -> bool {
         match (self, view) {
-            (Scope::Unclaimed, ItemEntry::Live(item)) => state.claim(item.id()).is_none(),
+            (Scope::Unclaimed, ItemEntry::Live(item)) => {
+                state.holder(item.id(), &SessionRole::Work).is_none()
+            }
             (Scope::Any, _)
             | (Scope::Live, ItemEntry::Live(_))
             | (Scope::Archived, ItemEntry::Archived(_)) => true,

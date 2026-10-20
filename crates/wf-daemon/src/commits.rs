@@ -923,7 +923,10 @@ mod tests {
             "the import of the session here moves it"
         );
 
-        scene.end(here, EndReason::Released).await;
+        let founder = scene.fixture.founder_actor();
+        scene
+            .write(0, founder, end_session(here, EndReason::Outclaimed))
+            .await;
         scene.reconcile().await;
         assert_eq!(scene.bare().branch_head(&item_branch(item)).unwrap(), head);
     }
