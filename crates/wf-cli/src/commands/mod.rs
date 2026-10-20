@@ -118,6 +118,8 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             ..
         } => crate::fork::accept(json, data, cwd, &id, relay.as_deref()),
         Command::Daemon(command) => crate::daemon::daemon(json, command, data),
+        // `main` runs it before anything else.
+        Command::GitBridge => Ok(wf_daemon::run_git_bridge()?),
         Command::Import { file } => crate::export::import(json, &file, &data),
         Command::Permissions(command) => crate::permissions::permissions(json, command, cwd),
         Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
@@ -129,8 +131,10 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 &workspace.held_permissions()?,
                 &machine_faults,
             );
+            let awaited = workspace.awaited_commits()?;
             let context = view::StatusContext {
                 machine_faults: &machine_faults,
+                awaited: &awaited,
                 own: Some(workspace.device_key()),
                 last_seen: &workspace.last_seen()?,
                 daemon: workspace.follows_daemon(),

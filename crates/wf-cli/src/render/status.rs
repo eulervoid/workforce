@@ -42,6 +42,9 @@ pub fn status(view: &StatusView) -> String {
     for line in &view.after_failures {
         let _ = writeln!(out, "waits for you: {line}");
     }
+    for line in &view.awaiting_commits {
+        let _ = writeln!(out, "waiting: {line}");
+    }
     for flag in &view.flagged {
         let _ = writeln!(out, "! {flag}");
     }
@@ -124,6 +127,7 @@ mod tests {
             next: None,
             refolded: false,
             caches: None,
+            awaiting_commits: Vec::new(),
         };
         let output = status(&view);
         let lines: Vec<&str> = output.lines().collect();

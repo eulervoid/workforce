@@ -5,6 +5,8 @@ use std::fmt;
 use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::autonomy::StartMode;
+use wf_core::brief::speaker;
+use wf_core::commits::{AwaitedCommit, Fetching, Naming};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{HashId, ItemId};
 use wf_core::identity::Actor;
@@ -46,6 +48,8 @@ pub struct StatusView {
     pub refolded: bool,
     /// What the caches in the worktrees take, when the machine config sets a budget.
     pub caches: Option<CacheUsage>,
+    /// What this device waits for before a session, a review or a merge can start, one line each.
+    pub awaiting_commits: Vec<String>,
 }
 
 /// Something wrong with the workforce that needs the principal. `wf status` prints it as one line,
@@ -272,6 +276,46 @@ pub struct StatusContext<'a> {
     pub caches: Option<CacheUsage>,
     /// What is wrong with the machine, as far as the daemon says.
     pub machine_faults: &'a MachineFaults,
+    /// The commits the log names that this device has not got yet.
+    pub awaited: &'a [AwaitedCommit],
+}
+
+/// What the commits wait for, as `wf status` and the dashboard say it: the item, the commit, what
+/// the log names it for and the device it is to come from, or since when no device had it.
+pub fn awaiting_lines(state: &State, awaited: &[AwaitedCommit]) -> Vec<String> {
+    awaited
+        .iter()
+        .map(|AwaitedCommit { named, fetching }| {
+            let title = match state.item(named.item) {
+                Some(ItemEntry::Live(item)) => item.title().to_string(),
+                Some(ItemEntry::Archived(_)) | None => "(archived)".to_string(),
+            };
+            let what = match named.naming {
+                Naming::Head { session } => match state.session(session) {
+                    Some(session) => {
+                        format!("the work of {}", speaker(state, &session.actor()))
+                    }
+                    None => "the work of a session".to_string(),
+                },
+                Naming::Submitted => "the commit under review".to_string(),
+            };
+            let (item, commit, device) = (
+                named.item.short(),
+                named.commit.short(),
+                device_label(state, named.author),
+            );
+            match fetching {
+                Fetching::Underway => format!(
+                    "#{item} \"{title}\": waiting for commit {commit} ({what}) from {device}"
+                ),
+                Fetching::Unavailable { since_ms } => format!(
+                    "#{item} \"{title}\": commit {commit} ({what}) is unavailable: {device} named \
+                     it, and no device has had it since {}",
+                    super::timestamp_ms(*since_ms)
+                ),
+            }
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -291,6 +335,7 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
         refolded,
         caches,
         machine_faults,
+        awaited,
     } = context;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut flagged = Vec::new();
@@ -499,6 +544,7 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
         next,
         refolded,
         caches,
+        awaiting_commits: awaiting_lines(state, awaited),
     }
 }
 
@@ -551,6 +597,7 @@ mod tests {
             &state.dependency_graph(),
             StatusContext {
                 machine_faults,
+                awaited: &[],
                 own: Some(fixture.devices[0].key()),
                 last_seen: &BTreeMap::new(),
                 daemon: true,
@@ -682,5 +729,58 @@ mod tests {
                 "some agents that could take ready items have an unknown harness: `wf agent edit <name> --harness …`"
             )
         );
+    }
+
+    #[test]
+    fn what_waits_for_a_commit_says_which_item_commit_and_device() {
+        let fixture = Fixture::new(2);
+        let mut state = fixture.state();
+        fixture.apply(&mut state, 0, 2_000, define_agent("coder"));
+        let item: wf_core::id::ItemId = fixture
+            .apply(&mut state, 0, 2_001, create("task", "Parse it"))
+            .id()
+            .into();
+        let started = fixture.apply(&mut state, 1, 2_002, start_session("coder", item));
+        let head = wf_core::session::CommitId::Git(
+            "0123456789abcdef0123456789abcdef01234567".parse().unwrap(),
+        );
+        fixture.apply(
+            &mut state,
+            1,
+            2_003,
+            end_session_at(
+                started.id().into(),
+                wf_core::session::EndReason::Released,
+                head,
+            ),
+        );
+        let named = state.named_commits();
+        assert_eq!(named.len(), 1, "{named:?}");
+        let awaited = |fetching| AwaitedCommit {
+            named: named[0],
+            fetching,
+        };
+        let device = device_label(&state, fixture.devices[1].key());
+        let lines = awaiting_lines(&state, &[awaited(Fetching::Underway)]);
+        let line = &lines[0];
+        assert!(
+            line.contains("\"Parse it\": waiting for commit 0123456"),
+            "{line}"
+        );
+        assert!(line.contains("(the work of"), "{line}");
+        assert!(line.contains(&device), "{line}");
+
+        let lines = awaiting_lines(
+            &state,
+            &[awaited(Fetching::Unavailable {
+                since_ms: 1_700_000_000_000,
+            })],
+        );
+        let line = &lines[0];
+        assert!(line.contains("commit 0123456"), "{line}");
+        assert!(line.contains("is unavailable"), "{line}");
+        assert!(line.contains(&format!("{device} named it")), "{line}");
+        assert!(line.contains("since 2023-11-14"), "{line}");
+        assert!(!line.contains("waiting"), "{line}");
     }
 }

@@ -37,6 +37,7 @@ fn briefs() -> Vec<String> {
         }],
         change_requests: open("c4d2e1"),
         earlier: earlier(),
+        diverged: vec![],
     };
     let review = |commit: Option<&str>| ReviewBrief {
         agent: "reviewer".into(),

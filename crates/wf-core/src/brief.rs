@@ -23,6 +23,11 @@ pub trait Sources {
     fn branch(&self, item: ItemId) -> String;
     /// What `commit` changes against `target`.
     fn diff(&self, target: &str, commit: CommitId) -> String;
+    /// The ref this device keeps the head of `session` under, when its work was set apart from
+    /// the branch of its item because that session lost the claim.
+    fn diverged(&self, _session: SessionId) -> Option<String> {
+        None
+    }
 }
 
 /// The brief of a session, by its role.
@@ -64,6 +69,7 @@ impl Brief {
                 dependencies: dependencies(state, item, sources),
                 change_requests: open_change_requests(state, item, sources),
                 earlier: earlier(state, item, sources),
+                diverged: diverged(state, item, sources),
             }),
             SessionRole::Review { commit, step } => Brief::Review(ReviewBrief {
                 agent: agent.name.to_string(),
@@ -285,6 +291,38 @@ fn open_change_requests(state: &State, item: &Item, sources: &impl Sources) -> V
         .collect()
 }
 
+/// The work of the other sessions on the item that this device keeps apart from its branch.
+fn diverged(state: &State, item: &Item, sources: &impl Sources) -> Vec<Diverged> {
+    // What the branch holds is not set apart from it, whatever a ref left over says.
+    let branch = state
+        .item_heads()
+        .into_iter()
+        .find(|heads| heads.item == item.id())
+        .and_then(|heads| heads.holder);
+    state
+        .sessions_of(item.id())
+        .filter(|session| session.role() == SessionRole::Work)
+        .filter(|session| {
+            branch.is_none_or(|holder| {
+                session.id() != holder.session && session.head() != Some(holder.commit)
+            })
+        })
+        .filter_map(|session| {
+            Some(Diverged {
+                reference: sources.diverged(session.id())?,
+                commit: session.head()?.to_string(),
+                by: speaker(
+                    state,
+                    &Actor::Agent {
+                        agent: session.agent().clone(),
+                        session: session.id(),
+                    },
+                ),
+            })
+        })
+        .collect()
+}
+
 /// The latest plain comment on an item: the answer, for a question.
 pub fn last_comment(item: &Item, sources: &impl Sources) -> Option<String> {
     item.comments()
@@ -387,6 +425,17 @@ pub struct WorkBrief {
     /// The change requests the work has to resolve before it is submitted.
     pub change_requests: Vec<OpenComment>,
     pub earlier: Vec<Earlier>,
+    /// Work of sessions that lost the claim, which is not in the branch.
+    pub diverged: Vec<Diverged>,
+}
+
+/// The head of a work session that lost the claim on its item, kept apart from the branch.
+pub struct Diverged {
+    /// The ref that keeps it.
+    pub reference: String,
+    pub commit: String,
+    /// Who did the work, as [`speaker`] names them.
+    pub by: String,
 }
 
 impl WorkBrief {
@@ -419,6 +468,22 @@ impl WorkBrief {
         if !self.change_requests.is_empty() {
             text.push_str("## Open change requests\n\nResolve every one before you submit.\n\n");
             open_comments(&mut text, &self.change_requests);
+        }
+        if !self.diverged.is_empty() {
+            text.push_str(
+                "## Work set apart\n\n\
+                 Sessions that lost the claim on this item left commits that are not in your \
+                 branch. Look at them (`git log`, `git diff`) and take what is useful, for example \
+                 with `git cherry-pick`.\n\n",
+            );
+            for work in &self.diverged {
+                let _ = writeln!(
+                    text,
+                    "- {} by {}: `{}`",
+                    work.commit, work.by, work.reference
+                );
+            }
+            text.push('\n');
         }
         history(&mut text, &self.earlier);
         let _ = writeln!(
@@ -900,6 +965,7 @@ mod tests {
             }],
             change_requests: vec![],
             earlier: earlier(),
+            diverged: vec![],
         };
         let text = brief.render();
         assert!(
@@ -943,6 +1009,7 @@ mod tests {
                 text: "Exit with 2 on a missing file".into(),
             }],
             earlier: vec![],
+            diverged: vec![],
         };
         let text = brief.render();
         assert!(text.contains("## Open change requests\n"), "{text}");
@@ -1031,6 +1098,7 @@ mod tests {
             dependencies: vec![],
             change_requests: vec![],
             earlier: vec![],
+            diverged: vec![],
         };
         let review = ReviewBrief {
             agent: "reviewer".into(),
@@ -1086,6 +1154,7 @@ mod tests {
             dependencies: vec![],
             change_requests: vec![],
             earlier: vec![],
+            diverged: vec![],
         };
         let text = brief.render();
         for heading in [

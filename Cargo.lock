@@ -6030,6 +6030,7 @@ dependencies = [
  "humantime",
  "humantime-serde",
  "jiff",
+ "libc",
  "n0-future",
  "nix 0.31.3",
  "rand 0.10.3",
@@ -6098,6 +6099,7 @@ name = "wf-vcs"
 version = "0.0.0"
 dependencies = [
  "close_fds",
+ "libc",
  "ssh-key",
  "tempfile",
  "thiserror 2.0.21",

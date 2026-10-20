@@ -546,6 +546,7 @@ impl Feed {
             events: self.events.len(),
             held: workspace.held_permissions()?,
             machine_faults: workspace.machine_faults()?,
+            awaited: workspace.awaited_commits()?,
             last_seen: workspace.last_seen()?,
             wanted: app.wanted(),
             detail_width: app.detail_width(),
@@ -568,6 +569,7 @@ impl Feed {
             &sources,
             &taken.held,
             &taken.machine_faults,
+            &taken.awaited,
             &taken.last_seen,
             taken.wanted.clone(),
         );
@@ -609,6 +611,7 @@ struct Taken {
     events: usize,
     held: Vec<HeldPermission>,
     machine_faults: wf_daemon::MachineFaults,
+    awaited: Vec<wf_core::commits::AwaitedCommit>,
     last_seen: crate::devices::LastSeen,
     wanted: Wanted,
     detail_width: u16,

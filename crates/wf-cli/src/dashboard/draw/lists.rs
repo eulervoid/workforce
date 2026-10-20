@@ -548,6 +548,13 @@ pub(super) fn now_lines(app: &App, width: u16) -> ListText {
         }
         list.push(Line::default());
     }
+    if !snapshot.awaiting_commits.is_empty() {
+        list.push(section("WAITING FOR COMMITS"));
+        for line in &snapshot.awaiting_commits {
+            list.push(Line::from(format!(" {line}")).themed(theme::text_dimmed()));
+        }
+        list.push(Line::default());
+    }
     if !snapshot.flagged.is_empty() {
         list.push(section("NEEDS ATTENTION"));
         for flag in &snapshot.flagged {

@@ -12,7 +12,7 @@ use crate::inbox::Stale;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::name::{Requirement, ReviewStepName};
 use crate::policy::ReviewStep;
-use crate::session::{CommitId, Outcome, SessionRole, Verdict};
+use crate::session::{CommitId, Outcome, Session, SessionRole, Verdict};
 use crate::state::State;
 
 /// Work the daemon merges into the target, then moves its item to `done`.
@@ -67,12 +67,18 @@ impl State {
     /// What the latest submitted work session of the item handed in, and when it ended: its
     /// commit, or `None` when the branch had no commits, as for a finding that nothing has to change.
     pub fn submission(&self, item: ItemId) -> Option<(Option<CommitId>, Stamp)> {
+        let (session, stamp) = self.submitting_session(item)?;
+        Some((session.head(), stamp))
+    }
+
+    /// The latest work session of the item that submitted, and when it ended.
+    pub(crate) fn submitting_session(&self, item: ItemId) -> Option<(&Session, Stamp)> {
         self.sessions_of(item)
             .filter(|session| session.role() == SessionRole::Work)
             .filter_map(|session| {
                 let ended = session.ended()?;
                 match ended.reason.outcome() {
-                    Outcome::Submitted => Some((session.head(), ended.stamp)),
+                    Outcome::Submitted => Some((session, ended.stamp)),
                     Outcome::Finished | Outcome::Failed | Outcome::Neither => None,
                 }
             })

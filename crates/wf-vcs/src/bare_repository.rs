@@ -122,7 +122,9 @@ impl GitCli {
     }
 
     /// Makes the bare repository at `bare` the remote `wf` of this checkout and the upstream of
-    /// `target`, and fetches it, so that `git pull` and `git push` on `target` go to it.
+    /// `target`, and fetches it, so that `git pull` and `git push` on `target` go to it. A push
+    /// to it without refspecs pushes the target alone: everything in the bare repository is
+    /// shared with the workforce, so no other branch of the principal is to go there by accident.
     fn add_remote(&self, bare: &Path, target: &str) -> Result<(), VcsError> {
         let url = bare.to_string_lossy();
         let known = self.run(&self.repository, &[], ["remote", "get-url", REMOTE])?;
@@ -134,9 +136,12 @@ impl GitCli {
         let remote_key = format!("branch.{target}.remote");
         let merge_key = format!("branch.{target}.merge");
         let merge = format!("refs/heads/{target}");
+        let push_key = format!("remote.{REMOTE}.push");
+        let push = format!("{merge}:{merge}");
         for (key, value) in [
             (remote_key.as_str(), REMOTE),
             (merge_key.as_str(), merge.as_str()),
+            (push_key.as_str(), push.as_str()),
         ] {
             self.run(&self.repository, &[], ["config", key, value])?
                 .ok()?;
@@ -235,6 +240,23 @@ mod tests {
             .unwrap();
         git_in(&repo.directory(), &["push", REMOTE, "main"]);
         assert_eq!(bare.branch_head("main").unwrap(), repo.main());
+    }
+
+    #[test]
+    fn a_push_without_refspecs_from_another_branch_pushes_only_the_target() {
+        let (repo, _) = checkout_with_branches();
+        let checkout = repo.directory();
+        let path = repo.root.path().join("wf-git");
+        let bare = GitCli::create_bare_repository(&path, "main", Some(&checkout)).unwrap();
+        repo.write(&checkout, "main.txt", "shared\n");
+        let shared = repo.commit(&checkout, "shared");
+        // From the worktree of the private branch, which shares the checkout's config.
+        let private = repo.worktree_path("private");
+        repo.write(&private, "private.txt", "mine\n");
+        repo.commit(&private, "private");
+        git_in(&private, &["push", "--quiet", REMOTE]);
+        assert_eq!(bare.branch_head("main").unwrap(), shared);
+        assert!(!branches(&path).contains(&"private".to_string()));
     }
 
     #[test]

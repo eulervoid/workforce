@@ -13,7 +13,7 @@ use wf_core::name::AgentName;
 use wf_core::session::{MachineFault, SessionRole};
 use wf_core::state::{AgentDefinition, State};
 use wf_harness::{AcpAgentConfig, Permission, PermissionRequest, Permissions};
-use wf_vcs::{GitCli, VcsError, item_branch, item_repository, session_directory};
+use wf_vcs::{GitCli, item_branch, session_directory};
 
 use super::drive::run_session;
 use super::{Begin, Run, SessionError, blocking};
@@ -172,26 +172,24 @@ impl Daemon {
         }
         self.ensure_bare_repository(workforce, &loaded.storage)
             .await;
-        let repository = self.bare_repository(workforce);
-        let git = match role {
+        // What the log names as the start of the work, or as the work to review, has to be here.
+        let head = state.work_head(item);
+        match &role {
             SessionRole::Work => {
-                let path = item_repository(&self.workforce_directory(workforce), item);
-                let (branch, target) = (item_branch(item), setup.target.clone());
-                blocking(move || {
-                    let git = GitCli::open(&repository)?;
-                    let commit = git.starting_commit(item, &target)?;
-                    git.create_agent_repository(&path, &branch, commit)?;
-                    git.ensure_item_branch(item, commit)?;
-                    Ok::<_, VcsError>(git)
-                })
-                .await??
+                if let Some(head) = head {
+                    self.require_commit(workforce, head).await?;
+                }
             }
-            // The directory of the others is named after the session, which is known once it is
-            // written.
-            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => {
-                blocking(move || GitCli::open(&repository)).await??
-            }
-        };
+            SessionRole::Review {
+                commit: Some(commit),
+                ..
+            } => self.require_commit(workforce, *commit).await?,
+            SessionRole::Review { commit: None, .. }
+            | SessionRole::Supervise
+            | SessionRole::Diagnose => {}
+        }
+        let repository = self.bare_repository(workforce);
+        let git = blocking(move || GitCli::open(&repository)).await??;
 
         let started = self
             .author(
@@ -210,7 +208,21 @@ impl Daemon {
         let directory = self.session_directory(workforce, item, session, &role);
         let prepared = async {
             match &role {
-                SessionRole::Work => {}
+                // The branch is the claim's to move, so only once the claim is written.
+                SessionRole::Work => {
+                    let path = directory.clone();
+                    let (branch, target, git) =
+                        (item_branch(item), setup.target.clone(), git.clone());
+                    blocking(move || {
+                        if let Some(head) = head {
+                            git.bring_item_branch_to(item, head)?;
+                        }
+                        let commit = git.starting_commit(item, &target)?;
+                        git.create_agent_repository(&path, &branch, commit)?;
+                        git.ensure_item_branch(item, commit)
+                    })
+                    .await??;
+                }
                 SessionRole::Review {
                     commit: Some(commit),
                     ..

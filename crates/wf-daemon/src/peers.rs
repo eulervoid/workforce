@@ -136,13 +136,13 @@ where
 
 /// When to try an unreachable device again: later and later, up to a few minutes.
 #[derive(Default)]
-struct Backoff {
+pub(crate) struct Backoff {
     failures: u32,
     retry_at: Option<Instant>,
 }
 
 impl Backoff {
-    fn record(&mut self, reached: bool, now: Instant) {
+    pub(crate) fn record(&mut self, reached: bool, now: Instant) {
         if reached {
             *self = Self::default();
             return;
@@ -154,11 +154,21 @@ impl Backoff {
         self.retry_at = Some(now + delay);
     }
 
+    /// Leaves it alone for the longest time there is: for what failed everywhere.
+    pub(crate) fn wait_longest(&mut self, now: Instant) {
+        self.retry_at = Some(now + LONGEST_RETRY);
+    }
+
     /// How long to wait before the next attempt: until the retry time of a device that failed,
     /// and a periodic round otherwise.
-    fn wait(&self, now: Instant) -> Duration {
+    pub(crate) fn wait(&self, now: Instant) -> Duration {
         self.retry_at
             .map_or(PERIODIC_ROUND, |at| at.saturating_duration_since(now))
+    }
+
+    /// Whether it is time to try again.
+    pub(crate) fn is_due(&self, now: Instant) -> bool {
+        self.retry_at.is_none_or(|at| at <= now)
     }
 }
 

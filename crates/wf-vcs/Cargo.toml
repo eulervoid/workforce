@@ -10,6 +10,7 @@ workspace = true
 [dependencies]
 wf-core.workspace = true
 close_fds.workspace = true
+libc = "0.2"
 ssh-key.workspace = true
 thiserror.workspace = true
 tempfile.workspace = true

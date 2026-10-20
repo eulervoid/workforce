@@ -2,6 +2,7 @@
 //! transport that carries it.
 
 pub mod frame;
+mod git;
 mod gossip;
 mod join;
 mod log;
@@ -9,6 +10,10 @@ mod node;
 mod query;
 mod sync;
 
+pub use git::{
+    GIT_ALPN, GitError, GitProcess, GitRequest, GitSource, initiate as git_initiate,
+    read_git_request, respond as git_respond,
+};
 pub use gossip::{GOSSIP_ALPN, HeadsTopic, Heard, heads_digest, topic_id};
 pub use join::JOIN_ALPN;
 pub use log::{LogError, SyncLog};

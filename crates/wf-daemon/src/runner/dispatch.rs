@@ -13,6 +13,9 @@ use wf_core::review::PendingMerge;
 use wf_core::session::SessionRole;
 use wf_core::state::State;
 
+use wf_vcs::GitCli;
+
+use super::SessionError;
 use super::merge::{Attempt, MergeRequest};
 use super::offered::CheckedReviews;
 use crate::notify::Notifier;
@@ -74,6 +77,7 @@ async fn dispatch_loop(
                     return;
                 }
             }
+            () = loaded.commits.arrived.notified() => {}
             () = halted => return,
             () = tokio::time::sleep(DISPATCH_TICK) => {}
         }
@@ -110,7 +114,28 @@ async fn dispatch_once(
     else {
         return;
     };
-    for PendingMerge { item, commit } in pending {
+    // A merge starts once the commit it merges is here.
+    let commits: Vec<_> = pending.iter().map(|pending| pending.commit).collect();
+    let missing = match tokio::task::spawn_blocking({
+        let repository = repository.clone();
+        move || GitCli::open(&repository)?.missing_commits(&commits)
+    })
+    .await
+    {
+        Ok(Ok(missing)) => missing,
+        Ok(Err(error)) => {
+            tracing::warn!(
+                "could not tell which commits to merge are here: {}",
+                wf_core::error_chain(&error)
+            );
+            return;
+        }
+        Err(_) => return,
+    };
+    for PendingMerge { item, commit } in pending
+        .into_iter()
+        .filter(|pending| !missing.contains(&pending.commit))
+    {
         loaded.merges.push(MergeRequest {
             item,
             commit,
@@ -168,12 +193,15 @@ async fn dispatch_once(
         .filter(|(_, harness)| !daemon.faults.holds(harness, now_ms))
         .map(|(agent, _)| agent)
         .collect();
+    // Items that wait for a commit to arrive; the next pass looks again.
+    let mut waiting = BTreeSet::new();
     for agent in agents {
         loop {
             let skipped: BTreeSet<ItemId> = failed
                 .keys()
                 .filter(|(_, name)| *name == agent.name)
                 .map(|(item, _)| *item)
+                .chain(waiting.iter().copied())
                 .collect();
             let candidate_of = agent.clone();
             let Ok(candidate) = daemon
@@ -190,7 +218,14 @@ async fn dispatch_once(
             let started = daemon
                 .start_session(workforce, loaded, agent.name.clone(), item, role)
                 .await;
-            if let Err(error) = started {
+            if let Err(SessionError::AwaitingCommit(commit)) = &started {
+                tracing::info!(
+                    "#{} waits for commit {} to arrive",
+                    item.short(),
+                    commit.short()
+                );
+                waiting.insert(item);
+            } else if let Err(error) = started {
                 daemon.faults.note_space(
                     &format!("the start of {} on #{}", agent.name, item.short()),
                     &error,

@@ -133,15 +133,98 @@ where
     I: IntoIterator<Item = S>,
     S: AsRef<OsStr>,
 {
+    spawn_inheriting(directory, environment, args, None)
+}
+
+/// The descriptor number a command run by git finds the bridge on: the one descriptor, beside
+/// stdin, stdout and stderr, that git is run with.
+pub const BRIDGE_DESCRIPTOR: std::os::fd::RawFd = 3;
+
+/// Like [`spawn`], with `inherit` as descriptor [`BRIDGE_DESCRIPTOR`] of git and so of what git
+/// runs. Nothing else can reach it, as no path leads to it. This process closes its copy once git
+/// is started.
+pub(crate) fn spawn_inheriting<I, S>(
+    directory: &Path,
+    environment: &[(&str, &str)],
+    args: I,
+    inherit: Option<std::os::fd::OwnedFd>,
+) -> Result<Finished, VcsError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    use std::os::fd::AsRawFd;
+    use std::process::Stdio;
     let args: Vec<S> = args.into_iter().collect();
-    let output = git()
+    let mut command = git();
+    command
         .args(&args)
         .envs(environment.iter().copied())
         .current_dir(directory)
         .env("LC_ALL", "C")
         .env("GIT_TERMINAL_PROMPT", "0")
-        .output()
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    if let Some(descriptor) = &inherit {
+        let source = descriptor.as_raw_fd();
+        // SAFETY: only async-signal-safe functions are called. It runs after the closing of every
+        // descriptor above 2 on exec, so the one it makes is the only one git inherits.
+        unsafe {
+            command.pre_exec(move || {
+                if source == BRIDGE_DESCRIPTOR {
+                    let flags = libc::fcntl(source, libc::F_GETFD);
+                    if flags < 0
+                        || libc::fcntl(source, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
+                    {
+                        return Err(std::io::Error::last_os_error());
+                    }
+                } else if libc::dup2(source, BRIDGE_DESCRIPTOR) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    let child = command.spawn().map_err(VcsError::Spawn)?;
+    drop(inherit);
+    let output = child.wait_with_output().map_err(VcsError::Spawn)?;
+    Ok(Finished {
+        command: describe(&args),
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
+/// Like [`spawn`], with `input` on the standard input of git.
+pub(crate) fn spawn_with_input<I, S>(
+    directory: &Path,
+    args: I,
+    input: String,
+) -> Result<Finished, VcsError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    use std::io::Write;
+    use std::process::Stdio;
+    let args: Vec<S> = args.into_iter().collect();
+    let mut child = git()
+        .args(&args)
+        .current_dir(directory)
+        .env("LC_ALL", "C")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .map_err(VcsError::Spawn)?;
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    // Written beside the reading, so that neither side fills a pipe the other waits on.
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let output = child.wait_with_output().map_err(VcsError::Spawn)?;
+    let _ = writer.join();
     Ok(Finished {
         command: describe(&args),
         success: output.status.success(),
@@ -272,7 +355,7 @@ impl GitCli {
         Ok(configured.success && configured.stdout.trim() == "true")
     }
 
-    fn oid(&self, command: &str, text: &str) -> Result<CommitId, VcsError> {
+    pub(crate) fn oid(&self, command: &str, text: &str) -> Result<CommitId, VcsError> {
         parse_output(command, text).map(CommitId::Git)
     }
 

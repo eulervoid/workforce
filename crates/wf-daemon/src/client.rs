@@ -267,6 +267,14 @@ impl DaemonClient {
         self.call(workforce, Call::TargetCommit)
     }
 
+    /// The commits the log names that this device has not got yet.
+    pub fn awaited_commits(
+        &mut self,
+        workforce: WorkforceId,
+    ) -> Result<Vec<wf_core::commits::AwaitedCommit>, ClientError> {
+        self.call(workforce, Call::AwaitedCommits)
+    }
+
     /// What is wrong with the machine the daemon runs on.
     pub fn machine_faults(
         &mut self,

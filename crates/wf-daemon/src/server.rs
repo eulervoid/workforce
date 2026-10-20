@@ -111,7 +111,8 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::MachineFaults
         | Call::CacheUsage
         | Call::LiveDiff { .. }
-        | Call::TargetCommit => daemon.workforce(request.workforce).await,
+        | Call::TargetCommit
+        | Call::AwaitedCommits => daemon.workforce(request.workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
@@ -164,6 +165,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         | Call::CacheUsage
         | Call::Permissions
         | Call::TargetCommit
+        | Call::AwaitedCommits
         | Call::EndSession { .. } => Ok(()),
         Call::Fork(_) => principals("found a fork"),
         Call::Join { .. } => principals("join a workforce"),
@@ -346,6 +348,7 @@ async fn call(
         Call::LastSeen => reply(daemon.presence().snapshot()),
         Call::MachineFaults => reply(daemon.faults.current()),
         Call::CacheUsage => reply(daemon.cache_usage_of(workforce)),
+        Call::AwaitedCommits => reply(loaded.commits.awaited()),
         Call::LiveDiff { item, since } => {
             let diff = daemon
                 .live_diff(workforce, item, since)

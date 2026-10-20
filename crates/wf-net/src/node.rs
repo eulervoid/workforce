@@ -15,6 +15,7 @@ use wf_core::identity::{DeviceKey, DeviceSigner};
 use wf_core::invite::{InviteCode, JoinRefusal};
 use wf_core::session::CommitId;
 
+use crate::git::{self, GIT_ALPN, GitError, GitRequest, GitSource, read_git_request};
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::{LogError, SyncLog};
@@ -27,6 +28,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FORBIDDEN: u32 = 403;
 const NOT_SERVED: u32 = 404;
+const BUSY: u32 = 429;
 pub(crate) const FAILED: u32 = 500;
 const DONE: u32 = 0;
 
@@ -54,6 +56,12 @@ pub enum NetError {
         peer: String,
         #[source]
         source: QueryError,
+    },
+    #[error("fetching from {peer} failed: {source}")]
+    Git {
+        peer: String,
+        #[source]
+        source: GitError,
     },
     #[error("gossip failed")]
     Gossip(#[source] SourceError),
@@ -286,6 +294,128 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for QueryHandler<L> {
     }
 }
 
+/// Where the daemon's `git upload-pack` comes from, once it has set one.
+type GitSlot = Arc<RwLock<Option<Arc<dyn GitSource>>>>;
+
+/// How many `git upload-pack` one device is served at once; more are refused, so that one device
+/// cannot hold every process of this one.
+const UPLOADS_PER_PEER: usize = 4;
+
+struct GitHandler<L> {
+    registry: Registry<L>,
+    source: GitSlot,
+    /// How many `git upload-pack` each device is being served.
+    serving: Arc<std::sync::Mutex<BTreeMap<DeviceKey, usize>>>,
+}
+
+/// One `git upload-pack` served to a device, counted until it is dropped.
+struct Serving {
+    serving: Arc<std::sync::Mutex<BTreeMap<DeviceKey, usize>>>,
+    device: DeviceKey,
+}
+
+impl Serving {
+    /// Counts one more for `device`, unless it has [`UPLOADS_PER_PEER`] already.
+    fn start(
+        serving: &Arc<std::sync::Mutex<BTreeMap<DeviceKey, usize>>>,
+        device: DeviceKey,
+    ) -> Option<Self> {
+        let mut counts = serving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count = counts.entry(device).or_default();
+        if *count >= UPLOADS_PER_PEER {
+            return None;
+        }
+        *count += 1;
+        Some(Self {
+            serving: Arc::clone(serving),
+            device,
+        })
+    }
+}
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        let mut counts = self
+            .serving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = counts.get_mut(&self.device) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.device);
+            }
+        }
+    }
+}
+
+impl<L> std::fmt::Debug for GitHandler<L> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("GitHandler")
+    }
+}
+
+impl<L: SyncLog + Clone + 'static> ProtocolHandler for GitHandler<L> {
+    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+        let remote = device_key(connection.remote_id());
+        match self.registry.is_member(remote).await {
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
+        }
+        let (mut send, mut recv) = connection
+            .accept_bi()
+            .await
+            .map_err(AcceptError::from_err)?;
+        let request = read_git_request(&mut recv, IDLE_TIMEOUT)
+            .await
+            .map_err(AcceptError::from_err)?;
+        let source = self
+            .source
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let (Some(log), Some(source)) = (self.registry.get(&request.workforce), source) else {
+            connection.close(NOT_SERVED.into(), b"workforce not served");
+            return Ok(());
+        };
+        match log.is_bound(remote).await {
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
+        }
+        let Some(_serving) = Serving::start(&self.serving, remote) else {
+            connection.close(BUSY.into(), b"too many fetches at once");
+            return Ok(());
+        };
+        let stream = tokio::io::join(&mut recv, &mut send);
+        match git::respond(stream, request, &*source, IDLE_TIMEOUT).await {
+            Ok(()) => {
+                let _ = send.finish();
+                linger(&connection).await;
+                Ok(())
+            }
+            Err(error @ GitError::Process(_)) => {
+                // git refused, and said why on the stream; let that arrive before closing.
+                let _ = send.finish();
+                linger(&connection).await;
+                Err(AcceptError::from_err(error))
+            }
+            Err(error) => {
+                connection.close(FAILED.into(), b"git failed");
+                Err(AcceptError::from_err(error))
+            }
+        }
+    }
+}
+
 /// Lets a protocol handler through only for devices that are bound in a workforce served here.
 struct MembersOnly<H, L> {
     inner: H,
@@ -324,6 +454,7 @@ pub struct Node<L: SyncLog + Clone + 'static> {
     router: Router,
     registry: Registry<L>,
     query_source: QuerySlot,
+    git_source: GitSlot,
     gossip: iroh_gossip::Gossip,
     signer: DeviceSigner,
     lookup: MemoryLookup,
@@ -352,6 +483,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .map_err(|error| NetError::Bind(error.into()))?;
         let registry = Registry::new();
         let query_source = QuerySlot::default();
+        let git_source = GitSlot::default();
         let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
         let router = Router::builder(endpoint)
             .accept(SYNC_ALPN, SyncHandler(registry.clone()))
@@ -360,6 +492,14 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
                 QueryHandler {
                     registry: registry.clone(),
                     source: Arc::clone(&query_source),
+                },
+            )
+            .accept(
+                GIT_ALPN,
+                GitHandler {
+                    registry: registry.clone(),
+                    source: Arc::clone(&git_source),
+                    serving: Arc::default(),
                 },
             )
             .accept(
@@ -381,6 +521,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             router,
             registry,
             query_source,
+            git_source,
             gossip,
             signer: device.clone(),
             lookup,
@@ -449,6 +590,50 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .query_source
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
+    }
+
+    /// Serves `git upload-pack` from `source` to the other devices. Until then they are refused.
+    pub fn serve_git(&self, source: Arc<dyn GitSource>) {
+        *self
+            .git_source
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
+    }
+
+    /// Opens a stream to the repository of `workforce` on a device and pipes it to `local`, the
+    /// side of `git fetch`. Returns when git has finished with it.
+    pub async fn git_connect<Local>(
+        &self,
+        peer: impl Into<EndpointAddr>,
+        workforce: WorkforceId,
+        local: Local,
+    ) -> Result<(), NetError>
+    where
+        Local: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let peer: EndpointAddr = peer.into();
+        let name = device_key(peer.id).fmt_short();
+        let connection = tokio::time::timeout(
+            self.connect_timeout,
+            self.endpoint().connect(peer.clone(), GIT_ALPN),
+        )
+        .await
+        .map_err(|_| connect_error(&name, TimedOut))?
+        .map_err(|error| connect_error(&name, error))?;
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|error| connect_error(&name, error))?;
+        let result = git::initiate(
+            tokio::io::join(&mut recv, &mut send),
+            &GitRequest { workforce },
+            local,
+            IDLE_TIMEOUT,
+        )
+        .await;
+        let _ = send.finish();
+        connection.close(DONE.into(), b"done");
+        result.map_err(|source| NetError::Git { peer: name, source })
     }
 
     /// Asks a device for the diff of an item, which it answers from its worktree.
@@ -580,5 +765,26 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
 
     pub async fn shutdown(self) {
         let _ = self.router.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_is_served_only_so_many_upload_packs_at_once() {
+        let serving = Arc::default();
+        let device = DeviceSigner::from_bytes(&[1; 32]).unwrap().key();
+        let other = DeviceSigner::from_bytes(&[2; 32]).unwrap().key();
+        let mut held: Vec<Serving> = (0..UPLOADS_PER_PEER)
+            .map(|_| Serving::start(&serving, device).unwrap())
+            .collect();
+        assert!(Serving::start(&serving, device).is_none());
+        assert!(Serving::start(&serving, other).is_some(), "per device");
+        held.pop();
+        assert!(Serving::start(&serving, device).is_some());
+        drop(held);
+        assert!(serving.lock().unwrap().is_empty());
     }
 }

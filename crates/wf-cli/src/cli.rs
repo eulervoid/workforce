@@ -178,6 +178,10 @@ pub enum Command {
         /// The file `wf export` wrote.
         file: PathBuf,
     },
+    /// What `git fetch` runs to reach another device through the daemon: pipes its input and
+    /// output to the socket the daemon handed git for the fetch, as descriptor 3.
+    #[command(hide = true)]
+    GitBridge,
 }
 
 #[derive(Args)]
@@ -987,6 +991,7 @@ mod tests {
             .collect();
         let mut missing: Vec<_> = command
             .get_subcommands()
+            .filter(|subcommand| !subcommand.is_hide_set())
             .map(|subcommand| subcommand.get_name())
             .filter(|name| *name != "help" && !grouped.contains(name))
             .collect();

@@ -6,10 +6,12 @@ pub mod caches;
 pub mod caller;
 pub mod client;
 pub mod command;
+mod commits;
 pub mod data_dir;
 pub mod decide;
 mod environment;
 mod faults;
+mod git_service;
 mod inherit;
 mod judges;
 mod keyed_locks;
@@ -40,6 +42,7 @@ use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
 pub use data_dir::DataDir;
 pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS, Retry};
+pub use git_service::{FetchError, run_git_bridge};
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, session_model};
@@ -100,6 +103,7 @@ pub struct Launch {
 pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
     pub(crate) merges: runner::MergeQueue,
+    pub(crate) commits: commits::Commits,
 }
 
 /// Serves the workforce to its other devices and keeps in sync with them, from when it first has
@@ -376,6 +380,7 @@ impl Daemon {
     ) {
         node.serve(id, storage.clone());
         node.serve_query(live_diff::WorktreeQuery::new(self));
+        node.serve_git(git_service::UploadPack::new(self));
     }
 
     async fn load_stored_workforces(self: &Arc<Self>) {
@@ -485,6 +490,7 @@ impl Daemon {
         let entry = Arc::new(Loaded {
             storage,
             merges: runner::MergeQueue::default(),
+            commits: commits::Commits::default(),
         });
         self.loaded
             .lock()
@@ -494,6 +500,12 @@ impl Daemon {
             Arc::downgrade(self),
             id,
             Arc::clone(&entry),
+        ));
+        tokio::spawn(commits::run_commits(
+            Arc::downgrade(self),
+            id,
+            Arc::clone(&entry),
+            commits::DeviceFetcher::new(self, id),
         ));
         let daemon = Arc::clone(self);
         let started = Arc::clone(&entry);
@@ -669,7 +681,11 @@ impl Daemon {
                 .join(code, wf_net::endpoint_id(*bootstrap), &storage, author)
                 .await
             {
-                Ok(()) => return Ok(()),
+                Ok(()) => {
+                    self.build_repository_from(code.workforce, *bootstrap, &storage)
+                        .await;
+                    return Ok(());
+                }
                 Err(error @ (NetError::JoinRefused { .. } | NetError::JoinAuthoring(_))) => {
                     return Err(error.into());
                 }

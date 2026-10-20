@@ -39,6 +39,8 @@ pub struct Snapshot {
     pub working: Vec<SessionInfo>,
     /// What `wf status` flags.
     pub flagged: Vec<Flag>,
+    /// What waits for a commit that has not arrived from another device, one line each.
+    pub awaiting_commits: Vec<String>,
     /// What the detail on screen shows.
     pub in_view: Option<InView>,
     /// The live items in groups, when the Items tab is on screen.
@@ -322,6 +324,7 @@ impl Snapshot {
         sources: &Sources,
         held: &[HeldPermission],
         machine_faults: &wf_daemon::MachineFaults,
+        awaited: &[wf_core::commits::AwaitedCommit],
         last_seen: &crate::devices::LastSeen,
         wanted: Wanted,
     ) -> Self {
@@ -337,6 +340,7 @@ impl Snapshot {
         let waiting = waiting(state, event, held, machine_faults);
         let context = view::StatusContext {
             machine_faults,
+            awaited,
             own: Some(own),
             last_seen,
             daemon: true,
@@ -362,6 +366,7 @@ impl Snapshot {
                 .clone()
                 .and_then(|wanted| InView::take(sources, &flagged, wanted)),
             flagged,
+            awaiting_commits: view::awaiting_lines(state, awaited),
             agents: match wanted.listing {
                 Some(Listing::Agents) => agents(state, graph, own),
                 Some(Listing::Items(_)) | None => Vec::new(),

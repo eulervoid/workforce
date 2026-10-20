@@ -645,15 +645,19 @@ impl State {
             .min_by_key(|session| session.started())
     }
 
-    /// Where the work on an item is, as the log last named it: the head of the latest work
-    /// session that named one. Meant to be that of the session holding the claim, once claims
-    /// across devices exist.
-    pub fn work_head(&self, item: ItemId) -> Option<crate::session::CommitId> {
+    /// The work session of an item that named a head last, by when it did.
+    pub(crate) fn latest_head_session(&self, item: ItemId) -> Option<&Session> {
         self.sessions_of(item)
             .filter(|session| session.role() == SessionRole::Work)
             .filter(|session| session.head().is_some())
-            .max_by_key(|session| session.started())
-            .and_then(Session::head)
+            .max_by_key(|session| session.head_stamp())
+    }
+
+    /// Where the work on an item is, as the log last named it: the latest head any of its work
+    /// sessions named. Meant to be that of the session holding the claim, once claims across
+    /// devices exist.
+    pub fn work_head(&self, item: ItemId) -> Option<crate::session::CommitId> {
+        self.latest_head_session(item).and_then(Session::head)
     }
 
     pub fn item(&self, id: ItemId) -> Option<ItemEntry<'_>> {

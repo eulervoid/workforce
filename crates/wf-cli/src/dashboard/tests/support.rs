@@ -201,6 +201,7 @@ pub(super) fn snapshot() -> Snapshot {
             item: item(4, "Watch").id,
             title: "Watch".to_owned(),
         }],
+        awaiting_commits: Vec::new(),
         in_view: None,
         items: Vec::new(),
         agents: Vec::new(),
