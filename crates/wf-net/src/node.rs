@@ -15,6 +15,7 @@ use wf_core::identity::{DeviceKey, DeviceSigner};
 use wf_core::invite::{InviteCode, JoinRefusal};
 use wf_core::session::CommitId;
 
+use crate::git::{self, GIT_ALPN, GitError, GitRequest, GitSource, read_git_request};
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::{LogError, SyncLog};
@@ -54,6 +55,12 @@ pub enum NetError {
         peer: String,
         #[source]
         source: QueryError,
+    },
+    #[error("fetching from {peer} failed: {source}")]
+    Git {
+        peer: String,
+        #[source]
+        source: GitError,
     },
     #[error("gossip failed")]
     Gossip(#[source] SourceError),
@@ -286,6 +293,69 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for QueryHandler<L> {
     }
 }
 
+/// Where the daemon's `git upload-pack` comes from, once it has set one.
+type GitSlot = Arc<RwLock<Option<Arc<dyn GitSource>>>>;
+
+struct GitHandler<L> {
+    registry: Registry<L>,
+    source: GitSlot,
+}
+
+impl<L> std::fmt::Debug for GitHandler<L> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("GitHandler")
+    }
+}
+
+impl<L: SyncLog + Clone + 'static> ProtocolHandler for GitHandler<L> {
+    async fn accept(&self, connection: Connection) -> Result<(), AcceptError> {
+        let remote = device_key(connection.remote_id());
+        match self.registry.is_member(remote).await {
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
+        }
+        let (mut send, mut recv) = connection
+            .accept_bi()
+            .await
+            .map_err(AcceptError::from_err)?;
+        let request = read_git_request(&mut recv, IDLE_TIMEOUT)
+            .await
+            .map_err(AcceptError::from_err)?;
+        let source = self
+            .source
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone();
+        let (Some(log), Some(source)) = (self.registry.get(&request.workforce), source) else {
+            connection.close(NOT_SERVED.into(), b"workforce not served");
+            return Ok(());
+        };
+        match log.is_bound(remote).await {
+            Ok(true) => {}
+            Ok(false) => {
+                connection.close(FORBIDDEN.into(), b"not a member");
+                return Ok(());
+            }
+            Err(error) => return Err(close_unreadable(&connection, error)),
+        }
+        match git::respond(tokio::io::join(&mut recv, &mut send), request, &*source).await {
+            Ok(()) => {
+                let _ = send.finish();
+                linger(&connection).await;
+                Ok(())
+            }
+            Err(error) => {
+                connection.close(FAILED.into(), b"git failed");
+                Err(AcceptError::from_err(error))
+            }
+        }
+    }
+}
+
 /// Lets a protocol handler through only for devices that are bound in a workforce served here.
 struct MembersOnly<H, L> {
     inner: H,
@@ -324,6 +394,7 @@ pub struct Node<L: SyncLog + Clone + 'static> {
     router: Router,
     registry: Registry<L>,
     query_source: QuerySlot,
+    git_source: GitSlot,
     gossip: iroh_gossip::Gossip,
     signer: DeviceSigner,
     lookup: MemoryLookup,
@@ -352,6 +423,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .map_err(|error| NetError::Bind(error.into()))?;
         let registry = Registry::new();
         let query_source = QuerySlot::default();
+        let git_source = GitSlot::default();
         let gossip = iroh_gossip::Gossip::builder().spawn(endpoint.clone());
         let router = Router::builder(endpoint)
             .accept(SYNC_ALPN, SyncHandler(registry.clone()))
@@ -360,6 +432,13 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
                 QueryHandler {
                     registry: registry.clone(),
                     source: Arc::clone(&query_source),
+                },
+            )
+            .accept(
+                GIT_ALPN,
+                GitHandler {
+                    registry: registry.clone(),
+                    source: Arc::clone(&git_source),
                 },
             )
             .accept(
@@ -381,6 +460,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             router,
             registry,
             query_source,
+            git_source,
             gossip,
             signer: device.clone(),
             lookup,
@@ -449,6 +529,49 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .query_source
             .write()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
+    }
+
+    /// Serves `git upload-pack` from `source` to the other devices. Until then they are refused.
+    pub fn serve_git(&self, source: Arc<dyn GitSource>) {
+        *self
+            .git_source
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = Some(source);
+    }
+
+    /// Opens a stream to the repository of `workforce` on a device and pipes it to `local`, the
+    /// side of `git fetch`. Returns when git has finished with it.
+    pub async fn git_connect<Local>(
+        &self,
+        peer: impl Into<EndpointAddr>,
+        workforce: WorkforceId,
+        local: Local,
+    ) -> Result<(), NetError>
+    where
+        Local: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin,
+    {
+        let peer: EndpointAddr = peer.into();
+        let name = device_key(peer.id).fmt_short();
+        let connection = tokio::time::timeout(
+            self.connect_timeout,
+            self.endpoint().connect(peer.clone(), GIT_ALPN),
+        )
+        .await
+        .map_err(|_| connect_error(&name, TimedOut))?
+        .map_err(|error| connect_error(&name, error))?;
+        let (mut send, mut recv) = connection
+            .open_bi()
+            .await
+            .map_err(|error| connect_error(&name, error))?;
+        let result = git::initiate(
+            tokio::io::join(&mut recv, &mut send),
+            &GitRequest { workforce },
+            local,
+        )
+        .await;
+        let _ = send.finish();
+        connection.close(DONE.into(), b"done");
+        result.map_err(|source| NetError::Git { peer: name, source })
     }
 
     /// Asks a device for the diff of an item, which it answers from its worktree.
