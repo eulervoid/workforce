@@ -12,7 +12,7 @@ use wf_core::event::{AgentDefined, Event, EventBody};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
 use wf_core::name::{AgentName, HarnessName};
 use wf_core::session::{CommitId, EndReason};
-use wf_core::state::State;
+use wf_core::state::{State, Trust};
 use wf_core::testing::*;
 use wf_daemon::client::DaemonClient;
 use wf_daemon::data_dir::STORE_FILE;
@@ -256,6 +256,50 @@ fn has_commit(bare: &std::path::Path, commit: CommitId) -> bool {
 }
 
 // Multi-threaded: the daemons serve on the runtime while the test waits on them.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_takeover_whose_start_fails_leaves_the_item_open_for_the_next_start() {
+    // One daemon, so it runs in Fence too: the vm's session is in the log, and the vm is never
+    // heard from.
+    let fixture = Fixture::new(2);
+    let workforce = fixture.workforce();
+    let (mut events, item) = workforce_with_a_task(&fixture);
+    let mut state = fixture.state();
+    for event in &events {
+        state.receive(event.clone(), Trust::Untrusted).unwrap();
+    }
+    let started = fixture.apply(&mut state, 1, 3_000, start_session("coder", item));
+    let on_vm = SessionId::from(started.id());
+    let active = fixture.apply(&mut state, 1, 3_001, moved(item, ItemState::Active));
+    events.extend([started, active]);
+    let repository = TestRepository::new();
+    let laptop = within(
+        "starting the laptop",
+        Device::start(&fixture, 0, &events, &repository),
+    )
+    .await;
+    let lease = laptop.state(workforce).await.lease();
+    laptop
+        .daemon
+        .backdate_presence(lease + Duration::from_secs(60));
+
+    laptop
+        .daemon
+        .fail_next_write(|body| matches!(body, EventBody::SessionStarted(_)));
+    laptop
+        .start_session(workforce, item)
+        .await
+        .expect_err("the write of the start fails");
+    let state = laptop.state(workforce).await;
+    assert_eq!(reason(&state, on_vm), Some(EndReason::LeaseExpired));
+    assert_eq!(state.live_state(item), Some(ItemState::Open));
+
+    let on_laptop = laptop.start_session(workforce, item).await.unwrap();
+    let state = laptop.state(workforce).await;
+    assert!(state.session(on_laptop).unwrap().is_live());
+    assert_eq!(state.live_state(item), Some(ItemState::Active));
+    laptop.daemon.halt().await;
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn two_devices_that_claim_one_item_before_they_sync_end_the_later_session_outclaimed() {
     if wf_core::testing::skip_in_fence("iroh needs the route socket") {

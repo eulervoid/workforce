@@ -297,8 +297,7 @@ impl Daemon {
 
     /// Ends `session`, which runs on another device of this principal that has been gone for
     /// longer than the lease, `LeaseExpired`, so that a session started here takes over what it
-    /// claimed. The comment before the end says which device was gone and since when. The item
-    /// does not move: the session that takes over starts on it at once.
+    /// claimed. The comment before the end says which device was gone and since when.
     pub(super) async fn take_over(
         &self,
         loaded: &Loaded,
@@ -346,13 +345,29 @@ impl Daemon {
                 EventBody::Commented(Commented::plain(folded.item(), note)),
             )
             .await?;
+        let because = Some(CommentId::from(written.id()));
+        // The item goes back as after any interruption, while the session still holds it: the
+        // start that takes over moves it on at once, and one that fails leaves it ready again.
+        if let Some(AfterEnd::MoveTo(to)) = state.after_end(session, reason, head) {
+            let principal = self.principal_of_device(&state)?;
+            self.move_item_once(
+                loaded,
+                &state,
+                principal,
+                folded.item(),
+                to,
+                because,
+                session,
+            )
+            .await?;
+        }
         self.author(
             loaded,
             actor,
             EventBody::SessionEnded(SessionEnded {
                 session,
                 reason,
-                because: Some(CommentId::from(written.id())),
+                because,
                 head,
             }),
         )
