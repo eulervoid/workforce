@@ -1214,6 +1214,17 @@ mod round_limit {
             .apply(start_review_step(agent, item, at, step))
             .id()
             .into();
+        request_changes_in(scene, agent, item, at, session);
+    }
+
+    /// `agent` writes a change request and then requests changes on `at` in its review `session`.
+    fn request_changes_in(
+        scene: &mut Scene,
+        agent: &str,
+        item: ItemId,
+        at: CommitId,
+        session: SessionId,
+    ) {
         let actor = scene.fixture.agent_actor(agent, session);
         scene.apply_as(actor.clone(), change_request(item, "not yet"));
         let body = EventBody::Reviewed(crate::event::Reviewed {
@@ -1358,6 +1369,42 @@ mod round_limit {
 
         resubmit(&mut scene, item, commit(2));
         request_changes(&mut scene, item, commit(2));
+        assert_eq!(
+            scene.status(item),
+            Some(ReviewStatus::RoundLimitReached { rounds: 1 })
+        );
+    }
+
+    #[test]
+    fn another_step_that_requests_changes_after_a_comment_of_the_principal_waits_too() {
+        let mut scene = Scene::with_wide_level();
+        scene.set_policy(
+            "[[review]]\nname = \"pair\"\nmax_rounds = 1\nsteps = [[\n\
+             { name = \"style\", requires = [\"review\"] },\n\
+             { name = \"security\", requires = [\"review\", \"strong-model\"] },\n]]\n",
+        );
+        let item = scene
+            .apply(create_reviewed("task", "work", "pair"))
+            .id()
+            .into();
+        resubmit(&mut scene, item, commit(1));
+        request_changes_as(&mut scene, "weak", item, commit(1), Some("style"));
+        resubmit(&mut scene, item, commit(2));
+
+        let security: SessionId = scene
+            .apply(start_review_step("reviewer", item, commit(2), Some("security")))
+            .id()
+            .into();
+        request_changes_as(&mut scene, "weak", item, commit(2), Some("style"));
+        assert_eq!(
+            scene.status(item),
+            Some(ReviewStatus::RoundLimitReached { rounds: 1 })
+        );
+        scene.apply(comment(item, "let me look"));
+        assert_eq!(scene.state.review_rounds(item, Rounds::All), 0);
+
+        request_changes_in(&mut scene, "reviewer", item, commit(2), security);
+        assert_eq!(state_of(&scene, item), ItemState::Review);
         assert_eq!(
             scene.status(item),
             Some(ReviewStatus::RoundLimitReached { rounds: 1 })

@@ -12,6 +12,7 @@ use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::Policy;
+use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole, Verdict};
 use crate::state::State;
 
@@ -299,9 +300,16 @@ impl State {
     }
 
     /// Where a request for changes by `by` on the submitted work of `item` sends it, by the
-    /// review rounds the item had before this submission. The verdict records the answer, so the
-    /// fold does not depend on the policy.
+    /// review rounds the item had before this submission. Once a request waits for the principal,
+    /// those of the other steps on the submission wait too: only the principal's verdict, a move or
+    /// a cancel ends the hold, not a comment that starts the count over. The verdict records the
+    /// answer, so the fold does not depend on the policy.
     pub fn after_changes_requested(&self, item: ItemId, by: &Actor) -> AfterChangesRequested {
+        if let (Actor::Agent { .. }, Some(ReviewStatus::RoundLimitReached { rounds })) =
+            (by, self.review_status(item))
+        {
+            return AfterChangesRequested::WaitsForPrincipal { rounds };
+        }
         let max_rounds = self.policy().and_then(|document| {
             let policy = &document.policy;
             let Some(ItemEntry::Live(live)) = self.item(item) else {
