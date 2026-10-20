@@ -348,6 +348,25 @@ fn a_finished_item_says_so() {
     assert!(scene.state.item_heads()[0].finished);
 }
 
+#[test]
+fn an_item_whose_head_is_merged_is_finished_before_it_is_moved_to_done() {
+    let mut scene = Scene::new();
+    let item = scene.item();
+    let session = scene.start(item, SessionRole::Work);
+    scene.comment_naming(session, item, commit(1));
+    scene.apply(submit_session(session, commit(1)));
+    scene.apply(moved(item, ItemState::Review));
+    assert!(!scene.state.item_heads()[0].finished);
+    scene.apply(merged(item, commit(1), commit(2)));
+    assert!(scene.state.item_heads()[0].finished);
+
+    // Work after the merge has a head of its own, which is not merged.
+    scene.apply(moved(item, ItemState::Open));
+    let again = scene.start(item, SessionRole::Work);
+    scene.comment_naming(again, item, commit(3));
+    assert!(!scene.state.item_heads()[0].finished);
+}
+
 /// Sources that keep the work of one session apart.
 struct Apart(SessionId);
 

@@ -61,7 +61,9 @@ pub struct HeadOf {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemHeads {
     pub item: ItemId,
-    /// The item is done or cancelled: its refs and its agent repository are no longer needed.
+    /// The item is done or cancelled, or the holder's head is merged: its refs and its agent
+    /// repository are no longer needed. Merged counts before the item is moved to done, or a
+    /// device would bring back the branch the merge removed in between.
     pub finished: bool,
     /// Every work session of the item, which may have a ref of work set apart.
     pub sessions: Vec<SessionId>,
@@ -148,9 +150,14 @@ impl State {
                         })
                     })
                     .collect();
+                let merged = holder.is_some_and(|holder| {
+                    item.merges()
+                        .values()
+                        .any(|merge| merge.reviewed == holder.commit)
+                });
                 ItemHeads {
                     item: id,
-                    finished: item.state(policy).is_terminal(),
+                    finished: merged || item.state(policy).is_terminal(),
                     sessions: work().map(|session| session.id()).collect(),
                     holder,
                     others,
