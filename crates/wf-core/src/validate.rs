@@ -908,7 +908,8 @@ impl State {
             .get(session)
             .ok_or(PolicyViolation::UnknownSession(*session))?;
         // A device that comes back to find its work session taken over names the session's last
-        // head. Only its daemon does: what an agent comments never carries a head it chose.
+        // head. Only its daemon does: what an agent comments never carries a head it chose. No
+        // other end needs it: only a takeover ends a session on another device.
         let names_its_last_head = matches!(
             body,
             EventBody::Commented(comment)
@@ -916,7 +917,10 @@ impl State {
                     && comment.item == folded.item()
                     && folded.role() == SessionRole::Work
         );
-        if folded.device() == author && !folded.is_live() && names_its_last_head {
+        let taken_over = folded
+            .ended()
+            .is_some_and(|ended| ended.reason == EndReason::LeaseExpired);
+        if folded.device() == author && taken_over && names_its_last_head {
             return Ok(());
         }
         if !folded.is_live() || folded.device() != author {

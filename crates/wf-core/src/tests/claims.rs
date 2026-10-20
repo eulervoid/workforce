@@ -495,7 +495,24 @@ fn a_returning_device_names_the_last_head_of_its_session_that_was_taken_over() {
             .is_err(),
         "only the session's own device names its head"
     );
-    let event = fixture.author_as(&state, 1, agent, 5_000, named);
+    let event = fixture.author_as(&state, 1, agent, 5_000, named.clone());
     state.receive(event, Trust::Untrusted).unwrap();
     assert_eq!(state.session(gone).unwrap().head(), Some(commit(7)));
+
+    // A session its own device ended had its head named at the end.
+    let released: SessionId = fixture
+        .apply(&mut state, 1, 6_000, start_session("coder", task))
+        .id()
+        .into();
+    fixture.apply(
+        &mut state,
+        1,
+        7_000,
+        end_session(released, EndReason::Released),
+    );
+    let agent = fixture.agent_actor("coder", released);
+    assert!(
+        state.check_actor(returning, &agent, &named).is_err(),
+        "only a session that was taken over names its head after its end"
+    );
 }
