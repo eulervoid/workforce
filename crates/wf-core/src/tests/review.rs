@@ -1274,6 +1274,16 @@ mod round_limit {
             }]
         );
         assert_eq!(scene.state.offered_reviews(), []);
+        let entry = crate::inbox::InboxEntry {
+            item,
+            waiting: waiting[0].clone(),
+        };
+        assert_eq!(
+            scene.state.what_waits(&entry),
+            "changes requested again after 2 rounds, the round limit: approve with \
+             `wf review --approve`, send it back with `wf review --request-changes`, or edit or \
+             cancel it"
+        );
 
         // A comment of the principal starts the count over, but it is not their decision.
         scene.apply(comment(item, "let me look"));
