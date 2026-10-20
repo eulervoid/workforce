@@ -3628,3 +3628,83 @@ wf work submit
     assert!(world.wf.run(&["inbox"]).contains("review of"));
     assert!(!comments_with(&world, &item, "comment", "Merges into main again").is_empty());
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn work_whose_head_is_missing_waits_without_failing_and_starts_once_it_arrives() {
+    let script = "\
+sh echo wip > wip.txt && git add wip.txt && git commit -q -m wip
+wf work release --note \"not yet\"
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Carry on"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+    let branch = format!("wf/{}", &item[..12]);
+    let bare = world.bare();
+    let head = git_in(&bare, &["rev-parse", &branch]);
+
+    // The head the log names leaves this repository, as if another device had named it and it
+    // had not arrived yet. A copy is kept aside to bring it back.
+    let aside = world.wf.root.path().join("aside.git");
+    git_in(
+        world.wf.root.path(),
+        &["init", "--quiet", "--bare", aside.to_str().unwrap()],
+    );
+    git_in(
+        &aside,
+        &[
+            "fetch",
+            "--quiet",
+            bare.to_str().unwrap(),
+            &format!("{branch}:{branch}"),
+        ],
+    );
+    let repositories = bare.parent().unwrap().join("repositories");
+    let _ = std::fs::remove_dir_all(&repositories);
+    git_in(
+        &bare,
+        &["update-ref", "-d", &format!("refs/heads/{branch}")],
+    );
+    git_in(&bare, &["gc", "--quiet", "--prune=now"]);
+    assert!(
+        std::process::Command::new("git")
+            .args(["-C", bare.to_str().unwrap(), "cat-file", "-e", &head])
+            .status()
+            .is_ok_and(|status| !status.success()),
+        "the head is gone"
+    );
+
+    world.automate("coder", "default");
+    world
+        .wait("status to say the head is not to be had", |world| {
+            let status = world.wf(&["status"]);
+            status["awaiting_commits"].as_array().is_some_and(|lines| {
+                lines.iter().any(|line| {
+                    line.as_str().is_some_and(|line| {
+                        line.contains(&head[..7]) && line.contains("is unavailable")
+                    })
+                })
+            })
+        })
+        .await;
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert_eq!(world.sessions().len(), 1, "nothing starts without the head");
+
+    // Once it is back, the next pass of the dispatcher starts the work on it: the wait was not
+    // a failed start, which would hold the item back for minutes.
+    git_in(
+        &bare,
+        &[
+            "fetch",
+            "--quiet",
+            aside.to_str().unwrap(),
+            &format!("{branch}:{branch}"),
+        ],
+    );
+    world.wf.run(&["comment", short(&item), "the head is back"]);
+    world
+        .wait("the work to start again", |world| {
+            world.sessions().len() == 2
+        })
+        .await;
+}
