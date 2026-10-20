@@ -77,7 +77,7 @@ pub(super) fn draw_detail(
                 frame,
                 app,
                 info,
-                successor.as_ref(),
+                successor.as_deref(),
                 opened.scroll,
                 body,
                 spots,

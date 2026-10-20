@@ -18,8 +18,8 @@ fn coder_stopped(successor: Option<crate::dashboard::snapshot::SessionInfo>) -> 
         snapshot.working.insert(0, successor.clone());
     }
     snapshot.in_view = Some(InView::Session {
-        info: coder,
-        successor,
+        info: Box::new(coder),
+        successor: successor.map(Box::new),
     });
     snapshot
 }

@@ -931,7 +931,7 @@ impl App {
     /// What the snapshot knows of a session: as one that works, one in view, or one of an agent.
     pub fn session_info(&self, session: SessionId) -> Option<&SessionInfo> {
         let in_view = match &self.snapshot.in_view {
-            Some(InView::Session { info, .. }) => Some(info),
+            Some(InView::Session { info, .. }) => Some(&**info),
             Some(
                 InView::Item { .. }
                 | InView::Agent { .. }
