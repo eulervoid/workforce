@@ -131,18 +131,47 @@ impl State {
         presence: &Presence,
         now_ms: u64,
     ) -> BTreeSet<SessionId> {
-        let Some(principal) = self.principal_of(&device) else {
-            return BTreeSet::new();
-        };
         let lease = self.lease();
         self.live_sessions()
             .filter(|session| {
-                session.device() != device
-                    && self.principal_of(&session.device()) == Some(principal)
+                self.may_take_over(device, session)
                     && presence.gone(session.device(), lease, now_ms)
             })
             .map(Session::id)
             .collect()
+    }
+
+    /// Whether a daemon on `device` takes over `session` once its device is gone: whether it runs
+    /// on another device of the same principal.
+    fn may_take_over(&self, device: DeviceKey, session: &Session) -> bool {
+        session.device() != device
+            && self
+                .principal_of(&device)
+                .is_some_and(|principal| self.principal_of(&session.device()) == Some(principal))
+    }
+
+    /// Refuses a session on `item` in `role` from a daemon on `device` while a live session holds
+    /// it that no takeover could end: one on `device` itself, or one of another principal. Whether
+    /// the devices of the others are gone only the daemon knows ([`State::claimable`]).
+    pub fn ensure_takeable(
+        &self,
+        item: ItemId,
+        role: &SessionRole,
+        device: DeviceKey,
+    ) -> Result<(), ItemClaimed> {
+        let kept = self
+            .sessions_of(item)
+            .filter(|session| session.is_live() && session.role == *role)
+            .filter(|session| !self.may_take_over(device, session))
+            .min_by_key(|session| session.started());
+        match kept {
+            Some(holder) => Err(ItemClaimed {
+                item,
+                role: role.clone(),
+                holder: self.actor_label(&holder.actor()),
+            }),
+            None => Ok(()),
+        }
     }
 
     /// Whether a live session holds the claim on `item` in `role`, leaving out the `expired` ones

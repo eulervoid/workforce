@@ -218,6 +218,17 @@ fn a_daemon_takes_over_the_claim_of_a_gone_device_of_its_principal() {
         claimable(&state, other, &silent, later).is_err(),
         "a device does not take over its own session"
     );
+    // Without presence, what only a session on another device of the principal holds may yet be
+    // taken over; one on the asking device may not.
+    assert_eq!(
+        state.ensure_takeable(task, &SessionRole::Work, asking),
+        Ok(())
+    );
+    assert!(
+        state
+            .ensure_takeable(task, &SessionRole::Work, other)
+            .is_err()
+    );
     assert_eq!(
         state.claimable(task, &SessionRole::Supervise, asking, &heard, later),
         Ok(vec![]),
@@ -261,6 +272,11 @@ fn a_claim_of_another_principal_is_not_taken_over() {
         )
         .unwrap_err();
     assert_eq!(claim.item, task);
+    assert!(
+        state
+            .ensure_takeable(task, &SessionRole::Work, fixture.devices[0].key())
+            .is_err()
+    );
 }
 
 #[test]
