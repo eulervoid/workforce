@@ -58,7 +58,7 @@ named, never required.
 ## 3. Non-goals for v1
 
 Revocation (fork instead), a recovery key (fork instead), voting or binding governance, jj support
-(kept possible, section 10), peer-to-peer repositories (a central origin first), a web UI.
+(kept possible, section 10), a web UI.
 
 ## 4. Architecture
 
@@ -72,6 +72,7 @@ wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine,
                                             └─ iroh endpoint, started once a second device exists
                                                  ├─ wf/join/2   invites
                                                  ├─ wf/sync/3   feed sync
+                                                 ├─ wf/git/1    git objects (Planned, M3)
                                                  └─ iroh-gossip heads
 ```
 
@@ -211,8 +212,9 @@ A principal cannot `Escalate` (it decides instead).
 Membership then still only grows, so "was the author a member at a causally earlier point?" stays
 independent of arrival order.
 
-**Planned (M3): anchor.** An owner may designate one device as anchor. It may only assign work, so a
-compromised anchor can reorder assignments, not change policy or roles.
+**Planned (M3): anchor.** An owner may designate one device as anchor. It assigns work and is the
+one device that merges (section 10), so a compromised anchor can reorder assignments and merge
+approved work late, not change policy or roles or merge what was not approved.
 
 ## 6. Event log
 
@@ -322,7 +324,8 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused. *Planned (M3):* `Assigned`, `Claim`.
+* Tags are never reused. *Planned (M3):* `Assigned`, `Claim`; `head: Option<CommitId>` on
+  `Commented` and `SessionEnded`, which replaces the commit in `Submitted` (section 10).
 
 ### Store
 
@@ -645,12 +648,14 @@ sessions expire: the item can be assigned again. Nothing is written per renewal;
 at query time and never stored. Of two concurrent claims, the earliest by `(hlc, EventId)` wins and
 the other cancels itself. A device that comes back after its claim was given away therefore finds
 the newer claim and cancels its session: the overlap is accepted, not prevented, so for a few
-minutes two sessions may work on one item. What the cancelled one committed stays on `wf/<item>`,
-and the next session continues from it, rebasing if both committed.
+minutes two sessions may work on one item. The heads the cancelled one named reach every device
+like any other (section 10), and the next session's brief names them, to rebase onto if both
+committed.
 
 One branch per item: every work session on it (after a release, a crash or requested changes)
 continues `wf/<item>`. Context carries over within a session in the conversation, and across sessions
-through comments. Reassignment carries only what was committed, which is why agents commit small.
+through comments. Reassignment carries only what was committed (across devices: what the log names a
+head for, section 10), which is why agents commit small.
 
 ### Dispatch
 
@@ -927,12 +932,54 @@ worktree.
   runs it; the daemon's runs are the ones that count.
 
 **Planned:**
-* `mode = "origin"` (M3): wf pushes approved branches and opens pull requests; the origin decides
-  merging (branch protection), and wf writes `Merged` when `wf/<item>` lands in the target.
+* `mode = "origin"` (M3): the merging device pushes approved branches and opens pull requests; the
+  origin decides merging (branch protection), and wf writes `Merged` when `wf/<item>` lands in the
+  target. With several devices the origin is a mirror, not how they reach each other (below).
 * `[[merge.after]]`: a command after a merge (release, deploy), run only by the daemon that merged,
   outside the sandbox with secrets from the broker. Its failure goes to the inbox and never reopens the
   item. wf does not become a CI system: no jobs, artifacts or matrices.
-* Git bundles over iroh-blobs for peer-to-peer repositories (M6); `git-remote-iroh` as prior art.
+
+### Planned (M3): repositories across devices
+
+Every commit the log names reaches every device, peer to peer: no server, no credentials between
+devices, nothing new for the principal to run.
+
+* **wf's own repository.** Each device keeps a bare repository, `<wf>/git`, with only the target and
+  the item branches. Agent repositories take their alternates from it; imports, rebases, checks and
+  merges work in it. The principal's checkout is a clone with `<wf>/git` as its remote `wf`, the
+  upstream of the target: merged work comes in with `git pull`, and the principal's own commits on
+  the target go out with `git push`, taken only as a fast-forward (`receive.denyNonFastForwards`).
+  `wf item checkout` fetches from `wf` first. wf no longer touches the principal's checkout, so
+  `<wf>/repository`, the merge's wait on a dirty checkout and its `merge` inbox entry go, and the
+  principal's other branches are never in what wf serves.
+* **The log names the commits.** `head: Option<CommitId>` on `Commented`, set by the daemon after an
+  import when a work session's head moved since it last named one (so about once per step report;
+  the agent never names it), and on `SessionEnded`, where a work session's branch was when it ended,
+  whatever the reason (a submission's commit, which `Submitted` no longer carries). With
+  `Reviewed{commit}` and `Merged{commit}` these are every commit another device needs. Item heads
+  get no event of their own and stay out of gossip.
+* **`wf/git/1`.** Each daemon serves `git upload-pack` on `<wf>/git` over an iroh stream, to members,
+  fetch only: no device writes into another's repository. With `uploadpack.allowReachableSHA1InWant`
+  it serves a commit reachable from the target or an item branch and refuses anything else, such as a
+  head rewritten away; the refusal is the server's, under protocol v0 and v2 alike. The fetching
+  side runs `git fetch` with `fetch.fsckObjects` through an `ext::` bridge to its daemon, so git does
+  the negotiation, thin packs and checks, and wf-net only carries bytes.
+* **Fetching.** A device fetches each named commit when the event naming it arrives, from its
+  author's device first, else from any peer; a device that has it serves it, so an always-on device
+  relays for those asleep. A work session, a review and a merge start only once the commit they need
+  is present, and say so while they wait.
+* **Item branches.** `wf/<item>` is at the latest head named by a session holding the item's claim. A
+  head of a session that lost its claim, if not an ancestor of it, is kept under
+  `refs/wf/diverged/<session>` and named in the next brief. On `Merged` or a cancel every device
+  removes the item's refs and its agent repository.
+* **The target.** Only the anchor merges (section 5; without one, the device that created the
+  workforce), with the merge task as it is, compare-and-swap in `<wf>/git`. Each device fetches the
+  target from its peers on the sync task's rounds, fast-forward only, which carries both merges and
+  the principal's pushes; a target that diverged between devices goes to the principal's inbox.
+* **Joining.** `wf join` builds `<wf>/git` from the peer it joins through and prints how to point a
+  checkout at it.
+* **Not iroh-blobs.** Packs are built per request, so they have no stable hash to fetch by, and git
+  verifies what it receives. iroh-blobs stays for files that are not git (transcripts, attachments).
 
 ### Commit identity and signatures
 
@@ -1269,6 +1316,7 @@ mDNS for LAN-only use.
   `{author → (max seq, tips)}` (tips for equivocated feeds); each streams what the other lacks, in
   `(hlc, id)` order, in frames of at most 256 events and 8 MiB; then missing parents and wanted history are fetched by id, answered in `Have` frames and an `EndOfHave`.
   One side writes at a time. A peer that neither sends nor accepts a byte for 30 s ends the session, and `Open`, `Versions`, wants and the join messages have small size limits. An event of more than 1 MiB is refused at admission, so every event fits a frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`; `3`: `Have` is ended by `EndOfHave`), so mismatched peers refuse at the handshake.
+* **`wf/git/1`** (*Planned, M3*): git objects, by `git upload-pack` over the stream (section 10).
 * **`wf/query/1`**: a device asks another for what only it has, read from its current state and
   changing and storing nothing. Today that is the live diff of an item, which only the device with
   its branch and agent repository has. One `Query::Diff { workforce, item, since }` (the head commit the
@@ -1301,7 +1349,8 @@ mDNS for LAN-only use.
 |---|---|
 | connectivity, NAT traversal, relays, encryption | `iroh` endpoint, dialed by `EndpointId` |
 | announce heads | `iroh-gossip` (digests only; events go over `wf/sync/3`) |
-| large artifacts (*Planned*: bundles, transcripts) | `iroh-blobs` |
+| git objects (*Planned*) | `git upload-pack` over an iroh stream (`wf/git/1`) |
+| large artifacts (*Planned*: transcripts, attachments) | `iroh-blobs` |
 
 **Not iroh-docs:** it is a mutable key-value store, not a log. Each `(author, key)` keeps only its
 latest value by wall clock, and a write removes the author's older entries under a prefix, so a device
@@ -1451,8 +1500,8 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 | M2.2 | Daily use on one machine (**stage 1**): recovery levels, machine faults, resume after restart, daemon management, export and import, network off for one device, notifications | built |
 | M2.3 | The dashboard | built |
 | — | Since: merge checks and `wf check`, rebase at submit, fixed states with verbs, commit signing, storage budget, `[theme]`, `wf stats` | built |
-| M3 | Sessions across devices (**stage 2**): anchor dispatch, claims and leases, `raw-cli` fallback, `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
+| M3 | Sessions across devices (**stage 2**): anchor dispatch, claims and leases, repositories across devices (`wf/git/1`, `<wf>/git`), `raw-cli` fallback, `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
 | M4 | Decision ratification, distill items, hybrid search | |
 | M5 | Several principals, member invites, threads, scopes, `wf attach` (**stage 3**) | |
-| M6 | Git bundles over iroh-blobs, peer-to-peer repositories, `seen` and compaction | |
+| M6 | `seen` and compaction | |
 | M7 | Donors (**stage 4**): revocation, rate limits, sandboxing, transcript publishing, governance | |
