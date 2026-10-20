@@ -765,16 +765,18 @@ sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello && \"$WF_B
 sh echo again > more.txt && git commit -q -am again
 wf work release --note \"stopping\"
 ";
-    let mut world = World::new(script).await;
+    let world = World::new(script).await;
     let item = world.wf.add(&["--title", "Name the head"]);
     start_session(&world, &item);
     world.ended_session().await;
 
     let events = logged_events(&world);
     let comment_head = |text: &str| {
-        events.iter().find_map(|event| match &event.content.body {
-            EventBody::Commented(comment) if comment.text == text => Some(comment.head),
-            _ => None,
+        events.iter().find_map(|event| {
+            let EventBody::Commented(comment) = &event.content.body else {
+                return None;
+            };
+            (comment.text == text).then_some(comment.head)
         })
     };
     let first = comment_head("first")
@@ -796,9 +798,11 @@ wf work release --note \"stopping\"
     );
     let ended = events
         .iter()
-        .find_map(|event| match &event.content.body {
-            EventBody::SessionEnded(ended) => Some(ended),
-            _ => None,
+        .find_map(|event| {
+            let EventBody::SessionEnded(ended) = &event.content.body else {
+                return None;
+            };
+            Some(ended)
         })
         .expect("the end");
     let last = ended
@@ -826,7 +830,7 @@ async fn a_work_session_without_commits_names_no_head() {
 wf comment {item} \"nothing yet\"
 wf work release --note \"stopping\"
 ";
-    let mut world = World::new(script).await;
+    let world = World::new(script).await;
     let item = world.wf.add(&["--title", "Nothing to name"]);
     start_session(&world, &item);
     world.ended_session().await;

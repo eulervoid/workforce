@@ -6,7 +6,7 @@ use std::collections::BTreeSet;
 use proptest::prelude::*;
 
 use crate::crdt::SetChange;
-use crate::event::{Change, CommentKind, Commented, Event, EventBody};
+use crate::event::{Change, CommentKind, Commented, Event, EventBody, SessionEnded};
 use crate::id::{EventId, ItemId};
 use crate::identity::{Actor, DeviceSigner, InviteSigner};
 use crate::item::{ItemEntry, ItemState, Priority};
@@ -671,10 +671,12 @@ fn the_generator_exercises_real_histories() {
     let submissions = count(
         |body| matches!(body, EventBody::SessionEnded(ended) if matches!(ended.reason, EndReason::Submitted)),
     );
-    let heads = count(|body| match body {
-        EventBody::Commented(comment) => comment.head.is_some(),
-        EventBody::SessionEnded(ended) => ended.head.is_some(),
-        _ => false,
+    let heads = count(|body| {
+        matches!(
+            body,
+            EventBody::Commented(Commented { head: Some(_), .. })
+                | EventBody::SessionEnded(SessionEnded { head: Some(_), .. })
+        )
     });
     assert!(
         requests > 0
