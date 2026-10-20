@@ -74,3 +74,89 @@ fn a_bridge_started_without_the_daemons_socket_refuses() {
     let stderr = String::from_utf8_lossy(&output.stderr);
     assert!(stderr.contains("not the daemon's bridge"), "{stderr}");
 }
+
+#[test]
+fn git_fetches_a_commit_through_the_bridge_on_the_socket_it_inherits() {
+    use wf_vcs::testing::{TestRepository, git_in};
+    use wf_vcs::{Bridge, GitCli};
+
+    let sandbox = Sandbox::new();
+    let repository = TestRepository::new();
+    let head = repository.work("wf/work", "a.txt", "a\n");
+    let served = sandbox.root.path().join("served.git");
+    let source = repository.directory().display().to_string();
+    git_in(
+        sandbox.root.path(),
+        &[
+            "clone",
+            "--quiet",
+            "--bare",
+            &source,
+            served.to_str().unwrap(),
+        ],
+    );
+    git_in(&served, &["fetch", "--quiet", &source, "wf/work:wf/work"]);
+    let server = GitCli::open(&served).unwrap();
+    let into_path = sandbox.root.path().join("into.git");
+    std::fs::create_dir(&into_path).unwrap();
+    git_in(&into_path, &["init", "--quiet", "--bare"]);
+    let into = GitCli::open(&into_path).unwrap();
+
+    // This side of the pair stands in for the daemon: it pipes to `upload-pack` directly, where
+    // the daemon goes over iroh.
+    let (daemon_end, bridge_end) = UnixStream::pair().unwrap();
+    let mut upload_pack = server.spawn_upload_pack().unwrap();
+    let (mut input, mut output) = (
+        upload_pack.stdin.take().unwrap(),
+        upload_pack.stdout.take().unwrap(),
+    );
+    let mut reader = daemon_end.try_clone().unwrap();
+    let mut writer = daemon_end;
+    let requests = std::thread::spawn(move || {
+        let _ = std::io::copy(&mut reader, &mut input);
+    });
+    let answers = std::thread::spawn(move || {
+        let _ = std::io::copy(&mut output, &mut writer);
+        let _ = writer.shutdown(std::net::Shutdown::Write);
+        upload_pack.wait().unwrap()
+    });
+    let wf = sandbox
+        .command(&[])
+        .get_program()
+        .to_string_lossy()
+        .into_owned();
+    let bridge = Bridge {
+        command: vec![wf, "git-bridge".to_string()],
+        descriptor: Some(OwnedFd::from(bridge_end)),
+    };
+    into.fetch_commit(bridge, head).unwrap();
+    assert!(into.has_commit(head).unwrap());
+    requests.join().unwrap();
+    assert!(answers.join().unwrap().success());
+}
+
+#[test]
+fn a_bridge_whose_other_side_ends_at_once_lets_git_fail_instead_of_waiting() {
+    use wf_vcs::testing::git_in;
+    use wf_vcs::{Bridge, GitCli};
+
+    let sandbox = Sandbox::new();
+    let into_path = sandbox.root.path().join("into.git");
+    std::fs::create_dir(&into_path).unwrap();
+    git_in(&into_path, &["init", "--quiet", "--bare"]);
+    let into = GitCli::open(&into_path).unwrap();
+    // The daemon's side hangs up before saying anything, as a device that refuses does.
+    let (daemon_end, bridge_end) = UnixStream::pair().unwrap();
+    drop(daemon_end);
+    let wf = sandbox
+        .command(&[])
+        .get_program()
+        .to_string_lossy()
+        .into_owned();
+    let bridge = Bridge {
+        command: vec![wf, "git-bridge".to_string()],
+        descriptor: Some(OwnedFd::from(bridge_end)),
+    };
+    let unknown = wf_core::session::CommitId::Git(wf_core::session::GitOid::from_bytes([9; 20]));
+    assert!(into.fetch_commit(bridge, unknown).is_err());
+}

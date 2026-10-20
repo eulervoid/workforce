@@ -118,6 +118,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             ..
         } => crate::fork::accept(json, data, cwd, &id, relay.as_deref()),
         Command::Daemon(command) => crate::daemon::daemon(json, command, data),
+        // `main` runs it before anything else.
         Command::GitBridge => Ok(wf_daemon::run_git_bridge()?),
         Command::Import { file } => crate::export::import(json, &file, &data),
         Command::Permissions(command) => crate::permissions::permissions(json, command, cwd),

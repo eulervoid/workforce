@@ -101,7 +101,8 @@ impl Daemon {
     }
 
     /// Fetches `commit` of `workforce` from `device` into the bare repository.
-    pub(crate) async fn fetch_commit_from(
+    #[doc(hidden)]
+    pub async fn fetch_commit_from(
         self: &Arc<Self>,
         workforce: WorkforceId,
         device: DeviceKey,
@@ -171,7 +172,7 @@ impl Daemon {
 /// process that does nothing else.
 pub fn run_git_bridge() -> std::io::Result<()> {
     use std::net::Shutdown;
-    use std::os::fd::FromRawFd;
+    use std::os::fd::{AsFd, FromRawFd};
     use std::os::unix::net::UnixStream;
 
     if !is_open_socket(BRIDGE_DESCRIPTOR) {
@@ -184,15 +185,17 @@ pub fn run_git_bridge() -> std::io::Result<()> {
     // process; nothing else in it uses the descriptor.
     let stream = unsafe { UnixStream::from_raw_fd(BRIDGE_DESCRIPTOR) };
     let mut writer = stream.try_clone()?;
-    let upstream = std::thread::spawn(move || {
-        let copied = std::io::copy(&mut std::io::stdin().lock(), &mut writer);
+    std::thread::spawn(move || {
+        let _ = std::io::copy(&mut std::io::stdin().lock(), &mut writer);
         let _ = writer.shutdown(Shutdown::Write);
-        copied
     });
+    // Straight to the descriptor: `Stdout` holds back what follows the last newline, and git's
+    // flush packet has none, so git would wait for it forever.
+    let mut output = std::fs::File::from(std::io::stdout().as_fd().try_clone_to_owned()?);
     let mut reader = stream;
-    std::io::copy(&mut reader, &mut std::io::stdout().lock())?;
-    // Git closes its end of our input when it is done, which ends the thread.
-    let _ = upstream.join();
+    std::io::copy(&mut reader, &mut output)?;
+    // The daemon's side has ended, so there is nothing more to say: exiting closes git's input
+    // even when git still waits to be answered, as when the other device refused at once.
     Ok(())
 }
 
