@@ -509,6 +509,8 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     EndReason::MachineFault(fault) => {
                         format!("was ended by the machine: {}", fault.label())
                     }
+                    EndReason::LeaseExpired => "was taken over: its device was gone".into(),
+                    EndReason::Outclaimed => "lost its claim to an earlier session".into(),
                 };
                 let summary = match moved_to {
                     Some(to) => format!("{ended} → {to}"),

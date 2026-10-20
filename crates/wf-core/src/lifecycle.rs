@@ -46,6 +46,11 @@ pub enum Interruption {
     /// The machine cannot carry the session. Nothing is commented: the inbox says once what is
     /// wrong with the machine, for all the sessions it ends.
     MachineFault(MachineFault),
+    /// Its device was gone for longer than the lease, and a daemon of its principal takes over
+    /// what it claimed.
+    LeaseExpired,
+    /// An earlier claim on the same thing arrived.
+    Outclaimed,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -208,6 +213,8 @@ impl State {
                     }
                     Interruption::TimedOut => closing(EndReason::TimedOut, by_daemon, None),
                     Interruption::Interrupted => closing(EndReason::Interrupted, by_daemon, None),
+                    Interruption::LeaseExpired => closing(EndReason::LeaseExpired, by_daemon, None),
+                    Interruption::Outclaimed => closing(EndReason::Outclaimed, by_daemon, None),
                     Interruption::MachineFault(fault) => {
                         closing(EndReason::MachineFault(*fault), by_daemon, None)
                     }
@@ -346,7 +353,9 @@ impl State {
             | EndReason::Failed
             | EndReason::Cancelled
             | EndReason::Interrupted
-            | EndReason::MachineFault(_) => {
+            | EndReason::MachineFault(_)
+            | EndReason::LeaseExpired
+            | EndReason::Outclaimed => {
                 let held_by_another = self
                     .holder(item, &SessionRole::Work)
                     .is_some_and(|holder| holder.id() != session.id());

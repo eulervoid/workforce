@@ -309,6 +309,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 26 | `Commented` | as tag 16, plus `lines: LineAnchor`, the lines of the diff it is about (section 11); a comment without lines is written under tag 16 |
 | 30 | `Commented` | as tag 16, 26 or 27 (by lines and kind), plus `head: CommitId`, where the branch of the work session that comments was (section 10); a comment without a head keeps its older tag |
 | 31 | `SessionEnded` | as tag 21 or 25, plus `head: CommitId`, where the branch of the work session was when it ended (section 10), for an end other than a submission; a submission is written under tag 21 or 25 with its commit in `Submitted{commit}`, read as the end's head, so ends written before heads keep their bytes, and an end without a head keeps its older tag |
+| 32 | `SessionEnded` | as tag 31, with `head` optional, for the ends that lost their claim (`LeaseExpired`, `Outclaimed`), so peers that predate them carry the event as unknown instead of failing to decode it |
 | 28 | `BoundPolicySet` | `Signed<BoundPolicySet>`: `policy`, and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
 
 * `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.
@@ -322,8 +323,8 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused. *Planned (M3):* `MergeClaimed{item, commit}`, the end reasons `LeaseExpired` and `Outclaimed`,
-  `TargetMoved{commit, onto}`; `onto: CommitId` on `Merged` (section 10).
+* Tags are never reused. *Planned (M3):* `MergeClaimed{item, commit}`, `TargetMoved{commit, onto}`;
+  `onto: CommitId` on `Merged` (section 10).
 
 ### Store
 

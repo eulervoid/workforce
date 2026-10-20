@@ -156,6 +156,11 @@ pub enum EndReason {
     /// The machine could not carry the session. Not a failure of the attempt: the item is tried
     /// again once the machine is fine.
     MachineFault(MachineFault),
+    /// Another device of the principal took over what it claimed, after the lease of its device
+    /// ran out. Not a failure of the attempt.
+    LeaseExpired,
+    /// An earlier claim on the same thing arrived. Not a failure of the attempt.
+    Outclaimed,
 }
 
 /// What was wrong with the machine a session ran on, as opposed to with its work.
@@ -223,8 +228,8 @@ pub enum Outcome {
     Finished,
     /// The attempt did not finish: the agent gave up, ran out of time or failed.
     Failed,
-    /// Interrupted by a restart, cancelled by the principal or ended by a fault of the machine:
-    /// no attempt either way.
+    /// Interrupted by a restart, cancelled by the principal, ended by a fault of the machine or by
+    /// losing its claim: no attempt either way.
     Neither,
 }
 
@@ -234,9 +239,11 @@ impl EndReason {
             EndReason::Submitted => Outcome::Submitted,
             EndReason::Reviewed | EndReason::Supervised | EndReason::Diagnosed => Outcome::Finished,
             EndReason::Released | EndReason::TimedOut | EndReason::Failed => Outcome::Failed,
-            EndReason::Interrupted | EndReason::Cancelled | EndReason::MachineFault(_) => {
-                Outcome::Neither
-            }
+            EndReason::Interrupted
+            | EndReason::Cancelled
+            | EndReason::MachineFault(_)
+            | EndReason::LeaseExpired
+            | EndReason::Outclaimed => Outcome::Neither,
         }
     }
 
@@ -254,6 +261,8 @@ impl EndReason {
             EndReason::Cancelled => "cancelled",
             EndReason::Interrupted => "interrupted",
             EndReason::Diagnosed => "diagnosed",
+            EndReason::LeaseExpired => "lease_expired",
+            EndReason::Outclaimed => "outclaimed",
         }
     }
 

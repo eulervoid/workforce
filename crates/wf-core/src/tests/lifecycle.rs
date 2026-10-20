@@ -173,6 +173,39 @@ fn an_item_another_session_holds_is_not_reopened() {
 }
 
 #[test]
+fn a_session_that_lost_its_claim_ends_like_an_interruption() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    scene.apply(moved(task, ItemState::Active));
+    let first = scene.start(task);
+    let second = scene.start(task);
+    assert_eq!(
+        scene.state.after_end(second, EndReason::Outclaimed, None),
+        Some(AfterEnd::Nothing),
+        "the earlier session holds the work"
+    );
+    scene.apply(end_session(second, EndReason::Outclaimed));
+    assert_eq!(
+        scene
+            .state
+            .after_end(first, EndReason::LeaseExpired, Some(commit())),
+        Some(AfterEnd::MoveTo(ItemState::Open)),
+        "nothing holds the work once it is taken over"
+    );
+    let closing = scene
+        .state
+        .closing(
+            first,
+            &SessionEnd::Interruption(Interruption::LeaseExpired),
+            Some(commit()),
+        )
+        .unwrap();
+    assert_eq!(closing.reason, EndReason::LeaseExpired);
+    assert_eq!(closing.head, Some(commit()));
+    assert!(matches!(closing.actor, Actor::Daemon(_)));
+}
+
+#[test]
 fn a_turn_continues_until_the_nudges_are_used_up() {
     let mut scene = Scene::new();
     let task = scene.item(create("task", "work"));

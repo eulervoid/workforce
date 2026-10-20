@@ -696,8 +696,8 @@ enum WrittenEndReason {
 }
 
 impl WrittenEndReason {
-    /// The older form of `reason` with `head`; `None` when only tag 31 can carry them, for a head
-    /// of an end other than a submission.
+    /// The older form of `reason` with `head`; `None` when only tag 31 or 32 can carry them: for
+    /// a head of an end other than a submission, or a reason newer than these tags.
     fn of(reason: EndReason, head: Option<CommitId>) -> Option<Self> {
         let written = match reason {
             EndReason::Submitted => return Some(WrittenEndReason::Submitted { commit: head }),
@@ -710,6 +710,7 @@ impl WrittenEndReason {
             EndReason::Interrupted => WrittenEndReason::Interrupted,
             EndReason::Diagnosed => WrittenEndReason::Diagnosed,
             EndReason::MachineFault(fault) => WrittenEndReason::MachineFault(fault),
+            EndReason::LeaseExpired | EndReason::Outclaimed => return None,
         };
         head.is_none().then_some(written)
     }
@@ -734,6 +735,9 @@ impl WrittenEndReason {
 
 impl SessionEnded {
     fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        if self.lost_claim() {
+            return Ok((tag::SESSION_ENDED_CLAIM_LOST, encoding::encode(self)?));
+        }
         let Some(reason) = WrittenEndReason::of(self.reason, self.head) else {
             return Ok((tag::SESSION_ENDED_WITH_HEAD, encoding::encode(self)?));
         };
@@ -760,8 +764,34 @@ impl SessionEnded {
     fn with_head(payload: &[u8]) -> Result<Self, EncodingError> {
         let ended: SessionEnded = encoding::decode(payload)?;
         match WrittenEndReason::of(ended.reason, ended.head) {
-            None => Ok(ended),
-            Some(_) => Err(EncodingError::malformed()),
+            None if !ended.lost_claim() => Ok(ended),
+            None | Some(_) => Err(EncodingError::malformed()),
+        }
+    }
+
+    /// One that did not lose its claim would encode under an older tag.
+    fn claim_lost(payload: &[u8]) -> Result<Self, EncodingError> {
+        let ended: SessionEnded = encoding::decode(payload)?;
+        match ended.lost_claim() {
+            true => Ok(ended),
+            false => Err(EncodingError::malformed()),
+        }
+    }
+
+    /// Whether the session ended because it lost its claim, which only tag 32 writes.
+    fn lost_claim(&self) -> bool {
+        match self.reason {
+            EndReason::LeaseExpired | EndReason::Outclaimed => true,
+            EndReason::Submitted
+            | EndReason::Reviewed
+            | EndReason::Supervised
+            | EndReason::Released
+            | EndReason::TimedOut
+            | EndReason::Failed
+            | EndReason::Cancelled
+            | EndReason::Interrupted
+            | EndReason::Diagnosed
+            | EndReason::MachineFault(_) => false,
         }
     }
 
@@ -882,6 +912,10 @@ mod tag {
     pub const COMMENT_WITH_HEAD: u16 = 30;
     /// `SessionEnded` that names a head; one that does not is still written under its older tag.
     pub const SESSION_ENDED_WITH_HEAD: u16 = 31;
+    /// `SessionEnded` because the session lost its claim (`LeaseExpired`, `Outclaimed`), with or
+    /// without a head. Peers that predate these reasons carry it as `Unknown` instead of failing
+    /// to decode the event.
+    pub const SESSION_ENDED_CLAIM_LOST: u16 = 32;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -1014,6 +1048,9 @@ impl EventBody {
             tag::SESSION_ENDED => EventBody::SessionEnded(SessionEnded::with_comment(payload)?),
             tag::SESSION_ENDED_WITH_HEAD => {
                 EventBody::SessionEnded(SessionEnded::with_head(payload)?)
+            }
+            tag::SESSION_ENDED_CLAIM_LOST => {
+                EventBody::SessionEnded(SessionEnded::claim_lost(payload)?)
             }
             tag::REVIEW => EventBody::Reviewed(encoding::decode(payload)?),
             tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
@@ -1262,16 +1299,30 @@ mod tests {
                 reviewed: commit,
                 commit,
             }),
+            EventBody::SessionEnded(SessionEnded {
+                session,
+                reason: EndReason::LeaseExpired,
+                because: None,
+                head: Some(commit),
+            }),
+            EventBody::SessionEnded(SessionEnded {
+                session,
+                reason: EndReason::Outclaimed,
+                because: Some(CommentId::from(EventId::of(b"tests"))),
+                head: None,
+            }),
         ];
         let encoded: Vec<String> = bodies.iter().map(golden_body_bytes).collect();
         assert_eq!(encoded, GOLDEN_SESSION_BODIES);
     }
 
-    const GOLDEN_SESSION_BODIES: [&str; 4] = [
+    const GOLDEN_SESSION_BODIES: [&str; 6] = [
         "143f05636f6465722001010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
         "15392002020202020202020202020202020202020202020202020202020202020202020001001400112233445566778899aabbccddeeff00112233",
         "165b20010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff0011223301012065e27c6eb2ae7ce97aceb1a372b6fb11fbc5bbffd95ee6fa17949cd148c6f730",
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
+        "203a2002020202020202020202020202020202020202020202020202020202020202020a0001001400112233445566778899aabbccddeeff00112233",
+        "20452002020202020202020202020202020202020202020202020202020202020202020b012065e27c6eb2ae7ce97aceb1a372b6fb11fbc5bbffd95ee6fa17949cd148c6f73000",
     ];
 
     fn created_task(state: Option<WrittenState>) -> EventBody {
@@ -1457,6 +1508,45 @@ mod tests {
             };
             assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
         }
+    }
+
+    #[test]
+    fn a_lost_claim_is_written_under_a_tag_of_its_own_and_only_under_it() {
+        let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
+        let session = SessionId::from_bytes([2; 32]);
+        for reason in [EndReason::LeaseExpired, EndReason::Outclaimed] {
+            for head in [None, Some(commit)] {
+                let ended = SessionEnded {
+                    session,
+                    reason,
+                    because: None,
+                    head,
+                };
+                let body = EventBody::SessionEnded(ended.clone());
+                let bytes = encoding::encode(&body).unwrap();
+                assert_eq!(bytes[0], tag::SESSION_ENDED_CLAIM_LOST as u8);
+                assert_eq!(encoding::decode::<EventBody>(&bytes).unwrap(), body);
+                // Under the tag of a head it would encode to other bytes than were signed.
+                let forged = TaggedBody {
+                    tag: tag::SESSION_ENDED_WITH_HEAD,
+                    payload: encoding::encode(&ended).unwrap(),
+                };
+                let forged = encoding::encode(&forged).unwrap();
+                assert!(encoding::decode::<EventBody>(&forged).is_err());
+            }
+        }
+        // Nor does tag 32 carry any other end.
+        let forged = TaggedBody {
+            tag: tag::SESSION_ENDED_CLAIM_LOST,
+            payload: encoding::encode(&SessionEnded {
+                session,
+                reason: EndReason::Released,
+                because: None,
+                head: Some(commit),
+            })
+            .unwrap(),
+        };
+        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
     }
 
     #[test]
