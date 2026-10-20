@@ -6,8 +6,8 @@ use wf_core::session::CommitId;
 
 use crate::{GitCli, VcsError, item_branch};
 
-/// What the refs of work set apart begin with. They are refs of the bare repository, so a commit
-/// kept under one is served to other devices like one on a branch.
+/// What the refs of work set apart begin with. They are refs of the bare repository, so the
+/// principal's checkout sees them and git does not collect what they keep.
 const DIVERGED_PREFIX: &str = "refs/wf/diverged/";
 
 /// The ref the head of `session` is kept under when it lost the claim on its item and is not in
@@ -17,24 +17,66 @@ pub fn diverged_ref(session: SessionId) -> String {
 }
 
 impl GitCli {
-    /// Moves the branch of `item` to `commit`, whatever it was at.
-    pub fn set_item_branch(&self, item: ItemId, commit: CommitId) -> Result<(), VcsError> {
-        let reference = format!("refs/heads/{}", item_branch(item));
-        self.update_ref(&reference, commit)
+    /// Moves the branch of `item` from `expected` (`None`: it does not exist) to `commit`, unless
+    /// something else moved it meanwhile. Returns whether it moved.
+    pub fn move_item_branch(
+        &self,
+        item: ItemId,
+        expected: Option<CommitId>,
+        commit: CommitId,
+    ) -> Result<bool, VcsError> {
+        self.move_branch(&item_branch(item), expected, commit)
+    }
+
+    /// Moves `branch` from `expected` (`None`: it does not exist) to `commit`, unless something
+    /// else moved it meanwhile. Returns whether it moved.
+    pub(crate) fn move_branch(
+        &self,
+        branch: &str,
+        expected: Option<CommitId>,
+        commit: CommitId,
+    ) -> Result<bool, VcsError> {
+        let reference = format!("refs/heads/{branch}");
+        let old = expected.map_or_else(String::new, |expected| expected.to_string());
+        let moved = self.run(
+            &self.repository,
+            &[],
+            ["update-ref", &reference, &commit.to_string(), &old],
+        )?;
+        if moved.success {
+            return Ok(true);
+        }
+        // A branch that is not where it was expected is the answer; anything else is an error.
+        let now = match self.branch_head(branch) {
+            Ok(now) => Some(now),
+            Err(VcsError::NoBranch(_)) => None,
+            Err(error) => return Err(error),
+        };
+        if now == expected {
+            moved.ok()?;
+        }
+        Ok(false)
     }
 
     /// Makes the branch of `item` contain `head`: moves it there when it is missing or does not
-    /// reach it, and leaves it when it is at `head` or ahead.
+    /// reach it, and leaves it when it is at `head` or ahead. A branch moved by someone else
+    /// meanwhile is looked at again.
     pub fn bring_item_branch_to(&self, item: ItemId, head: CommitId) -> Result<(), VcsError> {
-        let reached = match self.branch_head(&item_branch(item)) {
-            Ok(branch) => self.is_ancestor(head, branch)?,
-            Err(VcsError::NoBranch(_)) => false,
-            Err(error) => return Err(error),
-        };
-        if reached {
-            return Ok(());
+        loop {
+            let branch = match self.branch_head(&item_branch(item)) {
+                Ok(branch) => Some(branch),
+                Err(VcsError::NoBranch(_)) => None,
+                Err(error) => return Err(error),
+            };
+            if let Some(branch) = branch
+                && self.is_ancestor(head, branch)?
+            {
+                return Ok(());
+            }
+            if self.move_item_branch(item, branch, head)? {
+                return Ok(());
+            }
         }
-        self.set_item_branch(item, head)
     }
 
     /// The branches of items, by name (`wf/<item>`).
@@ -136,7 +178,7 @@ mod tests {
     }
 
     #[test]
-    fn the_branch_of_an_item_moves_to_the_commit_named() {
+    fn the_branch_of_an_item_moves_only_from_where_it_was_expected() {
         let repository = TestRepository::new();
         let directory = repository.directory();
         let first = repository.commit_id("HEAD", &directory);
@@ -144,10 +186,39 @@ mod tests {
         let second = repository.commit(&directory, "second");
         let item = ItemId::from_bytes([3; 32]);
         let git = &repository.git;
-        git.set_item_branch(item, first).unwrap();
+        assert!(git.move_item_branch(item, None, first).unwrap());
         assert_eq!(git.branch_head(&item_branch(item)).unwrap(), first);
-        git.set_item_branch(item, second).unwrap();
+        assert!(git.move_item_branch(item, Some(first), second).unwrap());
         assert_eq!(git.branch_head(&item_branch(item)).unwrap(), second);
+
+        // Someone else got there first: nothing moves.
+        assert!(!git.move_item_branch(item, Some(first), first).unwrap());
+        assert!(!git.move_item_branch(item, None, first).unwrap());
+        assert_eq!(git.branch_head(&item_branch(item)).unwrap(), second);
+        let other = ItemId::from_bytes([4; 32]);
+        assert!(!git.move_item_branch(other, Some(first), second).unwrap());
+        assert!(git.branch_head(&item_branch(other)).is_err());
+    }
+
+    #[test]
+    fn the_branch_is_brought_to_a_head_only_when_it_does_not_reach_it() {
+        let repository = TestRepository::new();
+        let directory = repository.directory();
+        let first = repository.commit_id("HEAD", &directory);
+        repository.write(&directory, "file.txt", "changed\n");
+        let second = repository.commit(&directory, "second");
+        let item = ItemId::from_bytes([3; 32]);
+        let git = &repository.git;
+        git.bring_item_branch_to(item, first).unwrap();
+        assert_eq!(git.branch_head(&item_branch(item)).unwrap(), first);
+        git.bring_item_branch_to(item, second).unwrap();
+        assert_eq!(git.branch_head(&item_branch(item)).unwrap(), second);
+        git.bring_item_branch_to(item, first).unwrap();
+        assert_eq!(
+            git.branch_head(&item_branch(item)).unwrap(),
+            second,
+            "a branch ahead stays"
+        );
     }
 
     #[test]
