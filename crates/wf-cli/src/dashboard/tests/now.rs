@@ -222,9 +222,7 @@ fn enter_on_what_waits_opens_the_item_with_its_notice_in_view() {
     for line in textwrap::wrap(what, 50) {
         text.push_str(&format!("  {bar} {line}\n"));
     }
-    text.push_str(&format!(
-        "  {bar} Nobody has answered it for a day.\n\n"
-    ));
+    text.push_str(&format!("  {bar} Nobody has answered it for a day.\n\n"));
     for line in 1..=30 {
         text.push_str(&format!("  body line {line}\n"));
     }

@@ -13,6 +13,20 @@ use crate::{ITEM_BRANCH_PREFIX, VcsError};
 /// The name of the remote the principal's checkout has for the bare repository.
 pub const REMOTE: &str = "wf";
 
+/// The config of the principal's checkout that the bare repository starts with: who the merge
+/// commits are by, and how they are signed. The checkout's own config is not read afterwards, and
+/// the git config of the principal's account applies to the bare repository as it does to any.
+const COPIED_CONFIG: [&str; 8] = [
+    "user.name",
+    "user.email",
+    "user.signingkey",
+    "commit.gpgsign",
+    "gpg.format",
+    "gpg.program",
+    "gpg.ssh.program",
+    "gpg.ssh.allowedSignersFile",
+];
+
 impl GitCli {
     /// Makes the bare repository at `path` with `target` as its head, and opens it; opens it as it
     /// is when it exists already. With the principal's `checkout`, the repository starts with the
@@ -53,10 +67,25 @@ impl GitCli {
             bare.run(path, &[], ["config", key, value])?.ok()?;
         }
         if let Some(checkout) = checkout {
+            bare.copy_config(checkout)?;
             bare.fetch_branches(checkout, target)?;
             GitCli::open(checkout)?.add_remote(path, target)?;
         }
         Ok(bare)
+    }
+
+    /// Copies what `COPIED_CONFIG` names from the config of the repository at `from`, the keys it
+    /// sets itself and not those it gets from the principal's account.
+    fn copy_config(&self, from: &Path) -> Result<(), VcsError> {
+        for key in COPIED_CONFIG {
+            let found = self.run(from, &[], ["config", "--local", "--get", key])?;
+            if found.success {
+                let value = found.stdout.trim_end_matches('\n');
+                self.run(&self.repository, &[], ["config", key, value])?
+                    .ok()?;
+            }
+        }
+        Ok(())
     }
 
     /// Copies the target and the item branches of the repository at `from` into this one.
@@ -265,6 +294,24 @@ mod tests {
         git_in(&checkout, &["pull", "--ff-only", "--quiet"]);
         assert_eq!(repo.main(), commit);
         assert!(checkout.join("a.txt").is_file());
+    }
+
+    #[test]
+    fn the_checkout_fetches_work_from_the_bare_repository_when_it_checks_it_out() {
+        let (repo, _) = checkout_with_branches();
+        let checkout = repo.directory();
+        let path = repo.root.path().join("wf-git");
+        let bare = GitCli::create_bare_repository(&path, "main", Some(&checkout)).unwrap();
+        let on_branch = bare_commit(&path, "wf/later", "later.txt");
+        // The branch of the item is gone, as after a merge or a submission without commits.
+        let orphan = bare_commit(&path, "wf/gone", "orphan.txt");
+        bare.delete_branch("wf/gone").unwrap();
+
+        let opened = GitCli::open(&checkout).unwrap();
+        opened.checkout_detached(on_branch).unwrap();
+        assert!(checkout.join("later.txt").is_file());
+        opened.checkout_detached(orphan).unwrap();
+        assert!(checkout.join("orphan.txt").is_file());
     }
 
     /// Commits a file on `branch` of the bare repository at `path` through a scratch clone.

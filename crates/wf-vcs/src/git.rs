@@ -33,6 +33,25 @@ fn diff_revisions(work: &Work) -> Vec<String> {
     }
 }
 
+/// The arguments of `git diff` for `work` with the caller's `args`: the revisions, then the
+/// options, then `--` and the paths. A bare repository has no working tree to tell a path from a
+/// revision by, so the paths are separated from the revisions when `args` does not do it already.
+fn diff_arguments(work: &Work, args: &[String]) -> Vec<String> {
+    let mut all = diff_revisions(work);
+    if args.iter().any(|arg| arg == "--") {
+        all.extend(args.iter().cloned());
+        return all;
+    }
+    let (options, paths): (Vec<&String>, Vec<&String>) =
+        args.iter().partition(|arg| arg.starts_with('-'));
+    all.extend(options.into_iter().cloned());
+    if !paths.is_empty() {
+        all.push("--".to_string());
+        all.extend(paths.into_iter().cloned());
+    }
+    all
+}
+
 /// A git repository, driven through the `git` command.
 #[derive(Clone, Debug)]
 pub struct GitCli {
@@ -512,14 +531,13 @@ impl GitCli {
     /// What `work` changes, as [`Work`] says, with `args` added to `git diff`, such as `--stat`
     /// or `-- src/`.
     pub fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError> {
-        let revisions = diff_revisions(work);
+        let arguments = diff_arguments(work, args);
         self.run(
             &self.repository,
             &[],
             ["diff"]
                 .into_iter()
-                .chain(revisions.iter().map(String::as_str))
-                .chain(args.iter().map(String::as_str)),
+                .chain(arguments.iter().map(String::as_str)),
         )?
         .ok()
     }
@@ -527,7 +545,7 @@ impl GitCli {
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
     /// apply as for `git diff`, except where `pager` says otherwise.
     pub fn show_diff(&self, work: &Work, args: &[String], pager: Pager) -> Result<(), VcsError> {
-        let revisions = diff_revisions(work);
+        let arguments = diff_arguments(work, args);
         // The principal's environment stays as it is, so the pager, colors and locale are theirs.
         let mut command = git();
         match pager {
@@ -539,8 +557,7 @@ impl GitCli {
         }
         let status = command
             .arg("diff")
-            .args(&revisions)
-            .args(args)
+            .args(&arguments)
             .current_dir(&self.repository)
             .status()
             .map_err(VcsError::Spawn)?;
@@ -548,7 +565,7 @@ impl GitCli {
             Ok(())
         } else {
             Err(VcsError::Git {
-                command: format!("diff {} {}", revisions.join(" "), args.join(" ")),
+                command: format!("diff {}", arguments.join(" ")),
                 stderr: format!("exited with {status}"),
             })
         }
@@ -920,6 +937,33 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn paths_after_the_options_of_a_diff_are_separated_from_its_revisions() {
+        let work = unmerged(CommitId::Git(GitOid::from_bytes([1; 20])));
+        let revisions = diff_revisions(&work);
+        let with = |extra: &[&str]| {
+            let mut expected = revisions.clone();
+            expected.extend(extra.iter().map(|word| word.to_string()));
+            expected
+        };
+        let args = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| word.to_string())
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(diff_arguments(&work, &args(&[])), with(&[]));
+        assert_eq!(diff_arguments(&work, &args(&["--stat"])), with(&["--stat"]));
+        assert_eq!(
+            diff_arguments(&work, &args(&["--stat", "src/", "a.txt"])),
+            with(&["--stat", "--", "src/", "a.txt"])
+        );
+        assert_eq!(
+            diff_arguments(&work, &args(&["--", "src/"])),
+            with(&["--", "src/"])
+        );
     }
 
     #[test]
