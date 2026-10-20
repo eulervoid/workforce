@@ -54,7 +54,8 @@ impl Daemon {
             })
             .await?
             .ok_or(LiveDiffError::NoPolicy)?;
-        self.ensure_bare_repository(workforce, &loaded.storage).await;
+        self.ensure_bare_repository(workforce, &loaded.storage)
+            .await;
         let worktree = item_repository(&self.workforce_directory(workforce), item);
         let repository = self.bare_repository(workforce);
         tokio::task::spawn_blocking(move || read_work(repository, worktree, item, &target, since))

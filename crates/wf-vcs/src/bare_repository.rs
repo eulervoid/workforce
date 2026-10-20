@@ -408,4 +408,80 @@ mod tests {
             commit.to_string()
         );
     }
+
+    #[test]
+    fn the_checkout_fetches_work_it_does_not_have_before_checking_it_out() {
+        let (repo, _) = checkout_with_branches();
+        let branch = "wf/later".to_string();
+        let checkout = repo.directory();
+        let path = repo.root.path().join("wf-git");
+        GitCli::create_bare_repository(&path, "main", Some(&checkout)).unwrap();
+        let checkout_git = GitCli::open(&checkout).unwrap();
+
+        // Submitted work, on the branch of its item.
+        let submitted = bare_commit(&path, &branch, "submitted.txt");
+        checkout_git.checkout_detached(submitted).unwrap();
+        assert_eq!(
+            git_in(&checkout, &["rev-parse", "HEAD"]),
+            submitted.to_string()
+        );
+
+        // Merged work, on the target.
+        checkout_git.checkout_previous().unwrap();
+        let merged = bare_commit(&path, "main", "merged.txt");
+        checkout_git.checkout_detached(merged).unwrap();
+        assert_eq!(
+            git_in(&checkout, &["rev-parse", "HEAD"]),
+            merged.to_string()
+        );
+    }
+
+    #[test]
+    fn work_whose_branch_is_gone_is_fetched_when_the_target_has_it() {
+        let (repo, _) = checkout_with_branches();
+        let branch = "wf/later".to_string();
+        let checkout = repo.directory();
+        let path = repo.root.path().join("wf-git");
+        GitCli::create_bare_repository(&path, "main", Some(&checkout)).unwrap();
+        let work = bare_commit(&path, &branch, "work.txt");
+        // The merge: the target takes the commit, and the branch of the item is deleted.
+        git_in(&path, &["update-ref", "refs/heads/main", &work.to_string()]);
+        git_in(&path, &["branch", "--delete", "--force", &branch]);
+        GitCli::open(&checkout)
+            .unwrap()
+            .checkout_detached(work)
+            .unwrap();
+        assert_eq!(git_in(&checkout, &["rev-parse", "HEAD"]), work.to_string());
+    }
+
+    #[test]
+    fn work_no_branch_reaches_any_more_is_fetched_by_its_commit_id() {
+        let (repo, _) = checkout_with_branches();
+        let checkout = repo.directory();
+        let path = repo.root.path().join("wf-git");
+        GitCli::create_bare_repository(&path, "main", Some(&checkout)).unwrap();
+        let orphan = bare_commit(&path, "wf/later", "orphan.txt");
+        git_in(&path, &["branch", "--delete", "--force", "wf/later"]);
+        // Git's protocol version 2, the default, serves an object by its id whatever reaches it;
+        // the bare repository still has the commit until a gc prunes it.
+        GitCli::open(&checkout)
+            .unwrap()
+            .checkout_detached(orphan)
+            .unwrap();
+        assert_eq!(
+            git_in(&checkout, &["rev-parse", "HEAD"]),
+            orphan.to_string()
+        );
+    }
+
+    #[test]
+    fn a_checkout_without_the_remote_says_so() {
+        let repo = TestRepository::new();
+        let checkout = GitCli::open(&repo.directory()).unwrap();
+        let unknown = CommitId::Git(wf_core::session::GitOid::from_bytes([9; 20]));
+        assert!(matches!(
+            checkout.checkout_detached(unknown),
+            Err(VcsError::NoRemote(_))
+        ));
+    }
 }

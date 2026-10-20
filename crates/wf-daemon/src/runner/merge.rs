@@ -261,7 +261,8 @@ impl Daemon {
                 Ok::<_, SessionError>(())
             }
         };
-        self.ensure_bare_repository(workforce, &loaded.storage).await;
+        self.ensure_bare_repository(workforce, &loaded.storage)
+            .await;
         let repository = self.bare_repository(workforce);
         let signing = match self.merge_signing() {
             Ok(signing) => signing,

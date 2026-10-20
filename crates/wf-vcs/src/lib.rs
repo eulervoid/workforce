@@ -150,6 +150,12 @@ pub enum VcsError {
     NotARepository(PathBuf),
     #[error("{} has uncommitted changes; commit or stash them first", .0.display())]
     DirtyCheckout(PathBuf),
+    #[error(
+        "{} has no remote `{}` to fetch the work from; add wf's repository as that remote",
+        .0.display(),
+        REMOTE
+    )]
+    NoRemote(PathBuf),
 }
 
 /// The work on an item, as far as git can show it.

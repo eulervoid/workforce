@@ -650,7 +650,7 @@ pub enum ItemCommand {
     Diff {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
-        /// Passed on to `git diff`, such as `--stat` or `-- src/`.
+        /// Passed on to `git diff`, such as `--stat` or `--diff-algorithm patience -- src/`; paths follow `--`.
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         git_args: Vec<String>,
     },

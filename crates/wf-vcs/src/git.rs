@@ -33,22 +33,12 @@ fn diff_revisions(work: &Work) -> Vec<String> {
     }
 }
 
-/// The arguments of `git diff` for `work` with the caller's `args`: the revisions, then the
-/// options, then `--` and the paths. A bare repository has no working tree to tell a path from a
-/// revision by, so the paths are separated from the revisions when `args` does not do it already.
+/// The arguments of `git diff` for `work` with the caller's `args`, as they are: the revisions,
+/// then `args`. A bare repository has no working tree to tell a path from a revision by, so paths
+/// follow `--` in `args`, as in `--diff-algorithm patience -- src/`; an option's separate value stays its value.
 fn diff_arguments(work: &Work, args: &[String]) -> Vec<String> {
     let mut all = diff_revisions(work);
-    if args.iter().any(|arg| arg == "--") {
-        all.extend(args.iter().cloned());
-        return all;
-    }
-    let (options, paths): (Vec<&String>, Vec<&String>) =
-        args.iter().partition(|arg| arg.starts_with('-'));
-    all.extend(options.into_iter().cloned());
-    if !paths.is_empty() {
-        all.push("--".to_string());
-        all.extend(paths.into_iter().cloned());
-    }
+    all.extend(args.iter().cloned());
     all
 }
 
@@ -529,7 +519,7 @@ impl GitCli {
     }
 
     /// What `work` changes, as [`Work`] says, with `args` added to `git diff`, such as `--stat`
-    /// or `-- src/`.
+    /// or `--diff-algorithm patience -- src/`.
     pub fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError> {
         let arguments = diff_arguments(work, args);
         self.run(
@@ -590,6 +580,10 @@ impl GitCli {
         };
         if !has(self)? {
             let remote = crate::REMOTE;
+            let known = self.run(&self.repository, &[], ["remote", "get-url", remote])?;
+            if !known.success {
+                return Err(VcsError::NoRemote(self.repository.clone()));
+            }
             self.run(
                 &self.repository,
                 &[],
@@ -940,29 +934,23 @@ mod tests {
     }
 
     #[test]
-    fn paths_after_the_options_of_a_diff_are_separated_from_its_revisions() {
+    fn the_arguments_of_a_diff_follow_its_revisions_as_they_are() {
         let work = unmerged(CommitId::Git(GitOid::from_bytes([1; 20])));
         let revisions = diff_revisions(&work);
-        let with = |extra: &[&str]| {
-            let mut expected = revisions.clone();
-            expected.extend(extra.iter().map(|word| word.to_string()));
-            expected
-        };
         let args = |words: &[&str]| {
             words
                 .iter()
                 .map(|word| word.to_string())
                 .collect::<Vec<_>>()
         };
+        let with = |extra: &[&str]| [revisions.clone(), args(extra)].concat();
         assert_eq!(diff_arguments(&work, &args(&[])), with(&[]));
-        assert_eq!(diff_arguments(&work, &args(&["--stat"])), with(&["--stat"]));
         assert_eq!(
-            diff_arguments(&work, &args(&["--stat", "src/", "a.txt"])),
-            with(&["--stat", "--", "src/", "a.txt"])
-        );
-        assert_eq!(
-            diff_arguments(&work, &args(&["--", "src/"])),
-            with(&["--", "src/"])
+            diff_arguments(
+                &work,
+                &args(&["--diff-algorithm", "patience", "--", "src/"])
+            ),
+            with(&["--diff-algorithm", "patience", "--", "src/"])
         );
     }
 

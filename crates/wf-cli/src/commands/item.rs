@@ -266,8 +266,12 @@ pub(super) fn item(
         ItemCommand::Link(args) => link(json, mode, workspace, args),
         ItemCommand::Diff { item, git_args } => {
             // `--json` after the item is wf's, not git's, though clap passes it on.
-            let (json_flags, git_args): (Vec<String>, Vec<String>) =
+            let (json_flags, mut git_args): (Vec<String>, Vec<String>) =
                 git_args.into_iter().partition(|arg| arg == "--json");
+            // Clap takes a leading `--` (`wf item diff k3f -- src/`) for itself; git needs it.
+            if git_args.first().is_some_and(|arg| !arg.starts_with('-')) {
+                git_args.insert(0, "--".to_string());
+            }
             let json = json || !json_flags.is_empty();
             let mode = if json { Mode::Scripted } else { mode };
             let id = choose_item(workspace, mode, item, Scope::Live)?;

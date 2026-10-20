@@ -2564,6 +2564,20 @@ wf work release --note later
         diff["committed"].as_str().unwrap().contains("+four"),
         "{diff}"
     );
+    // An option's separate value is not taken for a path.
+    let wide = world.wf.json(&[
+        "item",
+        "diff",
+        short(&item),
+        "--diff-algorithm",
+        "patience",
+        "--",
+        "file.txt",
+    ]);
+    assert!(
+        wide["committed"].as_str().unwrap().contains("+four"),
+        "{wide}"
+    );
 
     let path = world.wf.run(&["item", "path", short(&item)]);
     assert!(
