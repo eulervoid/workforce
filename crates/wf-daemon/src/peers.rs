@@ -154,6 +154,11 @@ impl Backoff {
         self.retry_at = Some(now + delay);
     }
 
+    /// Leaves it alone for the longest time there is: for what failed everywhere.
+    pub(crate) fn wait_longest(&mut self, now: Instant) {
+        self.retry_at = Some(now + LONGEST_RETRY);
+    }
+
     /// How long to wait before the next attempt: until the retry time of a device that failed,
     /// and a periodic round otherwise.
     pub(crate) fn wait(&self, now: Instant) -> Duration {

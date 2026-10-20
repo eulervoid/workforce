@@ -1,19 +1,20 @@
 //! Keeping the commits the log names present on this device, and the refs that follow them.
 //!
-//! Whenever the log changes, the daemon lists the commits it names, fetches the ones this
+//! Whenever the log changes, the daemon lists the commits it names, starts fetching the ones this
 //! repository lacks (from the device that wrote the event first, else from any other), and moves
 //! the refs of the items: `wf/<item>` at the head of the session holding the claim, the heads of
-//! sessions that lost it under `refs/wf/diverged/`, and none for items that are finished. What
-//! cannot be fetched is tried again later and shown as awaited.
+//! sessions that lost it under `refs/wf/diverged/`, and none for items that are finished. Fetches
+//! run beside all this, so one that hangs holds up nothing else. What no device could give is
+//! tried again now and then and shown as unavailable.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use n0_future::boxed::BoxFuture;
-use tokio::sync::Notify;
+use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
-use wf_core::commits::{ItemHeads, NamedCommit};
+use wf_core::commits::{AwaitedCommit, Fetching, ItemHeads, NamedCommit};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
 use wf_core::identity::DeviceKey;
 use wf_core::session::{CommitId, SessionRole};
@@ -69,25 +70,119 @@ impl CommitFetcher for DeviceFetcher {
 /// something arrived.
 #[derive(Default)]
 pub(crate) struct Commits {
-    awaited: Mutex<Vec<NamedCommit>>,
+    awaited: Mutex<Vec<AwaitedCommit>>,
     /// Notified when commits arrived, so that what waited for them starts.
     pub(crate) arrived: Notify,
 }
 
 impl Commits {
     /// The commits the log names that this device lacks.
-    pub(crate) fn awaited(&self) -> Vec<NamedCommit> {
+    pub(crate) fn awaited(&self) -> Vec<AwaitedCommit> {
         self.awaited
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
     }
 
-    fn set_awaited(&self, awaited: Vec<NamedCommit>) {
+    fn set_awaited(&self, awaited: Vec<AwaitedCommit>) {
         *self
             .awaited
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner()) = awaited;
+    }
+}
+
+/// How fetching one missing commit goes.
+struct Tracked {
+    backoff: Backoff,
+    fetching: Fetching,
+}
+
+/// The fetches of the commits this device lacks: those running, and how each went so far.
+pub(crate) struct Fetches {
+    tracked: BTreeMap<CommitId, Tracked>,
+    running: JoinSet<bool>,
+    /// The commit each running task fetches.
+    running_commits: HashMap<tokio::task::Id, CommitId>,
+    slots: Arc<Semaphore>,
+}
+
+impl Fetches {
+    pub(crate) fn new() -> Self {
+        Self {
+            tracked: BTreeMap::new(),
+            running: JoinSet::new(),
+            running_commits: HashMap::new(),
+            slots: Arc::new(Semaphore::new(FETCHES_AT_ONCE)),
+        }
+    }
+
+    fn is_running(&self, commit: CommitId) -> bool {
+        self.running_commits
+            .values()
+            .any(|running| *running == commit)
+    }
+
+    /// Starts fetching `commit` from `devices`, one after the other until one has it.
+    fn start(
+        &mut self,
+        commit: CommitId,
+        devices: Vec<DeviceKey>,
+        fetcher: &Arc<dyn CommitFetcher>,
+    ) {
+        let (fetcher, slots) = (Arc::clone(fetcher), Arc::clone(&self.slots));
+        let task = self.running.spawn(async move {
+            let _slot = slots.acquire_owned().await;
+            for device in devices {
+                match fetcher.fetch(device, commit).await {
+                    Ok(()) => return true,
+                    Err(error) => tracing::debug!(
+                        "could not fetch {} from {}: {error}",
+                        commit.short(),
+                        device.fmt_short()
+                    ),
+                }
+            }
+            false
+        });
+        self.running_commits.insert(task.id(), commit);
+    }
+
+    /// Waits for the next fetch to end, and notes how it went. Pending while none runs.
+    async fn next_done(&mut self) {
+        let Some(done) = self.running.join_next_with_id().await else {
+            return std::future::pending().await;
+        };
+        let (id, got) = match done {
+            Ok((id, got)) => (id, got),
+            Err(error) => (error.id(), false),
+        };
+        let Some(commit) = self.running_commits.remove(&id) else {
+            return;
+        };
+        let Some(tracked) = self.tracked.get_mut(&commit) else {
+            return;
+        };
+        let now = Instant::now();
+        if got {
+            tracked.backoff.record(true, now);
+        } else {
+            // Every device was asked: it is not to be had for now.
+            tracked.backoff.wait_longest(now);
+            if tracked.fetching == Fetching::Underway {
+                tracked.fetching = Fetching::Unavailable {
+                    since_ms: wf_store::now_ms(),
+                };
+            }
+        }
+    }
+
+    /// Waits for every running fetch to end, for the tests.
+    #[cfg(test)]
+    async fn finish(&mut self) {
+        while !self.running.is_empty() {
+            self.next_done().await;
+        }
     }
 }
 
@@ -106,24 +201,30 @@ struct Reading {
     heads: Vec<ItemHeads>,
     peers: Vec<DeviceKey>,
     finished: Vec<Finished>,
+    /// The items a work session of this device runs on: their branch is the session's, which
+    /// its import moves.
+    worked_here: BTreeSet<ItemId>,
 }
 
 fn read(state: &wf_core::state::State, own: DeviceKey) -> Reading {
     let heads = state.item_heads();
+    let work_of = |item: ItemId| {
+        state
+            .sessions_of(item)
+            .filter(|session| session.role() == SessionRole::Work)
+    };
+    let worked_here = heads
+        .iter()
+        .map(|heads| heads.item)
+        .filter(|item| work_of(*item).any(|session| session.is_live() && session.device() == own))
+        .collect::<BTreeSet<_>>();
     let finished = heads
         .iter()
         .filter(|heads| heads.finished)
-        .map(|heads| {
-            let work = || {
-                state
-                    .sessions_of(heads.item)
-                    .filter(|session| session.role() == SessionRole::Work)
-            };
-            Finished {
-                item: heads.item,
-                sessions: work().map(|session| session.id()).collect(),
-                busy: work().any(|session| session.is_live() && session.device() == own),
-            }
+        .map(|heads| Finished {
+            item: heads.item,
+            sessions: work_of(heads.item).map(|session| session.id()).collect(),
+            busy: worked_here.contains(&heads.item),
         })
         .collect();
     Reading {
@@ -131,6 +232,7 @@ fn read(state: &wf_core::state::State, own: DeviceKey) -> Reading {
         heads,
         peers: peers_of(state, own),
         finished,
+        worked_here,
     }
 }
 
@@ -144,14 +246,15 @@ fn devices_for(author: DeviceKey, own: DeviceKey, peers: &[DeviceKey]) -> Vec<De
     devices
 }
 
-/// One pass: fetches what is missing and is due, then sets the refs. Returns how long to wait
-/// before another pass if something is still missing.
+/// One pass: starts fetching what is missing and is due, sets the refs, and tells what waited
+/// when commits arrived. Returns how long to wait before another pass if something is still
+/// missing. Waits for no fetch: [`Fetches::next_done`] does.
 pub(crate) async fn reconcile(
     daemon: &Arc<Daemon>,
     workforce: WorkforceId,
     loaded: &Loaded,
     fetcher: &Arc<dyn CommitFetcher>,
-    retries: &mut BTreeMap<CommitId, Backoff>,
+    fetches: &mut Fetches,
 ) -> Option<Duration> {
     let own = daemon.device();
     daemon
@@ -188,65 +291,37 @@ pub(crate) async fn reconcile(
             return None;
         }
     };
+    let arrived = fetches
+        .tracked
+        .keys()
+        .any(|commit| !missing.contains(commit));
+    fetches.tracked.retain(|commit, _| missing.contains(commit));
     wanted.retain(|named| missing.contains(&named.commit));
-    retries.retain(|commit, _| missing.contains(commit));
-    loaded.commits.set_awaited(wanted.clone());
 
     let now = Instant::now();
-    let semaphore = Arc::new(tokio::sync::Semaphore::new(FETCHES_AT_ONCE));
-    let mut fetching = JoinSet::new();
-    for named in wanted.iter().filter(|named| {
-        retries
-            .get(&named.commit)
-            .is_none_or(|retry| retry.is_due(now))
-    }) {
-        let devices = devices_for(named.author, own, &reading.peers);
-        let (commit, fetcher, semaphore) =
-            (named.commit, Arc::clone(fetcher), Arc::clone(&semaphore));
-        fetching.spawn(async move {
-            let _slot = semaphore.acquire().await;
-            for device in devices {
-                match fetcher.fetch(device, commit).await {
-                    Ok(()) => return (commit, true),
-                    Err(error) => tracing::debug!(
-                        "could not fetch {} from {}: {error}",
-                        commit.short(),
-                        device.fmt_short()
-                    ),
-                }
-            }
-            (commit, false)
+    for named in &wanted {
+        let tracked = fetches.tracked.entry(named.commit).or_insert(Tracked {
+            backoff: Backoff::default(),
+            fetching: Fetching::Underway,
         });
-    }
-    let mut fetched = BTreeSet::new();
-    while let Some(done) = fetching.join_next().await {
-        if let Ok((commit, got)) = done {
-            retries
-                .entry(commit)
-                .or_default()
-                .record(got, Instant::now());
-            if got {
-                fetched.insert(commit);
-            }
+        if tracked.backoff.is_due(now) && !fetches.is_running(named.commit) {
+            let devices = devices_for(named.author, own, &reading.peers);
+            fetches.start(named.commit, devices, fetcher);
         }
     }
-    let still_missing: BTreeSet<CommitId> = missing.difference(&fetched).copied().collect();
-    if !fetched.is_empty() {
-        wanted.retain(|named| still_missing.contains(&named.commit));
-        loaded.commits.set_awaited(wanted);
-    }
+    loaded.commits.set_awaited(
+        wanted
+            .iter()
+            .map(|named| AwaitedCommit {
+                named: *named,
+                fetching: fetches.tracked[&named.commit].fetching,
+            })
+            .collect(),
+    );
 
     let workforce_directory = daemon.workforce_directory(workforce);
-    let referred = still_missing.clone();
     let referring = tokio::task::spawn_blocking(move || {
-        set_refs(
-            &bare,
-            &workforce_directory,
-            own,
-            &reading.heads,
-            &reading.finished,
-            &referred,
-        )
+        set_refs(&bare, &workforce_directory, &reading, &missing)
     })
     .await;
     match referring {
@@ -257,41 +332,58 @@ pub(crate) async fn reconcile(
         ),
         Err(error) => tracing::warn!("could not move the refs of the items: {error}"),
     }
-    if !fetched.is_empty() {
+    if arrived {
         loaded.commits.arrived.notify_one();
     }
-    if still_missing.is_empty() {
+    if fetches.tracked.is_empty() {
         return None;
     }
-    let waits = retries.values().map(|retry| retry.wait(Instant::now()));
+    let waits = fetches
+        .tracked
+        .values()
+        .map(|tracked| tracked.backoff.wait(Instant::now()));
     Some(waits.min().map_or(LOOK_AGAIN, |wait| wait.min(LOOK_AGAIN)))
 }
 
 /// Moves the refs of the items to the heads the log names, for those whose commits are here,
-/// and removes what finished items left.
+/// and removes what finished items left. Each branch moves only from where it was read, so an
+/// import or a start that moved it meanwhile wins, and not at all while a work session of this
+/// device runs on the item.
 fn set_refs(
     bare: &std::path::Path,
     workforce_directory: &std::path::Path,
-    own: DeviceKey,
-    heads: &[ItemHeads],
-    finished: &[Finished],
+    reading: &Reading,
     missing: &BTreeSet<CommitId>,
 ) -> Result<(), VcsError> {
     let git = GitCli::open(bare)?;
     let apart: BTreeSet<String> = git.refs_apart()?.into_iter().collect();
     let branches: BTreeSet<String> = git.item_branches()?.into_iter().collect();
-    for item in heads.iter().filter(|item| !item.finished) {
+    for item in reading.heads.iter().filter(|item| !item.finished) {
         let Some(holder) = item
             .holder
             .filter(|holder| !missing.contains(&holder.commit))
         else {
             continue;
         };
-        // What runs here keeps its own branch, which the import moves.
-        if holder.device != own {
-            let at_head = git.branch_head(&item_branch(item.item)).ok() == Some(holder.commit);
-            if !at_head {
-                git.set_item_branch(item.item, holder.commit)?;
+        if !reading.worked_here.contains(&item.item) {
+            let branch = match git.branch_head(&item_branch(item.item)) {
+                Ok(branch) => Some(branch),
+                Err(VcsError::NoBranch(_)) => None,
+                Err(error) => return Err(error),
+            };
+            if branch != Some(holder.commit) {
+                git.move_item_branch(item.item, branch, holder.commit)?;
+            }
+        }
+        // The holder's work, and work that became the same as it, is the branch's.
+        let others: BTreeSet<SessionId> = item.others.iter().map(|other| other.session).collect();
+        for session in item
+            .sessions
+            .iter()
+            .filter(|session| !others.contains(session))
+        {
+            if apart.contains(&diverged_ref(*session)) {
+                git.drop_apart(*session)?;
             }
         }
         for other in item
@@ -304,12 +396,12 @@ fn set_refs(
                 if kept {
                     git.drop_apart(other.session)?;
                 }
-            } else if !kept {
+            } else {
                 git.keep_apart(other.session, other.commit)?;
             }
         }
     }
-    for done in finished.iter().filter(|done| !done.busy) {
+    for done in reading.finished.iter().filter(|done| !done.busy) {
         for session in &done.sessions {
             if apart.contains(&diverged_ref(*session)) {
                 git.drop_apart(*session)?;
@@ -338,12 +430,12 @@ pub(crate) async fn run_commits(
         return;
     };
     let mut heads = loaded.storage.watch_heads();
-    let mut retries = BTreeMap::new();
+    let mut fetches = Fetches::new();
     loop {
         let Some(strong) = daemon.upgrade() else {
             return;
         };
-        let wait = reconcile(&strong, workforce, &loaded, &fetcher, &mut retries)
+        let wait = reconcile(&strong, workforce, &loaded, &fetcher, &mut fetches)
             .await
             .unwrap_or(LOOK_AGAIN);
         drop(strong);
@@ -355,6 +447,8 @@ pub(crate) async fn run_commits(
                 tokio::time::sleep(SETTLE).await;
                 heads.borrow_and_update();
             }
+            // A fetch ended: the next pass sets the refs and tells what waited for it.
+            () = fetches.next_done() => {}
             () = async { let _ = halted.wait_for(|halted| *halted).await; } => return,
             () = tokio::time::sleep(wait) => {}
         }
@@ -390,6 +484,7 @@ mod tests {
     use wf_core::event::{Commented, EventBody};
     use wf_core::identity::Actor;
     use wf_core::item::ItemState;
+    use wf_core::session::EndReason;
     use wf_core::testing::*;
     use wf_net::Network;
     use wf_store::{RedbStore, Replica};
@@ -398,17 +493,22 @@ mod tests {
     use super::*;
     use crate::{DataDir, Launch};
 
-    /// Fetches from repositories on disk, by device, as long as it is online.
+    /// Fetches from repositories on disk, by device, as long as it is online. A fetch of a commit
+    /// in `hanging` never ends.
     struct Repositories {
         bare: PathBuf,
         repositories: BTreeMap<DeviceKey, PathBuf>,
         online: AtomicBool,
         asked: Mutex<Vec<DeviceKey>>,
+        hanging: Mutex<BTreeSet<CommitId>>,
     }
 
     impl CommitFetcher for Repositories {
         fn fetch(&self, device: DeviceKey, commit: CommitId) -> BoxFuture<Result<(), String>> {
             self.asked.lock().unwrap().push(device);
+            if self.hanging.lock().unwrap().contains(&commit) {
+                return Box::pin(std::future::pending());
+            }
             let result = if !self.online.load(Ordering::SeqCst) {
                 Err("offline".to_string())
             } else if let Some(path) = self.repositories.get(&device) {
@@ -430,7 +530,7 @@ mod tests {
         loaded: Arc<Loaded>,
         remote: TestRepository,
         fetcher: Arc<Repositories>,
-        retries: BTreeMap<CommitId, Backoff>,
+        fetches: Fetches,
         clock: u64,
     }
 
@@ -468,6 +568,7 @@ mod tests {
                 repositories: BTreeMap::from([(fixture.devices[1].key(), remote.directory())]),
                 online: AtomicBool::new(true),
                 asked: Mutex::default(),
+                hanging: Mutex::default(),
             });
             Self {
                 _directory: directory,
@@ -476,7 +577,7 @@ mod tests {
                 loaded,
                 remote,
                 fetcher,
-                retries: BTreeMap::new(),
+                fetches: Fetches::new(),
                 clock: 2_000,
             }
         }
@@ -523,16 +624,36 @@ mod tests {
                 .into()
         }
 
-        async fn reconcile(&mut self) -> Option<Duration> {
+        /// One pass, which starts the fetches that are due and returns at once.
+        async fn pass(&mut self) -> Option<Duration> {
             let fetcher: Arc<dyn CommitFetcher> = Arc::clone(&self.fetcher) as _;
             reconcile(
                 &self.daemon,
                 self.fixture.workforce(),
                 &self.loaded,
                 &fetcher,
-                &mut self.retries,
+                &mut self.fetches,
             )
             .await
+        }
+
+        /// A pass, the fetches it started, and the pass that follows them.
+        async fn reconcile(&mut self) -> Option<Duration> {
+            self.pass().await;
+            self.fetches.finish().await;
+            self.pass().await
+        }
+
+        /// Makes every commit that waits due again.
+        fn retry_now(&mut self) {
+            for tracked in self.fetches.tracked.values_mut() {
+                tracked.backoff = Backoff::default();
+            }
+        }
+
+        async fn end(&mut self, session: SessionId, reason: EndReason) {
+            let founder = self.fixture.founder_actor();
+            self.write(1, founder, end_session(session, reason)).await;
         }
 
         fn bare(&self) -> GitCli {
@@ -567,12 +688,42 @@ mod tests {
         scene.name_head(session, item, head).await;
         scene.fetcher.online.store(false, Ordering::SeqCst);
 
-        let again = scene.reconcile().await;
-        assert!(again.is_some(), "it looks again");
+        scene.pass().await;
         let awaited = scene.loaded.commits.awaited();
         assert_eq!(
-            awaited.iter().map(|named| named.commit).collect::<Vec<_>>(),
-            vec![head]
+            awaited
+                .iter()
+                .map(|awaited| (awaited.named.commit, awaited.fetching))
+                .collect::<Vec<_>>(),
+            vec![(head, Fetching::Underway)]
+        );
+        scene.fetches.finish().await;
+        let again = scene.pass().await;
+        assert!(
+            again.is_some_and(|wait| wait <= LOOK_AGAIN),
+            "it looks again: {again:?}"
+        );
+        // No device had it: shown as unavailable, and asked for again only after a long while.
+        let awaited = scene.loaded.commits.awaited();
+        assert!(
+            matches!(
+                awaited.as_slice(),
+                [AwaitedCommit { named, fetching: Fetching::Unavailable { .. } }] if named.commit == head
+            ),
+            "{awaited:?}"
+        );
+        assert!(
+            !scene.fetches.tracked[&head]
+                .backoff
+                .is_due(Instant::now() + LOOK_AGAIN)
+        );
+        let asked = scene.fetcher.asked.lock().unwrap().len();
+        scene.pass().await;
+        scene.fetches.finish().await;
+        assert_eq!(
+            scene.fetcher.asked.lock().unwrap().len(),
+            asked,
+            "not due yet"
         );
         let workforce = scene.fixture.workforce();
         let waiting = scene.daemon.require_commit(workforce, head).await;
@@ -583,7 +734,7 @@ mod tests {
 
         // Retried when its time comes, and once the device is back the commit arrives.
         scene.fetcher.online.store(true, Ordering::SeqCst);
-        scene.retries.clear();
+        scene.retry_now();
         assert_eq!(scene.reconcile().await, None);
         scene.daemon.require_commit(workforce, head).await.unwrap();
         assert!(scene.loaded.commits.awaited().is_empty());
@@ -636,5 +787,144 @@ mod tests {
         scene.reconcile().await;
         assert!(scene.bare().refs_apart().unwrap().is_empty());
         assert!(scene.bare().item_branches().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_fetch_that_hangs_holds_up_no_ref_and_no_other_fetch() {
+        let mut scene = Scene::new().await;
+        let stuck_item = scene.item().await;
+        let stuck_session = scene.work_session(stuck_item).await;
+        let stuck = scene.remote.work("wf/stuck", "s.txt", "s\n");
+        scene.fetcher.hanging.lock().unwrap().insert(stuck);
+        scene.name_head(stuck_session, stuck_item, stuck).await;
+        scene.pass().await;
+
+        let item = scene.item().await;
+        let session = scene.work_session(item).await;
+        let head = scene.remote.work("wf/work", "a.txt", "a\n");
+        scene.name_head(session, item, head).await;
+        let passed = tokio::time::timeout(Duration::from_secs(10), async {
+            scene.pass().await;
+            // The other fetch ends while the stuck one still runs.
+            scene.fetches.next_done().await;
+            scene.pass().await
+        })
+        .await
+        .expect("a pass does not wait for a fetch");
+        assert!(passed.is_some(), "the stuck commit is still missing");
+        assert_eq!(scene.bare().branch_head(&item_branch(item)).unwrap(), head);
+        assert!(scene.fetches.is_running(stuck));
+        let awaited = scene.loaded.commits.awaited();
+        assert_eq!(
+            awaited
+                .iter()
+                .map(|awaited| awaited.named.commit)
+                .collect::<Vec<_>>(),
+            vec![stuck]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_done_item_loses_its_refs_and_its_repository() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        let holder = scene.work_session(item).await;
+        let head = scene.remote.work("wf/work", "a.txt", "a\n");
+        scene.name_head(holder, item, head).await;
+        let lost = scene.work_session(item).await;
+        let elsewhere = scene.remote.work("wf/other", "c.txt", "c\n");
+        scene.name_head(lost, item, elsewhere).await;
+        scene.reconcile().await;
+        assert_eq!(scene.bare().refs_apart().unwrap().len(), 1);
+        let workforce = scene.fixture.workforce();
+        let repository = item_repository(&scene.daemon.workforce_directory(workforce), item);
+        std::fs::create_dir_all(&repository).unwrap();
+
+        scene.end(lost, EndReason::Released).await;
+        scene.end(holder, EndReason::Submitted).await;
+        let founder = scene.fixture.founder_actor();
+        scene.write(0, founder, moved(item, ItemState::Done)).await;
+        assert_eq!(scene.reconcile().await, None);
+        assert!(scene.bare().refs_apart().unwrap().is_empty());
+        assert!(scene.bare().item_branches().unwrap().is_empty());
+        assert!(!repository.exists());
+        assert!(
+            scene.bare().has_commit(head).unwrap(),
+            "the commits stay, only the refs go"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_branch_follows_the_claim_when_it_passes_and_the_new_holder_is_not_set_apart() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        let first = scene.work_session(item).await;
+        let first_head = scene.remote.work("wf/first", "a.txt", "a\n");
+        scene.name_head(first, item, first_head).await;
+        // Started later, so it lost the claim, and its work went elsewhere.
+        let second = scene.work_session(item).await;
+        let second_head = scene.remote.work("wf/second", "b.txt", "b\n");
+        scene.name_head(second, item, second_head).await;
+        scene.reconcile().await;
+        assert_eq!(
+            scene.bare().branch_head(&item_branch(item)).unwrap(),
+            first_head
+        );
+        assert_eq!(
+            scene.bare().refs_apart().unwrap(),
+            vec![diverged_ref(second)]
+        );
+
+        // The first lets go, so the second holds the claim: the branch is its work now, and the
+        // work of the first is what is set apart.
+        scene.end(first, EndReason::Released).await;
+        assert_eq!(scene.reconcile().await, None);
+        assert_eq!(
+            scene.bare().branch_head(&item_branch(item)).unwrap(),
+            second_head
+        );
+        assert_eq!(
+            scene.bare().refs_apart().unwrap(),
+            vec![diverged_ref(first)]
+        );
+    }
+
+    #[tokio::test]
+    async fn the_branch_of_an_item_a_session_of_this_device_works_on_is_left_to_it() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        // A session of this device that lost the claim on another device's, after a partition.
+        let founder = scene.fixture.founder_actor();
+        let here: SessionId = scene
+            .write(0, founder, start_session("coder", item))
+            .await
+            .id()
+            .into();
+        let local_head = scene.remote.work("wf/here", "h.txt", "h\n");
+        scene
+            .bare()
+            .fetch_commit_from_path(&scene.remote.directory(), local_head)
+            .unwrap();
+        assert!(
+            scene
+                .bare()
+                .move_item_branch(item, None, local_head)
+                .unwrap()
+        );
+        let elsewhere = scene.work_session(item).await;
+        let head = scene.remote.work("wf/work", "a.txt", "a\n");
+        scene.name_head(elsewhere, item, head).await;
+
+        scene.reconcile().await;
+        assert!(scene.bare().has_commit(head).unwrap());
+        assert_eq!(
+            scene.bare().branch_head(&item_branch(item)).unwrap(),
+            local_head,
+            "the import of the session here moves it"
+        );
+
+        scene.end(here, EndReason::Released).await;
+        scene.reconcile().await;
+        assert_eq!(scene.bare().branch_head(&item_branch(item)).unwrap(), head);
     }
 }
