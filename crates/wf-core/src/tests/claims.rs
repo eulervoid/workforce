@@ -457,3 +457,45 @@ fn the_dispatcher_is_offered_the_work_of_a_gone_device() {
         "a device's own sessions never expire for it"
     );
 }
+
+/// The device of a work session that was taken over comes back and names the session's last
+/// head in a comment as its agent; every device then knows the commits.
+#[test]
+fn a_returning_device_names_the_last_head_of_its_session_that_was_taken_over() {
+    let (fixture, mut state, task) = with_task();
+    let returning = fixture.devices[1].key();
+    let gone: SessionId = fixture
+        .apply(&mut state, 1, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    let daemon = Actor::Daemon(fixture.founder.key());
+    let expired = fixture.author_as(
+        &state,
+        0,
+        daemon,
+        4_000,
+        end_session(gone, EndReason::LeaseExpired),
+    );
+    state.receive(expired, Trust::Untrusted).unwrap();
+
+    let agent = fixture.agent_actor("coder", gone);
+    let named = EventBody::Commented(crate::event::Commented {
+        head: Some(commit(7)),
+        ..crate::event::Commented::plain(task, "the last commit of the session")
+    });
+    assert_eq!(state.check_actor(returning, &agent, &named), Ok(()));
+    let plain = comment(task, "anything else");
+    assert!(
+        state.check_actor(returning, &agent, &plain).is_err(),
+        "an ended session writes nothing else"
+    );
+    assert!(
+        state
+            .check_actor(fixture.devices[0].key(), &agent, &named)
+            .is_err(),
+        "only the session's own device names its head"
+    );
+    let event = fixture.author_as(&state, 1, agent, 5_000, named);
+    state.receive(event, Trust::Untrusted).unwrap();
+    assert_eq!(state.session(gone).unwrap().head(), Some(commit(7)));
+}

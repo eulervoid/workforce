@@ -231,6 +231,11 @@ impl Runners {
         }
     }
 
+    /// The sessions whose tasks run here.
+    fn running(&self) -> Vec<SessionId> {
+        self.lock().keys().copied().collect()
+    }
+
     pub(crate) fn is_running(&self, session: SessionId) -> bool {
         self.lock().contains_key(&session)
     }

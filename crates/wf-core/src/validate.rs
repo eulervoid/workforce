@@ -907,6 +907,18 @@ impl State {
             .sessions
             .get(session)
             .ok_or(PolicyViolation::UnknownSession(*session))?;
+        // A device that comes back to find its work session taken over names the session's last
+        // head. Only its daemon does: what an agent comments never carries a head it chose.
+        let names_its_last_head = matches!(
+            body,
+            EventBody::Commented(comment)
+                if comment.head.is_some()
+                    && comment.item == folded.item()
+                    && folded.role() == SessionRole::Work
+        );
+        if folded.device() == author && !folded.is_live() && names_its_last_head {
+            return Ok(());
+        }
         if !folded.is_live() || folded.device() != author {
             return Err(PolicyViolation::SessionNotLive(*session));
         }
