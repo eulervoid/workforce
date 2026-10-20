@@ -160,3 +160,42 @@ fn a_bridge_whose_other_side_ends_at_once_lets_git_fail_instead_of_waiting() {
     let unknown = wf_core::session::CommitId::Git(wf_core::session::GitOid::from_bytes([9; 20]));
     assert!(into.fetch_commit(bridge, unknown).is_err());
 }
+
+#[test]
+fn a_bridge_exits_when_the_daemon_hangs_up_while_git_still_has_its_input_open() {
+    let sandbox = Sandbox::new();
+    let (daemon_end, bridge_end) = UnixStream::pair().unwrap();
+    let bridge_end = OwnedFd::from(bridge_end);
+    let inherited = bridge_end.as_raw_fd();
+    let mut command = sandbox.command(&["git-bridge"]);
+    // SAFETY: dup2 is async-signal-safe; the copy it makes is not closed on exec.
+    unsafe {
+        command.pre_exec(move || {
+            if libc::dup2(inherited, BRIDGE_DESCRIPTOR) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+    let mut bridge = command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .spawn()
+        .unwrap();
+    drop(bridge_end);
+    // Git's side stays open, as when git waits for an answer; the daemon, or its process, goes.
+    let _input = bridge.stdin.take().unwrap();
+    drop(daemon_end);
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let status = loop {
+        if let Some(status) = bridge.try_wait().unwrap() {
+            break status;
+        }
+        if std::time::Instant::now() > deadline {
+            let _ = bridge.kill();
+            panic!("the bridge outlived the daemon's end of its socket");
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    };
+    assert!(status.success());
+}

@@ -65,11 +65,20 @@ impl Device {
         }
     }
 
-    fn client(&self) -> DaemonClient {
+    /// A client of this device's daemon. Connecting blocks until the daemon answers the
+    /// handshake, so it runs off the runtime's threads, which serve the daemon.
+    async fn client(&self) -> DaemonClient {
         let token = DataDir::new(self.directory.path().to_path_buf()).read_principal_token();
-        DaemonClient::connect(&self.socket, token)
-            .unwrap()
-            .expect("a daemon")
+        let socket = self.socket.clone();
+        within(
+            "connecting to the daemon",
+            blocking(move || {
+                DaemonClient::connect(&socket, token)
+                    .unwrap()
+                    .expect("a daemon")
+            }),
+        )
+        .await
     }
 
     fn bare(&self, workforce: WorkforceId) -> PathBuf {
@@ -81,6 +90,14 @@ impl Device {
 
 async fn blocking<T: Send + 'static>(job: impl FnOnce() -> T + Send + 'static) -> T {
     tokio::task::spawn_blocking(job).await.unwrap()
+}
+
+/// Awaits `future` for up to a minute, so that a hang fails the test with `what` instead of
+/// running forever.
+async fn within<T>(what: &str, future: impl std::future::Future<Output = T>) -> T {
+    tokio::time::timeout(Duration::from_secs(60), future)
+        .await
+        .unwrap_or_else(|_| panic!("{what} did not finish within a minute"))
 }
 
 /// Puts `commit` of `repository` into the bare repository at `bare` with no ref reaching it, as
@@ -110,18 +127,21 @@ async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
     panic!("{what} did not happen");
 }
 
-#[tokio::test]
+// Multi-threaded: the daemons serve on the runtime while the test waits on them.
+#[tokio::test(flavor = "multi_thread")]
 async fn a_head_named_on_one_device_is_fetched_by_the_other_over_wf_git() {
     if wf_core::testing::skip_in_fence("iroh needs the route socket") {
         return;
     }
     let fixture = Fixture::new(2);
     let workforce = fixture.workforce();
-    let laptop = Device::start(&fixture, 0).await;
-    let vm = Device::start(&fixture, 1).await;
+    let laptop = within("starting the laptop", Device::start(&fixture, 0)).await;
+    let vm = within("starting the vm", Device::start(&fixture, 1)).await;
     let (laptop_node, vm_node) = (
-        laptop.daemon.node().await.unwrap(),
-        vm.daemon.node().await.unwrap(),
+        within("the laptop's node", laptop.daemon.node())
+            .await
+            .unwrap(),
+        within("the vm's node", vm.daemon.node()).await.unwrap(),
     );
     laptop_node.remember(vm_node.local_addr());
     vm_node.remember(laptop_node.local_addr());
@@ -134,27 +154,30 @@ async fn a_head_named_on_one_device_is_fetched_by_the_other_over_wf_git() {
     })
     .await;
     give_unreachable(&vm.bare(workforce), &repository, "wf/work");
-    let mut client = vm.client();
-    let item = blocking(move || {
-        client.author(workforce, define_agent("coder")).unwrap();
-        let item: wf_core::id::ItemId = client
-            .author(workforce, create("task", "work on the vm"))
-            .unwrap()
-            .id()
-            .into();
-        let session: SessionId = client
-            .author(workforce, start_session("coder", item))
-            .unwrap()
-            .id()
-            .into();
-        client
-            .author(
-                workforce,
-                end_session_at(session, EndReason::Released, head),
-            )
-            .unwrap();
-        item
-    })
+    let mut client = vm.client().await;
+    let item = within(
+        "authoring on the vm",
+        blocking(move || {
+            client.author(workforce, define_agent("coder")).unwrap();
+            let item: wf_core::id::ItemId = client
+                .author(workforce, create("task", "work on the vm"))
+                .unwrap()
+                .id()
+                .into();
+            let session: SessionId = client
+                .author(workforce, start_session("coder", item))
+                .unwrap()
+                .id()
+                .into();
+            client
+                .author(
+                    workforce,
+                    end_session_at(session, EndReason::Released, head),
+                )
+                .unwrap();
+            item
+        }),
+    )
     .await;
 
     let laptop_bare = laptop.bare(workforce);
@@ -167,8 +190,12 @@ async fn a_head_named_on_one_device_is_fetched_by_the_other_over_wf_git() {
         },
     )
     .await;
-    let mut client = laptop.client();
-    let awaited = blocking(move || client.awaited_commits(workforce).unwrap()).await;
+    let mut client = laptop.client().await;
+    let awaited = within(
+        "asking the laptop what it awaits",
+        blocking(move || client.awaited_commits(workforce).unwrap()),
+    )
+    .await;
     assert!(awaited.is_empty(), "{awaited:?}");
 
     // What the vm has is served by id, whether a ref reaches it or not; what it lacks is
@@ -177,11 +204,14 @@ async fn a_head_named_on_one_device_is_fetched_by_the_other_over_wf_git() {
     repository.write(&worktree, "b.txt", "b\n");
     let rewritten = repository.commit(&worktree, "rewritten away");
     give_unreachable(&vm.bare(workforce), &repository, "wf/work");
-    laptop
-        .daemon
-        .fetch_commit_from(workforce, vm.daemon.device(), rewritten)
-        .await
-        .unwrap();
+    within(
+        "fetching the rewritten commit",
+        laptop
+            .daemon
+            .fetch_commit_from(workforce, vm.daemon.device(), rewritten),
+    )
+    .await
+    .unwrap();
     assert!(
         GitCli::open(&laptop_bare)
             .unwrap()
@@ -189,11 +219,14 @@ async fn a_head_named_on_one_device_is_fetched_by_the_other_over_wf_git() {
             .unwrap()
     );
     let unknown = CommitId::Git(wf_core::session::GitOid::from_bytes([9; 20]));
-    let refused = laptop
-        .daemon
-        .fetch_commit_from(workforce, vm.daemon.device(), unknown)
-        .await
-        .expect_err("the vm does not have it");
+    let refused = within(
+        "fetching the unknown commit",
+        laptop
+            .daemon
+            .fetch_commit_from(workforce, vm.daemon.device(), unknown),
+    )
+    .await
+    .expect_err("the vm does not have it");
     let message = wf_core::error_chain(&refused);
     assert!(
         message.contains(&format!("does not have commit {}", unknown.short())),
