@@ -10,6 +10,7 @@ pub mod data_dir;
 pub mod decide;
 mod environment;
 mod faults;
+mod git_service;
 mod inherit;
 mod judges;
 mod keyed_locks;
@@ -40,6 +41,7 @@ use wf_store::{ForkError, HistorySource, RedbStore, Replica, StoreError};
 
 pub use data_dir::DataDir;
 pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS, Retry};
+pub use git_service::{FetchError, run_git_bridge};
 pub use panics::{Panics, watch_panics};
 pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, session_model};
@@ -376,6 +378,7 @@ impl Daemon {
     ) {
         node.serve(id, storage.clone());
         node.serve_query(live_diff::WorktreeQuery::new(self));
+        node.serve_git(git_service::UploadPack::new(self));
     }
 
     async fn load_stored_workforces(self: &Arc<Self>) {

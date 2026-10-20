@@ -348,6 +348,12 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for GitHandler<L> {
                 linger(&connection).await;
                 Ok(())
             }
+            Err(error @ GitError::Process(_)) => {
+                // git refused, and said why on the stream; let that arrive before closing.
+                let _ = send.finish();
+                linger(&connection).await;
+                Err(AcceptError::from_err(error))
+            }
             Err(error) => {
                 connection.close(FAILED.into(), b"git failed");
                 Err(AcceptError::from_err(error))

@@ -2,6 +2,8 @@
 //! fetch the commits it lacks and to keep the item refs of its repository. Pure: the daemon asks
 //! git what is present and carries out the rest.
 
+use serde::{Deserialize, Serialize};
+
 use crate::id::{ItemId, SessionId};
 use crate::identity::DeviceKey;
 use crate::item::ItemState;
@@ -9,7 +11,7 @@ use crate::session::{CommitId, SessionRole};
 use crate::state::State;
 
 /// Why the log names a commit.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Naming {
     /// The head of a work session, named by one of its comments or by its end.
     Head { session: SessionId },
@@ -20,7 +22,7 @@ pub enum Naming {
 }
 
 /// A commit the log names, and the device that wrote the event, which has it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NamedCommit {
     pub commit: CommitId,
     pub item: ItemId,
