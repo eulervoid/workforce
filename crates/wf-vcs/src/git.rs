@@ -150,6 +150,42 @@ where
     })
 }
 
+/// Like [`spawn`], with `input` on the standard input of git.
+pub(crate) fn spawn_with_input<I, S>(
+    directory: &Path,
+    args: I,
+    input: String,
+) -> Result<Finished, VcsError>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<OsStr>,
+{
+    use std::io::Write;
+    use std::process::Stdio;
+    let args: Vec<S> = args.into_iter().collect();
+    let mut child = git()
+        .args(&args)
+        .current_dir(directory)
+        .env("LC_ALL", "C")
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(VcsError::Spawn)?;
+    let mut stdin = child.stdin.take().expect("stdin is piped");
+    // Written beside the reading, so that neither side fills a pipe the other waits on.
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let output = child.wait_with_output().map_err(VcsError::Spawn)?;
+    let _ = writer.join();
+    Ok(Finished {
+        command: describe(&args),
+        success: output.status.success(),
+        stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+        stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+    })
+}
+
 /// The arguments of a command as one line, without the `-c` config that only sets how it runs.
 fn describe<S: AsRef<OsStr>>(args: &[S]) -> String {
     let mut words = args.iter().map(|arg| arg.as_ref().to_string_lossy());

@@ -7,6 +7,7 @@ mod bare_repository;
 pub mod config;
 pub mod diff;
 mod git;
+mod item_refs;
 pub mod signing;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
@@ -20,6 +21,7 @@ use wf_core::session::{CommitId, GitOid, SessionRole};
 pub use agent_repository::{agent_branch_head, remove_agent_repository};
 pub use bare_repository::REMOTE;
 pub use git::GitCli;
+pub use item_refs::diverged_ref;
 
 /// The variables that give git config through the environment: how many, then each key and value.
 const CONFIG_COUNT: &str = "GIT_CONFIG_COUNT";

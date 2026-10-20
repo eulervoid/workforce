@@ -45,6 +45,30 @@ impl GitCli {
         Ok(found.success)
     }
 
+    /// The commits among `commits` that this repository lacks, in the order given.
+    pub fn missing_commits(&self, commits: &[CommitId]) -> Result<Vec<CommitId>, VcsError> {
+        if commits.is_empty() {
+            return Ok(Vec::new());
+        }
+        let input: String = commits.iter().map(|commit| format!("{commit}\n")).collect();
+        let checked = crate::git::spawn_with_input(
+            &self.repository,
+            ["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+            input,
+        )?
+        .ok()?;
+        // One line per commit asked, `<id> commit`, or `<id> missing` for what is not there.
+        let present: std::collections::BTreeSet<&str> = checked
+            .lines()
+            .filter_map(|line| line.strip_suffix(" commit"))
+            .collect();
+        Ok(commits
+            .iter()
+            .filter(|commit| !present.contains(commit.to_string().as_str()))
+            .copied()
+            .collect())
+    }
+
     /// Fetches `commit` with everything it reaches that this repository lacks, from the repository
     /// the `bridge` command talks to: a program with its arguments, which pipes its input and
     /// output to a device's `git upload-pack`. Every object is checked (`fetch.fsckObjects`). No
