@@ -93,6 +93,29 @@ impl GitCli {
     }
 }
 
+#[cfg(any(test, feature = "testing"))]
+impl GitCli {
+    /// Fetches `commit` from the repository at `path`, for tests of what fetches commits without
+    /// a network.
+    pub fn fetch_commit_from_path(
+        &self,
+        path: &std::path::Path,
+        commit: CommitId,
+    ) -> Result<(), VcsError> {
+        let path = path.to_string_lossy();
+        let args = [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            &path,
+            &commit.to_string(),
+        ];
+        self.run(&self.repository, &[], args)?.ok()?;
+        Ok(())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::io::Write;

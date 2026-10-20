@@ -380,3 +380,261 @@ impl Daemon {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    use tempfile::TempDir;
+    use wf_core::event::{Commented, EventBody};
+    use wf_core::identity::Actor;
+    use wf_core::item::ItemState;
+    use wf_core::testing::*;
+    use wf_net::Network;
+    use wf_store::{RedbStore, Replica};
+    use wf_vcs::testing::TestRepository;
+
+    use super::*;
+    use crate::{DataDir, Launch};
+
+    /// Fetches from repositories on disk, by device, as long as it is online.
+    struct Repositories {
+        bare: PathBuf,
+        repositories: BTreeMap<DeviceKey, PathBuf>,
+        online: AtomicBool,
+        asked: Mutex<Vec<DeviceKey>>,
+    }
+
+    impl CommitFetcher for Repositories {
+        fn fetch(&self, device: DeviceKey, commit: CommitId) -> BoxFuture<Result<(), String>> {
+            self.asked.lock().unwrap().push(device);
+            let result = if !self.online.load(Ordering::SeqCst) {
+                Err("offline".to_string())
+            } else if let Some(path) = self.repositories.get(&device) {
+                GitCli::open(&self.bare)
+                    .and_then(|bare| bare.fetch_commit_from_path(path, commit))
+                    .map_err(|error| error.to_string())
+            } else {
+                Err("unknown device".to_string())
+            };
+            Box::pin(async move { result })
+        }
+    }
+
+    /// A daemon on device 0 of a workforce with two devices, and a repository for device 1.
+    struct Scene {
+        _directory: TempDir,
+        fixture: Fixture,
+        daemon: Arc<Daemon>,
+        loaded: Arc<Loaded>,
+        remote: TestRepository,
+        fetcher: Arc<Repositories>,
+        retries: BTreeMap<CommitId, Backoff>,
+        clock: u64,
+    }
+
+    impl Scene {
+        async fn new() -> Self {
+            let directory = TempDir::new().unwrap();
+            let fixture = Fixture::new(2);
+            let workforce = fixture.workforce();
+            let store_directory = directory.path().join(workforce.to_string());
+            std::fs::create_dir_all(&store_directory).unwrap();
+            let mut replica = Replica::open(
+                RedbStore::open(store_directory.join(crate::data_dir::STORE_FILE)).unwrap(),
+                workforce,
+            )
+            .unwrap();
+            replica.receive(fixture.genesis.clone()).unwrap();
+            drop(replica);
+            let daemon = Daemon::start(
+                Launch {
+                    data_dir: DataDir::new(directory.path().to_path_buf()),
+                    socket: directory.path().join("daemon.sock"),
+                    network: Network::Direct,
+                    harnesses: Default::default(),
+                    machine_config: None,
+                    wf_binary: None,
+                },
+                fixture.devices[0].clone(),
+            )
+            .await
+            .unwrap();
+            let loaded = daemon.workforce(workforce).await.unwrap();
+            let remote = TestRepository::new();
+            let fetcher = Arc::new(Repositories {
+                bare: daemon.bare_repository(workforce),
+                repositories: BTreeMap::from([(fixture.devices[1].key(), remote.directory())]),
+                online: AtomicBool::new(true),
+                asked: Mutex::default(),
+            });
+            Self {
+                _directory: directory,
+                fixture,
+                daemon,
+                loaded,
+                remote,
+                fetcher,
+                retries: BTreeMap::new(),
+                clock: 2_000,
+            }
+        }
+
+        /// Writes `body` as `actor` on device `device`.
+        async fn write(
+            &mut self,
+            device: usize,
+            actor: Actor,
+            body: EventBody,
+        ) -> wf_core::event::Event {
+            self.clock += 1;
+            let (signer, now) = (self.fixture.devices[device].clone(), self.clock);
+            self.loaded
+                .storage
+                .with(move |replica| replica.author(&signer, actor, now, body))
+                .await
+                .unwrap()
+                .unwrap()
+        }
+
+        async fn work_session(&mut self, item: ItemId) -> SessionId {
+            let founder = self.fixture.founder_actor();
+            let started = self.write(1, founder, start_session("coder", item)).await;
+            started.id().into()
+        }
+
+        async fn name_head(&mut self, session: SessionId, item: ItemId, head: CommitId) {
+            let actor = self.fixture.agent_actor("coder", session);
+            let comment = EventBody::Commented(Commented {
+                head: Some(head),
+                ..Commented::plain(item, "step done")
+            });
+            self.write(1, actor, comment).await;
+        }
+
+        /// An item with the agent defined, on device 0.
+        async fn item(&mut self) -> ItemId {
+            let founder = self.fixture.founder_actor();
+            self.write(0, founder.clone(), define_agent("coder")).await;
+            self.write(0, founder, create("task", "work"))
+                .await
+                .id()
+                .into()
+        }
+
+        async fn reconcile(&mut self) -> Option<Duration> {
+            let fetcher: Arc<dyn CommitFetcher> = Arc::clone(&self.fetcher) as _;
+            reconcile(
+                &self.daemon,
+                self.fixture.workforce(),
+                &self.loaded,
+                &fetcher,
+                &mut self.retries,
+            )
+            .await
+        }
+
+        fn bare(&self) -> GitCli {
+            GitCli::open(&self.daemon.bare_repository(self.fixture.workforce())).unwrap()
+        }
+    }
+
+    #[tokio::test]
+    async fn the_head_a_device_names_is_fetched_from_that_device_and_becomes_the_branch() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        let session = scene.work_session(item).await;
+        let head = scene.remote.work("wf/work", "a.txt", "a\n");
+        scene.name_head(session, item, head).await;
+        assert!(!scene.bare().has_commit(head).unwrap());
+
+        let again = scene.reconcile().await;
+        assert_eq!(again, None, "nothing is missing any more");
+        assert!(scene.bare().has_commit(head).unwrap());
+        assert_eq!(scene.bare().branch_head(&item_branch(item)).unwrap(), head);
+        assert!(scene.loaded.commits.awaited().is_empty());
+        let asked = scene.fetcher.asked.lock().unwrap().clone();
+        assert_eq!(asked.first(), Some(&scene.fixture.devices[1].key()));
+    }
+
+    #[tokio::test]
+    async fn a_commit_that_cannot_be_fetched_is_awaited_and_holds_back_what_starts_on_it() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        let session = scene.work_session(item).await;
+        let head = scene.remote.work("wf/work", "a.txt", "a\n");
+        scene.name_head(session, item, head).await;
+        scene.fetcher.online.store(false, Ordering::SeqCst);
+
+        let again = scene.reconcile().await;
+        assert!(again.is_some(), "it looks again");
+        let awaited = scene.loaded.commits.awaited();
+        assert_eq!(
+            awaited.iter().map(|named| named.commit).collect::<Vec<_>>(),
+            vec![head]
+        );
+        let workforce = scene.fixture.workforce();
+        let waiting = scene.daemon.require_commit(workforce, head).await;
+        assert!(
+            matches!(waiting, Err(SessionError::AwaitingCommit(commit)) if commit == head),
+            "{waiting:?}"
+        );
+
+        // Retried when its time comes, and once the device is back the commit arrives.
+        scene.fetcher.online.store(true, Ordering::SeqCst);
+        scene.retries.clear();
+        assert_eq!(scene.reconcile().await, None);
+        scene.daemon.require_commit(workforce, head).await.unwrap();
+        assert!(scene.loaded.commits.awaited().is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_work_of_a_session_that_lost_the_claim_is_kept_apart_unless_it_is_an_ancestor() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        let holder = scene.work_session(item).await;
+        let first = scene.remote.work("wf/work", "a.txt", "a\n");
+        let worktree = scene.remote.worktree_path("wf/work");
+        scene.remote.write(&worktree, "b.txt", "b\n");
+        let second = scene.remote.commit(&worktree, "second");
+        scene.name_head(holder, item, second).await;
+        // Started later, so it lost the claim: one head is in the branch's history, one is not.
+        let behind = scene.work_session(item).await;
+        scene.name_head(behind, item, first).await;
+        let lost = scene.work_session(item).await;
+        let elsewhere = scene.remote.work("wf/other", "c.txt", "c\n");
+        scene.name_head(lost, item, elsewhere).await;
+
+        assert_eq!(scene.reconcile().await, None);
+        let bare = scene.bare();
+        assert_eq!(bare.branch_head(&item_branch(item)).unwrap(), second);
+        assert_eq!(bare.refs_apart().unwrap(), vec![diverged_ref(lost)]);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_item_loses_its_refs() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        let holder = scene.work_session(item).await;
+        let head = scene.remote.work("wf/work", "a.txt", "a\n");
+        scene.name_head(holder, item, head).await;
+        let lost = scene.work_session(item).await;
+        let elsewhere = scene.remote.work("wf/other", "c.txt", "c\n");
+        scene.name_head(lost, item, elsewhere).await;
+        scene.reconcile().await;
+        assert_eq!(scene.bare().refs_apart().unwrap().len(), 1);
+        assert_eq!(
+            scene.bare().item_branches().unwrap(),
+            vec![item_branch(item)]
+        );
+
+        let founder = scene.fixture.founder_actor();
+        scene
+            .write(0, founder, moved(item, ItemState::Cancelled))
+            .await;
+        scene.reconcile().await;
+        assert!(scene.bare().refs_apart().unwrap().is_empty());
+        assert!(scene.bare().item_branches().unwrap().is_empty());
+    }
+}
