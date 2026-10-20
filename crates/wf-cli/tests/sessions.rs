@@ -859,10 +859,9 @@ wf work release --note \"stopping\"
     start_session(&world, &item);
     world.ended_session().await;
     let events = logged_events(&world);
-    assert!(events.iter().all(|event| match &event.content.body {
-        EventBody::Commented(comment) => comment.head.is_none(),
-        EventBody::SessionEnded(ended) => ended.head.is_none(),
-        _ => true,
+    assert!(!events.iter().any(|event| {
+        matches!(&event.content.body, EventBody::Commented(comment) if comment.head.is_some())
+            || matches!(&event.content.body, EventBody::SessionEnded(ended) if ended.head.is_some())
     }));
 }
 
