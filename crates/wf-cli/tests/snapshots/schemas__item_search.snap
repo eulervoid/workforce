@@ -1,0 +1,62 @@
+---
+source: crates/wf-cli/tests/schemas.rs
+expression: "Envelope::new(&found)"
+---
+{
+  "schema": 8,
+  "data": [
+    {
+      "item": {
+        "id": "zgt62loygs4iynj2kw3uv764p6olubtqvb2mgmnr3lpc5wk7uoqa",
+        "type": "task",
+        "title": "Implement feed sync",
+        "state": "open",
+        "priority": "P1",
+        "readiness": "blocked",
+        "blocked_by": [
+          {
+            "id": "qkmy6cme3eheb5cwp4a2hfe6agvemcszfwo3nri7dm2kl2vs5n2q",
+            "type": "task",
+            "title": "Pick a hash for event ids",
+            "state": "open",
+            "priority": "P2"
+          }
+        ],
+        "blocking": [],
+        "labels": [],
+        "lane": "default",
+        "steps": null,
+        "archived": false
+      },
+      "matches": [
+        {
+          "field": "title",
+          "comment": null,
+          "by": null,
+          "text": "Implement feed sync",
+          "highlights": [
+            [
+              10,
+              14
+            ]
+          ]
+        },
+        {
+          "field": "comment",
+          "comment": "36tjhyft2vck53qk2gk35zrjkdj2tzja447rrwsefgwxfa25ye3q",
+          "by": {
+            "kind": "principal",
+            "label": "@ada"
+          },
+          "text": "see #qkmy6c, @ada please check",
+          "highlights": [
+            [
+              25,
+              30
+            ]
+          ]
+        }
+      ]
+    }
+  ]
+}

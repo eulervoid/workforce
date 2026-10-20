@@ -11,6 +11,7 @@ use wf_core::event::{Change, EventBody, ItemCreated, ItemLinked, ItemMoved, Item
 use wf_core::id::{HashId, ItemId};
 use wf_core::item::{Item, ItemEntry, ItemState, Merge, Priority};
 use wf_core::policy::Field;
+use wf_core::search::{Query, SearchScope, search as search_state};
 use wf_core::state::State;
 use wf_core::validate::OneOf;
 
@@ -21,7 +22,7 @@ use crate::cli::*;
 use crate::draft::{Draft, NewItemDraft};
 use crate::interactive::{self, Choice, Mode};
 use crate::render;
-use crate::view::{self, ItemSummary};
+use crate::view::{self, ItemSummary, SearchHitView};
 use crate::workspace::Workspace;
 
 /// The items, the live ones in `order` and the archived ones after them by when they were
@@ -218,67 +219,22 @@ pub(super) fn item(
         }
         ItemCommand::List(args) => {
             let state = workspace.state();
-            check_list_filters(state, &args)?;
+            check_list_filters(state, &args.filters)?;
             let graph = state.dependency_graph();
             let views = sorted_views(
                 state,
-                if args.archived {
+                if args.filters.archived {
                     Scope::Any
                 } else {
                     Scope::Live
                 },
                 args.sort,
             );
-            let dispatchable: Option<BTreeSet<ItemId>> = match &args.for_agent {
-                None => None,
-                Some(name) => {
-                    let device = workspace.device_key();
-                    let principal = workspace.principal();
-                    if state.agent(name, principal).is_none() {
-                        bail!("{name} is not an agent of yours; see `wf agent list`");
-                    }
-                    let agent = wf_core::identity::AgentId {
-                        principal,
-                        name: name.clone(),
-                    };
-                    Some(
-                        state
-                            .dispatchable(device, &agent)
-                            .iter()
-                            .map(|item| item.id())
-                            .collect(),
-                    )
-                }
-            };
+            let dispatchable = dispatchable_items(workspace, &args.filters)?;
             let entries: Vec<ItemSummary> = views
                 .into_iter()
                 .map(|view| view::summary(state, &graph, view))
-                .filter(|summary| {
-                    args.item_type
-                        .as_ref()
-                        .is_none_or(|wanted| summary.item_type == wanted.as_str())
-                })
-                .filter(|summary| args.state.is_empty() || args.state.contains(&summary.state))
-                .filter(|summary| args.accepts(summary.readiness))
-                .filter(|summary| {
-                    args.label
-                        .as_ref()
-                        .is_none_or(|wanted| summary.labels.contains(&wanted.to_string()))
-                })
-                .filter(|summary| {
-                    args.lane
-                        .as_ref()
-                        .is_none_or(|wanted| summary.lane.as_deref() == Some(wanted.as_str()))
-                })
-                .filter(|summary| {
-                    args.priority
-                        .is_none_or(|wanted| summary.priority == Some(wanted))
-                })
-                .filter(|summary| {
-                    dispatchable
-                        .as_ref()
-                        .is_none_or(|offered| offered.contains(&summary.id))
-                })
+                .filter(|summary| passes_filters(summary, &args.filters, dispatchable.as_ref()))
                 .collect();
             match args.group_by {
                 None => emit(json, &entries, |items| render::item_list(items)),
@@ -290,6 +246,7 @@ pub(super) fn item(
                 }
             }
         }
+        ItemCommand::Search(args) => search(json, workspace, args),
         ItemCommand::Show { item } => {
             let id = choose_item(workspace, mode, item, Scope::Any)?;
             show(json, mode, workspace, id)
@@ -691,7 +648,7 @@ fn check(json: bool, workspace: &mut Workspace, args: ItemCheckArgs) -> anyhow::
 }
 
 /// Refuses a `--type` or `--lane` that no item can have, instead of listing nothing.
-fn check_list_filters(state: &State, args: &ItemListArgs) -> anyhow::Result<()> {
+fn check_list_filters(state: &State, args: &ItemFilterArgs) -> anyhow::Result<()> {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     if let Some(name) = &args.item_type
         && policy.type_config(name).is_none()
@@ -710,6 +667,83 @@ fn check_list_filters(state: &State, args: &ItemListArgs) -> anyhow::Result<()> 
         );
     }
     Ok(())
+}
+
+/// The items the `--for` agent would be given, when the filters name one.
+fn dispatchable_items(
+    workspace: &Workspace,
+    filters: &ItemFilterArgs,
+) -> anyhow::Result<Option<BTreeSet<ItemId>>> {
+    let Some(name) = &filters.for_agent else {
+        return Ok(None);
+    };
+    let state = workspace.state();
+    let device = workspace.device_key();
+    let principal = workspace.principal();
+    if state.agent(name, principal).is_none() {
+        bail!("{name} is not an agent of yours; see `wf agent list`");
+    }
+    let agent = wf_core::identity::AgentId {
+        principal,
+        name: name.clone(),
+    };
+    Ok(Some(
+        state
+            .dispatchable(device, &agent)
+            .iter()
+            .map(|item| item.id())
+            .collect(),
+    ))
+}
+
+fn passes_filters(
+    summary: &ItemSummary,
+    filters: &ItemFilterArgs,
+    dispatchable: Option<&BTreeSet<ItemId>>,
+) -> bool {
+    filters
+        .item_type
+        .as_ref()
+        .is_none_or(|wanted| summary.item_type == wanted.as_str())
+        && (filters.state.is_empty() || filters.state.contains(&summary.state))
+        && filters.accepts(summary.readiness)
+        && filters
+            .label
+            .as_ref()
+            .is_none_or(|wanted| summary.labels.contains(&wanted.to_string()))
+        && filters
+            .lane
+            .as_ref()
+            .is_none_or(|wanted| summary.lane.as_deref() == Some(wanted.as_str()))
+        && filters
+            .priority
+            .is_none_or(|wanted| summary.priority == Some(wanted))
+        && dispatchable.is_none_or(|offered| offered.contains(&summary.id))
+}
+
+fn search(json: bool, workspace: &Workspace, args: ItemSearchArgs) -> anyhow::Result<()> {
+    let state = workspace.state();
+    check_list_filters(state, &args.filters)?;
+    let query =
+        Query::parse(&args.query.join(" ")).context("give at least one word to search for")?;
+    let dispatchable = dispatchable_items(workspace, &args.filters)?;
+    let comment_texts = view::comment_texts(&workspace.events()?);
+    let graph = state.dependency_graph();
+    let hits: Vec<SearchHitView> = search_state(
+        state,
+        &query,
+        &comment_texts,
+        if args.filters.archived {
+            SearchScope::LiveAndArchived
+        } else {
+            SearchScope::Live
+        },
+    )
+    .iter()
+    .map(|hit| view::search_hit_view(state, &graph, hit))
+    .filter(|hit| passes_filters(&hit.item, &args.filters, dispatchable.as_ref()))
+    .collect();
+    emit(json, &hits, |hits| render::search_hits(hits))
 }
 
 fn link(

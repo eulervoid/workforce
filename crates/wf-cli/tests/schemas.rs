@@ -79,6 +79,27 @@ fn item_lists() {
 }
 
 #[test]
+fn item_search() {
+    let scenario = scenario();
+    let state = &scenario.state;
+    let events: Vec<_> = scenario.events.values().cloned().collect();
+    let query = wf_core::search::Query::parse("check feed").unwrap();
+    let hits = wf_core::search::search(
+        state,
+        &query,
+        &view::comment_texts(&events),
+        wf_core::search::SearchScope::LiveAndArchived,
+    );
+    let graph = state.dependency_graph();
+    let found: Vec<_> = hits
+        .iter()
+        .map(|hit| view::search_hit_view(state, &graph, hit))
+        .collect();
+    assert_eq!(found.len(), 1);
+    insta::assert_json_snapshot!("item_search", Envelope::new(&found));
+}
+
+#[test]
 fn live_item_detail() {
     let scenario = scenario();
     let state = &scenario.state;
