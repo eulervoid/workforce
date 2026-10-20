@@ -172,6 +172,22 @@ impl Daemon {
         }
         self.ensure_bare_repository(workforce, &loaded.storage)
             .await;
+        // What the log names as the start of the work, or as the work to review, has to be here.
+        let head = state.work_head(item);
+        match &role {
+            SessionRole::Work => {
+                if let Some(head) = head {
+                    self.require_commit(workforce, head).await?;
+                }
+            }
+            SessionRole::Review {
+                commit: Some(commit),
+                ..
+            } => self.require_commit(workforce, *commit).await?,
+            SessionRole::Review { commit: None, .. }
+            | SessionRole::Supervise
+            | SessionRole::Diagnose => {}
+        }
         let repository = self.bare_repository(workforce);
         let git = match role {
             SessionRole::Work => {
@@ -179,6 +195,9 @@ impl Daemon {
                 let (branch, target) = (item_branch(item), setup.target.clone());
                 blocking(move || {
                     let git = GitCli::open(&repository)?;
+                    if let Some(head) = head {
+                        git.bring_item_branch_to(item, head)?;
+                    }
                     let commit = git.starting_commit(item, &target)?;
                     git.create_agent_repository(&path, &branch, commit)?;
                     git.ensure_item_branch(item, commit)?;

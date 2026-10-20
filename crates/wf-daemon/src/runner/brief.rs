@@ -5,10 +5,10 @@ use std::sync::Arc;
 
 use wf_core::brief::{Brief, Sources, restarted_text, resumed_text};
 use wf_core::event::EventBody;
-use wf_core::id::{CommentId, EventId, ItemId};
+use wf_core::id::{CommentId, EventId, ItemId, SessionId};
 use wf_core::session::{CommitId, SessionRole};
 use wf_store::RedbStore;
-use wf_vcs::{Work, item_branch};
+use wf_vcs::{Work, diverged_ref, item_branch};
 
 use super::{Run, blocking};
 use crate::Loaded;
@@ -18,6 +18,8 @@ use crate::Loaded;
 struct Logged<'a> {
     store: &'a RedbStore,
     diff: String,
+    /// The refs of work set apart in the repository.
+    apart: Vec<String>,
 }
 
 impl Sources for Logged<'_> {
@@ -39,6 +41,11 @@ impl Sources for Logged<'_> {
 
     fn diff(&self, _target: &str, _commit: CommitId) -> String {
         self.diff.clone()
+    }
+
+    fn diverged(&self, session: SessionId) -> Option<String> {
+        let reference = diverged_ref(session);
+        self.apart.contains(&reference).then_some(reference)
     }
 }
 
@@ -71,12 +78,20 @@ pub(super) async fn brief(loaded: &Arc<Loaded>, run: &Run) -> Result<String, Str
         | SessionRole::Diagnose => String::new(),
     };
     let session = run.session;
+    let git = run.git.clone();
+    // A repository that cannot be listed has no work set apart to name.
+    let apart = blocking(move || git.refs_apart())
+        .await
+        .ok()
+        .and_then(Result::ok)
+        .unwrap_or_default();
     loaded
         .storage
         .with(move |replica| {
             let sources = Logged {
                 store: replica.store(),
                 diff,
+                apart,
             };
             Brief::of(replica.state(), session, &sources).map(|brief| brief.render())
         })
@@ -95,6 +110,7 @@ pub(super) async fn resumed(loaded: &Arc<Loaded>, run: &Run) -> String {
             let sources = Logged {
                 store: replica.store(),
                 diff: String::new(),
+                apart: Vec::new(),
             };
             resumed_text(replica.state(), session, &sources)
         })
@@ -112,6 +128,7 @@ pub(super) async fn restarted(loaded: &Arc<Loaded>, run: &Run, prompted_ms: u64)
             let sources = Logged {
                 store: replica.store(),
                 diff: String::new(),
+                apart: Vec::new(),
             };
             restarted_text(replica.state(), session, prompted_ms, &sources)
         })

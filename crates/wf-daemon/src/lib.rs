@@ -6,6 +6,7 @@ pub mod caches;
 pub mod caller;
 pub mod client;
 pub mod command;
+mod commits;
 pub mod data_dir;
 pub mod decide;
 mod environment;
@@ -102,6 +103,7 @@ pub struct Launch {
 pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
     pub(crate) merges: runner::MergeQueue,
+    pub(crate) commits: commits::Commits,
 }
 
 /// Serves the workforce to its other devices and keeps in sync with them, from when it first has
@@ -488,6 +490,7 @@ impl Daemon {
         let entry = Arc::new(Loaded {
             storage,
             merges: runner::MergeQueue::default(),
+            commits: commits::Commits::default(),
         });
         self.loaded
             .lock()
@@ -497,6 +500,12 @@ impl Daemon {
             Arc::downgrade(self),
             id,
             Arc::clone(&entry),
+        ));
+        tokio::spawn(commits::run_commits(
+            Arc::downgrade(self),
+            id,
+            Arc::clone(&entry),
+            commits::DeviceFetcher::new(self, id),
         ));
         let daemon = Arc::clone(self);
         let started = Arc::clone(&entry);

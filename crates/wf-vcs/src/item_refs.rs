@@ -23,6 +23,36 @@ impl GitCli {
         self.update_ref(&reference, commit)
     }
 
+    /// Makes the branch of `item` contain `head`: moves it there when it is missing or does not
+    /// reach it, and leaves it when it is at `head` or ahead.
+    pub fn bring_item_branch_to(&self, item: ItemId, head: CommitId) -> Result<(), VcsError> {
+        let reached = match self.branch_head(&item_branch(item)) {
+            Ok(branch) => self.is_ancestor(head, branch)?,
+            Err(VcsError::NoBranch(_)) => false,
+            Err(error) => return Err(error),
+        };
+        if reached {
+            return Ok(());
+        }
+        self.set_item_branch(item, head)
+    }
+
+    /// The branches of items, by name (`wf/<item>`).
+    pub fn item_branches(&self) -> Result<Vec<String>, VcsError> {
+        let listed = self
+            .run(
+                &self.repository,
+                &[],
+                [
+                    "for-each-ref",
+                    "--format=%(refname:short)",
+                    "refs/heads/wf/",
+                ],
+            )?
+            .ok()?;
+        Ok(listed.lines().map(str::to_string).collect())
+    }
+
     /// Keeps `commit` under the ref of `session`'s work set apart.
     pub fn keep_apart(&self, session: SessionId, commit: CommitId) -> Result<(), VcsError> {
         self.update_ref(&diverged_ref(session), commit)

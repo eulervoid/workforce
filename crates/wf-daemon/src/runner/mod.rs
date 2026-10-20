@@ -30,7 +30,7 @@ use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::lifecycle::{Interruption, ItemClaimed};
 use wf_core::name::{AgentName, HarnessName};
-use wf_core::session::SessionRole;
+use wf_core::session::{CommitId, SessionRole};
 use wf_core::state::State;
 use wf_harness::{AcpAgentConfig, Permissions};
 use wf_store::{AuthorError, ReceiveError};
@@ -58,6 +58,8 @@ pub enum SessionError {
     Claimed(#[from] ItemClaimed),
     #[error("a session is already starting on #{}", .0.short())]
     Starting(ItemId),
+    #[error("commit {} has not arrived from the device that has it yet", .0.short())]
+    AwaitingCommit(CommitId),
     #[error("there is no session {}", .0.short())]
     UnknownSession(SessionId),
     #[error("the session runs on another machine")]
@@ -126,6 +128,7 @@ impl SessionError {
             | Self::Archived(_)
             | Self::Claimed(_)
             | Self::Starting(_)
+            | Self::AwaitingCommit(_)
             | Self::UnknownSession(_)
             | Self::NotOurs(_)
             | Self::NotWork

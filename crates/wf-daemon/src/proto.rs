@@ -25,7 +25,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 21;
+pub const PROTOCOL_VERSION: u32 = 22;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -163,6 +163,9 @@ pub enum Call {
     /// The commit the target branch is at, for the session to rebase its work onto before it
     /// submits; answered with a `CommitId`.
     TargetCommit,
+    /// The commits the log names that this device has not got yet, which what waits for them
+    /// (a session, a review, a merge) waits for; answered with a `Vec<NamedCommit>`.
+    AwaitedCommits,
 }
 
 /// What a [`Call::LiveDiff`] came to.
@@ -345,11 +348,12 @@ mod tests {
             Call::CacheUsage => "CacheUsage",
             Call::LiveDiff { .. } => "LiveDiff",
             Call::TargetCommit => "TargetCommit",
+            Call::AwaitedCommits => "AwaitedCommits",
         }
     }
 
     /// The number of arms of [`golden_name`].
-    const CALL_VARIANTS: usize = 20;
+    const CALL_VARIANTS: usize = 21;
 
     /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
     /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
@@ -417,6 +421,7 @@ mod tests {
                 )),
             },
             Call::TargetCommit,
+            Call::AwaitedCommits,
         ];
         assert_eq!(
             calls.len(),
@@ -453,7 +458,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_REQUESTS: [(&str, usize, &str); 20] = [
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 21] = [
         (
             "State",
             34,
@@ -554,14 +559,19 @@ mod tests {
             34,
             "cmgxhicxtrff6finessdexo5yzwek5jmgkga335q3w2a5idgtp7a",
         ),
+        (
+            "AwaitedCommits",
+            34,
+            "5msmqw2c7yzuofh4s4bpco4hbgk6nkb2ld6ybzmawmg25sbtdomq",
+        ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 21;
+    const GOLDEN_PROTOCOL_VERSION: u32 = 22;
     const GOLDEN_REPLIES: [(&str, usize, &str); 7] = [
         (
             "State",
-            23241,
-            "myyuyre35xjpl6oiyygirbpb5ywddizb5g4z4xitrchmwnpiqyaa",
+            23307,
+            "cpdpfnp77nt6qngs2g47f4fljzmikanhpoxn4gzetaxz4grxqvdq",
         ),
         (
             "Permissions",
