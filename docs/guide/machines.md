@@ -47,11 +47,12 @@ on which of them takes an item, so give each agent one machine to run on, with `
 
 A session lasts as long as its machine is there. When a machine has not been heard from for the
 policy's `[claims] lease` (3 minutes by default, see [policy.md](policy.md#claims)), another machine
-of yours may take its sessions over: the dispatcher, or `wf session start` by hand, ends the session
-`lease_expired` with a comment saying which machine was gone and since when, then starts its own.
-While the machine is there, `wf session start` refuses an item its session holds. When the machine
-comes back, it stops the sessions that were taken over and names the last commit of each in a
-comment, so that commit reaches every machine and the next session's brief names it.
+of yours may take its sessions over: the dispatcher, or a start by hand (`wf session start` or the
+dashboard's), ends the session `lease_expired` with a comment saying which machine was gone and
+since when, then starts its own. While the machine is there, a start by hand refuses an item its
+session holds; the dashboard leaves that to the daemon, which alone knows whom it heard from. When
+the machine comes back, it stops the sessions that were taken over and names the last commit of
+each in a comment, so that commit reaches every machine and the next session's brief names it.
 
 ## Commits across devices
 
