@@ -7,8 +7,10 @@ use std::collections::BTreeSet;
 use crate::autonomy::StartMode;
 use crate::crdt::Lww;
 use crate::event::DeviceProfile;
+use crate::graph::DependencyGraph;
+use crate::id::SessionId;
 use crate::identity::{AgentId, DeviceKey};
-use crate::item::Item;
+use crate::item::{Item, ItemState};
 use crate::name::Requirement;
 use crate::review::ReviewStatus;
 use crate::session::SessionRole;
@@ -135,8 +137,14 @@ impl State {
     /// requirement met by its capabilities or the hardware of the device, and not waiting for the
     /// principal after sessions that did not finish. They come in [`State::dispatch_order`]: most
     /// urgent first, and within a priority work sent back by review, then other started work,
-    /// then new work, each with the fewest unchecked steps first.
-    pub fn dispatchable(&self, device: DeviceKey, agent: &AgentId) -> Vec<&Item> {
+    /// then new work, each with the fewest unchecked steps first. An active item whose work only
+    /// `expired` sessions ([`State::expired`]) hold counts as ready, to take over.
+    pub fn dispatchable(
+        &self,
+        device: DeviceKey,
+        agent: &AgentId,
+        expired: &BTreeSet<SessionId>,
+    ) -> Vec<&Item> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
         };
@@ -145,9 +153,14 @@ impl State {
         };
         let offered = self.offered(device, definition);
 
+        let graph = self.dependency_graph();
         let mut dispatchable: Vec<&Item> = self
             .ready_items()
             .into_iter()
+            .chain(
+                self.live_items()
+                    .filter(|item| self.ready_to_take_over(&graph, item, expired)),
+            )
             .filter(|item| {
                 item.effective_lane(policy)
                     .is_some_and(|lane| definition.lanes.contains(lane))
@@ -160,5 +173,29 @@ impl State {
             .collect();
         dispatchable.sort_by_cached_key(|item| self.dispatch_order(item));
         dispatchable
+    }
+
+    /// Whether `item` is active, only `expired` sessions hold its work, and it would be ready
+    /// without them: no open blocker and every dependency done.
+    fn ready_to_take_over(
+        &self,
+        graph: &DependencyGraph,
+        item: &Item,
+        expired: &BTreeSet<SessionId>,
+    ) -> bool {
+        let Some(policy) = self.policy().map(|document| &document.policy) else {
+            return false;
+        };
+        let mut claimants = self
+            .sessions_of(item.id())
+            .filter(|session| session.is_live() && session.role() == SessionRole::Work);
+        let held_only_by_expired = claimants
+            .next()
+            .is_some_and(|first| expired.contains(&first.id()))
+            && claimants.all(|claimant| expired.contains(&claimant.id()));
+        item.state(policy) == ItemState::Active
+            && held_only_by_expired
+            && !item.has_open_blocker()
+            && self.unfinished_dependencies(graph, item.id()).is_empty()
     }
 }

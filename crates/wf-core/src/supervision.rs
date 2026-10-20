@@ -1,6 +1,8 @@
 //! Who a blocker waits on, and which blockers an agent can answer. Pure functions of the state.
 
-use crate::id::{CommentId, ItemId};
+use std::collections::BTreeSet;
+
+use crate::id::{CommentId, ItemId, SessionId};
 use crate::identity::{AgentId, PrincipalKey};
 use crate::item::{Comment, Item};
 use crate::name::LaneName;
@@ -76,9 +78,10 @@ impl State {
     }
 
     /// The items with a blocker `agent` can answer in a supervise session, oldest blocker first:
-    /// the agent never worked on the item, no supervise session holds it, and the agent did
-    /// not give up on supervising it since the blocker was written.
-    pub fn supervisable(&self, agent: &AgentId) -> Vec<ItemId> {
+    /// the agent never worked on the item, no supervise session holds it but for the `expired`
+    /// ones ([`State::expired`]), and the agent did not give up on supervising it since the
+    /// blocker was written.
+    pub fn supervisable(&self, agent: &AgentId, expired: &BTreeSet<SessionId>) -> Vec<ItemId> {
         let mut items: Vec<(crate::hlc::Hlc, ItemId)> = Vec::new();
         for item in self.live_items() {
             let Some(oldest) = self
@@ -93,7 +96,7 @@ impl State {
             let worked_on = self
                 .sessions_of(item.id())
                 .any(|session| session.agent() == agent && session.role() == SessionRole::Work);
-            let supervised_now = self.holder(item.id(), &SessionRole::Supervise).is_some();
+            let supervised_now = self.held(item.id(), &SessionRole::Supervise, expired);
             let allowed = self
                 .recovery(item.id(), &SessionRole::Supervise)
                 .allows_attempt();

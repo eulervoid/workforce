@@ -11,7 +11,7 @@
 //! of the principal takes over the claims of a gone device by ending its sessions `LeaseExpired`
 //! ([`State::claimable`]).
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::id::{HashId, ItemId, SessionId};
@@ -50,11 +50,26 @@ impl Presence {
         }
     }
 
+    /// Notes that `device` was heard from at `at_ms`.
+    pub fn saw(&mut self, device: DeviceKey, at_ms: u64) {
+        self.heard_ms.insert(device, at_ms);
+    }
+
+    /// When each device was last heard from, in milliseconds since the epoch.
+    pub fn heard_ms(&self) -> impl Iterator<Item = (DeviceKey, u64)> + '_ {
+        self.heard_ms.iter().map(|(device, at)| (*device, *at))
+    }
+
+    /// Since when `device` has been silent as far as this daemon knows: since it was last heard
+    /// from, or since the daemon started when it was not heard from since.
+    pub fn silent_since_ms(&self, device: DeviceKey) -> u64 {
+        let heard = self.heard_ms.get(&device).copied().unwrap_or_default();
+        heard.max(self.started_ms)
+    }
+
     /// Whether `device` has been silent for longer than `lease` at `now_ms`.
     pub fn gone(&self, device: DeviceKey, lease: Duration, now_ms: u64) -> bool {
-        let heard = self.heard_ms.get(&device).copied().unwrap_or_default();
-        let silent_since = heard.max(self.started_ms);
-        u128::from(now_ms.saturating_sub(silent_since)) > lease.as_millis()
+        u128::from(now_ms.saturating_sub(self.silent_since_ms(device))) > lease.as_millis()
     }
 }
 
@@ -94,6 +109,45 @@ impl State {
             .collect()
     }
 
+    /// The policy's `[claims] lease`.
+    pub fn lease(&self) -> Duration {
+        self.policy().map_or_else(
+            || Policy::default_policy().claims.lease,
+            |document| document.policy.claims.lease,
+        )
+    }
+
+    /// The live sessions whose claims a daemon on `device` may take over at `now_ms`: those on
+    /// other devices of its principal that are gone. A session of another principal never
+    /// expires here, since only that principal's daemons may end it.
+    pub fn expired(
+        &self,
+        device: DeviceKey,
+        presence: &Presence,
+        now_ms: u64,
+    ) -> BTreeSet<SessionId> {
+        let Some(principal) = self.principal_of(&device) else {
+            return BTreeSet::new();
+        };
+        let lease = self.lease();
+        self.live_sessions()
+            .filter(|session| {
+                session.device() != device
+                    && self.principal_of(&session.device()) == Some(principal)
+                    && presence.gone(session.device(), lease, now_ms)
+            })
+            .map(Session::id)
+            .collect()
+    }
+
+    /// Whether a live session holds the claim on `item` in `role`, leaving out the `expired` ones
+    /// ([`State::expired`]), whose claims the asking daemon would take over.
+    pub fn held(&self, item: ItemId, role: &SessionRole, expired: &BTreeSet<SessionId>) -> bool {
+        self.sessions_of(item).any(|session| {
+            session.is_live() && session.role == *role && !expired.contains(&session.id())
+        })
+    }
+
     /// Whether a daemon on `device` may start a session on `item` in `role` at `now_ms`, and which
     /// sessions it must end `LeaseExpired` first to take their claim over: the live ones that claim
     /// it on other devices of its principal that are gone. Refused while any other live session
@@ -107,31 +161,22 @@ impl State {
         presence: &Presence,
         now_ms: u64,
     ) -> Result<Vec<SessionId>, ItemClaimed> {
-        let principal = self.principal_of(&device);
-        let lease = self.policy().map_or_else(
-            || Policy::default_policy().claims.lease,
-            |document| document.policy.claims.lease,
-        );
+        let expired = self.expired(device, presence, now_ms);
         let mut claimants: Vec<&Session> = self
             .sessions_of(item)
             .filter(|session| session.is_live() && session.role == *role)
             .collect();
         claimants.sort_by_key(|session| session.started());
-        let mut takeover = Vec::new();
-        for claimant in claimants {
-            let expired = claimant.device() != device
-                && principal.is_some()
-                && self.principal_of(&claimant.device()) == principal
-                && presence.gone(claimant.device(), lease, now_ms);
-            if !expired {
-                return Err(ItemClaimed {
-                    item,
-                    role: role.clone(),
-                    holder: self.actor_label(&claimant.actor()),
-                });
-            }
-            takeover.push(claimant.id());
+        if let Some(holder) = claimants
+            .iter()
+            .find(|claimant| !expired.contains(&claimant.id()))
+        {
+            return Err(ItemClaimed {
+                item,
+                role: role.clone(),
+                holder: self.actor_label(&holder.actor()),
+            });
         }
-        Ok(takeover)
+        Ok(claimants.into_iter().map(Session::id).collect())
     }
 }

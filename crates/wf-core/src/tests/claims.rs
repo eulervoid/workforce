@@ -1,11 +1,13 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use crate::claims::Presence;
 use crate::event::{Event, EventBody, SessionEnded};
 use crate::id::{ItemId, SessionId};
-use crate::identity::Actor;
+use crate::identity::{Actor, AgentId};
+use crate::item::ItemState;
 use crate::lifecycle::{Interruption, SessionEnd};
-use crate::name::ReviewStepName;
+use crate::name::{AgentName, LaneName, ReviewStepName};
 use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::{State, Trust};
 use crate::testing::*;
@@ -402,5 +404,56 @@ fn a_takeover_and_a_late_end_from_the_returning_device_converge() {
             .claimable(task, &SessionRole::Work, returning, &hears_the_other, now)
             .is_err(),
         "the device that came back finds the claim held"
+    );
+}
+
+/// The active item of a gone device's work session is offered to the dispatcher of another
+/// device of the principal, to take over; while the device is there, it is not.
+#[test]
+fn the_dispatcher_is_offered_the_work_of_a_gone_device() {
+    let (fixture, mut state, task) = with_task();
+    let asking = fixture.devices[0].key();
+    let EventBody::AgentDefined(coder) = define_agent("coder") else {
+        unreachable!()
+    };
+    let in_the_default_lane = EventBody::AgentDefined(crate::event::AgentDefined {
+        lanes: vec![LaneName::new("default").unwrap()],
+        ..coder
+    });
+    fixture.apply(&mut state, 0, 2_500, in_the_default_lane);
+    let gone: SessionId = fixture
+        .apply(&mut state, 1, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    fixture.apply(&mut state, 1, 3_001, moved(task, ItemState::Active));
+    let coder = AgentId {
+        principal: fixture.founder.key(),
+        name: AgentName::new("coder").unwrap(),
+    };
+    let started = 10 * MINUTE_MS;
+    let later = started + 4 * MINUTE_MS;
+    let offered = |expired: &BTreeSet<SessionId>| -> Vec<ItemId> {
+        state
+            .dispatchable(asking, &coder, expired)
+            .iter()
+            .map(|item| item.id())
+            .collect()
+    };
+
+    let heard = Presence::new(started, [(fixture.devices[1].key(), later)]);
+    let present = state.expired(asking, &heard, later);
+    assert!(present.is_empty());
+    assert!(offered(&present).is_empty());
+    assert!(state.held(task, &SessionRole::Work, &present));
+
+    let expired = state.expired(asking, &Presence::new(started, []), later);
+    assert_eq!(expired, BTreeSet::from([gone]));
+    assert_eq!(offered(&expired), [task]);
+    assert!(!state.held(task, &SessionRole::Work, &expired));
+    assert!(
+        state
+            .expired(fixture.devices[1].key(), &Presence::new(started, []), later)
+            .is_empty(),
+        "a device's own sessions never expire for it"
     );
 }

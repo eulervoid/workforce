@@ -165,12 +165,14 @@ impl State {
         }
     }
 
-    /// The open steps of the review of `commit` of `item` that no live review session holds.
+    /// The open steps of the review of `commit` of `item` that no live review session holds, but
+    /// for the `expired` ones ([`State::expired`]).
     fn unheld(
         &self,
         item: ItemId,
         commit: Option<CommitId>,
         open: Vec<ReviewStep>,
+        expired: &BTreeSet<SessionId>,
     ) -> Vec<ReviewStep> {
         open.into_iter()
             .filter(|step| match step {
@@ -179,7 +181,7 @@ impl State {
                         commit,
                         step: name.clone(),
                     };
-                    self.holder(item, &role).is_none()
+                    !self.held(item, &role, expired)
                 }
                 ReviewStep::Principal => true,
             })
@@ -201,7 +203,7 @@ impl State {
                 };
                 match self.review_status(item.id())? {
                     ReviewStatus::Awaiting { steps, .. } => self
-                        .unheld(item.id(), Some(commit), steps)
+                        .unheld(item.id(), Some(commit), steps, &BTreeSet::new())
                         .into_iter()
                         .next()
                         .map(|step| (item.id(), commit, step)),
@@ -229,7 +231,7 @@ impl State {
             return None;
         };
         let names = self
-            .unheld(item, commit, steps)
+            .unheld(item, commit, steps, &BTreeSet::new())
             .into_iter()
             .filter_map(|step| match step {
                 ReviewStep::Agent { name, .. } => Some(name),
@@ -392,12 +394,14 @@ impl State {
 
     /// The review steps `agent` could take on `device`, with the item and commit they are for: the
     /// agent's capabilities and the device's hardware meet what the step requires, and no review
-    /// session holds the step. Not offered an item are agents that did its work or gave a verdict
-    /// on the submitted commit. Steps of the same name are one step, offered once.
+    /// session holds the step, but for the `expired` ones ([`State::expired`]). Not offered an
+    /// item are agents that did its work or gave a verdict on the submitted commit. Steps of the
+    /// same name are one step, offered once.
     pub fn reviewable(
         &self,
         device: DeviceKey,
         agent: &AgentId,
+        expired: &BTreeSet<SessionId>,
     ) -> Vec<(ItemId, Option<CommitId>, Option<ReviewStepName>)> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
@@ -429,7 +433,7 @@ impl State {
                 continue;
             }
             let mut offered_names = BTreeSet::new();
-            for step in self.unheld(item.id(), commit, steps) {
+            for step in self.unheld(item.id(), commit, steps, expired) {
                 let ReviewStep::Agent { name, requires, .. } = step else {
                     continue;
                 };

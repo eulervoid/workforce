@@ -12,6 +12,7 @@ use crate::session::{CommitId, EndReason, Verdict};
 use crate::state::State;
 use crate::testing::*;
 use crate::validate::PolicyViolation;
+use std::collections::BTreeSet;
 
 fn commit(byte: u8) -> CommitId {
     let text: String = std::iter::repeat_n(format!("{byte:02x}"), 20).collect();
@@ -416,8 +417,11 @@ fn approved_work_and_work_without_review_wait_for_the_merge() {
 fn reviewers_are_offered_what_they_are_capable_of_and_did_not_work_on() {
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
-    let offered =
-        |scene: &Scene, name: &str| scene.state.reviewable(scene.device(), &scene.agent(name));
+    let offered = |scene: &Scene, name: &str| {
+        scene
+            .state
+            .reviewable(scene.device(), &scene.agent(name), &BTreeSet::new())
+    };
     assert_eq!(offered(&scene, "reviewer"), [(item, Some(commit(1)), None)]);
     assert!(offered(&scene, "weak").is_empty(), "missing strong-model");
     assert!(
@@ -447,7 +451,11 @@ fn the_hardware_of_the_device_counts_for_a_review_step() {
 
     let mut scene = Scene::new();
     let item = scene.submitted("standard");
-    let offered = |scene: &Scene| scene.state.reviewable(scene.device(), &scene.agent("weak"));
+    let offered = |scene: &Scene| {
+        scene
+            .state
+            .reviewable(scene.device(), &scene.agent("weak"), &BTreeSet::new())
+    };
     assert!(offered(&scene).is_empty(), "missing strong-model");
     scene.apply(EventBody::DeviceProfile(DeviceProfile {
         name: "laptop".into(),
@@ -465,7 +473,7 @@ fn reviewers_that_do_not_finish_are_retried_until_the_principal_decides() {
     let offered = |scene: &Scene| {
         scene
             .state
-            .reviewable(scene.device(), &scene.agent("reviewer"))
+            .reviewable(scene.device(), &scene.agent("reviewer"), &BTreeSet::new())
     };
     for attempt in 1..=3 {
         assert_eq!(
@@ -506,7 +514,7 @@ fn human_steps_are_not_offered_to_agents() {
     assert!(
         scene
             .state
-            .reviewable(scene.device(), &scene.agent("reviewer"))
+            .reviewable(scene.device(), &scene.agent("reviewer"), &BTreeSet::new())
             .is_empty()
     );
 }
@@ -935,7 +943,7 @@ mod at_once {
     fn offered(scene: &Scene, agent: &str) -> Vec<Option<String>> {
         scene
             .state
-            .reviewable(scene.device(), &scene.agent(agent))
+            .reviewable(scene.device(), &scene.agent(agent), &BTreeSet::new())
             .into_iter()
             .map(|(_, _, step)| step.map(|name| name.to_string()))
             .collect()

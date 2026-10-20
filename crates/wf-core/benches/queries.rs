@@ -90,6 +90,8 @@ fn main() {
     let device = fixture.devices[0].key();
     println!("{ITEMS} items, {} sessions", state.sessions().count());
     time("inbox", 5, || state.inbox());
-    time("dispatchable", 5, || state.dispatchable(device, &agent));
+    time("dispatchable", 5, || {
+        state.dispatchable(device, &agent, &Default::default())
+    });
     time("open blockers", 5, || state.open_blockers());
 }

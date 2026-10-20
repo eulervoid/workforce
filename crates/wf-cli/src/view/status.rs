@@ -587,7 +587,9 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
     let takes_here = |device, unknown: bool| {
         state.auto_agents(device).iter().any(|(agent, definition)| {
             harness_unknown(&definition.harness) == unknown
-                && !state.dispatchable(device, agent).is_empty()
+                && !state
+                    .dispatchable(device, agent, &Default::default())
+                    .is_empty()
         })
     };
     let an_agent_starts_here = own.is_some_and(|device| takes_here(device, false));

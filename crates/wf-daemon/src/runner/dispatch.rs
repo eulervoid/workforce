@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use wf_core::id::{HashId, ItemId, WorkforceId};
+use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::AgentId;
 use wf_core::identity::DeviceKey;
 use wf_core::item::ItemState;
@@ -204,9 +204,12 @@ async fn dispatch_once(
                 .chain(waiting.iter().copied())
                 .collect();
             let candidate_of = agent.clone();
+            let presence = daemon.presence_now();
+            let now_ms = wf_store::now_ms();
             let Ok(candidate) = daemon
                 .read(loaded, move |state| {
-                    next_start(state, device, &candidate_of, &skipped)
+                    let expired = state.expired(device, &presence, now_ms);
+                    next_start(state, device, &candidate_of, &skipped, &expired)
                 })
                 .await
             else {
@@ -244,26 +247,27 @@ async fn dispatch_once(
 
 /// What `agent` starts next on this device, unless it has no free slot or nothing to take that is
 /// not in `skipped`: a review first, then a blocker to supervise, then work to diagnose, and
-/// otherwise the first item it may take.
+/// otherwise the first item it may take. What only `expired` sessions hold is free to take over.
 fn next_start(
     state: &State,
     device: DeviceKey,
     agent: &AgentId,
     skipped: &BTreeSet<ItemId>,
+    expired: &BTreeSet<SessionId>,
 ) -> Option<(ItemId, SessionRole)> {
     if !state.has_free_slot(device, agent) {
         return None;
     }
     let review = state
-        .reviewable(device, agent)
+        .reviewable(device, agent, expired)
         .into_iter()
         .find(|(item, _, _)| !skipped.contains(item));
     let supervision = state
-        .supervisable(agent)
+        .supervisable(agent, expired)
         .into_iter()
         .find(|item| !skipped.contains(item));
     let diagnosis = state
-        .diagnosable(device, agent)
+        .diagnosable(device, agent, expired)
         .into_iter()
         .find(|item| !skipped.contains(item));
     match (review, supervision, diagnosis) {
@@ -271,7 +275,7 @@ fn next_start(
         (None, Some(item), _) => Some((item, SessionRole::Supervise)),
         (None, None, Some(item)) => Some((item, SessionRole::Diagnose)),
         (None, None, None) => state
-            .dispatchable(device, agent)
+            .dispatchable(device, agent, expired)
             .into_iter()
             .map(|item| item.id())
             .find(|item| !skipped.contains(item))

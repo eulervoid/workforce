@@ -124,8 +124,13 @@ impl State {
 
     /// The items whose work waits for a diagnosis that `agent` can give on `device`: the agent's
     /// capabilities and the device's hardware meet what the step requires, and no diagnose
-    /// session holds the item. Oldest first.
-    pub fn diagnosable(&self, device: DeviceKey, agent: &AgentId) -> Vec<ItemId> {
+    /// session holds the item but for the `expired` ones ([`State::expired`]). Oldest first.
+    pub fn diagnosable(
+        &self,
+        device: DeviceKey,
+        agent: &AgentId,
+        expired: &BTreeSet<SessionId>,
+    ) -> Vec<ItemId> {
         let Some(definition) = self.agent(&agent.name, agent.principal) else {
             return Vec::new();
         };
@@ -139,7 +144,7 @@ impl State {
                     return false;
                 };
                 let capable = requires.iter().all(|need| offered.contains(need));
-                let held = self.holder(item.id(), &SessionRole::Diagnose).is_some();
+                let held = self.held(item.id(), &SessionRole::Diagnose, expired);
                 capable && !held
             })
             .collect();

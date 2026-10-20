@@ -2,12 +2,13 @@
 
 use std::sync::Arc;
 
+use wf_core::claims::Presence;
 use wf_core::event::{Commented, EventBody, ItemMoved, SessionEnded};
 use wf_core::hlc::Hlc;
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{ItemEntry, ItemState};
-use wf_core::lifecycle::{AfterEnd, Closing, Finish, SessionEnd};
+use wf_core::lifecycle::{AfterEnd, Closing, Finish, Interruption, SessionEnd};
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::State;
 use wf_vcs::{GitCli, Import, ImportMode, VcsError, item_branch, item_repository};
@@ -292,6 +293,76 @@ impl Daemon {
         }
         effect?;
         Ok(EndAnswer::Ended)
+    }
+
+    /// Ends `session`, which runs on another device of this principal that has been gone for
+    /// longer than the lease, `LeaseExpired`, so that a session started here takes over what it
+    /// claimed. The comment before the end says which device was gone and since when. The item
+    /// does not move: the session that takes over starts on it at once.
+    pub(super) async fn take_over(
+        &self,
+        loaded: &Loaded,
+        session: SessionId,
+        presence: &Presence,
+    ) -> Result<(), SessionError> {
+        let _ending = self.ending.lock(session).await;
+        let state = self.snapshot(loaded).await?;
+        let folded = state
+            .session(session)
+            .ok_or(SessionError::UnknownSession(session))?;
+        if !folded.is_live() {
+            return Ok(());
+        }
+        let Closing {
+            reason,
+            actor,
+            note: _,
+            head,
+        } = state
+            .closing(
+                session,
+                &SessionEnd::Interruption(Interruption::LeaseExpired),
+                None,
+            )
+            .ok_or(SessionError::UnknownSession(session))?;
+        let device = folded.device();
+        let silent_since = i64::try_from(presence.silent_since_ms(device))
+            .ok()
+            .and_then(|ms| jiff::Timestamp::from_millisecond(ms).ok())
+            .map_or_else(
+                || "a while".to_string(),
+                |at| at.strftime("%Y-%m-%d %H:%M:%S UTC").to_string(),
+            );
+        let note = format!(
+            "Taken over: device {} was not heard from since {silent_since}, longer than the lease \
+             of {}.",
+            crate::peers::peer_label(&state, device),
+            humantime::format_duration(state.lease()),
+        );
+        let written = self
+            .author(
+                loaded,
+                actor.clone(),
+                EventBody::Commented(Commented::plain(folded.item(), note)),
+            )
+            .await?;
+        self.author(
+            loaded,
+            actor,
+            EventBody::SessionEnded(SessionEnded {
+                session,
+                reason,
+                because: Some(CommentId::from(written.id())),
+                head,
+            }),
+        )
+        .await?;
+        tracing::info!(
+            "session {}: taken over from device {}, gone since {silent_since}",
+            session.short(),
+            device.fmt_short()
+        );
+        Ok(())
     }
 
     /// `body`, written for the work session `session`, with the head it names. Only a comment on

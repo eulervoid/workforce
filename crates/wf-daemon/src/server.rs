@@ -345,7 +345,7 @@ async fn call(
             let results = sync_all(&node, workforce, peers, Some(daemon.presence())).await;
             reply(results)
         }
-        Call::LastSeen => reply(daemon.presence().snapshot()),
+        Call::LastSeen => reply(daemon.presence_now().heard_ms().collect::<Vec<_>>()),
         Call::MachineFaults => reply(daemon.faults.current()),
         Call::CacheUsage => reply(daemon.cache_usage_of(workforce)),
         Call::AwaitedCommits => reply(loaded.commits.awaited()),

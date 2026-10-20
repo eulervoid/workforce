@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tokio::task::{AbortHandle, JoinSet};
+use wf_core::claims::Presence;
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceKey;
 use wf_core::state::State;
@@ -77,28 +78,13 @@ pub fn needs_network(state: &State, own: DeviceKey, now_ms: u64) -> bool {
     !peers_of(state, own).is_empty() || state.has_open_invite(now_ms)
 }
 
-/// When each device was last heard from, in milliseconds since the epoch. Local to this
+/// Notes in `presence` that `device` was heard from just now. What a daemon heard is local to its
 /// machine, and not part of the workforce state.
-#[derive(Clone, Default)]
-pub struct Presence(Arc<Mutex<BTreeMap<DeviceKey, u64>>>);
-
-impl Presence {
-    pub fn saw(&self, device: DeviceKey) {
-        let now = wf_store::now_ms();
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .insert(device, now);
-    }
-
-    pub fn snapshot(&self) -> Vec<(DeviceKey, u64)> {
-        self.0
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .iter()
-            .map(|(device, seen)| (*device, *seen))
-            .collect()
-    }
+fn saw(presence: &Mutex<Presence>, device: DeviceKey) {
+    presence
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .saw(device, wf_store::now_ms());
 }
 
 /// Syncs `workforce` with each of `peers` at once. `peers` pairs a device with how to call it.
@@ -106,7 +92,7 @@ pub async fn sync_all<L>(
     node: &Arc<Node<L>>,
     workforce: WorkforceId,
     peers: Vec<(DeviceKey, String)>,
-    presence: Option<&Presence>,
+    presence: Option<&Mutex<Presence>>,
 ) -> Vec<PeerSync>
 where
     L: SyncLog + Clone + 'static,
@@ -125,7 +111,7 @@ where
             if result.reached()
                 && let Some(presence) = presence
             {
-                presence.saw(result.device);
+                saw(presence, result.device);
             }
             results.push((index, result));
         }
@@ -180,7 +166,7 @@ async fn keep_in_sync(
     workforce: WorkforceId,
     storage: StorageHandle,
     device: DeviceKey,
-    presence: Presence,
+    presence: Arc<Mutex<Presence>>,
     kick: Arc<Notify>,
 ) {
     let mut heads = storage.watch_heads();
@@ -222,7 +208,7 @@ pub async fn run_peer_loop(
     node: Arc<Node<StorageHandle>>,
     workforce: WorkforceId,
     storage: StorageHandle,
-    presence: Presence,
+    presence: Arc<Mutex<Presence>>,
 ) {
     let mut heads = storage.watch_heads();
     let own = node.device();
@@ -251,7 +237,7 @@ pub async fn run_peer_loop(
                     workforce,
                     storage.clone(),
                     *device,
-                    presence.clone(),
+                    Arc::clone(&presence),
                     Arc::clone(&kick),
                 ));
                 (kick, task)
@@ -287,7 +273,7 @@ pub async fn run_peer_loop(
                     let Some((kick, _)) = syncers.get(&heard.device) else {
                         continue;
                     };
-                    presence.saw(heard.device);
+                    saw(&presence, heard.device);
                     if heard.digest != heads_digest(&heads.borrow()) {
                         kick.notify_one();
                     }
@@ -311,7 +297,8 @@ async fn peer_label_of(storage: &StorageHandle, device: DeviceKey) -> String {
         .unwrap_or_else(|_| device.fmt_short())
 }
 
-fn peer_label(state: &State, device: DeviceKey) -> String {
+/// What `device` is called: its profile's name, or its short key.
+pub(crate) fn peer_label(state: &State, device: DeviceKey) -> String {
     let name = state
         .devices()
         .find(|info| info.device == device)
