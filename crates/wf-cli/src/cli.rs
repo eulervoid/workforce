@@ -617,6 +617,8 @@ pub enum ItemCommand {
     Add(ItemAddArgs),
     /// List the live items, filtered and grouped.
     List(ItemListArgs),
+    /// Find items by words in their title, body and comments.
+    Search(ItemSearchArgs),
     /// Show an item with its comments, links, review and what happened to it.
     Show {
         /// The start of an item id. Without one, pick at a terminal.
@@ -737,8 +739,9 @@ pub struct ItemAddArgs {
     pub edit: bool,
 }
 
+/// The filters `wf item list` and `wf item search` narrow the items with.
 #[derive(Args)]
-pub struct ItemListArgs {
+pub struct ItemFilterArgs {
     /// Only items of this type.
     #[arg(long = "type")]
     pub item_type: Option<TypeName>,
@@ -769,12 +772,28 @@ pub struct ItemListArgs {
     /// Only open items with a cancelled dependency; someone has to act to free them.
     #[arg(long)]
     pub stranded: bool,
+}
+
+#[derive(Args)]
+pub struct ItemListArgs {
+    #[command(flatten)]
+    pub filters: ItemFilterArgs,
     /// Show the items in groups.
     #[arg(long, value_enum)]
     pub group_by: Option<ItemGrouping>,
     /// The order of the items, within each group.
     #[arg(long, value_enum, default_value_t = ItemOrder::Priority)]
     pub sort: ItemOrder,
+}
+
+#[derive(Args)]
+pub struct ItemSearchArgs {
+    /// The words to find, in any order and case. An item must have all of them in its title, body
+    /// and comments together; an item id or its start (`#7ph6ds`) finds that item.
+    #[arg(required = true)]
+    pub query: Vec<String>,
+    #[command(flatten)]
+    pub filters: ItemFilterArgs,
 }
 
 /// What `wf item list --sort` orders by. Archived items come after the live ones, by when they
@@ -809,7 +828,7 @@ pub enum ItemGrouping {
     Priority,
 }
 
-impl ItemListArgs {
+impl ItemFilterArgs {
     /// Whether an item passes the `--ready`, `--blocked` and `--stranded` filters; given together
     /// they match any of them.
     pub fn accepts(&self, readiness: Option<Readiness>) -> bool {

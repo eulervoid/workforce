@@ -136,6 +136,56 @@ pub fn item_list(items: &[ItemSummary]) -> String {
     format!("{table}\n")
 }
 
+/// The list row of each found item, with a line under its title for each field a word is in:
+/// `body: …` or the name of the comment's author, the words highlighted. A word in the title is
+/// highlighted in the row itself.
+pub fn search_hits(hits: &[SearchHitView]) -> String {
+    if hits.is_empty() {
+        return "no items found\n".to_string();
+    }
+    let mut table = table(&ITEM_COLUMNS);
+    for hit in hits {
+        let mut row = item_row(&hit.item);
+        let mut title = hit.item.title.clone();
+        let mut lines = Vec::new();
+        for found in &hit.matches {
+            let context = highlighted(&found.text, &found.highlights);
+            match found.field {
+                MatchFieldView::Title => title = context,
+                MatchFieldView::Body => lines.push(format!(
+                    "{} {context}",
+                    paint(theme::text_dimmed(), "body:")
+                )),
+                MatchFieldView::Comment => {
+                    let author = found.by.as_ref().map_or_else(String::new, paint_actor);
+                    lines.push(format!("{author} {context}"));
+                }
+            }
+        }
+        for line in lines {
+            title.push_str("\n  ");
+            title.push_str(&line);
+        }
+        row[2] = title;
+        table.add_row(row);
+    }
+    format!("{table}\n")
+}
+
+/// `text` with the byte ranges `highlights` in bold and underlined.
+fn highlighted(text: &str, highlights: &[[usize; 2]]) -> String {
+    let style = theme::text_bold().underline();
+    let mut out = String::new();
+    let mut end_of_previous = 0;
+    for [start, end] in highlights {
+        out.push_str(&text[end_of_previous..*start]);
+        out.push_str(&paint(style, &text[*start..*end]));
+        end_of_previous = *end;
+    }
+    out.push_str(&text[end_of_previous..]);
+    out
+}
+
 /// `◐ active (3)`: the group's icon and name, with the number of items.
 fn group_heading(grouping: ItemGrouping, group: &ItemGroup) -> String {
     let Some(first) = group.items.first() else {

@@ -414,6 +414,9 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
         (_, Some(Detail::Item(_))) if item_session => &[BACK, SCROLL, OPEN_SESSION],
         (_, Some(Detail::Item(_) | Detail::Agent(_) | Detail::Flag(_))) => &[BACK, SCROLL],
         (Tab::Now, None) => &[OPEN, MOVE],
+        (Tab::Items, None) if !app.items.filter.is_empty() => {
+            &[OPEN, GROUP, CHANGE_FILTER, CLEAR_FILTER, READINESS]
+        }
         (Tab::Items, None) => &[OPEN, GROUP, FILTER, READINESS],
         (Tab::Log, None) if !app.log.filter.is_empty() => &[CHANGE_FILTER, CLEAR_FILTER],
         (Tab::Log, None) => &[FILTER, SCROLL],

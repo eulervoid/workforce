@@ -24,6 +24,7 @@ pub mod recovery;
 pub mod refs;
 pub mod resolve;
 pub mod review;
+pub mod search;
 pub mod session;
 pub mod state;
 pub mod stats;

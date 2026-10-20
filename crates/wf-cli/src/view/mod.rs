@@ -6,6 +6,7 @@ mod detail;
 mod event;
 mod inbox;
 mod item;
+mod search;
 mod session;
 mod status;
 
@@ -14,6 +15,7 @@ pub use detail::*;
 pub use event::*;
 pub use inbox::*;
 pub use item::*;
+pub use search::*;
 pub use session::*;
 pub use status::*;
 

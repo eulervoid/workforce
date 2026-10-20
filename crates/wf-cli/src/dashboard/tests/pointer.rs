@@ -130,6 +130,7 @@ fn the_list_behind_an_open_detail_takes_no_keys() {
         Some(ItemListing {
             grouping: crate::cli::ItemGrouping::State,
             order: crate::cli::ItemOrder::Priority,
+            search: None,
         })
     );
     assert!(app.prompt.is_none());

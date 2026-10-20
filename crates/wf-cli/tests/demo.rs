@@ -1679,3 +1679,94 @@ fn check_runs_the_policys_checks_on_the_checkout_and_fails_when_one_does() {
             .contains("the policy has no check `lint`; it has present, broken")
     );
 }
+
+#[test]
+fn items_are_found_by_words_in_title_body_and_comments() {
+    let wf = Sandbox::new();
+    wf.run(&["init", "--name", "demo"]);
+    let in_comment = wf.add(&["--title", "Plain", "--label", "bug"]);
+    wf.run(&["comment", short(&in_comment), "the Packed-Refs file is odd"]);
+    wf.add(&["--title", "Body", "--body", "first\nreads packed-refs here"]);
+    wf.add(&["--title", "About packed-refs", "--priority", "P3"]);
+    wf.add(&["--title", "Unrelated"]);
+
+    let found = wf.json(&["item", "search", "PACKED-refs"]);
+    assert_eq!(
+        titles(&found_items(&found)),
+        ["About packed-refs", "Body", "Plain"]
+    );
+    let matches = &found[2]["matches"];
+    assert_eq!(matches[0]["field"], "comment");
+    assert_eq!(matches[0]["by"]["label"], "@ada");
+    assert_eq!(matches[0]["text"], "the Packed-Refs file is odd");
+    assert_eq!(matches[0]["highlights"][0], serde_json::json!([4, 15]));
+    assert!(matches[0]["comment"].is_string());
+    assert_eq!(found[1]["matches"][0]["field"], "body");
+    assert_eq!(found[1]["matches"][0]["text"], "reads packed-refs here");
+
+    // Several words, all of them; and the list filters.
+    assert_eq!(
+        titles(&found_items(&wf.json(&[
+            "item",
+            "search",
+            "file",
+            "packed-refs"
+        ]))),
+        ["Plain"]
+    );
+    assert_eq!(
+        titles(&found_items(&wf.json(&[
+            "item",
+            "search",
+            "packed-refs",
+            "--priority",
+            "P3"
+        ]))),
+        ["About packed-refs"]
+    );
+    assert_eq!(
+        titles(&found_items(&wf.json(&[
+            "item",
+            "search",
+            "packed-refs",
+            "--label",
+            "bug"
+        ]))),
+        ["Plain"]
+    );
+
+    // An id finds the item; archived items only on request.
+    let by_id = wf.json(&["item", "search", &format!("#{}", short(&in_comment))]);
+    assert_eq!(titles(&found_items(&by_id)), ["Plain"]);
+    assert_eq!(by_id[0]["matches"], serde_json::json!([]));
+    wf.run(&["item", "done", short(&in_comment)]);
+    wf.run(&["item", "archive", short(&in_comment)]);
+    assert_eq!(wf.json(&["item", "search", "file"]), serde_json::json!([]));
+    assert_eq!(
+        titles(&found_items(&wf.json(&[
+            "item",
+            "search",
+            "file",
+            "--archived"
+        ]))),
+        ["Plain"]
+    );
+
+    let text = wf.run(&["item", "search", "packed-refs"]);
+    assert!(text.contains("About packed-refs"), "{text}");
+    assert!(text.contains("body: reads packed-refs here"), "{text}");
+    assert_eq!(
+        wf.run(&["item", "search", "nothing-like-it"]),
+        "no items found\n"
+    );
+    assert!(wf.fail(&["item", "search"]).contains("QUERY"));
+}
+
+fn found_items(found: &serde_json::Value) -> serde_json::Value {
+    found
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|hit| hit["item"].clone())
+        .collect()
+}

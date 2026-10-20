@@ -103,7 +103,7 @@ session that is open.
 | `e` | edit the item in `$EDITOR` |
 | `i` | on a session or a diff: open its item |
 | `f` | on a session: the full transcript, without the abridged tool output |
-| `o` / `O` / `F` / `/` | on the Items tab: grouping, order, readiness filter (ready, blocked, stranded), filter by title or the start of an id (`#` optional) |
+| `o` / `O` / `F` / `/` | on the Items tab: grouping, order, readiness filter (ready, blocked, stranded), search the items as you type, as `wf item search` does: words in the title, body or comments, or the start of an id (`#` optional); `esc` clears, and the search shows in the list header |
 | `/` | on the Log tab: filter the events |
 | `ctrl+g` | carry what you are typing in the footer to `$EDITOR` |
 | `q`, `ctrl+c` | quit |
