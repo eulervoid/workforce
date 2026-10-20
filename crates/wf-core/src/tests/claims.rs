@@ -8,6 +8,7 @@ use crate::name::ReviewStepName;
 use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::{State, Trust};
 use crate::testing::*;
+use crate::validate::Invalid;
 
 fn commit(byte: u8) -> CommitId {
     let text: String = std::iter::repeat_n(format!("{byte:02x}"), 20).collect();
@@ -257,4 +258,119 @@ fn a_claim_of_another_principal_is_not_taken_over() {
         )
         .unwrap_err();
     assert_eq!(claim.item, task);
+}
+
+#[test]
+fn only_a_daemon_of_the_principal_ends_a_session_of_another_device_and_only_as_lease_expired() {
+    let (fixture, mut state, task) = with_task();
+    let session: SessionId = fixture
+        .apply(&mut state, 0, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    let daemon = Actor::Daemon(fixture.founder.key());
+    let refused = |actor: Actor, reason| {
+        let event = fixture.author_as(&state, 1, actor, 4_000, end_session(session, reason));
+        state.clone().receive(event, Trust::Untrusted).map(|_| ())
+    };
+    assert_eq!(
+        refused(daemon.clone(), EndReason::Cancelled),
+        Err(Invalid::EndsSessionOfAnotherDevice(session))
+    );
+    assert_eq!(
+        refused(fixture.founder_actor(), EndReason::LeaseExpired),
+        Err(Invalid::EndsSessionOfAnotherDevice(session)),
+        "the principal stops a session through the daemon of its device"
+    );
+    let member = Actor::Daemon(fixture.member.key());
+    let by_member = state
+        .builder(fixture.member_device.key(), member, 4_000)
+        .unwrap()
+        .sign(
+            &fixture.member_device,
+            end_session(session, EndReason::LeaseExpired),
+        )
+        .unwrap();
+    assert_eq!(
+        state
+            .clone()
+            .receive(by_member, Trust::Untrusted)
+            .map(|_| ()),
+        Err(Invalid::EndsSessionOfAnotherDevice(session)),
+        "a daemon of another principal"
+    );
+
+    assert_eq!(refused(daemon, EndReason::LeaseExpired), Ok(()));
+    fixture.apply(
+        &mut state,
+        0,
+        4_001,
+        end_session(session, EndReason::Cancelled),
+    );
+}
+
+/// The device of `@ada` that ran a session went away; the other took the session over and started
+/// its own, while the first, back but not yet in sync, ended the session itself.
+#[test]
+fn a_takeover_and_a_late_end_from_the_returning_device_converge() {
+    let (fixture, base, task) = with_task();
+    let returning = fixture.devices[1].key();
+    let started = fixture.author(&base, 1, 3_000, start_session("coder", task));
+    let gone: SessionId = started.id().into();
+    let base = received(&base, &[&started]);
+
+    let silent = Presence::new(10 * MINUTE_MS, []);
+    let now = 20 * MINUTE_MS;
+    let mut taking_over = base.clone();
+    let ended = taking_over
+        .claimable(
+            task,
+            &SessionRole::Work,
+            fixture.devices[0].key(),
+            &silent,
+            now,
+        )
+        .unwrap();
+    assert_eq!(ended, [gone]);
+    let daemon = Actor::Daemon(fixture.founder.key());
+    let expired = fixture.author_as(
+        &taking_over,
+        0,
+        daemon.clone(),
+        now,
+        end_session(gone, EndReason::LeaseExpired),
+    );
+    taking_over = received(&taking_over, &[&expired]);
+    let takeover = fixture.author(&taking_over, 0, now + 1, start_session("coder", task));
+    let successor: SessionId = takeover.id().into();
+
+    let late = fixture.author_as(
+        &base,
+        1,
+        daemon,
+        now + 2,
+        end_session(gone, EndReason::Interrupted),
+    );
+    let forward = received(&base, &[&expired, &takeover, &late]);
+    let backward = received(&base, &[&late, &expired, &takeover]);
+    assert_eq!(forward, backward);
+    let ended = forward.session(gone).unwrap().ended().unwrap();
+    assert_eq!(
+        ended.reason,
+        EndReason::LeaseExpired,
+        "the earliest end counts"
+    );
+    assert_eq!(
+        forward
+            .holder(task, &SessionRole::Work)
+            .map(|session| session.id()),
+        Some(successor)
+    );
+    assert!(forward.outclaimed(returning).is_empty());
+    let hears_the_other = Presence::new(10 * MINUTE_MS, [(fixture.devices[0].key(), now)]);
+    assert!(
+        forward
+            .claimable(task, &SessionRole::Work, returning, &hears_the_other, now)
+            .is_err(),
+        "the device that came back finds the claim held"
+    );
 }
