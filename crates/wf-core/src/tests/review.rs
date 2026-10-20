@@ -60,12 +60,7 @@ impl Scene {
     fn submit(&mut self, item: ItemId, commit: CommitId) {
         let session: SessionId = self.apply(start_session("coder", item)).id().into();
         self.apply(moved(item, ItemState::Review));
-        self.apply(end_session(
-            session,
-            EndReason::Submitted {
-                commit: Some(commit),
-            },
-        ));
+        self.apply(submit_session(session, commit));
     }
 
     /// A verdict given by `reviewer` from a review session of `commit(1)`, which it then ends.
@@ -702,7 +697,7 @@ fn work_without_commits_is_reviewed_and_finished_by_its_approval() {
         .into();
     let session: SessionId = scene.apply(start_session("coder", finding)).id().into();
     scene.apply(moved(finding, ItemState::Review));
-    scene.apply(end_session(session, EndReason::Submitted { commit: None }));
+    scene.apply(end_session(session, EndReason::Submitted));
     assert_eq!(scene.status(finding), Some(awaiting_human()));
     assert!(scene.state.finished_reviews().is_empty());
 
@@ -728,12 +723,7 @@ fn merged_work_is_finished_by_the_daemon_and_waits_on_nobody() {
     // As the daemon writes a submission: the item moves to review, then the session ends.
     let session: SessionId = scene.apply(start_session("coder", item)).id().into();
     scene.apply(moved(item, ItemState::Review));
-    scene.apply(end_session(
-        session,
-        EndReason::Submitted {
-            commit: Some(commit(1)),
-        },
-    ));
+    scene.apply(submit_session(session, commit(1)));
     scene.apply(verdict(item, commit(1), Verdict::Approve));
     assert!(
         scene.state.finished_reviews().is_empty(),
@@ -773,7 +763,7 @@ fn approved_work_without_commits_does_not_finish_an_item_that_was_moved_since() 
         .into();
     let session: SessionId = scene.apply(start_session("coder", finding)).id().into();
     scene.apply(moved(finding, ItemState::Review));
-    scene.apply(end_session(session, EndReason::Submitted { commit: None }));
+    scene.apply(end_session(session, EndReason::Submitted));
     scene.apply(verdict(finding, None, Verdict::Approve));
     scene.apply(moved(finding, ItemState::Open));
     scene.apply(moved(finding, ItemState::Review));
@@ -802,12 +792,7 @@ fn change_requests_hold_up_approval_and_the_next_submission() {
     scene.apply(moved(item, ItemState::Open));
 
     let session: SessionId = scene.apply(start_session("coder", item)).id().into();
-    let submit = end_session(
-        session,
-        EndReason::Submitted {
-            commit: Some(commit(2)),
-        },
-    );
+    let submit = submit_session(session, commit(2));
     assert_eq!(
         scene.state.check_policy(&submit),
         Err(PolicyViolation::OpenChangeRequests(item))
@@ -837,12 +822,7 @@ fn check_failures_hold_up_approval_and_the_next_submission_like_change_requests(
     scene.apply(moved(item, ItemState::Open));
 
     let session: SessionId = scene.apply(start_session("coder", item)).id().into();
-    let submit = end_session(
-        session,
-        EndReason::Submitted {
-            commit: Some(commit(2)),
-        },
-    );
+    let submit = submit_session(session, commit(2));
     assert_eq!(
         scene.state.check_policy(&submit),
         Err(PolicyViolation::OpenChangeRequests(item))

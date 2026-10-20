@@ -82,7 +82,7 @@ impl State {
                     Outcome::Failed if same_role(role, &session.role()) => {
                         Some((at, Step::Failed(session.id())))
                     }
-                    Outcome::Failed | Outcome::Finished | Outcome::Submitted { .. } => {
+                    Outcome::Failed | Outcome::Finished | Outcome::Submitted => {
                         diagnosed.then_some((at, Step::Diagnosed))
                     }
                 }

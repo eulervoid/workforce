@@ -135,8 +135,8 @@ impl SessionRole {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum EndReason {
-    /// The work is done. `None` when the branch has no commits.
-    Submitted { commit: Option<CommitId> },
+    /// The work is done: the commit it hands in is the `head` of the end.
+    Submitted,
     /// A review session gave its verdict.
     Reviewed,
     /// A supervise session resolved or escalated the blockers it was started for.
@@ -217,8 +217,8 @@ impl From<HarnessFault> for MachineFault {
 /// What an end reason makes of the session, for deciding what happens next and for counting.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Outcome {
-    /// The work was handed in, with its commit.
-    Submitted { commit: Option<CommitId> },
+    /// The work was handed in.
+    Submitted,
     /// The session did what it was started for, other than handing in work.
     Finished,
     /// The attempt did not finish: the agent gave up, ran out of time or failed.
@@ -231,7 +231,7 @@ pub enum Outcome {
 impl EndReason {
     pub fn outcome(&self) -> Outcome {
         match self {
-            EndReason::Submitted { commit } => Outcome::Submitted { commit: *commit },
+            EndReason::Submitted => Outcome::Submitted,
             EndReason::Reviewed | EndReason::Supervised | EndReason::Diagnosed => Outcome::Finished,
             EndReason::Released | EndReason::TimedOut | EndReason::Failed => Outcome::Failed,
             EndReason::Interrupted | EndReason::Cancelled | EndReason::MachineFault(_) => {
@@ -245,7 +245,7 @@ impl EndReason {
     pub fn name(&self) -> &'static str {
         match self {
             EndReason::MachineFault(fault) => fault.name(),
-            EndReason::Submitted { .. } => "submitted",
+            EndReason::Submitted => "submitted",
             EndReason::Reviewed => "reviewed",
             EndReason::Released => "released",
             EndReason::Supervised => "supervised",
@@ -293,6 +293,15 @@ pub struct Session {
     pub(crate) device: DeviceKey,
     pub(crate) started: Stamp,
     pub(crate) ended: Option<Ended>,
+    /// The last head the log names for the session, by its comment or its end.
+    pub(crate) head: Option<NamedHead>,
+}
+
+/// A head as the log names it, and when.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct NamedHead {
+    pub(crate) commit: CommitId,
+    pub(crate) stamp: Stamp,
 }
 
 impl Session {
@@ -331,6 +340,17 @@ impl Session {
 
     pub fn ended(&self) -> Option<&Ended> {
         self.ended.as_ref()
+    }
+
+    /// Where the branch of a work session was when the log last named it; `None` if it never did.
+    pub fn head(&self) -> Option<CommitId> {
+        self.head.map(|named| named.commit)
+    }
+
+    pub(crate) fn name_head(&mut self, commit: CommitId, stamp: Stamp) {
+        if self.head.is_none_or(|named| named.stamp < stamp) {
+            self.head = Some(NamedHead { commit, stamp });
+        }
     }
 
     pub fn is_live(&self) -> bool {

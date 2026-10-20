@@ -69,30 +69,14 @@ fn main() {
             2 => {
                 let session: SessionId =
                     apply(&mut state, start_session("coder", item)).id().into();
-                apply(
-                    &mut state,
-                    end_session(
-                        session,
-                        EndReason::Submitted {
-                            commit: Some(commit()),
-                        },
-                    ),
-                );
+                apply(&mut state, submit_session(session, commit()));
                 apply(&mut state, moved(item, ItemState::Review));
             }
             // Sent back by review.
             _ => {
                 let session: SessionId =
                     apply(&mut state, start_session("coder", item)).id().into();
-                apply(
-                    &mut state,
-                    end_session(
-                        session,
-                        EndReason::Submitted {
-                            commit: Some(commit()),
-                        },
-                    ),
-                );
+                apply(&mut state, submit_session(session, commit()));
                 apply(&mut state, moved(item, ItemState::Review));
                 apply(&mut state, verdict(item, commit(), Verdict::RequestChanges));
                 apply(&mut state, blocker(item, "which way?"));

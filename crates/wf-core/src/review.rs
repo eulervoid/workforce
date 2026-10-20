@@ -72,7 +72,7 @@ impl State {
             .filter_map(|session| {
                 let ended = session.ended()?;
                 match ended.reason.outcome() {
-                    Outcome::Submitted { commit } => Some((commit, ended.stamp)),
+                    Outcome::Submitted => Some((session.head(), ended.stamp)),
                     Outcome::Finished | Outcome::Failed | Outcome::Neither => None,
                 }
             })

@@ -110,6 +110,10 @@ pub enum Invalid {
     UnknownSession(SessionId),
     #[error("session {0} is not a session of this agent on this device")]
     SessionMismatch(SessionId),
+    #[error(
+        "only the device that runs a work session names a head, on a comment on its item or at its end"
+    )]
+    HeadNotOfItsWorkSession,
     #[error("an item cannot depend on itself")]
     SelfDependency,
     #[error("{0} is not a comment of the item in the causal past of the event")]
@@ -663,10 +667,17 @@ impl State {
                 known_item(&started.item)
             }
             EventBody::SessionEnded(ended) => {
-                if workforce.sessions.contains_key(&ended.session) {
-                    Ok(())
+                let session = workforce
+                    .sessions
+                    .get(&ended.session)
+                    .ok_or(Invalid::UnknownSession(ended.session))?;
+                let names_head_elsewhere = ended.head.is_some()
+                    && (session.role() != SessionRole::Work
+                        || session.device() != event.content.author);
+                if names_head_elsewhere {
+                    Err(Invalid::HeadNotOfItsWorkSession)
                 } else {
-                    Err(Invalid::UnknownSession(ended.session))
+                    Ok(())
                 }
             }
             EventBody::Reviewed(crate::event::Reviewed { item, .. })
@@ -677,6 +688,21 @@ impl State {
             | EventBody::ItemUnarchived(crate::event::ItemRef { item }) => known_item(item),
             EventBody::Commented(comment) => {
                 known_item(&comment.item)?;
+                if comment.head.is_some() {
+                    let of_its_work_session = match &event.content.actor {
+                        Actor::Agent { session, .. } => {
+                            workforce.sessions.get(session).is_some_and(|session| {
+                                session.role() == SessionRole::Work
+                                    && session.item() == comment.item
+                                    && session.device() == event.content.author
+                            })
+                        }
+                        Actor::Principal(_) | Actor::Daemon(_) => false,
+                    };
+                    if !of_its_work_session {
+                        return Err(Invalid::HeadNotOfItsWorkSession);
+                    }
+                }
                 // Whether the comment is already folded here must not decide whether it resolves:
                 // only what the author had seen does.
                 comment.resolves.iter().try_for_each(|resolved| {
@@ -1103,7 +1129,7 @@ impl State {
             | EventBody::SessionStarted(_)
             | EventBody::Merged(_) => Ok(()),
             EventBody::SessionEnded(ended) => {
-                let submitted = matches!(ended.reason, crate::session::EndReason::Submitted { .. });
+                let submitted = matches!(ended.reason, crate::session::EndReason::Submitted);
                 let item = workforce
                     .sessions
                     .get(&ended.session)

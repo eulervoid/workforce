@@ -47,6 +47,10 @@ impl Scene {
     fn end(&mut self, session: SessionId, reason: EndReason) {
         self.apply(end_session(session, reason));
     }
+
+    fn submit(&mut self, session: SessionId) {
+        self.apply(submit_session(session, commit()));
+    }
 }
 
 #[test]
@@ -73,10 +77,13 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     let task = scene.item(create("task", "work"));
     let reviewed = scene.item(create_reviewed("task", "careful", "standard"));
     let unreviewed = scene.item(create_reviewed("task", "finding", "none"));
-    let submitted = EndReason::Submitted {
-        commit: Some(commit()),
+    let submitted = EndReason::Submitted;
+    let after = |scene: &Scene, session, reason| {
+        scene
+            .state
+            .after_end(session, reason, Some(commit()))
+            .unwrap()
     };
-    let after = |scene: &Scene, session, reason| scene.state.after_end(session, reason).unwrap();
 
     let session = scene.start(task);
     scene.apply(moved(task, ItemState::Active));
@@ -87,18 +94,21 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
             wait_in: Some(ItemState::Review)
         }
     );
-    scene.end(session, submitted);
+    scene.submit(session);
 
     let session = scene.start(reviewed);
     assert_eq!(
         after(&scene, session, submitted),
         AfterEnd::MoveTo(ItemState::Review)
     );
-    scene.end(session, submitted);
+    scene.submit(session);
 
     let session = scene.start(unreviewed);
     assert_eq!(
-        after(&scene, session, EndReason::Submitted { commit: None }),
+        scene
+            .state
+            .after_end(session, EndReason::Submitted, None)
+            .unwrap(),
         AfterEnd::MoveTo(ItemState::Done)
     );
     scene.end(session, EndReason::Released);
@@ -106,7 +116,10 @@ fn ending_a_session_moves_its_item_by_why_it_ended() {
     let doubted = scene.item(create_reviewed("task", "unsure", "manual"));
     let session = scene.start(doubted);
     assert_eq!(
-        after(&scene, session, EndReason::Submitted { commit: None }),
+        scene
+            .state
+            .after_end(session, EndReason::Submitted, None)
+            .unwrap(),
         AfterEnd::MoveTo(ItemState::Review),
         "work without commits under review is not done yet"
     );
@@ -139,7 +152,7 @@ fn an_item_that_is_not_being_worked_on_stays_where_it_is() {
     let session = scene.start(task);
     scene.apply(moved(task, ItemState::Done));
     assert_eq!(
-        scene.state.after_end(session, EndReason::Failed),
+        scene.state.after_end(session, EndReason::Failed, None),
         Some(AfterEnd::Nothing),
         "a stale session does not reopen finished work"
     );
@@ -153,7 +166,7 @@ fn an_item_another_session_holds_is_not_reopened() {
     let _first = scene.start(task);
     let second = scene.start(task);
     assert_eq!(
-        scene.state.after_end(second, EndReason::Cancelled),
+        scene.state.after_end(second, EndReason::Cancelled, None),
         Some(AfterEnd::Nothing),
         "the earlier session holds the item, the later one gives way"
     );
@@ -235,11 +248,10 @@ fn an_agent_finish_is_written_by_the_agent_and_an_interruption_by_the_daemon() {
     assert_eq!(
         submitted,
         Closing {
-            reason: EndReason::Submitted {
-                commit: Some(commit())
-            },
+            reason: EndReason::Submitted,
             actor: by_agent.clone(),
             note: Some("done".to_string()),
+            head: Some(commit()),
         }
     );
     let released = closing(SessionEnd::Finish(Finish::Release { note: None }));
@@ -289,11 +301,12 @@ fn a_fault_of_the_machine_ends_the_session_with_it_and_without_a_comment() {
                 reason: EndReason::MachineFault(fault),
                 actor: by_daemon.clone(),
                 note: None,
+                head: None,
             },
             "the inbox says what is wrong, not a comment per session"
         );
         assert_eq!(
-            scene.state.after_end(session, closing.reason),
+            scene.state.after_end(session, closing.reason, closing.head),
             Some(AfterEnd::MoveTo(ItemState::Open)),
             "{fault:?}"
         );
@@ -389,10 +402,7 @@ fn work_rebases_at_submit_until_it_is_approved() {
         !scene.state.rebases_at_submit(first),
         "work that was moved on to review is not rewritten"
     );
-    let submitted = EndReason::Submitted {
-        commit: Some(commit()),
-    };
-    scene.end(first, submitted);
+    scene.submit(first);
 
     // Sent back by its review.
     scene.apply(verdict(task, commit(), Verdict::RequestChanges));
@@ -400,7 +410,7 @@ fn work_rebases_at_submit_until_it_is_approved() {
     let again = scene.start(task);
     assert!(scene.state.rebases_at_submit(again));
     scene.apply(moved(task, ItemState::Review));
-    scene.end(again, submitted);
+    scene.submit(again);
 
     // Approved, it waits in review for its merge and is never rewritten.
     scene.apply(verdict(task, commit(), Verdict::Approve));
@@ -434,12 +444,7 @@ impl Scene {
             .apply_by_daemon(start_session("coder", item))
             .id()
             .into();
-        self.apply_by_daemon(end_session(
-            session,
-            EndReason::Submitted {
-                commit: Some(commit()),
-            },
-        ));
+        self.apply_by_daemon(submit_session(session, commit()));
         if failed_run {
             let failed = self.apply_by_daemon(check_failure(item, "checks failed"));
             // The agent fixes it before it submits again.
@@ -495,12 +500,7 @@ fn work_with_an_open_blocker_waits_to_merge_and_the_inbox_shows_the_blocker() {
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
     scene.apply(moved(task, ItemState::Review));
-    scene.end(
-        session,
-        EndReason::Submitted {
-            commit: Some(commit()),
-        },
-    );
+    scene.submit(session);
     assert_eq!(scene.state.pending_merges().len(), 1);
 
     let blocker = scene.apply_by_daemon(blocker(task, "main itself fails `clippy`"));
