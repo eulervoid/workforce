@@ -212,7 +212,7 @@ fn named(scene: &Scene) -> Vec<(CommitId, Naming)> {
 }
 
 #[test]
-fn the_log_names_the_heads_the_submission_and_the_merge_with_the_device_that_wrote_them() {
+fn the_log_names_the_heads_and_the_submission_with_the_device_that_wrote_them() {
     let mut scene = Scene::new();
     let item = scene.item();
     let session = scene.start(item, SessionRole::Work);
@@ -222,14 +222,11 @@ fn the_log_names_the_heads_the_submission_and_the_merge_with_the_device_that_wro
     scene.apply(submit_session(session, commit(1)));
     scene.apply(moved(item, ItemState::Review));
     scene.apply(verdict(item, commit(1), Verdict::Approve));
-    scene.apply(merged(item, commit(1), commit(2)));
     assert_eq!(
         named(&scene),
         vec![
             (commit(1), Naming::Head { session }),
             (commit(1), Naming::Submitted),
-            (commit(1), Naming::Merged),
-            (commit(2), Naming::Merged),
         ]
     );
     let device = scene.fixture.devices[0].key();
@@ -267,8 +264,8 @@ fn a_finished_item_names_no_commits() {
     scene.comment_naming(session, item, commit(1));
     scene.apply(submit_session(session, commit(1)));
     scene.apply(moved(item, ItemState::Review));
+    assert_eq!(named(&scene).len(), 2);
     scene.apply(merged(item, commit(1), commit(2)));
-    assert_eq!(named(&scene).len(), 4);
     scene.apply(moved(item, ItemState::Done));
     assert_eq!(named(&scene), vec![]);
 }

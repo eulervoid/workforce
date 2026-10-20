@@ -164,7 +164,7 @@ pub enum Call {
     /// submits; answered with a `CommitId`.
     TargetCommit,
     /// The commits the log names that this device has not got yet, which what waits for them
-    /// (a session, a review, a merge) waits for; answered with a `Vec<NamedCommit>`.
+    /// (a session, a review, a merge) waits for; answered with a `Vec<AwaitedCommit>`.
     AwaitedCommits,
 }
 

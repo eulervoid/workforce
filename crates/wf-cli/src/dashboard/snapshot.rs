@@ -324,7 +324,7 @@ impl Snapshot {
         sources: &Sources,
         held: &[HeldPermission],
         machine_faults: &wf_daemon::MachineFaults,
-        awaited: &[wf_core::commits::NamedCommit],
+        awaited: &[wf_core::commits::AwaitedCommit],
         last_seen: &crate::devices::LastSeen,
         wanted: Wanted,
     ) -> Self {

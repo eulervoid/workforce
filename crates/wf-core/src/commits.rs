@@ -18,8 +18,6 @@ pub enum Naming {
     Head { session: SessionId },
     /// The commit an item in review was submitted at, which a review and the merge start on.
     Submitted,
-    /// The merge commit, or the commit that was merged, of an item that is not finished.
-    Merged,
 }
 
 /// A commit the log names, and the device that wrote the event, which has it.
@@ -29,6 +27,26 @@ pub struct NamedCommit {
     pub item: ItemId,
     pub author: DeviceKey,
     pub naming: Naming,
+}
+
+/// A commit the log names that this device lacks, and how fetching it goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct AwaitedCommit {
+    pub named: NamedCommit,
+    pub fetching: Fetching,
+}
+
+/// How fetching a commit this device lacks goes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum Fetching {
+    /// Not asked for yet, or still being asked for.
+    Underway,
+    /// No device it was asked of had it or could be reached: it is asked for again now and then,
+    /// and what starts on it waits.
+    Unavailable {
+        /// When it was found unavailable, in milliseconds since the Unix epoch.
+        since_ms: u64,
+    },
 }
 
 /// The head a work session had when the log last named one.
@@ -56,10 +74,10 @@ pub struct ItemHeads {
 }
 
 impl State {
-    /// The commits that something on a device still needs and that a ref keeps: the heads of
-    /// items that are not finished (the holder's, and the others' to keep apart), the commit an
-    /// item in review was submitted at, and what an item that is not finished had merged. What
-    /// finished items or heads rewritten away once named is not here: no device is asked for it.
+    /// The commits that something on a device still needs: the heads of items that are not
+    /// finished (the holder's, and the others' to keep apart), and the commit an item in review
+    /// was submitted at, which its reviews and its merge start on. What finished items or heads
+    /// rewritten away once named, or verdicts on them, is not here: no device is asked for it.
     pub fn named_commits(&self) -> Vec<NamedCommit> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
@@ -93,16 +111,6 @@ impl State {
                     author: session.device(),
                     naming: Naming::Submitted,
                 });
-            }
-            if let Some(merge) = item.latest_merge() {
-                for commit in [merge.reviewed, merge.commit] {
-                    named.push(NamedCommit {
-                        commit,
-                        item: id,
-                        author: merge.device,
-                        naming: Naming::Merged,
-                    });
-                }
             }
         }
         named

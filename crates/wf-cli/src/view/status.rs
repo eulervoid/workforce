@@ -6,7 +6,7 @@ use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::autonomy::StartMode;
 use wf_core::brief::speaker;
-use wf_core::commits::{NamedCommit, Naming};
+use wf_core::commits::{AwaitedCommit, Fetching, Naming};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{HashId, ItemId};
 use wf_core::identity::Actor;
@@ -277,15 +277,15 @@ pub struct StatusContext<'a> {
     /// What is wrong with the machine, as far as the daemon says.
     pub machine_faults: &'a MachineFaults,
     /// The commits the log names that this device has not got yet.
-    pub awaited: &'a [NamedCommit],
+    pub awaited: &'a [AwaitedCommit],
 }
 
 /// What the commits wait for, as `wf status` and the dashboard say it: the item, the commit, what
-/// the log names it for and the device it is to come from.
-pub fn awaiting_lines(state: &State, awaited: &[NamedCommit]) -> Vec<String> {
+/// the log names it for and the device it is to come from, or since when no device had it.
+pub fn awaiting_lines(state: &State, awaited: &[AwaitedCommit]) -> Vec<String> {
     awaited
         .iter()
-        .map(|named| {
+        .map(|AwaitedCommit { named, fetching }| {
             let title = match state.item(named.item) {
                 Some(ItemEntry::Live(item)) => item.title().to_string(),
                 Some(ItemEntry::Archived(_)) | None => "(archived)".to_string(),
@@ -298,14 +298,22 @@ pub fn awaiting_lines(state: &State, awaited: &[NamedCommit]) -> Vec<String> {
                     None => "the work of a session".to_string(),
                 },
                 Naming::Submitted => "the commit under review".to_string(),
-                Naming::Merged => "the merged work".to_string(),
             };
-            format!(
-                "#{} \"{title}\": waiting for commit {} ({what}) from {}",
+            let (item, commit, device) = (
                 named.item.short(),
                 named.commit.short(),
-                device_label(state, named.author)
-            )
+                device_label(state, named.author),
+            );
+            match fetching {
+                Fetching::Underway => format!(
+                    "#{item} \"{title}\": waiting for commit {commit} ({what}) from {device}"
+                ),
+                Fetching::Unavailable { since_ms } => format!(
+                    "#{item} \"{title}\": commit {commit} ({what}) is unavailable: {device} named \
+                     it, and no device has had it since {}",
+                    super::timestamp_ms(*since_ms)
+                ),
+            }
         })
         .collect()
 }
@@ -746,17 +754,33 @@ mod tests {
                 head,
             ),
         );
-        let lines = awaiting_lines(&state, &state.named_commits());
-        assert_eq!(lines.len(), 1, "{lines:?}");
+        let named = state.named_commits();
+        assert_eq!(named.len(), 1, "{named:?}");
+        let awaited = |fetching| AwaitedCommit {
+            named: named[0],
+            fetching,
+        };
+        let device = device_label(&state, fixture.devices[1].key());
+        let lines = awaiting_lines(&state, &[awaited(Fetching::Underway)]);
         let line = &lines[0];
         assert!(
             line.contains("\"Parse it\": waiting for commit 0123456"),
             "{line}"
         );
         assert!(line.contains("(the work of"), "{line}");
-        assert!(
-            line.contains(&device_label(&state, fixture.devices[1].key())),
-            "{line}"
+        assert!(line.contains(&device), "{line}");
+
+        let lines = awaiting_lines(
+            &state,
+            &[awaited(Fetching::Unavailable {
+                since_ms: 1_700_000_000_000,
+            })],
         );
+        let line = &lines[0];
+        assert!(line.contains("commit 0123456"), "{line}");
+        assert!(line.contains("is unavailable"), "{line}");
+        assert!(line.contains(&format!("{device} named it")), "{line}");
+        assert!(line.contains("since 2023-11-14"), "{line}");
+        assert!(!line.contains("waiting"), "{line}");
     }
 }

@@ -611,7 +611,7 @@ struct Taken {
     events: usize,
     held: Vec<HeldPermission>,
     machine_faults: wf_daemon::MachineFaults,
-    awaited: Vec<wf_core::commits::NamedCommit>,
+    awaited: Vec<wf_core::commits::AwaitedCommit>,
     last_seen: crate::devices::LastSeen,
     wanted: Wanted,
     detail_width: u16,

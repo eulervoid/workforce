@@ -271,7 +271,7 @@ impl DaemonClient {
     pub fn awaited_commits(
         &mut self,
         workforce: WorkforceId,
-    ) -> Result<Vec<wf_core::commits::NamedCommit>, ClientError> {
+    ) -> Result<Vec<wf_core::commits::AwaitedCommit>, ClientError> {
         self.call(workforce, Call::AwaitedCommits)
     }
 
