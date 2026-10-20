@@ -212,9 +212,8 @@ A principal cannot `Escalate` (it decides instead).
 Membership then still only grows, so "was the author a member at a causally earlier point?" stays
 independent of arrival order.
 
-**Planned (M3): anchor.** An owner may designate one device as anchor. It assigns work and is the
-one device that merges (section 10), so a compromised anchor can reorder assignments and merge
-approved work late, not change policy or roles or merge what was not approved.
+**Planned (M3): anchor.** An owner may designate one device as anchor. It may only assign work, so a
+compromised anchor can reorder assignments, not change policy or roles.
 
 ## 6. Event log
 
@@ -324,8 +323,9 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused. *Planned (M3):* `Assigned`, `Claim`; `head: Option<CommitId>` on
-  `Commented` and `SessionEnded`, which replaces the commit in `Submitted` (section 10).
+* Tags are never reused. *Planned (M3):* `Assigned`, `Claim` (of an item's work or of its merge),
+  `TargetMoved{commit, onto}`; `head: Option<CommitId>` on `Commented` and `SessionEnded`, which
+  replaces the commit in `Submitted`; `onto: CommitId` on `Merged` (section 10).
 
 ### Store
 
@@ -935,7 +935,8 @@ worktree.
 * `mode = "origin"` (M3): the merging device pushes approved branches and opens pull requests; the
   origin decides merging (branch protection), and wf writes `Merged` when `wf/<item>` lands in the
   target. With several devices the origin is a mirror, not how they reach each other (below).
-* `[[merge.after]]`: a command after a merge (release, deploy), run only by the daemon that merged,
+* `[[merge.after]]`: a command after a merge (release, deploy), run only by the device the policy
+  names for it (`[merge] after_device`), since across devices a merge can still lose a fork (below),
   outside the sandbox with secrets from the broker. Its failure goes to the inbox and never reopens the
   item. wf does not become a CI system: no jobs, artifacts or matrices.
 
@@ -972,10 +973,20 @@ devices, nothing new for the principal to run.
   head of a session that lost its claim, if not an ancestor of it, is kept under
   `refs/wf/diverged/<session>` and named in the next brief. On `Merged` or a cancel every device
   removes the item's refs and its agent repository.
-* **The target.** Only the anchor merges (section 5; without one, the device that created the
-  workforce), with the merge task as it is, compare-and-swap in `<wf>/git`. Each device fetches the
-  target from its peers on the sync task's rounds, fast-forward only, which carries both merges and
-  the principal's pushes; a target that diverged between devices goes to the principal's inbox.
+* **The target is a chain in the log.** Every move of it names the tip it moved from: `Merged`
+  gains `onto`, and a push of the principal to `wf` is written by that device's daemon as
+  `TargetMoved{commit, onto}` when it sees the target move. The target is the end of that chain, and
+  its commits are fetched like any other the log names. Two moves with the same `onto` are a fork:
+  the earliest by `(hlc, EventId)` wins, on every device alike.
+* **Any device merges.** One that meets the policy's `[merge] requires` (its checks run there) and
+  has the approved commit claims the item's merge with a `Claim`, like work: the earliest claim
+  wins, its lease is its device's presence (section 9), and the merge task runs as it is, in
+  `<wf>/git`. Devices that reach each other therefore never merge at once; only devices cut off
+  from each other can fork the target. A device whose move lost resets its `<wf>/git` target to the
+  winner (wf's ref, not the principal's checkout); a lost merge goes back to waiting for its merge
+  and runs again on the new tip, checks included; a lost push of the principal goes to the inbox, to
+  rebase. A principal who pulled a merge that later lost finds their next push refused as diverged,
+  in the inbox.
 * **Joining.** `wf join` builds `<wf>/git` from the peer it joins through and prints how to point a
   checkout at it.
 * **Not iroh-blobs.** Packs are built per request, so they have no stable hash to fetch by, and git
@@ -1396,6 +1407,7 @@ machine's config gives checks, so each machine's principal decides what they may
 they check.
 
 *Planned:* `[compaction] after` (M6), `[assignment]` with `mode`, `fallback` and `lease` (M3),
+`[merge] requires` and `after_device` (M3, section 10),
 `[transcripts] publish` (M7), `[governance]` (advisory, M7), `wf policy diff`. *Open:* whether
 `default_agent`, a convenience of one principal, belongs in the machine config instead.
 
