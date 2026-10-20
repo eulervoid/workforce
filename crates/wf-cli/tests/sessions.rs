@@ -835,14 +835,14 @@ wf work release --note \"stopping\"
     assert_ne!(last, third, "the commit after the last comment");
     assert_eq!(
         git_in(
-            &world.wf.repository,
+            &world.bare(),
             &["rev-parse", &format!("wf/{}", &item[..12])]
         ),
         last.to_string()
     );
     for named in [first, third, last] {
         git_in(
-            &world.wf.repository,
+            &world.bare(),
             &["cat-file", "-e", &format!("{named}^{{commit}}")],
         );
     }
