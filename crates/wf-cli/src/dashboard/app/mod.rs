@@ -509,7 +509,7 @@ impl App {
         else {
             return;
         };
-        let Some(InView::Session(info)) = self.in_view_of(&Detail::Session(session)) else {
+        let Some(InView::Session { info, .. }) = self.in_view_of(&Detail::Session(session)) else {
             return;
         };
         let (Place::Here, Some(transcript)) = (&info.place, self.transcripts.get(&session)) else {
@@ -931,7 +931,7 @@ impl App {
     /// What the snapshot knows of a session: as one that works, one in view, or one of an agent.
     pub fn session_info(&self, session: SessionId) -> Option<&SessionInfo> {
         let in_view = match &self.snapshot.in_view {
-            Some(InView::Session(info)) => Some(info),
+            Some(InView::Session { info, .. }) => Some(info),
             Some(
                 InView::Item { .. }
                 | InView::Agent { .. }

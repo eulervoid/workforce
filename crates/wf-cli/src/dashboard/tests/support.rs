@@ -118,6 +118,14 @@ pub(super) fn item_in_view(id: ItemId, text: String, session: Option<SessionId>)
     InView::Item { id, text, session }
 }
 
+/// The session `info` in view, while it lives or without a session of its item after it.
+pub(super) fn session_in_view(info: SessionInfo) -> InView {
+    InView::Session {
+        info,
+        successor: None,
+    }
+}
+
 /// `info` with another status.
 pub(super) fn with_status(info: SessionInfo, status: SessionStatus) -> SessionInfo {
     SessionInfo {

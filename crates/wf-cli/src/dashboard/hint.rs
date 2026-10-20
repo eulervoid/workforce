@@ -76,6 +76,7 @@ pub const MOVE: Hint = Hint::keys("j/k", "move");
 pub const EXTEND: Hint = Hint::keys("j/k", "extend");
 pub const FOLLOW: Hint = Hint::key("G", KeyCode::Char('G'), "follow");
 pub const ITEM: Hint = Hint::key("i", KeyCode::Char('i'), "item");
+pub const NEXT_SESSION: Hint = Hint::key("n", KeyCode::Char('n'), "next session");
 pub const FULL: Hint = Hint::key("f", KeyCode::Char('f'), "full");
 pub const OPEN_DIFF: Hint = Hint::key("l", KeyCode::Char('l'), "diff");
 pub const SELECT: Hint = Hint::key("v", KeyCode::Char('v'), "select");
@@ -119,6 +120,7 @@ pub const HELP: &[Hint] = &[
     Hint::keys("s x", "start a session, stop one"),
     Hint::keys("m c e", "move, comment on, edit an item"),
     Hint::keys("i f l", "item, full transcript, diff"),
+    Hint::keys("n", "an ended session: its item's next"),
     Hint::keys("o O", "items: grouping, order"),
     Hint::keys("/ F", "items: title or id, readiness"),
     Hint::keys("q", "quit"),

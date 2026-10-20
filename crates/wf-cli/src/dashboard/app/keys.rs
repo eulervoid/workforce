@@ -208,19 +208,18 @@ impl App {
 
     /// The keys of the open detail.
     pub(super) fn detail_key(&mut self, key: KeyEvent) -> Option<Effect> {
-        let item_session = match self
+        let (item_session, successor) = match self
             .stack()
             .last()
             .and_then(|opened| self.in_view_of(&opened.detail))
         {
-            Some(InView::Item { session, .. }) => *session,
-            Some(
-                InView::Session(_)
-                | InView::Agent { .. }
-                | InView::Flag { .. }
-                | InView::Diff { .. },
-            )
-            | None => None,
+            Some(InView::Item { session, .. }) => (*session, None),
+            Some(InView::Session { successor, .. }) => {
+                (None, successor.as_ref().map(|successor| successor.id))
+            }
+            Some(InView::Agent { .. } | InView::Flag { .. } | InView::Diff { .. }) | None => {
+                (None, None)
+            }
         };
         let item_of_session = self.item_subject();
         let page = self.page();
@@ -272,6 +271,13 @@ impl App {
             (KeyCode::Char('i'), Detail::Session(_)) => {
                 if let Some(item) = item_of_session {
                     self.open_item_of_top(item);
+                }
+            }
+            // The session that ended gives way to the one its item went on in.
+            (KeyCode::Char('n'), Detail::Session(_)) => {
+                if let Some(successor) = successor {
+                    self.stack_mut().pop();
+                    self.push(Detail::Session(successor));
                 }
             }
             (KeyCode::Char('f'), Detail::Session(_)) => {

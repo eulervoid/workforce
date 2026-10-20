@@ -95,7 +95,7 @@ fn a_session_opens_on_its_transcript_and_esc_goes_back() {
     press(&mut app, KeyCode::Enter);
     assert_eq!(app.wanted().detail, Some(Detail::Session(coder.id)));
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(coder));
+    snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&mut app, 60, 16));
     press(&mut app, KeyCode::Esc);
@@ -113,7 +113,7 @@ fn a_wide_window_shows_the_selection_beside_the_list() {
     press(&mut app, KeyCode::Char('j'));
     assert_eq!(app.wanted().detail, Some(Detail::Session(blocked)));
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&mut app, 130, 14));
 }
@@ -127,7 +127,7 @@ fn h_and_l_fold_the_list_or_the_detail_to_a_strip() {
         press(&mut app, KeyCode::Char('j'));
     }
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
     app.refresh(snapshot);
     // The list takes the window; the detail is a strip at the right.
     press(&mut app, KeyCode::Char('H'));
@@ -365,7 +365,7 @@ fn a_session_with_a_request_shows_it_under_its_transcript() {
     app.transcribed(coder.id, &coder_transcript());
     press(&mut app, KeyCode::Enter);
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(coder));
+    snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     insta::assert_snapshot!(screen(&mut app, 60, 12));
 }

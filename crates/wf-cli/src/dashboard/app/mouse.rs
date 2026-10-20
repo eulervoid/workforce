@@ -149,7 +149,13 @@ impl App {
                 self.open_link(Detail::Diff(item));
                 None
             }
-            Target::Key { code, .. } => self.key(KeyEvent::from(code)),
+            Target::Key { code, .. } => {
+                // A key drawn in the detail beside the list is the detail's key.
+                if in_detail {
+                    self.keys_to_detail();
+                }
+                self.key(KeyEvent::from(code))
+            }
             Target::Back { depth, .. } => {
                 self.stack_mut().truncate(depth);
                 if depth > 0

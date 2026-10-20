@@ -6,17 +6,18 @@ use ratatui::style::Style;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Paragraph, Wrap};
 
-use super::chrome::{SEPARATOR, button, draw_breadcrumb};
+use super::chrome::{SEPARATOR, button, draw_breadcrumb, session_crumb};
 use super::lists::{RowLines, context_line, right_start};
 use super::{Themed, ansi_text, draw_position, padded, themed};
 use crate::dashboard::app::{App, DrawnDetail, Opened, Request, Scroll, Spot, Target};
 use crate::dashboard::draw_diff;
-use crate::dashboard::hint::{ALLOW, DENY};
+use crate::dashboard::hint::{ALLOW, DENY, NEXT_SESSION};
 use crate::dashboard::links;
 use crate::dashboard::snapshot::Detail;
 use crate::dashboard::snapshot::{InView, InboxEntry, Place, SessionInfo};
 use crate::theme;
 use crate::transcript::Transcript;
+use crate::view::SessionStatus;
 
 /// Draws a detail under its breadcrumb; returns where it was drawn, and adds its links to
 /// `spots`.
@@ -69,11 +70,19 @@ pub(super) fn draw_detail(
             )
         }
         Detail::Session(_) => {
-            let Some(InView::Session(session)) = in_view else {
+            let Some(InView::Session { info, successor }) = in_view else {
                 return None;
             };
-            let scroll = draw_session(frame, app, session, opened.scroll, body, spots);
-            (scroll, Some(session.item))
+            let scroll = draw_session(
+                frame,
+                app,
+                info,
+                successor.as_ref(),
+                opened.scroll,
+                body,
+                spots,
+            );
+            (scroll, Some(info.item))
         }
         // Code is no text with links in it.
         Detail::Diff(id) => {
@@ -108,12 +117,14 @@ pub(super) fn draw_detail(
     Some(DrawnDetail::Text(scroll))
 }
 
-/// Draws a session's transcript, with its permission request under it; returns the scroll it was
-/// drawn at, and adds the answers to the request to `spots`.
+/// Draws a session's transcript, with its permission request under it, or once it ended, that it
+/// did and the `successor` its item went on in; returns the scroll it was drawn at, and adds the
+/// answers to the request and the key to the successor to `spots`.
 pub(super) fn draw_session(
     frame: &mut Frame,
     app: &App,
     session: &SessionInfo,
+    successor: Option<&SessionInfo>,
     scroll: Scroll,
     body: Rect,
     spots: &mut Vec<Spot>,
@@ -155,9 +166,14 @@ pub(super) fn draw_session(
         transcript.and_then(Transcript::model),
         transcript.and_then(Transcript::usage),
     );
-    let [body, bar, context] = Layout::vertical([
+    let ended = match session.status {
+        SessionStatus::Live | SessionStatus::Parked => None,
+        SessionStatus::Ended { reason, .. } => Some(reason),
+    };
+    let [body, bar, ended_bar, context] = Layout::vertical([
         Constraint::Fill(1),
         Constraint::Length(u16::from(!asks.is_empty())),
+        Constraint::Length(u16::from(ended.is_some())),
         Constraint::Length(u16::from(bottom.is_some())),
     ])
     .areas(body);
@@ -186,6 +202,29 @@ pub(super) fn draw_session(
         ));
         spots.push(button(bar, deny, width(&deny_text), Target::Deny(*request)));
         frame.render_widget(Paragraph::new(first), bar);
+    }
+    if let Some(reason) = ended {
+        let mut line = vec![
+            themed("■ ", theme::text_dimmed()),
+            Span::raw(format!("ended: {}", reason.label())),
+        ];
+        let next = NEXT_SESSION.text();
+        let right = successor.map(|successor| {
+            line.push(Span::raw(" · its item goes on in "));
+            line.extend(session_crumb(app, successor));
+            Line::from(themed(next.clone(), theme::key()))
+        });
+        let first = RowLines::new(app, false, ended_bar.width)
+            .lines(line, right, Vec::new())
+            .remove(0);
+        if successor.is_some() {
+            let start = right_start(&first, &next);
+            let width = textwrap::core::display_width(&next);
+            if let Some(target) = NEXT_SESSION.target(None) {
+                spots.push(button(ended_bar, start, width, target));
+            }
+        }
+        frame.render_widget(Paragraph::new(first), ended_bar);
     }
     shown
 }

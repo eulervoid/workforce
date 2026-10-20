@@ -2,7 +2,7 @@
 
 use super::support::*;
 use crate::dashboard::app::{App, Prompt, Tab};
-use crate::dashboard::snapshot::{Detail, InView};
+use crate::dashboard::snapshot::Detail;
 use crate::theme;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Style;
@@ -17,7 +17,7 @@ fn the_part_with_the_keys_has_the_accent_and_the_other_the_dimmed_accent() {
         press(&mut app, KeyCode::Char('j'));
     }
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
     app.refresh(snapshot.clone());
     // The parked coder is selected on line 9; the breadcrumb is on line 3, right of the list.
     let row = 9;
@@ -71,7 +71,7 @@ fn the_accent_goes_to_the_breadcrumb_on_enter_and_back_on_esc() {
     assert_eq!(Drawn::of(&mut app, 60, 16).bg_at(10, row), Some(accent()));
     press(&mut app, KeyCode::Enter);
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(coder));
+    snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     let (column, crumb_y) = find(&mut app, 60, 16, "coder · work");
     assert_eq!(
@@ -90,7 +90,7 @@ fn the_last_part_of_the_breadcrumb_has_its_ends_in_its_accent() {
         press(&mut app, KeyCode::Char('j'));
     }
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
     app.refresh(snapshot.clone());
     let crumb = "coder · work · 40m ◇ parked";
     // The list has the keys: the ends are dimmed with the rest of the highlight.
@@ -106,7 +106,7 @@ fn a_breadcrumb_cut_short_leaves_out_the_end_of_its_highlight() {
     let coder = app.snapshot.working[0].clone();
     press(&mut app, KeyCode::Enter);
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(coder));
+    snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     // Wide enough for the text and its end, for the text only, and for neither.
     let (column, row) = find(&mut app, 60, 16, "◆▌");

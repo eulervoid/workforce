@@ -2,7 +2,6 @@
 
 use super::support::*;
 use crate::dashboard::app::{App, CONFIRM_LASTS_MS, Tab};
-use crate::dashboard::snapshot::InView;
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Modifier;
 use wf_harness::Permission;
@@ -83,7 +82,7 @@ fn the_answers_under_a_session_and_in_the_footer_are_buttons_too() {
     let coder = app.snapshot.working[0].clone();
     press(&mut app, KeyCode::Enter);
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(coder));
+    snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     let (allow, row) = find(&mut app, 60, 24, "a allow");
     assert!(row < LATEST);

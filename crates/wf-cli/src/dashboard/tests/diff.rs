@@ -128,7 +128,7 @@ fn i_in_a_diff_below_an_item_and_its_session_goes_back_to_the_item() {
     press(&mut app, KeyCode::Enter);
     press(&mut app, KeyCode::Enter);
     let mut snapshot = with_items();
-    snapshot.in_view = Some(InView::Session(snapshot.working[0].clone()));
+    snapshot.in_view = Some(session_in_view(snapshot.working[0].clone()));
     app.refresh(snapshot);
     press(&mut app, KeyCode::Enter);
     assert!(matches!(
