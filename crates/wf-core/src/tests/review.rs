@@ -1310,7 +1310,44 @@ mod round_limit {
             Ok(()),
             "the principal approves over the open change requests"
         );
+        let open_by_agents = |scene: &Scene| -> Vec<_> {
+            let Some(crate::item::ItemEntry::Live(live)) = scene.state.item(item) else {
+                panic!("the item is live");
+            };
+            let mut open: Vec<_> = live
+                .comments()
+                .iter()
+                .filter(|(_, comment)| comment.kind.is_change_request() && comment.is_open())
+                .map(|(id, comment)| (comment.at, *id))
+                .collect();
+            open.sort();
+            open.into_iter().map(|(_, id)| id).collect()
+        };
+        let principal = scene.fixture.founder_actor();
+        let overruled = scene
+            .state
+            .overruled_change_requests(item, Verdict::Approve, &principal);
+        assert_eq!(overruled, open_by_agents(&scene));
+        assert!(!overruled.is_empty());
+        for (verdict, by) in [
+            (Verdict::RequestChanges, principal.clone()),
+            (Verdict::Escalate, principal.clone()),
+            (Verdict::Approve, Actor::Daemon(scene.fixture.founder.key())),
+        ] {
+            assert_eq!(
+                scene.state.overruled_change_requests(item, verdict, &by),
+                [],
+                "{verdict:?} by {by:?} overrules nothing"
+            );
+        }
         scene.apply(verdict(item, commit(3), Verdict::Approve));
+        assert_eq!(
+            scene
+                .state
+                .overruled_change_requests(item, Verdict::Approve, &principal),
+            [],
+            "only at the round limit"
+        );
         assert_eq!(
             scene.status(item),
             Some(ReviewStatus::Approved {
@@ -1392,7 +1429,12 @@ mod round_limit {
         resubmit(&mut scene, item, commit(2));
 
         let security: SessionId = scene
-            .apply(start_review_step("reviewer", item, commit(2), Some("security")))
+            .apply(start_review_step(
+                "reviewer",
+                item,
+                commit(2),
+                Some("security"),
+            ))
             .id()
             .into();
         request_changes_as(&mut scene, "weak", item, commit(2), Some("style"));

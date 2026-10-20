@@ -5,7 +5,7 @@ use anyhow::{anyhow, bail};
 use ratatui::DefaultTerminal;
 use ratatui::crossterm::execute;
 use ratatui::crossterm::terminal::{EnterAlternateScreen, enable_raw_mode};
-use wf_core::event::{CommentKind, Commented, EventBody, ItemEdited, ItemMoved, Reviewed};
+use wf_core::event::{CommentKind, Commented, EventBody, ItemEdited, ItemMoved};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::name::AgentName;
@@ -15,7 +15,7 @@ use wf_harness::Permission;
 
 use super::app::{Choice, Effect, Request, Starter, Written};
 use super::diff::LineComment;
-use crate::commands::{edit_in_editor, edit_until_valid, item_work};
+use crate::commands::{edit_in_editor, edit_until_valid, item_work, resolving, write_verdict};
 use crate::draft::Draft;
 use crate::workspace::Workspace;
 
@@ -67,10 +67,16 @@ pub fn carry_out(
                 workspace,
                 item,
                 commit,
+                overruled: 0,
             };
             let sent = send_review(&mut sink, &comments, &[], Verdict::Approve);
             reviewed_or_failed(sent, item, || {
-                format!("approved #{}{}", item.short(), with(&comments))
+                format!(
+                    "approved #{}{}{}",
+                    item.short(),
+                    with(&comments),
+                    resolving(sink.overruled)
+                )
             })
         }
         Effect::RequestChanges {
@@ -379,6 +385,7 @@ fn request_changes(
         workspace,
         item,
         commit,
+        overruled: 0,
     };
     let sent = send_review(&mut sink, comments, &changes, Verdict::RequestChanges);
     let count = changes.len() + on_lines;
@@ -447,6 +454,8 @@ struct WorkspaceSink<'a> {
     workspace: &'a mut Workspace,
     item: ItemId,
     commit: Option<CommitId>,
+    /// How many change requests the verdict overruled and resolved.
+    overruled: usize,
 }
 
 impl ReviewSink for WorkspaceSink<'_> {
@@ -464,17 +473,8 @@ impl ReviewSink for WorkspaceSink<'_> {
     }
 
     fn verdict(&mut self, verdict: Verdict) -> anyhow::Result<()> {
-        let round_limit_reached =
-            self.workspace
-                .state()
-                .round_limit_reached(self.item, verdict, self.workspace.actor());
-        self.workspace.author(EventBody::Reviewed(Reviewed {
-            item: self.item,
-            commit: self.commit,
-            verdict,
-            because: None,
-            round_limit_reached,
-        }))?;
+        let written = write_verdict(self.workspace, self.item, self.commit, verdict, None)?;
+        self.overruled = written.overruled;
         Ok(())
     }
 }

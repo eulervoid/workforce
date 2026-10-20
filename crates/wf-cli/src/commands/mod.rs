@@ -12,7 +12,7 @@ mod vcs;
 mod work;
 
 pub(crate) use item::{Scope, choose_item, sorted_views};
-pub(crate) use review::review;
+pub(crate) use review::{resolving, review, write_verdict};
 pub(crate) use vcs::{DeviceDiff, ItemDiff, item_diff, item_work};
 
 use std::path::Path;

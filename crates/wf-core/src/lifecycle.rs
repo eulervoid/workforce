@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use crate::event::CommentKind;
 use crate::graph::DependencyGraph;
 use crate::hlc::Hlc;
-use crate::id::{ItemId, SessionId};
+use crate::id::{CommentId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::Policy;
@@ -343,6 +343,42 @@ impl State {
                 AfterChangesRequested::WaitsForPrincipal { rounds } => Some(rounds),
             },
             Verdict::Approve | Verdict::Escalate => None,
+        }
+    }
+
+    /// The change requests that a verdict by `by` on the submitted work of `item` overrules, for
+    /// its writer to resolve: when the principal approves at the round limit, the agents' open
+    /// ones, oldest first. Left open, they would keep the next work session from submitting if
+    /// the merge sent the work back.
+    pub fn overruled_change_requests(
+        &self,
+        item: ItemId,
+        verdict: Verdict,
+        by: &Actor,
+    ) -> Vec<CommentId> {
+        let at_round_limit = matches!(
+            self.review_status(item),
+            Some(ReviewStatus::RoundLimitReached { .. })
+        );
+        let Some(ItemEntry::Live(live)) = self.item(item) else {
+            return Vec::new();
+        };
+        match (verdict, by) {
+            (Verdict::Approve, Actor::Principal(_)) if at_round_limit => {
+                let mut open: Vec<_> = live
+                    .comments()
+                    .iter()
+                    .filter(|(_, comment)| {
+                        comment.kind.is_change_request()
+                            && comment.is_open()
+                            && matches!(comment.by, Actor::Agent { .. })
+                    })
+                    .map(|(id, comment)| (comment.at, *id))
+                    .collect();
+                open.sort();
+                open.into_iter().map(|(_, id)| id).collect()
+            }
+            (Verdict::Approve | Verdict::RequestChanges | Verdict::Escalate, _) => Vec::new(),
         }
     }
 

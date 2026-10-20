@@ -2065,6 +2065,50 @@ sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" comme
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn the_principal_approving_at_the_round_limit_resolves_the_change_requests_it_overrules() {
+    let coder = "\
+sh if [ -f hello.txt ]; then echo again >> hello.txt && git commit -q -am again && \"$WF_BIN\" comment {item} \"done\" --resolve-change-requests; else echo hi > hello.txt && git add hello.txt && git commit -q -m hello; fi
+wf work submit
+";
+    let reviewer = "\
+sh \"$WF_BIN\" comment {item} \"not yet\" --request-change && \"$WF_BIN\" review --request-changes
+";
+    let world = review_world(coder, reviewer).await;
+    let policy = world.wf.run(&["policy", "show"]);
+    let path = world.wf.root.path().join("bounded-policy.toml");
+    std::fs::write(
+        &path,
+        format!(
+            "{policy}\n[[review]]\nname = \"bounded\"\nmax_rounds = 1\n\
+             steps = [{{ requires = [\"review\"] }}]\n"
+        ),
+    )
+    .unwrap();
+    world.wf.run(&["policy", "apply", path.to_str().unwrap()]);
+    let item = world.wf.add(&["--title", "Add hello", "--review", "bounded"]);
+    world
+        .wait("the round limit", |world| {
+            world.item(&item)["review_status"]["status"] == "round_limit_reached"
+        })
+        .await;
+    let shown = world.item(&item);
+    assert_eq!(shown["state"], "review");
+    assert_eq!(shown["open"].as_array().unwrap().len(), 1, "{shown}");
+
+    let approved = world.wf.run(&["review", short(&item), "--approve"]);
+    assert!(
+        approved.contains("resolving the change request it overruled"),
+        "{approved}"
+    );
+    assert_eq!(world.item(&item)["open"], serde_json::json!([]));
+    world
+        .wait("the item done", |world| {
+            world.item(&item)["state"] == "done"
+        })
+        .await;
+}
+
 /// A coder and three reviewers, all started by the dispatcher, and a review level `wide` of three
 /// steps at once.
 async fn wide_review_world(reviewers: [&str; 3]) -> World {

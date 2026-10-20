@@ -114,8 +114,17 @@ last acted on it, the next request for changes leaves it in review, and `wf inbo
  principal_review  #k3f7ab  Parse durations in policy  changes requested again after 3 rounds, the round limit: approve with `wf review --approve`, send it back with `wf review --request-changes`, or edit or cancel it
 ```
 
-`wf item show` quotes the open change requests. Approving merges the work as it is; requesting
-changes yourself sends it back for another round, and the count starts over.
+`wf item show` quotes the open change requests. Approving merges the work as it is and resolves the
+agents' open change requests, since you overruled them, so that work the merge sends back (a check
+that fails, a conflict) is not held up by them:
+
+```
+approved #k3f7ab, resolving the 2 change requests it overruled
+```
+
+Requesting changes yourself sends it back for another round, and the count starts over. A comment
+of yours starts the count over too, but the item keeps waiting for your verdict: a request for
+changes from another step still under way waits with it.
 
 ## The merge
 

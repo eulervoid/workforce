@@ -303,7 +303,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 20 | `SessionStarted` | `agent`, `item`, `role`: `Work`, `Review{commit: Option}`, `Supervise`, `Diagnose` |
 | 21 | `SessionEnded` | `session`, `reason` (section 9) |
 | 22 | `Reviewed` | `item`, `commit: Option` (none: submitted without commits), `verdict` (`Approve`, `RequestChanges`, `Escalate`), `because: Option<CommentId>` |
-| 32 | `Reviewed` | as tag 22, plus `round_limit_reached: u32`, for a `RequestChanges` at the round limit of its level (section 10); a verdict without it keeps tag 22 |
+| 33 | `Reviewed` | as tag 22, plus `round_limit_reached: u32`, for a `RequestChanges` at the round limit of its level (section 10); a verdict without it keeps tag 22 |
 | 23 | `Merged` | `item`, `reviewed`, `commit` |
 | 24 | retired | (`Report`, now a comment) |
 | 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
@@ -911,8 +911,14 @@ default for tasks).
   `wf inbox` as `principal_review` with that reason and its open change requests, and the other
   steps' verdicts on the commit count for nothing. The principal approves (over the open change
   requests; it decides the entry as at any step), sends the work back with their own
-  `RequestChanges`, edits or cancels the item. Any action of theirs starts the count over, so
-  another round needs no verb of its own. Without `max_rounds` every request sends the work back.
+  `RequestChanges`, edits or cancels the item. An approval at the limit overrules the agents' open
+  change requests: `wf review` and the dashboard resolve them with a comment right after the
+  verdict (`State::overruled_change_requests`), so that a merge that fails its checks or conflicts
+  sends the work back without requests the next session would have to resolve before it can submit.
+  Any action of theirs starts the count over, so another round needs no verb of its own, but only
+  their verdict, a move or a cancel ends the hold: an agent's `RequestChanges` on the commit while
+  it lasts, after a comment of theirs too, records `round_limit_reached` as well. Without
+  `max_rounds` every request sends the work back.
 * Before a review step is offered the daemon builds the merge of the work into the target
   (`git merge-tree`). Work that conflicts goes back to its open state with a change request from
   `@daemon` naming the files. If the work merged when offered and stops merging while the principal
