@@ -274,12 +274,20 @@ pub struct ListTab<Key> {
 
 impl<Key: Clone + PartialEq> ListTab<Key> {
     /// Keeps the selection on its row of `rows`; when that moved it to another row, the list
-    /// follows it on screen again.
+    /// follows it on screen again, and the details opened from the row that is gone give way to
+    /// the selection's, as for a key that moves it, unless one of them has the keys.
     pub(super) fn update(&mut self, rows: &[Key]) {
         let before = self.selection.get().cloned();
         self.selection.update(rows);
         if self.selection.get() != before.as_ref() {
             self.panes.list_top = self.panes.list_top.follow();
+            match self.panes.keys {
+                Pane::List => {
+                    self.panes.stack.clear();
+                    self.panes.jumped_from.clear();
+                }
+                Pane::Detail => {}
+            }
         }
     }
 }
