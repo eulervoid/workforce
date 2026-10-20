@@ -121,7 +121,7 @@ pub(super) fn item_in_view(id: ItemId, text: String, session: Option<SessionId>)
 /// The session `info` in view, while it lives or without a session of its item after it.
 pub(super) fn session_in_view(info: SessionInfo) -> InView {
     InView::Session {
-        info,
+        info: Box::new(info),
         successor: None,
     }
 }

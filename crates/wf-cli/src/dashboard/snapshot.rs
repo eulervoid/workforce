@@ -226,11 +226,12 @@ pub enum InView {
         /// The session `enter` opens: the live one, else the latest.
         session: Option<SessionId>,
     },
+    /// Boxed, as a session is several times larger than what the other variants hold.
     Session {
-        info: SessionInfo,
+        info: Box<SessionInfo>,
         /// Once it ended, the session of its item that `enter` opens from the item now, when
         /// that is another: the live one, else the latest.
-        successor: Option<SessionInfo>,
+        successor: Option<Box<SessionInfo>>,
     },
     /// What a diff shows besides the diff, which the loop reads from git: the comments on its
     /// lines in the log.
@@ -540,9 +541,9 @@ impl InView {
                 let session = state.session(id)?;
                 let successor = item_session(state, session.item())
                     .filter(|successor| !session.is_live() && successor.id() != id)
-                    .map(|successor| session_info(state, graph, own, successor));
+                    .map(|successor| Box::new(session_info(state, graph, own, successor)));
                 Some(InView::Session {
-                    info: session_info(state, graph, own, session),
+                    info: Box::new(session_info(state, graph, own, session)),
                     successor,
                 })
             }
