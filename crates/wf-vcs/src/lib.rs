@@ -10,6 +10,7 @@ mod git;
 pub mod signing;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
+mod transfer;
 
 use std::path::{Path, PathBuf};
 
