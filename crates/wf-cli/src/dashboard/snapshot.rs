@@ -216,10 +216,7 @@ impl std::ops::Deref for SessionInfo {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InView {
     /// The definition of an agent and how it is doing.
-    Agent {
-        id: AgentId,
-        text: String,
-    },
+    Agent { id: AgentId, text: String },
     /// The item as `wf item show` prints it.
     Item {
         id: ItemId,
@@ -227,7 +224,12 @@ pub enum InView {
         /// The session `enter` opens: the live one, else the latest.
         session: Option<SessionId>,
     },
-    Session(SessionInfo),
+    Session {
+        info: SessionInfo,
+        /// Once it ended, the session of its item that `enter` opens from the item now, when
+        /// that is another: the live one, else the latest.
+        successor: Option<SessionInfo>,
+    },
     /// What a diff shows besides the diff, which the loop reads from git: the comments on its
     /// lines in the log.
     Diff {
@@ -235,10 +237,7 @@ pub enum InView {
         comments: Vec<PostedComment>,
     },
     /// A flag that is not about an item, in the notice box of an item.
-    Flag {
-        flag: Flag,
-        text: String,
-    },
+    Flag { flag: Flag, text: String },
 }
 
 impl InView {
@@ -246,13 +245,13 @@ impl InView {
     pub fn is_of(&self, detail: &Detail) -> bool {
         match (self, detail) {
             (Self::Item { id, .. }, Detail::Item(wanted)) => id == wanted,
-            (Self::Session(session), Detail::Session(wanted)) => session.view.id == *wanted,
+            (Self::Session { info, .. }, Detail::Session(wanted)) => info.view.id == *wanted,
             (Self::Diff { id, .. }, Detail::Diff(wanted)) => id == wanted,
             (Self::Agent { id, .. }, Detail::Agent(wanted)) => id == wanted,
             (Self::Flag { flag, .. }, Detail::Flag(wanted)) => flag == wanted,
             (
                 Self::Item { .. }
-                | Self::Session(_)
+                | Self::Session { .. }
                 | Self::Diff { .. }
                 | Self::Agent { .. }
                 | Self::Flag { .. },
@@ -529,17 +528,18 @@ impl InView {
                         format!("#{} {} (archived)\n", id.short(), item.title())
                     }
                 };
-                let mut sessions: Vec<&Session> = state
-                    .sessions()
-                    .filter(|session| session.item() == id)
-                    .collect();
-                sessions.sort_by_key(|session| (session.is_live(), session.started()));
-                let session = sessions.last().map(|session| session.id());
+                let session = item_session(state, id).map(Session::id);
                 Some(InView::Item { id, text, session })
             }
             Detail::Session(id) => {
                 let session = state.session(id)?;
-                Some(InView::Session(session_info(state, graph, own, session)))
+                let successor = item_session(state, session.item())
+                    .filter(|successor| !session.is_live() && successor.id() != id)
+                    .map(|successor| session_info(state, graph, own, successor));
+                Some(InView::Session {
+                    info: session_info(state, graph, own, session),
+                    successor,
+                })
             }
             Detail::Agent(id) => {
                 let detail = view::agent_detail(state, &id, events, Some(own))?;
@@ -589,6 +589,14 @@ impl InView {
             }),
         }
     }
+}
+
+/// The session of `item` that `enter` opens from it: the live one, else the latest.
+fn item_session(state: &State, item: ItemId) -> Option<&Session> {
+    state
+        .sessions()
+        .filter(|session| session.item() == item)
+        .max_by_key(|session| (session.is_live(), session.started()))
 }
 
 /// The agents, each with its live sessions and the latest that ended.

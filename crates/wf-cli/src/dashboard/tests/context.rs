@@ -1,7 +1,6 @@
 //! Dashboard tests: context.
 
 use super::support::*;
-use crate::dashboard::snapshot::InView;
 use crate::theme;
 use jiff::tz::TimeZone;
 use ratatui::crossterm::event::KeyCode;
@@ -38,7 +37,7 @@ fn a_session_detail_shows_its_context_above_the_transcript() {
     let coder = app.snapshot.working[0].clone();
     press(&mut app, KeyCode::Enter);
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(coder));
+    snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     insta::assert_snapshot!("detail_context", screen(&mut app, 60, 16));
 }
@@ -52,7 +51,7 @@ fn a_nearly_full_context_is_yellow_in_the_detail() {
         press(&mut app, KeyCode::Char('j'));
     }
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(snapshot.working[1].clone()));
+    snapshot.in_view = Some(session_in_view(snapshot.working[1].clone()));
     app.refresh(snapshot);
     insta::assert_snapshot!("detail_context_full", screen(&mut app, 130, 14));
     let line = screen(&mut app, 130, 14)
@@ -76,7 +75,7 @@ fn a_session_detail_names_its_model_before_any_usage() {
     app.transcribed(coder.id, &transcript);
     press(&mut app, KeyCode::Enter);
     let mut snapshot = snapshot();
-    snapshot.in_view = Some(InView::Session(coder));
+    snapshot.in_view = Some(session_in_view(coder));
     app.refresh(snapshot);
     insta::assert_snapshot!("detail_model", screen(&mut app, 60, 16));
 }

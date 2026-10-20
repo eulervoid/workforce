@@ -13,8 +13,8 @@ use crate::dashboard::app::{App, Scroll, Spot, Status, Tab, Target};
 use crate::dashboard::hint::{
     ALLOW, ANSWER, ANSWER_IN_EDITOR, BACK, CHANGE, CHANGE_FILTER, CLEAR_FILTER, COMMENT, DENY,
     DIFF, DROP, EDIT, EXTEND, FILE, FILTER, FOLD, FOLLOW, FULL, GROUP, Hint, ITEM, JUMP_BACK, KEYS,
-    MOVE, OPEN, OPEN_DIFF, OPEN_SESSION, PAGER, READINESS, REVIEW, REVIEW_IN_DIFF, SCROLL, SELECT,
-    UNSELECT,
+    MOVE, NEXT_SESSION, OPEN, OPEN_DIFF, OPEN_SESSION, PAGER, READINESS, REVIEW, REVIEW_IN_DIFF,
+    SCROLL, SELECT, UNSELECT,
 };
 use crate::dashboard::snapshot::Detail;
 use crate::dashboard::snapshot::{InView, InboxEntry, MovedBack, SessionInfo};
@@ -404,7 +404,17 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
             ..
         })
     );
+    let successor = matches!(
+        opened.and_then(|opened| app.in_view_of(&opened.detail)),
+        Some(InView::Session {
+            successor: Some(_),
+            ..
+        })
+    );
     let navigation: &[Hint] = match (app.tab, opened.map(|opened| &opened.detail)) {
+        (_, Some(Detail::Session(_))) if successor => {
+            &[BACK, SCROLL, NEXT_SESSION, ITEM, FULL, OPEN_DIFF]
+        }
         (_, Some(Detail::Session(_))) => &[BACK, SCROLL, ITEM, FULL, OPEN_DIFF],
         (_, Some(Detail::Diff(_))) => match app.diff_on_top() {
             Some(pane) if pane.selection.is_some() => &[UNSELECT, EXTEND, COMMENT, CHANGE],
