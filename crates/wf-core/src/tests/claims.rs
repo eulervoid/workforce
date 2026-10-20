@@ -1,5 +1,9 @@
+use std::time::Duration;
+
+use crate::claims::Presence;
 use crate::event::{Event, EventBody};
 use crate::id::{ItemId, SessionId};
+use crate::identity::Actor;
 use crate::name::ReviewStepName;
 use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::{State, Trust};
@@ -160,4 +164,97 @@ fn a_review_claims_its_step_of_its_commit() {
         .into();
     assert_eq!(state.outclaimed(fixture.devices[1].key()), [late]);
     assert_eq!(held(&state, review(2, Some("security"))), Some(newer));
+}
+
+const MINUTE_MS: u64 = 60_000;
+const LEASE: Duration = Duration::from_secs(3 * 60);
+
+#[test]
+fn a_device_is_gone_once_silent_for_longer_than_the_lease_since_the_daemon_started() {
+    let (fixture, _, _) = with_task();
+    let device = fixture.devices[1].key();
+    let started = 100 * MINUTE_MS;
+    let never_heard = Presence::new(started, []);
+    assert!(
+        !never_heard.gone(device, LEASE, started + 3 * MINUTE_MS),
+        "the daemon has not run for a lease yet"
+    );
+    assert!(never_heard.gone(device, LEASE, started + 3 * MINUTE_MS + 1));
+
+    let heard = Presence::new(started, [(device, started + 10 * MINUTE_MS)]);
+    assert!(!heard.gone(device, LEASE, started + 13 * MINUTE_MS));
+    assert!(heard.gone(device, LEASE, started + 13 * MINUTE_MS + 1));
+
+    let heard_before_the_start = Presence::new(started, [(device, started - 60 * MINUTE_MS)]);
+    assert!(!heard_before_the_start.gone(device, LEASE, started + MINUTE_MS));
+}
+
+#[test]
+fn a_daemon_takes_over_the_claim_of_a_gone_device_of_its_principal() {
+    let (fixture, mut state, task) = with_task();
+    let (asking, other) = (fixture.devices[0].key(), fixture.devices[1].key());
+    let gone: SessionId = fixture
+        .apply(&mut state, 1, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    let started = 10 * MINUTE_MS;
+    let silent = Presence::new(started, []);
+    let later = started + 4 * MINUTE_MS;
+    let claimable = |state: &State, device, presence: &Presence, now_ms| {
+        state.claimable(task, &SessionRole::Work, device, presence, now_ms)
+    };
+    assert_eq!(claimable(&state, asking, &silent, later), Ok(vec![gone]));
+    assert!(
+        claimable(&state, asking, &silent, started + MINUTE_MS).is_err(),
+        "the daemon has not run for a lease"
+    );
+    let heard = Presence::new(started, [(other, later - MINUTE_MS)]);
+    assert!(claimable(&state, asking, &heard, later).is_err());
+    assert!(
+        claimable(&state, other, &silent, later).is_err(),
+        "a device does not take over its own session"
+    );
+    assert_eq!(
+        state.claimable(task, &SessionRole::Supervise, asking, &heard, later),
+        Ok(vec![]),
+        "nothing claims the role"
+    );
+
+    // A longer lease in the policy keeps the claim.
+    let source = format!(
+        "{}\n[claims]\nlease = \"5m\"\n",
+        crate::policy::DEFAULT_POLICY_TOML
+    );
+    let body = fixture.policy_set(&state, 0, 4_000, &fixture.founder, &source);
+    fixture.apply(&mut state, 0, 4_000, body);
+    assert!(claimable(&state, asking, &silent, later).is_err());
+    assert_eq!(
+        claimable(&state, asking, &silent, started + 6 * MINUTE_MS),
+        Ok(vec![gone])
+    );
+}
+
+#[test]
+fn a_claim_of_another_principal_is_not_taken_over() {
+    let (fixture, mut state, task) = with_task();
+    let member = Actor::Principal(fixture.member.key());
+    for body in [define_agent("helper"), start_session("helper", task)] {
+        let event = state
+            .builder(fixture.member_device.key(), member.clone(), 3_000)
+            .unwrap()
+            .sign(&fixture.member_device, body)
+            .unwrap();
+        state.receive(event, Trust::Untrusted).unwrap();
+    }
+    let silent = Presence::new(0, []);
+    let claim = state
+        .claimable(
+            task,
+            &SessionRole::Work,
+            fixture.devices[0].key(),
+            &silent,
+            60 * MINUTE_MS,
+        )
+        .unwrap_err();
+    assert_eq!(claim.item, task);
 }

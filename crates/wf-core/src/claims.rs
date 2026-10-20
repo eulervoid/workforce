@@ -4,9 +4,19 @@
 //! the same item and the same role (for a review: the same commit and step) claim the same thing,
 //! and of their live claims the earliest by `(hlc, EventId)` holds it. Pure functions of the
 //! state: nothing about a claim is stored.
+//!
+//! A claim lasts while its session is live, and a session is live until its `SessionEnded`. A
+//! session that dies on a running device is ended by that device's daemon, so the only death the
+//! others must notice is the device's: its lease, read from the [`Presence`] of devices. A daemon
+//! of the principal takes over the claims of a gone device by ending its sessions `LeaseExpired`
+//! ([`State::claimable`]).
+
+use std::collections::BTreeMap;
+use std::time::Duration;
 
 use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::DeviceKey;
+use crate::policy::Policy;
 use crate::session::{Session, SessionRole};
 use crate::state::State;
 
@@ -18,6 +28,34 @@ pub struct ItemClaimed {
     pub role: SessionRole,
     /// The session that holds the item, as [`State::actor_label`] names it.
     pub holder: String,
+}
+
+/// What one daemon knows of which devices are still there: when it last heard from each and when it
+/// started. A device not heard from for the policy's `[claims] lease` is gone, counted by this
+/// daemon's clock and only once the daemon has run that long, since before that it could not have
+/// heard from anyone. Computed when asked, never stored.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Presence {
+    /// When the daemon started, in milliseconds since the epoch.
+    started_ms: u64,
+    /// When each device was last heard from, in milliseconds since the epoch.
+    heard_ms: BTreeMap<DeviceKey, u64>,
+}
+
+impl Presence {
+    pub fn new(started_ms: u64, heard_ms: impl IntoIterator<Item = (DeviceKey, u64)>) -> Self {
+        Self {
+            started_ms,
+            heard_ms: heard_ms.into_iter().collect(),
+        }
+    }
+
+    /// Whether `device` has been silent for longer than `lease` at `now_ms`.
+    pub fn gone(&self, device: DeviceKey, lease: Duration, now_ms: u64) -> bool {
+        let heard = self.heard_ms.get(&device).copied().unwrap_or_default();
+        let silent_since = heard.max(self.started_ms);
+        u128::from(now_ms.saturating_sub(silent_since)) > lease.as_millis()
+    }
 }
 
 impl State {
@@ -54,5 +92,46 @@ impl State {
             })
             .map(Session::id)
             .collect()
+    }
+
+    /// Whether a daemon on `device` may start a session on `item` in `role` at `now_ms`, and which
+    /// sessions it must end `LeaseExpired` first to take their claim over: the live ones that claim
+    /// it on other devices of its principal that are gone. Refused while any other live session
+    /// claims it, since its device is there or belongs to another principal, whose daemons alone
+    /// may end it.
+    pub fn claimable(
+        &self,
+        item: ItemId,
+        role: &SessionRole,
+        device: DeviceKey,
+        presence: &Presence,
+        now_ms: u64,
+    ) -> Result<Vec<SessionId>, ItemClaimed> {
+        let principal = self.principal_of(&device);
+        let lease = self.policy().map_or_else(
+            || Policy::default_policy().claims.lease,
+            |document| document.policy.claims.lease,
+        );
+        let mut claimants: Vec<&Session> = self
+            .sessions_of(item)
+            .filter(|session| session.is_live() && session.role == *role)
+            .collect();
+        claimants.sort_by_key(|session| session.started());
+        let mut takeover = Vec::new();
+        for claimant in claimants {
+            let expired = claimant.device() != device
+                && principal.is_some()
+                && self.principal_of(&claimant.device()) == principal
+                && presence.gone(claimant.device(), lease, now_ms);
+            if !expired {
+                return Err(ItemClaimed {
+                    item,
+                    role: role.clone(),
+                    holder: self.actor_label(&claimant.actor()),
+                });
+            }
+            takeover.push(claimant.id());
+        }
+        Ok(takeover)
     }
 }
