@@ -322,7 +322,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused. *Planned (M3):* `Assigned`, `Claim`, `Heartbeat`.
+* Tags are never reused. *Planned (M3):* `Assigned`, `Claim`.
 
 ### Store
 
@@ -636,9 +636,17 @@ machine fault) is the daemon's and acts at once.
 
 **Claims.** On one machine the claim of an item is its earliest live work session; starts take a
 per-item lock and refuse an item with a live work session. Across devices (*Planned, M3*) liveness
-comes from a lease: a session without renewal counts as dead, its claim expires and the item can be
-assigned again; of two concurrent claims, the earliest by `(hlc, EventId)` wins and the other cancels
-itself.
+comes from a lease, and the lease of a session is the presence of its device: a session that dies on
+a running device is ended by that device's daemon, as on one machine, so the only death others must
+notice is the device's, which gossip already announces (section 14). A device not heard from for the
+policy's `lease` (default 3 minutes, measured by the receiver's clock from the last announcement it
+accepted, so two lost announcements do not expire it) counts as gone, and the claims of its live work
+sessions expire: the item can be assigned again. Nothing is written per renewal; liveness is computed
+at query time and never stored. Of two concurrent claims, the earliest by `(hlc, EventId)` wins and
+the other cancels itself. A device that comes back after its claim was given away therefore finds
+the newer claim and cancels its session: the overlap is accepted, not prevented, so for a few
+minutes two sessions may work on one item. What the cancelled one committed stays on `wf/<item>`,
+and the next session continues from it, rebasing if both committed.
 
 One branch per item: every work session on it (after a release, a crash or requested changes)
 continues `wf/<item>`. Context carries over within a session in the conversation, and across sessions
@@ -678,7 +686,8 @@ a script is told the open steps. Supervision and diagnosis need hosted `start = 
 
 **Planned (M3): across devices.** The dispatch target stays an agent; any device that hosts it with a
 free slot may run it. A device with capacity asks the anchor, which signs `Assigned{item, agent,
-device, lease}`; the device starts the session and renews it with `Heartbeat`. Without a reachable
+device, lease}`; the device starts the session, and the lease holds while the device's gossip
+announcements arrive. Without a reachable
 anchor, a policy `fallback` decides: `optimistic` (start with an unconfirmed `Claim`) or `wait`. Until
 then, two daemons do not coordinate, so each agent should be hosted on one machine.
 
@@ -1405,10 +1414,9 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 
 1. Should merges into the main branch need a principal key once origin-side protection is not enough?
    (v1: a review level with a principal step in `local` mode, the origin in `origin` mode.)
-2. Do heartbeats belong in the log (M3)? One per minute for three sessions is about 130k events a
-   month, the main source of log growth. Liveness is computed at query time anyway, so a lease renewed
-   over gossip plus a final `SessionEnded` might do. Settle this before M3; it decides how urgent
-   compaction is.
+2. *Settled:* heartbeats stay out of the log. A session's lease is its device's presence over
+   gossip (section 9); the overlap after a lost device returns is accepted rather than fenced off.
+   This keeps compaction at M6.
 3. With several principals (M5), can a review step require a principal other than the author?
 4. Merging without the checks: `wf item merge --unchecked`, or edit the policy for a moment?
 5. Should the limit of two failed check runs be part of the recovery level?
