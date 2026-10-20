@@ -82,6 +82,31 @@ fn the_next_session_takes_the_place_of_the_ended_one_opened_from_its_item() {
 }
 
 #[test]
+fn a_click_on_the_next_session_beside_the_list_opens_it_while_the_list_has_the_keys() {
+    let mut app = app();
+    app.resize(130, 24);
+    let coder = app.snapshot.working[0].clone();
+    for _ in 0..3 {
+        press(&mut app, KeyCode::Char('j'));
+    }
+    press(&mut app, KeyCode::Enter);
+    press(&mut app, KeyCode::Esc);
+    // The ended session keeps its row, so the selection stays on it and the detail beside it.
+    let next = next_session();
+    let mut snapshot = coder_stopped(Some(next.clone()));
+    snapshot
+        .working
+        .push(with_status(coder.clone(), ended(EndReason::Cancelled, 0)));
+    app.refresh(snapshot);
+    assert!(app.list_has_keys());
+    assert_eq!(app.wanted().detail, Some(Detail::Session(coder.id)));
+    let (column, row) = find(&mut app, 130, 24, "n next session");
+    app.click(column, row);
+    assert_eq!(app.wanted().detail, Some(Detail::Session(next.id)));
+    assert!(!app.list_has_keys());
+}
+
+#[test]
 fn a_live_session_offers_no_next_one() {
     let mut app = app();
     let coder = app.snapshot.working[0].clone();
