@@ -767,6 +767,16 @@ pub fn golden_forking_state() -> State {
     state
 }
 
+/// Whether a test that needs more than Fence allows (such as the `AF_ROUTE` socket iroh opens) is
+/// skipped here, saying why. Such a test starts with `if skip_in_fence("...") { return; }`.
+pub fn skip_in_fence(reason: &str) -> bool {
+    let in_fence = std::env::var_os("FENCE_SANDBOX").is_some();
+    if in_fence {
+        eprintln!("skipped in Fence: {reason}");
+    }
+    in_fence
+}
+
 #[cfg(test)]
 mod tests {
     use crate::state::ForkState;
@@ -808,14 +818,4 @@ mod tests {
             Some(ForkState::TakingIn { .. })
         ));
     }
-}
-
-/// Whether a test that needs more than Fence allows (such as the `AF_ROUTE` socket iroh opens) is
-/// skipped here, saying why. Such a test starts with `if skip_in_fence("...") { return; }`.
-pub fn skip_in_fence(reason: &str) -> bool {
-    let in_fence = std::env::var_os("FENCE_SANDBOX").is_some();
-    if in_fence {
-        eprintln!("skipped in Fence: {reason}");
-    }
-    in_fence
 }
