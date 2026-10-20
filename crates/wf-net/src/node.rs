@@ -28,6 +28,7 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(20);
 const DIRECT_CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 const FORBIDDEN: u32 = 403;
 const NOT_SERVED: u32 = 404;
+const BUSY: u32 = 429;
 pub(crate) const FAILED: u32 = 500;
 const DONE: u32 = 0;
 
@@ -296,9 +297,57 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for QueryHandler<L> {
 /// Where the daemon's `git upload-pack` comes from, once it has set one.
 type GitSlot = Arc<RwLock<Option<Arc<dyn GitSource>>>>;
 
+/// How many `git upload-pack` one device is served at once; more are refused, so that one device
+/// cannot hold every process of this one.
+const UPLOADS_PER_PEER: usize = 4;
+
 struct GitHandler<L> {
     registry: Registry<L>,
     source: GitSlot,
+    /// How many `git upload-pack` each device is being served.
+    serving: Arc<std::sync::Mutex<BTreeMap<DeviceKey, usize>>>,
+}
+
+/// One `git upload-pack` served to a device, counted until it is dropped.
+struct Serving {
+    serving: Arc<std::sync::Mutex<BTreeMap<DeviceKey, usize>>>,
+    device: DeviceKey,
+}
+
+impl Serving {
+    /// Counts one more for `device`, unless it has [`UPLOADS_PER_PEER`] already.
+    fn start(
+        serving: &Arc<std::sync::Mutex<BTreeMap<DeviceKey, usize>>>,
+        device: DeviceKey,
+    ) -> Option<Self> {
+        let mut counts = serving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let count = counts.entry(device).or_default();
+        if *count >= UPLOADS_PER_PEER {
+            return None;
+        }
+        *count += 1;
+        Some(Self {
+            serving: Arc::clone(serving),
+            device,
+        })
+    }
+}
+
+impl Drop for Serving {
+    fn drop(&mut self) {
+        let mut counts = self
+            .serving
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(count) = counts.get_mut(&self.device) {
+            *count -= 1;
+            if *count == 0 {
+                counts.remove(&self.device);
+            }
+        }
+    }
 }
 
 impl<L> std::fmt::Debug for GitHandler<L> {
@@ -342,7 +391,12 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for GitHandler<L> {
             }
             Err(error) => return Err(close_unreadable(&connection, error)),
         }
-        match git::respond(tokio::io::join(&mut recv, &mut send), request, &*source).await {
+        let Some(_serving) = Serving::start(&self.serving, remote) else {
+            connection.close(BUSY.into(), b"too many fetches at once");
+            return Ok(());
+        };
+        let stream = tokio::io::join(&mut recv, &mut send);
+        match git::respond(stream, request, &*source, IDLE_TIMEOUT).await {
             Ok(()) => {
                 let _ = send.finish();
                 linger(&connection).await;
@@ -445,6 +499,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
                 GitHandler {
                     registry: registry.clone(),
                     source: Arc::clone(&git_source),
+                    serving: Arc::default(),
                 },
             )
             .accept(
@@ -573,6 +628,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             tokio::io::join(&mut recv, &mut send),
             &GitRequest { workforce },
             local,
+            IDLE_TIMEOUT,
         )
         .await;
         let _ = send.finish();
@@ -709,5 +765,26 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
 
     pub async fn shutdown(self) {
         let _ = self.router.shutdown().await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_device_is_served_only_so_many_upload_packs_at_once() {
+        let serving = Arc::default();
+        let device = DeviceSigner::from_bytes(&[1; 32]).unwrap().key();
+        let other = DeviceSigner::from_bytes(&[2; 32]).unwrap().key();
+        let mut held: Vec<Serving> = (0..UPLOADS_PER_PEER)
+            .map(|_| Serving::start(&serving, device).unwrap())
+            .collect();
+        assert!(Serving::start(&serving, device).is_none());
+        assert!(Serving::start(&serving, other).is_some(), "per device");
+        held.pop();
+        assert!(Serving::start(&serving, device).is_some());
+        drop(held);
+        assert!(serving.lock().unwrap().is_empty());
     }
 }
