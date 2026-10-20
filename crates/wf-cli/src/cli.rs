@@ -994,6 +994,7 @@ mod tests {
             .collect();
         let mut missing: Vec<_> = command
             .get_subcommands()
+            .filter(|subcommand| !subcommand.is_hide_set())
             .map(|subcommand| subcommand.get_name())
             .filter(|name| *name != "help" && !grouped.contains(name))
             .collect();
