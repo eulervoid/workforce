@@ -362,7 +362,6 @@ impl State {
                             commit: review.commit,
                             verdict: review.verdict,
                             by: content.actor.clone(),
-                            device: content.author,
                             stamp,
                         },
                     );
@@ -376,7 +375,6 @@ impl State {
                         Merge {
                             reviewed: merged.reviewed,
                             commit: merged.commit,
-                            device: content.author,
                             stamp,
                         },
                     );

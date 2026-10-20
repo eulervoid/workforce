@@ -152,7 +152,7 @@ use crate::crdt::{AddWinsSet, Lww, Stamp};
 use crate::event::{CommentKind, WrittenState};
 use crate::hlc::Hlc;
 use crate::id::{CommentId, EventId, ItemId, SessionId};
-use crate::identity::{Actor, DeviceKey};
+use crate::identity::Actor;
 use crate::name::{Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, TypeName};
 use crate::policy::Policy;
 use crate::refs::Token;
@@ -205,8 +205,6 @@ pub struct Review {
     pub commit: Option<CommitId>,
     pub verdict: Verdict,
     pub by: Actor,
-    /// The device that wrote the verdict, which has the commit it is about.
-    pub device: DeviceKey,
     pub(crate) stamp: Stamp,
 }
 
@@ -217,8 +215,6 @@ pub struct Merge {
     pub reviewed: CommitId,
     /// The merge commit on the target branch.
     pub commit: CommitId,
-    /// The device that merged, which has both commits.
-    pub device: DeviceKey,
     pub(crate) stamp: Stamp,
 }
 
