@@ -198,6 +198,7 @@ fn outcomes_in_the_log() {
             commit: Some(commit),
             verdict: Verdict::RequestChanges,
             because: Some(why),
+            round_limit_reached: None,
         }),
     );
     let comments = view::comment_texts(&events);

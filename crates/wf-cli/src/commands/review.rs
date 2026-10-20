@@ -42,18 +42,30 @@ pub(crate) fn review(
     };
     let verdict = args.verdict();
     let because = comment_why(workspace, item, args.note)?;
+    let round_limit_reached =
+        workspace
+            .state()
+            .round_limit_reached(item, verdict, workspace.actor());
     let event = workspace.author(EventBody::Reviewed(wf_core::event::Reviewed {
         item,
         commit,
         verdict,
         because,
+        round_limit_reached,
     }))?;
     if let Some((_, _, SessionRole::Review { .. })) = own_session {
         workspace.end_session(Finish::Reviewed)?;
     }
     let message = match verdict {
         Verdict::Approve => format!("approved #{}", item.short()),
-        Verdict::RequestChanges => format!("requested changes on #{}", item.short()),
+        Verdict::RequestChanges => match round_limit_reached {
+            None => format!("requested changes on #{}", item.short()),
+            Some(rounds) => format!(
+                "requested changes on #{} after {}, the round limit of its review level: it waits for the principal",
+                item.short(),
+                wf_core::inbox::round_count(rounds)
+            ),
+        },
         Verdict::Escalate => format!("escalated #{} to the principal", item.short()),
     };
     done(json, message, &event, Some(item))

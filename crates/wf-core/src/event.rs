@@ -831,6 +831,56 @@ pub struct Reviewed {
     pub verdict: Verdict,
     /// The comment on the item that says why, written just before.
     pub because: Option<CommentId>,
+    /// Set on a `RequestChanges` of an agent's review that the review level's `max_rounds` stops:
+    /// the rounds of changes requested by agent reviews the item had since the principal last
+    /// acted on it. The item stays in review for the principal instead of going back to work.
+    pub round_limit_reached: Option<u32>,
+}
+
+/// The wire form of `Reviewed` before a review level could limit its rounds.
+#[derive(Serialize, Deserialize)]
+struct ReviewedWithoutRoundLimit {
+    item: ItemId,
+    commit: Option<CommitId>,
+    verdict: Verdict,
+    because: Option<CommentId>,
+}
+
+impl Reviewed {
+    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        if self.round_limit_reached.is_some() {
+            return Ok((tag::REVIEW_AT_ROUND_LIMIT, encoding::encode(self)?));
+        }
+        Ok((
+            tag::REVIEW,
+            encoding::encode(&ReviewedWithoutRoundLimit {
+                item: self.item,
+                commit: self.commit,
+                verdict: self.verdict,
+                because: self.because,
+            })?,
+        ))
+    }
+
+    fn without_round_limit(payload: &[u8]) -> Result<Self, EncodingError> {
+        let old: ReviewedWithoutRoundLimit = encoding::decode(payload)?;
+        Ok(Reviewed {
+            item: old.item,
+            commit: old.commit,
+            verdict: old.verdict,
+            because: old.because,
+            round_limit_reached: None,
+        })
+    }
+
+    /// One that reached no round limit would encode to other bytes than were signed.
+    fn at_round_limit(payload: &[u8]) -> Result<Self, EncodingError> {
+        let reviewed: Reviewed = encoding::decode(payload)?;
+        match reviewed.round_limit_reached {
+            Some(_) => Ok(reviewed),
+            None => Err(EncodingError::malformed()),
+        }
+    }
 }
 
 /// The reviewed commit of an item went into the target branch as `commit`.
@@ -895,6 +945,8 @@ mod tag {
     /// `SessionEnded` as written before it named the comment that says why, and still for an end
     /// without one.
     pub const SESSION_ENDED_WITHOUT_COMMENT: u16 = 21;
+    /// `Reviewed` as written before a review level could limit its rounds, and still for a verdict
+    /// that reached no limit.
     pub const REVIEW: u16 = 22;
     pub const MERGED: u16 = 23;
     // 24 was `Report`, now a comment with a step. Retired: never reuse it.
@@ -916,6 +968,8 @@ mod tag {
     /// without a head. Peers that predate these reasons carry it as `Unknown` instead of failing
     /// to decode the event.
     pub const SESSION_ENDED_CLAIM_LOST: u16 = 32;
+    /// `Reviewed` of a request for changes that reached the round limit of its review level.
+    pub const REVIEW_AT_ROUND_LIMIT: u16 = 33;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -1004,7 +1058,7 @@ impl EventBody {
             EventBody::Commented(body) => body.to_tagged()?,
             EventBody::SessionStarted(body) => body.to_tagged()?,
             EventBody::SessionEnded(body) => body.to_tagged()?,
-            EventBody::Reviewed(body) => (tag::REVIEW, encoding::encode(body)?),
+            EventBody::Reviewed(body) => body.to_tagged()?,
             EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
             EventBody::Unknown { tag, payload } => (*tag, payload.clone()),
         };
@@ -1052,7 +1106,8 @@ impl EventBody {
             tag::SESSION_ENDED_CLAIM_LOST => {
                 EventBody::SessionEnded(SessionEnded::claim_lost(payload)?)
             }
-            tag::REVIEW => EventBody::Reviewed(encoding::decode(payload)?),
+            tag::REVIEW => EventBody::Reviewed(Reviewed::without_round_limit(payload)?),
+            tag::REVIEW_AT_ROUND_LIMIT => EventBody::Reviewed(Reviewed::at_round_limit(payload)?),
             tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
             tag => EventBody::Unknown {
                 tag,
@@ -1293,6 +1348,7 @@ mod tests {
                 commit: Some(commit),
                 verdict: Verdict::RequestChanges,
                 because: Some(CommentId::from(EventId::of(b"tests"))),
+                round_limit_reached: None,
             }),
             EventBody::Merged(Merged {
                 item,

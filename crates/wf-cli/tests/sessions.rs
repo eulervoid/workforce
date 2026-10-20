@@ -3087,6 +3087,7 @@ hang
         commit: None,
         verdict: Verdict::Approve,
         because: None,
+        round_limit_reached: None,
     });
     let refused = client.author(workforce, approve).unwrap_err();
     assert!(refused.to_string().contains("review"), "{refused}");

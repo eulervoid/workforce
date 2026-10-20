@@ -464,11 +464,16 @@ impl ReviewSink for WorkspaceSink<'_> {
     }
 
     fn verdict(&mut self, verdict: Verdict) -> anyhow::Result<()> {
+        let round_limit_reached =
+            self.workspace
+                .state()
+                .round_limit_reached(self.item, verdict, self.workspace.actor());
         self.workspace.author(EventBody::Reviewed(Reviewed {
             item: self.item,
             commit: self.commit,
             verdict,
             because: None,
+            round_limit_reached,
         }))?;
         Ok(())
     }

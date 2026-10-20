@@ -235,6 +235,11 @@ impl Workspace {
         (replicated, self.workforce)
     }
 
+    /// Who the events this process writes are by: the principal, or the session it works in.
+    pub fn actor(&self) -> &Actor {
+        &self.actor
+    }
+
     /// The session this process works in: the daemon's say, or `WF_SESSION` without a daemon.
     pub fn session(&self) -> Option<SessionId> {
         match &self.actor {

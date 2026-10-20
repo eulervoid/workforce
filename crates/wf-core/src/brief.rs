@@ -372,6 +372,7 @@ fn review_step(state: &State, item: ItemId, name: &Option<ReviewStepName>) -> St
         }
         Some(
             ReviewStatus::ChangesRequested
+            | ReviewStatus::RoundLimitReached { .. }
             | ReviewStatus::Approved { .. }
             | ReviewStatus::Merged { .. },
         )

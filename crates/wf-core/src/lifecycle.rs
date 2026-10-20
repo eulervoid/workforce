@@ -1,15 +1,18 @@
 //! What follows from a session starting, ending and finishing a turn. Pure functions of the
 //! state: the daemon asks and then writes the events.
 
+use std::collections::BTreeSet;
+
 use serde::{Deserialize, Serialize};
 
 use crate::event::CommentKind;
 use crate::graph::DependencyGraph;
+use crate::hlc::Hlc;
 use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::Policy;
-use crate::session::{CommitId, EndReason, MachineFault, SessionRole};
+use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole, Verdict};
 use crate::state::State;
 
 /// How an agent ends its session. The session ends after the agent's turn, and the agent writes
@@ -94,6 +97,18 @@ pub enum AfterFailedChecks {
 /// How many failed check runs send an item back to work before the next waits for the principal.
 const FAILED_CHECK_RUNS_LIMIT: usize = 2;
 
+/// Where a request for changes sends the submitted work of an item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AfterChangesRequested {
+    /// Back to work, in the same event: what every request for changes does under a review level
+    /// without `max_rounds`, and a principal's always.
+    BackToWork,
+    /// An agent's review requests changes after the item had `rounds` rounds of them since the
+    /// principal last acted on it, as many as its review level's `max_rounds` or more: the item
+    /// stays in review and waits for the principal.
+    WaitsForPrincipal { rounds: u32 },
+}
+
 /// How much of the last words of an agent that gave up goes into the comment, in characters.
 const LAST_MESSAGE_LIMIT: usize = 600;
 
@@ -150,6 +165,14 @@ impl MergePlan {
             MergePlan::Merge
         }
     }
+}
+
+/// Which review rounds [`State::review_rounds`] counts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rounds {
+    All,
+    /// Not the latest submission: a verdict on it decides as the first one on it did.
+    BeforeThisSubmission,
 }
 
 /// What to do when a turn of a session has ended.
@@ -273,6 +296,86 @@ impl State {
             }
             Some(_) | None => AfterFailedChecks::WaitsForPrincipal { runs },
         }
+    }
+
+    /// Where a request for changes by `by` on the submitted work of `item` sends it, by the
+    /// review rounds the item had before this submission. The verdict records the answer, so the
+    /// fold does not depend on the policy.
+    pub fn after_changes_requested(&self, item: ItemId, by: &Actor) -> AfterChangesRequested {
+        let max_rounds = self.policy().and_then(|document| {
+            let policy = &document.policy;
+            let Some(ItemEntry::Live(live)) = self.item(item) else {
+                return None;
+            };
+            policy
+                .review_level(live.effective_review_level(policy)?)?
+                .max_rounds
+        });
+        match (by, max_rounds) {
+            (Actor::Agent { .. }, Some(max_rounds)) => {
+                let rounds = self.review_rounds(item, Rounds::BeforeThisSubmission);
+                if rounds >= max_rounds.get() {
+                    AfterChangesRequested::WaitsForPrincipal { rounds }
+                } else {
+                    AfterChangesRequested::BackToWork
+                }
+            }
+            (Actor::Agent { .. }, None) | (Actor::Principal(_) | Actor::Daemon(_), _) => {
+                AfterChangesRequested::BackToWork
+            }
+        }
+    }
+
+    /// What a verdict by `by` on the submitted work of `item` records as its
+    /// [`Reviewed::round_limit_reached`](crate::event::Reviewed::round_limit_reached).
+    pub fn round_limit_reached(&self, item: ItemId, verdict: Verdict, by: &Actor) -> Option<u32> {
+        match verdict {
+            Verdict::RequestChanges => match self.after_changes_requested(item, by) {
+                AfterChangesRequested::BackToWork => None,
+                AfterChangesRequested::WaitsForPrincipal { rounds } => Some(rounds),
+            },
+            Verdict::Approve | Verdict::Escalate => None,
+        }
+    }
+
+    /// The review rounds of `item` since the principal last acted on it: its submissions that an
+    /// agent's review sent back with a request for changes. Several steps that request changes on
+    /// one submission make one round; a request that waits for the principal makes none, nor do
+    /// those of the principal and of the daemon.
+    pub fn review_rounds(&self, item: ItemId, which: Rounds) -> u32 {
+        let Some(ItemEntry::Live(live)) = self.item(item) else {
+            return 0;
+        };
+        let mut submitted: Vec<Hlc> = self
+            .sessions_of(item)
+            .filter(|session| session.role() == SessionRole::Work)
+            .filter_map(|session| {
+                let ended = session.ended()?;
+                match ended.reason.outcome() {
+                    Outcome::Submitted => Some(ended.at()),
+                    Outcome::Finished | Outcome::Failed | Outcome::Neither => None,
+                }
+            })
+            .collect();
+        submitted.sort();
+        let since = live.principal_touched();
+        let sent_back: BTreeSet<usize> = live
+            .verdicts()
+            .values()
+            .filter(|review| {
+                review.verdict == Verdict::RequestChanges
+                    && review.round_limit_reached.is_none()
+                    && matches!(review.by, Actor::Agent { .. })
+                    && since.is_none_or(|since| review.stamp.hlc > since)
+            })
+            // The submissions before the verdict: the last of them is the one it reviewed.
+            .map(|review| submitted.partition_point(|at| *at < review.stamp.hlc))
+            .filter(|before| match which {
+                Rounds::All => true,
+                Rounds::BeforeThisSubmission => *before < submitted.len(),
+            })
+            .collect();
+        u32::try_from(sent_back.len()).unwrap_or(u32::MAX)
     }
 
     /// How many check runs on the merge result of `item` failed since the principal last acted on

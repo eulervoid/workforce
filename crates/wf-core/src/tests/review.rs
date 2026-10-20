@@ -1,7 +1,9 @@
 use crate::event::EventBody;
 use crate::id::{ItemId, SessionId};
-use crate::identity::AgentId;
+use crate::identity::{Actor, AgentId};
+use crate::inbox::PrincipalReviewReason;
 use crate::item::ItemState;
+use crate::lifecycle::Rounds;
 use crate::lifecycle::TurnOutcome;
 use crate::name::AgentName;
 use crate::policy::ReviewStep;
@@ -77,20 +79,43 @@ impl Scene {
         step: Option<&str>,
         verdict_given: Verdict,
     ) {
+        self.review_as(agent, item, commit(1), step, verdict_given);
+    }
+
+    /// A verdict given by `agent` from a review session of `reviewed` for the step called `step`,
+    /// which it then ends. The verdict records the round limit as `wf review` does.
+    fn review_as(
+        &mut self,
+        agent: &str,
+        item: ItemId,
+        reviewed: CommitId,
+        step: Option<&str>,
+        verdict_given: Verdict,
+    ) {
         let session: SessionId = self
-            .apply(start_review_step(agent, item, commit(1), step))
+            .apply(start_review_step(agent, item, reviewed, step))
             .id()
             .into();
-        self.clock += 1;
         let actor = self.fixture.agent_actor(agent, session);
-        let body = verdict(item, commit(1), verdict_given);
+        let body = EventBody::Reviewed(crate::event::Reviewed {
+            item,
+            commit: Some(reviewed),
+            verdict: verdict_given,
+            because: None,
+            round_limit_reached: self.state.round_limit_reached(item, verdict_given, &actor),
+        });
+        self.apply_as(actor, body);
+        self.apply(end_session(session, EndReason::Reviewed));
+    }
+
+    fn apply_as(&mut self, actor: crate::identity::Actor, body: EventBody) {
+        self.clock += 1;
         let event = self
             .fixture
             .author_as(&self.state, 0, actor, self.clock, body);
         self.state
             .receive(event, crate::state::Trust::Untrusted)
-            .expect("the verdict is valid");
-        self.apply(end_session(session, EndReason::Reviewed));
+            .expect("the event is valid");
     }
 
     /// Replaces the policy with the default one and `extra` after it.
@@ -631,7 +656,8 @@ mod inbox {
                     item: careful,
                     waiting: Waiting::PrincipalReview {
                         commit: Some(commit(1)),
-                        stale: None
+                        stale: None,
+                        reason: PrincipalReviewReason::Step,
                     }
                 },
             ]
@@ -1141,5 +1167,247 @@ mod at_once {
         assert_eq!(scene.status(item), Some(awaiting_agent()));
         scene.agent_verdict(item, Verdict::Approve);
         assert_eq!(scene.status(item), Some(awaiting_human()));
+    }
+}
+
+mod round_limit {
+    use super::*;
+
+    /// A task under the level `bounded`, of one agent step that sends the work back twice at most,
+    /// submitted at `commit(1)`.
+    fn bounded() -> (Scene, ItemId) {
+        let mut scene = Scene::new();
+        scene.set_policy(
+            "[[review]]\nname = \"bounded\"\nsteps = [{ requires = [\"review\"] }]\nmax_rounds = 2\n",
+        );
+        let item = scene
+            .apply(create_reviewed("task", "work", "bounded"))
+            .id()
+            .into();
+        resubmit(&mut scene, item, commit(1));
+        (scene, item)
+    }
+
+    /// As the daemon writes a submission, so that the principal does not act on the item.
+    fn resubmit(scene: &mut Scene, item: ItemId, at: CommitId) {
+        let session: SessionId = scene.apply(start_session("coder", item)).id().into();
+        let daemon = Actor::Daemon(scene.fixture.founder.key());
+        scene.apply_as(daemon, moved(item, ItemState::Review));
+        scene.apply(submit_session(session, at));
+    }
+
+    /// `weak` requests changes on `at`, in a review session for the unnamed step.
+    fn request_changes(scene: &mut Scene, item: ItemId, at: CommitId) {
+        request_changes_as(scene, "weak", item, at, None);
+    }
+
+    /// `agent` writes a change request and then requests changes on `at`, in a review session for
+    /// `step`, recording the round limit as `wf review` does.
+    fn request_changes_as(
+        scene: &mut Scene,
+        agent: &str,
+        item: ItemId,
+        at: CommitId,
+        step: Option<&str>,
+    ) {
+        let session: SessionId = scene
+            .apply(start_review_step(agent, item, at, step))
+            .id()
+            .into();
+        let actor = scene.fixture.agent_actor(agent, session);
+        scene.apply_as(actor.clone(), change_request(item, "not yet"));
+        let body = EventBody::Reviewed(crate::event::Reviewed {
+            item,
+            commit: Some(at),
+            verdict: Verdict::RequestChanges,
+            because: None,
+            round_limit_reached: scene.state.round_limit_reached(
+                item,
+                Verdict::RequestChanges,
+                &actor,
+            ),
+        });
+        assert_eq!(scene.state.check_policy(&body), Ok(()));
+        scene.apply_as(actor, body);
+        scene.apply(end_session(session, EndReason::Reviewed));
+    }
+
+    fn state_of(scene: &Scene, item: ItemId) -> ItemState {
+        scene.state.live_state(item).unwrap()
+    }
+
+    #[test]
+    fn requests_for_changes_send_the_work_back_until_the_limit_then_the_principal_decides() {
+        let (mut scene, item) = bounded();
+        for (round, at) in [(1, commit(1)), (2, commit(2))] {
+            request_changes(&mut scene, item, at);
+            assert_eq!(state_of(&scene, item), ItemState::Open, "round {round}");
+            assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+            assert_eq!(scene.state.review_rounds(item, Rounds::All), round);
+            resubmit(&mut scene, item, commit(round as u8 + 1));
+        }
+
+        request_changes(&mut scene, item, commit(3));
+        assert_eq!(state_of(&scene, item), ItemState::Review);
+        assert_eq!(
+            scene.status(item),
+            Some(ReviewStatus::RoundLimitReached { rounds: 2 })
+        );
+        assert_eq!(
+            scene.state.review_rounds(item, Rounds::All),
+            2,
+            "a request that waits for the principal is no round"
+        );
+        let waiting: Vec<_> = scene
+            .state
+            .inbox()
+            .into_iter()
+            .filter(|entry| entry.item == item)
+            .map(|entry| entry.waiting)
+            .collect();
+        assert_eq!(
+            waiting,
+            [crate::inbox::Waiting::PrincipalReview {
+                commit: Some(commit(3)),
+                stale: None,
+                reason: PrincipalReviewReason::RoundLimit { rounds: 2 },
+            }]
+        );
+        assert_eq!(scene.state.offered_reviews(), []);
+
+        // A comment of the principal starts the count over, but it is not their decision.
+        scene.apply(comment(item, "let me look"));
+        assert_eq!(
+            scene.status(item),
+            Some(ReviewStatus::RoundLimitReached { rounds: 2 })
+        );
+        assert_eq!(scene.state.review_rounds(item, Rounds::All), 0);
+        assert_eq!(
+            scene
+                .state
+                .check_policy(&verdict(item, commit(3), Verdict::Approve)),
+            Ok(()),
+            "the principal approves over the open change requests"
+        );
+        scene.apply(verdict(item, commit(3), Verdict::Approve));
+        assert_eq!(
+            scene.status(item),
+            Some(ReviewStatus::Approved {
+                commit: Some(commit(3))
+            })
+        );
+        assert_eq!(
+            scene.state.pending_merges(),
+            [crate::review::PendingMerge {
+                item,
+                commit: commit(3)
+            }]
+        );
+    }
+
+    #[test]
+    fn the_principal_sends_it_back_for_another_round_of_its_own() {
+        let (mut scene, item) = bounded();
+        for round in 1..=2u8 {
+            request_changes(&mut scene, item, commit(round));
+            resubmit(&mut scene, item, commit(round + 1));
+        }
+        request_changes(&mut scene, item, commit(3));
+        assert_eq!(state_of(&scene, item), ItemState::Review);
+
+        scene.apply(verdict(item, commit(3), Verdict::RequestChanges));
+        assert_eq!(state_of(&scene, item), ItemState::Open);
+        assert_eq!(scene.status(item), Some(ReviewStatus::ChangesRequested));
+
+        resubmit(&mut scene, item, commit(4));
+        request_changes(&mut scene, item, commit(4));
+        assert_eq!(
+            state_of(&scene, item),
+            ItemState::Open,
+            "the count started over when the principal acted"
+        );
+    }
+
+    #[test]
+    fn several_steps_that_request_changes_on_one_submission_make_one_round() {
+        let mut scene = Scene::with_wide_level();
+        scene.set_policy(
+            "[[review]]\nname = \"pair\"\nmax_rounds = 1\nsteps = [[\n\
+             { name = \"style\", requires = [\"review\"] },\n\
+             { name = \"security\", requires = [\"review\", \"strong-model\"] },\n]]\n",
+        );
+        let item = scene
+            .apply(create_reviewed("task", "work", "pair"))
+            .id()
+            .into();
+        resubmit(&mut scene, item, commit(1));
+        request_changes_as(&mut scene, "weak", item, commit(1), Some("style"));
+        request_changes_as(&mut scene, "reviewer", item, commit(1), Some("security"));
+        assert_eq!(scene.state.review_rounds(item, Rounds::All), 1);
+        assert_eq!(state_of(&scene, item), ItemState::Open);
+
+        resubmit(&mut scene, item, commit(2));
+        request_changes(&mut scene, item, commit(2));
+        assert_eq!(
+            scene.status(item),
+            Some(ReviewStatus::RoundLimitReached { rounds: 1 })
+        );
+    }
+
+    #[test]
+    fn the_verdict_has_to_say_what_the_round_limit_makes_of_it() {
+        let (mut scene, item) = bounded();
+        for round in 1..=2u8 {
+            request_changes(&mut scene, item, commit(round));
+            resubmit(&mut scene, item, commit(round + 1));
+        }
+        let session: SessionId = scene
+            .apply(start_review_step("weak", item, commit(3), None))
+            .id()
+            .into();
+        let actor = scene.fixture.agent_actor("weak", session);
+        let reviewed = |round_limit_reached| {
+            EventBody::Reviewed(crate::event::Reviewed {
+                item,
+                commit: Some(commit(3)),
+                verdict: Verdict::RequestChanges,
+                because: None,
+                round_limit_reached,
+            })
+        };
+        let device = scene.device();
+        assert_eq!(
+            scene.state.check_actor(device, &actor, &reviewed(None)),
+            Err(PolicyViolation::WrongRoundLimit(item))
+        );
+        assert_eq!(
+            scene.state.check_actor(device, &actor, &reviewed(Some(1))),
+            Err(PolicyViolation::WrongRoundLimit(item))
+        );
+        assert_eq!(
+            scene.state.check_actor(device, &actor, &reviewed(Some(2))),
+            Ok(())
+        );
+        assert_eq!(
+            scene
+                .state
+                .check_actor(device, &scene.fixture.founder_actor(), &reviewed(Some(2))),
+            Err(PolicyViolation::WrongRoundLimit(item)),
+            "the principal's requests always send the work back"
+        );
+    }
+
+    #[test]
+    fn without_max_rounds_every_request_sends_the_work_back() {
+        let mut scene = Scene::new();
+        let item = scene
+            .apply(create_reviewed("task", "work", "light"))
+            .id()
+            .into();
+        for round in 1..=5u8 {
+            resubmit(&mut scene, item, commit(round));
+            request_changes(&mut scene, item, commit(round));
+            assert_eq!(state_of(&scene, item), ItemState::Open);
+        }
     }
 }

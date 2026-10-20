@@ -31,6 +31,12 @@ pub enum ReviewStatus {
         approved: Vec<Option<ReviewStepName>>,
     },
     ChangesRequested,
+    /// An agent's review requested changes after the item had `rounds` rounds of them, as many as
+    /// its review level allows: the work stays in review, and the principal decides with a verdict
+    /// of their own. The other steps' verdicts on the commit count for nothing.
+    RoundLimitReached {
+        rounds: u32,
+    },
     Approved {
         commit: Option<CommitId>,
     },
@@ -110,14 +116,24 @@ impl State {
             .filter(|verdict| verdict.commit == commit && verdict.stamp > submitted)
             .collect();
         verdicts.sort_by_key(|verdict| verdict.stamp);
+        let mut round_limit_reached = None;
         for verdict in verdicts {
             if progress.is_done() {
                 break;
             }
+            if round_limit_reached.is_some() && !matches!(verdict.by, Actor::Principal(_)) {
+                continue;
+            }
             match (verdict.verdict, &verdict.by) {
-                (Verdict::RequestChanges, _) => return Some(ReviewStatus::ChangesRequested),
-                // A principal decides for the whole entry.
-                (Verdict::Approve, Actor::Principal(_)) => progress.decided_by_principal(),
+                (Verdict::RequestChanges, _) => match verdict.round_limit_reached {
+                    None => return Some(ReviewStatus::ChangesRequested),
+                    Some(rounds) => round_limit_reached = Some(rounds),
+                },
+                // A principal decides for the whole entry, at the round limit too.
+                (Verdict::Approve, Actor::Principal(_)) => {
+                    round_limit_reached = None;
+                    progress.decided_by_principal();
+                }
                 (Verdict::Approve, Actor::Agent { session, .. }) => {
                     progress.close(self.step_of(*session), false);
                 }
@@ -129,7 +145,9 @@ impl State {
                 (Verdict::Approve | Verdict::Escalate, _) => {}
             }
         }
-        Some(if progress.is_done() {
+        Some(if let Some(rounds) = round_limit_reached {
+            ReviewStatus::RoundLimitReached { rounds }
+        } else if progress.is_done() {
             ReviewStatus::Approved { commit }
         } else {
             ReviewStatus::Awaiting {
@@ -188,6 +206,7 @@ impl State {
                         .next()
                         .map(|step| (item.id(), commit, step)),
                     ReviewStatus::ChangesRequested
+                    | ReviewStatus::RoundLimitReached { .. }
                     | ReviewStatus::Approved { .. }
                     | ReviewStatus::Merged { .. } => None,
                 }
@@ -282,7 +301,11 @@ impl State {
                 let ready = match self.review_status(item.id()) {
                     Some(ReviewStatus::Approved { .. }) => true,
                     Some(ReviewStatus::Merged { .. }) => item.moved() < submitted,
-                    Some(ReviewStatus::Awaiting { .. } | ReviewStatus::ChangesRequested) => false,
+                    Some(
+                        ReviewStatus::Awaiting { .. }
+                        | ReviewStatus::ChangesRequested
+                        | ReviewStatus::RoundLimitReached { .. },
+                    ) => false,
                     None => !item.needs_review(policy),
                 };
                 if !ready {

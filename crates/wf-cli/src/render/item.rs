@@ -323,6 +323,12 @@ fn status_line(detail: &ItemDetail) -> Option<String> {
     if let Some(review) = &detail.review_status {
         status.push(review_status_label(review));
     }
+    if let Some(rounds) = &detail.review_rounds {
+        status.push(format!(
+            "review rounds {} of {}",
+            rounds.rounds, rounds.max_rounds
+        ));
+    }
     if !summary.blocked_by.is_empty() {
         let ids: Vec<String> = summary
             .blocked_by
@@ -359,6 +365,10 @@ fn review_status_label(review: &ReviewStatusView) -> String {
             }
         }
         ReviewStatusView::ChangesRequested => "review: changes requested".to_string(),
+        ReviewStatusView::RoundLimitReached { rounds } => format!(
+            "review: waits for the principal, changes requested again after {}, the round limit",
+            wf_core::inbox::round_count(*rounds)
+        ),
         ReviewStatusView::Approved {
             commit: Some(commit),
         } => format!("review: approved {}", short_commit(commit)),
@@ -740,6 +750,7 @@ mod tests {
             updated: jiff::Timestamp::UNIX_EPOCH,
             review: None,
             review_status: None,
+            review_rounds: None,
             recovery: None,
             stats: Default::default(),
             waiting: Vec::new(),

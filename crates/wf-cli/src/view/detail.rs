@@ -11,8 +11,9 @@ use wf_core::event::{Change, CommentKind, Event};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{CommentId, HashId, ItemId};
 use wf_core::identity::Actor;
-use wf_core::inbox::{InboxKind, Waiting};
+use wf_core::inbox::{InboxKind, PrincipalReviewReason, Waiting, round_count};
 use wf_core::item::{Item, ItemEntry, ItemState, WrittenIn};
+use wf_core::lifecycle::Rounds;
 use wf_core::policy::{Field, ReviewStep};
 use wf_core::review::{ReviewStatus, step_names};
 use wf_core::session::{CommitId, EndReason, SessionRole, Verdict};
@@ -248,6 +249,9 @@ pub struct ItemDetail {
     pub review: Option<String>,
     /// Where the review of the submitted work stands.
     pub review_status: Option<ReviewStatusView>,
+    /// The rounds of changes requested by agent reviews since the principal last acted on the
+    /// item, when its review level limits them.
+    pub review_rounds: Option<ReviewRoundsView>,
     /// What happens when a session ends without finishing: its own level, or its type's.
     pub recovery: Option<String>,
     /// How many rounds the work went through, and how long it took.
@@ -265,6 +269,13 @@ pub struct ItemDetail {
     pub activity: Vec<ActivityView>,
     pub open: Vec<OpenCommentView>,
     pub flags: Vec<String>,
+}
+
+/// How many review rounds an item had, of how many its review level allows.
+#[derive(Serialize)]
+pub struct ReviewRoundsView {
+    pub rounds: u32,
+    pub max_rounds: u32,
 }
 
 /// Something about the item that waits on the principal, with what it points to, so nothing has
@@ -297,6 +308,11 @@ pub enum ReviewStatusView {
         approved: Vec<String>,
     },
     ChangesRequested,
+    /// An agent's review requested changes after `rounds` rounds of them, the round limit of the
+    /// review level: the principal decides.
+    RoundLimitReached {
+        rounds: u32,
+    },
     Approved {
         /// `None` for work submitted without commits.
         commit: Option<String>,
@@ -337,6 +353,9 @@ fn review_status_view(status: ReviewStatus) -> ReviewStatusView {
                 .collect(),
         },
         ReviewStatus::ChangesRequested => ReviewStatusView::ChangesRequested,
+        ReviewStatus::RoundLimitReached { rounds } => {
+            ReviewStatusView::RoundLimitReached { rounds }
+        }
         ReviewStatus::Approved { commit } => ReviewStatusView::Approved {
             commit: commit.map(|commit| commit.to_string()),
         },
@@ -685,7 +704,26 @@ fn waiting_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<WaitingVi
                     ("blocker".to_string(), points_to)
                 }
                 Waiting::Proposal => ("proposal".to_string(), Vec::new()),
-                Waiting::PrincipalReview { .. } => ("review".to_string(), Vec::new()),
+                Waiting::PrincipalReview {
+                    reason: PrincipalReviewReason::Step,
+                    ..
+                } => ("review".to_string(), Vec::new()),
+                Waiting::PrincipalReview {
+                    reason: PrincipalReviewReason::RoundLimit { rounds },
+                    ..
+                } => {
+                    // The change requests the principal decides over.
+                    let mut points_to = Vec::new();
+                    for (entry, _, text) in comments().filter(|(_, id, _)| {
+                        item.comments().get(id).is_some_and(|comment| {
+                            comment.kind.is_change_request() && comment.is_open()
+                        })
+                    }) {
+                        points_to.push(format!("from {}:", state.actor_label(&entry.by)));
+                        points_to.push(quoted(text));
+                    }
+                    (format!("round limit: {}", round_count(rounds)), points_to)
+                }
                 Waiting::Recovery {
                     ref role,
                     failures,
@@ -827,6 +865,13 @@ pub fn item_detail(
             .expect("a live item of the state has stats"),
         review: item.effective_review_level(policy).map(ToString::to_string),
         review_status: state.review_status(item.id()).map(review_status_view),
+        review_rounds: item
+            .effective_review_level(policy)
+            .and_then(|level| policy.review_level(level)?.max_rounds)
+            .map(|max_rounds| ReviewRoundsView {
+                rounds: state.review_rounds(item.id(), Rounds::All),
+                max_rounds: max_rounds.get(),
+            }),
         recovery: item
             .effective_recovery_level(policy)
             .map(ToString::to_string),

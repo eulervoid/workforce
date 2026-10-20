@@ -19,6 +19,7 @@ use crate::theme;
 use crate::transcript::{self, Now, Transcript, Usage};
 use crate::view::{AgentView, ItemSummary, SessionStatus};
 use wf_core::id::ItemId;
+use wf_core::inbox::PrincipalReviewReason;
 use wf_core::stats::ProjectStats;
 
 /// The lines of a list `width` wide.
@@ -347,6 +348,7 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
             item,
             commit,
             stale,
+            reason,
         } => {
             let mut first = vec![themed("◎ ", theme::attention())];
             first.push(themed(format!("#{}", item.id.short()), theme::id()));
@@ -355,15 +357,23 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
                 first.push(Span::raw(format!(" {}", commit.short())).themed(theme::text_dimmed()));
             }
             first.push(Span::raw(format!("  {}", item.title)));
-            let more = stale
-                .iter()
-                .map(|stale| {
-                    Line::from(format!(
-                        "  stale since {}: it no longer merges",
-                        wf_core::inbox::timestamp(stale.since_ms)
-                    ))
-                    .themed(theme::text_dimmed())
-                })
+            let round_limit = match reason {
+                PrincipalReviewReason::Step => None,
+                PrincipalReviewReason::RoundLimit { rounds } => Some(format!(
+                    "  changes requested again after {}, the round limit",
+                    wf_core::inbox::round_count(*rounds)
+                )),
+            };
+            let stale = stale.iter().map(|stale| {
+                format!(
+                    "  stale since {}: it no longer merges",
+                    wf_core::inbox::timestamp(stale.since_ms)
+                )
+            });
+            let more = round_limit
+                .into_iter()
+                .chain(stale)
+                .map(|text| Line::from(text).themed(theme::text_dimmed()))
                 .collect();
             row.lines(first, row.keys("v").map(Line::from), more)
         }

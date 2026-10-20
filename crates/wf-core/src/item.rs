@@ -205,6 +205,8 @@ pub struct Review {
     pub commit: Option<CommitId>,
     pub verdict: Verdict,
     pub by: Actor,
+    /// See [`crate::event::Reviewed::round_limit_reached`].
+    pub round_limit_reached: Option<u32>,
     pub(crate) stamp: Stamp,
 }
 
