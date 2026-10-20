@@ -297,7 +297,7 @@ pub fn awaiting_lines(state: &State, awaited: &[NamedCommit]) -> Vec<String> {
                     }
                     None => "the work of a session".to_string(),
                 },
-                Naming::Reviewed => "the commit under review".to_string(),
+                Naming::Submitted => "the commit under review".to_string(),
                 Naming::Merged => "the merged work".to_string(),
             };
             format!(

@@ -347,6 +347,11 @@ impl Session {
         self.head.map(|named| named.commit)
     }
 
+    /// When the log last named a head for the session.
+    pub(crate) fn head_stamp(&self) -> Option<Stamp> {
+        self.head.map(|named| named.stamp)
+    }
+
     pub(crate) fn name_head(&mut self, commit: CommitId, stamp: Stamp) {
         if self.head.is_none_or(|named| named.stamp < stamp) {
             self.head = Some(NamedHead { commit, stamp });

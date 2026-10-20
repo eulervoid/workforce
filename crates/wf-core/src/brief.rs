@@ -293,9 +293,20 @@ fn open_change_requests(state: &State, item: &Item, sources: &impl Sources) -> V
 
 /// The work of the other sessions on the item that this device keeps apart from its branch.
 fn diverged(state: &State, item: &Item, sources: &impl Sources) -> Vec<Diverged> {
+    // What the branch holds is not set apart from it, whatever a ref left over says.
+    let branch = state
+        .item_heads()
+        .into_iter()
+        .find(|heads| heads.item == item.id())
+        .and_then(|heads| heads.holder);
     state
         .sessions_of(item.id())
         .filter(|session| session.role() == SessionRole::Work)
+        .filter(|session| {
+            branch.is_none_or(|holder| {
+                session.id() != holder.session && session.head() != Some(holder.commit)
+            })
+        })
         .filter_map(|session| {
             Some(Diverged {
                 reference: sources.diverged(session.id())?,

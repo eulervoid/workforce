@@ -10,14 +10,15 @@ use crate::item::ItemState;
 use crate::session::{CommitId, SessionRole};
 use crate::state::State;
 
-/// Why the log names a commit.
+/// Why a device needs a commit the log names.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum Naming {
-    /// The head of a work session, named by one of its comments or by its end.
+    /// The head of a work session of an item that is not finished, named by one of its comments or
+    /// by its end: the branch of the item, or work set apart from it.
     Head { session: SessionId },
-    /// The commit a verdict is about.
-    Reviewed,
-    /// The merge commit, or the commit that was merged.
+    /// The commit an item in review was submitted at, which a review and the merge start on.
+    Submitted,
+    /// The merge commit, or the commit that was merged, of an item that is not finished.
     Merged,
 }
 
@@ -44,8 +45,10 @@ pub struct ItemHeads {
     pub item: ItemId,
     /// The item is done or cancelled: its refs and its agent repository are no longer needed.
     pub finished: bool,
-    /// The head `wf/<item>` is at: that of the session holding the claim, or of the latest work
-    /// session that named one when none holds it.
+    /// Every work session of the item, which may have a ref of work set apart.
+    pub sessions: Vec<SessionId>,
+    /// The head `wf/<item>` is at: that of the session holding the claim, or of the work session
+    /// that named a head last when none holds it.
     pub holder: Option<HeadOf>,
     /// The heads of the other work sessions that differ from the holder's. Whether one is an
     /// ancestor of the holder's, and so nothing is lost, only git knows.
@@ -53,41 +56,45 @@ pub struct ItemHeads {
 }
 
 impl State {
-    /// Every commit the log names for the items that are not cancelled or archived: session
-    /// heads, the commits of verdicts, and merges.
+    /// The commits that something on a device still needs and that a ref keeps: the heads of
+    /// items that are not finished (the holder's, and the others' to keep apart), the commit an
+    /// item in review was submitted at, and what an item that is not finished had merged. What
+    /// finished items or heads rewritten away once named is not here: no device is asked for it.
     pub fn named_commits(&self) -> Vec<NamedCommit> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
         let mut named = Vec::new();
+        for heads in self.item_heads().iter().filter(|heads| !heads.finished) {
+            for head in heads.holder.iter().chain(&heads.others) {
+                named.push(NamedCommit {
+                    commit: head.commit,
+                    item: heads.item,
+                    author: head.device,
+                    naming: Naming::Head {
+                        session: head.session,
+                    },
+                });
+            }
+        }
         for item in self.live_items() {
-            if item.state(policy) == ItemState::Cancelled {
+            let id = item.id();
+            let state = item.state(policy);
+            if state.is_terminal() {
                 continue;
             }
-            let id = item.id();
-            for session in self.sessions_of(id) {
-                if let (SessionRole::Work, Some(commit)) = (session.role(), session.head()) {
-                    named.push(NamedCommit {
-                        commit,
-                        item: id,
-                        author: session.device(),
-                        naming: Naming::Head {
-                            session: session.id(),
-                        },
-                    });
-                }
+            if state == ItemState::Review
+                && let Some((session, _)) = self.submitting_session(id)
+                && let Some(commit) = session.head()
+            {
+                named.push(NamedCommit {
+                    commit,
+                    item: id,
+                    author: session.device(),
+                    naming: Naming::Submitted,
+                });
             }
-            for review in item.verdicts().values() {
-                if let Some(commit) = review.commit {
-                    named.push(NamedCommit {
-                        commit,
-                        item: id,
-                        author: review.device,
-                        naming: Naming::Reviewed,
-                    });
-                }
-            }
-            for merge in item.merges().values() {
+            if let Some(merge) = item.latest_merge() {
                 for commit in [merge.reviewed, merge.commit] {
                     named.push(NamedCommit {
                         commit,
@@ -116,19 +123,16 @@ impl State {
                     })
                 };
                 let id = item.id();
-                let latest = self
-                    .sessions_of(id)
-                    .filter(|session| session.role() == SessionRole::Work)
-                    .filter(|session| session.head().is_some())
-                    .max_by_key(|session| session.started());
+                let work = || {
+                    self.sessions_of(id)
+                        .filter(|session| session.role() == SessionRole::Work)
+                };
                 let holder = self
                     .claim(id)
                     .filter(|session| session.head().is_some())
-                    .or(latest)
+                    .or_else(|| self.latest_head_session(id))
                     .and_then(head_of);
-                let others = self
-                    .sessions_of(id)
-                    .filter(|session| session.role() == SessionRole::Work)
+                let others = work()
                     .filter_map(head_of)
                     .filter(|head| {
                         holder.is_some_and(|holder| {
@@ -139,6 +143,7 @@ impl State {
                 ItemHeads {
                     item: id,
                     finished: item.state(policy).is_terminal(),
+                    sessions: work().map(|session| session.id()).collect(),
                     holder,
                     others,
                 }
