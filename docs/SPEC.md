@@ -322,7 +322,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused. *Planned (M3):* `Claim` (of an item's merge), the end reasons `Expired` and `Outclaimed`,
+* Tags are never reused. *Planned (M3):* `MergeClaimed{item, commit}`, the end reasons `LeaseExpired` and `Outclaimed`,
   `TargetMoved{commit, onto}`; `onto: CommitId` on `Merged` (section 10).
 
 ### Store
@@ -625,8 +625,8 @@ it with one session.
 | `Cancelled` | the principal stopped it, or its item moved on (cancelled, done, drafted, archived) |
 | `Interrupted` | the daemon stopped and could not resume it |
 | `MachineFault` | `LoginLapsed`, `UsageLimit`, `NoSpace` or `HarnessUnreachable`: the machine, not the attempt |
-| `Expired` (*Planned, M3*) | another device took the item over after the lease of this session's device ran out |
-| `Outclaimed` (*Planned, M3*) | an earlier claim on the item arrived |
+| `LeaseExpired` (*Planned, M3*) | another device took over what the session claimed, after the lease of the session's device ran out |
+| `Outclaimed` (*Planned, M3*) | an earlier claim on the same thing arrived |
 
 **Ending moves the item first.** `after_end` in `wf-core::lifecycle` says what happens to the item:
 back to open, to review, merge then done, or nothing. The daemon writes that move while the session
@@ -637,29 +637,31 @@ verdict, answer, diagnosis) is the agent's, and waits up to 20 s for its turn to
 command it ran waits for the answer; an `Interruption` (stop, moved on, timeout, failure, giving up,
 machine fault) is the daemon's and acts at once.
 
-**Claims.** The claim of an item is its earliest live work session by `(hlc, EventId)`. Starts take a
-per-item lock and refuse an item that a live work session holds. A session is live until its
+**Claims.** A session claims what it alone may work on: a work session the item's work, a review
+session its step of the submitted commit, a supervise session the item's open blockers, a diagnose
+session the item's diagnosis. Its `SessionStarted` is the claim; no other event is written for it.
+Of two live claims on the same thing, the earliest by `(hlc, EventId)` holds it. Starts take a
+per-item lock and refuse what a live session already claims. A session is live until its
 `SessionEnded`, so liveness is read from the log alone, the same on every device.
 
-**Planned (M3): leases.** Across devices nothing coordinates a start: `SessionStarted` is the claim.
-Two devices that start one item before they sync find the earlier claim once they do, and the later
-session ends itself `Outclaimed`. A session that dies on a running device is ended by that device's
-daemon, as on one machine, so the only death others must notice is the device's, which gossip
-already announces (section 14). The lease of a session is therefore the presence of its device: a
-device not heard from for the policy's `[claims] lease` (default 3 minutes, measured by the
-receiver's clock from the last announcement it accepted, so two lost announcements do not expire it)
-counts as gone, once the receiver's daemon has itself run that long, so a daemon that just started
-does not count every device as gone. Nothing is written per renewal.
+**Planned (M3): leases.** Across devices nothing coordinates a start. Two devices that claim one
+thing before they sync find the earlier claim once they do, and the later session ends itself
+`Outclaimed`. A session that dies on a running device is ended by that device's daemon, as on one
+machine, so the only death others must notice is the device's, which gossip already announces
+(section 14). The lease of a claim is therefore the presence of its session's device: a device not
+heard from for the policy's `[claims] lease` (default 3 minutes, measured by the receiver's clock
+from the last announcement it accepted, so two lost announcements do not expire it) counts as gone,
+once the receiver's daemon has itself run that long, so a daemon that just started does not count
+every device as gone. Nothing is written per renewal.
 
-A device that would start on an item held by a gone device's session first ends that session
-`Expired`, then writes its own `SessionStarted`, under the same lock. The end is the takeover, so
-every device agrees on who holds the item, whatever it heard from whom. A review session holding a
-step and a supervise session holding a blocker are taken over the same way. Only a daemon of the
-principal ends a session of another device, and only as `Expired`. A device that comes back finds its
-sessions ended, stops them, and names the last head of each in a comment, so what they committed
-reaches every device (section 10) and the brief of the next session names it, to rebase onto. The
-overlap is accepted, not prevented: for a few minutes two sessions may work on one item. `Expired`
-and `Outclaimed`, like `Interrupted`, cost no recovery step.
+A device that would claim what a gone device's session claims first ends that session
+`LeaseExpired`, then writes its own `SessionStarted`, under the same lock. The end is the takeover,
+so every device agrees on who holds what, whatever it heard from whom. Only a daemon of the
+principal ends a session of another device, and only as `LeaseExpired`. A device that comes back
+finds its sessions ended, stops them, and names the last head of each work session in a comment, so
+what they committed reaches every device (section 10) and the brief of the next session names it,
+to rebase onto. The overlap is accepted, not prevented: for a few minutes two sessions may work on
+one thing. `LeaseExpired` and `Outclaimed`, like `Interrupted`, cost no recovery step.
 
 One branch per item: every work session on it (after a release, a crash or requested changes)
 continues `wf/<item>`. Context carries over within a session in the conversation, and across sessions
@@ -699,8 +701,28 @@ else of the unnamed one. When several are open and none fits, a terminal offers 
 a script is told the open steps. Supervision and diagnosis need hosted `start = auto` agents.
 
 **Planned (M3): across devices.** The dispatch target stays an agent; any device that hosts it with a
-free slot may run it, and claims (above) keep two devices from working on one item for
-long. Until then, two daemons do not coordinate, so each agent should be hosted on one machine.
+free slot may run it. Claims (above) keep two devices from working on one thing for long, and
+**placement** makes it rare that they try: every device ranks, by the same rules, the devices that
+could take a claimable thing, and only the first starts at once. Left out are devices whose lease
+ran out, that have no free slot for an agent that may take it (as the log says), or that do not meet
+its `requires`. The rest rank by, first to last:
+
+1. **where the work is**: the next work session of an item goes to the device of its latest one,
+   which has its agent repository, branch and build caches;
+2. **where it was written**: a review goes to the device of the work session that submitted it,
+   where the commit is and the checks just ran;
+3. **where it was reviewed**: a merge goes to the device of the review session that approved it;
+4. **where it waits**: a supervise session goes to the device of the session the blocker waits on;
+5. a hash of the thing and the device (rendezvous hashing), which spreads the rest evenly.
+
+The device of rank *r* waits *r* times 15 s (well above the few seconds a claim takes to sync)
+before it starts, and then only if no claim arrived. The ranking reads only the log, profiles and
+presence, so devices agree on it; what only one device knows (a warm cache, its load) may make it
+wait longer, never start sooner. A ranking that is wrong costs a delay or a race the claims
+resolve, never correctness. With one device nothing waits. Ranking is pure (`wf-core`); waiting is
+the dispatcher's.
+
+Until then, two daemons do not coordinate, so each agent should be hosted on one machine.
 
 ### Briefs
 
@@ -1050,7 +1072,7 @@ devices, nothing new for the principal to run.
   its commits are fetched like any other the log names. Two moves with the same `onto` are a fork:
   the earliest by `(hlc, EventId)` wins, on every device alike.
 * **Any device merges.** One that meets the policy's `[merge] requires` (its checks run there) and
-  has the approved commit claims the item's merge with a `Claim`, like work: the earliest claim
+  has the approved commit claims the item's merge with `MergeClaimed{item, commit}`, like a session's claim: the earliest claim
   wins, its lease is its device's presence (section 9), and the merge task runs as it is, in
   `<wf>/git`. Devices that reach each other therefore never merge at once; only devices cut off
   from each other can fork the target. A device whose move lost resets its `<wf>/git` target to the
@@ -1586,7 +1608,7 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 | M2.2 | Daily use on one machine (**stage 1**): recovery levels, machine faults, resume after restart, daemon management, export and import, network off for one device, notifications | built |
 | M2.3 | The dashboard | built |
 | — | Since: merge checks and `wf check`, rebase at submit, fixed states with verbs, commit signing, storage budget, `[theme]`, `wf stats` | built |
-| M3 | Sessions across devices (**stage 2**): claims and leases, repositories across devices (`wf/git/1`, `<wf>/git`), `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
+| M3 | Sessions across devices (**stage 2**): claims and leases, placement, repositories across devices (`wf/git/1`, `<wf>/git`), `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
 | M4 | Decision ratification, distill items, hybrid search | |
 | M5 | Several principals, member invites, threads, scopes, `wf attach` (**stage 3**) | |
 | M6 | `seen` and compaction | |
