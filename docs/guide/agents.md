@@ -120,10 +120,12 @@ wf session stop s4k2             # stop it; the item goes back to open
 ## What happens in a session
 
 The daemon creates a repository of the agent's own for the item and starts the agent there, on the
-branch `wf/<item>` at the tip of the target. It lives outside your repository, under
-`~/.local/share/workforce/<workforce id>/repos/`, and reads your repository's objects without being
-able to change your repository at all; `wf item path <item>` prints it. The daemon copies the agent's
-commits into your repository, on the branch `wf/<item>`, at the end of every turn and when it submits.
+branch `wf/<item>` at the tip of the target. It lives outside your checkout, under
+`~/.local/share/workforce/<workforce id>/repos/`, and reads the objects of wf's own repository
+(`~/.local/share/workforce/<workforce id>/git`, see [review-and-merge.md](review-and-merge.md#the-merge))
+without being able to change it at all; `wf item path <item>` prints it. The daemon copies the agent's
+commits into wf's repository, on the branch `wf/<item>`, at the end of every turn and when it submits.
+`wf item checkout <item>` fetches them into your checkout.
 Every session on the item continues the same repository, so the next one picks up where the last one
 stopped. `wf work submit` rebases the work onto the target first; when that stops at a conflict, the
 agent resolves the files and submits again.

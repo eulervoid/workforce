@@ -57,7 +57,7 @@ the diff is on screen, and when the machine cannot be reached it keeps the last 
 the reason. Only what is committed shows from another machine, not what its agent has yet to commit.
 
 While an agent works on the item on this machine, the diff follows what it has committed, as the
-daemon copies its commits into your repository at the end of every turn. Only the committed part takes comments on
+daemon copies its commits into wf's repository at the end of every turn. Only the committed part takes comments on
 lines: the uncommitted lines are not in any commit to anchor to, and `c` and `r` do nothing on them.
 `p` shows the committed part through git.
 
@@ -178,7 +178,6 @@ The `WHAT` column says what to do. The kinds:
 | `blocker` | a question or a wait that someone has to resolve | `wf comment <item> "<answer>" --resolve <comment>` |
 | `proposal` | a decision to accept or reject | `wf item done <item>` or `wf item cancel <item>` |
 | `principal_review` | your step of a review | `wf item diff <item>`, then `wf review <item> --approve` or `--request-changes` |
-| `merge` | approved work that cannot be merged while the target branch is checked out with changes | commit or stash your changes; the daemon tries again by itself |
 | `recovery` | sessions that did not finish, and the item's recovery level leaves it to you | comment with what to do differently, or `wf session start <item>` |
 | `permission` | an agent waits for an answer | `wf session allow <session>` or `deny` |
 
