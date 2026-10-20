@@ -19,11 +19,12 @@ pub enum Waiting {
     /// The item waits in its review state without submitted work, such as a proposed decision.
     /// Moving it on decides.
     Proposal,
-    /// The review of the work has reached a step for the principal: `wf review`. `stale` says
-    /// when the branch stopped merging into the target after the review was offered.
+    /// The review of the work waits for the principal: `wf review`. `stale` says when the branch
+    /// stopped merging into the target after the review was offered.
     PrincipalReview {
         commit: Option<CommitId>,
         stale: Option<Stale>,
+        reason: PrincipalReviewReason,
     },
     /// Sessions of `role` on the item ended without finishing, and its recovery level leaves the
     /// next step to the principal: starting a session, commenting, editing or moving the item.
@@ -32,6 +33,17 @@ pub enum Waiting {
         failures: usize,
         last: SessionId,
     },
+}
+
+/// Why a review waits for the principal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum PrincipalReviewReason {
+    /// The review level has reached a step for the principal, or an agent escalated.
+    Step,
+    /// An agent's review requested changes after `rounds` rounds of them, as many as the review
+    /// level's `max_rounds` allows: the open change requests did not send the work back.
+    RoundLimit { rounds: u32 },
 }
 
 /// The daemon found that the work no longer merges into the target branch, after it offered the
@@ -126,6 +138,15 @@ impl State {
                         Waiting::PrincipalReview {
                             commit,
                             stale: self.stale_since(item.id(), submitted.hlc),
+                            reason: PrincipalReviewReason::Step,
+                        }
+                    }
+                    Some(ReviewStatus::RoundLimitReached { rounds }) => {
+                        let (commit, submitted) = self.submission(item.id())?;
+                        Waiting::PrincipalReview {
+                            commit,
+                            stale: self.stale_since(item.id(), submitted.hlc),
+                            reason: PrincipalReviewReason::RoundLimit { rounds },
                         }
                     }
                     Some(ReviewStatus::Awaiting { .. }) => return None,
@@ -212,6 +233,14 @@ impl State {
     }
 }
 
+/// A number of review rounds, as the inbox and `wf item show` say it.
+pub fn round_count(rounds: u32) -> String {
+    match rounds {
+        1 => "1 round".to_string(),
+        _ => format!("{rounds} rounds"),
+    }
+}
+
 /// A point in time, given in milliseconds since the epoch, as the inbox and the dashboard show it.
 pub fn timestamp(at_ms: u64) -> String {
     jiff::Timestamp::from_millisecond(i64::try_from(at_ms).unwrap_or(i64::MAX))
@@ -244,13 +273,23 @@ impl State {
                 entry.item.short(),
                 entry.item.short()
             ),
-            Waiting::PrincipalReview { commit, stale } => {
-                let review = match commit {
-                    Some(commit) => format!(
+            Waiting::PrincipalReview {
+                commit,
+                stale,
+                reason,
+            } => {
+                let review = match (reason, commit) {
+                    (PrincipalReviewReason::Step, Some(commit)) => format!(
                         "review of {}: `wf item diff`, then `wf review`",
                         commit.short()
                     ),
-                    None => "review of work without commits: read it, then `wf review`".to_string(),
+                    (PrincipalReviewReason::Step, None) => {
+                        "review of work without commits: read it, then `wf review`".to_string()
+                    }
+                    (PrincipalReviewReason::RoundLimit { rounds }, _) => format!(
+                        "changes requested again after {}, the round limit: approve with `wf review --approve`, send it back with `wf review --request-changes`, or edit or cancel it",
+                        round_count(*rounds)
+                    ),
                 };
                 match stale {
                     Some(stale) => format!(

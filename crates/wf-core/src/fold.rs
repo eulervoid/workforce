@@ -352,8 +352,12 @@ impl State {
                     item.touch(stamp, &content.actor);
                     // Requesting changes sends the work back: the item is open for the next
                     // session, in the same event. Whether the type still uses `open` is not
-                    // asked: a concurrent policy change must not decide the outcome.
-                    if review.verdict == Verdict::RequestChanges {
+                    // asked: a concurrent policy change must not decide the outcome. A request
+                    // that reached the round limit says so itself, and the item stays in review
+                    // for the principal.
+                    if review.verdict == Verdict::RequestChanges
+                        && review.round_limit_reached.is_none()
+                    {
                         item.state.set(Some(ItemState::Open.into()), stamp);
                     }
                     item.verdicts.insert(
@@ -362,6 +366,7 @@ impl State {
                             commit: review.commit,
                             verdict: review.verdict,
                             by: content.actor.clone(),
+                            round_limit_reached: review.round_limit_reached,
                             stamp,
                         },
                     );

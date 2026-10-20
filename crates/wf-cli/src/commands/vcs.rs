@@ -295,6 +295,7 @@ pub(super) fn path(
             Some(
                 ReviewStatus::Awaiting { .. }
                 | ReviewStatus::ChangesRequested
+                | ReviewStatus::RoundLimitReached { .. }
                 | ReviewStatus::Approved { .. },
             )
             | None => String::new(),

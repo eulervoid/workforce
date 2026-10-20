@@ -18,6 +18,7 @@ use serde_json::json;
 use wf_core::graph::Readiness;
 use wf_core::id::{CommentId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
+use wf_core::inbox::PrincipalReviewReason;
 use wf_core::item::{ItemState, Priority};
 use wf_core::name::AgentName;
 use wf_core::session::EndReason;
@@ -194,6 +195,7 @@ pub(super) fn snapshot() -> Snapshot {
                 item: archive,
                 commit: None,
                 stale: None,
+                reason: PrincipalReviewReason::Step,
             },
         ],
         working: vec![coder, parked, reviewer],

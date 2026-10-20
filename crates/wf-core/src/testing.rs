@@ -507,6 +507,7 @@ pub fn verdict(item: ItemId, commit: impl Into<Option<CommitId>>, verdict: Verdi
         commit: commit.into(),
         verdict,
         because: None,
+        round_limit_reached: None,
     })
 }
 

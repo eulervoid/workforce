@@ -7,7 +7,7 @@ use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_core::identity::{Actor, DeviceKey};
-use wf_core::inbox::{InboxKind, Stale, Waiting as InboxWaiting};
+use wf_core::inbox::{InboxKind, PrincipalReviewReason, Stale, Waiting as InboxWaiting};
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::name::AgentName;
 use wf_core::resolve::MentionTarget;
@@ -142,6 +142,7 @@ pub enum InboxEntry {
         commit: Option<CommitId>,
         /// The branch stopped merging into the target after the review was offered.
         stale: Option<Stale>,
+        reason: PrincipalReviewReason,
     },
     /// A proposal, a merge or a recovery step: answered with commands for now.
     Notice {
@@ -468,10 +469,15 @@ fn waiting(
                     text,
                 }
             }
-            InboxWaiting::PrincipalReview { commit, stale } => InboxEntry::Review {
+            InboxWaiting::PrincipalReview {
+                commit,
+                stale,
+                reason,
+            } => InboxEntry::Review {
                 item,
                 commit,
                 stale,
+                reason,
             },
             InboxWaiting::Proposal | InboxWaiting::Recovery { .. } => InboxEntry::Notice {
                 kind: entry.waiting.kind(),

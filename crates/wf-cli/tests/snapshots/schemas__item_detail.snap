@@ -39,6 +39,7 @@ expression: "Envelope::new(&detail)"
     "updated": "1970-01-01T00:00:09Z",
     "review": null,
     "review_status": null,
+    "review_rounds": null,
     "recovery": "standard",
     "stats": {
       "sessions": 0,

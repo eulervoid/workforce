@@ -1,6 +1,7 @@
 //! The workforce policy: item types, lanes and assignment. Stored verbatim as TOML in the log.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::num::NonZeroU32;
 use std::sync::LazyLock;
 use std::time::Duration;
 
@@ -251,6 +252,10 @@ pub struct ReviewLevelConfig {
     pub name: ReviewLevelName,
     #[serde(deserialize_with = "written_steps::deserialize")]
     pub steps: Vec<Vec<ReviewStep>>,
+    /// How many rounds of changes requested by agent reviews send an item back to work before
+    /// the principal decides; without it, every round does.
+    #[serde(default)]
+    pub max_rounds: Option<NonZeroU32>,
 }
 
 /// How a policy writes review steps. Policies already in the log write an agent step as
@@ -1015,6 +1020,36 @@ mod tests {
             &postcard::from_bytes::<ReviewLevelConfig>(&bytes).unwrap(),
             wide
         );
+    }
+
+    #[test]
+    fn a_review_level_may_limit_its_rounds_to_a_positive_number() {
+        let limited = with_custom(
+            "[[review]]\nname = \"bounded\"\nsteps = [{ requires = [\"review\"] }]\nmax_rounds = 3\n",
+        );
+        let policy = Policy::parse(&limited).unwrap();
+        let bounded = policy
+            .review_level(&ReviewLevelName::new("bounded").unwrap())
+            .unwrap();
+        assert_eq!(bounded.max_rounds, NonZeroU32::new(3));
+        let bytes = postcard::to_stdvec(bounded).unwrap();
+        assert_eq!(
+            &postcard::from_bytes::<ReviewLevelConfig>(&bytes).unwrap(),
+            bounded
+        );
+        let standard = policy
+            .review_level(&ReviewLevelName::new("standard").unwrap())
+            .unwrap();
+        assert_eq!(standard.max_rounds, None);
+        for rounds in ["0", "-1"] {
+            let source = with_custom(&format!(
+                "[[review]]\nname = \"bounded\"\nsteps = []\nmax_rounds = {rounds}\n"
+            ));
+            assert!(
+                matches!(Policy::parse(&source), Err(PolicyError::Parse(_))),
+                "max_rounds = {rounds}"
+            );
+        }
     }
 
     #[test]

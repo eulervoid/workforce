@@ -213,6 +213,10 @@ pub enum PolicyViolation {
     PrincipalCannotEscalate,
     #[error("{0} was not submitted at that commit, so a verdict on it counts for nothing")]
     StaleReview(ItemId),
+    #[error(
+        "the verdict on {0} does not say what its review level's `max_rounds` makes of it: whether it sends the work back or waits for the principal"
+    )]
+    WrongRoundLimit(ItemId),
     #[error("there is no review level `{name}`; {valid}")]
     UnknownReviewLevel { name: ReviewLevelName, valid: OneOf },
     #[error("a `{type_name}` is never `review`, so it cannot wait for a review")]
@@ -873,6 +877,9 @@ impl State {
                 EventBody::Reviewed(review) if review.verdict == Verdict::Escalate => {
                     Err(PolicyViolation::PrincipalCannotEscalate)
                 }
+                EventBody::Reviewed(review) if review.round_limit_reached.is_some() => {
+                    Err(PolicyViolation::WrongRoundLimit(review.item))
+                }
                 EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
                 | EventBody::BoundPolicySet(_)
@@ -925,10 +932,15 @@ impl State {
                         && other.item() == review.item
                         && other.role() == SessionRole::Work
                 });
-                if reviewing && !did_the_work {
+                if !reviewing || did_the_work {
+                    return Err(PolicyViolation::NotTheReviewer);
+                }
+                if review.round_limit_reached
+                    == self.round_limit_reached(review.item, review.verdict, actor)
+                {
                     Ok(())
                 } else {
-                    Err(PolicyViolation::NotTheReviewer)
+                    Err(PolicyViolation::WrongRoundLimit(review.item))
                 }
             }
             EventBody::ItemEdited(edited)
@@ -1161,11 +1173,17 @@ impl State {
                 let changes_open = has_open(item, CommentKind::ChangeRequest);
                 match review.verdict {
                     // After a step requested changes, the others still review the same commit:
-                    // their approvals are recorded and count for nothing.
+                    // their approvals are recorded and count for nothing. At the round limit, the
+                    // principal's approval decides over the open change requests.
                     Verdict::Approve
                         if changes_open
-                            && self.review_status(review.item)
-                                != Some(ReviewStatus::ChangesRequested) =>
+                            && !matches!(
+                                self.review_status(review.item),
+                                Some(
+                                    ReviewStatus::ChangesRequested
+                                        | ReviewStatus::RoundLimitReached { .. }
+                                )
+                            ) =>
                     {
                         Err(PolicyViolation::OpenChangeRequests(review.item))
                     }
