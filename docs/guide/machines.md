@@ -30,6 +30,9 @@ wf daemon start
 
 ```
 joined workforce kjfllqz46iux... as vm (@ada) with 1274 events
+wf's repository is ~/.local/share/workforce/kjfllqz46iux.../git; the daemon keeps it current with the other devices. To work from a checkout of the project, in it run:
+  git remote add wf ~/.local/share/workforce/kjfllqz46iux.../git
+  git fetch wf
 ```
 
 The new machine becomes a device of yours: same principal, its own device key. It never sees your
@@ -39,6 +42,17 @@ has, such as `gpu, os:linux`; left out, its os and architecture.
 
 Each daemon starts sessions for the agents its machine hosts. Two daemons do not yet coordinate
 which of them takes an item, so give each agent one machine to run on, with `wf device edit --agent`.
+
+## Commits across devices
+
+The log names every commit that matters: where a session's branch is when it comments or ends, what
+a review looked at, what was merged. Each device fetches those commits from the device that wrote
+the event (else from any other), over the same connection it syncs on, so work done on one machine
+is there on the others without a remote or credentials. A session, a review or a merge that needs a
+commit that has not arrived starts only once it has; `wf status` lists `waiting: ...` for each such
+commit, and so does the Now tab of the dashboard. When two sessions worked on one item and the
+later one lost the claim, its commits are kept under `refs/wf/diverged/<session>` in wf's
+repository, and the brief of the next session on the item names them.
 
 ## Syncing
 

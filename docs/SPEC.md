@@ -72,7 +72,7 @@ wf CLI, dashboard, agents ──unix socket──► wf daemon (one per machine,
                                             └─ iroh endpoint, started once a second device exists
                                                  ├─ wf/join/2   invites
                                                  ├─ wf/sync/3   feed sync
-                                                 ├─ wf/git/1    git objects (Planned, M3)
+                                                 ├─ wf/git/1    git objects
                                                  └─ iroh-gossip heads
 ```
 
@@ -979,25 +979,49 @@ is, so that the log says every commit another device needs.
 With `Reviewed{commit}` and `Merged{commit}` these are every commit another device needs. Item
 heads get no event of their own and stay out of gossip.
 
-### Planned (M3): repositories across devices
+### Repositories across devices
 
 Every commit the log names reaches every device, peer to peer: no server, no credentials between
-devices, nothing new for the principal to run. (`<wf>/git`, which this builds on, is built: section 10.)
+devices, nothing new for the principal to run.
 
 * **`wf/git/1`.** Each daemon serves `git upload-pack` on `<wf>/git` over an iroh stream, to members,
-  fetch only: no device writes into another's repository. With `uploadpack.allowReachableSHA1InWant`
-  it serves a commit reachable from the target or an item branch and refuses anything else, such as a
-  head rewritten away; the refusal is the server's, under protocol v0 and v2 alike. The fetching
-  side runs `git fetch` with `fetch.fsckObjects` through an `ext::` bridge to its daemon, so git does
-  the negotiation, thin packs and checks, and wf-net only carries bytes.
-* **Fetching.** A device fetches each named commit when the event naming it arrives, from its
-  author's device first, else from any peer; a device that has it serves it, so an always-on device
-  relays for those asleep. A work session, a review and a merge start only once the commit they need
-  is present, and say so while they wait.
-* **Item branches.** `wf/<item>` is at the latest head named by a session holding the item's claim. A
-  head of a session that lost its claim, if not an ancestor of it, is kept under
-  `refs/wf/diverged/<session>` and named in the next brief. On `Merged` or a cancel every device
-  removes the item's refs and its agent repository.
+  fetch only: no device writes into another's repository. The process runs with
+  `uploadpack.allowReachableSHA1InWant`, so a commit reachable from the target, an item branch or a
+  ref of work set apart is served and anything else, such as a head rewritten away, is refused by
+  the server (`not our ref`). It speaks protocol version 0 and nothing else (`GIT_PROTOCOL` is
+  removed, and a client of an `ext::` bridge cannot ask for another): git 2.55 serves any object by
+  id under protocol version 2 whatever that option says, so only version 0 keeps the refusal. The
+  fetching side runs `git fetch` with `fetch.fsckObjects` through an `ext::` bridge, so git does
+  the negotiation, thin packs and checks, and wf-net only carries bytes. The bridge is the hidden
+  `wf git-bridge <socket>` of the daemon's own copy of `wf`: for each fetch the daemon listens on
+  a unix socket in a private temporary directory, `git fetch` runs the bridge, and the daemon
+  pipes the socket to `wf/git/1` of the device.
+* **Fetching.** A device fetches each commit the log names (the `head` of a comment or a session
+  end, `Reviewed`, `Merged`) as the event arrives, from its author's device first, else from any
+  other bound device, four at a time; a commit that cannot be fetched is tried again, later each
+  time (5 s up to 5 min), and a device that has it serves it, so an always-on device relays for
+  those asleep. Commits of cancelled and archived items are not fetched. What is still missing is
+  `Call::AwaitedCommits`, which `wf status` (`waiting: ...` lines) and the Now tab of the
+  dashboard (`WAITING FOR COMMITS`) show.
+* **Waiting.** A work session starts only once the head the log names for its item is present, a
+  review only once its commit is, and a merge only once the reviewed commit is; until then the
+  dispatcher leaves the item alone (it is not a failed start) and looks again when commits arrive.
+  A work session that starts moves `wf/<item>` to the named head if the branch does not contain it.
+* **Item branches.** `wf/<item>` in `<wf>/git` is at the latest head named by the session holding
+  the item's claim (the latest session that named one when none holds it), on a device whose own
+  session it is not; the daemon's import keeps the branch of a session that runs on the device. A
+  head of another work session, if not an ancestor of it, is kept under
+  `refs/wf/diverged/<session>` and named in the brief of the next work session. When the item is
+  done or cancelled every device removes the refs and its agent repository (unless one of its
+  sessions still runs there).
+* **Joining.** A device that joins starts with the repository the daemon makes (empty), then fetches
+  the branches of the device it joined through, so it has the target and the item branches at
+  once. `wf join` prints where the repository is and how to point a checkout at it:
+  `git remote add wf <wf>/git` and `git fetch wf`. Without a daemon there is nothing to fetch with,
+  and the daemon fills the repository from the commits the log names when it starts.
+
+**Planned (M3):**
+
 * **The target is a chain in the log.** Every move of it names the tip it moved from: `Merged`
   gains `onto`, and a push of the principal to `wf` is written by that device's daemon as
   `TargetMoved{commit, onto}` when it sees the target move. The target is the end of that chain, and
@@ -1012,8 +1036,6 @@ devices, nothing new for the principal to run. (`<wf>/git`, which this builds on
   and runs again on the new tip, checks included; a lost push of the principal goes to the inbox, to
   rebase. A principal who pulled a merge that later lost finds their next push refused as diverged,
   in the inbox.
-* **Joining.** A device that joins starts with an empty `<wf>/git` (the daemon makes it); `wf join`
-  will build it from the peer it joins through and add the remote `wf` to the checkout it is run in.
 * **Not iroh-blobs.** Packs are built per request, so they have no stable hash to fetch by, and git
   verifies what it receives. iroh-blobs stays for files that are not git (transcripts, attachments).
 
@@ -1352,7 +1374,10 @@ mDNS for LAN-only use.
   `{author → (max seq, tips)}` (tips for equivocated feeds); each streams what the other lacks, in
   `(hlc, id)` order, in frames of at most 256 events and 8 MiB; then missing parents and wanted history are fetched by id, answered in `Have` frames and an `EndOfHave`.
   One side writes at a time. A peer that neither sends nor accepts a byte for 30 s ends the session, and `Open`, `Versions`, wants and the join messages have small size limits. An event of more than 1 MiB is refused at admission, so every event fits a frame. The ALPN is bumped whenever the message format changes (`2`: `EndOfWants` replaced an empty `Want`; `3`: `Have` is ended by `EndOfHave`), so mismatched peers refuse at the handshake.
-* **`wf/git/1`** (*Planned, M3*): git objects, by `git upload-pack` over the stream (section 10).
+* **`wf/git/1`**: git objects, by `git upload-pack` over the stream (section 10). The initiator
+  sends one frame naming the workforce, and from then on the stream carries what `git fetch` and
+  `git upload-pack` say to each other; wf only moves the bytes. Members only (`403` otherwise); a
+  node that serves no repository answers `404`.
 * **`wf/query/1`**: a device asks another for what only it has, read from its current state and
   changing and storing nothing. Today that is the live diff of an item, which only the device with
   its branch and agent repository has. One `Query::Diff { workforce, item, since }` (the head commit the
@@ -1385,7 +1410,7 @@ mDNS for LAN-only use.
 |---|---|
 | connectivity, NAT traversal, relays, encryption | `iroh` endpoint, dialed by `EndpointId` |
 | announce heads | `iroh-gossip` (digests only; events go over `wf/sync/3`) |
-| git objects (*Planned*) | `git upload-pack` over an iroh stream (`wf/git/1`) |
+| git objects | `git upload-pack` over an iroh stream (`wf/git/1`) |
 | large artifacts (*Planned*: transcripts, attachments) | `iroh-blobs` |
 
 **Not iroh-docs:** it is a mutable key-value store, not a log. Each `(author, key)` keeps only its
