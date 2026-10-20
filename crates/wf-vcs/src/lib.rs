@@ -195,8 +195,6 @@ pub enum MergeOutcome {
     Merged { commit: CommitId },
     /// The work does not merge cleanly. The paths are the files in conflict.
     Conflict { paths: Vec<String> },
-    /// The target branch is checked out in a worktree with changes, which the merge never touches.
-    DirtyCheckout(DirtyCheckout),
     /// The target branch moved while the merge was being made. Nothing changed; try again.
     TargetMoved,
 }

@@ -66,9 +66,7 @@ async fn dispatch_loop(
         }
         strong.faults.check_space(strong.launch.data_dir.root());
         dispatch_once(&strong, workforce, loaded, &mut failed, &mut checked).await;
-        notifier
-            .announce(&strong, loaded, &loaded.merges.waiting())
-            .await;
+        notifier.announce(&strong, loaded).await;
         let halted = async { strong.until_halted().await };
         tokio::select! {
             changed = heads.changed() => {
@@ -76,7 +74,6 @@ async fn dispatch_loop(
                     return;
                 }
             }
-            () = loaded.merges.waiting_changed() => {}
             () = halted => return,
             () = tokio::time::sleep(DISPATCH_TICK) => {}
         }

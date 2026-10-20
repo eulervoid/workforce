@@ -321,45 +321,18 @@ impl GitCli {
         Ok(self.changed_paths(worktree)?.is_empty())
     }
 
-    /// Moves `target` from `old` to `new`, if nothing moved it in the meantime. Where the target
-    /// is checked out it must be clean and is fast-forwarded there, so the files follow.
+    /// Moves `target` from `old` to `new`, if nothing moved it in the meantime: a compare-and-swap
+    /// of the reference, so a push of the principal that landed first is never overwritten.
     fn advance(&self, target: &str, old: &CommitId, new: &CommitId) -> Result<Advance, VcsError> {
-        let checkout = self
-            .worktrees()?
-            .into_iter()
-            .find(|worktree| worktree.branch.as_deref() == Some(target));
-        let moved = |this: &Self| -> Result<bool, VcsError> {
-            Ok(this.rev_parse(&format!("refs/heads/{target}"))? != *old)
-        };
-        let finished = match checkout {
-            Some(worktree) => {
-                let paths = self.changed_paths(&worktree.path)?;
-                if !paths.is_empty() {
-                    return Ok(Advance::Dirty(DirtyCheckout {
-                        worktree: worktree.path,
-                        paths,
-                    }));
-                }
-                self.run(
-                    &worktree.path,
-                    &[],
-                    ["merge", "--ff-only", "--quiet", &new.to_string()],
-                )?
-            }
-            None => self.run(
-                &self.repository,
-                &[],
-                [
-                    "update-ref",
-                    &format!("refs/heads/{target}"),
-                    &new.to_string(),
-                    &old.to_string(),
-                ],
-            )?,
-        };
-        match finished.ok() {
+        let reference = format!("refs/heads/{target}");
+        let updated = self.run(
+            &self.repository,
+            &[],
+            ["update-ref", &reference, &new.to_string(), &old.to_string()],
+        )?;
+        match updated.ok() {
             Ok(_) => Ok(Advance::Done),
-            Err(_) if moved(self)? => Ok(Advance::Moved),
+            Err(_) if self.rev_parse(&reference)? != *old => Ok(Advance::Moved),
             Err(error) => Err(error),
         }
     }
@@ -411,8 +384,6 @@ impl GitCli {
 
 struct Worktree {
     path: PathBuf,
-    /// The short name of the branch checked out, if one is.
-    branch: Option<String>,
 }
 
 /// The worktrees in the output of `git worktree list --porcelain -z`: NUL ends each attribute
@@ -420,19 +391,13 @@ struct Worktree {
 fn parse_worktrees(listing: &str) -> Vec<Worktree> {
     let mut worktrees = Vec::new();
     let mut path = None;
-    let mut branch = None;
     for attribute in listing.split('\0') {
         if let Some(found) = attribute.strip_prefix("worktree ") {
             path = Some(PathBuf::from(found));
-        } else if let Some(found) = attribute.strip_prefix("branch ") {
-            branch = found.strip_prefix("refs/heads/").map(str::to_string);
         } else if attribute.is_empty()
             && let Some(path) = path.take()
         {
-            worktrees.push(Worktree {
-                path,
-                branch: branch.take(),
-            });
+            worktrees.push(Worktree { path });
         }
     }
     worktrees
@@ -440,7 +405,6 @@ fn parse_worktrees(listing: &str) -> Vec<Worktree> {
 
 enum Advance {
     Done,
-    Dirty(DirtyCheckout),
     Moved,
 }
 
@@ -676,7 +640,7 @@ impl GitCli {
 
     /// Commits `tree`, made by [`GitCli::merge_tree`], as the merge of `commit` into `target`
     /// at `base`, signed as `signing` says, and moves `target` to it. Never a conflict: the
-    /// outcome is the merge, a checkout of `target` with changes, or `target` no longer at `base`.
+    /// outcome is the merge, or `target` no longer at `base`.
     pub fn commit_merge(
         &self,
         target: &str,
@@ -711,7 +675,6 @@ impl GitCli {
         let new = self.oid("commit-tree", &made)?;
         Ok(match self.advance(target, &base, &new)? {
             Advance::Done => MergeOutcome::Merged { commit: new },
-            Advance::Dirty(dirty) => MergeOutcome::DirtyCheckout(dirty),
             Advance::Moved => MergeOutcome::TargetMoved,
         })
     }
@@ -1274,7 +1237,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_merge_updates_the_checked_out_target_and_its_files() {
+    fn a_clean_merge_moves_the_target_to_a_merge_of_both() {
         let repo = TestRepo::new();
         let work = repo.work("wf/k3f9", "a.txt", "a\n");
         let before = repo.main();
@@ -1296,8 +1259,6 @@ mod tests {
             git_in(&repo.directory(), &["log", "-1", "--format=%s", "main"]),
             "Merge #k3f9: add a"
         );
-        assert!(repo.directory().join("a.txt").is_file());
-        assert_eq!(git_in(&repo.directory(), &["status", "--porcelain"]), "");
     }
 
     #[test]
@@ -2214,49 +2175,6 @@ mod tests {
     }
 
     #[test]
-    fn a_dirty_checkout_of_the_target_is_never_touched() {
-        let repo = TestRepo::new();
-        let work = repo.work("wf/k3f9", "a.txt", "a\n");
-        let main = repo.directory();
-        repo.write(&main, "file.txt", "edited by hand\n");
-        let before = repo.main();
-        let outcome = repo
-            .git
-            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
-            .unwrap();
-        assert_eq!(
-            outcome,
-            MergeOutcome::DirtyCheckout(DirtyCheckout {
-                worktree: main.clone(),
-                paths: vec!["file.txt".into()],
-            })
-        );
-        assert_eq!(repo.main(), before);
-        assert_eq!(
-            std::fs::read_to_string(main.join("file.txt")).unwrap(),
-            "edited by hand\n"
-        );
-    }
-
-    #[test]
-    fn untracked_files_do_not_block_a_merge_into_the_checked_out_target() {
-        let repo = TestRepo::new();
-        let work = repo.work("wf/k3f9", "a.txt", "a\n");
-        let main = repo.directory();
-        repo.write(&main, ".workforce.toml", "id = \"x\"\n");
-        let outcome = repo
-            .git
-            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
-            .unwrap();
-        assert!(
-            matches!(outcome, MergeOutcome::Merged { .. }),
-            "{outcome:?}"
-        );
-        assert!(main.join("a.txt").exists());
-        assert!(main.join(".workforce.toml").exists());
-    }
-
-    #[test]
     fn a_dirty_checkout_names_its_changed_files_and_where_a_rename_went() {
         let repo = TestRepo::new();
         let main = repo.directory();
@@ -2291,11 +2209,6 @@ mod tests {
         let main = repo.directory();
         repo.write(&main, "b.txt", "b\n");
         let moved_to = repo.commit(&main, "someone else merged first");
-        let outcome = repo.git.advance("main", &old, &work).unwrap();
-        assert!(matches!(outcome, Advance::Moved));
-        assert_eq!(repo.main(), moved_to);
-
-        git_in(&main, &["checkout", "--quiet", "--detach"]);
         let outcome = repo.git.advance("main", &old, &work).unwrap();
         assert!(matches!(outcome, Advance::Moved));
         assert_eq!(repo.main(), moved_to);

@@ -478,7 +478,6 @@ pub(super) fn notices(detail: &ItemDetail, width: Option<usize>, format: Format)
                         InboxKind::Blocker
                         | InboxKind::Proposal
                         | InboxKind::PrincipalReview
-                        | InboxKind::Merge
                         | InboxKind::Permission => theme::attention(),
                     };
                     let paragraphs = std::iter::once(&waiting.what)
@@ -916,6 +915,7 @@ mod tests {
         );
     }
 
+<<<<<<< HEAD
     /// The detail of an approved item whose merge waits on a dirty checkout, which the daemon
     /// commented on twice.
     fn held_merge() -> ItemDetail {
@@ -1002,6 +1002,8 @@ mod tests {
         crate::view::item_detail(&state, &state.dependency_graph(), live, &events)
     }
 
+=======
+>>>>>>> 251044f (Merge in <wf>/git by compare-and-swap only: no dirty-checkout wait, no merge inbox entry)
     /// The lines of the notice box, without the bar.
     fn boxed(shown: &str) -> Vec<String> {
         anstream::adapter::strip_str(shown)
@@ -1013,63 +1015,8 @@ mod tests {
     }
 
     #[test]
-    fn a_held_merge_shows_in_full_with_its_files_in_the_box() {
-        let detail = held_merge();
-        let what = &detail.waiting[0].what;
-        assert!(what.contains("is ready to merge"), "{what}");
-        let shown = item_detail_for(&detail, Some(40), Format::Styled);
-        let plain = anstream::adapter::strip_str(&shown).to_string();
-        assert!(
-            plain
-                .lines()
-                .all(|line| textwrap::core::display_width(line) <= 40),
-            "{plain}"
-        );
-        let boxed = boxed(&shown);
-        assert_eq!(boxed[0], "merge waits");
-        let text = boxed[1..].join(" ");
-        assert!(text.contains(what.as_str()), "{text}");
-        assert!(
-            text.contains("with changes to src/lib.rs, Cargo.toml. Commit or stash them."),
-            "{text}"
-        );
-        assert!(!text.contains("kept moving"), "only the latest: {text}");
-        let body = plain.find("activity").unwrap();
-        assert!(plain.find("merge waits").unwrap() < body, "{plain}");
-    }
-
-    #[test]
-    fn a_daemon_comment_from_an_earlier_round_is_not_in_the_box() {
-        let detail = merge_pending(
-            &[
-                "Merging into main conflicts in src/lib.rs. The next session merges main into the branch first.",
-            ],
-            &[],
-        );
-        let shown = item_detail_for(&detail, Some(60), Format::Styled);
-        let boxed = boxed(&shown);
-        assert_eq!(boxed[0], "merge waits");
-        assert!(detail.waiting[0].points_to.is_empty(), "{boxed:?}");
-        assert!(!boxed.join(" ").contains("conflicts"), "{boxed:?}");
-    }
-
-    #[test]
     fn an_item_with_nothing_waiting_has_no_box() {
         let shown = item_detail_for(&detail_with_a_body(), Some(40), Format::Styled);
         assert!(boxed(&shown).is_empty(), "{shown}");
-    }
-
-    #[test]
-    fn piped_what_waits_and_the_flags_are_plain_lines() {
-        let mut detail = held_merge();
-        detail.flags = vec!["a task needs a priority".to_string()];
-        let shown =
-            anstream::adapter::strip_str(&item_detail_for(&detail, None, Format::Raw)).to_string();
-        assert!(!shown.contains('┃'), "{shown}");
-        let expected = format!(
-            "  ! merge waits: {}\n    Waiting to merge: main is checked out in /src/app with changes to src/lib.rs, Cargo.toml. Commit or stash them.\n  ! a task needs a priority\n",
-            detail.waiting[0].what
-        );
-        assert!(shown.contains(&expected), "{shown}");
     }
 }

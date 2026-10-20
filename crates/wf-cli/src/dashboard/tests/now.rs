@@ -198,12 +198,12 @@ fn an_item_detail_shows_the_item_as_wf_item_show_prints_it() {
 
 #[test]
 fn enter_on_what_waits_opens_the_item_with_its_notice_in_view() {
-    let held = item(4, "Held merge");
-    let what = "75eba435 is ready to merge, but main is checked out with changes; the daemon's comment on the item names them";
+    let held = item(4, "Held proposal");
+    let what = "proposed: accept it with `wf item done 4`, reject it with `wf item cancel 4`";
     let mut snapshot = snapshot();
     snapshot.waiting = vec![InboxEntry::Notice {
         item: held.clone(),
-        kind: wf_core::inbox::InboxKind::Merge,
+        kind: wf_core::inbox::InboxKind::Proposal,
         what: what.to_owned(),
     }];
     let mut app = App::new(snapshot.clone(), TimeZone::UTC);
@@ -217,13 +217,13 @@ fn enter_on_what_waits_opens_the_item_with_its_notice_in_view() {
     // As `wf item show` renders it, with a long body under the notice.
     let bar = "\x1b[33m┃\x1b[0m";
     let mut text = format!(
-        "◎ #aqcaqcaqcaqc (task:review) Held merge\n\n  {bar} \x1b[1;33mmerge waits\x1b[0m\n"
+        "◎ #aqcaqcaqcaqc (task:review) Held proposal\n\n  {bar} \x1b[1;33mproposal\x1b[0m\n"
     );
     for line in textwrap::wrap(what, 50) {
         text.push_str(&format!("  {bar} {line}\n"));
     }
     text.push_str(&format!(
-        "  {bar} Waiting to merge: main has changes to src/lib.rs.\n\n"
+        "  {bar} Nobody has answered it for a day.\n\n"
     ));
     for line in 1..=30 {
         text.push_str(&format!("  body line {line}\n"));
@@ -231,9 +231,9 @@ fn enter_on_what_waits_opens_the_item_with_its_notice_in_view() {
     snapshot.in_view = Some(item_in_view(held.id, text, None));
     app.refresh(snapshot);
     let shown = screen(&mut app, 60, 16);
-    assert!(shown.contains("┃ merge waits"), "{shown}");
-    assert!(shown.contains("┃ names them"), "{shown}");
-    assert!(shown.contains("changes to src/lib.rs."), "{shown}");
+    assert!(shown.contains("┃ proposal"), "{shown}");
+    assert!(shown.contains("┃ it with `wf item cancel 4`"), "{shown}");
+    assert!(shown.contains("answered it for a day."), "{shown}");
 }
 
 #[test]

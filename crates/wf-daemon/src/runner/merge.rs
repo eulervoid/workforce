@@ -52,30 +52,18 @@ pub(super) struct MergeRequest {
     pub(super) attempt: Attempt,
 }
 
-/// What became of a merge request, as far as the principal is concerned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(super) enum MergeEnd {
-    /// Merged, refused, made by another request already, or left for the daemon to try again.
-    Handled,
-    /// The target branch is checked out with changes: the merge waits on the principal.
-    WaitsForCleanCheckout,
-}
-
 /// The merges of one workforce that wait for its merge task, which makes them one after the
 /// other, so that a slow merge holds up only the merges behind it.
 #[derive(Default)]
 pub(crate) struct MergeQueue {
     queued: Mutex<Queued>,
     added: Notify,
-    waiting_changed: Notify,
 }
 
 #[derive(Default)]
 struct Queued {
     /// At most one request per item, in the order they came.
     requests: VecDeque<MergeRequest>,
-    /// The items whose last merge found the target checked out with changes.
-    waiting: BTreeSet<ItemId>,
     /// The items whose session is ending and will queue the first attempt: no retry of them is
     /// queued meanwhile.
     reserved: BTreeSet<ItemId>,
@@ -139,16 +127,6 @@ impl MergeQueue {
         self.added.notify_one();
     }
 
-    /// The items whose merge waits for the target branch to be checked out without changes.
-    pub(super) fn waiting(&self) -> BTreeSet<ItemId> {
-        self.lock().waiting.clone()
-    }
-
-    /// Completes once [`MergeQueue::waiting`] changed.
-    pub(super) async fn waiting_changed(&self) {
-        self.waiting_changed.notified().await;
-    }
-
     /// The next merge to make, once there is one.
     async fn next(&self) -> MergeRequest {
         loop {
@@ -159,19 +137,9 @@ impl MergeQueue {
         }
     }
 
-    fn record(&self, item: ItemId, end: MergeEnd) {
-        let changed = match end {
-            MergeEnd::Handled => self.lock().waiting.remove(&item),
-            MergeEnd::WaitsForCleanCheckout => self.lock().waiting.insert(item),
-        };
-        if changed {
-            self.waiting_changed.notify_one();
-        }
-    }
-
     /// Makes the queued merges with `merge`, one at a time, until `stop` completes. A merge that
     /// has begun is finished first.
-    async fn run<F: Future<Output = MergeEnd>>(
+    async fn run<F: Future<Output = ()>>(
         &self,
         stop: impl Future<Output = ()>,
         mut merge: impl FnMut(MergeRequest) -> F,
@@ -182,9 +150,7 @@ impl MergeQueue {
                 request = self.next() => request,
                 () = &mut stop => return,
             };
-            let item = request.item;
-            let end = merge(request).await;
-            self.record(item, end);
+            merge(request).await;
         }
     }
 
@@ -212,18 +178,14 @@ pub(crate) async fn run_merger(daemon: Weak<Daemon>, workforce: WorkforceId, loa
     let merge = move |request: MergeRequest| async move {
         let item = request.item;
         let Some(daemon) = daemon.upgrade() else {
-            return MergeEnd::Handled;
+            return;
         };
-        match daemon.merge_item(workforce, loaded, request).await {
-            Ok(end) => end,
-            Err(error) => {
-                tracing::warn!(
-                    "could not merge #{}: {}",
-                    item.short(),
-                    wf_core::error_chain(&error)
-                );
-                MergeEnd::Handled
-            }
+        if let Err(error) = daemon.merge_item(workforce, loaded, request).await {
+            tracing::warn!(
+                "could not merge #{}: {}",
+                item.short(),
+                wf_core::error_chain(&error)
+            );
         }
     };
     loaded.merges.run(stop, merge).await;
@@ -237,7 +199,7 @@ impl Daemon {
         workforce: WorkforceId,
         loaded: &Loaded,
         request: MergeRequest,
-    ) -> Result<MergeEnd, SessionError> {
+    ) -> Result<(), SessionError> {
         let MergeRequest {
             item,
             commit,
@@ -251,17 +213,17 @@ impl Daemon {
         let policy = &state.policy().ok_or(SessionError::NoPolicy)?.policy;
         let plan = MergePlan::of(live, policy, commit);
         if plan == MergePlan::Nothing {
-            return Ok(MergeEnd::Handled);
+            return Ok(());
         }
         // Queued while an earlier merge of the item ran, which sent it back to work or left it
         // waiting on the principal, as failed checks do.
         let pending = PendingMerge { item, commit };
         if attempt == Attempt::Retry && !state.pending_merges().contains(&pending) {
-            return Ok(MergeEnd::Handled);
+            return Ok(());
         }
         // The submission's checks, or anyone, left a blocker for the principal: it waits for them.
         if live.has_open_blocker() {
-            return Ok(MergeEnd::Handled);
+            return Ok(());
         }
         let principal = self.principal_of_device(&state)?;
         if plan == MergePlan::MoveToDone {
@@ -274,7 +236,7 @@ impl Daemon {
                 attempt.by_session(),
             )
             .await?;
-            return Ok(MergeEnd::Handled);
+            return Ok(());
         }
         let target = policy.merge.target.clone();
         let message = format!("Merge #{}: {}", HashId::short(&item), live.title());
@@ -296,7 +258,7 @@ impl Daemon {
                 if attempt != Attempt::Retry {
                     comment(note).await?;
                 }
-                Ok::<_, SessionError>(MergeEnd::Handled)
+                Ok::<_, SessionError>(())
             }
         };
         let repository = self.bare_repository(workforce);
@@ -346,7 +308,7 @@ impl Daemon {
                     if !failed.is_empty() {
                         self.checks_failed(loaded, principal, item, attempt, &target, failed)
                             .await?;
-                        return Ok(MergeEnd::Handled);
+                        return Ok(());
                     }
                     let (repository, target, message, signing) = (
                         repository.clone(),
@@ -374,12 +336,6 @@ impl Daemon {
                 break;
             }
         }
-        let end = match outcome {
-            MergeOutcome::DirtyCheckout { .. } => MergeEnd::WaitsForCleanCheckout,
-            MergeOutcome::Merged { .. }
-            | MergeOutcome::Conflict { .. }
-            | MergeOutcome::TargetMoved => MergeEnd::Handled,
-        };
         match outcome {
             MergeOutcome::Merged { commit: merged } => {
                 self.author(
@@ -431,21 +387,12 @@ impl Daemon {
                         .await?;
                 }
             }
-            MergeOutcome::DirtyCheckout(_) | MergeOutcome::TargetMoved
-                if attempt == Attempt::Retry => {}
-            MergeOutcome::DirtyCheckout(dirty) => {
-                comment(format!(
-                    "Waiting to merge: {target} is checked out in {} with changes to {}. Commit or stash them.",
-                    dirty.worktree.display(),
-                    dirty.files()
-                ))
-                .await?;
-            }
+            MergeOutcome::TargetMoved if attempt == Attempt::Retry => {}
             MergeOutcome::TargetMoved => {
                 comment(format!("Waiting to merge: {target} kept moving.")).await?;
             }
         }
-        Ok(end)
+        Ok(())
     }
 }
 
@@ -487,7 +434,7 @@ mod tests {
     use wf_core::id::{ItemId, SessionId};
     use wf_core::session::CommitId;
 
-    use super::{Attempt, MergeEnd, MergeQueue, MergeRequest};
+    use super::{Attempt, MergeQueue, MergeRequest};
 
     fn request(seed: u8, attempt: Attempt) -> MergeRequest {
         MergeRequest {
@@ -512,7 +459,6 @@ mod tests {
                         async move {
                             started.send(request.item).unwrap();
                             release.notified().await;
-                            MergeEnd::Handled
                         }
                     })
                     .await;
@@ -555,7 +501,6 @@ mod tests {
                     if merged.len() == 2 {
                         done.notify_one();
                     }
-                    MergeEnd::Handled
                 }
             })
             .await;
@@ -598,15 +543,5 @@ mod tests {
         drop(queue.reserve(request(1, Attempt::First { session })));
         queue.push(request(1, Attempt::Retry));
         assert_eq!(queue.lock().requests.len(), 1);
-    }
-
-    #[test]
-    fn a_merge_that_waits_on_a_clean_checkout_is_told_of_until_it_is_handled() {
-        let queue = MergeQueue::default();
-        let item = ItemId::from_bytes([1; 32]);
-        queue.record(item, MergeEnd::WaitsForCleanCheckout);
-        assert!(queue.waiting().contains(&item));
-        queue.record(item, MergeEnd::Handled);
-        assert!(queue.waiting().is_empty());
     }
 }

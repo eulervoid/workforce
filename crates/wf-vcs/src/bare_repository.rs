@@ -228,6 +228,45 @@ mod tests {
         assert_eq!(bare.branch_head("main").unwrap(), own);
     }
 
+    #[test]
+    fn a_merge_in_the_bare_repository_comes_into_the_checkout_with_a_pull_and_loses_to_a_push() {
+        use crate::{CommitSigning, MergeOutcome, MergeTree};
+
+        let (repo, item_branch) = checkout_with_branches();
+        let checkout = repo.directory();
+        let path = repo.root.path().join("wf-git");
+        let bare = GitCli::create_bare_repository(&path, "main", Some(&checkout)).unwrap();
+        let work = bare.branch_head(&item_branch).unwrap();
+        let MergeTree::Clean { base, tree } = bare.merge_tree("main", work).unwrap() else {
+            panic!("the work merges cleanly");
+        };
+
+        // The principal pushed first: the merge is not made over it.
+        repo.write(&checkout, "own.txt", "own\n");
+        let own = repo.commit(&checkout, "own");
+        git_in(&checkout, &["push", "--quiet"]);
+        let outcome = bare
+            .commit_merge("main", base, tree, work, "Merge", &CommitSigning::Unsigned)
+            .unwrap();
+        assert_eq!(outcome, MergeOutcome::TargetMoved);
+        assert_eq!(bare.branch_head("main").unwrap(), own);
+
+        let MergeTree::Clean { base, tree } = bare.merge_tree("main", work).unwrap() else {
+            panic!("the work merges cleanly");
+        };
+        let MergeOutcome::Merged { commit } = bare
+            .commit_merge("main", base, tree, work, "Merge", &CommitSigning::Unsigned)
+            .unwrap()
+        else {
+            panic!("the target did not move");
+        };
+        // The checkout is not touched until the principal pulls.
+        assert!(!checkout.join("a.txt").exists());
+        git_in(&checkout, &["pull", "--ff-only", "--quiet"]);
+        assert_eq!(repo.main(), commit);
+        assert!(checkout.join("a.txt").is_file());
+    }
+
     /// Commits a file on `branch` of the bare repository at `path` through a scratch clone.
     fn bare_commit(path: &Path, branch: &str, name: &str) -> CommitId {
         let scratch = tempfile::TempDir::new().unwrap();
