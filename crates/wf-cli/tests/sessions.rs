@@ -1892,6 +1892,16 @@ wf work submit
 #[tokio::test(flavor = "multi_thread")]
 async fn only_the_items_an_agent_would_be_given_are_listed_for_it() {
     let world = World::new("").await;
+    // On a harness this machine does not know, so the dispatcher starts nothing while it is
+    // listed: a started item is not ready any more.
+    world.wf.run(&[
+        "agent",
+        "edit",
+        "coder",
+        "--harness",
+        "unknown-here",
+        "--harness-unknown-here",
+    ]);
     world.automate("coder", "default");
     world.wf.add(&["--title", "Plain"]);
     world
