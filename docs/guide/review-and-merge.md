@@ -130,6 +130,18 @@ made and signed as the git config of wf's repository and of your account say (`w
 checkout's `user.name`, `user.email` and signing config into it; `git -C ~/.local/share/workforce/<workforce
 id>/git config` changes them); see `merge_signing` in [machine-config.md](machine-config.md#commits-and-signatures).
 
+Agents start from `main` in wf's repository, not from your checkout: a commit you never pushed is
+one no agent sees. wf compares the two directly, without a fetch, as `wf/main` in your checkout may be
+stale:
+
+* **Ahead**, your `main` has commits wf's lacks: every command warns on stderr, `wf status` says it
+  first in `next:`, and the dashboard's header has it. `git push wf main` fixes it.
+* **Diverged**, each has commits the other lacks: the same warning, as your push would be refused.
+  Rebase onto `wf/main`, `git pull --rebase wf main`, then push.
+* **Behind**, as after merges: only a hint in `wf status` and the dashboard's header, `git pull`.
+
+No warning is shown with `--json` or inside a session.
+
 Work on an item whose level has no steps is merged as soon as the session submits.
 
 Two things can hold a merge: the checks, below, and this:

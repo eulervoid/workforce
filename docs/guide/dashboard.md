@@ -152,6 +152,11 @@ A click opens the item. The warning stays until you press a key or open the item
 the latest with ` · 2 more`. A tip under the pointer takes its place while it is hovered. Moves from
 before the dashboard started do not warn.
 
+When your checkout's `main` has commits wf's repository lacks, which no agent sees, the header warns
+beside the name, `⚠ main 3 ahead of wf: git push wf main`, or says how to rebase when the two have
+diverged; being behind is a dimmed `main 2 behind wf: git pull`. See
+[The merge](review-and-merge.md#the-merge).
+
 ### Focus
 
 The place that has the keys is marked in blue; the rest is dimmed. The label of the tab on screen is
@@ -203,6 +208,10 @@ next: 2 waiting on you: `wf inbox`
 
 It also flags what needs someone: stranded items, review steps no agent can take, items in a state
 the policy does not know.
+
+Under the workforce, a `target:` line says when your checkout's `main` and wf's differ, with the git
+command that fixes it: `git push wf main` when yours has commits agents cannot see, `git pull` when it
+is behind. See [The merge](review-and-merge.md#the-merge).
 
 ## `wf log`
 
