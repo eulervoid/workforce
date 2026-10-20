@@ -934,7 +934,7 @@ mod tests {
         use wf_core::id::{ItemId, SessionId};
         use wf_core::identity::Actor;
         use wf_core::item::ItemEntry;
-        use wf_core::session::{CommitId, EndReason, Verdict};
+        use wf_core::session::{CommitId, Verdict};
         use wf_core::testing::*;
 
         let fixture = Fixture::new(1);
@@ -961,9 +961,6 @@ mod tests {
         )
         .id()
         .into();
-        let submitted = EndReason::Submitted {
-            commit: Some(commit),
-        };
         if !earlier.is_empty() {
             let session: SessionId =
                 apply(&mut state, principal.clone(), start_session("coder", item))
@@ -972,7 +969,7 @@ mod tests {
             apply(
                 &mut state,
                 principal.clone(),
-                end_session(session, submitted),
+                submit_session(session, commit),
             );
             for text in earlier {
                 apply(&mut state, daemon.clone(), comment(item, text));
@@ -984,7 +981,7 @@ mod tests {
         apply(
             &mut state,
             principal.clone(),
-            end_session(session, submitted),
+            submit_session(session, commit),
         );
         apply(
             &mut state,

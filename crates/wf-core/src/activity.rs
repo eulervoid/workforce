@@ -60,6 +60,8 @@ pub enum Activity {
         /// Where the end moved the item, unless it stayed where it was.
         moved_to: Option<ItemState>,
         because: Option<CommentId>,
+        /// Where the branch was: what a submission hands in.
+        head: Option<CommitId>,
     },
     Reviewed {
         commit: Option<CommitId>,
@@ -286,6 +288,7 @@ impl State {
                         reason: ended.reason,
                         moved_to,
                         because: ended.because,
+                        head: ended.head,
                     }
                 }
                 EventBody::Reviewed(review) if review.item == item => Activity::Reviewed {

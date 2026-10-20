@@ -181,6 +181,7 @@ fn outcomes_in_the_log() {
             session,
             reason: EndReason::Released,
             because: Some(note),
+            head: None,
         }),
     );
     let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());

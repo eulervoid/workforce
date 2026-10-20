@@ -86,6 +86,7 @@ fn a_session_shows_the_moves_it_caused_at_its_start_and_end() {
                 reason: EndReason::Submitted,
                 moved_to: Some(ItemState::Done),
                 because: None,
+                head: None,
             },
             Activity::Moved {
                 to: ItemState::Open,

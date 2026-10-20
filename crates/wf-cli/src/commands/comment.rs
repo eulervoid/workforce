@@ -44,6 +44,7 @@ pub(super) fn comment(
         resolves: resolves.clone(),
         step,
         lines: None,
+        head: None,
     }))?;
     if let (Some(step), true) = (step, args.done) {
         workspace.author_without_refresh(EventBody::ItemEdited(wf_core::event::ItemEdited {

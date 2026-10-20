@@ -226,7 +226,7 @@ pub fn event_view(
             session: ended.session,
             reason: ended.reason.name(),
             commit: match ended.reason {
-                EndReason::Submitted { commit } => commit.map(|commit| commit.to_string()),
+                EndReason::Submitted => ended.head.map(|commit| commit.to_string()),
                 EndReason::Reviewed
                 | EndReason::Supervised
                 | EndReason::Released
