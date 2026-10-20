@@ -182,7 +182,7 @@ The `WHAT` column says what to do. The kinds:
 |---|---|---|
 | `blocker` | a question or a wait that someone has to resolve | `wf comment <item> "<answer>" --resolve <comment>` |
 | `proposal` | a decision to accept or reject | `wf item done <item>` or `wf item cancel <item>` |
-| `principal_review` | your step of a review | `wf item diff <item>`, then `wf review <item> --approve` or `--request-changes` |
+| `principal_review` | your step of a review, or a review that reached its round limit | `wf item diff <item>`, then `wf review <item> --approve` or `--request-changes` |
 | `recovery` | sessions that did not finish, and the item's recovery level leaves it to you | comment with what to do differently, or `wf session start <item>` |
 | `permission` | an agent waits for an answer | `wf session allow <session>` or `deny` |
 

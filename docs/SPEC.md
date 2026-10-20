@@ -303,6 +303,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 20 | `SessionStarted` | `agent`, `item`, `role`: `Work`, `Review{commit: Option}`, `Supervise`, `Diagnose` |
 | 21 | `SessionEnded` | `session`, `reason` (section 9) |
 | 22 | `Reviewed` | `item`, `commit: Option` (none: submitted without commits), `verdict` (`Approve`, `RequestChanges`, `Escalate`), `because: Option<CommentId>` |
+| 32 | `Reviewed` | as tag 22, plus `round_limit_reached: u32`, for a `RequestChanges` at the round limit of its level (section 10); a verdict without it keeps tag 22 |
 | 23 | `Merged` | `item`, `reviewed`, `commit` |
 | 24 | retired | (`Report`, now a comment) |
 | 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
@@ -387,7 +388,7 @@ not repeat them, because a concurrent policy change would make acceptance order-
 of section 5; the type exists and uses the state; a new item starts in its type's initial state or as
 a draft; fields allowed for the type; the lane exists; `depends_on` target type allowed; no dependency
 cycle; archive only from `done` or `cancelled`; `supersedes` only between decisions; verdict rules
-(section 10). The fold keeps whatever a peer wrote and flags what no longer fits (an unknown type, a
+(section 10), including what a verdict records of the round limit. The fold keeps whatever a peer wrote and flags what no longer fits (an unknown type, a
 state its type no longer uses).
 
 **Fold:**
@@ -889,7 +890,8 @@ default for tasks).
     later step.
   * `RequestChanges` needs an open change request (written first, one comment each) and moves the item
     back to its open state in the same event. The next work session continues the branch and resolves
-    them; a resolution the reviewer does not accept gets a new change request.
+    them; a resolution the reviewer does not accept gets a new change request. At the round limit of
+    the level an agent's `RequestChanges` does not move the item (below).
   * `Escalate` (agents only) inserts a principal step after the current entry.
   * `RequestChanges` from any step of an entry sends the work back. The other review sessions on
     that commit are not stopped: they finish, and their change requests go to the next work session
@@ -897,6 +899,20 @@ default for tasks).
     of the old one has nothing left to judge and is closed. A principal's `Approve` satisfies the
     whole entry.
   * A verdict may carry a plain comment as its `because`.
+* **Round limit.** A level's optional `max_rounds` bounds how often agent reviews send the work
+  back. A round is a submission that an agent's `RequestChanges` sent back since the principal last
+  acted on the item (`State::review_rounds`); several steps requesting changes on one submission
+  make one round, and the requests of the principal and of `@daemon` make none. This is apart from
+  recovery (section 9), which counts attempts without a result, not results that are rejected. An
+  agent's `RequestChanges` after `max_rounds` rounds records `round_limit_reached` with the count
+  (`State::after_changes_requested` in `lifecycle`; the author check refuses a verdict that records
+  otherwise, and a principal's records nothing), and the fold leaves the item in review, so the
+  fold does not read the policy. The status is then `RoundLimitReached{rounds}`: the item waits in
+  `wf inbox` as `principal_review` with that reason and its open change requests, and the other
+  steps' verdicts on the commit count for nothing. The principal approves (over the open change
+  requests; it decides the entry as at any step), sends the work back with their own
+  `RequestChanges`, edits or cancels the item. Any action of theirs starts the count over, so
+  another round needs no verb of its own. Without `max_rounds` every request sends the work back.
 * Before a review step is offered the daemon builds the merge of the work into the target
   (`git merge-tree`). Work that conflicts goes back to its open state with a change request from
   `@daemon` naming the files. If the work merged when offered and stops merging while the principal
@@ -1488,7 +1504,7 @@ fold, so it does not depend on arrival order.
 | `default_agent` | the agent `wf session start` uses without `--agent` |
 | `[lanes.<name>]` | the lanes (`default`, `meta`, `supervision` by default) |
 | `[types.<name>]` | `lane`, `fields`, `depends_on`, `states`, `initial`, `review`, `recovery` (section 8) |
-| `[[review]]` | `name`, `steps`: `{ name, requires, instructions }`, `"principal"` or a list of them that run at once (section 10) |
+| `[[review]]` | `name`, `steps`: `{ name, requires, instructions }`, `"principal"` or a list of them that run at once, `max_rounds` (optional, positive; section 10) |
 | `[[recovery]]` | `name`, `steps`: `"retry"`, `{ agent = { requires = [...] } }` or `"principal"` (section 9) |
 | `[merge]` | `mode = "local"`, `target` (default `main`) |
 | `[[merge.check]]` | `name` (unique), `run` (argv, no shell, not empty), `timeout` (default 30m) |
