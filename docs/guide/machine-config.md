@@ -172,8 +172,10 @@ Agents commit as themselves, `@you/coder`, with the email of your git config. Th
 so they never wait for a key you have to unlock or approve.
 
 When your git config signs commits (`commit.gpgsign`), the merge commit that brings approved work
-into the target branch is signed as you: the signature says you accepted the work. Or the daemon
-signs it with its device's key, which needs nobody to approve it.
+into the target branch is signed as you: the signature says you accepted the work. The merge is made
+in wf's own repository, `<data>/<workforce id>/git`, so it is the config of that repository and of
+your account that counts; `wf init` copied the signing config and the identity of your checkout into
+it. Or the daemon signs it with its device's key, which needs nobody to approve it.
 
 ```toml
 [commits]
@@ -194,7 +196,7 @@ git config gpg.ssh.allowedSignersFile .git/allowed_signers
 ## Notifications
 
 With a command under `[notify]`, the daemon runs it once for each new entry of `wf inbox`: a
-blocker, a proposal to decide, a review that is yours, a merge that waits, sessions that did not
+blocker, a proposal to decide, a review that is yours, sessions that did not
 finish, a permission request.
 
 ```toml

@@ -27,6 +27,10 @@ struct InitView {
     harnesses: Vec<String>,
     /// The agents defined, which only `wf init -i` does.
     agents: Vec<String>,
+    /// The upstream of the target in this checkout, such as `wf/main`: where `git pull` brings
+    /// merged work from and `git push` sends the principal's own commits. `None` when this
+    /// directory is not in a git repository.
+    upstream: Option<String>,
 }
 
 pub(super) fn init(
@@ -125,6 +129,23 @@ pub(super) fn init(
         ));
     }
 
+    let target = replica
+        .state()
+        .policy()
+        .expect("a workforce has a policy")
+        .policy
+        .merge
+        .target
+        .clone();
+    let checkout = match wf_vcs::GitCli::checkout_root(cwd) {
+        Ok(root) => Some(root),
+        Err(wf_vcs::VcsError::NotARepository(_)) => None,
+        Err(error) => return Err(error.into()),
+    };
+    let bare = wf_vcs::bare_repository(&data.workforce(&id));
+    wf_vcs::GitCli::create_bare_repository(&bare, &target, checkout.as_deref())?;
+    let upstream = checkout.map(|_| format!("{}/{target}", wf_vcs::REMOTE));
+
     let file = toml::to_string(&WorkforceFile { id })?;
     std::fs::write(cwd.join(WORKFORCE_FILE), file)?;
     emit(
@@ -135,12 +156,18 @@ pub(super) fn init(
             handle: handle.to_string(),
             harnesses: harnesses.into_iter().map(String::from).collect(),
             agents,
+            upstream,
         },
         |init| {
             let mut out = format!(
                 "created workforce \"{}\" ({})\nyou are @{}\n",
                 init.name, init.id, init.handle
             );
+            if let Some(upstream) = &init.upstream {
+                out.push_str(&format!(
+                    "merged work comes into this checkout with `git pull` and your commits go out with `git push`: {upstream}\n"
+                ));
+            }
             if !init.agents.is_empty() {
                 for agent in &init.agents {
                     out.push_str(&format!("defined agent {agent}\n"));

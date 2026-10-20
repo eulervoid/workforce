@@ -33,6 +33,15 @@ fn diff_revisions(work: &Work) -> Vec<String> {
     }
 }
 
+/// The arguments of `git diff` for `work` with the caller's `args`, as they are: the revisions,
+/// then `args`. A bare repository has no working tree to tell a path from a revision by, so paths
+/// follow `--` in `args`, as in `--diff-algorithm patience -- src/`; an option's separate value stays its value.
+fn diff_arguments(work: &Work, args: &[String]) -> Vec<String> {
+    let mut all = diff_revisions(work);
+    all.extend(args.iter().cloned());
+    all
+}
+
 /// A git repository, driven through the `git` command.
 #[derive(Clone, Debug)]
 pub struct GitCli {
@@ -115,7 +124,7 @@ impl Finished {
 
 /// Runs git in `directory` with `environment` set on top. Everything that runs git comes
 /// through here, so that all of it runs the same way.
-fn spawn<I, S>(
+pub(crate) fn spawn<I, S>(
     directory: &Path,
     environment: &[(&str, &str)],
     args: I,
@@ -321,45 +330,18 @@ impl GitCli {
         Ok(self.changed_paths(worktree)?.is_empty())
     }
 
-    /// Moves `target` from `old` to `new`, if nothing moved it in the meantime. Where the target
-    /// is checked out it must be clean and is fast-forwarded there, so the files follow.
+    /// Moves `target` from `old` to `new`, if nothing moved it in the meantime: a compare-and-swap
+    /// of the reference, so a push of the principal that landed first is never overwritten.
     fn advance(&self, target: &str, old: &CommitId, new: &CommitId) -> Result<Advance, VcsError> {
-        let checkout = self
-            .worktrees()?
-            .into_iter()
-            .find(|worktree| worktree.branch.as_deref() == Some(target));
-        let moved = |this: &Self| -> Result<bool, VcsError> {
-            Ok(this.rev_parse(&format!("refs/heads/{target}"))? != *old)
-        };
-        let finished = match checkout {
-            Some(worktree) => {
-                let paths = self.changed_paths(&worktree.path)?;
-                if !paths.is_empty() {
-                    return Ok(Advance::Dirty(DirtyCheckout {
-                        worktree: worktree.path,
-                        paths,
-                    }));
-                }
-                self.run(
-                    &worktree.path,
-                    &[],
-                    ["merge", "--ff-only", "--quiet", &new.to_string()],
-                )?
-            }
-            None => self.run(
-                &self.repository,
-                &[],
-                [
-                    "update-ref",
-                    &format!("refs/heads/{target}"),
-                    &new.to_string(),
-                    &old.to_string(),
-                ],
-            )?,
-        };
-        match finished.ok() {
+        let reference = format!("refs/heads/{target}");
+        let updated = self.run(
+            &self.repository,
+            &[],
+            ["update-ref", &reference, &new.to_string(), &old.to_string()],
+        )?;
+        match updated.ok() {
             Ok(_) => Ok(Advance::Done),
-            Err(_) if moved(self)? => Ok(Advance::Moved),
+            Err(_) if self.rev_parse(&reference)? != *old => Ok(Advance::Moved),
             Err(error) => Err(error),
         }
     }
@@ -411,8 +393,6 @@ impl GitCli {
 
 struct Worktree {
     path: PathBuf,
-    /// The short name of the branch checked out, if one is.
-    branch: Option<String>,
 }
 
 /// The worktrees in the output of `git worktree list --porcelain -z`: NUL ends each attribute
@@ -420,19 +400,13 @@ struct Worktree {
 fn parse_worktrees(listing: &str) -> Vec<Worktree> {
     let mut worktrees = Vec::new();
     let mut path = None;
-    let mut branch = None;
     for attribute in listing.split('\0') {
         if let Some(found) = attribute.strip_prefix("worktree ") {
             path = Some(PathBuf::from(found));
-        } else if let Some(found) = attribute.strip_prefix("branch ") {
-            branch = found.strip_prefix("refs/heads/").map(str::to_string);
         } else if attribute.is_empty()
             && let Some(path) = path.take()
         {
-            worktrees.push(Worktree {
-                path,
-                branch: branch.take(),
-            });
+            worktrees.push(Worktree { path });
         }
     }
     worktrees
@@ -440,7 +414,6 @@ fn parse_worktrees(listing: &str) -> Vec<Worktree> {
 
 enum Advance {
     Done,
-    Dirty(DirtyCheckout),
     Moved,
 }
 
@@ -546,16 +519,15 @@ impl GitCli {
     }
 
     /// What `work` changes, as [`Work`] says, with `args` added to `git diff`, such as `--stat`
-    /// or `-- src/`.
+    /// or `--diff-algorithm patience -- src/`.
     pub fn diff(&self, work: &Work, args: &[String]) -> Result<String, VcsError> {
-        let revisions = diff_revisions(work);
+        let arguments = diff_arguments(work, args);
         self.run(
             &self.repository,
             &[],
             ["diff"]
                 .into_iter()
-                .chain(revisions.iter().map(String::as_str))
-                .chain(args.iter().map(String::as_str)),
+                .chain(arguments.iter().map(String::as_str)),
         )?
         .ok()
     }
@@ -563,7 +535,7 @@ impl GitCli {
     /// The same diff, written to the terminal by git itself, so its pager and diff settings
     /// apply as for `git diff`, except where `pager` says otherwise.
     pub fn show_diff(&self, work: &Work, args: &[String], pager: Pager) -> Result<(), VcsError> {
-        let revisions = diff_revisions(work);
+        let arguments = diff_arguments(work, args);
         // The principal's environment stays as it is, so the pager, colors and locale are theirs.
         let mut command = git();
         match pager {
@@ -575,8 +547,7 @@ impl GitCli {
         }
         let status = command
             .arg("diff")
-            .args(&revisions)
-            .args(args)
+            .args(&arguments)
             .current_dir(&self.repository)
             .status()
             .map_err(VcsError::Spawn)?;
@@ -584,16 +555,45 @@ impl GitCli {
             Ok(())
         } else {
             Err(VcsError::Git {
-                command: format!("diff {} {}", revisions.join(" "), args.join(" ")),
+                command: format!("diff {}", arguments.join(" ")),
                 stderr: format!("exited with {status}"),
             })
         }
     }
 
-    /// Checks `commit` out, detached, in the main checkout, which has to be clean.
+    /// Checks `commit` out, detached, in the main checkout, which has to be clean. A commit the
+    /// checkout does not have yet is fetched from the remote `wf`, wf's bare repository: first the
+    /// branches, and when `commit` is not on one (the branch of its item is gone), the commit
+    /// itself.
     pub fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError> {
         if !self.is_clean(&self.repository)? {
             return Err(VcsError::DirtyCheckout(self.repository.clone()));
+        }
+        let revision = format!("{commit}^{{commit}}");
+        let has = |this: &Self| -> Result<bool, VcsError> {
+            let found = this.run(
+                &this.repository,
+                &[],
+                ["rev-parse", "--verify", "--quiet", &revision],
+            )?;
+            Ok(found.success)
+        };
+        if !has(self)? {
+            let remote = crate::REMOTE;
+            let known = self.run(&self.repository, &[], ["remote", "get-url", remote])?;
+            if !known.success {
+                return Err(VcsError::NoRemote(self.repository.clone()));
+            }
+            self.run(
+                &self.repository,
+                &[],
+                ["fetch", "--quiet", "--no-tags", remote],
+            )?
+            .ok()?;
+            if !has(self)? {
+                let args = ["fetch", "--quiet", "--no-tags", remote, &commit.to_string()];
+                self.run(&self.repository, &[], args)?.ok()?;
+            }
         }
         let args = ["checkout", "--quiet", "--detach", &commit.to_string()];
         self.run(&self.repository, &[], args)?.ok()?;
@@ -651,7 +651,7 @@ impl GitCli {
 
     /// Commits `tree`, made by [`GitCli::merge_tree`], as the merge of `commit` into `target`
     /// at `base`, signed as `signing` says, and moves `target` to it. Never a conflict: the
-    /// outcome is the merge, a checkout of `target` with changes, or `target` no longer at `base`.
+    /// outcome is the merge, or `target` no longer at `base`.
     pub fn commit_merge(
         &self,
         target: &str,
@@ -686,7 +686,6 @@ impl GitCli {
         let new = self.oid("commit-tree", &made)?;
         Ok(match self.advance(target, &base, &new)? {
             Advance::Done => MergeOutcome::Merged { commit: new },
-            Advance::Dirty(dirty) => MergeOutcome::DirtyCheckout(dirty),
             Advance::Moved => MergeOutcome::TargetMoved,
         })
     }
@@ -932,6 +931,27 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn the_arguments_of_a_diff_follow_its_revisions_as_they_are() {
+        let work = unmerged(CommitId::Git(GitOid::from_bytes([1; 20])));
+        let revisions = diff_revisions(&work);
+        let args = |words: &[&str]| {
+            words
+                .iter()
+                .map(|word| word.to_string())
+                .collect::<Vec<_>>()
+        };
+        let with = |extra: &[&str]| [revisions.clone(), args(extra)].concat();
+        assert_eq!(diff_arguments(&work, &args(&[])), with(&[]));
+        assert_eq!(
+            diff_arguments(
+                &work,
+                &args(&["--diff-algorithm", "patience", "--", "src/"])
+            ),
+            with(&["--diff-algorithm", "patience", "--", "src/"])
+        );
     }
 
     #[test]
@@ -1249,7 +1269,7 @@ mod tests {
     }
 
     #[test]
-    fn a_clean_merge_updates_the_checked_out_target_and_its_files() {
+    fn a_clean_merge_moves_the_target_to_a_merge_of_both() {
         let repo = TestRepo::new();
         let work = repo.work("wf/k3f9", "a.txt", "a\n");
         let before = repo.main();
@@ -1271,8 +1291,6 @@ mod tests {
             git_in(&repo.directory(), &["log", "-1", "--format=%s", "main"]),
             "Merge #k3f9: add a"
         );
-        assert!(repo.directory().join("a.txt").is_file());
-        assert_eq!(git_in(&repo.directory(), &["status", "--porcelain"]), "");
     }
 
     #[test]
@@ -2189,49 +2207,6 @@ mod tests {
     }
 
     #[test]
-    fn a_dirty_checkout_of_the_target_is_never_touched() {
-        let repo = TestRepo::new();
-        let work = repo.work("wf/k3f9", "a.txt", "a\n");
-        let main = repo.directory();
-        repo.write(&main, "file.txt", "edited by hand\n");
-        let before = repo.main();
-        let outcome = repo
-            .git
-            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
-            .unwrap();
-        assert_eq!(
-            outcome,
-            MergeOutcome::DirtyCheckout(DirtyCheckout {
-                worktree: main.clone(),
-                paths: vec!["file.txt".into()],
-            })
-        );
-        assert_eq!(repo.main(), before);
-        assert_eq!(
-            std::fs::read_to_string(main.join("file.txt")).unwrap(),
-            "edited by hand\n"
-        );
-    }
-
-    #[test]
-    fn untracked_files_do_not_block_a_merge_into_the_checked_out_target() {
-        let repo = TestRepo::new();
-        let work = repo.work("wf/k3f9", "a.txt", "a\n");
-        let main = repo.directory();
-        repo.write(&main, ".workforce.toml", "id = \"x\"\n");
-        let outcome = repo
-            .git
-            .merge("main", work, "Merge #k3f9", &CommitSigning::AsConfigured)
-            .unwrap();
-        assert!(
-            matches!(outcome, MergeOutcome::Merged { .. }),
-            "{outcome:?}"
-        );
-        assert!(main.join("a.txt").exists());
-        assert!(main.join(".workforce.toml").exists());
-    }
-
-    #[test]
     fn a_dirty_checkout_names_its_changed_files_and_where_a_rename_went() {
         let repo = TestRepo::new();
         let main = repo.directory();
@@ -2266,11 +2241,6 @@ mod tests {
         let main = repo.directory();
         repo.write(&main, "b.txt", "b\n");
         let moved_to = repo.commit(&main, "someone else merged first");
-        let outcome = repo.git.advance("main", &old, &work).unwrap();
-        assert!(matches!(outcome, Advance::Moved));
-        assert_eq!(repo.main(), moved_to);
-
-        git_in(&main, &["checkout", "--quiet", "--detach"]);
         let outcome = repo.git.advance("main", &old, &work).unwrap();
         assert!(matches!(outcome, Advance::Moved));
         assert_eq!(repo.main(), moved_to);

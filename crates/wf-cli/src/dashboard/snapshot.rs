@@ -463,13 +463,11 @@ fn waiting(
                 commit,
                 stale,
             },
-            InboxWaiting::Proposal | InboxWaiting::Merge { .. } | InboxWaiting::Recovery { .. } => {
-                InboxEntry::Notice {
-                    kind: entry.waiting.kind(),
-                    what: state.what_waits(&entry),
-                    item,
-                }
-            }
+            InboxWaiting::Proposal | InboxWaiting::Recovery { .. } => InboxEntry::Notice {
+                kind: entry.waiting.kind(),
+                what: state.what_waits(&entry),
+                item,
+            },
         });
     }
     waiting.extend(

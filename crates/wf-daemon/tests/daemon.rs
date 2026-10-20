@@ -41,6 +41,11 @@ fn fail_on_panic() {
 }
 
 async fn start() -> Running {
+    start_with(|_| {}).await
+}
+
+/// Like [`start`], with `prepare` run on the directory of the workforce before the daemon starts.
+async fn start_with(prepare: impl FnOnce(&Path)) -> Running {
     fail_on_panic();
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);
@@ -61,6 +66,7 @@ async fn start() -> Running {
         )
         .unwrap();
     drop(replica);
+    prepare(&store_directory);
 
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
@@ -106,6 +112,67 @@ fn connect(socket: &Path) -> DaemonClient {
     DaemonClient::connect(socket, token)
         .unwrap()
         .expect("a daemon")
+}
+
+#[tokio::test]
+async fn a_workforce_without_a_bare_repository_gets_one_from_the_repository_it_remembered() {
+    let repository = wf_vcs::testing::TestRepository::new();
+    repository.work("wf/k3f9k3f9k3f9", "a.txt", "a\n");
+    repository.work("private", "b.txt", "b\n");
+    let checkout = repository.directory();
+    let running = start_with(|directory| {
+        std::fs::write(directory.join("repository"), checkout.to_str().unwrap()).unwrap();
+    })
+    .await;
+    let workforce_directory = DataDir::new(running._directory.path().to_path_buf())
+        .workforce(&running.fixture.workforce());
+    let bare = wf_vcs::bare_repository(&workforce_directory);
+    assert!(bare.join("HEAD").is_file());
+    let branches = wf_vcs::testing::git_in(&bare, &["branch", "--format=%(refname:short)"]);
+    let mut branches: Vec<_> = branches.lines().collect();
+    branches.sort();
+    assert_eq!(branches, ["main", "wf/k3f9k3f9k3f9"]);
+    assert!(
+        !workforce_directory.join("repository").exists(),
+        "the file is done with"
+    );
+    let upstream =
+        wf_vcs::testing::git_in(&checkout, &["rev-parse", "--abbrev-ref", "main@{upstream}"]);
+    assert_eq!(upstream, "wf/main");
+}
+
+#[tokio::test]
+async fn a_workforce_whose_remembered_checkout_is_gone_gets_an_empty_bare_repository() {
+    let running = start_with(|directory| {
+        std::fs::write(directory.join("repository"), "/nonexistent/checkout").unwrap();
+    })
+    .await;
+    let workforce_directory = DataDir::new(running._directory.path().to_path_buf())
+        .workforce(&running.fixture.workforce());
+    let bare = wf_vcs::bare_repository(&workforce_directory);
+    assert!(bare.join("HEAD").is_file());
+    assert_eq!(wf_vcs::testing::git_in(&bare, &["branch", "--list"]), "");
+    assert!(
+        !workforce_directory.join("repository").exists(),
+        "the file is done with"
+    );
+}
+
+#[tokio::test]
+async fn a_workforce_that_never_had_a_repository_gets_an_empty_bare_one() {
+    let running = start().await;
+    let workforce_directory = DataDir::new(running._directory.path().to_path_buf())
+        .workforce(&running.fixture.workforce());
+    let bare = wf_vcs::bare_repository(&workforce_directory);
+    assert_eq!(
+        wf_vcs::testing::git_in(&bare, &["rev-parse", "--is-bare-repository"]),
+        "true"
+    );
+    assert_eq!(
+        wf_vcs::testing::git_in(&bare, &["branch", "--list"]),
+        "",
+        "no branches yet"
+    );
 }
 
 #[tokio::test]
@@ -691,8 +758,9 @@ async fn a_join_with_an_invite_for_another_workforce_leaves_no_store_behind() {
     assert!(!data_dir.join(other.to_string()).exists());
 }
 
-/// Where `directory`, a daemon's data directory, has its worktrees, and a repository with the
-/// work of `item` on its branch in the worktree there; returns the head of the branch.
+/// Where `directory`, a daemon's data directory, has its worktrees, and a repository, standing in
+/// for the bare repository of the workforce, with the work of `item` on its branch in the
+/// worktree there; returns the head of the branch.
 fn give_work(
     directory: &Path,
     workforce: wf_core::id::WorkforceId,
@@ -701,7 +769,11 @@ fn give_work(
 ) -> wf_core::session::CommitId {
     let data_dir = DataDir::new(directory.to_path_buf());
     let workforce_directory = data_dir.workforce(&workforce);
-    wf_daemon::remember_repository(&workforce_directory, &repository.directory()).unwrap();
+    // The test repository stands in for the workforce's bare repository, which the daemon made
+    // empty when it loaded the workforce.
+    let bare = wf_vcs::bare_repository(&workforce_directory);
+    std::fs::remove_dir_all(&bare).unwrap();
+    std::os::unix::fs::symlink(repository.directory(), bare).unwrap();
     let worktree = wf_vcs::item_repository(&workforce_directory, item);
     repository.prepare_worktree(&wf_vcs::item_branch(item), &worktree, "main");
     repository.write(&worktree, "live.txt", "work in progress\n");

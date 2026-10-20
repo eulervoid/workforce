@@ -25,8 +25,6 @@ pub enum Waiting {
         commit: Option<CommitId>,
         stale: Option<Stale>,
     },
-    /// The work is ready to merge, but the target branch is checked out with changes.
-    Merge { commit: CommitId },
     /// Sessions of `role` on the item ended without finishing, and its recovery level leaves the
     /// next step to the principal: starting a session, commenting, editing or moving the item.
     Recovery {
@@ -52,7 +50,6 @@ pub enum InboxKind {
     Blocker,
     Proposal,
     PrincipalReview,
-    Merge,
     Recovery,
     Permission,
     MachineFault,
@@ -65,7 +62,6 @@ impl InboxKind {
             InboxKind::Blocker => "blocker",
             InboxKind::Proposal => "proposal",
             InboxKind::PrincipalReview => "principal_review",
-            InboxKind::Merge => "merge",
             InboxKind::Recovery => "recovery",
             InboxKind::Permission => "permission",
             InboxKind::MachineFault => "machine_fault",
@@ -85,7 +81,6 @@ impl Waiting {
             Waiting::Blocker { .. } => InboxKind::Blocker,
             Waiting::Proposal => InboxKind::Proposal,
             Waiting::PrincipalReview { .. } => InboxKind::PrincipalReview,
-            Waiting::Merge { .. } => InboxKind::Merge,
             Waiting::Recovery { .. } => InboxKind::Recovery,
         }
     }
@@ -134,22 +129,13 @@ impl State {
                         }
                     }
                     Some(ReviewStatus::Awaiting { .. }) => return None,
-                    // The merge task moves it to `done`.
-                    Some(ReviewStatus::Merged { .. })
-                        if merges.iter().any(|pending| pending.item == item.id()) =>
-                    {
-                        return None;
-                    }
                     Some(ReviewStatus::Approved { .. })
                     | Some(ReviewStatus::ChangesRequested)
                     | Some(ReviewStatus::Merged { .. })
                     | None => {
-                        if let Some(pending) =
-                            merges.iter().find(|pending| pending.item == item.id())
-                        {
-                            Waiting::Merge {
-                                commit: pending.commit,
-                            }
+                        if merges.iter().any(|pending| pending.item == item.id()) {
+                            // The merge task merges it and moves it to `done`.
+                            return None;
                         } else if finished.contains(&item.id()) {
                             // The daemon moves it to `done`.
                             return None;
@@ -276,11 +262,6 @@ impl State {
                     None => review,
                 }
             }
-            Waiting::Merge { commit } => format!(
-                "{} is ready to merge, but {} is checked out with changes; the daemon's comment on the item names them",
-                commit.short(),
-                policy.merge.target
-            ),
             Waiting::Recovery {
                 role,
                 failures,

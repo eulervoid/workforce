@@ -684,17 +684,6 @@ fn waiting_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<WaitingVi
                 }
                 Waiting::Proposal => ("proposal".to_string(), Vec::new()),
                 Waiting::PrincipalReview { .. } => ("review".to_string(), Vec::new()),
-                Waiting::Merge { .. } => {
-                    // Only a comment on this round's merge: one from before the latest submission
-                    // was about an earlier round, and the daemon may not have tried this one yet.
-                    let submitted = state.submission(item.id()).map(|(_, stamp)| stamp.hlc);
-                    let named = comments()
-                        .rev()
-                        .filter(|(entry, _, _)| submitted.is_some_and(|at| entry.at > at))
-                        .find(|(entry, _, _)| matches!(entry.by, Actor::Daemon(_)))
-                        .map(|(_, _, text)| text.to_string());
-                    ("merge waits".to_string(), named.into_iter().collect())
-                }
                 Waiting::Recovery {
                     ref role,
                     failures,

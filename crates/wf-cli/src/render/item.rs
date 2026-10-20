@@ -478,7 +478,6 @@ pub(super) fn notices(detail: &ItemDetail, width: Option<usize>, format: Format)
                         InboxKind::Blocker
                         | InboxKind::Proposal
                         | InboxKind::PrincipalReview
-                        | InboxKind::Merge
                         | InboxKind::Permission => theme::attention(),
                     };
                     let paragraphs = std::iter::once(&waiting.what)
@@ -916,92 +915,6 @@ mod tests {
         );
     }
 
-    /// The detail of an approved item whose merge waits on a dirty checkout, which the daemon
-    /// commented on twice.
-    fn held_merge() -> ItemDetail {
-        merge_pending(
-            &[],
-            &[
-                "Waiting to merge: main kept moving.",
-                "Waiting to merge: main is checked out in /src/app with changes to src/lib.rs, Cargo.toml. Commit or stash them.",
-            ],
-        )
-    }
-
-    /// The detail of an approved item whose merge is pending. With `earlier` comments, the daemon
-    /// made them on an earlier submission, before the latest one; `after` it made on the latest.
-    fn merge_pending(earlier: &[&str], after: &[&str]) -> ItemDetail {
-        use wf_core::id::{ItemId, SessionId};
-        use wf_core::identity::Actor;
-        use wf_core::item::ItemEntry;
-        use wf_core::session::{CommitId, Verdict};
-        use wf_core::testing::*;
-
-        let fixture = Fixture::new(1);
-        let mut state = fixture.state();
-        let mut events = Vec::new();
-        let mut now = 2_000;
-        let mut apply = |state: &mut wf_core::state::State, actor: Actor, body| {
-            now += 1_000;
-            let event = fixture.author_as(state, 0, actor, now, body);
-            state
-                .receive(event.clone(), wf_core::state::Trust::Untrusted)
-                .unwrap();
-            events.push(event.clone());
-            event
-        };
-        let principal = fixture.founder_actor();
-        let daemon = Actor::Daemon(fixture.founder.key());
-        let commit = CommitId::Git("75eba435".repeat(5).parse().unwrap());
-        apply(&mut state, principal.clone(), define_agent("coder"));
-        let item: ItemId = apply(
-            &mut state,
-            principal.clone(),
-            create_reviewed("task", "Held", "standard"),
-        )
-        .id()
-        .into();
-        if !earlier.is_empty() {
-            let session: SessionId =
-                apply(&mut state, principal.clone(), start_session("coder", item))
-                    .id()
-                    .into();
-            apply(
-                &mut state,
-                principal.clone(),
-                submit_session(session, commit),
-            );
-            for text in earlier {
-                apply(&mut state, daemon.clone(), comment(item, text));
-            }
-        }
-        let session: SessionId = apply(&mut state, principal.clone(), start_session("coder", item))
-            .id()
-            .into();
-        apply(
-            &mut state,
-            principal.clone(),
-            submit_session(session, commit),
-        );
-        apply(
-            &mut state,
-            principal.clone(),
-            moved(item, ItemState::Review),
-        );
-        apply(
-            &mut state,
-            principal.clone(),
-            verdict(item, commit, Verdict::Approve),
-        );
-        for text in after {
-            apply(&mut state, daemon.clone(), comment(item, text));
-        }
-        let ItemEntry::Live(live) = state.item(item).unwrap() else {
-            panic!()
-        };
-        crate::view::item_detail(&state, &state.dependency_graph(), live, &events)
-    }
-
     /// The lines of the notice box, without the bar.
     fn boxed(shown: &str) -> Vec<String> {
         anstream::adapter::strip_str(shown)
@@ -1013,63 +926,8 @@ mod tests {
     }
 
     #[test]
-    fn a_held_merge_shows_in_full_with_its_files_in_the_box() {
-        let detail = held_merge();
-        let what = &detail.waiting[0].what;
-        assert!(what.contains("is ready to merge"), "{what}");
-        let shown = item_detail_for(&detail, Some(40), Format::Styled);
-        let plain = anstream::adapter::strip_str(&shown).to_string();
-        assert!(
-            plain
-                .lines()
-                .all(|line| textwrap::core::display_width(line) <= 40),
-            "{plain}"
-        );
-        let boxed = boxed(&shown);
-        assert_eq!(boxed[0], "merge waits");
-        let text = boxed[1..].join(" ");
-        assert!(text.contains(what.as_str()), "{text}");
-        assert!(
-            text.contains("with changes to src/lib.rs, Cargo.toml. Commit or stash them."),
-            "{text}"
-        );
-        assert!(!text.contains("kept moving"), "only the latest: {text}");
-        let body = plain.find("activity").unwrap();
-        assert!(plain.find("merge waits").unwrap() < body, "{plain}");
-    }
-
-    #[test]
-    fn a_daemon_comment_from_an_earlier_round_is_not_in_the_box() {
-        let detail = merge_pending(
-            &[
-                "Merging into main conflicts in src/lib.rs. The next session merges main into the branch first.",
-            ],
-            &[],
-        );
-        let shown = item_detail_for(&detail, Some(60), Format::Styled);
-        let boxed = boxed(&shown);
-        assert_eq!(boxed[0], "merge waits");
-        assert!(detail.waiting[0].points_to.is_empty(), "{boxed:?}");
-        assert!(!boxed.join(" ").contains("conflicts"), "{boxed:?}");
-    }
-
-    #[test]
     fn an_item_with_nothing_waiting_has_no_box() {
         let shown = item_detail_for(&detail_with_a_body(), Some(40), Format::Styled);
         assert!(boxed(&shown).is_empty(), "{shown}");
-    }
-
-    #[test]
-    fn piped_what_waits_and_the_flags_are_plain_lines() {
-        let mut detail = held_merge();
-        detail.flags = vec!["a task needs a priority".to_string()];
-        let shown =
-            anstream::adapter::strip_str(&item_detail_for(&detail, None, Format::Raw)).to_string();
-        assert!(!shown.contains('┃'), "{shown}");
-        let expected = format!(
-            "  ! merge waits: {}\n    Waiting to merge: main is checked out in /src/app with changes to src/lib.rs, Cargo.toml. Commit or stash them.\n  ! a task needs a priority\n",
-            detail.waiting[0].what
-        );
-        assert!(shown.contains(&expected), "{shown}");
     }
 }

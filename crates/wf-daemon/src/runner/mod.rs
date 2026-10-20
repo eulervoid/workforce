@@ -20,7 +20,7 @@ pub(crate) use start::sandboxed_in;
 pub(crate) use submit::SubmissionChecks;
 
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -50,8 +50,6 @@ pub enum SessionError {
     UnknownHarness(HarnessName),
     #[error("the workforce has no policy yet")]
     NoPolicy,
-    #[error("the workforce has no repository to submit the work to")]
-    NoRepository,
     #[error("there is no item #{}", .0.short())]
     UnknownItem(ItemId),
     #[error("#{} is archived", .0.short())]
@@ -122,7 +120,6 @@ impl SessionError {
             )
             | Self::NotBound
             | Self::NoPolicy
-            | Self::NoRepository
             | Self::UnknownAgent(_)
             | Self::UnknownHarness(_)
             | Self::UnknownItem(_)
@@ -412,25 +409,8 @@ impl Daemon {
         self.launch.data_dir.workforce(&workforce)
     }
 
-    /// Where the repository of a workforce is on this machine, as the last `wf` run there said.
-    pub(crate) fn repository_of(&self, workforce: WorkforceId) -> Option<PathBuf> {
-        let text = std::fs::read_to_string(
-            self.workforce_directory(workforce)
-                .join(crate::REPOSITORY_FILE),
-        )
-        .ok()?;
-        Some(PathBuf::from(text.trim())).filter(|path| !path.as_os_str().is_empty())
-    }
-
-    fn remember_repository(
-        &self,
-        workforce: WorkforceId,
-        repository: &Path,
-    ) -> Result<(), SessionError> {
-        let directory = self.workforce_directory(workforce);
-        crate::remember_repository(&directory, repository).map_err(|source| SessionError::Io {
-            path: directory,
-            source,
-        })
+    /// The bare repository of a workforce on this machine, where the daemon runs git.
+    pub(crate) fn bare_repository(&self, workforce: WorkforceId) -> PathBuf {
+        wf_vcs::bare_repository(&self.workforce_directory(workforce))
     }
 }

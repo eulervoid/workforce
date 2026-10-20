@@ -108,7 +108,7 @@ it, or a subscription.
 | `$XDG_RUNTIME_DIR/workforce/daemon.sock` | the socket (else `<data>/daemon.sock`), 0600 in a 0700 directory |
 | `<wf>/principal.key` | the principal key for this workforce |
 | `<wf>/store.redb` | the event store |
-| `<wf>/repository` | where the main checkout is; every `wf` command run in it refreshes this |
+| `<wf>/git` | wf's own bare repository: the target and the item branches, and nothing else (section 10) |
 | `<wf>/repos/` | the repository of each item's agent and the repositories and directories of other sessions (section 10) |
 | `<wf>/transcripts/` | ACP transcripts and resume records of sessions (local, never synced) |
 | `<wf>/check/`, `check-logs/`, `checks-passed/` | the check worktree, logs, passes |
@@ -776,34 +776,49 @@ default level; an item can name another (`--recovery`).
 * Git only, through the `git` CLI (2.38 or later), run by `wf-vcs` alone, always with
   `core.hooksPath=/dev/null`, `core.fsmonitor=false`, `LC_ALL=C` and no terminal prompt. Commit ids
   are a `vcs` enum with one variant, so jj can be added without a format change.
+* **wf's own repository.** Each device keeps a bare repository, `<wf>/git`, with only the target and
+  the item branches. Agent repositories take their alternates from it; imports, rebases, the check
+  worktree and merges work in it, and nothing in wf runs git in the principal's checkout. `wf init`
+  makes it: from the checkout it is run in (when that is a git repository) it starts with the target
+  and the `wf/*` branches the checkout has, and takes the checkout's own `user.*` and signing config,
+  which is what the merge commits are made and signed by (`[commits] merge_signing =
+  "as_configured"` reads the config of `<wf>/git` and of the principal's account, not of the
+  checkout); the principal's other branches are never in it. The checkout gets `<wf>/git` as its
+  remote `wf`, the upstream of the target (`branch.<target>.remote`/`merge`): merged work comes in
+  with `git pull`, and the principal's own commits on the target go out with `git push`, taken only as
+  a fast-forward (`receive.denyNonFastForwards`; `receive.autogc` is off, as the daemon never packs or
+  prunes). The merge moves the target by compare-and-swap, so a push that landed first is not
+  overwritten, and the merge is made again on top of it. A daemon that loads a workforce without
+  `<wf>/git` makes it once, from the `<wf>/repository` an earlier version left (which it then
+  removes), or empty. `wf item checkout` fetches from `wf` (the branches, else the commit itself)
+  before it checks the work out.
 * One branch per item, `wf/<item>`, where `<item>` is the first 12 characters of the item id, and one
   **agent repository** per item, `<wf>/repos/<item>`: a repository of the agent's own, outside the
-  principal's. Its `objects/info/alternates` points at the principal's `.git/objects`, it has no
+  principal's. Its `objects/info/alternates` points at `<wf>/git/objects`, it has no
   remote, and its branch starts at the tip of the target (at `wf/<item>` after a change request) and
   is checked out. The daemon runs git there only while it creates it, before the agent touches it.
-  The agent can write all of it and none of the principal's repository, so no rule about which
+  The agent can write all of it and none of `<wf>/git`, so no rule about which
   parts of a `.git` it may write exists (and any sandbox that cannot express per-ref write rules,
   such as a container, works the same way). Later sessions on the item continue in the same
   repository; it is removed after the merge, when the item is cancelled, or at once when a session
   submits without commits. A review gets a throwaway repository of the same kind with the commit
   checked out, detached, in `<item>-review-<session>` (an empty `<item>-review-<session>` directory
   for a submission without commits), removed when it ends.
-* **Import.** The daemon copies the agent's commits into the principal's repository at the end of
+* **Import.** The daemon copies the agent's commits into `<wf>/git` at the end of
   every turn of a work session (so that `wf item diff` and the live diff follow the work) and when
   it submits. It reads the agent's ref from the file (or `packed-refs`) itself, accepting only a
-  regular file holding a commit id, and in the principal's repository, with
+  regular file holding a commit id, and in `<wf>/git`, with
   `GIT_ALTERNATE_OBJECT_DIRECTORIES=<agent repo>/.git/objects`, runs
   `git rev-list --objects <commit> --not <target> [wf/<item>] | git pack-objects .git/objects/pack/pack`
   and then `git update-ref refs/heads/wf/<item>`. A submission must name a commit that contains the
   tip of the target, else it is refused and the agent rebases again; work in progress is copied as it
   is. No git process runs with the agent repository's config, hooks or attributes, and the objects
   copied are only those the commit reaches, so an edited `alternates` file adds nothing. Review,
-  checks and merge see only `wf/<item>` in the principal's repository.
-* If the principal rewrites the target behind the agent's base (wf never does), the objects that
-  agent repository got through its alternates can be pruned and git there fails with missing
+  checks and merge see only `wf/<item>` in `<wf>/git`.
+* If the target is rewritten behind the agent's base (wf never does, and a push cannot), the objects
+  that agent repository got through its alternates can be pruned and git there fails with missing
   objects; the repository is then removed and made again. `gc` or `pack-refs` in either repository
   changes nothing the import relies on.
-* The adapter works on the repository's main checkout, found through `<wf>/repository`.
 
 ### Review
 
@@ -862,8 +877,9 @@ default for tasks).
   approved: `awaiting security, style; general approved`. The flag for a review no hosted agent can
   take names the steps.
 * Principal steps wait in `wf inbox` as `principal_review`. `wf item diff` shows the work through git
-  (the principal's pager and diff settings apply); `wf item checkout` puts the main checkout on it,
-  detached, since the item's agent repository may have it checked out.
+  (the principal's pager and diff settings apply) from `<wf>/git`; `wf item checkout` fetches it from
+  the remote `wf` and puts the main checkout on it, detached, since the item's agent repository may
+  have it checked out.
 * When the last step approves, the item is merged and then done, which unblocks its dependents. An
   item someone moved after the submission is left where it is.
 
@@ -872,19 +888,17 @@ requests; a comment naming a file and lines as data.
 
 ### Merge
 
-`[merge] mode = "local"` merges approved work into `[merge] target` in this repository. One **merge
+`[merge] mode = "local"` merges approved work into `[merge] target` in `<wf>/git`. One **merge
 task** per workforce merges one item at a time, outside the dispatch loop; the dispatcher and session
 ends only queue work for it. Work without a review level waits in `review` while queued.
 
-1. Build the merge with `git merge-tree --write-tree`, touching no checkout.
+1. Build the merge with `git merge-tree --write-tree`.
 2. Run the policy's checks on that tree (below), unless they passed on it in the same sandbox.
-3. Commit it (`Merge #<item>: <title>`) with `git commit-tree`, and advance the target: fast-forward a
-   clean checkout of it, or compare-and-swap with `git update-ref`. A target that moved meanwhile is
-   tried again (3 times, then one comment).
+3. Commit it (`Merge #<item>: <title>`) with `git commit-tree`, and advance the target by
+   compare-and-swap with `git update-ref`. A target that moved meanwhile (a push of the principal,
+   say) is tried again on top of the new tip (3 times, then one comment).
 4. Write `Merged{item, reviewed, commit}`, remove the branch and the agent repository, move the item to done.
 
-* A **dirty checkout** of the target makes the merge wait: one comment naming the files, a `merge`
-  entry in `wf inbox`, and a retry on every change and tick. Untracked files do not count.
 * A **conflict** sends the item back to its open state with a comment naming the files; approved work
   is never rewritten. The next session's submission rebases it.
 * Any other failure comments once and leaves the item in `review` to retry. A reviewed commit that
@@ -968,16 +982,8 @@ heads get no event of their own and stay out of gossip.
 ### Planned (M3): repositories across devices
 
 Every commit the log names reaches every device, peer to peer: no server, no credentials between
-devices, nothing new for the principal to run.
+devices, nothing new for the principal to run. (`<wf>/git`, which this builds on, is built: section 10.)
 
-* **wf's own repository.** Each device keeps a bare repository, `<wf>/git`, with only the target and
-  the item branches. Agent repositories take their alternates from it; imports, rebases, checks and
-  merges work in it. The principal's checkout is a clone with `<wf>/git` as its remote `wf`, the
-  upstream of the target: merged work comes in with `git pull`, and the principal's own commits on
-  the target go out with `git push`, taken only as a fast-forward (`receive.denyNonFastForwards`).
-  `wf item checkout` fetches from `wf` first. wf no longer touches the principal's checkout, so
-  `<wf>/repository`, the merge's wait on a dirty checkout and its `merge` inbox entry go, and the
-  principal's other branches are never in what wf serves.
 * **`wf/git/1`.** Each daemon serves `git upload-pack` on `<wf>/git` over an iroh stream, to members,
   fetch only: no device writes into another's repository. With `uploadpack.allowReachableSHA1InWant`
   it serves a commit reachable from the target or an item branch and refuses anything else, such as a
@@ -1006,8 +1012,8 @@ devices, nothing new for the principal to run.
   and runs again on the new tip, checks included; a lost push of the principal goes to the inbox, to
   rebase. A principal who pulled a merge that later lost finds their next push refused as diverged,
   in the inbox.
-* **Joining.** `wf join` builds `<wf>/git` from the peer it joins through and prints how to point a
-  checkout at it.
+* **Joining.** A device that joins starts with an empty `<wf>/git` (the daemon makes it); `wf join`
+  will build it from the peer it joins through and add the remote `wf` to the checkout it is run in.
 * **Not iroh-blobs.** Packs are built per request, so they have no stable hash to fetch by, and git
   verifies what it receives. iroh-blobs stays for files that are not git (transcripts, attachments).
 
@@ -1228,8 +1234,8 @@ for dispatch and turn-end decisions uses the same protocol.
 ### Notifications
 
 With `[notify] command` in the machine config, the daemon runs it, without a shell, once for each new
-inbox entry that waits on the principal: a blocker, a proposal, a principal review step, a merge
-waiting on a dirty checkout, a recovery left to the principal, and a held permission request.
+inbox entry that waits on the principal: a blocker, a proposal, a principal review step, a recovery
+left to the principal, and a held permission request.
 `{kind}`, `{item}`, `{title}` and `{what}` in its arguments are replaced. Entries are announced after
 each dispatcher round, so work about to merge is not announced. What was announced is kept in
 `<wf>/announced.json`, so a restart does not repeat it, and an entry that goes and comes back (a
@@ -1474,7 +1480,7 @@ wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | f
   commented `state = "draft"` for new items), then the body verbatim. Unknown keys are refused. State
   changes only through the verbs.
 * **`wf inbox`** lists what waits on the principal: `blocker`, `proposal` (an item in `review` without
-  submitted work, such as a decision), `principal_review`, `merge`, `recovery`, `permission` and
+  submitted work, such as a decision), `principal_review`, `recovery`, `permission` and
   `machine_fault`, each with the command that answers it. `wf status` summarises the workforce, flags
   what needs someone (stranded items, steps no agent can take, unknown states, an unreadable policy)
   and says what to do next.

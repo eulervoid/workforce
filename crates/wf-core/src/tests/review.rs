@@ -624,10 +624,6 @@ mod inbox {
             scene.state.inbox(),
             [
                 InboxEntry {
-                    item: light,
-                    waiting: Waiting::Merge { commit: commit(1) }
-                },
-                InboxEntry {
                     item: asking,
                     waiting: Waiting::Blocker { comment: question }
                 },

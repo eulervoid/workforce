@@ -52,7 +52,10 @@ found harnesses; add an agent for the one wf should use:
 
 You are `@ada`: the **principal**, the person the agents work for (your real handle will be 
 `@$USER`, `--handle` picks another name). `wf init` writes `.workforce.toml`, which holds only 
-the id of the workforce; commit it, so that clones on your other machines find it. `wf init -i` 
+the id of the workforce; commit it, so that clones on your other machines find it. wf keeps a bare
+repository of its own for the daemon to merge in, and `wf init` makes it the remote `wf` of this
+checkout, the upstream of `main`: `git pull` brings in merged work and `git push` sends your own
+commits. `wf init -i` 
 asks instead: the name, which harnesses to define agents for, and for each its name, permissions 
 and model.
 

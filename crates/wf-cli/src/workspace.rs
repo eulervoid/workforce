@@ -91,8 +91,9 @@ pub struct Workspace {
     /// The member this machine belongs to; `actor` is the principal or a session of theirs.
     principal: PrincipalKey,
     actor: Actor,
-    /// The directory of the workforce file, if there is one.
-    repository: Option<PathBuf>,
+    /// The directory of the workforce file, if there is one: the principal's checkout, or in a
+    /// session the agent's repository.
+    checkout: Option<PathBuf>,
 }
 
 /// Why [`Workspace::reconnect`] did not connect.
@@ -145,19 +146,10 @@ impl Workspace {
             || WORKFORCE_VARIABLE.to_string(),
             |file| file.display().to_string(),
         );
-        let repository = file
+        let checkout = file
             .as_deref()
             .and_then(Path::parent)
             .map(Path::to_path_buf);
-        // The repositories of sessions have the workforce file too, but they are not the
-        // principal's and they come and go.
-        if let Some(repository) = repository
-            .as_deref()
-            .filter(|directory| directory.join(".git").is_dir())
-            .filter(|_| std::env::var_os(wf_daemon::caller::SESSION_VARIABLE).is_none())
-        {
-            data.remember_repository(&id, repository);
-        }
         // With a daemon, only the daemon reads the device key: agents are not let to.
         if !refold && let Some(mut client) = data.connect_daemon()? {
             let device = client.device();
@@ -172,7 +164,7 @@ impl Workspace {
                 data,
                 id,
                 device,
-                repository,
+                checkout,
             );
         }
         let signer = data
@@ -195,7 +187,7 @@ impl Workspace {
             data,
             id,
             device,
-            repository,
+            checkout,
         )
     }
 
@@ -204,7 +196,7 @@ impl Workspace {
         data: DataDir,
         workforce: WorkforceId,
         device: DeviceKey,
-        repository: Option<PathBuf>,
+        checkout: Option<PathBuf>,
     ) -> anyhow::Result<Self> {
         let state = match &source {
             Source::Local(replica, _) => replica.state(),
@@ -230,7 +222,7 @@ impl Workspace {
             device,
             principal,
             actor,
-            repository,
+            checkout,
         })
     }
 
@@ -260,10 +252,18 @@ impl Workspace {
         self.principal
     }
 
-    /// The repository of the workforce: the directory of its `.workforce.toml`.
+    /// The bare repository of the workforce on this machine, `<wf>/git`: the target and the
+    /// branches of the items, which is where the daemon merges and the work is read from.
     pub fn repository(&self) -> anyhow::Result<wf_vcs::GitCli> {
+        let path = wf_vcs::bare_repository(&self.data.workforce(&self.workforce));
+        Ok(wf_vcs::GitCli::open(&path)?)
+    }
+
+    /// The checkout the workforce file is in: the principal's own repository, which has the
+    /// bare repository as its remote `wf`.
+    pub fn checkout(&self) -> anyhow::Result<wf_vcs::GitCli> {
         let directory = self
-            .repository
+            .checkout
             .as_deref()
             .ok_or_else(|| anyhow!("no {WORKFORCE_FILE} found here or in a parent directory"))?;
         Ok(wf_vcs::GitCli::open(directory)?)
@@ -415,10 +415,9 @@ impl Workspace {
         item: ItemId,
         step: Option<wf_core::name::ReviewStepName>,
     ) -> anyhow::Result<SessionId> {
-        let repository = self.repository()?.repository().to_path_buf();
         let workforce = self.workforce;
         let (client, state) = self.daemon("start sessions")?;
-        let session = client.start_session(workforce, agent, item, step, &repository)?;
+        let session = client.start_session(workforce, agent, item, step)?;
         *state = client.state(workforce)?;
         Ok(session)
     }

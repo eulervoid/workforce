@@ -58,7 +58,7 @@ Look at the work:
 wf item show k3f7                # what the agent reported, step by step
 wf item diff k3f7                # the diff, through git: your pager, colors and diff config apply
 wf item diff k3f7 --stat         # anything after the item goes to `git diff`, such as `-- src/`
-wf item checkout k3f7            # put your main checkout on the work, detached, to build and try it
+wf item checkout k3f7            # fetch the work and put your main checkout on it, detached, to build and try it
 wf item checkout -               # and back to where it was
 cd $(wf item path k3f7)          # or go to the repository its agent works in
 ```
@@ -70,7 +70,7 @@ agent has not made any commits; with `--json`, `committed` is then `null`, where
 give an empty one.
 
 While an agent works on the item on this machine, the diff shows what it has committed so far:
-the daemon copies the agent's commits into your repository at the end of every turn. What the
+the daemon copies the agent's commits into wf's repository at the end of every turn. What the
 agent has not committed shows nowhere, as wf does not run git in the agent's repository. Only
 commits carry over to a later session and are what review and merge see.
 
@@ -109,19 +109,31 @@ A reviewer agent can also `--escalate`: then a step of yours is added after its 
 ## The merge
 
 Once the last step approves, the daemon merges the reviewed commit into the target branch of the
-policy, `main` by default. It builds the merge commit without touching any checkout,
-`Merge #k3f7ab: Parse durations in policy`, and moves the branch. If the target is checked out, in
-your main checkout for example, that checkout is fast-forwarded so your files follow. Then it removes
-the agent's repository and the item's `wf/<item>` branch, and the item is done; what depended on it can start.
+policy, `main` by default. It builds the merge commit,
+`Merge #k3f7ab: Parse durations in policy`, in wf's own repository and moves the branch there. Then it
+removes the agent's repository and the item's `wf/<item>` branch, and the item is done; what depended on
+it can start.
+
+wf never touches your checkout. `wf init` made wf's repository, `~/.local/share/workforce/<workforce
+id>/git`, with only the target and the item branches, and gave your checkout its path as the remote
+`wf`, the upstream of the target. Merged work comes into your checkout when you pull:
+
+```sh
+git pull                         # brings in what the daemon merged into main
+git push                         # sends your own commits on main to wf's repository
+```
+
+Your pushes are taken only as fast-forwards: a push that rewrites `main` is refused, as wf's merges
+build on it. If your push and a merge cross, the daemon merges again on top of yours. Your other
+branches are never sent to wf's repository, and nothing in it is pushed anywhere. The merge commit is
+made and signed as the git config of wf's repository and of your account say (`wf init` copied your
+checkout's `user.name`, `user.email` and signing config into it; `git -C ~/.local/share/workforce/<workforce
+id>/git config` changes them); see `merge_signing` in [machine-config.md](machine-config.md#commits-and-signatures).
 
 Work on an item whose level has no steps is merged as soon as the session submits.
 
-Three things can hold a merge: the checks, below, and these two:
+Two things can hold a merge: the checks, below, and this:
 
-* **Your checkout has changes.** If the target branch is checked out with uncommitted changes, the
-  daemon does not touch it. It comments once, `Waiting to merge: main is checked out in ~/src/app with
-  changes to src/lib.rs. Commit or stash them.`, and `wf inbox` lists a `merge` entry. Commit or stash,
-  and the daemon merges within half a minute.
 * **A conflict.** The daemon comments `Merging into main conflicts in src/parse.rs. The next session
   merges main into the branch first.`, the item goes back to open, and the dashboard warns of it
   (see [Warnings](dashboard.md#warnings)). The next session resolves the

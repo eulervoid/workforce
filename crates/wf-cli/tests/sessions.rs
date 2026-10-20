@@ -53,12 +53,16 @@ impl World {
 
     fn without_daemon(agents: &[(&str, &str)]) -> WorldSetup {
         let wf = Sandbox::new();
+        init_repository(&wf.repository);
         wf.run(&["init", "--name", "demo"]);
         let policy = wf.run(&["policy", "show"]);
         let path = wf.root.path().join("unreviewed-policy.toml");
         std::fs::write(&path, policy.replace("review = \"manual\"\n", "")).unwrap();
         wf.run(&["policy", "apply", path.to_str().unwrap()]);
-        init_repository(&wf.repository);
+        // As the principal commits the workforce file and pushes it to the target.
+        git_in(&wf.repository, &["add", ".workforce.toml"]);
+        git_in(&wf.repository, &["commit", "--quiet", "-m", "workforce"]);
+        git_in(&wf.repository, &["push", "--quiet"]);
         let mut scripts = BTreeMap::new();
         for (name, script) in agents {
             let path = wf.root.path().join(format!("script-{name}.txt"));
@@ -91,6 +95,28 @@ impl World {
         let (daemon, shutdown) = start_daemon(&self.wf, &self.scripts, self.reopens).await;
         self.daemon = daemon;
         self.shutdown = Some(shutdown);
+    }
+
+    /// wf's bare repository of the workforce, where the daemon merges.
+    fn bare(&self) -> PathBuf {
+        let (_, workforce) = wf_cli::workspace::find_workforce(&self.wf.repository).unwrap();
+        wf_vcs::bare_repository(
+            &wf_daemon::DataDir::new(self.wf.data.join("workforce")).workforce(&workforce),
+        )
+    }
+
+    /// Brings merged work into the principal's checkout, as the principal does with `git pull`.
+    fn pull(&self) {
+        git_in(&self.wf.repository, &["pull", "--quiet", "--ff-only"]);
+    }
+
+    /// Commits `text` as `name` in the principal's checkout and pushes it to the target.
+    fn push_file(&self, name: &str, text: &str, message: &str) {
+        let repository = &self.wf.repository;
+        std::fs::write(repository.join(name), text).unwrap();
+        git_in(repository, &["add", name]);
+        git_in(repository, &["commit", "--quiet", "-m", message]);
+        git_in(repository, &["push", "--quiet"]);
     }
 
     fn transcript(&self, item: &str) -> String {
@@ -276,7 +302,7 @@ impl Drop for World {
     }
 }
 
-/// Has the repository's config sign commits, with a stand-in for ssh-keygen that writes a
+/// Has the bare repository's config sign commits, with a stand-in for ssh-keygen that writes a
 /// signature beside the data it gets.
 fn sign_commits(world: &World) {
     let signer = world.wf.root.path().join("fake-sign");
@@ -292,7 +318,7 @@ fn sign_commits(world: &World) {
         ("user.signingkey", "key::ssh-ed25519 AAAAfake"),
         ("gpg.ssh.program", signer.to_str().unwrap()),
     ] {
-        git_in(&world.wf.repository, &["config", key, value]);
+        git_in(&world.bare(), &["config", key, value]);
     }
 }
 
@@ -568,6 +594,7 @@ wf work submit --note \"all done\"
     );
 
     let repository = &world.wf.repository;
+    world.pull();
     assert_eq!(
         std::fs::read_to_string(repository.join("hello.txt")).unwrap(),
         "hi\n"
@@ -575,11 +602,12 @@ wf work submit --note \"all done\"
     let subject = git_in(repository, &["log", "-1", "--format=%s", "main"]);
     assert!(subject.starts_with("Merge #"), "{subject}");
     assert_eq!(git_in(repository, &["status", "--porcelain"]), "");
+    let bare = world.bare();
     assert!(
-        git_in(repository, &["branch", "--list", "wf/*"]).is_empty(),
+        git_in(&bare, &["branch", "--list", "wf/*"]).is_empty(),
         "the branch of a merged item is removed"
     );
-    assert_eq!(git_in(repository, &["worktree", "list"]).lines().count(), 1);
+    assert_eq!(git_in(&bare, &["worktree", "list"]).lines().count(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -596,16 +624,12 @@ wf work submit
     world
         .wait("the merge", |world| world.item(&item)["state"] == "done")
         .await;
-    let signed = |commit: &str| {
-        git_in(&world.wf.repository, &["cat-file", "commit", commit]).contains("gpgsig")
-    };
+    let signed =
+        |commit: &str| git_in(&world.bare(), &["cat-file", "commit", commit]).contains("gpgsig");
     assert!(signed("main"), "the merge commit is signed");
     assert!(!signed("main^2"), "the agent's commit is not");
     assert_eq!(
-        git_in(
-            &world.wf.repository,
-            &["log", "-1", "--format=%an|%cn", "main^2"]
-        ),
+        git_in(&world.bare(), &["log", "-1", "--format=%an|%cn", "main^2"]),
         "@ada/coder|@ada/coder",
         "the agent commits as itself"
     );
@@ -622,10 +646,8 @@ wf work submit
     sign_commits(&world);
     let item = world.wf.add(&["--title", "Add hello"]);
     start_session(&world, &item);
-    let repository = &world.wf.repository;
-    std::fs::write(repository.join("other.txt"), "other\n").unwrap();
-    git_in(repository, &["add", "other.txt"]);
-    git_in(repository, &["commit", "--quiet", "-m", "main moves on"]);
+    world.push_file("other.txt", "other\n", "main moves on");
+    let repository = &world.bare();
     let moved = git_in(repository, &["rev-parse", "main"]);
     std::fs::write(world.wf.data.join("go"), "").unwrap();
 
@@ -648,7 +670,7 @@ wf work submit
     world
         .wait("the merge", |world| world.item(&item)["state"] == "done")
         .await;
-    assert!(repository.join("hello.txt").is_file());
+    assert!(git_in(repository, &["ls-tree", "main", "hello.txt"]).contains("hello.txt"));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -674,7 +696,7 @@ wf work submit
                 &format!("gpg.ssh.allowedSignersFile={}", allowed.display()),
             ])
             .args(["verify-commit", "main"])
-            .current_dir(&world.wf.repository),
+            .current_dir(world.bare()),
     );
     let said = String::from_utf8_lossy(&verified.stderr);
     assert!(verified.status.success(), "{said}");
@@ -699,18 +721,18 @@ wf work submit
             world.wf.data.join("committed").exists()
         })
         .await;
-    // The first commit is copied into the principal's repository, which packs and collects.
+    // The first commit is copied into wf's repository, which packs and collects.
     world
         .wait("the first commit to be copied", |world| {
             git_in(
-                &world.wf.repository,
+                &world.bare(),
                 &["log", "--oneline", "--branches=wf/*", "--not", "main"],
             )
             .contains(" a")
         })
         .await;
-    git_in(&world.wf.repository, &["pack-refs", "--all"]);
-    git_in(&world.wf.repository, &["gc", "-q"]);
+    git_in(&world.bare(), &["pack-refs", "--all"]);
+    git_in(&world.bare(), &["gc", "-q"]);
     std::fs::write(world.wf.data.join("packed"), "").unwrap();
 
     let session = world.ended_session().await;
@@ -718,8 +740,10 @@ wf work submit
     world
         .wait("the merge", |world| world.item(&item)["state"] == "done")
         .await;
+    world.pull();
     assert!(world.wf.repository.join("a.txt").is_file());
     assert!(world.wf.repository.join("b.txt").is_file());
+    git_in(&world.bare(), &["fsck", "--strict"]);
     git_in(&world.wf.repository, &["fsck", "--strict"]);
 }
 
@@ -744,7 +768,7 @@ wf work release --note \"I cannot do this\"
             .iter()
             .any(|note| note["kind"] == "comment" && note["text"] == "I cannot do this")
     );
-    assert!(!git_in(&world.wf.repository, &["branch", "--list", "wf/*"]).is_empty());
+    assert!(!git_in(&world.bare(), &["branch", "--list", "wf/*"]).is_empty());
 }
 
 /// The events of the log, read from the daemon of the world.
@@ -811,14 +835,14 @@ wf work release --note \"stopping\"
     assert_ne!(last, third, "the commit after the last comment");
     assert_eq!(
         git_in(
-            &world.wf.repository,
+            &world.bare(),
             &["rev-parse", &format!("wf/{}", &item[..12])]
         ),
         last.to_string()
     );
     for named in [first, third, last] {
         git_in(
-            &world.wf.repository,
+            &world.bare(),
             &["cat-file", "-e", &format!("{named}^{{commit}}")],
         );
     }
@@ -1152,7 +1176,7 @@ async fn a_session_whose_record_cannot_be_written_fails() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn work_waits_while_the_target_is_checked_out_with_changes() {
+async fn work_merges_while_the_principals_checkout_has_changes_and_a_pull_brings_it_in() {
     let script = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
 wf work submit
@@ -1165,53 +1189,34 @@ wf work submit
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
-    // The merge task tries after the session has ended.
     world
-        .wait("the waiting merge", |world| {
-            comments(&world.item(&item))
-                .as_array()
-                .unwrap()
-                .iter()
-                .any(|note| {
-                    note["text"].as_str().is_some_and(|text| {
-                        text.starts_with("Waiting to merge")
-                            && text.contains("changes to .workforce.toml.")
-                    })
-                })
-        })
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
         .await;
-    let shown = world.item(&item);
-    assert_eq!(shown["state"], "review", "{shown}");
+    // The checkout is the principal's: nothing of the merge reaches it until they pull.
+    assert!(!world.wf.repository.join("hello.txt").exists());
     assert!(
         std::fs::read_to_string(&file)
             .unwrap()
             .ends_with("# edited by hand\n")
     );
-
-    git_in(
-        &world.wf.repository,
-        &["checkout", "--quiet", "--", ".workforce.toml"],
-    );
-    world
-        .wf
-        .run(&["comment", short(&item), "the checkout is clean again"]);
-    world
-        .wait("the waiting merge", |world| {
-            world.item(&item)["state"] == "done"
-        })
-        .await;
+    world.pull();
     assert!(world.wf.repository.join("hello.txt").is_file());
-    let waits = comments(&world.item(&item))
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|note| {
-            note["text"]
+    assert!(
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .ends_with("# edited by hand\n")
+    );
+    assert!(
+        comments(&world.item(&item))
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|note| !note["text"]
                 .as_str()
-                .is_some_and(|text| text.starts_with("Waiting to merge"))
-        })
-        .count();
-    assert_eq!(waits, 1, "waiting again does not say so again");
+                .is_some_and(|text| text.starts_with("Waiting to merge"))),
+        "the merge waits for nobody"
+    );
+    assert!(inbox(&world).is_empty(), "{:?}", inbox(&world));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1222,9 +1227,8 @@ wf work submit
 ";
     let world = World::new(script).await;
     let item = world.wf.add(&["--title", "Add hello"]);
-    // With main not checked out the merge only moves the ref, which the lock refuses.
-    git_in(&world.wf.repository, &["checkout", "--quiet", "--detach"]);
-    let lock = world.wf.repository.join(".git/refs/heads/main.lock");
+    // The merge moves the ref, which the lock refuses.
+    let lock = world.bare().join("refs/heads/main.lock");
     std::fs::write(&lock, "").unwrap();
     start_session(&world, &item);
     let session = world.ended_session().await;
@@ -1256,7 +1260,7 @@ wf work submit
     let merged = common::output(
         Command::new("git")
             .args(["show", "main:hello.txt"])
-            .current_dir(&world.wf.repository),
+            .current_dir(world.bare()),
     );
     assert!(merged.status.success(), "hello.txt is on main");
 }
@@ -1551,7 +1555,7 @@ async fn submitting_without_commits_finishes_the_item_and_leaves_no_branch() {
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
     assert_eq!(world.item(&item)["state"], "done");
-    assert!(git_in(&world.wf.repository, &["branch", "--list", "wf/*"]).is_empty());
+    assert!(git_in(&world.bare(), &["branch", "--list", "wf/*"]).is_empty());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1989,13 +1993,14 @@ async fn work_approved_by_a_reviewer_agent_is_merged() {
     );
     assert_eq!(statuses(&world), ["coder submitted", "reviewer reviewed"]);
 
-    let repository = &world.wf.repository;
-    assert!(repository.join("hello.txt").is_file());
-    assert!(git_in(repository, &["branch", "--list", "wf/*"]).is_empty());
+    world.pull();
+    assert!(world.wf.repository.join("hello.txt").is_file());
+    let bare = world.bare();
+    assert!(git_in(&bare, &["branch", "--list", "wf/*"]).is_empty());
     // The reviewer's checkout goes once its harness has closed.
     world
-        .wait("only the main checkout left", |_| {
-            git_in(repository, &["worktree", "list"]).lines().count() == 1
+        .wait("only the bare repository left", |_| {
+            git_in(&bare, &["worktree", "list"]).lines().count() == 1
         })
         .await;
 }
@@ -2027,6 +2032,7 @@ sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" comme
             "reviewer reviewed"
         ]
     );
+    world.pull();
     let repository = &world.wf.repository;
     assert!(repository.join("hello.txt").is_file() && repository.join("test.txt").is_file());
 
@@ -2144,6 +2150,7 @@ async fn steps_that_run_at_once_start_three_sessions_and_merge_after_the_last_ap
         })
         .await;
     assert_eq!(world.item(&item)["review_status"]["status"], "merged");
+    world.pull();
     assert!(world.wf.repository.join("hello.txt").is_file());
     let reviewed = statuses(&world)
         .into_iter()
@@ -2289,6 +2296,7 @@ async fn a_critical_item_waits_for_a_person_after_the_agent_approves() {
             world.item(&item)["state"] == "done"
         })
         .await;
+    world.pull();
     assert!(world.wf.repository.join("hello.txt").is_file());
 }
 
@@ -2385,9 +2393,8 @@ wf review --approve
     let approved = first["commit"].as_str().unwrap().to_string();
 
     // Main moves while the review runs, so the approved work conflicts with it.
-    let repository = &world.wf.repository;
-    std::fs::write(repository.join("file.txt"), "main\n").unwrap();
-    git_in(repository, &["commit", "--quiet", "-am", "main moves on"]);
+    let repository = &world.bare();
+    world.push_file("file.txt", "main\n", "main moves on");
     let main = git_in(repository, &["rev-parse", "main"]);
     std::fs::write(world.wf.data.join("go"), "").unwrap();
     // The item is open only until the next session starts on it, so the note is waited for.
@@ -2418,7 +2425,7 @@ wf review --approve
         use wf_core::id::CommentId;
         use wf_core::item::ItemState;
         let socket = world.wf.root.path().join("run/workforce/daemon.sock");
-        let (_, workforce) = wf_cli::workspace::find_workforce(repository).unwrap();
+        let (_, workforce) = wf_cli::workspace::find_workforce(&world.wf.repository).unwrap();
         let token = wf_daemon::DataDir::new(world.wf.data.join("workforce")).read_principal_token();
         let mut client = wf_daemon::client::DaemonClient::connect(&socket, token)
             .unwrap()
@@ -2488,10 +2495,7 @@ wf review --approve
         transcript.contains("the rebase is stopped at a commit that conflicts in file.txt"),
         "the nudge names the file: {transcript}"
     );
-    assert_eq!(
-        std::fs::read_to_string(repository.join("file.txt")).unwrap(),
-        "branch\n"
-    );
+    assert_eq!(git_in(repository, &["show", "main:file.txt"]), "branch");
 }
 
 fn inbox(world: &World) -> Vec<Value> {
@@ -2559,6 +2563,20 @@ wf work release --note later
     assert!(
         diff["committed"].as_str().unwrap().contains("+four"),
         "{diff}"
+    );
+    // An option's separate value is not taken for a path.
+    let wide = world.wf.json(&[
+        "item",
+        "diff",
+        short(&item),
+        "--diff-algorithm",
+        "patience",
+        "--",
+        "file.txt",
+    ]);
+    assert!(
+        wide["committed"].as_str().unwrap().contains("+four"),
+        "{wide}"
     );
 
     let path = world.wf.run(&["item", "path", short(&item)]);
@@ -2674,11 +2692,9 @@ wf work submit
     world
         .wait("the merge", |world| world.item(&item)["state"] == "done")
         .await;
-    let repository = &world.wf.repository;
-    let merge = git_in(repository, &["rev-parse", "main"]);
-    std::fs::write(repository.join("later.txt"), "later\n").unwrap();
-    git_in(repository, &["add", "later.txt"]);
-    git_in(repository, &["commit", "-q", "-m", "later"]);
+    let merge = git_in(&world.bare(), &["rev-parse", "main"]);
+    world.pull();
+    world.push_file("later.txt", "later\n", "later");
 
     let diff = world.wf.json(&["item", "diff", short(&item)]);
     assert_eq!(diff["commit"], session["commit"], "{diff}");
@@ -2934,6 +2950,7 @@ async fn a_session_belongs_to_its_workforce_whatever_its_committed_workforce_fil
         repository,
         &["commit", "--quiet", "-am", "an older workforce"],
     );
+    git_in(repository, &["push", "--quiet"]);
     std::fs::write(&file, right).unwrap();
 
     let item = world.wf.add(&["--title", "Add hello"]);
@@ -2966,7 +2983,7 @@ wf work submit
     world
         .wait("the merge", |world| world.item(&item)["state"] == "done")
         .await;
-    let brief = git_in(&world.wf.repository, &["show", "main:brief.md"]);
+    let brief = git_in(&world.bare(), &["show", "main:brief.md"]);
     assert!(
         brief.contains("## Instructions\n\nPrefer the standard library.\n"),
         "{brief}"
@@ -3151,7 +3168,7 @@ async fn checks_that_pass_let_the_work_merge_and_a_moved_target_is_checked_again
         &format!(
             "test -f hello.txt || exit 1; [ -f \"{moved}\" ] && exit 0; touch \"{moved}\"; \
              echo moved > \"{repo}/moved.txt\" && git -C \"{repo}\" add moved.txt && \
-             git -C \"{repo}\" -c commit.gpgsign=false commit -q -m moved",
+             git -C \"{repo}\" -c commit.gpgsign=false commit -q -m moved && git -C \"{repo}\" push -q",
             moved = moved.display(),
             repo = repository.display()
         ),
@@ -3176,6 +3193,7 @@ async fn checks_that_pass_let_the_work_merge_and_a_moved_target_is_checked_again
         2,
         "at the submission, then on the merge with the moved target"
     );
+    world.pull();
     for file in ["hello.txt", "moved.txt"] {
         assert!(repository.join(file).exists(), "{file} is on main");
     }
@@ -3204,7 +3222,7 @@ wf work submit
     let world = World::new(script).await;
     let (check, check_runs) = counted_check(&world, "unbroken", "! test -f broken.txt");
     add_checks(&world, &check);
-    let main = git_in(&world.wf.repository, &["rev-parse", "main"]);
+    let main = git_in(&world.bare(), &["rev-parse", "main"]);
     let item = world.wf.add(&["--title", "Break it"]);
     let session = start_session(&world, &item);
     world
@@ -3242,7 +3260,7 @@ wf work submit
         transcript.contains("Your submission was not sent to review: its checks failed"),
         "{transcript}"
     );
-    assert_ne!(git_in(&world.wf.repository, &["rev-parse", "main"]), main);
+    assert_ne!(git_in(&world.bare(), &["rev-parse", "main"]), main);
     assert!(inbox(&world).is_empty(), "{:?}", inbox(&world));
     // The failed run, and main itself to tell whose fault it was; the fixed work is main's tree,
     // which passed.
@@ -3375,10 +3393,7 @@ turn
 #[tokio::test(flavor = "multi_thread")]
 async fn a_check_that_fails_on_the_target_too_waits_for_the_principal() {
     let world = World::new(ADD_HELLO).await;
-    let repository = &world.wf.repository;
-    std::fs::write(repository.join("broken.txt"), "x\n").unwrap();
-    git_in(repository, &["add", "broken.txt"]);
-    git_in(repository, &["commit", "--quiet", "-m", "main breaks"]);
+    world.push_file("broken.txt", "x\n", "main breaks");
     let (check, check_runs) = counted_check(&world, "unbroken", "! test -f broken.txt");
     add_checks(&world, &check);
     let item = world.wf.add(&["--title", "Add hello"]);
@@ -3400,7 +3415,7 @@ async fn a_check_that_fails_on_the_target_too_waits_for_the_principal() {
     assert_eq!(waiting.len(), 1, "{waiting:?}");
     assert_eq!(waiting[0]["kind"], "blocker", "{waiting:?}");
     assert_eq!(runs(&check_runs), 2, "on the merge, then on main itself");
-    assert!(!repository.join("hello.txt").exists());
+    assert!(!world.wf.repository.join("hello.txt").exists());
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3410,10 +3425,7 @@ sh echo x > broken.txt && git add broken.txt && git commit -q -m break
 wf work submit
 ";
     let world = World::new(script).await;
-    let repository = &world.wf.repository;
-    std::fs::write(repository.join("main-broken.txt"), "x\n").unwrap();
-    git_in(repository, &["add", "main-broken.txt"]);
-    git_in(repository, &["commit", "--quiet", "-m", "main breaks"]);
+    world.push_file("main-broken.txt", "x\n", "main breaks");
     let (by_work, _) = counted_check(&world, "unbroken", "! test -f broken.txt");
     let (by_main, _) = counted_check(&world, "main-unbroken", "! test -f main-broken.txt");
     add_checks(&world, &format!("{by_work}\n{by_main}"));
@@ -3554,9 +3566,7 @@ wf review --approve
                 .any(|session| session["role"] == "review")
         })
         .await;
-    let repository = &world.wf.repository;
-    std::fs::write(repository.join("file.txt"), "main\n").unwrap();
-    git_in(repository, &["commit", "--quiet", "-am", "main moves on"]);
+    world.push_file("file.txt", "main\n", "main moves on");
     std::fs::write(world.wf.data.join("go"), "").unwrap();
     world
         .wait("the change request", |world| {
@@ -3594,8 +3604,7 @@ wf work submit
         })
         .await;
     let repository = &world.wf.repository;
-    std::fs::write(repository.join("file.txt"), "main\n").unwrap();
-    git_in(repository, &["commit", "--quiet", "-am", "main moves on"]);
+    world.push_file("file.txt", "main\n", "main moves on");
     world.wf.run(&["comment", short(&item), "main moved"]);
     world
         .wait("the stale review", |world| {
@@ -3606,7 +3615,10 @@ wf work submit
     assert!(!comments_with(&world, &item, "change_request", "conflicts in file.txt").is_empty());
     assert_eq!(world.item(&item)["state"], "review");
     assert!(world.wf.run(&["inbox"]).contains("review of"));
-    git_in(repository, &["reset", "--quiet", "--hard", "HEAD~1"]);
+    // The target goes back to where it was: the principal rewinds it, which a push refuses
+    // (`receive.denyNonFastForwards`), so it is done where the target is kept.
+    let moved = git_in(repository, &["rev-parse", "HEAD~1"]);
+    git_in(&world.bare(), &["update-ref", "refs/heads/main", &moved]);
     world.wf.run(&["comment", short(&item), "main moved back"]);
     world
         .wait("the stale marker to clear", |world| {

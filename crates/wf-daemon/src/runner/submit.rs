@@ -223,9 +223,7 @@ impl Daemon {
             .merge
             .target
             .clone();
-        let repository = self
-            .repository_of(workforce)
-            .ok_or(SessionError::NoRepository)?;
+        let repository = self.bare_repository(workforce);
         let made = {
             let (repository, target) = (repository.clone(), target.clone());
             blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit)).await??

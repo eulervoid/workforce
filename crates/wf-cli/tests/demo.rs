@@ -1619,6 +1619,78 @@ fn archive_by_state_takes_every_finished_item_of_every_type() {
 }
 
 #[test]
+fn init_in_a_git_repository_makes_the_bare_repository_the_remote_of_the_checkout() {
+    use wf_vcs::testing::{git_in, init_repository};
+
+    let wf = Sandbox::new();
+    init_repository(&wf.repository);
+    git_in(&wf.repository, &["branch", "private"]);
+    let init = wf.json(&["init", "--name", "demo"]);
+    assert_eq!(init["upstream"], "wf/main");
+
+    let (_, workforce) = wf_cli::workspace::find_workforce(&wf.repository).unwrap();
+    let bare = wf_vcs::bare_repository(
+        &wf_daemon::DataDir::new(wf.data.join("workforce")).workforce(&workforce),
+    );
+    assert_eq!(
+        git_in(&bare, &["rev-parse", "--is-bare-repository"]),
+        "true"
+    );
+    assert_eq!(
+        git_in(&bare, &["rev-parse", "main"]),
+        git_in(&wf.repository, &["rev-parse", "main"])
+    );
+    assert_eq!(
+        git_in(&bare, &["branch", "--format=%(refname:short)"]),
+        "main",
+        "the principal's other branches stay out"
+    );
+    assert_eq!(
+        git_in(&wf.repository, &["remote", "get-url", "wf"]),
+        bare.to_str().unwrap()
+    );
+    assert_eq!(
+        git_in(
+            &wf.repository,
+            &["rev-parse", "--abbrev-ref", "main@{upstream}"]
+        ),
+        "wf/main"
+    );
+    // Pushing the principal's commits is a fast-forward of the target; a rewrite is refused.
+    std::fs::write(wf.repository.join("own.txt"), "own\n").unwrap();
+    git_in(&wf.repository, &["add", "own.txt"]);
+    git_in(&wf.repository, &["commit", "--quiet", "-m", "own"]);
+    git_in(&wf.repository, &["push", "--quiet"]);
+    assert_eq!(
+        git_in(&bare, &["rev-parse", "main"]),
+        git_in(&wf.repository, &["rev-parse", "main"])
+    );
+    git_in(
+        &wf.repository,
+        &["commit", "--amend", "--quiet", "-m", "rewritten"],
+    );
+    let refused = common::output(
+        std::process::Command::new("git")
+            .args(["push", "--force", "--quiet"])
+            .current_dir(&wf.repository)
+            .env_remove("GIT_CONFIG_COUNT"),
+    );
+    assert!(!refused.status.success());
+}
+
+#[test]
+fn init_outside_a_git_repository_still_makes_the_bare_repository() {
+    let wf = Sandbox::new();
+    let init = wf.json(&["init", "--name", "demo"]);
+    assert!(init["upstream"].is_null(), "{init}");
+    let (_, workforce) = wf_cli::workspace::find_workforce(&wf.repository).unwrap();
+    let bare = wf_vcs::bare_repository(
+        &wf_daemon::DataDir::new(wf.data.join("workforce")).workforce(&workforce),
+    );
+    assert!(bare.join("HEAD").is_file());
+}
+
+#[test]
 fn check_runs_the_policys_checks_on_the_checkout_and_fails_when_one_does() {
     let wf = Sandbox::new();
     wf_vcs::testing::git_in(&wf.repository, &["init", "--quiet"]);

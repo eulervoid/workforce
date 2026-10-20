@@ -2,12 +2,11 @@
 //! the machine config: once for each new entry of the inbox. Permission requests are told of
 //! where they are held, as they are not part of the state.
 
-use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use wf_core::id::{HashId, ItemId};
-use wf_core::inbox::{InboxEntry, Waiting};
+use wf_core::id::HashId;
+use wf_core::inbox::InboxEntry;
 use wf_core::state::State;
 
 use crate::machine_config::{Notice, NotifyConfig};
@@ -43,14 +42,8 @@ impl Notifier {
         }
     }
 
-    /// Tells of what waits on the principal and was not told of yet. `waiting_merges` are the
-    /// items whose last merge by the merge task found the target checked out with changes.
-    pub(crate) async fn announce(
-        &mut self,
-        daemon: &Daemon,
-        loaded: &Loaded,
-        waiting_merges: &BTreeSet<ItemId>,
-    ) {
+    /// Tells of what waits on the principal and was not told of yet.
+    pub(crate) async fn announce(&mut self, daemon: &Daemon, loaded: &Loaded) {
         let notify = match daemon.machine_config() {
             Ok(config) => {
                 self.broken_config = None;
@@ -71,14 +64,7 @@ impl Notifier {
         let Ok(inbox) = daemon.read(loaded, |state| state.inbox()).await else {
             return;
         };
-        let waits_on_principal = |entry: &InboxEntry| match &entry.waiting {
-            Waiting::Merge { .. } => waiting_merges.contains(&entry.item),
-            Waiting::Proposal
-            | Waiting::Blocker { .. }
-            | Waiting::PrincipalReview { .. }
-            | Waiting::Recovery { .. } => true,
-        };
-        let new = self.take_new(inbox, waits_on_principal);
+        let new = self.take_new(inbox);
         if new.is_empty() {
             return;
         }
@@ -97,18 +83,12 @@ impl Notifier {
         }
     }
 
-    /// The entries of `inbox` that wait on the principal and were not told of yet, oldest first.
-    /// Remembers what of `inbox` was told of, which forgets entries that are gone: an item that
-    /// comes back to wait is told of again. An entry that does not wait on the principal yet is
-    /// neither told of nor forgotten.
-    fn take_new(
-        &mut self,
-        inbox: Vec<InboxEntry>,
-        waits_on_principal: impl Fn(&InboxEntry) -> bool,
-    ) -> Vec<InboxEntry> {
+    /// The entries of `inbox` that were not told of yet, oldest first. Remembers what of `inbox`
+    /// was told of, which forgets entries that are gone: an item that comes back to wait is told
+    /// of again.
+    fn take_new(&mut self, inbox: Vec<InboxEntry>) -> Vec<InboxEntry> {
         let (told, untold): (Vec<InboxEntry>, Vec<InboxEntry>) = inbox
             .into_iter()
-            .filter(|entry| self.announced.contains(entry) || waits_on_principal(entry))
             .partition(|entry| self.announced.contains(entry));
         let new: Vec<InboxEntry> = untold.iter().rev().cloned().collect();
         if new.is_empty() && told.len() == self.announced.len() {
@@ -193,6 +173,7 @@ pub(crate) fn run_command(config: &NotifyConfig, notice: &Notice) {
 mod tests {
     use super::*;
     use wf_core::id::{CommentId, ItemId};
+    use wf_core::inbox::Waiting;
 
     fn blocker(byte: u8) -> InboxEntry {
         InboxEntry {
@@ -203,29 +184,22 @@ mod tests {
         }
     }
 
-    fn waits(_: &InboxEntry) -> bool {
-        true
-    }
-
     #[test]
     fn each_entry_is_told_of_once_across_restarts() {
         let directory = tempfile::tempdir().unwrap();
         let (first, second) = (blocker(1), blocker(2));
         let mut notifier = Notifier::load(directory.path());
-        assert_eq!(
-            notifier.take_new(vec![first.clone()], waits),
-            vec![first.clone()]
-        );
-        assert_eq!(notifier.take_new(vec![first.clone()], waits), []);
+        assert_eq!(notifier.take_new(vec![first.clone()]), vec![first.clone()]);
+        assert_eq!(notifier.take_new(vec![first.clone()]), []);
 
         let mut restarted = Notifier::load(directory.path());
         assert_eq!(
-            restarted.take_new(vec![second.clone(), first.clone()], waits),
+            restarted.take_new(vec![second.clone(), first.clone()]),
             vec![second.clone()]
         );
-        assert_eq!(restarted.take_new(vec![second.clone()], waits), []);
+        assert_eq!(restarted.take_new(vec![second.clone()]), []);
         assert_eq!(
-            restarted.take_new(vec![first.clone(), second], waits),
+            restarted.take_new(vec![first.clone(), second]),
             [first],
             "an entry that was gone and is back is told of again"
         );
@@ -236,31 +210,7 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let mut notifier = Notifier::load(&directory.path().join("missing"));
         let first = blocker(1);
-        assert_eq!(
-            notifier.take_new(vec![first.clone()], waits),
-            vec![first.clone()]
-        );
-        assert_eq!(notifier.take_new(vec![first], waits), []);
-    }
-
-    #[test]
-    fn an_entry_that_does_not_wait_yet_is_neither_told_of_nor_forgotten() {
-        let directory = tempfile::tempdir().unwrap();
-        let (first, second) = (blocker(1), blocker(2));
-        let mut notifier = Notifier::load(directory.path());
-        let only_first = |entry: &InboxEntry| *entry == first;
-        assert_eq!(
-            notifier.take_new(vec![first.clone(), second.clone()], only_first),
-            vec![first.clone()]
-        );
-        assert_eq!(
-            notifier.take_new(vec![first.clone(), second.clone()], |_: &InboxEntry| false),
-            [],
-            "what was told of stays told of"
-        );
-        assert_eq!(
-            notifier.take_new(vec![first, second.clone()], waits),
-            [second]
-        );
+        assert_eq!(notifier.take_new(vec![first.clone()]), vec![first.clone()]);
+        assert_eq!(notifier.take_new(vec![first]), []);
     }
 }
