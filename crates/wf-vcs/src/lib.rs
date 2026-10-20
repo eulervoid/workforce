@@ -20,8 +20,9 @@ use wf_core::session::{CommitId, GitOid, SessionRole};
 
 pub use agent_repository::{agent_branch_head, remove_agent_repository};
 pub use bare_repository::REMOTE;
-pub use git::GitCli;
+pub use git::{BRIDGE_DESCRIPTOR, GitCli};
 pub use item_refs::diverged_ref;
+pub use transfer::Bridge;
 
 /// The variables that give git config through the environment: how many, then each key and value.
 const CONFIG_COUNT: &str = "GIT_CONFIG_COUNT";
@@ -159,6 +160,8 @@ pub enum VcsError {
         REMOTE
     )]
     NoRemote(PathBuf),
+    #[error("the device does not have commit {}", .0.short())]
+    Unserved(CommitId),
 }
 
 /// The work on an item, as far as git can show it.

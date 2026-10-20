@@ -2,6 +2,7 @@
 //! commit through a bridge to another device's. Git negotiates, packs and checks; wf only starts
 //! the processes and carries their bytes (in `wf-net`, over iroh).
 
+use std::os::fd::OwnedFd;
 use std::process::{Child, Stdio};
 
 use wf_core::session::CommitId;
@@ -15,22 +16,35 @@ fn escape_ext(word: &str) -> String {
     word.replace('%', "%%").replace(' ', "% ")
 }
 
+/// Where the branches of the device a join goes through are fetched to before they become
+/// branches here.
+const JOINED_PREFIX: &str = "refs/wf/joined/";
+
+/// What `git fetch` reaches another device's repository with: a program that pipes its input and
+/// output to that device, which git runs as an `ext::` remote.
+pub struct Bridge {
+    /// The program and its arguments.
+    pub command: Vec<String>,
+    /// A descriptor the program finds as [`crate::BRIDGE_DESCRIPTOR`] and talks to this process
+    /// over. No path leads to it, so no other process can take the place of the program on it.
+    pub descriptor: Option<OwnedFd>,
+}
+
 impl GitCli {
     /// Starts `git upload-pack` on this repository, its input and output piped: the process to
-    /// serve a fetch from another device with. Fetch only, and it serves no object that no ref
-    /// reaches, such as a head rewritten away (`uploadpack.allowReachableSHA1InWant`).
+    /// serve a fetch from another device with. Fetch only.
     ///
-    /// It speaks protocol version 0, which no client of an `ext::` bridge can change (`GIT_PROTOCOL`
-    /// is removed): version 2 serves any object it has by id, whatever that option says, and would
-    /// serve what a rewrite left behind.
+    /// It speaks protocol version 2, which serves every object of the repository by id, whether
+    /// a ref reaches it or not: everything in wf's repository is shared with the workforce. The
+    /// server sets the version, as a client behind an `ext::` bridge cannot ask for one; git
+    /// fetching follows what the server speaks.
     pub fn spawn_upload_pack(&self) -> Result<Child, VcsError> {
         git()
-            .args(["-c", "uploadpack.allowReachableSHA1InWant=true"])
             .args(["upload-pack", "--strict"])
             .arg(&self.repository)
             .env("LC_ALL", "C")
             .env("GIT_TERMINAL_PROMPT", "0")
-            .env_remove("GIT_PROTOCOL")
+            .env("GIT_PROTOCOL", "version=2")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::null())
@@ -70,22 +84,68 @@ impl GitCli {
     }
 
     /// Fetches `commit` with everything it reaches that this repository lacks, from the repository
-    /// the `bridge` command talks to: a program with its arguments, which pipes its input and
-    /// output to a device's `git upload-pack`. Every object is checked (`fetch.fsckObjects`). No
-    /// ref is made: the caller points one at the commit, or the commit stays an object.
-    pub fn fetch_commit(&self, bridge: &[String], commit: CommitId) -> Result<(), VcsError> {
-        self.fetch_through(bridge, &commit.to_string())
+    /// the `bridge` talks to, which pipes its input and output to a device's `git upload-pack`.
+    /// Every object is checked (`fetch.fsckObjects`). No ref is made: the caller points one at the
+    /// commit, or the commit stays an object. A device that lacks the commit is
+    /// [`VcsError::Unserved`].
+    pub fn fetch_commit(&self, bridge: Bridge, commit: CommitId) -> Result<(), VcsError> {
+        match self.fetch_through(bridge, &commit.to_string()) {
+            Err(VcsError::Git { stderr, .. }) if stderr.contains("not our ref") => {
+                Err(VcsError::Unserved(commit))
+            }
+            fetched => fetched,
+        }
     }
 
     /// Fetches every branch of the repository the `bridge` talks to, and what they reach, as
     /// branches of this one: how a device that joins starts with the target and the item
-    /// branches of the device it joined through.
-    pub fn fetch_branches_through(&self, bridge: &[String]) -> Result<(), VcsError> {
-        self.fetch_through(bridge, "+refs/heads/*:refs/heads/*")
+    /// branches of the device it joined through. A branch this repository has already (made from
+    /// a checkout, say) is only moved forward, never back or aside.
+    pub fn fetch_branches_through(&self, bridge: Bridge) -> Result<(), VcsError> {
+        self.fetch_through(bridge, &format!("+refs/heads/*:{JOINED_PREFIX}*"))?;
+        let listed = self
+            .run(
+                &self.repository,
+                &[],
+                [
+                    "for-each-ref",
+                    "--format=%(objectname) %(refname)",
+                    JOINED_PREFIX,
+                ],
+            )?
+            .ok()?;
+        for line in listed.lines() {
+            let (commit, reference) =
+                line.split_once(' ')
+                    .ok_or_else(|| VcsError::UnexpectedOutput {
+                        command: "for-each-ref".into(),
+                        output: line.into(),
+                    })?;
+            let commit = self.oid("for-each-ref", commit)?;
+            let branch = reference.trim_start_matches(JOINED_PREFIX);
+            loop {
+                let here = match self.branch_head(branch) {
+                    Ok(here) => Some(here),
+                    Err(VcsError::NoBranch(_)) => None,
+                    Err(error) => return Err(error),
+                };
+                if let Some(here) = here
+                    && !self.is_ancestor(here, commit)?
+                {
+                    break;
+                }
+                if here == Some(commit) || self.move_branch(branch, here, commit)? {
+                    break;
+                }
+            }
+            self.run(&self.repository, &[], ["update-ref", "-d", reference])?
+                .ok()?;
+        }
+        Ok(())
     }
 
-    fn fetch_through(&self, bridge: &[String], what: &str) -> Result<(), VcsError> {
-        let words: Vec<String> = bridge.iter().map(|word| escape_ext(word)).collect();
+    fn fetch_through(&self, bridge: Bridge, what: &str) -> Result<(), VcsError> {
+        let words: Vec<String> = bridge.command.iter().map(|word| escape_ext(word)).collect();
         let url = format!("ext::{}", words.join(" "));
         let args = [
             "-c",
@@ -99,7 +159,7 @@ impl GitCli {
             &url,
             what,
         ];
-        self.run(&self.repository, &[], args)?.ok()?;
+        crate::git::spawn_inheriting(&self.repository, &[], args, bridge.descriptor)?.ok()?;
         Ok(())
     }
 }
@@ -137,12 +197,12 @@ mod tests {
 
     /// A bridge from `git fetch` to the `upload-pack` of `server`, through two named pipes and
     /// two threads: what a daemon does over iroh.
-    struct Bridge {
+    struct Piped {
         directory: tempfile::TempDir,
         threads: Vec<std::thread::JoinHandle<()>>,
     }
 
-    impl Bridge {
+    impl Piped {
         fn to(server: &GitCli) -> Self {
             let directory = tempfile::TempDir::new().unwrap();
             let (requests, answers) = (
@@ -180,17 +240,20 @@ mod tests {
             }
         }
 
-        fn command(&self) -> Vec<String> {
+        fn bridge(&self) -> Bridge {
             let path = |name: &str| self.directory.path().join(name).display().to_string();
-            vec![
-                "sh".into(),
-                "-c".into(),
-                format!(
-                    "cat <&0 > {} & cat < {}; wait",
-                    path("requests"),
-                    path("answers")
-                ),
-            ]
+            Bridge {
+                command: vec![
+                    "sh".into(),
+                    "-c".into(),
+                    format!(
+                        "cat <&0 > {} & cat < {}; wait",
+                        path("requests"),
+                        path("answers")
+                    ),
+                ],
+                descriptor: None,
+            }
         }
 
         fn finish(self) {
@@ -212,7 +275,8 @@ mod tests {
     }
 
     /// A bare server repository with `main` and `wf/item` at the second commit of the repository,
-    /// and the commits of both: the first, the second, and a third made after rewriting it.
+    /// the first and the second commit, and a third made after rewriting the second, which the
+    /// server does not have yet.
     struct Served {
         repository: TestRepository,
         server: GitCli,
@@ -261,8 +325,8 @@ mod tests {
 
     fn fetch_from(served: &Served, commit: CommitId) -> (Result<(), VcsError>, GitCli) {
         let into = fetcher(served.repository.root.path());
-        let bridge = Bridge::to(&served.server);
-        let fetched = into.fetch_commit(&bridge.command(), commit);
+        let bridge = Piped::to(&served.server);
+        let fetched = into.fetch_commit(bridge.bridge(), commit);
         bridge.finish();
         (fetched, into)
     }
@@ -278,9 +342,9 @@ mod tests {
     }
 
     #[test]
-    fn a_head_rewritten_away_and_what_the_server_lacks_are_refused() {
+    fn a_head_rewritten_away_is_still_served_and_what_the_server_lacks_is_unserved() {
         let served = served();
-        // Moves the item branch off the second commit, so no ref reaches it.
+        // Moves the item branch and the target off the second commit, so no ref reaches it.
         let rewritten = served.rewritten.to_string();
         let bare = served.server.repository().to_path_buf();
         let source = served.repository.directory().display().to_string();
@@ -290,27 +354,46 @@ mod tests {
             &bare,
             &["update-ref", "refs/heads/main", &served.first.to_string()],
         );
-        assert!(served.server.has_commit(served.second).unwrap());
-        let (fetched, into) = fetch_from(&served, served.rewritten);
-        fetched.unwrap();
-        assert!(into.has_commit(served.rewritten).unwrap());
-        let (fetched, into) = fetch_from(&served, served.second);
-        let error = fetched.expect_err("a head rewritten away is served");
-        assert!(error.to_string().contains("not our ref"), "{error}");
-        assert!(!into.has_commit(served.second).unwrap());
+        for commit in [served.rewritten, served.second] {
+            let (fetched, into) = fetch_from(&served, commit);
+            fetched.unwrap();
+            assert!(into.has_commit(commit).unwrap());
+        }
         let unknown = CommitId::Git(wf_core::session::GitOid::from_bytes([9; 20]));
         let (fetched, _) = fetch_from(&served, unknown);
-        assert!(fetched.is_err(), "what the server lacks is served");
+        assert!(
+            matches!(fetched, Err(VcsError::Unserved(commit)) if commit == unknown),
+            "{fetched:?}"
+        );
     }
 
     #[test]
     fn the_branches_of_a_device_are_fetched_as_branches() {
         let served = served();
         let into = fetcher(served.repository.root.path());
-        let bridge = Bridge::to(&served.server);
-        into.fetch_branches_through(&bridge.command()).unwrap();
+        let bridge = Piped::to(&served.server);
+        into.fetch_branches_through(bridge.bridge()).unwrap();
         bridge.finish();
         assert_eq!(into.branch_head("main").unwrap(), served.second);
+        assert_eq!(into.branch_head("wf/item").unwrap(), served.second);
+    }
+
+    #[test]
+    fn the_branches_of_a_device_do_not_overwrite_branches_that_went_elsewhere() {
+        let served = served();
+        let into = fetcher(served.repository.root.path());
+        // A repository made from a checkout, with the target somewhere else.
+        let source = served.repository.directory().display().to_string();
+        let into_path = into.repository().to_path_buf();
+        git_in(
+            &into_path,
+            &["fetch", "--quiet", &source, "other:refs/heads/main"],
+        );
+        let bridge = Piped::to(&served.server);
+        let fetched = into.fetch_branches_through(bridge.bridge());
+        bridge.finish();
+        fetched.unwrap();
+        assert_eq!(into.branch_head("main").unwrap(), served.rewritten);
         assert_eq!(into.branch_head("wf/item").unwrap(), served.second);
     }
 

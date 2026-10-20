@@ -2,16 +2,14 @@
 //! repository of a workforce, and fetches the commits it lacks from other devices through a
 //! bridge, a small program that `git fetch` runs and that pipes to a socket of this daemon.
 
-use std::path::Path;
 use std::sync::{Arc, Weak};
 
 use n0_future::boxed::BoxFuture;
-use tokio::net::UnixListener;
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceKey;
 use wf_core::session::CommitId;
 use wf_net::{GitProcess, GitSource, NetError, SourceError};
-use wf_vcs::{GitCli, VcsError};
+use wf_vcs::{BRIDGE_DESCRIPTOR, Bridge, GitCli, VcsError};
 
 use crate::Daemon;
 
@@ -63,8 +61,10 @@ impl GitSource for UploadPack {
             let input = tokio::process::ChildStdin::from_std(child.stdin.take().expect("piped"))?;
             let output =
                 tokio::process::ChildStdout::from_std(child.stdout.take().expect("piped"))?;
+            // Waited for from the start, so that it is reaped even when nobody asks how it ended.
+            let waiting = tokio::task::spawn_blocking(move || child.wait());
             let finished = async move {
-                let status = tokio::task::spawn_blocking(move || child.wait()).await??;
+                let status = waiting.await??;
                 if status.success() {
                     Ok(())
                 } else {
@@ -108,7 +108,7 @@ impl Daemon {
         commit: CommitId,
     ) -> Result<(), FetchError> {
         self.fetch_through_bridge(workforce, device, move |git, bridge| {
-            git.fetch_commit(&bridge, commit)
+            git.fetch_commit(bridge, commit)
         })
         .await
     }
@@ -121,44 +121,39 @@ impl Daemon {
         device: DeviceKey,
     ) -> Result<(), FetchError> {
         self.fetch_through_bridge(workforce, device, |git, bridge| {
-            git.fetch_branches_through(&bridge)
+            git.fetch_branches_through(bridge)
         })
         .await
     }
 
     /// Runs `fetch`, a `git fetch` in the bare repository of `workforce` through the bridge it is
     /// given, while this side pipes the bridge over iroh to `device`. `git fetch` runs the `wf`
-    /// binary of this daemon as its `ext::` bridge, which pipes to a socket in a private
-    /// directory.
+    /// binary of this daemon as its `ext::` bridge, which talks to this daemon over one end of a
+    /// socket pair that git inherits: no path leads to it, so no other process, an agent's
+    /// included, can take the place of the bridge. Bounded by the silence of the relay: when it
+    /// ends, the bridge's input ends, and so does git.
     async fn fetch_through_bridge(
         self: &Arc<Self>,
         workforce: WorkforceId,
         device: DeviceKey,
-        fetch: impl FnOnce(GitCli, Vec<String>) -> Result<(), VcsError> + Send + 'static,
+        fetch: impl FnOnce(GitCli, Bridge) -> Result<(), VcsError> + Send + 'static,
     ) -> Result<(), FetchError> {
         let binary = self
             .bin_dir()
             .map(|directory| directory.join("wf"))
             .ok_or(FetchError::NoBridge)?;
         let node = self.node().await?;
-        // A short path, as socket paths have little room; the directory is private to this daemon.
-        let directory = tempfile::Builder::new().prefix("wf-git-").tempdir()?;
-        let socket = directory.path().join("bridge");
-        let listener = UnixListener::bind(&socket)?;
-        let bridge = vec![
-            binary.display().to_string(),
-            "git-bridge".to_string(),
-            socket.display().to_string(),
-        ];
+        let (ours, theirs) = std::os::unix::net::UnixStream::pair()?;
+        ours.set_nonblocking(true)?;
+        let ours = tokio::net::UnixStream::from_std(ours)?;
+        let bridge = Bridge {
+            command: vec![binary.display().to_string(), "git-bridge".to_string()],
+            descriptor: Some(theirs.into()),
+        };
         let repository = self.bare_repository(workforce);
         let mut fetch =
             tokio::task::spawn_blocking(move || fetch(GitCli::open(&repository)?, bridge));
-        let relay = async {
-            let (stream, _) = listener.accept().await?;
-            node.git_connect(wf_net::endpoint_id(device), workforce, stream)
-                .await
-                .map_err(FetchError::from)
-        };
+        let relay = node.git_connect(wf_net::endpoint_id(device), workforce, ours);
         tokio::select! {
             fetched = &mut fetch => Ok(fetched??),
             relayed = relay => {
@@ -171,13 +166,23 @@ impl Daemon {
     }
 }
 
-/// The bridge `git fetch` runs: pipes its own input and output to the unix socket at `socket`,
-/// and passes on the end of either. Blocking, for a process that does nothing else.
-pub fn run_git_bridge(socket: &Path) -> std::io::Result<()> {
+/// The bridge `git fetch` runs: pipes its own input and output to the socket the daemon handed
+/// git as descriptor [`BRIDGE_DESCRIPTOR`], and passes on the end of either. Blocking, for a
+/// process that does nothing else.
+pub fn run_git_bridge() -> std::io::Result<()> {
     use std::net::Shutdown;
+    use std::os::fd::FromRawFd;
     use std::os::unix::net::UnixStream;
 
-    let stream = UnixStream::connect(socket)?;
+    if !is_open_socket(BRIDGE_DESCRIPTOR) {
+        return Err(std::io::Error::other(format!(
+            "descriptor {BRIDGE_DESCRIPTOR} is not the daemon's bridge; only `git fetch` started by \
+             the daemon runs this"
+        )));
+    }
+    // SAFETY: an open socket, which the daemon started git with and git handed on to this
+    // process; nothing else in it uses the descriptor.
+    let stream = unsafe { UnixStream::from_raw_fd(BRIDGE_DESCRIPTOR) };
     let mut writer = stream.try_clone()?;
     let upstream = std::thread::spawn(move || {
         let copied = std::io::copy(&mut std::io::stdin().lock(), &mut writer);
@@ -189,4 +194,15 @@ pub fn run_git_bridge(socket: &Path) -> std::io::Result<()> {
     // Git closes its end of our input when it is done, which ends the thread.
     let _ = upstream.join();
     Ok(())
+}
+
+/// Whether `descriptor` is open in this process and a socket.
+fn is_open_socket(descriptor: std::os::fd::RawFd) -> bool {
+    let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+    // SAFETY: fstat writes the stat of an open descriptor and fails on any other, which is then
+    // not read.
+    unsafe {
+        libc::fstat(descriptor, stat.as_mut_ptr()) == 0
+            && (stat.assume_init().st_mode & libc::S_IFMT) == libc::S_IFSOCK
+    }
 }

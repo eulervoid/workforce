@@ -179,12 +179,9 @@ pub enum Command {
         file: PathBuf,
     },
     /// What `git fetch` runs to reach another device through the daemon: pipes its input and
-    /// output to the socket the daemon opened for the fetch.
+    /// output to the socket the daemon handed git for the fetch, as descriptor 3.
     #[command(hide = true)]
-    GitBridge {
-        /// The unix socket of the daemon's side of the bridge.
-        socket: PathBuf,
-    },
+    GitBridge,
 }
 
 #[derive(Args)]
