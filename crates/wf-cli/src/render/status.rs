@@ -7,6 +7,9 @@ use wf_core::id::HashId;
 pub fn status(view: &StatusView) -> String {
     let mut out = String::new();
     let _ = writeln!(out, "workforce \"{}\" {}", view.name, view.id);
+    if let Some(target) = &view.checkout_target {
+        let _ = writeln!(out, "target: {target}");
+    }
     if let Some(parent) = &view.forked_from {
         let _ = writeln!(out, "forked from {parent}");
     }
@@ -128,6 +131,7 @@ mod tests {
             refolded: false,
             caches: None,
             awaiting_commits: Vec::new(),
+            checkout_target: None,
         };
         let output = status(&view);
         let lines: Vec<&str> = output.lines().collect();

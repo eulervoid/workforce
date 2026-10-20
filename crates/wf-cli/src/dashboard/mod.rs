@@ -548,6 +548,7 @@ impl Feed {
             machine_faults: workspace.machine_faults()?,
             awaited: workspace.awaited_commits()?,
             last_seen: workspace.last_seen()?,
+            checkout_target: workspace.checkout_target(),
             wanted: app.wanted(),
             detail_width: app.detail_width(),
         };
@@ -571,6 +572,7 @@ impl Feed {
             &taken.machine_faults,
             &taken.awaited,
             &taken.last_seen,
+            taken.checkout_target.clone(),
             taken.wanted.clone(),
         );
         self.taken = Some(taken);
@@ -613,6 +615,7 @@ struct Taken {
     machine_faults: wf_daemon::MachineFaults,
     awaited: Vec<wf_core::commits::AwaitedCommit>,
     last_seen: crate::devices::LastSeen,
+    checkout_target: Option<view::CheckoutTarget>,
     wanted: Wanted,
     detail_width: u16,
 }

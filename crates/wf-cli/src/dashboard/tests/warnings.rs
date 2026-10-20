@@ -1,7 +1,7 @@
 //! Dashboard tests: warnings.
 
 use super::support::*;
-use crate::dashboard::app::STATUS_LASTS_MS;
+use crate::dashboard::app::{App, STATUS_LASTS_MS};
 use crate::dashboard::snapshot::{Detail, MovedBack, Snapshot, moves_back};
 use ratatui::crossterm::event::KeyCode;
 use ratatui::style::Color;
@@ -110,4 +110,31 @@ fn only_new_daemon_moves_from_review_back_to_open_with_a_reason_warn() {
     let by_principal = fixture.author(&state, 0, 3_002, moved(item, ItemState::Open));
     events.push(by_principal);
     assert_eq!(moves_back(&events, events.len() - 1), Vec::new());
+}
+
+#[test]
+fn the_header_says_how_the_checkouts_target_stands_against_wfs() {
+    use crate::view::CheckoutTarget;
+    use wf_vcs::TargetStanding;
+
+    let mut app = app();
+    let header = |app: &mut App| screen(app, ROOMY, 24).lines().next().unwrap().to_owned();
+    app.refresh(Snapshot {
+        checkout_target: CheckoutTarget::new("main", TargetStanding::Ahead { commits: 3 }),
+        ..snapshot()
+    });
+    insta::assert_snapshot!("checkout_ahead", header(&mut app));
+    let (column, row) = find(&mut app, ROOMY, 24, "⚠ main 3 ahead");
+    let style = Drawn::of(&mut app, ROOMY, 24).style_at(column, row);
+    assert_eq!(style.fg, Some(Color::Yellow));
+    app.refresh(Snapshot {
+        checkout_target: CheckoutTarget::new("main", TargetStanding::Behind { commits: 2 }),
+        ..snapshot()
+    });
+    insta::assert_snapshot!("checkout_behind", header(&mut app));
+    app.refresh(Snapshot {
+        checkout_target: CheckoutTarget::new("main", TargetStanding::Same),
+        ..snapshot()
+    });
+    assert!(!header(&mut app).contains("main"), "{}", header(&mut app));
 }

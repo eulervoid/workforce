@@ -17,6 +17,7 @@ use wf_core::session::HarnessFault;
 use wf_core::state::State;
 use wf_daemon::MachineFaults;
 use wf_daemon::caches::CacheUsage;
+use wf_vcs::TargetStanding;
 
 use super::{device_label, timestamp_ms};
 
@@ -50,6 +51,8 @@ pub struct StatusView {
     pub caches: Option<CacheUsage>,
     /// What this device waits for before a session, a review or a merge can start, one line each.
     pub awaiting_commits: Vec<String>,
+    /// How the target branch of the principal's checkout differs from wf's, if it does.
+    pub checkout_target: Option<CheckoutTarget>,
 }
 
 /// Something wrong with the workforce that needs the principal. `wf status` prints it as one line,
@@ -266,8 +269,108 @@ impl Serialize for Flag {
     }
 }
 
+/// How the target branch of the principal's checkout differs from the target in wf's repository,
+/// which agents start from. `wf status` prints it as one line, and its JSON has that line.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckoutTarget {
+    branch: String,
+    standing: CheckoutStanding,
+}
+
+/// [`TargetStanding`] without `Same`, which says nothing.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CheckoutStanding {
+    Ahead { commits: usize },
+    Behind { commits: usize },
+    Diverged,
+}
+
+impl CheckoutTarget {
+    /// What there is to say about `branch` standing as `standing`; nothing when it is the same.
+    pub fn new(branch: &str, standing: TargetStanding) -> Option<Self> {
+        let standing = match standing {
+            TargetStanding::Same => return None,
+            TargetStanding::Ahead { commits } => CheckoutStanding::Ahead { commits },
+            TargetStanding::Behind { commits } => CheckoutStanding::Behind { commits },
+            TargetStanding::Diverged => CheckoutStanding::Diverged,
+        };
+        Some(Self {
+            branch: branch.to_string(),
+            standing,
+        })
+    }
+
+    /// Whether agents miss commits of the checkout, which every command warns of. Being behind
+    /// is normal after merges, and only `wf status` and the dashboard say so.
+    pub fn warns(&self) -> bool {
+        match self.standing {
+            CheckoutStanding::Ahead { .. } | CheckoutStanding::Diverged => true,
+            CheckoutStanding::Behind { .. } => false,
+        }
+    }
+
+    /// What is wrong in a few words, as the header of the dashboard has it: `main 2 ahead of wf`.
+    pub fn brief(&self) -> String {
+        let (branch, remote) = (&self.branch, wf_vcs::REMOTE);
+        match self.standing {
+            CheckoutStanding::Ahead { commits } => format!("{branch} {commits} ahead of {remote}"),
+            CheckoutStanding::Behind { commits } => {
+                format!("{branch} {commits} behind {remote}")
+            }
+            CheckoutStanding::Diverged => format!("{branch} diverged from {remote}"),
+        }
+    }
+
+    /// What is wrong, without the command that fixes it.
+    pub fn what(&self) -> String {
+        let branch = &self.branch;
+        let commits = |count: usize| match count {
+            1 => "1 commit".to_string(),
+            count => format!("{count} commits"),
+        };
+        match self.standing {
+            CheckoutStanding::Ahead { commits: count } => format!(
+                "{branch} here has {} that wf's repository lacks, and agents start from wf's",
+                commits(count)
+            ),
+            CheckoutStanding::Behind { commits: count } => {
+                format!("{branch} here is {} behind wf's repository", commits(count))
+            }
+            CheckoutStanding::Diverged => format!(
+                "{branch} here and in wf's repository have diverged, so a push is refused until it is rebased onto {}/{branch}",
+                wf_vcs::REMOTE
+            ),
+        }
+    }
+
+    /// The command that fixes it.
+    pub fn command(&self) -> String {
+        let (remote, branch) = (wf_vcs::REMOTE, &self.branch);
+        match self.standing {
+            CheckoutStanding::Ahead { .. } => format!("git push {remote} {branch}"),
+            CheckoutStanding::Behind { .. } => "git pull".to_string(),
+            CheckoutStanding::Diverged => format!("git pull --rebase {remote} {branch}"),
+        }
+    }
+}
+
+/// The line `wf status` prints: what is wrong, then the command that fixes it.
+impl fmt::Display for CheckoutTarget {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        write!(formatter, "{}: `{}`", self.what(), self.command())
+    }
+}
+
+impl Serialize for CheckoutTarget {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.collect_str(self)
+    }
+}
+
 /// What `wf status` knows besides the state.
 pub struct StatusContext<'a> {
+    /// How the target branch of the principal's checkout differs from wf's, if it does.
+    pub checkout_target: Option<CheckoutTarget>,
     pub own: Option<wf_core::identity::DeviceKey>,
     pub last_seen: &'a std::collections::BTreeMap<wf_core::identity::DeviceKey, u64>,
     pub daemon: bool,
@@ -336,6 +439,7 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
         caches,
         machine_faults,
         awaited,
+        checkout_target,
     } = context;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let mut flagged = Vec::new();
@@ -488,7 +592,10 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
     };
     let an_agent_starts_here = own.is_some_and(|device| takes_here(device, false));
     let unknown_harness_stops_some = own.is_some_and(|device| takes_here(device, true));
-    let next = if state.agents().next().is_none() {
+    let warned = checkout_target.as_ref().filter(|target| target.warns());
+    let next = if let Some(target) = warned {
+        Some(target.to_string())
+    } else if state.agents().next().is_none() {
         Some("add an agent: `wf agent add`".to_string())
     } else if !daemon && auto_agents {
         Some("start the daemon, which starts the agents: `wf daemon start`".to_string())
@@ -515,7 +622,7 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
                 .to_string(),
         )
     } else {
-        None
+        checkout_target.as_ref().map(ToString::to_string)
     };
     StatusView {
         name: state.name().unwrap_or_default().to_string(),
@@ -545,6 +652,7 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
         refolded,
         caches,
         awaiting_commits: awaiting_lines(state, awaited),
+        checkout_target,
     }
 }
 
@@ -604,6 +712,7 @@ mod tests {
                 waiting_on_you: 0,
                 refolded: false,
                 caches: None,
+                checkout_target: None,
             },
         )
         .next

@@ -9,6 +9,7 @@ pub mod diff;
 mod git;
 mod item_refs;
 pub mod signing;
+mod target_standing;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
 mod transfer;
@@ -22,6 +23,7 @@ pub use agent_repository::{agent_branch_head, remove_agent_repository};
 pub use bare_repository::REMOTE;
 pub use git::{BRIDGE_DESCRIPTOR, GitCli};
 pub use item_refs::diverged_ref;
+pub use target_standing::{TargetStanding, target_standing};
 pub use transfer::Bridge;
 
 /// The variables that give git config through the environment: how many, then each key and value.

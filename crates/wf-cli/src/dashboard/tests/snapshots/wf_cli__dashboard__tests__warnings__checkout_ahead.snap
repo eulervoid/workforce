@@ -1,0 +1,5 @@
+---
+source: crates/wf-cli/src/dashboard/tests/warnings.rs
+expression: header(&mut app)
+---
+" workforce  ⚠ main 3 ahead of wf: git push wf main                       ▐1 Now▌  2 Items   3 Agents   4 Log  "

@@ -121,13 +121,21 @@ pub(super) fn draw_header(frame: &mut Frame, app: &App, area: Rect) -> Vec<(Tab,
         Constraint::Length(tabs.width() as u16 + 1),
     ])
     .areas(area);
-    frame.render_widget(
-        Paragraph::new(Line::from(vec![
-            Span::raw(" "),
-            Span::raw(app.snapshot.name.clone()).themed(theme::text_bold()),
-        ])),
-        name,
-    );
+    let mut spans = vec![
+        Span::raw(" "),
+        Span::raw(app.snapshot.name.clone()).themed(theme::text_bold()),
+    ];
+    if let Some(target) = &app.snapshot.checkout_target {
+        // Agents miss what was never pushed, so that warns; being behind is normal after merges.
+        let (mark, style) = if target.warns() {
+            ("⚠ ", theme::attention())
+        } else {
+            ("", theme::text_dimmed())
+        };
+        let text = format!("{mark}{}: {}", target.brief(), target.command());
+        spans.extend([Span::raw("  "), Span::raw(text).themed(style)]);
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), name);
     frame.render_widget(Paragraph::new(tabs), tabs_area);
     labels
         .into_iter()
