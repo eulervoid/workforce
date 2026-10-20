@@ -53,12 +53,12 @@ impl World {
 
     fn without_daemon(agents: &[(&str, &str)]) -> WorldSetup {
         let wf = Sandbox::new();
+        init_repository(&wf.repository);
         wf.run(&["init", "--name", "demo"]);
         let policy = wf.run(&["policy", "show"]);
         let path = wf.root.path().join("unreviewed-policy.toml");
         std::fs::write(&path, policy.replace("review = \"manual\"\n", "")).unwrap();
         wf.run(&["policy", "apply", path.to_str().unwrap()]);
-        init_repository(&wf.repository);
         let mut scripts = BTreeMap::new();
         for (name, script) in agents {
             let path = wf.root.path().join(format!("script-{name}.txt"));

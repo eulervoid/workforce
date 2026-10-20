@@ -53,11 +53,7 @@ struct BriefView {
 }
 
 fn brief(json: bool, workspace: &Workspace, session: SessionId) -> anyhow::Result<()> {
-    // The checkout of a session is a worktree of the repository, so git works from here.
-    let git = match workspace.repository() {
-        Ok(git) => Some(git),
-        Err(_) => wf_vcs::GitCli::open(&std::env::current_dir()?).ok(),
-    };
+    let git = workspace.repository().ok();
     let sources = Here { workspace, git };
     let brief = Brief::of(workspace.state(), session, &sources)
         .ok_or_else(|| anyhow!("session {} has no item to brief on", session.short()))?;

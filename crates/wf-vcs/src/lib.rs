@@ -3,6 +3,7 @@
 //! system, called as the `git` CLI.
 
 mod agent_repository;
+mod bare_repository;
 pub mod config;
 pub mod diff;
 mod git;
@@ -16,6 +17,7 @@ use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::session::{CommitId, GitOid, SessionRole};
 
 pub use agent_repository::{agent_branch_head, remove_agent_repository};
+pub use bare_repository::REMOTE;
 pub use git::GitCli;
 
 /// The variables that give git config through the environment: how many, then each key and value.
@@ -76,9 +78,19 @@ impl CommitSigning {
 /// How much of an item's id names its branch and repository.
 const NAME_LEN: usize = 12;
 
+/// What the names of the branches of items begin with.
+const ITEM_BRANCH_PREFIX: &str = "wf/";
+
 /// The name of the branch that holds the work of an item. Sessions continue it.
 pub fn item_branch(item: ItemId) -> String {
-    format!("wf/{}", item_name(item))
+    format!("{ITEM_BRANCH_PREFIX}{}", item_name(item))
+}
+
+/// The bare repository of a workforce on this machine, `git` in its directory: the target and the
+/// branches of the items. Agent repositories take their objects from it, and the principal's
+/// checkout has it as its remote.
+pub fn bare_repository(workforce_directory: &Path) -> PathBuf {
+    workforce_directory.join("git")
 }
 
 /// The name of the directory of the worktree of an item.

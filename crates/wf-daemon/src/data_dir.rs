@@ -179,15 +179,6 @@ impl DataDir {
         Ok(())
     }
 
-    /// Tells the daemon where the repository of the workforce is on this machine, which is where
-    /// the last `wf` command ran. Best effort: the daemon only needs it to start sessions.
-    pub fn remember_repository(&self, id: &WorkforceId, repository: &Path) {
-        let directory = self.workforce(id);
-        if directory.is_dir() {
-            let _ = crate::remember_repository(&directory, repository);
-        }
-    }
-
     /// The device key of this machine, if it has one.
     pub fn device(&self) -> Result<Option<DeviceSigner>, DataDirError> {
         Ok(read_secret(&self.device_key())?

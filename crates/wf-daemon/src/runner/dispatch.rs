@@ -97,16 +97,7 @@ async fn dispatch_once(
 ) {
     failed.retain(|_, at| at.elapsed() < RETRY_FAILED_START);
     let device = daemon.device();
-    let Some(repository) = daemon.repository_of(workforce) else {
-        // Nothing starts without one, but what is wrong with the harnesses is still told.
-        if let Ok(harnesses) = daemon
-            .read(loaded, move |state| auto_agent_harnesses(state, device))
-            .await
-        {
-            sync_unknown_harnesses(daemon, workforce, harnesses);
-        }
-        return;
-    };
+    let repository = daemon.bare_repository(workforce);
     let Ok((pending, finished, principal)) = daemon
         .read(loaded, move |state| {
             (
@@ -197,14 +188,7 @@ async fn dispatch_once(
                 break;
             };
             let started = daemon
-                .start_session(
-                    workforce,
-                    loaded,
-                    agent.name.clone(),
-                    item,
-                    role,
-                    repository.clone(),
-                )
+                .start_session(workforce, loaded, agent.name.clone(), item, role)
                 .await;
             if let Err(error) = started {
                 daemon.faults.note_space(

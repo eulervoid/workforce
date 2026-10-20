@@ -115,7 +115,7 @@ impl Finished {
 
 /// Runs git in `directory` with `environment` set on top. Everything that runs git comes
 /// through here, so that all of it runs the same way.
-fn spawn<I, S>(
+pub(crate) fn spawn<I, S>(
     directory: &Path,
     environment: &[(&str, &str)],
     args: I,
@@ -590,10 +590,35 @@ impl GitCli {
         }
     }
 
-    /// Checks `commit` out, detached, in the main checkout, which has to be clean.
+    /// Checks `commit` out, detached, in the main checkout, which has to be clean. A commit the
+    /// checkout does not have yet is fetched from the remote `wf`, wf's bare repository: first the
+    /// branches, and when `commit` is not on one (the branch of its item is gone), the commit
+    /// itself.
     pub fn checkout_detached(&self, commit: CommitId) -> Result<(), VcsError> {
         if !self.is_clean(&self.repository)? {
             return Err(VcsError::DirtyCheckout(self.repository.clone()));
+        }
+        let revision = format!("{commit}^{{commit}}");
+        let has = |this: &Self| -> Result<bool, VcsError> {
+            let found = this.run(
+                &this.repository,
+                &[],
+                ["rev-parse", "--verify", "--quiet", &revision],
+            )?;
+            Ok(found.success)
+        };
+        if !has(self)? {
+            let remote = crate::REMOTE;
+            self.run(
+                &self.repository,
+                &[],
+                ["fetch", "--quiet", "--no-tags", remote],
+            )?
+            .ok()?;
+            if !has(self)? {
+                let args = ["fetch", "--quiet", "--no-tags", remote, &commit.to_string()];
+                self.run(&self.repository, &[], args)?.ok()?;
+            }
         }
         let args = ["checkout", "--quiet", "--detach", &commit.to_string()];
         self.run(&self.repository, &[], args)?.ok()?;

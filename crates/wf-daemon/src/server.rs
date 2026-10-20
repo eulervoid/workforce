@@ -360,12 +360,7 @@ async fn call(
                 .map_err(|error| wf_core::error_chain(&error))?;
             reply(commit)
         }
-        Call::StartSession {
-            agent,
-            item,
-            step,
-            repository,
-        } => {
+        Call::StartSession { agent, item, step } => {
             let state = daemon
                 .snapshot(loaded)
                 .await
@@ -381,7 +376,7 @@ async fn call(
                 None => SessionRole::Work,
             };
             let session = daemon
-                .start_session(workforce, loaded, agent, item, role, repository)
+                .start_session(workforce, loaded, agent, item, role)
                 .await
                 .map_err(|error| wf_core::error_chain(&error))?;
             reply(session)
@@ -452,7 +447,6 @@ mod tests {
                 agent: wf_core::name::AgentName::new("coder").unwrap(),
                 item: wf_core::id::ItemId::from(EventId::of(b"item")),
                 step: None,
-                repository: "/repository".into(),
             },
         ];
         for call in &principals {

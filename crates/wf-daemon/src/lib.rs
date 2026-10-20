@@ -45,22 +45,10 @@ pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
 pub use runner::{SessionError, session_model};
 pub use storage::{StorageClosed, StorageHandle};
 
-/// The file in the directory of a workforce that says where its repository is on this machine.
-pub const REPOSITORY_FILE: &str = "repository";
-
-/// Records where the repository of the workforce stored in `workforce_directory` is. The file is
-/// replaced in one step, so a reader sees the old path or the new one and never half of one.
-pub fn remember_repository(
-    workforce_directory: &std::path::Path,
-    repository: &std::path::Path,
-) -> std::io::Result<()> {
-    let path = workforce_directory.join(REPOSITORY_FILE);
-    let text = repository.to_string_lossy();
-    if std::fs::read_to_string(&path).is_ok_and(|current| current.trim() == text) {
-        return Ok(());
-    }
-    data_dir::write_private(&path, text.as_bytes())
-}
+/// The file in the directory of a workforce that said where its repository was on this machine,
+/// before wf had a bare repository of its own. A daemon that finds it makes the bare repository
+/// from that repository once, and removes the file.
+const LEGACY_REPOSITORY_FILE: &str = "repository";
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -490,6 +478,7 @@ impl Daemon {
             id,
             storage.clone(),
         ));
+        self.ensure_bare_repository(id, &storage).await;
         let entry = Arc::new(Loaded {
             storage,
             merges: runner::MergeQueue::default(),
@@ -514,6 +503,51 @@ impl Daemon {
             runner::run_dispatcher(weak, id, started).await;
         });
         Ok(entry)
+    }
+
+    /// Makes the bare repository of a workforce that has none yet: from the repository an earlier
+    /// version remembered (its target and item branches, which also gets the remote `wf`), or
+    /// empty when the workforce never had one. Sessions and merges cannot run without it, so a
+    /// failure is only logged, and tried again at the next start.
+    async fn ensure_bare_repository(&self, id: WorkforceId, storage: &StorageHandle) {
+        let directory = self.launch.data_dir.workforce(&id);
+        let bare = wf_vcs::bare_repository(&directory);
+        if bare.join("HEAD").is_file() {
+            return;
+        }
+        let target = storage
+            .with(|replica| {
+                replica
+                    .state()
+                    .policy()
+                    .map(|config| config.policy.merge.target.clone())
+            })
+            .await;
+        let Ok(Some(target)) = target else {
+            return;
+        };
+        let remembered = directory.join(LEGACY_REPOSITORY_FILE);
+        let checkout = std::fs::read_to_string(&remembered)
+            .ok()
+            .map(|text| PathBuf::from(text.trim()))
+            .filter(|path| !path.as_os_str().is_empty());
+        let made = tokio::task::spawn_blocking(move || {
+            wf_vcs::GitCli::create_bare_repository(&bare, &target, checkout.as_deref()).map(|_| ())
+        })
+        .await;
+        match made {
+            Ok(Ok(())) => {
+                let _ = std::fs::remove_file(&remembered);
+            }
+            Ok(Err(error)) => tracing::warn!(
+                "could not make the repository of workforce {id}: {}",
+                wf_core::error_chain(&error)
+            ),
+            Err(error) => tracing::warn!(
+                "could not make the repository of workforce {id}: {}",
+                wf_core::error_chain(&error)
+            ),
+        }
     }
 
     /// The loaded workforce, if it is one and its storage is running: nothing is opened.

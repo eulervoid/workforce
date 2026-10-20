@@ -124,14 +124,13 @@ pub enum Call {
     /// When each device was last heard from, in milliseconds since the epoch, as
     /// `Vec<(DeviceKey, u64)>`.
     LastSeen,
-    /// Starts a session of `agent` on `item` by hand, with `repository` on this machine: a review
+    /// Starts a session of `agent` on `item` by hand: a review
     /// of the named `step` (or of the only one open) when the item awaits a review, and a work
     /// session in a worktree otherwise. Answered with its `SessionId`.
     StartSession {
         agent: AgentName,
         item: ItemId,
         step: Option<ReviewStepName>,
-        repository: PathBuf,
     },
     /// Ends the session the connection acts for after the agent's turn, as the agent says, and
     /// applies what follows from it to its item; answered with an [`EndAnswer`].
@@ -396,7 +395,6 @@ mod tests {
                 agent: AgentName::new("claude").unwrap(),
                 item,
                 step: None,
-                repository: "/repo".into(),
             },
             Call::EndSession {
                 finish: Finish::Submit {
@@ -513,8 +511,8 @@ mod tests {
         ),
         (
             "StartSession",
-            81,
-            "iuworek3slgxmh5dzcc6ohtafpcmefvmdh4vacbqflthrnf2t2ya",
+            75,
+            "ukqjthnmoaxq3qjltbxabki5fmmm75vymii4o5frb3diswpywozq",
         ),
         (
             "EndSession",

@@ -299,13 +299,7 @@ impl Daemon {
                 Ok::<_, SessionError>(MergeEnd::Handled)
             }
         };
-        let Some(repository) = self.repository_of(workforce) else {
-            return cannot_merge(
-                "the daemon does not know the repository; run any `wf` command in its main checkout"
-                    .to_string(),
-            )
-            .await;
-        };
+        let repository = self.bare_repository(workforce);
         let signing = match self.merge_signing() {
             Ok(signing) => signing,
             Err(error) => return cannot_merge(wf_core::error_chain(&error)).await,

@@ -208,14 +208,8 @@ impl DaemonClient {
         agent: AgentName,
         item: ItemId,
         step: Option<ReviewStepName>,
-        repository: &Path,
     ) -> Result<SessionId, ClientError> {
-        let call = Call::StartSession {
-            agent,
-            item,
-            step,
-            repository: repository.to_path_buf(),
-        };
+        let call = Call::StartSession { agent, item, step };
         self.call(workforce, call)
     }
 

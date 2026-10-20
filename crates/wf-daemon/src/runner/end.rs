@@ -350,9 +350,7 @@ impl Daemon {
 
     /// Removes the agent's repository and the branch of an item whose work left nothing to keep.
     async fn discard_branch(&self, workforce: WorkforceId, item: ItemId) {
-        let Some(repository) = self.repository_of(workforce) else {
-            return;
-        };
+        let repository = self.bare_repository(workforce);
         let branch = item_branch(item);
         let directory = item_repository(&self.workforce_directory(workforce), item);
         let removed = blocking(move || {
@@ -388,9 +386,7 @@ impl Daemon {
     ) -> Result<CommitId, SessionError> {
         let state = self.snapshot(loaded).await?;
         let target = target_of(&state)?;
-        let repository = self
-            .repository_of(workforce)
-            .ok_or(SessionError::NoRepository)?;
+        let repository = self.bare_repository(workforce);
         Ok(blocking(move || GitCli::open(&repository)?.branch_head(&target)).await??)
     }
 
@@ -405,9 +401,7 @@ impl Daemon {
         item: ItemId,
         mode: ImportMode,
     ) -> Result<Option<CommitId>, SessionError> {
-        let repository = self
-            .repository_of(workforce)
-            .ok_or(SessionError::NoRepository)?;
+        let repository = self.bare_repository(workforce);
         let target = target_of(state)?;
         let agent_repository = item_repository(&self.workforce_directory(workforce), item);
         let branch = item_branch(item);

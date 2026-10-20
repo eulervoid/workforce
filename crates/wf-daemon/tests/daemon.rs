@@ -691,8 +691,9 @@ async fn a_join_with_an_invite_for_another_workforce_leaves_no_store_behind() {
     assert!(!data_dir.join(other.to_string()).exists());
 }
 
-/// Where `directory`, a daemon's data directory, has its worktrees, and a repository with the
-/// work of `item` on its branch in the worktree there; returns the head of the branch.
+/// Where `directory`, a daemon's data directory, has its worktrees, and a repository, standing in
+/// for the bare repository of the workforce, with the work of `item` on its branch in the
+/// worktree there; returns the head of the branch.
 fn give_work(
     directory: &Path,
     workforce: wf_core::id::WorkforceId,
@@ -701,7 +702,13 @@ fn give_work(
 ) -> wf_core::session::CommitId {
     let data_dir = DataDir::new(directory.to_path_buf());
     let workforce_directory = data_dir.workforce(&workforce);
-    wf_daemon::remember_repository(&workforce_directory, &repository.directory()).unwrap();
+    // The test repository stands in for the workforce's bare repository.
+    std::fs::create_dir_all(&workforce_directory).unwrap();
+    std::os::unix::fs::symlink(
+        repository.directory(),
+        wf_vcs::bare_repository(&workforce_directory),
+    )
+    .unwrap();
     let worktree = wf_vcs::item_repository(&workforce_directory, item);
     repository.prepare_worktree(&wf_vcs::item_branch(item), &worktree, "main");
     repository.write(&worktree, "live.txt", "work in progress\n");

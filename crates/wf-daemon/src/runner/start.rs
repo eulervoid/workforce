@@ -154,7 +154,6 @@ impl Daemon {
         agent: AgentName,
         item: ItemId,
         role: SessionRole,
-        repository: PathBuf,
     ) -> Result<SessionId, SessionError> {
         // A start by hand and one by the dispatcher must not both see the item free: the state is
         // read and the claim checked under a lock held until `SessionStarted` is written.
@@ -171,6 +170,7 @@ impl Daemon {
         if role == SessionRole::Work {
             state.ensure_unclaimed(item)?;
         }
+        let repository = self.bare_repository(workforce);
         let git = match role {
             SessionRole::Work => {
                 let path = item_repository(&self.workforce_directory(workforce), item);
@@ -190,7 +190,6 @@ impl Daemon {
                 blocking(move || GitCli::open(&repository)).await??
             }
         };
-        self.remember_repository(workforce, git.repository())?;
 
         let started = self
             .author(

@@ -57,8 +57,6 @@ enum NotResumed {
     NoRecord,
     #[error("{} is gone", .0.display())]
     NoDirectory(PathBuf),
-    #[error("the repository of the workforce is not known on this machine")]
-    NoRepository,
     #[error(transparent)]
     Session(#[from] SessionError),
 }
@@ -136,9 +134,7 @@ impl Daemon {
         if !directory.is_dir() {
             return Err(NotResumed::NoDirectory(directory));
         }
-        let repository = self
-            .repository_of(workforce)
-            .ok_or(NotResumed::NoRepository)?;
+        let repository = self.bare_repository(workforce);
         let git = blocking(move || GitCli::open(&repository))
             .await?
             .map_err(SessionError::from)?;

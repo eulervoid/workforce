@@ -246,9 +246,9 @@ pub(super) fn checkout(
     workspace: &Workspace,
     item: Option<String>,
 ) -> anyhow::Result<()> {
-    let git = workspace.repository()?;
+    let checkout = workspace.checkout()?;
     if item.as_deref() == Some("-") {
-        git.checkout_previous()?;
+        checkout.checkout_previous()?;
         let view = CheckoutView {
             item: None,
             commit: None,
@@ -258,8 +258,8 @@ pub(super) fn checkout(
         });
     }
     let id = choose_item(workspace, mode, item, Scope::Live)?;
-    let commit = item_work(workspace, &git, id)?.commit();
-    git.checkout_detached(commit)?;
+    let commit = item_work(workspace, &workspace.repository()?, id)?.commit();
+    checkout.checkout_detached(commit)?;
     let view = CheckoutView {
         item: Some(id.to_base32()),
         commit: Some(commit.to_string()),
