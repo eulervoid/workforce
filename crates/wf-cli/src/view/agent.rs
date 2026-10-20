@@ -239,10 +239,7 @@ mod tests {
         let first = apply(&mut state, create("task", "First")).id().into();
         let second = apply(&mut state, create("task", "Second")).id().into();
         let ended = apply(&mut state, start_session("coder", first)).id().into();
-        apply(
-            &mut state,
-            end_session(ended, EndReason::Submitted { commit: None }),
-        );
+        apply(&mut state, end_session(ended, EndReason::Submitted));
         let live: wf_core::id::SessionId = apply(&mut state, start_session("coder", second))
             .id()
             .into();

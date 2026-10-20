@@ -747,6 +747,101 @@ wf work release --note \"I cannot do this\"
     assert!(!git_in(&world.wf.repository, &["branch", "--list", "wf/*"]).is_empty());
 }
 
+/// The events of the log, read from the daemon of the world.
+fn logged_events(world: &World) -> Vec<wf_core::event::Event> {
+    let socket = world.wf.root.path().join("run/workforce/daemon.sock");
+    let (_, workforce) = wf_cli::workspace::find_workforce(&world.wf.repository).unwrap();
+    let token = wf_daemon::DataDir::new(world.wf.data.join("workforce")).read_principal_token();
+    let mut client = wf_daemon::client::DaemonClient::connect(&socket, token)
+        .unwrap()
+        .expect("a daemon");
+    client.events(workforce).unwrap()
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_work_session_names_its_head_on_a_comment_when_it_moved_and_on_its_end() {
+    let script = "\
+sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello && \"$WF_BIN\" comment {item} \"first\" && \"$WF_BIN\" comment {item} \"second\" && echo more > more.txt && git add more.txt && git commit -q -m more && \"$WF_BIN\" comment {item} \"third\"
+sh echo again > more.txt && git commit -q -am again
+wf work release --note \"stopping\"
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Name the head"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+
+    let events = logged_events(&world);
+    let comment_head = |text: &str| {
+        events.iter().find_map(|event| {
+            let EventBody::Commented(comment) = &event.content.body else {
+                return None;
+            };
+            (comment.text == text).then_some(comment.head)
+        })
+    };
+    let first = comment_head("first")
+        .expect("the first comment")
+        .expect("a head");
+    assert_eq!(
+        comment_head("second"),
+        Some(None),
+        "the branch did not move since the first comment named it"
+    );
+    let third = comment_head("third")
+        .expect("the third comment")
+        .expect("a head");
+    assert_ne!(first, third);
+    assert_eq!(
+        comment_head("stopping"),
+        Some(None),
+        "the note of an end is not a step report; the end names the head"
+    );
+    let ended = events
+        .iter()
+        .find_map(|event| {
+            let EventBody::SessionEnded(ended) = &event.content.body else {
+                return None;
+            };
+            Some(ended)
+        })
+        .expect("the end");
+    let last = ended
+        .head
+        .expect("a work session names its head when it ends");
+    assert_ne!(last, third, "the commit after the last comment");
+    assert_eq!(
+        git_in(
+            &world.wf.repository,
+            &["rev-parse", &format!("wf/{}", &item[..12])]
+        ),
+        last.to_string()
+    );
+    for named in [first, third, last] {
+        git_in(
+            &world.wf.repository,
+            &["cat-file", "-e", &format!("{named}^{{commit}}")],
+        );
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_work_session_without_commits_names_no_head() {
+    let script = "\
+wf comment {item} \"nothing yet\"
+wf work release --note \"stopping\"
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Nothing to name"]);
+    start_session(&world, &item);
+    world.ended_session().await;
+    let events = logged_events(&world);
+    assert!(events.iter().all(|event| match &event.content.body {
+        EventBody::Commented(comment) => comment.head.is_none(),
+        EventBody::SessionEnded(ended) => ended.head.is_none(),
+        _ => true,
+    }));
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_starting_daemon_removes_stray_repositories_and_caches_over_the_budget() {
     let script = "\

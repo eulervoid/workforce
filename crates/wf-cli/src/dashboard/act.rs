@@ -610,7 +610,6 @@ fn suspended<T>(terminal: &mut DefaultTerminal, run: impl FnOnce() -> T) -> anyh
 
 #[cfg(test)]
 mod tests {
-    use wf_core::session::EndReason;
     use wf_core::testing::*;
 
     use super::*;
@@ -634,15 +633,7 @@ mod tests {
         let session = apply(&mut state, start_session("coder", item)).id().into();
         let submitted_commit =
             CommitId::Git("a8d4948400000000000000000000000000000000".parse().unwrap());
-        apply(
-            &mut state,
-            end_session(
-                session,
-                EndReason::Submitted {
-                    commit: Some(submitted_commit),
-                },
-            ),
-        );
+        apply(&mut state, submit_session(session, submitted_commit));
         assert_eq!(
             submitted(&state, item, Some(submitted_commit)).unwrap(),
             Some(submitted_commit)

@@ -276,6 +276,12 @@ async fn call(
             reply(events)
         }
         Call::Author { body } => {
+            let body = match caller {
+                Caller::Session { session, .. } => {
+                    Box::new(daemon.with_head(workforce, loaded, session, *body).await)
+                }
+                Caller::Principal => body,
+            };
             let signer = daemon.signer().clone();
             let now_ms = wf_store::now_ms();
             let event = storage

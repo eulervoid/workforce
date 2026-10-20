@@ -344,7 +344,7 @@ impl Scene {
     }
 
     fn send_back_with(&mut self, item: ItemId, open_comment: EventBody) {
-        self.work(item, EndReason::Submitted { commit: None });
+        self.work(item, EndReason::Submitted);
         self.apply(open_comment);
         self.apply(verdict(item, None, Verdict::RequestChanges));
     }

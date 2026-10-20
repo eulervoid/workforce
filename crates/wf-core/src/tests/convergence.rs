@@ -6,12 +6,12 @@ use std::collections::BTreeSet;
 use proptest::prelude::*;
 
 use crate::crdt::SetChange;
-use crate::event::{Change, CommentKind, Event, EventBody};
+use crate::event::{Change, CommentKind, Commented, Event, EventBody, SessionEnded};
 use crate::id::{EventId, ItemId};
-use crate::identity::{DeviceSigner, InviteSigner};
+use crate::identity::{Actor, DeviceSigner, InviteSigner};
 use crate::item::{ItemEntry, ItemState, Priority};
 use crate::name::{Label, Requirement};
-use crate::session::{CommitId, EndReason, Verdict};
+use crate::session::{CommitId, EndReason, SessionRole, Verdict};
 use crate::state::{Disposition, State, Trust};
 use crate::testing::*;
 
@@ -89,14 +89,19 @@ impl Simulation {
 
     /// Writes the event on the replica if the policy lets it, and returns its id.
     fn submit_event(&mut self, device: usize, body: EventBody) -> Option<EventId> {
+        let actor = self.fixture.founder_actor();
+        self.submit_event_as(device, actor, body)
+    }
+
+    fn submit_event_as(&mut self, device: usize, actor: Actor, body: EventBody) -> Option<EventId> {
         if self.replicas[device].check_policy(&body).is_err() {
             return None;
         }
         // Wall clocks of different devices drift: sometimes the clock does not advance at all.
         self.clock += 1;
-        let event = self
-            .fixture
-            .author(&self.replicas[device], device, self.clock / 2, body);
+        let event =
+            self.fixture
+                .author_as(&self.replicas[device], device, actor, self.clock / 2, body);
         self.replicas[device]
             .receive(event.clone(), Trust::Stored)
             .expect("an event authored on a valid view is valid");
@@ -293,7 +298,27 @@ impl Simulation {
                     self.submit(device, edit(item, change));
                 }
             }
-            (13, Some(item)) => self.submit(device, comment(item, &format!("note {second} @ada"))),
+            (13, Some(item)) => {
+                // A work session of this device on the item names where its branch is.
+                let working = self.replicas[device]
+                    .live_sessions()
+                    .find(|session| {
+                        session.item() == item
+                            && session.role() == SessionRole::Work
+                            && session.device() == self.fixture.devices[device].key()
+                    })
+                    .map(|session| session.actor());
+                match working {
+                    Some(actor) => {
+                        let body = EventBody::Commented(Commented {
+                            head: Some(commit(first % 3)),
+                            ..Commented::plain(item, format!("step {second} done"))
+                        });
+                        self.submit_event_as(device, actor, body);
+                    }
+                    None => self.submit(device, comment(item, &format!("note {second} @ada"))),
+                }
+            }
             (14, Some(item)) if second % 4 == 3 => {
                 let coder = crate::name::AgentName::new("coder").unwrap();
                 if self.replicas[device]
@@ -314,11 +339,19 @@ impl Simulation {
                         EndReason::Released,
                         EndReason::Failed,
                         EndReason::Cancelled,
-                        EndReason::Submitted {
-                            commit: Some(commit(first % 2)),
-                        },
+                        EndReason::Submitted,
                     ][usize::from(first) % 4];
-                    self.submit(device, end_session(session, reason));
+                    // The daemon of the device names the head of a session it runs.
+                    let body = match self.replicas[device].session(session) {
+                        Some(folded)
+                            if folded.role() == SessionRole::Work
+                                && folded.device() == self.fixture.devices[device].key() =>
+                        {
+                            end_session_at(session, reason, commit(second % 3))
+                        }
+                        Some(_) | None => end_session(session, reason),
+                    };
+                    self.submit(device, body);
                 }
             }
             (14, _) if second % 4 == 1 => {
@@ -385,10 +418,7 @@ impl Simulation {
                     return;
                 };
                 self.submit(device, moved(item, ItemState::Review));
-                let ended = EndReason::Submitted {
-                    commit: Some(commit(second % 2)),
-                };
-                self.submit(device, end_session(session.into(), ended));
+                self.submit(device, submit_session(session.into(), commit(second % 2)));
             }
             (18, Some(item)) => {
                 let Some((submitted, _)) = self.replicas[device].submission(item) else {
@@ -639,11 +669,23 @@ fn the_generator_exercises_real_histories() {
         count(|body| matches!(body, EventBody::Commented(comment) if !comment.resolves.is_empty()));
     let bindings = count(|body| matches!(body, EventBody::DeviceBound(_)));
     let submissions = count(
-        |body| matches!(body, EventBody::SessionEnded(ended) if matches!(ended.reason, EndReason::Submitted { .. })),
+        |body| matches!(body, EventBody::SessionEnded(ended) if matches!(ended.reason, EndReason::Submitted)),
     );
+    let heads = count(|body| {
+        matches!(
+            body,
+            EventBody::Commented(Commented { head: Some(_), .. })
+                | EventBody::SessionEnded(SessionEnded { head: Some(_), .. })
+        )
+    });
     assert!(
-        requests > 0 && reviews > requests && resolving > 0 && bindings > 0 && submissions > 0,
-        "{reviews} reviews, {requests} requesting changes, {resolving} resolving, {bindings} bindings, {submissions} submissions"
+        requests > 0
+            && reviews > requests
+            && resolving > 0
+            && bindings > 0
+            && submissions > 0
+            && heads > 0,
+        "{reviews} reviews, {requests} requesting changes, {resolving} resolving, {bindings} bindings, {submissions} submissions, {heads} heads"
     );
     eprintln!(
         "events={} items={} archived={} ignored_edges={}",

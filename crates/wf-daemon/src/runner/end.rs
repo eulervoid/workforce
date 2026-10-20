@@ -126,7 +126,7 @@ impl Daemon {
         let principal = self.principal_of_device(&state)?;
         let item = folded.item();
         let role = folded.role();
-        let submitted = match &end {
+        let head = match &end {
             SessionEnd::Finish(Finish::Submit { .. }) => {
                 // The agent rebased the branch onto the target before it submitted (`wf work
                 // submit`), unless it is approved already; either way what it committed is
@@ -148,27 +148,37 @@ impl Daemon {
             )
             | SessionEnd::Interruption(_) => {
                 // What the work has got to stays on the branch of the item, for the next session
-                // and for the principal to look at.
-                if role == SessionRole::Work
-                    && let Err(error) = self
-                        .import_commits(workforce, &state, item, ImportMode::InProgress)
-                        .await
-                {
-                    tracing::warn!(
-                        "could not copy the commits of session {}: {}",
-                        session.short(),
-                        wf_core::error_chain(&error)
-                    );
+                // and for the principal to look at; the end names it.
+                match role {
+                    SessionRole::Work => {
+                        match self
+                            .import_commits(workforce, &state, item, ImportMode::InProgress)
+                            .await
+                        {
+                            Ok(head) => head,
+                            Err(error) => {
+                                tracing::warn!(
+                                    "could not copy the commits of session {}: {}",
+                                    session.short(),
+                                    wf_core::error_chain(&error)
+                                );
+                                None
+                            }
+                        }
+                    }
+                    SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => {
+                        None
+                    }
                 }
-                None
             }
         };
         let Closing {
             reason,
             actor,
             note,
+            head,
         } = state
-            .closing(session, &end, submitted)
+            .closing(session, &end, head)
             .ok_or(SessionError::UnknownSession(session))?;
         // A submission with open change requests is refused before anything is written.
         state
@@ -176,11 +186,11 @@ impl Daemon {
                 session,
                 reason,
                 because: None,
+                head,
             }))
             .map_err(|violation| SessionError::Authoring(violation.into()))?;
         // The checks of the policy run on the submission before anyone reviews it.
-        if let (SessionEnd::Finish(finish @ Finish::Submit { .. }), Some(commit)) =
-            (&end, submitted)
+        if let (SessionEnd::Finish(finish @ Finish::Submit { .. }), Some(commit)) = (&end, head)
             && !self.submission_checked(session, commit)
         {
             let checks = Self::checks_of(&state)?;
@@ -219,7 +229,7 @@ impl Daemon {
         // The item moves while the session still holds it, so that it is never ready in between.
         // A move that could not be written is tried again with the whole end, which is not
         // written before it; one that is refused does not hold up the end.
-        let effect = match state.after_end(session, reason) {
+        let effect = match state.after_end(session, reason, head) {
             None | Some(AfterEnd::Nothing) => Ok(None),
             Some(AfterEnd::MoveTo(to)) => self
                 .move_item_once(loaded, &state, principal, item, to, because, session)
@@ -255,6 +265,7 @@ impl Daemon {
                 session,
                 reason,
                 because,
+                head,
             }),
         )
         .await?;
@@ -276,11 +287,65 @@ impl Daemon {
             self.discard_session_directory(workforce, item, session, role)
                 .await;
         }
-        if matches!(reason, EndReason::Submitted { commit: None }) {
+        if reason == EndReason::Submitted && head.is_none() {
             self.discard_branch(workforce, item).await;
         }
         effect?;
         Ok(EndAnswer::Ended)
+    }
+
+    /// `body`, written for the work session `session`, with the head it names. Only a comment on
+    /// its item names one, and only when the branch moved since the log named one for the session
+    /// last: the commits are copied into this repository first, so that they exist here when the
+    /// event is written. The agent never names a head itself, so one it brings is dropped. A
+    /// comment is not held up by commits that cannot be copied; the end of the session names them.
+    pub(crate) async fn with_head(
+        &self,
+        workforce: WorkforceId,
+        loaded: &Loaded,
+        session: SessionId,
+        body: EventBody,
+    ) -> EventBody {
+        let EventBody::Commented(comment) = body else {
+            return body;
+        };
+        let comment = Commented {
+            head: None,
+            ..comment
+        };
+        let head = self
+            .moved_head(workforce, loaded, session, comment.item)
+            .await;
+        EventBody::Commented(Commented { head, ..comment })
+    }
+
+    async fn moved_head(
+        &self,
+        workforce: WorkforceId,
+        loaded: &Loaded,
+        session: SessionId,
+        item: ItemId,
+    ) -> Option<CommitId> {
+        let state = self.snapshot(loaded).await.ok()?;
+        let folded = state.session(session)?;
+        if folded.role() != SessionRole::Work || folded.item() != item || !folded.is_live() {
+            return None;
+        }
+        let head = match self
+            .import_commits(workforce, &state, item, ImportMode::InProgress)
+            .await
+        {
+            Ok(head) => head?,
+            Err(error) => {
+                tracing::warn!(
+                    "could not copy the commits of session {}: {}",
+                    session.short(),
+                    wf_core::error_chain(&error)
+                );
+                return None;
+            }
+        };
+        (folded.head() != Some(head)).then_some(head)
     }
 
     /// Removes the agent's repository and the branch of an item whose work left nothing to keep.

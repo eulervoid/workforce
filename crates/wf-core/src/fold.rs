@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::crdt::{Lww, Stamp};
 use crate::event::{Change, CommentKind, Event, EventBody, ItemLinked, Link};
 use crate::id::{CommentId, EventId, ItemId, SessionId};
-use crate::identity::{AgentId, Role};
+use crate::identity::{Actor, AgentId, Role};
 use crate::item::{Comment, Item, ItemState, Merge, Resolved, Review};
 use crate::refs;
 use crate::session::{Ended, Session, Verdict};
@@ -328,6 +328,7 @@ impl State {
                         device: content.author,
                         started: stamp,
                         ended: None,
+                        head: None,
                     },
                 );
             }
@@ -339,6 +340,11 @@ impl State {
                         reason: ended.reason,
                         stamp,
                     });
+                }
+                if let (Some(head), Some(session)) =
+                    (ended.head, workforce.sessions.get_mut(&ended.session))
+                {
+                    session.name_head(head, stamp);
                 }
             }
             EventBody::Reviewed(review) => {
@@ -426,6 +432,11 @@ impl State {
                 }
             }
             EventBody::Commented(comment) => {
+                if let (Some(head), Actor::Agent { session, .. }) = (comment.head, &content.actor)
+                    && let Some(session) = workforce.sessions.get_mut(session)
+                {
+                    session.name_head(head, stamp);
+                }
                 if let Some(item) = workforce.items.get_mut(&comment.item) {
                     item.touch(stamp, &content.actor);
                     let by = CommentId::from(id);

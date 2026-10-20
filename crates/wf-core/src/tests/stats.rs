@@ -58,7 +58,7 @@ fn stats_count_what_was_done_lately_and_how_attempts_ended() {
         &mut state,
         0,
         now - HOUR,
-        end_session(done, EndReason::Submitted { commit: None }),
+        end_session(done, EndReason::Submitted),
     );
     fixture.apply(&mut state, 0, now - HOUR, moved(new, ItemState::Done));
     let live = item_id(&fixture.apply(&mut state, 0, now, create("task", "live")));
@@ -94,7 +94,7 @@ fn item_stats_count_rounds_and_the_time_to_done() {
         &mut state,
         0,
         3 * HOUR,
-        end_session(first, EndReason::Submitted { commit: None }),
+        end_session(first, EndReason::Submitted),
     );
     fixture.apply(&mut state, 0, 3 * HOUR, change_request(item, "add a test"));
     fixture.apply(&mut state, 0, 3 * HOUR, change_request(item, "and docs"));
@@ -103,7 +103,7 @@ fn item_stats_count_rounds_and_the_time_to_done() {
         &mut state,
         0,
         5 * HOUR,
-        end_session(second, EndReason::Submitted { commit: None }),
+        end_session(second, EndReason::Submitted),
     );
     assert_eq!(
         state.item_stats(item),

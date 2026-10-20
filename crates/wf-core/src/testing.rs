@@ -415,7 +415,23 @@ pub fn end_session(session: SessionId, reason: EndReason) -> EventBody {
         session,
         reason,
         because: None,
+        head: None,
     })
+}
+
+/// A work session ends with `reason`, naming where its branch is.
+pub fn end_session_at(session: SessionId, reason: EndReason, head: CommitId) -> EventBody {
+    EventBody::SessionEnded(SessionEnded {
+        session,
+        reason,
+        because: None,
+        head: Some(head),
+    })
+}
+
+/// A work session submits `commit`.
+pub fn submit_session(session: SessionId, commit: CommitId) -> EventBody {
+    end_session_at(session, EndReason::Submitted, commit)
 }
 
 /// A comment about a step of the item's body: a report, when a session writes it.
@@ -651,12 +667,7 @@ pub fn golden_state() -> State {
         &mut state,
         0,
         7_003,
-        end_session(
-            coding,
-            EndReason::Submitted {
-                commit: Some(golden_commit(1)),
-            },
-        ),
+        submit_session(coding, golden_commit(1)),
     );
     let reviewing: SessionId = act(
         &mut state,

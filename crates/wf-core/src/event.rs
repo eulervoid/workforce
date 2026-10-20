@@ -332,6 +332,9 @@ pub struct Commented {
     pub step: Option<StepId>,
     /// The lines of the diff of the item's work the comment is about.
     pub lines: Option<LineAnchor>,
+    /// Where the branch of the work session that comments was, when it moved since the session
+    /// named a head last. Set by the daemon after it imported the commit, never by the agent.
+    pub head: Option<CommitId>,
 }
 
 /// The wire form of `Commented` before it could be about lines of a diff, and still for one that
@@ -345,6 +348,18 @@ struct CommentWithoutLines<'a> {
     step: Option<StepId>,
 }
 
+/// The wire form of `Commented` before it could name a head, and still for one that does not.
+/// Borrows what it encodes.
+#[derive(Serialize, Deserialize)]
+struct CommentWithoutHead<'a> {
+    item: ItemId,
+    text: Cow<'a, str>,
+    kind: CommentKind,
+    resolves: Cow<'a, [CommentId]>,
+    step: Option<StepId>,
+    lines: Option<LineAnchor>,
+}
+
 impl Commented {
     pub fn plain(item: ItemId, text: impl Into<String>) -> Self {
         Self {
@@ -354,6 +369,7 @@ impl Commented {
             resolves: Vec::new(),
             step: None,
             lines: None,
+            head: None,
         }
     }
 
@@ -374,11 +390,20 @@ impl Commented {
     }
 
     fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        if self.head.is_some() {
+            return Ok((tag::COMMENT_WITH_HEAD, encoding::encode(self)?));
+        }
         if self.kind == CommentKind::CheckFailure {
-            return Ok((tag::COMMENT_CHECK_FAILURE, encoding::encode(self)?));
+            return Ok((
+                tag::COMMENT_CHECK_FAILURE,
+                encoding::encode(&self.without_head())?,
+            ));
         }
         match self.lines {
-            Some(_) => Ok((tag::COMMENT_ON_LINES, encoding::encode(self)?)),
+            Some(_) => Ok((
+                tag::COMMENT_ON_LINES,
+                encoding::encode(&self.without_head())?,
+            )),
             None => Ok((
                 tag::COMMENT,
                 encoding::encode(&CommentWithoutLines {
@@ -392,9 +417,41 @@ impl Commented {
         }
     }
 
+    fn without_head(&self) -> CommentWithoutHead<'_> {
+        CommentWithoutHead {
+            item: self.item,
+            text: Cow::Borrowed(&self.text),
+            kind: self.kind,
+            resolves: Cow::Borrowed(&self.resolves),
+            step: self.step,
+            lines: self.lines.clone(),
+        }
+    }
+
+    fn from_without_head(old: CommentWithoutHead<'_>) -> Self {
+        Commented {
+            item: old.item,
+            text: old.text.into_owned(),
+            kind: old.kind,
+            resolves: old.resolves.into_owned(),
+            step: old.step,
+            lines: old.lines,
+            head: None,
+        }
+    }
+
+    /// One without a head would encode to other bytes than were signed.
+    fn with_head(payload: &[u8]) -> Result<Self, EncodingError> {
+        let comment: Commented = encoding::decode(payload)?;
+        match comment.head {
+            Some(_) => Ok(comment),
+            None => Err(EncodingError::malformed()),
+        }
+    }
+
     /// One without lines would encode to other bytes than were signed.
     fn on_lines(payload: &[u8]) -> Result<Self, EncodingError> {
-        let comment: Commented = encoding::decode(payload)?;
+        let comment = Self::from_without_head(encoding::decode(payload)?);
         match (comment.kind, &comment.lines) {
             (CommentKind::CheckFailure, _) | (_, None) => Err(EncodingError::malformed()),
             (_, Some(_)) => Ok(comment),
@@ -403,7 +460,7 @@ impl Commented {
 
     /// A check failure under any other tag would encode to other bytes than were signed.
     fn check_failure(payload: &[u8]) -> Result<Self, EncodingError> {
-        let comment: Commented = encoding::decode(payload)?;
+        let comment = Self::from_without_head(encoding::decode(payload)?);
         match comment.kind {
             CommentKind::CheckFailure => Ok(comment),
             CommentKind::Plain | CommentKind::Blocker | CommentKind::ChangeRequest => {
@@ -424,6 +481,7 @@ impl Commented {
             resolves: old.resolves.into_owned(),
             step: old.step,
             lines: None,
+            head: None,
         })
     }
 }
@@ -599,6 +657,18 @@ pub struct SessionEnded {
     pub reason: EndReason,
     /// The comment on the item that says why, written just before.
     pub because: Option<CommentId>,
+    /// For a work session, where its branch was when it ended, whatever the reason: the commit a
+    /// submission hands in. `None` when the branch has no commits of its own. Set by the daemon
+    /// after it imported the commit.
+    pub head: Option<CommitId>,
+}
+
+/// The wire form of `SessionEnded` before it could name a head, with the comment that says why.
+#[derive(Serialize, Deserialize)]
+struct SessionEndedWithoutHead {
+    session: SessionId,
+    reason: EndReason,
+    because: Option<CommentId>,
 }
 
 /// The wire form of `SessionEnded` before it named the comment that says why.
@@ -610,8 +680,18 @@ struct SessionEndedWithoutComment {
 
 impl SessionEnded {
     fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        if self.head.is_some() {
+            return Ok((tag::SESSION_ENDED_WITH_HEAD, encoding::encode(self)?));
+        }
         match self.because {
-            Some(_) => Ok((tag::SESSION_ENDED, encoding::encode(self)?)),
+            Some(_) => Ok((
+                tag::SESSION_ENDED,
+                encoding::encode(&SessionEndedWithoutHead {
+                    session: self.session,
+                    reason: self.reason,
+                    because: self.because,
+                })?,
+            )),
             None => Ok((
                 tag::SESSION_ENDED_WITHOUT_COMMENT,
                 encoding::encode(&SessionEndedWithoutComment {
@@ -622,11 +702,25 @@ impl SessionEnded {
         }
     }
 
+    /// One without a head would encode to other bytes than were signed.
+    fn with_head(payload: &[u8]) -> Result<Self, EncodingError> {
+        let ended: SessionEnded = encoding::decode(payload)?;
+        match ended.head {
+            Some(_) => Ok(ended),
+            None => Err(EncodingError::malformed()),
+        }
+    }
+
     /// One without a comment would encode to other bytes than were signed.
     fn with_comment(payload: &[u8]) -> Result<Self, EncodingError> {
-        let ended: SessionEnded = encoding::decode(payload)?;
-        match ended.because {
-            Some(_) => Ok(ended),
+        let old: SessionEndedWithoutHead = encoding::decode(payload)?;
+        match old.because {
+            Some(_) => Ok(SessionEnded {
+                session: old.session,
+                reason: old.reason,
+                because: old.because,
+                head: None,
+            }),
             None => Err(EncodingError::malformed()),
         }
     }
@@ -637,6 +731,7 @@ impl SessionEnded {
             session: old.session,
             reason: old.reason,
             because: None,
+            head: None,
         })
     }
 }
@@ -727,6 +822,10 @@ mod tag {
     pub const BOUND_POLICY_SET: u16 = 28;
     /// `SessionStarted` of a review for the step of a name.
     pub const SESSION_STARTED_FOR_STEP: u16 = 29;
+    /// `Commented` that names a head; one that does not is still written under its older tag.
+    pub const COMMENT_WITH_HEAD: u16 = 30;
+    /// `SessionEnded` that names a head; one that does not is still written under its older tag.
+    pub const SESSION_ENDED_WITH_HEAD: u16 = 31;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -846,6 +945,7 @@ impl EventBody {
             tag::COMMENT => EventBody::Commented(Commented::without_lines(payload)?),
             tag::COMMENT_ON_LINES => EventBody::Commented(Commented::on_lines(payload)?),
             tag::COMMENT_CHECK_FAILURE => EventBody::Commented(Commented::check_failure(payload)?),
+            tag::COMMENT_WITH_HEAD => EventBody::Commented(Commented::with_head(payload)?),
             tag::SESSION_STARTED => {
                 EventBody::SessionStarted(SessionStarted::without_step(payload)?)
             }
@@ -856,6 +956,9 @@ impl EventBody {
                 EventBody::SessionEnded(SessionEnded::without_comment(payload)?)
             }
             tag::SESSION_ENDED => EventBody::SessionEnded(SessionEnded::with_comment(payload)?),
+            tag::SESSION_ENDED_WITH_HEAD => {
+                EventBody::SessionEnded(SessionEnded::with_head(payload)?)
+            }
             tag::REVIEW => EventBody::Reviewed(encoding::decode(payload)?),
             tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
             tag => EventBody::Unknown {
@@ -1065,6 +1168,7 @@ mod tests {
             resolves: vec![CommentId::from_bytes([3; 32])],
             step: Some(StepId::of("pick storage")),
             lines: None,
+            head: None,
         });
         assert_eq!(golden_body_bytes(&body), GOLDEN_COMMENT_BODY);
     }
@@ -1087,10 +1191,9 @@ mod tests {
             }),
             EventBody::SessionEnded(SessionEnded {
                 session,
-                reason: EndReason::Submitted {
-                    commit: Some(commit),
-                },
+                reason: EndReason::Submitted,
                 because: None,
+                head: Some(commit),
             }),
             EventBody::Reviewed(Reviewed {
                 item,
@@ -1110,7 +1213,7 @@ mod tests {
 
     const GOLDEN_SESSION_BODIES: [&str; 4] = [
         "143f05636f6465722001010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
-        "15392002020202020202020202020202020202020202020202020202020202020202020001001400112233445566778899aabbccddeeff00112233",
+        "1f3a200202020202020202020202020202020202020202020202020202020202020202000001001400112233445566778899aabbccddeeff00112233",
         "165b20010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff0011223301012065e27c6eb2ae7ce97aceb1a372b6fb11fbc5bbffd95ee6fa17949cd148c6f730",
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
     ];
@@ -1246,11 +1349,67 @@ mod tests {
     }
 
     #[test]
+    fn a_head_is_written_under_a_tag_of_its_own_and_only_under_it() {
+        let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
+        let comment = Commented {
+            head: Some(commit),
+            ..comment_on_lines()
+        };
+        let ended = SessionEnded {
+            session: SessionId::from_bytes([2; 32]),
+            reason: EndReason::Submitted,
+            because: Some(CommentId::from_bytes([3; 32])),
+            head: Some(commit),
+        };
+        for (body, expected) in [
+            (
+                EventBody::Commented(comment.clone()),
+                tag::COMMENT_WITH_HEAD,
+            ),
+            (
+                EventBody::SessionEnded(ended.clone()),
+                tag::SESSION_ENDED_WITH_HEAD,
+            ),
+        ] {
+            let bytes = encoding::encode(&body).unwrap();
+            assert_eq!(bytes[0], expected as u8);
+            assert_eq!(encoding::decode::<EventBody>(&bytes).unwrap(), body);
+        }
+        // Without a head, the older tags decode to a body without one, and a body under the tag of
+        // a head without one would encode to other bytes than were signed.
+        for (payload, forged) in [
+            (
+                encoding::encode(&Commented {
+                    head: None,
+                    ..comment
+                })
+                .unwrap(),
+                tag::COMMENT_WITH_HEAD,
+            ),
+            (
+                encoding::encode(&SessionEnded {
+                    head: None,
+                    ..ended
+                })
+                .unwrap(),
+                tag::SESSION_ENDED_WITH_HEAD,
+            ),
+        ] {
+            let forged = TaggedBody {
+                tag: forged,
+                payload,
+            };
+            assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
+        }
+    }
+
+    #[test]
     fn a_session_end_with_a_comment_round_trips_under_its_own_tag() {
         let ended = SessionEnded {
             session: SessionId::from_bytes([2; 32]),
             reason: EndReason::Released,
             because: Some(CommentId::from_bytes([3; 32])),
+            head: None,
         };
         let bytes = encoding::encode(&EventBody::SessionEnded(ended.clone())).unwrap();
         assert_eq!(bytes[0], tag::SESSION_ENDED as u8);

@@ -365,7 +365,7 @@ pub(super) fn with_agents() -> Snapshot {
     let ended = with_status(
         session(14, "coder", item(4, "Dashboard"), 300),
         SessionStatus::Ended {
-            reason: EndReason::Submitted { commit: None },
+            reason: EndReason::Submitted,
             at: crate::view::timestamp_ms(NOW_MS - 2 * 60 * 60_000),
         },
     );
@@ -574,7 +574,7 @@ pub(super) fn coder_detail(hosted_here: bool) -> crate::view::AgentDetail {
                 14,
                 "coder",
                 &item(4, "Dashboard"),
-                ended(EndReason::Submitted { commit: None }, 120),
+                ended(EndReason::Submitted, 120),
                 120 + 30,
             ),
             session_view(

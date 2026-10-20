@@ -70,7 +70,7 @@ fn a_session_shows_the_moves_it_caused_at_its_start_and_end() {
     let session: SessionId = log.apply(start_session("coder", task)).id().into();
     log.apply(moved_for(task, ItemState::Active, session));
     log.apply(moved_for(task, ItemState::Done, session));
-    log.apply(end_session(session, EndReason::Submitted { commit: None }));
+    log.apply(end_session(session, EndReason::Submitted));
     log.apply(moved(task, ItemState::Open));
 
     assert_eq!(
@@ -83,9 +83,10 @@ fn a_session_shows_the_moves_it_caused_at_its_start_and_end() {
             },
             Activity::SessionEnded {
                 session,
-                reason: EndReason::Submitted { commit: None },
+                reason: EndReason::Submitted,
                 moved_to: Some(ItemState::Done),
                 because: None,
+                head: None,
             },
             Activity::Moved {
                 to: ItemState::Open,

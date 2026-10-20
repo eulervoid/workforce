@@ -97,7 +97,7 @@ impl State {
                 continue;
             }
             match ended.reason.outcome() {
-                Outcome::Submitted { .. } | Outcome::Finished => stats.attempts += 1,
+                Outcome::Submitted | Outcome::Finished => stats.attempts += 1,
                 Outcome::Failed => {
                     stats.attempts += 1;
                     stats.failed_attempts += 1;
@@ -124,7 +124,7 @@ impl State {
         for session in self.sessions_of(item.id()) {
             stats.sessions += 1;
             if let Some(ended) = session.ended()
-                && matches!(ended.reason.outcome(), Outcome::Submitted { .. })
+                && matches!(ended.reason.outcome(), Outcome::Submitted)
             {
                 stats.submissions += 1;
             }
@@ -157,7 +157,7 @@ impl State {
                 continue;
             };
             match ended.reason.outcome() {
-                Outcome::Submitted { .. } | Outcome::Finished => stats.finished += 1,
+                Outcome::Submitted | Outcome::Finished => stats.finished += 1,
                 Outcome::Failed => stats.failed += 1,
                 Outcome::Neither => {}
             }

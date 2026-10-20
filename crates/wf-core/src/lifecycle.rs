@@ -60,6 +60,9 @@ pub struct Closing {
     pub reason: EndReason,
     pub actor: Actor,
     pub note: Option<String>,
+    /// For a work session, where its branch is: what a submission hands in, `None` when the branch
+    /// has no commits of its own.
+    pub head: Option<CommitId>,
 }
 
 /// Why reviewed work could not be merged.
@@ -171,30 +174,33 @@ pub enum TurnOutcome {
 }
 
 impl State {
-    /// What is written when `session` ends. `submitted` is the head of the session's branch when
-    /// the branch has commits of its own; only a submission records it. `None` for a session that
-    /// does not exist or a device that is not bound.
+    /// What is written when `session` ends. `head` is the head of the session's branch when the
+    /// branch has commits of its own; a work session records it, whatever the reason it ends for.
+    /// `None` for a session that does not exist or a device that is not bound.
     pub fn closing(
         &self,
         session: SessionId,
         end: &SessionEnd,
-        submitted: Option<CommitId>,
+        head: Option<CommitId>,
     ) -> Option<Closing> {
         let session = self.session(session)?;
+        let head = match session.role() {
+            SessionRole::Work => head,
+            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
+        };
         let closing = |reason, actor, note| Closing {
             reason,
             actor,
             note,
+            head,
         };
         Some(match end {
             SessionEnd::Finish(finish) => {
                 let by_agent = session.actor();
                 match finish {
-                    Finish::Submit { note } => closing(
-                        EndReason::Submitted { commit: submitted },
-                        by_agent,
-                        note.clone(),
-                    ),
+                    Finish::Submit { note } => {
+                        closing(EndReason::Submitted, by_agent, note.clone())
+                    }
                     Finish::Release { note } => {
                         closing(EndReason::Released, by_agent, note.clone())
                     }
@@ -317,8 +323,13 @@ impl State {
 
     /// What happens to the item of `session` when it ends for `reason`. The daemon does it before
     /// it writes the end, while the session still holds the item, so the item is never ready in
-    /// between. `None` for a session that does not exist.
-    pub fn after_end(&self, session: SessionId, reason: EndReason) -> Option<AfterEnd> {
+    /// between. `head` is the one the end names. `None` for a session that does not exist.
+    pub fn after_end(
+        &self,
+        session: SessionId,
+        reason: EndReason,
+        head: Option<CommitId>,
+    ) -> Option<AfterEnd> {
         let session = self.session(session)?;
         if session.role() != SessionRole::Work {
             return Some(AfterEnd::Nothing);
@@ -327,7 +338,7 @@ impl State {
         let used = |state| self.state_if_used(item, state);
         let move_to = |state: Option<ItemState>| state.map_or(AfterEnd::Nothing, AfterEnd::MoveTo);
         Some(match reason {
-            EndReason::Submitted { commit } => match (self.needs_review(item), commit) {
+            EndReason::Submitted => match (self.needs_review(item), head) {
                 (true, _) => move_to(used(ItemState::Review)),
                 (false, Some(commit)) => match used(ItemState::Done) {
                     Some(_) => AfterEnd::MergeThenDone {

@@ -15,7 +15,7 @@ const FIXTURE: &str = include_str!("golden_bodies.txt");
 
 /// Every tag of `mod tag` (24 is retired). A tag missing here is not covered; the test below fails for one
 /// that has no line.
-const ALL_TAGS: [u16; 25] = [
+const ALL_TAGS: [u16; 27] = [
     tag::GENESIS,
     tag::POLICY_SET,
     tag::AGENT_DEFINED,
@@ -41,6 +41,8 @@ const ALL_TAGS: [u16; 25] = [
     tag::COMMENT_CHECK_FAILURE,
     tag::BOUND_POLICY_SET,
     tag::SESSION_STARTED_FOR_STEP,
+    tag::COMMENT_WITH_HEAD,
+    tag::SESSION_ENDED_WITH_HEAD,
 ];
 
 fn fixture_lines() -> Vec<(u16, Vec<u8>)> {
@@ -244,6 +246,7 @@ fn bodies() -> Vec<EventBody> {
             session,
             reason: EndReason::Released,
             because: None,
+            head: None,
         }),
         EventBody::Reviewed(Reviewed {
             item,
@@ -260,6 +263,7 @@ fn bodies() -> Vec<EventBody> {
             session,
             reason: EndReason::Released,
             because: Some(comment),
+            head: None,
         }),
         EventBody::Commented(Commented {
             lines: Some(LineAnchor {
@@ -274,7 +278,17 @@ fn bodies() -> Vec<EventBody> {
         }),
         EventBody::Commented(Commented {
             kind: CommentKind::CheckFailure,
+            ..plain_comment.clone()
+        }),
+        EventBody::Commented(Commented {
+            head: Some(commit),
             ..plain_comment
+        }),
+        EventBody::SessionEnded(SessionEnded {
+            session,
+            reason: EndReason::Submitted,
+            because: Some(comment),
+            head: Some(commit),
         }),
     ]
 }

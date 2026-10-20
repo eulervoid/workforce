@@ -195,8 +195,8 @@ pub fn session_view(
     };
     let commit = match (session.role(), session.ended().map(|ended| ended.reason)) {
         (SessionRole::Review { commit, .. }, _) => commit.map(|commit| commit.to_string()),
-        (SessionRole::Work, Some(EndReason::Submitted { commit })) => {
-            commit.map(|commit| commit.to_string())
+        (SessionRole::Work, Some(EndReason::Submitted)) => {
+            session.head().map(|commit| commit.to_string())
         }
         (SessionRole::Work | SessionRole::Supervise | SessionRole::Diagnose, _) => None,
     };

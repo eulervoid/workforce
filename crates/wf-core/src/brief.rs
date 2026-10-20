@@ -116,7 +116,7 @@ impl Brief {
                                     ended.reason.label()
                                 ))
                             }
-                            EndReason::Submitted { .. }
+                            EndReason::Submitted
                             | EndReason::Reviewed
                             | EndReason::Supervised
                             | EndReason::Cancelled

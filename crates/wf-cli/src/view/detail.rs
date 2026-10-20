@@ -490,15 +490,14 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                 reason,
                 moved_to,
                 because,
+                head,
                 ..
             } => {
                 let ended = match reason {
-                    EndReason::Submitted {
-                        commit: Some(commit),
-                    } => {
-                        format!("submitted {}", short_commit(commit))
-                    }
-                    EndReason::Submitted { commit: None } => "submitted without commits".into(),
+                    EndReason::Submitted => match head {
+                        Some(commit) => format!("submitted {}", short_commit(commit)),
+                        None => "submitted without commits".into(),
+                    },
                     EndReason::Reviewed => "finished the review".into(),
                     EndReason::Supervised => "finished supervising".into(),
                     EndReason::Released => "released the item".into(),
@@ -923,10 +922,7 @@ mod tests {
             .into();
         let session: SessionId = apply(&mut state, start_session("coder", item)).id().into();
         apply(&mut state, moved(item, ItemState::Review));
-        apply(
-            &mut state,
-            end_session(session, EndReason::Submitted { commit: None }),
-        );
+        apply(&mut state, end_session(session, EndReason::Submitted));
         assert_eq!(state.unstaffed_reviews(), [(item, Vec::new())]);
         assert!(flags(&state, item).contains(&UNSTAFFED.to_string()));
 
