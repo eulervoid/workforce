@@ -40,8 +40,18 @@ principal key. `--max-sessions` and `--agent` say how many sessions it runs and 
 `wf device edit` does later (see [agents.md](agents.md#where-agents-run)). `--hardware` says what it
 has, such as `gpu, os:linux`; left out, its os and architecture.
 
-Each daemon starts sessions for the agents its machine hosts. Two daemons do not yet coordinate
-which of them takes an item, so give each agent one machine to run on, with `wf device edit --agent`.
+Each daemon starts sessions for the agents its machine hosts. Two daemons do not yet agree in advance
+on which of them takes an item, so give each agent one machine to run on, with `wf device edit
+--agent`. When two machines start a session on one item before they sync, the later session ends
+`outclaimed` once they do, keeping its commits.
+
+A session lasts as long as its machine is there. When a machine has not been heard from for the
+policy's `[claims] lease` (3 minutes by default, see [policy.md](policy.md#claims)), another machine
+of yours may take its sessions over: the dispatcher, or `wf session start` by hand, ends the session
+`lease_expired` with a comment saying which machine was gone and since when, then starts its own.
+While the machine is there, `wf session start` refuses an item its session holds. When the machine
+comes back, it stops the sessions that were taken over and names the last commit of each in a
+comment, so that commit reaches every machine and the next session's brief names it.
 
 ## Commits across devices
 
