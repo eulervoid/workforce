@@ -8,7 +8,8 @@ use ratatui::layout::Position;
 use ratatui::style::Style;
 use ratatui::text::Line;
 use wf_core::graph::Readiness;
-use wf_core::id::{HashId, ItemId, SessionId};
+use wf_core::id::{ItemId, SessionId};
+use wf_core::search::Query;
 use wf_core::session::CommitId;
 use wf_harness::TranscriptEntry;
 
@@ -133,7 +134,8 @@ pub struct ItemsTab {
     pub list: ListTab<ItemId>,
     pub grouping: ItemGrouping,
     pub order: ItemOrder,
-    /// Only items whose title has this text are listed.
+    /// Only items with all the words of this text in their title, body or comments are listed,
+    /// and the item whose id it starts.
     pub filter: String,
     pub readiness: ReadinessFilter,
 }
@@ -590,12 +592,10 @@ impl App {
         waiting.chain(working).chain(flagged).collect()
     }
 
-    /// The groups of the Items tab with the items that pass its filters; empty groups are left
-    /// out. The text filter passes an item whose title contains it or whose id starts with it,
-    /// as `wf item` commands resolve an id, with or without a leading `#`.
+    /// The groups of the Items tab with the items that pass its readiness filter; empty groups
+    /// are left out. The text filter is applied when the snapshot is taken, as `wf item search`
+    /// does.
     pub fn item_groups(&self) -> Vec<(&str, Vec<&ItemSummary>)> {
-        let filter = self.items.filter.to_lowercase();
-        let id_prefix = filter.strip_prefix('#').unwrap_or(&filter);
         self.snapshot
             .items
             .iter()
@@ -604,10 +604,6 @@ impl App {
                     .items
                     .iter()
                     .filter(|item| self.items.readiness.accepts(item.readiness))
-                    .filter(|item| {
-                        item.title.to_lowercase().contains(&filter)
-                            || item.id.to_base32().starts_with(id_prefix)
-                    })
                     .collect();
                 (group.group.as_str(), items)
             })
@@ -863,6 +859,7 @@ impl App {
                 Tab::Items => Some(Listing::Items(ItemListing {
                     grouping: self.items.grouping,
                     order: self.items.order,
+                    search: Query::parse(&self.items.filter),
                 })),
                 Tab::Agents => Some(Listing::Agents),
                 Tab::Now | Tab::Log => None,

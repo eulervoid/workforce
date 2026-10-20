@@ -25,17 +25,20 @@ fn the_items_tab_lists_items_by_state_and_filters_them() {
     press(&mut app, KeyCode::Char('F'));
     press(&mut app, KeyCode::Char('F'));
     press(&mut app, KeyCode::Char('F'));
+    // The words typed are searched for when the snapshot is taken.
     press(&mut app, KeyCode::Char('/'));
     for character in "parse".chars() {
         press(&mut app, KeyCode::Char(character));
+        assert!(item_listing(&app).unwrap().search.is_some());
     }
     press(&mut app, KeyCode::Enter);
-    let titles: Vec<&str> = app
-        .item_groups()
-        .into_iter()
-        .flat_map(|(_, items)| items.into_iter().map(|item| item.title.as_str()))
-        .collect();
-    assert_eq!(titles, ["Parse config lazily"]);
+    assert_eq!(
+        item_listing(&app).unwrap().search,
+        wf_core::search::Query::parse("parse")
+    );
+    assert!(screen(&mut app, 60, 14).contains("\"parse\""));
+    press(&mut app, KeyCode::Esc);
+    assert_eq!(item_listing(&app).unwrap().search, None);
     press(&mut app, KeyCode::Char('o'));
     assert_eq!(
         item_listing(&app).map(|listing| listing.grouping),
@@ -60,27 +63,6 @@ fn the_items_tab_cycles_its_order_and_shows_it_in_its_title() {
     assert!(screen(&mut app, 60, 14).contains("sorted by merge"));
     press(&mut app, KeyCode::Char('O'));
     assert_eq!(order(&app), Some(ItemOrder::Priority));
-}
-
-#[test]
-fn the_items_filter_matches_the_start_of_an_id_with_or_without_a_hash() {
-    let mut app = app();
-    press(&mut app, KeyCode::Char('2'));
-    app.refresh(with_items());
-    for filter in ["aeaqca", "#AEAQ"] {
-        press(&mut app, KeyCode::Char('/'));
-        for character in filter.chars() {
-            press(&mut app, KeyCode::Char(character));
-        }
-        press(&mut app, KeyCode::Enter);
-        let titles: Vec<&str> = app
-            .item_groups()
-            .into_iter()
-            .flat_map(|(_, items)| items.into_iter().map(|item| item.title.as_str()))
-            .collect();
-        assert_eq!(titles, ["Parse config lazily"], "filtered by {filter}");
-        press(&mut app, KeyCode::Esc);
-    }
 }
 
 #[test]

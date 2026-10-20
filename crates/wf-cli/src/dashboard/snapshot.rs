@@ -1,6 +1,6 @@
 //! What the dashboard shows at one refresh, taken from the workspace.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeSet, HashMap, HashSet};
 
 use wf_core::event::{Event, EventBody};
 use wf_core::graph::{DependencyGraph, Readiness};
@@ -11,6 +11,7 @@ use wf_core::inbox::{InboxKind, Stale, Waiting as InboxWaiting};
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::name::AgentName;
 use wf_core::resolve::MentionTarget;
+use wf_core::search::{Query, SearchScope, search};
 use wf_core::session::{CommitId, Session};
 use wf_core::state::State;
 use wf_core::stats::{AgentStats, ProjectStats};
@@ -270,7 +271,7 @@ pub struct Wanted {
 }
 
 /// A list read from the workspace for the tab on screen.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Listing {
     /// The items, listed so.
     Items(ItemListing),
@@ -278,11 +279,14 @@ pub enum Listing {
     Agents,
 }
 
-/// How the items are listed: `wf item list --group-by --sort`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// How the items are listed: `wf item list --group-by --sort`, or `wf item search` when there
+/// is something to search for.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ItemListing {
     pub grouping: ItemGrouping,
     pub order: ItemOrder,
+    /// Only the items with all of its words are listed.
+    pub search: Option<Query>,
 }
 
 /// What a detail shows.
@@ -368,7 +372,7 @@ impl Snapshot {
                 Some(Listing::Items(_)) | None => ProjectStats::default(),
             },
             items: match wanted.listing {
-                Some(Listing::Items(listing)) => item_groups(state, graph, listing),
+                Some(Listing::Items(listing)) => item_groups(sources, listing),
                 Some(Listing::Agents) | None => Vec::new(),
             },
             links: Links::take(state),
@@ -622,9 +626,27 @@ fn agents(state: &State, graph: &DependencyGraph, own: DeviceKey) -> Vec<AgentIn
         .collect()
 }
 
-fn item_groups(state: &State, graph: &DependencyGraph, listing: ItemListing) -> Vec<ItemGroup> {
+fn item_groups(sources: &Sources, listing: ItemListing) -> Vec<ItemGroup> {
+    let Sources {
+        state,
+        graph,
+        events,
+        ..
+    } = *sources;
+    let found: Option<BTreeSet<ItemId>> = listing.search.map(|query| {
+        let texts = view::comment_texts(events);
+        search(state, &query, &texts, SearchScope::Live)
+            .iter()
+            .map(|hit| hit.item.id())
+            .collect()
+    });
     let summaries = sorted_views(state, crate::commands::Scope::Live, listing.order)
         .into_iter()
+        .filter(|item| {
+            found
+                .as_ref()
+                .is_none_or(|found| found.contains(&item.id()))
+        })
         .map(|view| view::summary(state, graph, view))
         .collect();
     view::group_items(listing.grouping, summaries)

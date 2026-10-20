@@ -179,3 +179,67 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
         ["The disk is full", "The login of claude has lapsed"]
     );
 }
+
+#[test]
+fn the_items_list_holds_the_items_found_in_titles_bodies_and_comments() {
+    use crate::dashboard::snapshot::{ItemListing, Listing, Sources, Wanted};
+    use wf_core::search::Query;
+    use wf_core::testing::*;
+
+    let fixture = Fixture::new(1);
+    let mut state = fixture.state();
+    let mut events = Vec::new();
+    let mut apply = |state: &mut wf_core::state::State, body| {
+        let event = fixture.author(state, 0, 2_000, body);
+        state
+            .receive(event.clone(), wf_core::state::Trust::Untrusted)
+            .unwrap();
+        events.push(event.clone());
+        event
+    };
+    apply(&mut state, create("task", "Nudges in the title"));
+    apply(&mut state, create_with_body("task", "Body", "about nudges"));
+    let remarked: ItemId = apply(&mut state, create("task", "Remarked")).id().into();
+    apply(&mut state, comment(remarked, "nudges here"));
+    apply(&mut state, create("task", "Unrelated"));
+    let graph = state.dependency_graph();
+    let sources = Sources {
+        state: &state,
+        graph: &graph,
+        events: &events,
+        event: &|_| None,
+        own: fixture.devices[0].key(),
+        now_ms: 3_000,
+        detail_width: 80,
+    };
+    let titles = |search: &str| {
+        let wanted = Wanted {
+            detail: None,
+            listing: Some(Listing::Items(ItemListing {
+                grouping: crate::cli::ItemGrouping::State,
+                order: crate::cli::ItemOrder::Priority,
+                search: Query::parse(search),
+            })),
+        };
+        let snapshot = Snapshot::take(
+            &sources,
+            &[],
+            &Default::default(),
+            &Default::default(),
+            wanted,
+        );
+        let mut titles: Vec<String> = snapshot
+            .items
+            .iter()
+            .flat_map(|group| group.items.iter().map(|item| item.title.clone()))
+            .collect();
+        titles.sort();
+        titles
+    };
+    assert_eq!(
+        titles("NUDGES"),
+        ["Body", "Nudges in the title", "Remarked"]
+    );
+    assert_eq!(titles("nudges here"), ["Remarked"]);
+    assert_eq!(titles("").len(), 4);
+}
