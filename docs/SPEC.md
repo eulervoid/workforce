@@ -1214,8 +1214,7 @@ model the harness does not offer fails the session with the list.
 
 The CLI and the dashboard are thin layers over the same daemon calls.
 
-*Planned:* a `wf` MCP server attached at `session/new` (M3); a `raw-cli` fallback that starts any
-agent with a prompt file and watches commits (M3); `wf attach <session>` over an iroh ALPN `wf/acp/1`
+*Planned:* a `wf` MCP server attached at `session/new` (M3); `wf attach <session>` over an iroh ALPN `wf/acp/1`
 (M5); probing harnesses with ACP `initialize`.
 
 ### Permission requests
@@ -1568,6 +1567,8 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 9. Should the merge refuse to run checks outside the sandbox for work no principal reviewed (a `light`
    level, agents only)? Today it runs agent-written code with the principal's privileges after only
    another agent read it.
+10. *Parked:* a `raw-cli` fallback for harnesses without ACP (start the agent with a prompt file and
+    watch its commits). Not needed while every harness we use speaks ACP.
 
 ## 18. Milestones
 
@@ -1580,7 +1581,7 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 | M2.2 | Daily use on one machine (**stage 1**): recovery levels, machine faults, resume after restart, daemon management, export and import, network off for one device, notifications | built |
 | M2.3 | The dashboard | built |
 | — | Since: merge checks and `wf check`, rebase at submit, fixed states with verbs, commit signing, storage budget, `[theme]`, `wf stats` | built |
-| M3 | Sessions across devices (**stage 2**): anchor dispatch, claims and leases, repositories across devices (`wf/git/1`, `<wf>/git`), `raw-cli` fallback, `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
+| M3 | Sessions across devices (**stage 2**): anchor dispatch, claims and leases, repositories across devices (`wf/git/1`, `<wf>/git`), `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
 | M4 | Decision ratification, distill items, hybrid search | |
 | M5 | Several principals, member invites, threads, scopes, `wf attach` (**stage 3**) | |
 | M6 | `seen` and compaction | |
