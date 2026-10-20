@@ -310,6 +310,8 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 24 | retired | (`Report`, now a comment) |
 | 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
 | 26 | `Commented` | as tag 16, plus `lines: LineAnchor`, the lines of the diff it is about (section 11); a comment without lines is written under tag 16 |
+| 30 | `Commented` | as tag 16, 26 or 27 (by lines and kind), plus `head: CommitId`, where the branch of the work session that comments was (section 10); a comment without a head keeps its older tag |
+| 31 | `SessionEnded` | as tag 21 or 25, plus `head: CommitId`, where the branch of the work session was when it ended (section 10); an end without a head keeps its older tag |
 | 28 | `BoundPolicySet` | `Signed<BoundPolicySet>`: `policy`, and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
 
 * `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.
@@ -324,8 +326,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
 * Tags are never reused. *Planned (M3):* `Assigned`, `Claim` (of an item's work or of its merge),
-  `TargetMoved{commit, onto}`; `head: Option<CommitId>` on `Commented` and `SessionEnded`, which
-  replaces the commit in `Submitted`; `onto: CommitId` on `Merged` (section 10).
+  `TargetMoved{commit, onto}`; `onto: CommitId` on `Merged` (section 10).
 
 ### Store
 
@@ -619,7 +620,7 @@ it with one session.
 
 | Reason | Ends when |
 |---|---|
-| `Submitted{commit}` | the agent ran `wf work submit` |
+| `Submitted` | the agent ran `wf work submit`; the commit it hands in is the `head` of the end (section 10) |
 | `Reviewed`, `Supervised`, `Diagnosed` | the agent gave a verdict, resolved a blocker, wrote its diagnosis |
 | `Released` | `wf work release`, or the nudges ran out |
 | `TimedOut` | `park_timeout` or `max_duration` passed |
@@ -940,6 +941,30 @@ worktree.
   outside the sandbox with secrets from the broker. Its failure goes to the inbox and never reopens the
   item. wf does not become a CI system: no jobs, artifacts or matrices.
 
+### The log names the commits
+
+`head: Option<CommitId>` on `Commented` and `SessionEnded` names where the branch of a work session
+is, so that the log says every commit another device needs.
+
+* On `Commented`, the daemon sets it, never the agent (a head the agent brings is dropped): when a
+  work session comments on its item and its head moved since the log last named one for the
+  session, the daemon imports first, so the commit exists in the principal's repository when the
+  event is written. Step reports make this about once per step. A comment is not held up by commits
+  that cannot be imported.
+* On `SessionEnded`, for a work session, it is where the branch was when the session ended,
+  whatever the reason, or `None` when the branch has no commits of its own. `Submitted` carries no
+  commit: the submission is the `head` of the session's end, so the two cannot disagree, and
+  `None` is work submitted without commits.
+* Admission: a `head` is accepted only from the device that runs the work session, and only on a
+  comment on the session's item or on the end of a work session; any other event naming one is
+  invalid.
+* Fold: a session's head is the last one named, by `(hlc, EventId)`; the item's head
+  (`State::work_head`) is that of its latest work session that named one (the session holding the
+  claim, once claims across devices exist).
+
+With `Reviewed{commit}` and `Merged{commit}` these are every commit another device needs. Item
+heads get no event of their own and stay out of gossip.
+
 ### Planned (M3): repositories across devices
 
 Every commit the log names reaches every device, peer to peer: no server, no credentials between
@@ -953,12 +978,6 @@ devices, nothing new for the principal to run.
   `wf item checkout` fetches from `wf` first. wf no longer touches the principal's checkout, so
   `<wf>/repository`, the merge's wait on a dirty checkout and its `merge` inbox entry go, and the
   principal's other branches are never in what wf serves.
-* **The log names the commits.** `head: Option<CommitId>` on `Commented`, set by the daemon after an
-  import when a work session's head moved since it last named one (so about once per step report;
-  the agent never names it), and on `SessionEnded`, where a work session's branch was when it ended,
-  whatever the reason (a submission's commit, which `Submitted` no longer carries). With
-  `Reviewed{commit}` and `Merged{commit}` these are every commit another device needs. Item heads
-  get no event of their own and stay out of gossip.
 * **`wf/git/1`.** Each daemon serves `git upload-pack` on `<wf>/git` over an iroh stream, to members,
   fetch only: no device writes into another's repository. With `uploadpack.allowReachableSHA1InWant`
   it serves a commit reachable from the target or an item branch and refuses anything else, such as a
