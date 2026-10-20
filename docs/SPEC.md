@@ -784,7 +784,9 @@ default level; an item can name another (`--recovery`).
   which is what the merge commits are made and signed by (`[commits] merge_signing =
   "as_configured"` reads the config of `<wf>/git` and of the principal's account, not of the
   checkout); the principal's other branches are never in it. The checkout gets `<wf>/git` as its
-  remote `wf`, the upstream of the target (`branch.<target>.remote`/`merge`): merged work comes in
+  remote `wf`, the upstream of the target (`branch.<target>.remote`/`merge`), which pushes the
+  target alone (`remote.wf.push = refs/heads/<target>:refs/heads/<target>`), so a plain `git push`
+  cannot carry another branch into `<wf>/git`: merged work comes in
   with `git pull`, and the principal's own commits on the target go out with `git push`, taken only as
   a fast-forward (`receive.denyNonFastForwards`; `receive.autogc` is off, as the daemon never packs or
   prunes). The merge moves the target by compare-and-swap, so a push that landed first is not
@@ -976,8 +978,8 @@ is, so that the log says every commit another device needs.
   (`State::work_head`) is that of its latest work session that named one (the session holding the
   claim, once claims across devices exist).
 
-With `Reviewed{commit}` and `Merged{commit}` these are every commit another device needs. Item
-heads get no event of their own and stay out of gossip.
+With the submission (the `head` of a submitted end) these are every commit another device needs.
+Item heads get no event of their own and stay out of gossip.
 
 ### Repositories across devices
 
@@ -985,40 +987,55 @@ Every commit the log names reaches every device, peer to peer: no server, no cre
 devices, nothing new for the principal to run.
 
 * **`wf/git/1`.** Each daemon serves `git upload-pack` on `<wf>/git` over an iroh stream, to members,
-  fetch only: no device writes into another's repository. The process runs with
-  `uploadpack.allowReachableSHA1InWant`, so a commit reachable from the target, an item branch or a
-  ref of work set apart is served and anything else, such as a head rewritten away, is refused by
-  the server (`not our ref`). It speaks protocol version 0 and nothing else (`GIT_PROTOCOL` is
-  removed, and a client of an `ext::` bridge cannot ask for another): git 2.55 serves any object by
-  id under protocol version 2 whatever that option says, so only version 0 keeps the refusal. The
-  fetching side runs `git fetch` with `fetch.fsckObjects` through an `ext::` bridge, so git does
-  the negotiation, thin packs and checks, and wf-net only carries bytes. The bridge is the hidden
-  `wf git-bridge <socket>` of the daemon's own copy of `wf`: for each fetch the daemon listens on
-  a unix socket in a private temporary directory, `git fetch` runs the bridge, and the daemon
-  pipes the socket to `wf/git/1` of the device.
-* **Fetching.** A device fetches each commit the log names (the `head` of a comment or a session
-  end, `Reviewed`, `Merged`) as the event arrives, from its author's device first, else from any
-  other bound device, four at a time; a commit that cannot be fetched is tried again, later each
-  time (5 s up to 5 min), and a device that has it serves it, so an always-on device relays for
-  those asleep. Commits of cancelled and archived items are not fetched. What is still missing is
-  `Call::AwaitedCommits`, which `wf status` (`waiting: ...` lines) and the Now tab of the
-  dashboard (`WAITING FOR COMMITS`) show.
+  fetch only: no device writes into another's repository. Everything in `<wf>/git` is shared with
+  the workforce (imports, fetched commits, merges, the principal's pushes to the target) and served
+  by id under protocol version 2, which the server sets, as a client behind an `ext::` bridge
+  cannot ask for it: a head rewritten away stays fetchable from a device that has it, as nothing in
+  `<wf>/git` prunes, and a device that fetched a commit relays it without a ref. The boundary is
+  that the principal's other branches never enter `<wf>/git`. A commit the device lacks is refused
+  (`not our ref`), which the fetching side reports as `the device does not have commit <id>`. A
+  device is served at most four `upload-pack` at once (`429` beyond), and a fetch on which neither
+  side has sent a byte for 30 s is given up, from either end, without cutting a long pack short;
+  the process is waited for either way. The fetching side runs `git fetch` with
+  `fetch.fsckObjects` through an `ext::` bridge, so git does the negotiation, thin packs and
+  checks, and wf-net only carries bytes. The bridge is the hidden `wf git-bridge` of the daemon's
+  own copy of `wf`: for each fetch the daemon makes a socket pair, `git fetch` inherits one end as
+  descriptor 3 and hands it to the bridge, and the daemon pipes the other to `wf/git/1` of the
+  device. No path leads to the socket, so no other process, an agent's included, can take the
+  bridge's place.
+* **What is fetched.** A device fetches the commits something still needs: the head of the session
+  holding each live item's claim, the heads of its other work sessions (to keep apart), and the
+  submitted commit of an item in review, which its reviews and its merge start on. Not the history
+  of done or cancelled items, nor verdicts on heads rebased away since. Each is fetched as its event
+  arrives, from its author's device first, else from any other bound device, four at a time, beside
+  everything else the daemon does: a fetch that hangs holds up no other fetch, no ref and no start.
+  A device that has a commit serves it, so an always-on device relays for those asleep. A commit
+  that no device had when every one was asked is unavailable: it is asked for again every 5 min,
+  and shown once as such (which device named it, since when) rather than as an open wait. What is
+  still missing is `Call::AwaitedCommits`, which `wf status` (`waiting: ...` lines, or `... is
+  unavailable: ...`) and the Now tab of the dashboard (`WAITING FOR COMMITS`) show.
 * **Waiting.** A work session starts only once the head the log names for its item is present, a
   review only once its commit is, and a merge only once the reviewed commit is; until then the
-  dispatcher leaves the item alone (it is not a failed start) and looks again when commits arrive.
-  A work session that starts moves `wf/<item>` to the named head if the branch does not contain it.
+  dispatcher leaves that item alone (it is not a failed start), and the rest goes on; it looks
+  again when commits arrive. A work session that starts moves `wf/<item>` to the named head, if the
+  branch does not contain it, once its `SessionStarted` is written: a start refused for the claim
+  moves nothing.
 * **Item branches.** `wf/<item>` in `<wf>/git` is at the latest head named by the session holding
-  the item's claim (the latest session that named one when none holds it), on a device whose own
-  session it is not; the daemon's import keeps the branch of a session that runs on the device. A
-  head of another work session, if not an ancestor of it, is kept under
-  `refs/wf/diverged/<session>` and named in the brief of the next work session. When the item is
-  done or cancelled every device removes the refs and its agent repository (unless one of its
-  sessions still runs there).
-* **Joining.** A device that joins starts with the repository the daemon makes (empty), then fetches
-  the branches of the device it joined through, so it has the target and the item branches at
-  once. `wf join` prints where the repository is and how to point a checkout at it:
-  `git remote add wf <wf>/git` and `git fetch wf`. Without a daemon there is nothing to fetch with,
-  and the daemon fills the repository from the commits the log names when it starts.
+  the item's claim (when none holds it, the latest head any of its work sessions named, by when it
+  was named). Every move is a compare-and-swap from where the branch was read, and none happens
+  while a work session of the device runs on the item: the daemon's import keeps that branch, even
+  for a session that lost the claim after a partition. A head of another work session, if neither
+  the holder's nor an ancestor of it, is kept under `refs/wf/diverged/<session>` and named in the
+  brief of the next work session; the ref goes once its session holds the claim or its head is in
+  the branch. When the item is done or cancelled every device removes the refs and its agent
+  repository (unless one of its sessions still runs there).
+* **Joining.** A device that joins starts with the repository the daemon makes, then fetches the
+  branches of the device it joined through, so it has the target and the item branches at once:
+  into a repository without branches they are taken as they are, and a branch the repository has
+  already (made from a checkout) only moves forward. `wf join` prints where the repository is and
+  how to point a checkout at it: `git remote add wf <wf>/git` and `git fetch wf`. Without a daemon
+  there is nothing to fetch with, and the daemon fills the repository from the commits the log
+  names when it starts.
 
 **Planned (M3):**
 
@@ -1377,7 +1394,8 @@ mDNS for LAN-only use.
 * **`wf/git/1`**: git objects, by `git upload-pack` over the stream (section 10). The initiator
   sends one frame naming the workforce, and from then on the stream carries what `git fetch` and
   `git upload-pack` say to each other; wf only moves the bytes. Members only (`403` otherwise); a
-  node that serves no repository answers `404`.
+  node that serves no repository answers `404`, and one already serving the device four fetches
+  `429`. Neither side waits more than 30 s of silence.
 * **`wf/query/1`**: a device asks another for what only it has, read from its current state and
   changing and storing nothing. Today that is the live diff of an item, which only the device with
   its branch and agent repository has. One `Query::Diff { workforce, item, since }` (the head commit the

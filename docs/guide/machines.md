@@ -45,12 +45,15 @@ which of them takes an item, so give each agent one machine to run on, with `wf 
 
 ## Commits across devices
 
-The log names every commit that matters: where a session's branch is when it comments or ends, what
-a review looked at, what was merged. Each device fetches those commits from the device that wrote
+The log names every commit that matters: where a session's branch is when it comments or ends, and
+what was submitted for review. Each device fetches the ones still needed from the device that wrote
 the event (else from any other), over the same connection it syncs on, so work done on one machine
-is there on the others without a remote or credentials. A session, a review or a merge that needs a
-commit that has not arrived starts only once it has; `wf status` lists `waiting: ...` for each such
-commit, and so does the Now tab of the dashboard. When two sessions worked on one item and the
+is there on the others without a remote or credentials. Everything in wf's repository is shared
+with the workforce this way; your other branches never go there, and a plain `git push` to `wf`
+pushes the target only. A session, a review or a merge that needs a commit that has not arrived
+starts only once it has; `wf status` lists `waiting: ...` for each such commit, and so does the Now
+tab of the dashboard. A commit no device could give is listed once as unavailable, with the device
+that named it and since when, and asked for again every few minutes. When two sessions worked on one item and the
 later one lost the claim, its commits are kept under `refs/wf/diverged/<session>` in wf's
 repository, and the brief of the next session on the item names them.
 
