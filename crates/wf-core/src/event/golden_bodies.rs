@@ -286,7 +286,7 @@ fn bodies() -> Vec<EventBody> {
         }),
         EventBody::SessionEnded(SessionEnded {
             session,
-            reason: EndReason::Submitted,
+            reason: EndReason::Released,
             because: Some(comment),
             head: Some(commit),
         }),

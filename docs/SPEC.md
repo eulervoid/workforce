@@ -311,7 +311,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
 | 26 | `Commented` | as tag 16, plus `lines: LineAnchor`, the lines of the diff it is about (section 11); a comment without lines is written under tag 16 |
 | 30 | `Commented` | as tag 16, 26 or 27 (by lines and kind), plus `head: CommitId`, where the branch of the work session that comments was (section 10); a comment without a head keeps its older tag |
-| 31 | `SessionEnded` | as tag 21 or 25, plus `head: CommitId`, where the branch of the work session was when it ended (section 10); an end without a head keeps its older tag |
+| 31 | `SessionEnded` | as tag 21 or 25, plus `head: CommitId`, where the branch of the work session was when it ended (section 10), for an end other than a submission; a submission is written under tag 21 or 25 with its commit in `Submitted{commit}`, read as the end's head, so ends written before heads keep their bytes, and an end without a head keeps its older tag |
 | 28 | `BoundPolicySet` | `Signed<BoundPolicySet>`: `policy`, and the `hlc` of the event that carries it, so the signed statement cannot be written into a newer event to roll the policy back |
 
 * `Signed<T>` = `statement`, `signer: PrincipalKey`, `signature`.

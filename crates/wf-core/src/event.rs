@@ -20,7 +20,7 @@ use crate::name::{
     AgentName, HarnessName, Label, LaneName, NameError, RecoveryLevelName, Requirement,
     ReviewLevelName, TypeName,
 };
-use crate::session::{CommitId, EndReason, SessionRole, Verdict};
+use crate::session::{CommitId, EndReason, MachineFault, SessionRole, Verdict};
 
 pub const EVENT_VERSION: u16 = 1;
 
@@ -667,7 +667,7 @@ pub struct SessionEnded {
 #[derive(Serialize, Deserialize)]
 struct SessionEndedWithoutHead {
     session: SessionId,
-    reason: EndReason,
+    reason: WrittenEndReason,
     because: Option<CommentId>,
 }
 
@@ -675,20 +675,74 @@ struct SessionEndedWithoutHead {
 #[derive(Serialize, Deserialize)]
 struct SessionEndedWithoutComment {
     session: SessionId,
-    reason: EndReason,
+    reason: WrittenEndReason,
+}
+
+/// `EndReason` as tags 21 and 25 write it, in the order its variants had then: a submission
+/// carries its commit, which is the end's `head`. Every submission is still written this way, so
+/// the ends written before `head` existed keep their bytes; tag 31 names a head for other ends.
+#[derive(Clone, Copy, Serialize, Deserialize)]
+enum WrittenEndReason {
+    Submitted { commit: Option<CommitId> },
+    Reviewed,
+    Supervised,
+    Released,
+    TimedOut,
+    Failed,
+    Cancelled,
+    Interrupted,
+    Diagnosed,
+    MachineFault(MachineFault),
+}
+
+impl WrittenEndReason {
+    /// The older form of `reason` with `head`; `None` when only tag 31 can carry them, for a head
+    /// of an end other than a submission.
+    fn of(reason: EndReason, head: Option<CommitId>) -> Option<Self> {
+        let written = match reason {
+            EndReason::Submitted => return Some(WrittenEndReason::Submitted { commit: head }),
+            EndReason::Reviewed => WrittenEndReason::Reviewed,
+            EndReason::Supervised => WrittenEndReason::Supervised,
+            EndReason::Released => WrittenEndReason::Released,
+            EndReason::TimedOut => WrittenEndReason::TimedOut,
+            EndReason::Failed => WrittenEndReason::Failed,
+            EndReason::Cancelled => WrittenEndReason::Cancelled,
+            EndReason::Interrupted => WrittenEndReason::Interrupted,
+            EndReason::Diagnosed => WrittenEndReason::Diagnosed,
+            EndReason::MachineFault(fault) => WrittenEndReason::MachineFault(fault),
+        };
+        head.is_none().then_some(written)
+    }
+
+    /// The reason, and the head a submission names.
+    fn read(self) -> (EndReason, Option<CommitId>) {
+        let reason = match self {
+            WrittenEndReason::Submitted { commit } => return (EndReason::Submitted, commit),
+            WrittenEndReason::Reviewed => EndReason::Reviewed,
+            WrittenEndReason::Supervised => EndReason::Supervised,
+            WrittenEndReason::Released => EndReason::Released,
+            WrittenEndReason::TimedOut => EndReason::TimedOut,
+            WrittenEndReason::Failed => EndReason::Failed,
+            WrittenEndReason::Cancelled => EndReason::Cancelled,
+            WrittenEndReason::Interrupted => EndReason::Interrupted,
+            WrittenEndReason::Diagnosed => EndReason::Diagnosed,
+            WrittenEndReason::MachineFault(fault) => EndReason::MachineFault(fault),
+        };
+        (reason, None)
+    }
 }
 
 impl SessionEnded {
     fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
-        if self.head.is_some() {
+        let Some(reason) = WrittenEndReason::of(self.reason, self.head) else {
             return Ok((tag::SESSION_ENDED_WITH_HEAD, encoding::encode(self)?));
-        }
+        };
         match self.because {
             Some(_) => Ok((
                 tag::SESSION_ENDED,
                 encoding::encode(&SessionEndedWithoutHead {
                     session: self.session,
-                    reason: self.reason,
+                    reason,
                     because: self.because,
                 })?,
             )),
@@ -696,30 +750,31 @@ impl SessionEnded {
                 tag::SESSION_ENDED_WITHOUT_COMMENT,
                 encoding::encode(&SessionEndedWithoutComment {
                     session: self.session,
-                    reason: self.reason,
+                    reason,
                 })?,
             )),
         }
     }
 
-    /// One without a head would encode to other bytes than were signed.
+    /// One without a head, or a submission, would encode to other bytes than were signed.
     fn with_head(payload: &[u8]) -> Result<Self, EncodingError> {
         let ended: SessionEnded = encoding::decode(payload)?;
-        match ended.head {
-            Some(_) => Ok(ended),
-            None => Err(EncodingError::malformed()),
+        match WrittenEndReason::of(ended.reason, ended.head) {
+            None => Ok(ended),
+            Some(_) => Err(EncodingError::malformed()),
         }
     }
 
     /// One without a comment would encode to other bytes than were signed.
     fn with_comment(payload: &[u8]) -> Result<Self, EncodingError> {
         let old: SessionEndedWithoutHead = encoding::decode(payload)?;
+        let (reason, head) = old.reason.read();
         match old.because {
             Some(_) => Ok(SessionEnded {
                 session: old.session,
-                reason: old.reason,
+                reason,
                 because: old.because,
-                head: None,
+                head,
             }),
             None => Err(EncodingError::malformed()),
         }
@@ -727,11 +782,12 @@ impl SessionEnded {
 
     fn without_comment(payload: &[u8]) -> Result<Self, EncodingError> {
         let old: SessionEndedWithoutComment = encoding::decode(payload)?;
+        let (reason, head) = old.reason.read();
         Ok(SessionEnded {
             session: old.session,
-            reason: old.reason,
+            reason,
             because: None,
-            head: None,
+            head,
         })
     }
 }
@@ -1213,7 +1269,7 @@ mod tests {
 
     const GOLDEN_SESSION_BODIES: [&str; 4] = [
         "143f05636f6465722001010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233",
-        "1f3a200202020202020202020202020202020202020202020202020202020202020202000001001400112233445566778899aabbccddeeff00112233",
+        "15392002020202020202020202020202020202020202020202020202020202020202020001001400112233445566778899aabbccddeeff00112233",
         "165b20010101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff0011223301012065e27c6eb2ae7ce97aceb1a372b6fb11fbc5bbffd95ee6fa17949cd148c6f730",
         "174d200101010101010101010101010101010101010101010101010101010101010101001400112233445566778899aabbccddeeff00112233001400112233445566778899aabbccddeeff00112233",
     ];
@@ -1357,7 +1413,7 @@ mod tests {
         };
         let ended = SessionEnded {
             session: SessionId::from_bytes([2; 32]),
-            reason: EndReason::Submitted,
+            reason: EndReason::Released,
             because: Some(CommentId::from_bytes([3; 32])),
             head: Some(commit),
         };
@@ -1401,6 +1457,69 @@ mod tests {
             };
             assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
         }
+    }
+
+    #[test]
+    fn a_submission_keeps_the_wire_form_it_had_before_heads() {
+        let commit = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
+        let session = SessionId::from_bytes([2; 32]);
+        let because = CommentId::from_bytes([3; 32]);
+        // As a build before heads wrote them, with the commit in the reason.
+        let written = [
+            (
+                tag::SESSION_ENDED,
+                encoding::encode(&SessionEndedWithoutHead {
+                    session,
+                    reason: WrittenEndReason::Submitted {
+                        commit: Some(commit),
+                    },
+                    because: Some(because),
+                })
+                .unwrap(),
+                SessionEnded {
+                    session,
+                    reason: EndReason::Submitted,
+                    because: Some(because),
+                    head: Some(commit),
+                },
+            ),
+            (
+                tag::SESSION_ENDED_WITHOUT_COMMENT,
+                encoding::encode(&SessionEndedWithoutComment {
+                    session,
+                    reason: WrittenEndReason::Submitted { commit: None },
+                })
+                .unwrap(),
+                SessionEnded {
+                    session,
+                    reason: EndReason::Submitted,
+                    because: None,
+                    head: None,
+                },
+            ),
+        ];
+        for (tag, payload, ended) in written {
+            let bytes = encoding::encode(&TaggedBody {
+                tag,
+                payload: payload.clone(),
+            })
+            .unwrap();
+            let decoded = encoding::decode::<EventBody>(&bytes).unwrap();
+            assert_eq!(decoded, EventBody::SessionEnded(ended.clone()));
+            assert_eq!(encoding::encode(&decoded).unwrap(), bytes);
+        }
+        // A submission under the tag of a head would encode to other bytes than were signed.
+        let forged = TaggedBody {
+            tag: tag::SESSION_ENDED_WITH_HEAD,
+            payload: encoding::encode(&SessionEnded {
+                session,
+                reason: EndReason::Submitted,
+                because: Some(because),
+                head: Some(commit),
+            })
+            .unwrap(),
+        };
+        assert!(encoding::decode::<EventBody>(&encoding::encode(&forged).unwrap()).is_err());
     }
 
     #[test]
