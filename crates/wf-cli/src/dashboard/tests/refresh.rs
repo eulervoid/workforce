@@ -155,6 +155,7 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
         &faults,
         &[],
         &Default::default(),
+        None,
         Wanted::default(),
     );
     let in_inbox = crate::view::inbox_views(&state, &[], &faults).len();
@@ -228,6 +229,7 @@ fn the_items_list_holds_the_items_found_in_titles_bodies_and_comments() {
             &Default::default(),
             &[],
             &Default::default(),
+            None,
             wanted,
         );
         let mut titles: Vec<String> = snapshot

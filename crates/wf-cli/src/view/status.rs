@@ -309,6 +309,18 @@ impl CheckoutTarget {
         }
     }
 
+    /// What is wrong in a few words, as the header of the dashboard has it: `main 2 ahead of wf`.
+    pub fn brief(&self) -> String {
+        let (branch, remote) = (&self.branch, wf_vcs::REMOTE);
+        match self.standing {
+            CheckoutStanding::Ahead { commits } => format!("{branch} {commits} ahead of {remote}"),
+            CheckoutStanding::Behind { commits } => {
+                format!("{branch} {commits} behind {remote}")
+            }
+            CheckoutStanding::Diverged => format!("{branch} diverged from {remote}"),
+        }
+    }
+
     /// What is wrong, without the command that fixes it.
     pub fn what(&self) -> String {
         let branch = &self.branch;

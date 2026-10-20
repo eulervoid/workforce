@@ -41,6 +41,8 @@ pub struct Snapshot {
     pub flagged: Vec<Flag>,
     /// What waits for a commit that has not arrived from another device, one line each.
     pub awaiting_commits: Vec<String>,
+    /// How the target branch of the principal's checkout differs from wf's, if it does.
+    pub checkout_target: Option<view::CheckoutTarget>,
     /// What the detail on screen shows.
     pub in_view: Option<InView>,
     /// The live items in groups, when the Items tab is on screen.
@@ -327,6 +329,7 @@ impl Snapshot {
         machine_faults: &wf_daemon::MachineFaults,
         awaited: &[wf_core::commits::AwaitedCommit],
         last_seen: &crate::devices::LastSeen,
+        checkout_target: Option<view::CheckoutTarget>,
         wanted: Wanted,
     ) -> Self {
         let Sources {
@@ -349,8 +352,7 @@ impl Snapshot {
             refolded: false,
             // Measuring them walks the caches, too slow for every frame.
             caches: None,
-            // The header says it.
-            checkout_target: None,
+            checkout_target: checkout_target.clone(),
         };
         let mut live: Vec<&Session> = state.live_sessions().collect();
         live.sort_by_key(|session| std::cmp::Reverse(session.started()));
@@ -370,6 +372,7 @@ impl Snapshot {
                 .and_then(|wanted| InView::take(sources, &flagged, wanted)),
             flagged,
             awaiting_commits: view::awaiting_lines(state, awaited),
+            checkout_target,
             agents: match wanted.listing {
                 Some(Listing::Agents) => agents(state, graph, own),
                 Some(Listing::Items(_)) | None => Vec::new(),
