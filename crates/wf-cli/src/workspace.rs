@@ -269,6 +269,21 @@ impl Workspace {
         Ok(wf_vcs::GitCli::open(directory)?)
     }
 
+    /// How the target branch of the principal's checkout differs from the target in wf's
+    /// repository, which agents start from. Nothing inside a session, whose checkout is the
+    /// agent's, outside a checkout, before wf's repository is there, or when git cannot tell:
+    /// the comparison only informs, and never keeps a command from running.
+    pub fn checkout_target(&self) -> Option<crate::view::CheckoutTarget> {
+        if self.session().is_some() {
+            return None;
+        }
+        let checkout = self.checkout.as_deref()?;
+        let target = &self.state().policy()?.policy.merge.target;
+        let bare = wf_vcs::bare_repository(&self.data.workforce(&self.workforce));
+        let standing = wf_vcs::target_standing(checkout, &bare, target).ok()??;
+        crate::view::CheckoutTarget::new(target, standing)
+    }
+
     /// When devices were last heard from. Only a running daemon knows.
     pub fn last_seen(&self) -> anyhow::Result<crate::devices::LastSeen> {
         match &self.source {

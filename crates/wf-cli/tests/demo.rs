@@ -1619,6 +1619,71 @@ fn archive_by_state_takes_every_finished_item_of_every_type() {
 }
 
 #[test]
+fn commands_warn_of_commits_on_the_target_that_wfs_repository_lacks() {
+    use wf_vcs::testing::{git_in, init_repository};
+
+    let wf = Sandbox::new();
+    init_repository(&wf.repository);
+    wf.run(&["init", "--name", "demo"]);
+    let stderr = |args: &[&str]| {
+        let output = common::output(&mut wf.command(args));
+        assert!(output.status.success(), "wf {args:?} failed");
+        String::from_utf8(output.stderr).unwrap()
+    };
+    assert_eq!(stderr(&["item", "list"]), "");
+    assert!(wf.json(&["status"])["checkout_target"].is_null());
+
+    std::fs::write(wf.repository.join("own.txt"), "own\n").unwrap();
+    git_in(&wf.repository, &["add", "own.txt"]);
+    git_in(&wf.repository, &["commit", "--quiet", "-m", "own"]);
+    let warned = stderr(&["item", "list"]);
+    assert!(
+        warned.starts_with("warning: main here has 1 commit that wf's repository lacks"),
+        "{warned}"
+    );
+    assert!(warned.ends_with("`git push wf main`\n"), "{warned}");
+    assert_eq!(warned.lines().count(), 1, "{warned}");
+    assert_eq!(stderr(&["item", "list", "--json"]), "", "not with --json");
+    let status = wf.run(&["status"]);
+    let lines: Vec<&str> = status.lines().collect();
+    assert!(
+        lines[1].starts_with("target: main here has 1 commit"),
+        "{status}"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with("next: main here has 1 commit")),
+        "{status}"
+    );
+    assert!(
+        !stderr(&["status"]).contains("warning"),
+        "said once, in the status"
+    );
+
+    git_in(&wf.repository, &["push", "--quiet", "wf", "main"]);
+    assert_eq!(stderr(&["item", "list"]), "");
+    assert!(!wf.run(&["status"]).contains("target:"));
+
+    // Behind, as after merges, is only a hint of the status.
+    git_in(&wf.repository, &["reset", "--quiet", "--hard", "HEAD~1"]);
+    assert_eq!(stderr(&["item", "list"]), "");
+    let status = wf.run(&["status"]);
+    assert!(
+        status.contains("target: main here is 1 commit behind wf's repository: `git pull`"),
+        "{status}"
+    );
+
+    // Each side with a commit the other lacks diverges.
+    std::fs::write(wf.repository.join("other.txt"), "other\n").unwrap();
+    git_in(&wf.repository, &["add", "other.txt"]);
+    git_in(&wf.repository, &["commit", "--quiet", "-m", "other"]);
+    let warned = stderr(&["item", "list"]);
+    assert!(warned.contains("have diverged"), "{warned}");
+    assert!(warned.contains("`git pull --rebase wf main`"), "{warned}");
+}
+
+#[test]
 fn init_in_a_git_repository_makes_the_bare_repository_the_remote_of_the_checkout() {
     use wf_vcs::testing::{git_in, init_repository};
 

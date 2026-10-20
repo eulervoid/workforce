@@ -147,6 +147,10 @@ fn events_and_status() {
                 waiting_on_you: 0,
                 refolded: false,
                 caches: None,
+                checkout_target: view::CheckoutTarget::new(
+                    "main",
+                    wf_vcs::TargetStanding::Behind { commits: 2 }
+                ),
             }
         ))
     );

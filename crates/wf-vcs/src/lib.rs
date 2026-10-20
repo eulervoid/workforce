@@ -9,9 +9,9 @@ pub mod diff;
 mod git;
 mod item_refs;
 pub mod signing;
+mod target_standing;
 #[cfg(any(test, feature = "testing"))]
 pub mod testing;
-mod target_standing;
 mod transfer;
 
 use std::path::{Path, PathBuf};

@@ -349,6 +349,8 @@ impl Snapshot {
             refolded: false,
             // Measuring them walks the caches, too slow for every frame.
             caches: None,
+            // The header says it.
+            checkout_target: None,
         };
         let mut live: Vec<&Session> = state.live_sessions().collect();
         live.sort_by_key(|session| std::cmp::Reverse(session.started()));

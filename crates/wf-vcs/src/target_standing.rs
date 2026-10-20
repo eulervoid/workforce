@@ -112,12 +112,10 @@ fn ahead_and_behind(
 }
 
 fn parse_count(command: &str, text: &str) -> Result<usize, VcsError> {
-    text.trim()
-        .parse()
-        .map_err(|_| VcsError::UnexpectedOutput {
-            command: command.into(),
-            output: text.trim().into(),
-        })
+    text.trim().parse().map_err(|_| VcsError::UnexpectedOutput {
+        command: command.into(),
+        output: text.trim().into(),
+    })
 }
 
 #[cfg(test)]
