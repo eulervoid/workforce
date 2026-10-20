@@ -25,10 +25,11 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::mpsc;
+use wf_core::claims::ItemClaimed;
 use wf_core::event::{Event, EventBody};
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
-use wf_core::lifecycle::{Interruption, ItemClaimed};
+use wf_core::lifecycle::Interruption;
 use wf_core::name::{AgentName, HarnessName};
 use wf_core::session::{CommitId, SessionRole};
 use wf_core::state::State;

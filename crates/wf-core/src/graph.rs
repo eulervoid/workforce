@@ -11,6 +11,7 @@ use serde::Serialize;
 use crate::crdt::Stamp;
 use crate::id::ItemId;
 use crate::item::{Item, ItemState};
+use crate::session::SessionRole;
 use crate::state::State;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
@@ -156,7 +157,7 @@ impl State {
                 Readiness::Stranded
             } else if !unfinished.is_empty() || item.has_open_blocker() {
                 Readiness::Blocked
-            } else if self.claim(item.id()).is_some() {
+            } else if self.holder(item.id(), &SessionRole::Work).is_some() {
                 Readiness::Claimed
             } else {
                 Readiness::Ready

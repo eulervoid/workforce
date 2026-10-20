@@ -639,7 +639,7 @@ machine fault) is the daemon's and acts at once.
 
 **Claims.** A session claims what it alone may work on: a work session the item's work, a review
 session its step of the submitted commit, a supervise session the item's open blockers, a diagnose
-session the item's diagnosis. Its `SessionStarted` is the claim; no other event is written for it.
+session the item's diagnosis (`wf-core::claims`). Its `SessionStarted` is the claim; no other event is written for it.
 Of two live claims on the same thing, the earliest by `(hlc, EventId)` holds it. Starts take a
 per-item lock and refuse what a live session already claims. A session is live until its
 `SessionEnded`, so liveness is read from the log alone, the same on every device.

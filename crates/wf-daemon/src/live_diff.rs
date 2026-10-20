@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Weak};
 
 use wf_core::id::{ItemId, WorkforceId};
-use wf_core::session::CommitId;
+use wf_core::session::{CommitId, SessionRole};
 use wf_net::{DiffAnswer, SourceError, Work};
 use wf_vcs::{GitCli, VcsError, item_repository};
 
@@ -76,7 +76,12 @@ impl Daemon {
             .ok_or(LiveDiffError::NotLoaded(workforce))?;
         let session_device = loaded
             .storage
-            .with(move |replica| replica.state().claim(item).map(|session| session.device()))
+            .with(move |replica| {
+                replica
+                    .state()
+                    .holder(item, &SessionRole::Work)
+                    .map(|session| session.device())
+            })
             .await?;
         let Some(device) = session_device else {
             return Ok(LiveDiff::NoSession);

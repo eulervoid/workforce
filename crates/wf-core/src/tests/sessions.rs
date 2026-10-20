@@ -2,7 +2,7 @@ use crate::event::Event;
 use crate::id::{ItemId, SessionId};
 use crate::item::{ItemEntry, ItemState};
 use crate::name::ReviewLevelName;
-use crate::session::EndReason;
+use crate::session::{EndReason, SessionRole};
 use crate::state::{State, Trust};
 use crate::testing::*;
 use crate::validate::Invalid;
@@ -99,7 +99,10 @@ fn the_claim_belongs_to_the_earliest_live_work_session() {
     } else {
         &first
     };
-    assert_eq!(state.claim(task).unwrap().id(), session_id(earlier));
+    assert_eq!(
+        state.holder(task, &SessionRole::Work).unwrap().id(),
+        session_id(earlier)
+    );
 
     fixture.apply(
         &mut state,
@@ -107,7 +110,10 @@ fn the_claim_belongs_to_the_earliest_live_work_session() {
         4_000,
         end_session(session_id(earlier), EndReason::Cancelled),
     );
-    assert_eq!(state.claim(task).unwrap().id(), session_id(later));
+    assert_eq!(
+        state.holder(task, &SessionRole::Work).unwrap().id(),
+        session_id(later)
+    );
 }
 
 #[test]

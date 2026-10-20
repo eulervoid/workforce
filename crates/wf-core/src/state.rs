@@ -637,14 +637,6 @@ impl State {
         self.sessions().filter(|session| session.is_live())
     }
 
-    /// The session that holds the claim on an item: the earliest live work session by
-    /// `(hlc, event id)`. A later one is meant to cancel itself.
-    pub fn claim(&self, item: ItemId) -> Option<&Session> {
-        self.sessions_of(item)
-            .filter(|session| session.is_live() && session.role() == SessionRole::Work)
-            .min_by_key(|session| session.started())
-    }
-
     /// The work session of an item that named a head last, by when it did.
     pub(crate) fn latest_head_session(&self, item: ItemId) -> Option<&Session> {
         self.sessions_of(item)

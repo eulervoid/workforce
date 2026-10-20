@@ -138,7 +138,7 @@ impl State {
                         .filter(|session| session.role() == SessionRole::Work)
                 };
                 let holder = self
-                    .claim(id)
+                    .holder(id, &SessionRole::Work)
                     .filter(|session| session.head().is_some())
                     .or_else(|| self.latest_head_session(id))
                     .and_then(head_of);

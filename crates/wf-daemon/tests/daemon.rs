@@ -2,6 +2,7 @@ use std::path::Path;
 use std::sync::Arc;
 
 use tempfile::TempDir;
+use wf_core::session::SessionRole;
 use wf_core::testing::*;
 use wf_daemon::client::{ClientError, DaemonClient};
 use wf_daemon::data_dir::STORE_FILE;
@@ -901,7 +902,7 @@ async fn a_device_reads_the_committed_work_of_a_session_on_another() {
     for _ in 0..200 {
         let socket = laptop_socket.clone();
         let state = blocking(move || connect(&socket).state(workforce).unwrap()).await;
-        if state.claim(item).is_some() {
+        if state.holder(item, &SessionRole::Work).is_some() {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;

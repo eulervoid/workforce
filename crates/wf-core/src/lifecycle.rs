@@ -5,7 +5,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::event::CommentKind;
 use crate::graph::DependencyGraph;
-use crate::id::{HashId, ItemId, SessionId};
+use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::Policy;
@@ -105,15 +105,6 @@ pub enum AfterEnd {
         commit: CommitId,
         wait_in: Option<ItemState>,
     },
-}
-
-/// A work session cannot start on an item that a live session holds.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
-#[error("#{} already has a live session, {holder}; stop it first", .item.short())]
-pub struct ItemClaimed {
-    pub item: ItemId,
-    /// The session that holds the item, as [`State::actor_label`] names it.
-    pub holder: String,
 }
 
 /// What a session that continues after the daemon restarted is told first.
@@ -357,7 +348,7 @@ impl State {
             | EndReason::Interrupted
             | EndReason::MachineFault(_) => {
                 let held_by_another = self
-                    .claim(item)
+                    .holder(item, &SessionRole::Work)
                     .is_some_and(|holder| holder.id() != session.id());
                 // Only an item that is being worked on goes back: one that was moved on, to done
                 // or to review, stays where it is.
@@ -435,17 +426,6 @@ impl State {
             Some(ItemEntry::Archived(_)) | None => false,
         };
         blocked_by_comment || !self.unfinished_dependencies(graph, item).is_empty()
-    }
-
-    /// Refuses a work session on `item` while a live one holds it.
-    pub fn ensure_unclaimed(&self, item: ItemId) -> Result<(), ItemClaimed> {
-        match self.claim(item) {
-            Some(holder) => Err(ItemClaimed {
-                item,
-                holder: self.actor_label(&holder.actor()),
-            }),
-            None => Ok(()),
-        }
     }
 
     /// What `session` is told first after a restart of the daemon, which last prompted it at

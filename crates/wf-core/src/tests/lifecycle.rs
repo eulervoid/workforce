@@ -5,7 +5,7 @@ use crate::lifecycle::{
     AfterEnd, AfterFailedChecks, Closing, Finish, Interruption, MergeFailure, MergePlan,
     SessionEnd, TurnOutcome,
 };
-use crate::session::{CommitId, EndReason, MachineFault, Verdict};
+use crate::session::{CommitId, EndReason, MachineFault, SessionRole, Verdict};
 use crate::state::State;
 use crate::testing::*;
 
@@ -579,7 +579,10 @@ fn only_a_live_work_session_with_a_waiting_item_waits() {
 fn a_refusal_names_the_item_short_and_the_session_that_holds_it() {
     let mut scene = Scene::new();
     let item = scene.item(create("task", "Busy"));
-    assert_eq!(scene.state.ensure_unclaimed(item), Ok(()));
+    assert_eq!(
+        scene.state.ensure_unclaimed(item, &SessionRole::Work),
+        Ok(())
+    );
     let session = scene.start(item);
     let holder = scene
         .state
@@ -589,9 +592,13 @@ fn a_refusal_names_the_item_short_and_the_session_that_holds_it() {
         "{holder}"
     );
     assert_eq!(
-        scene.state.ensure_unclaimed(item).unwrap_err().to_string(),
+        scene
+            .state
+            .ensure_unclaimed(item, &SessionRole::Work)
+            .unwrap_err()
+            .to_string(),
         format!(
-            "#{} already has a live session, {holder}; stop it first",
+            "#{} already has a live work session, {holder}; stop it first",
             item.short()
         )
     );
