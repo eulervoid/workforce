@@ -1356,7 +1356,7 @@ they check.
 wf [--item <item>]                                  # the dashboard at a terminal; piped, the help
 wf init | status [--refold] | stats | members | log [--follow] [--item] | export | import <file>
 wf policy show | edit | apply <file>
-wf item add [--draft] | list [--sort priority|created|merged] [--group-by state|readiness|label|type|lane|priority] | show | edit | link | check | archive | unarchive | diff | checkout | path
+wf item add [--draft] | list [--sort priority|created|merged] [--group-by state|readiness|label|type|lane|priority] | search <word>... | show | edit | link | check | archive | unarchive | diff | checkout | path
 wf item open | draft | done <item>... | cancel <item>       # [--note]
 wf comment <item> [<text>] [--block | --request-change] [--resolve <c>... | --resolve-blockers |
            --resolve-change-requests] [--step <n> [--done]]
@@ -1376,6 +1376,19 @@ wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | f
 * **Ids** print as 6 characters of base32 for items (any unique prefix of at least 4 is accepted,
   with or without `#`) and 4 for comments. Missing item or session arguments open a picker at a
   terminal; a missing text opens `$EDITOR`.
+* **`wf item search <word>...`** finds items by text with a plain scan of the folded state and the
+  comment texts read from the log, no index. Matching is case-insensitive; every word must occur
+  somewhere in the item (title, body or comment texts together), and an item id or its start of at
+  least 4 characters, with or without `#`, counts as an occurrence. It takes the filters of `item list`
+  (`--type`, `--state`, `--label`, `--lane`, `--priority`, `--ready`, `--blocked`, `--stranded`,
+  `--archived`). Items named by an id come first, then those with a word in the title, then in the
+  body, then only in comments; within each the order of `item list`. The text output is the list row
+  with one line under it per field that matched (`body: …`, or the comment's author), the words
+  highlighted. `--json` gives, per item, `item` (the list summary) and `matches`: each with `field`
+  (`title`, `body`, `comment`), `comment` and `by` for a comment, `text` (the first line of the field
+  with a word in it, cropped) and `highlights` (byte ranges in `text`). The matching is
+  `wf_core::search`, a pure function over `State` that the dashboard shares; hybrid search (section
+  11, M4) can replace what is behind it without changing the command or the shape.
 * **`wf item add` and `edit`** without flags open a draft in `$EDITOR`: TOML front matter between
   `+++` fences (`title`, `priority`, `lane`, `labels`, `requires`, `review`, `recovery`; `type` and a
   commented `state = "draft"` for new items), then the body verbatim. Unknown keys are refused. State

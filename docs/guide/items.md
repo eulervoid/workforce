@@ -94,9 +94,16 @@ wf item list --ready --for ada   # what agent ada would be given on this machine
 wf item list --blocked           # waiting on dependencies; --stranded: a dependency was cancelled
 wf item list --state draft,open --label parser --group-by priority
 wf item list --state done --sort merged   # what went into the target last, at the bottom
+wf item search packed-refs       # by words in titles, bodies and comments; all words must occur
+wf item search nudges --state open --label parser   # narrowed by the list's filters
 wf item show k3f7                # the item, its comments, links, review and history
 wf mentions @ada/grace           # where someone is mentioned
 ```
+
+`wf item search` ignores case. Items with the words in the title come first, then in the body, then
+only in comments; an item id (`#k3f7`) in the query finds that item. Under each item it shows the line
+of each field that matched, with the words highlighted, and the author for a comment. Archived items
+are included with `--archived`.
 
 `--group-by` takes `state`, `readiness`, `label`, `type`, `lane` or `priority`.
 
