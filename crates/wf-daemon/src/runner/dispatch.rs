@@ -94,6 +94,9 @@ async fn dispatch_once(
 ) {
     failed.retain(|_, at| at.elapsed() < RETRY_FAILED_START);
     let device = daemon.device();
+    daemon
+        .ensure_bare_repository(workforce, &loaded.storage)
+        .await;
     let repository = daemon.bare_repository(workforce);
     let Ok((pending, finished, principal)) = daemon
         .read(loaded, move |state| {

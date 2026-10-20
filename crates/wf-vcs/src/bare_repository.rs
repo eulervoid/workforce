@@ -43,6 +43,9 @@ impl GitCli {
         if path.join("HEAD").is_file() {
             return GitCli::open(path);
         }
+        // A checkout that is gone or no longer a repository leaves an empty one, which the first
+        // push fills.
+        let checkout = checkout.filter(|checkout| GitCli::open(checkout).is_ok());
         let made = Self::make_bare(path, target, checkout);
         if made.is_err() {
             // Nothing half made stays for the next start to take for a repository.
@@ -190,6 +193,21 @@ mod tests {
             git_in(&path, &["config", "receive.denyNonFastForwards"]),
             "true"
         );
+    }
+
+    #[test]
+    fn a_checkout_that_is_gone_or_not_a_repository_leaves_an_empty_repository() {
+        let repo = TestRepository::new();
+        let gone = repo.root.path().join("gone");
+        let plain = tempfile::tempdir().unwrap();
+        for (name, checkout) in [("gone", gone.as_path()), ("plain", plain.path())] {
+            let path = repo.root.path().join(format!("wf-git-{name}"));
+            let bare = GitCli::create_bare_repository(&path, "main", Some(checkout)).unwrap();
+            assert!(matches!(
+                bare.branch_head("main"),
+                Err(VcsError::NoBranch(_))
+            ));
+        }
     }
 
     #[test]

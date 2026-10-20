@@ -170,6 +170,7 @@ impl Daemon {
         if role == SessionRole::Work {
             state.ensure_unclaimed(item)?;
         }
+        self.ensure_bare_repository(workforce, &loaded.storage).await;
         let repository = self.bare_repository(workforce);
         let git = match role {
             SessionRole::Work => {

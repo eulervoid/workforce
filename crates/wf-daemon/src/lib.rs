@@ -231,6 +231,8 @@ pub struct Daemon {
     ending: Arc<keyed_locks::KeyedLocks<SessionId>>,
     /// Taken while a workforce is opened, because its store can be open only once.
     opening: Arc<keyed_locks::KeyedLocks<WorkforceId>>,
+    /// Held while a workforce's bare repository is made, so two callers do not both make it.
+    repositories: Arc<keyed_locks::KeyedLocks<WorkforceId>>,
     held: Arc<permissions::Held>,
     /// Whom each connection to the socket acts for.
     callers: caller::Callers,
@@ -270,6 +272,7 @@ impl Daemon {
             starting: runner::ItemLocks::default(),
             ending: Default::default(),
             opening: Default::default(),
+            repositories: Default::default(),
             held: Arc::default(),
             callers: caller::Callers::default(),
             judges: judges::Judges::default(),
@@ -507,9 +510,11 @@ impl Daemon {
 
     /// Makes the bare repository of a workforce that has none yet: from the repository an earlier
     /// version remembered (its target and item branches, which also gets the remote `wf`), or
-    /// empty when the workforce never had one. Sessions and merges cannot run without it, so a
-    /// failure is only logged, and tried again at the next start.
-    async fn ensure_bare_repository(&self, id: WorkforceId, storage: &StorageHandle) {
+    /// empty when the workforce never had one or its checkout is gone. It waits for the policy,
+    /// which a joined or forked workforce gets by sync after it loads, so it is called again
+    /// wherever the repository is first needed. A failure is only logged, and tried again.
+    pub(crate) async fn ensure_bare_repository(&self, id: WorkforceId, storage: &StorageHandle) {
+        let _making = self.repositories.lock(id).await;
         let directory = self.launch.data_dir.workforce(&id);
         let bare = wf_vcs::bare_repository(&directory);
         if bare.join("HEAD").is_file() {
@@ -762,5 +767,50 @@ mod tests {
             std::fs::read_to_string(bin.join("wf")).unwrap(),
             "second build"
         );
+    }
+
+    use wf_core::testing::Fixture;
+    use wf_store::{RedbStore, Replica};
+
+    #[tokio::test]
+    async fn a_workforce_whose_policy_arrives_after_it_loads_gets_its_bare_repository_then() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let fixture = Fixture::new(1);
+        let id = fixture.workforce();
+        let data_dir = DataDir::new(directory.path().to_path_buf());
+        // A joined workforce: its store is there, its log not yet synced.
+        std::fs::create_dir_all(data_dir.workforce(&id)).unwrap();
+        drop(Replica::open(RedbStore::open(data_dir.store(&id)).unwrap(), id).unwrap());
+        let daemon = Daemon::start(
+            Launch {
+                data_dir: data_dir.clone(),
+                socket: directory.path().join("daemon.sock"),
+                network: wf_net::Network::Direct,
+                harnesses: Default::default(),
+                machine_config: None,
+                wf_binary: None,
+            },
+            fixture.devices[0].clone(),
+        )
+        .await
+        .unwrap();
+        let loaded = daemon.open_workforce(id).await.unwrap();
+        let bare = wf_vcs::bare_repository(&data_dir.workforce(&id));
+        assert!(!bare.join("HEAD").exists(), "no policy to name the target");
+
+        let genesis = fixture.genesis.clone();
+        loaded
+            .storage
+            .with(move |replica| replica.receive(genesis))
+            .await
+            .unwrap()
+            .unwrap();
+        for _ in 0..250 {
+            if bare.join("HEAD").is_file() {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the repository was not made when the policy arrived");
     }
 }

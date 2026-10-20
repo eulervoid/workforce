@@ -142,6 +142,23 @@ async fn a_workforce_without_a_bare_repository_gets_one_from_the_repository_it_r
 }
 
 #[tokio::test]
+async fn a_workforce_whose_remembered_checkout_is_gone_gets_an_empty_bare_repository() {
+    let running = start_with(|directory| {
+        std::fs::write(directory.join("repository"), "/nonexistent/checkout").unwrap();
+    })
+    .await;
+    let workforce_directory = DataDir::new(running._directory.path().to_path_buf())
+        .workforce(&running.fixture.workforce());
+    let bare = wf_vcs::bare_repository(&workforce_directory);
+    assert!(bare.join("HEAD").is_file());
+    assert_eq!(wf_vcs::testing::git_in(&bare, &["branch", "--list"]), "");
+    assert!(
+        !workforce_directory.join("repository").exists(),
+        "the file is done with"
+    );
+}
+
+#[tokio::test]
 async fn a_workforce_that_never_had_a_repository_gets_an_empty_bare_one() {
     let running = start().await;
     let workforce_directory = DataDir::new(running._directory.path().to_path_buf())
