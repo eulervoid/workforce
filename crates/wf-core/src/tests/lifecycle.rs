@@ -201,7 +201,10 @@ fn a_session_that_lost_its_claim_ends_like_an_interruption() {
         )
         .unwrap();
     assert_eq!(closing.reason, EndReason::LeaseExpired);
-    assert_eq!(closing.head, Some(commit()));
+    assert_eq!(
+        closing.head, None,
+        "another device takes the session over and cannot name its branch"
+    );
     assert!(matches!(closing.actor, Actor::Daemon(_)));
 }
 

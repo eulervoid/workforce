@@ -171,7 +171,8 @@ pub enum TurnOutcome {
 
 impl State {
     /// What is written when `session` ends. `head` is the head of the session's branch when the
-    /// branch has commits of its own; a work session records it, whatever the reason it ends for.
+    /// branch has commits of its own; a work session records it, whatever the reason it ends for,
+    /// except a takeover: another device writes `LeaseExpired` and cannot know the branch.
     /// `None` for a session that does not exist or a device that is not bound.
     pub fn closing(
         &self,
@@ -180,9 +181,12 @@ impl State {
         head: Option<CommitId>,
     ) -> Option<Closing> {
         let session = self.session(session)?;
-        let head = match session.role() {
-            SessionRole::Work => head,
-            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
+        let head = match (session.role(), end) {
+            (_, SessionEnd::Interruption(Interruption::LeaseExpired)) => None,
+            (SessionRole::Work, _) => head,
+            (SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose, _) => {
+                None
+            }
         };
         let closing = |reason, actor, note| Closing {
             reason,

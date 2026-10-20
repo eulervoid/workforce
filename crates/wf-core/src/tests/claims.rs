@@ -1,9 +1,10 @@
 use std::time::Duration;
 
 use crate::claims::Presence;
-use crate::event::{Event, EventBody};
+use crate::event::{Event, EventBody, SessionEnded};
 use crate::id::{ItemId, SessionId};
 use crate::identity::Actor;
+use crate::lifecycle::{Interruption, SessionEnd};
 use crate::name::ReviewStepName;
 use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::{State, Trust};
@@ -305,6 +306,35 @@ fn only_a_daemon_of_the_principal_ends_a_session_of_another_device_and_only_as_l
         0,
         4_001,
         end_session(session, EndReason::Cancelled),
+    );
+}
+
+#[test]
+fn the_closing_of_a_takeover_is_accepted_from_the_device_taking_over() {
+    let (fixture, mut state, task) = with_task();
+    let session: SessionId = fixture
+        .apply(&mut state, 1, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    let closing = state
+        .closing(
+            session,
+            &SessionEnd::Interruption(Interruption::LeaseExpired),
+            Some(commit(1)),
+        )
+        .unwrap();
+    assert_eq!(closing.note, None, "a takeover writes no comment on why");
+    let body = EventBody::SessionEnded(SessionEnded {
+        session,
+        reason: closing.reason,
+        because: None,
+        head: closing.head,
+    });
+    let event = fixture.author_as(&state, 0, closing.actor, 4_000, body);
+    state.receive(event, Trust::Untrusted).unwrap();
+    assert_eq!(
+        state.session(session).unwrap().ended().unwrap().reason,
+        EndReason::LeaseExpired
     );
 }
 
