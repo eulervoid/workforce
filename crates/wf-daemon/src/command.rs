@@ -233,7 +233,14 @@ impl Confinement<'_> {
             // The group may be gone already; then there is nothing left to stop.
             let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
         }
-        crate::processes::stop(owner).await;
+        let stopped = crate::processes::stop(owner).await;
+        if stopped.running > 0 {
+            tracing::warn!(
+                "{}: {} still running after KILL",
+                command.command().display(),
+                crate::processes::processes(stopped.running)
+            );
+        }
         if matches!(outcome, Outcome::TimedOut) {
             child.wait().await.map_err(io_error)?;
         }

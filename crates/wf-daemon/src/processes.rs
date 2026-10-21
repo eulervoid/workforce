@@ -26,6 +26,9 @@ pub(crate) const COMMAND_RUN_VARIABLE: &str = "WF_COMMAND_RUN";
 
 /// How long a process has to end after `TERM` before it is killed.
 const GRACE: Duration = Duration::from_secs(2);
+/// How long a process has to end after `KILL` before it is left running: one in uninterruptible
+/// sleep, as on a mount that hangs, does not end, and the end of a session must not wait for it.
+const KILLED: Duration = Duration::from_secs(5);
 /// How often the processes are looked at again while they end.
 const POLL: Duration = Duration::from_millis(100);
 
@@ -340,21 +343,38 @@ pub(crate) struct Stopped {
     /// The orphans that may be the owner's but were left running, as their working directory is
     /// unknown.
     pub(crate) unknown: usize,
+    /// Of those stopped, those still running after `KILL` was given time to end them.
+    pub(crate) running: usize,
 }
 
 /// Stops the processes that belong to `owner`: `TERM` first, and `KILL` for those still running
-/// after [`GRACE`]. Those they start meanwhile are stopped too.
+/// after [`GRACE`]. Those they start meanwhile are stopped too. Gives up on those still running
+/// [`KILLED`] after that.
 pub(crate) async fn stop(owner: Owner) -> Stopped {
+    stop_found(|| belonging(owner.clone()), GRACE, KILLED).await
+}
+
+/// [`stop`], for the processes `find` finds each time it looks.
+async fn stop_found<Found>(
+    mut find: impl FnMut() -> Found,
+    grace: Duration,
+    killed: Duration,
+) -> Stopped
+where
+    Found: Future<Output = (BTreeSet<Pid>, usize)>,
+{
     let mut stopped = BTreeSet::new();
     let mut unknown = None;
-    let killed_after = Instant::now() + GRACE;
+    let killed_after = Instant::now() + grace;
+    let given_up_after = killed_after + killed;
     loop {
-        let (running, may) = belonging(owner.clone()).await;
+        let (running, may) = find().await;
         let unknown = *unknown.get_or_insert(may);
-        if running.is_empty() {
+        if running.is_empty() || Instant::now() >= given_up_after {
             return Stopped {
                 stopped: stopped.len(),
                 unknown,
+                running: running.len(),
             };
         }
         let signal = if Instant::now() < killed_after {
@@ -385,6 +405,7 @@ pub(crate) async fn stop_session(
         return Stopped {
             stopped: 0,
             unknown: 0,
+            running: 0,
         };
     }
     let mark = Mark::Session { workforce, session };
@@ -401,6 +422,13 @@ pub(crate) async fn stop_session(
             processes(stopped.stopped)
         );
     }
+    if stopped.running > 0 {
+        tracing::warn!(
+            "session {}: {} still running after KILL",
+            session.short(),
+            processes(stopped.running)
+        );
+    }
     if stopped.unknown > 0 {
         tracing::warn!(
             "session {}: left {} running that may be its own: orphans whose directory macOS does \
@@ -413,7 +441,7 @@ pub(crate) async fn stop_session(
 }
 
 /// "1 process", "2 processes".
-fn processes(count: usize) -> String {
+pub(crate) fn processes(count: usize) -> String {
     format!("{count} process{}", if count == 1 { "" } else { "es" })
 }
 
@@ -578,6 +606,7 @@ mod tests {
         Stopped {
             stopped,
             unknown: 0,
+            running: 0,
         }
     }
 
@@ -622,6 +651,29 @@ mod tests {
         assert_eq!(stop(marked(mark)).await, stopped(1));
         assert!(started.elapsed() >= GRACE);
         assert!(!running(stubborn));
+    }
+
+    #[tokio::test]
+    async fn a_process_that_kill_does_not_end_is_given_up_on() {
+        // Above any pid macOS or Linux gives, so `kill` finds no such process.
+        let unending = Pid::from_raw(i32::MAX);
+        let started = Instant::now();
+        let given_up = stop_found(
+            || async { (BTreeSet::from([unending]), 0) },
+            Duration::from_millis(200),
+            Duration::from_millis(300),
+        )
+        .await;
+        assert!(started.elapsed() >= Duration::from_millis(500));
+        assert!(started.elapsed() < Duration::from_secs(5));
+        assert_eq!(
+            given_up,
+            Stopped {
+                stopped: 1,
+                unknown: 0,
+                running: 1
+            }
+        );
     }
 
     fn hidden_orphan(started: Timestamp, directory: Option<&str>) -> Process {
@@ -764,13 +816,7 @@ mod tests {
         // Its environment is readable: only a mark makes it the owner's.
         let unmarked = daemonized_in(&inside);
 
-        assert_eq!(
-            stop(owner).await,
-            Stopped {
-                stopped: 1,
-                unknown: 0
-            }
-        );
+        assert_eq!(stop(owner).await, stopped(1));
         assert!(!running(yes.0));
         assert!(running(before.0), "an orphan older than its owner runs on");
         assert!(
