@@ -213,7 +213,7 @@ pub(super) fn draw_session(
         let right = successor.map(|successor| {
             line.push(Span::raw(match reason {
                 EndReason::LeaseExpired => " · taken over by ",
-                EndReason::Outclaimed => " · outclaimed by ",
+                EndReason::Outclaimed => " · claimed first by ",
                 EndReason::Submitted
                 | EndReason::Reviewed
                 | EndReason::Supervised

@@ -232,7 +232,7 @@ fn a_session_that_lost_its_claim_says_so_and_who_has_it() {
         (
             EndReason::Outclaimed,
             "outclaimed",
-            "■ ended: outclaimed · outclaimed by coder · work · 1m ◆ on vm",
+            "■ ended: outclaimed · claimed first by coder · work · 1m ◆ on vm",
         ),
     ] {
         let mut app = app();
