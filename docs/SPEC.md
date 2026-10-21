@@ -1424,16 +1424,27 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
   * writing git's own config (`~/.config/git`), with which git would run the agent's code outside the sandbox;
   * writing the config of the harnesses, which they run or follow when the principal starts them
     outside the sandbox: settings with hooks and MCP servers, commands, agents, skills, plugins,
-    rules, instructions (`CLAUDE.md`, `AGENTS.md`) and OpenCode's binary. Their state, sessions and
-    login stay writable;
+    rules, instructions (`CLAUDE.md`, `AGENTS.md`), Claude Code's status line script, the extensions
+    of the Cursor and Kiro editors and the harnesses' own binaries (Claude Code's local install,
+    Amp, OpenCode, Copilot's updates). Their state, sessions and login stay writable;
   * reading SSH and GPG keys and the credentials of clouds, registries and docker.
 
 `wf` in a session reads no key: the daemon signs what it writes.
 
-**Remaining gap:** `~/.claude.json` holds both Claude Code's state, which it writes while it runs,
-and the principal's user-scope `mcpServers`, so it cannot be denied: an agent can add an MCP server
-there that the principal's Claude Code starts outside the sandbox. A `CLAUDE_CONFIG_DIR` of each
-agent's own closes it later.
+**Remaining gaps:** agents can still write some code that the principal runs later, outside the
+sandbox:
+
+* `~/.claude.json` holds both Claude Code's state, which it writes while it runs, and the
+  principal's user-scope `mcpServers`, so it cannot be denied: an agent can add an MCP server there
+  that the principal's Claude Code starts.
+* The scripts Claude Code's settings point to outside the denied paths, such as a hook command in
+  `~/.claude/scripts`, are not denied (a denylist cannot know them); only the common
+  `~/.claude/statusline*` is. An agent can rewrite such a script and the principal's Claude Code
+  runs it.
+* Caches hold code too: `npx` runs packages from `~/.npm/_npx`, `~/.bun` holds bun's global
+  installs and their `bin`, and `~/.cache` holds e.g. pre-commit's hook repositories (#vfbuiv).
+
+A `CLAUDE_CONFIG_DIR` of each agent's own closes the first two later.
 
 **Repository maintenance** (`gc`, `pack-refs`, repacking) in the agent's repository is the agent's
 own business and changes nothing the import relies on. The git the daemon runs in the principal's
@@ -1444,10 +1455,10 @@ the daemon never packs or prunes it itself; the principal's own git does as it a
 
 An agent's environment is only: what wf sets (`WF_SESSION`, `WF_SESSION_TOKEN`, `WF_WORKFORCE`,
 `PATH` with `<data>/bin` first, `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, signing through
-`GIT_CONFIG_*`, and `CARGO_HOME` in Fence); what every program expects (`HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`,
-`LC_*`, `XDG_*_HOME`); and what the machine config inherits or sets, for all agents or one (the
-agent's value wins). wf's own variables cannot be set there. A variable allows nothing in the sandbox
-by itself: a directory to write to also goes in `allow_write`.
+`GIT_CONFIG_*`, and `CARGO_HOME` in Fence); what every program expects (`HOME`, `USER`, `LOGNAME`,
+`SHELL`, `TMPDIR`, `LANG`, `LC_*`, `XDG_*_HOME`); and what the machine config inherits or sets, for
+all agents or one (the agent's value wins). wf's own variables cannot be set there. A variable allows
+nothing in the sandbox by itself: a directory to write to also goes in `allow_write`.
 
 ### Planned: secrets and transcripts (M3, M7)
 
