@@ -12,7 +12,7 @@ use std::time::Duration;
 use tempfile::TempDir;
 use tracing::instrument::WithSubscriber;
 use wf_core::event::{AgentDefined, Event, EventBody};
-use wf_core::id::{ItemId, SessionId, WorkforceId};
+use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::DeviceKey;
 use wf_core::name::{AgentName, HarnessName};
 use wf_core::placement::RANK_DELAY;
@@ -531,7 +531,7 @@ async fn the_device_ranked_second_waits_until_it_hears_from_the_first_and_takes_
     // of it could not have arrived, however long the device ranked second has waited its turn.
     let fixture = Fixture::new(2);
     let workforce = fixture.workforce();
-    let (events, item, [_, second]) = workforce_with_an_auto_agent(&fixture);
+    let (events, item, [first, second]) = workforce_with_an_auto_agent(&fixture);
     let repository = TestRepository::new();
     let device = within(
         "starting the device ranked second",
@@ -539,7 +539,18 @@ async fn the_device_ranked_second_waits_until_it_hears_from_the_first_and_takes_
     )
     .await;
 
-    tokio::time::sleep(RANK_DELAY + Duration::from_secs(5)).await;
+    // Its dispatcher passes the task over until it hears from the first: it has no turn to wait
+    // out, after which it would start.
+    let hears = format!(
+        "coder waits for #{} until this device hears from {}, ranked ahead",
+        item.short(),
+        fixture.devices[first].key().fmt_short()
+    );
+    eventually(
+        "the device ranked second waits to hear from the first",
+        || device.log.contains(&hears),
+    )
+    .await;
     assert!(
         work_sessions(&device.state(workforce).await, item).is_empty(),
         "the device ranked second waits to hear from the first"
@@ -605,8 +616,12 @@ async fn of_two_devices_that_could_start_an_item_the_first_by_rank_does_and_the_
         })
         .await;
 
-    // Past its turn, the device ranked second has seen the claim and started nothing.
-    tokio::time::sleep(RANK_DELAY + Duration::from_secs(5)).await;
+    // The claim leaves the device ranked second nothing to start, so it has no turn left to wait
+    // out, after which it would start.
+    eventually("the device ranked second passes the task over", || {
+        devices[second].log.contains("coder has nothing to start")
+    })
+    .await;
     for device in &devices {
         let state = device.state(workforce).await;
         assert_eq!(work_sessions(&state, item), [(session, on)]);

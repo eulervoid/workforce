@@ -138,12 +138,14 @@ struct Watched {
 }
 
 /// Follows the target of a workforce for as long as the daemon runs and its storage does: when
-/// what the log says of it changes, and now and then for pushes, which nothing announces.
+/// what the log says of it changes, when commits arrived, and now and then for pushes, which
+/// nothing announces.
 pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loaded: Arc<Loaded>) {
     let Some(mut halted) = daemon.upgrade().map(|strong| strong.halted.subscribe()) else {
         return;
     };
     let mut heads = loaded.storage.watch_heads();
+    let mut arrived = loaded.commits.arrived.subscribe();
     let mut watched = None;
     // Ticks however often the log changes; the first tick is at once.
     let mut look_for_pushes = tokio::time::interval(LOOK_FOR_PUSHES);
@@ -158,6 +160,8 @@ pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loa
                 false
             }
             () = async { let _ = halted.wait_for(|halted| *halted).await; } => return,
+            // The tip may be what arrived.
+            _ = arrived.changed() => true,
             _ = look_for_pushes.tick() => true,
         };
         let Some(strong) = daemon.upgrade() else {

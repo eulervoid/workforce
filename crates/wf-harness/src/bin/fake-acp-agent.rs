@@ -17,7 +17,8 @@
 //! - `login`: answers the prompt `Authentication required`, as a harness whose login lapsed.
 //! - `limit`: answers the prompt with a rate limit that says no reset time, as a harness whose
 //!   usage limit is reached.
-//! - `silent`: does not answer the prompt, nor say anything.
+//! - `silent`: does not answer the prompt, nor say anything. Cancelled, it exits without an answer,
+//!   as an agent does that is stopped with its daemon before it read the prompt.
 //! - `turn`: ends the turn.
 //! - `unstartable`, as the first line: exits before it answers `initialize`, as a harness that is
 //!   not installed.
@@ -177,6 +178,8 @@ fn main() {
     let mut lines = std::io::stdin().lock().lines();
     let mut directory = std::env::current_dir().unwrap();
     let mut item = String::new();
+    // A prompt was left without an answer by `silent`.
+    let mut unanswered = false;
     'requests: while let Some(Ok(line)) = lines.next() {
         let request: Value = serde_json::from_str(&line).unwrap();
         let id = request["id"].clone();
@@ -259,7 +262,10 @@ fn main() {
                         "say" => say(rest),
                         "tool" => tool_call(rest),
                         "commands" => available_commands(),
-                        "silent" => continue 'requests,
+                        "silent" => {
+                            unanswered = true;
+                            continue 'requests;
+                        }
                         "sh" => {
                             let status = Command::new("sh")
                                 .args(["-c", &rest.replace("{item}", &item)])
@@ -366,6 +372,7 @@ fn main() {
                     send(json!({"jsonrpc": "2.0", "id": id, "result": {"stopReason": stop}}));
                 }
             }
+            Some("session/cancel") if unanswered => std::process::exit(0),
             _ => {}
         }
     }

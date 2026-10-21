@@ -50,7 +50,7 @@ impl Waits {
         let rank = match turn {
             Turn::Rank(rank) => rank,
             // Not seen, so its wait is forgotten at the end of the pass.
-            Turn::Unheard(_) => return Due::Unheard,
+            Turn::Unheard(ahead) => return Due::Unheard(ahead),
         };
         let thing = (item, role.clone());
         self.seen.insert(thing.clone());
@@ -70,8 +70,8 @@ impl Waits {
             if index == 0 {
                 choice = match due {
                     Due::Now => Choice::Start(item, role),
-                    Due::At(at) => Choice::Wait(at),
-                    Due::Unheard => Choice::Hear,
+                    Due::At(at) => Choice::Wait(item, at),
+                    Due::Unheard(ahead) => Choice::Hear(item, ahead),
                 };
             }
         }
@@ -90,19 +90,19 @@ impl Waits {
 enum Due {
     Now,
     At(Instant),
-    /// Once it has heard from a device ranked ahead ([`Turn::Unheard`]).
-    Unheard,
+    /// Once it has heard from this device, ranked ahead ([`Turn::Unheard`]).
+    Unheard(DeviceKey),
 }
 
 /// What an agent does next ([`Waits::choose`]).
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Choice {
     Start(ItemId, SessionRole),
-    /// Its first candidate is due at this instant.
-    Wait(Instant),
-    /// Its first candidate waits for this device to hear from a device ranked ahead, which the
-    /// next pass looks at again.
-    Hear,
+    /// Its first candidate, this item, is due at this instant.
+    Wait(ItemId, Instant),
+    /// Its first candidate, this item, waits for this device to hear from this other device,
+    /// ranked ahead, which the next pass looks at again.
+    Hear(ItemId, DeviceKey),
     Nothing,
 }
 
@@ -129,11 +129,15 @@ async fn dispatch_loop(
     loaded: &Arc<Loaded>,
 ) {
     let mut heads = loaded.storage.watch_heads();
+    let mut arrived = loaded.commits.arrived.subscribe();
     let mut failed = FailedStarts::new();
     let mut checked = CheckedReviews::new();
     let mut waits = Waits::default();
-    let mut notifier = match daemon.upgrade() {
-        Some(strong) => Notifier::load(&strong.workforce_directory(workforce)),
+    let (mut notifier, mut backdated) = match daemon.upgrade() {
+        Some(strong) => (
+            Notifier::load(&strong.workforce_directory(workforce)),
+            strong.backdated.subscribe(),
+        ),
         None => return,
     };
     loop {
@@ -172,8 +176,11 @@ async fn dispatch_loop(
                 }
                 tracing::debug!("dispatching: the log changed");
             }
-            () = loaded.commits.arrived.notified() => {
+            _ = arrived.changed() => {
                 tracing::debug!("dispatching: commits arrived");
+            }
+            _ = backdated.changed() => {
+                tracing::debug!("dispatching: the presence was backdated");
             }
             () = halted => return,
             () = tokio::time::sleep(tick) => {
@@ -320,11 +327,24 @@ async fn dispatch_once(
             };
             let (item, role) = match waits.choose(candidates, Instant::now()) {
                 Choice::Start(item, role) => (item, role),
-                Choice::Wait(at) => {
+                Choice::Wait(item, at) => {
+                    tracing::debug!("{} waits its turn for #{}", agent.name, item.short());
                     next = Some(next.map_or(at, |next: Instant| next.min(at)));
                     break;
                 }
-                Choice::Hear | Choice::Nothing => break,
+                Choice::Hear(item, ahead) => {
+                    tracing::debug!(
+                        "{} waits for #{} until this device hears from {}, ranked ahead",
+                        agent.name,
+                        item.short(),
+                        ahead.fmt_short()
+                    );
+                    break;
+                }
+                Choice::Nothing => {
+                    tracing::debug!("{} has nothing to start", agent.name);
+                    break;
+                }
             };
             let started = daemon
                 .start_session(workforce, loaded, agent.name.clone(), item, role)
@@ -496,7 +516,7 @@ mod tests {
         for later in [seen, seen + RANK_DELAY * 10] {
             assert_eq!(
                 waits.choose(both(Turn::Unheard(ahead)), later),
-                Choice::Hear
+                Choice::Hear(unheard, ahead)
             );
             waits.end_pass();
         }
@@ -504,7 +524,7 @@ mod tests {
         let heard = seen + RANK_DELAY * 11;
         assert_eq!(
             waits.choose(both(Turn::Rank(1)), heard),
-            Choice::Wait(heard + RANK_DELAY)
+            Choice::Wait(unheard, heard + RANK_DELAY)
         );
     }
 
@@ -519,7 +539,7 @@ mod tests {
                 (other, SessionRole::Work, Turn::Rank(0)),
             ]
         };
-        let wait = Choice::Wait(seen + RANK_DELAY);
+        let wait = Choice::Wait(urgent, seen + RANK_DELAY);
         assert_eq!(waits.choose(both(), seen), wait);
         waits.end_pass();
         assert_eq!(waits.choose(both(), seen + RANK_DELAY / 2), wait);

@@ -181,6 +181,7 @@ async fn keep_in_sync(
         let results = sync_all(&node, workforce, vec![(device, label)], Some(&presence)).await;
         let reached = results.iter().all(PeerSync::reached);
         backoff.record(reached, Instant::now());
+        let mut retry_at = Instant::now() + backoff.wait(Instant::now());
         loop {
             tokio::select! {
                 _ = kick.notified() => {
@@ -194,13 +195,14 @@ async fn keep_in_sync(
                     tokio::time::sleep(SETTLE).await;
                     heads.borrow_and_update();
                     // A device that answered gets another round at once, since what changed may
-                    // be what it lacks. One that was out of reach a moment ago is left alone
-                    // until that was not just now.
-                    if reached || Instant::now() >= attempted + RETRY_ON_NEWS_AFTER {
+                    // be what it lacks. One that was out of reach a moment ago gets it once that
+                    // was not just now.
+                    if reached {
                         break;
                     }
+                    retry_at = retry_at.min(attempted + RETRY_ON_NEWS_AFTER);
                 }
-                _ = tokio::time::sleep(backoff.wait(Instant::now())) => break,
+                _ = tokio::time::sleep_until(retry_at.into()) => break,
             }
         }
     }

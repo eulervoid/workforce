@@ -31,7 +31,8 @@ fn fake_agent() -> PathBuf {
 /// A workforce in a git repository, a daemon, and agents that follow their scripts.
 struct World {
     wf: Sandbox,
-    daemon: Arc<Daemon>,
+    /// None only between [`World::halt`] and [`World::start_again`].
+    daemon: Option<Arc<Daemon>>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     /// The script of each harness.
     scripts: BTreeMap<String, PathBuf>,
@@ -89,31 +90,46 @@ impl World {
         }
     }
 
-    /// Stops the daemon as `wf daemon stop` does and starts another on the same data.
-    async fn restart(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-        self.daemon.halt().await;
-        let (daemon, shutdown) =
-            start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
-        self.daemon = daemon;
-        self.shutdown = Some(shutdown);
+    fn daemon(&self) -> &Daemon {
+        self.daemon.as_ref().expect("a daemon")
     }
 
-    /// Stops the daemon as `wf daemon stop` does, leaving its sessions live.
+    /// Stops the daemon as `wf daemon stop` does and starts another on the same data.
+    async fn restart(&mut self) {
+        self.halt().await;
+        self.start_again().await;
+    }
+
+    /// Stops the daemon as `wf daemon stop` does, leaving its sessions live, and waits until it
+    /// has let go of the store, as its process does when it exits.
     async fn halt(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
-        self.daemon.halt().await;
+        let halted = self.daemon.take().expect("a daemon");
+        halted.halt().await;
+        drop(halted);
+        let (_, workforce) = wf_cli::workspace::find_workforce(&self.wf.repository).unwrap();
+        let store = wf_daemon::DataDir::new(self.wf.data.join("workforce")).store(&workforce);
+        let deadline = Instant::now() + WAIT_LIMIT;
+        loop {
+            let store = store.clone();
+            match tokio::task::spawn_blocking(move || wf_store::RedbStore::open(store).map(drop))
+                .await
+                .unwrap()
+            {
+                Ok(()) => break,
+                Err(wf_store::StoreError::Locked) if Instant::now() < deadline => {}
+                Err(error) => panic!("the stopped daemon keeps the store: {error}"),
+            }
+        }
     }
 
     /// Starts a daemon on the same data again, after [`World::halt`].
     async fn start_again(&mut self) {
         let (daemon, shutdown) =
             start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
-        self.daemon = daemon;
+        self.daemon = Some(daemon);
         self.shutdown = Some(shutdown);
     }
 
@@ -281,7 +297,7 @@ impl WorldSetup {
             start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
         World {
             wf: self.wf,
-            daemon,
+            daemon: Some(daemon),
             shutdown: Some(shutdown),
             scripts: self.scripts,
             reopens: self.reopens,
@@ -1193,7 +1209,7 @@ async fn a_full_disk_ends_the_session_for_the_machine_and_the_inbox_says_so_once
     // The disk fills while the turn runs: a write of the daemon fails for it, and so does the
     // probe that would tell there is space again.
     std::fs::create_dir_all(world.wf.data.join("workforce/.space-probe")).unwrap();
-    assert!(world.daemon.write_failed(
+    assert!(world.daemon().write_failed(
         "a transcript",
         &std::io::Error::from(std::io::ErrorKind::StorageFull)
     ));
@@ -1894,7 +1910,7 @@ async fn submit_with_a_failing_write(failing: fn(&EventBody) -> bool) -> (World,
         .wf
         .add(&["--title", "Check the parser", "--review", "none"]);
     start_session(&world, &item);
-    world.daemon.fail_next_write(failing);
+    world.daemon().fail_next_write(failing);
     std::fs::write(world.wf.data.join("armed"), "").unwrap();
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
@@ -4083,7 +4099,7 @@ wf work submit
     // makes it check again.
     world
         .wait("the daemon to check that the review merges", |world| {
-            world.daemon.reviews_found_merging() > 0
+            world.daemon().reviews_found_merging() > 0
         })
         .await;
     let repository = &world.wf.repository;
