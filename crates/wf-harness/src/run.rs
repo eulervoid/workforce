@@ -365,6 +365,8 @@ pub struct Conversation {
     /// Counts the cancels asked for. A watch keeps the latest value, so no cancel is lost, and
     /// both the turn and a permission request it waits on see it.
     cancel: Arc<watch::Sender<u64>>,
+    /// Counts the turns the agent accepted, as [`Conversation::accepted`] tells them.
+    accepted: Arc<watch::Sender<u64>>,
     task: AgentTask,
 }
 
@@ -418,12 +420,25 @@ impl Conversation {
         // What the agent says in the turn that runs, as `reply` returns it.
         let said = Arc::new(Mutex::new(String::new()));
         let chunks = Arc::clone(&said);
+        // Whether the prompt of the turn that runs was sent and not accepted yet: the agent
+        // accepts it with its first update in the turn, or with its answer.
+        let unaccepted = Arc::new(AtomicBool::new(false));
+        let accepting = Arc::clone(&unaccepted);
+        let (accepted, _) = watch::channel(0u64);
+        let accepted = Arc::new(accepted);
+        let acceptor = Arc::clone(&accepted);
+        let answer_acceptor = Arc::clone(&accepted);
 
         let task = tokio::spawn(async move {
             let outcome = Client
                 .builder()
                 .on_receive_notification(
                     async move |notification: SessionNotification, _connection| {
+                        if !unheard.load(Ordering::SeqCst)
+                            && accepting.swap(false, Ordering::SeqCst)
+                        {
+                            acceptor.send_modify(|turns| *turns += 1);
+                        }
                         if let SessionUpdate::AgentMessageChunk(chunk) = notification.update
                             && let ContentBlock::Text(text) = chunk.content
                             && !unheard.load(Ordering::SeqCst)
@@ -559,6 +574,7 @@ impl Conversation {
                             .lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner()) =
                             tokio::time::Instant::now();
+                        unaccepted.store(true, Ordering::SeqCst);
                         let request = connection
                             .send_request(PromptRequest::new(
                                 session_id.clone(),
@@ -603,6 +619,9 @@ impl Conversation {
                             &mut *said.lock().unwrap_or_else(|poisoned| poisoned.into_inner()),
                         );
                         let failed = response.is_err();
+                        if unaccepted.swap(false, Ordering::SeqCst) && !failed {
+                            answer_acceptor.send_modify(|turns| *turns += 1);
+                        }
                         let _ = turn
                             .reply
                             .send(response.map(|response| (response.stop_reason, text)));
@@ -626,6 +645,7 @@ impl Conversation {
                 model,
                 turns,
                 cancel,
+                accepted,
                 task,
             }),
             Err(_) => {
@@ -674,6 +694,13 @@ impl Conversation {
     /// that comes while no turn runs cancels nothing.
     pub fn cancel(&self) -> CancelHandle {
         CancelHandle(Arc::clone(&self.cancel))
+    }
+
+    /// Counts the turns whose prompt the agent accepted: it took it up with its first update in
+    /// the turn, or answered it. A prompt that is sent is not yet accepted, as the agent may never
+    /// read it.
+    pub fn accepted(&self) -> watch::Receiver<u64> {
+        self.accepted.subscribe()
     }
 
     /// Stops the agent and waits until it is gone, at most [`CLOSE_GRACE`]; an agent that takes

@@ -376,6 +376,34 @@ async fn a_turn_of_an_agent_that_says_nothing_fails() {
     let _ = conversation.close().await;
 }
 
+#[tokio::test]
+async fn a_prompt_is_accepted_once_the_agent_takes_it_up() {
+    // How many prompts an agent that follows `script` accepted in a turn it never answers.
+    async fn accepted(script: &str) -> u64 {
+        let directory = tempfile::tempdir().unwrap();
+        let mut conversation = Conversation::start(Launch {
+            agent: scripted_agent(&directory, script),
+            opening: Opening::New,
+            model: None,
+            directory: directory.path().to_path_buf(),
+            permissions: Arc::new(Permission::Allow),
+            transcript: SharedBuffer::default(),
+            silence_limit: Duration::from_secs(1),
+        })
+        .await
+        .unwrap();
+        let accepted = conversation.accepted();
+        let reply = tokio::time::timeout(Duration::from_secs(10), conversation.reply("hello"))
+            .await
+            .expect("the turn ends");
+        assert!(matches!(reply, Err(Error::Silent(_))), "{reply:?}");
+        let _ = conversation.close().await;
+        *accepted.borrow()
+    }
+    assert_eq!(accepted("silent").await, 0, "sent, but never taken up");
+    assert_eq!(accepted("say on it\nsilent").await, 1);
+}
+
 /// The fake agent, following `script` instead of its default, which is kept in `directory`.
 fn scripted_agent(
     directory: &tempfile::TempDir,
