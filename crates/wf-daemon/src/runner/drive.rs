@@ -8,7 +8,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use wf_core::id::SessionId;
+use wf_core::id::{HashId, SessionId};
 use wf_core::lifecycle::{Interruption, Resume, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_core::state::State;
@@ -243,6 +243,7 @@ async fn drive(
             );
         }
     };
+    tracing::debug!("session {}: {} started", run.session.short(), run.harness);
     let mut record = AgentSessionRecord {
         id: conversation.session().0.clone(),
         prompted_ms: match &run.begin {
@@ -297,6 +298,9 @@ async fn turns(
         tokio::pin!(turn);
         let result = loop {
             tokio::select! {
+                // The turn first, so that it is asked for before its time or a stop cancels it: a
+                // cancel before that is not meant for it.
+                biased;
                 result = &mut turn => break result,
                 // The work so far is copied while the turn goes on, for whoever looks at it.
                 _ = importing.tick() => import_progress(daemon, loaded, run, &mut imported).await,
@@ -312,6 +316,7 @@ async fn turns(
                     return End::Over;
                 }
                 () = sleep_until(deadline) => {
+                    tracing::debug!("session {}: ran out of time, cancelling its turn", run.session.short());
                     cancel.cancel();
                     let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
                     return End::Interrupt(Interruption::TimedOut);
@@ -578,7 +583,10 @@ async fn import_progress(
         blocking(move || git.import_commits(&directory, item, &target, ImportMode::InProgress))
             .await;
     match copied {
-        Ok(Ok(_)) => *imported = head,
+        Ok(Ok(_)) => {
+            *imported = head;
+            loaded.commits.copied_here();
+        }
         Ok(Err(error)) => tracing::warn!(
             "session {}: could not copy its commits: {}",
             run.session,

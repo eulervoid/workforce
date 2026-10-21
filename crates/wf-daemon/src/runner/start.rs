@@ -389,7 +389,7 @@ impl Daemon {
     pub(super) fn spawn_run(self: &Arc<Self>, loaded: &Arc<Loaded>, run: Run) {
         let (stop, stopped) = mpsc::unbounded_channel();
         self.runners.add(run.session, stop);
-        let task = tokio::spawn(run_session(
+        let task = crate::spawn(run_session(
             Arc::clone(self),
             Arc::clone(loaded),
             run,

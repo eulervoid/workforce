@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use n0_future::boxed::BoxFuture;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
+use tracing::instrument::WithSubscriber;
 use wf_core::commits::{AwaitedCommit, Fetching, ItemHeads, NamedCommit};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
 use wf_core::identity::DeviceKey;
@@ -73,6 +74,9 @@ pub(crate) struct Commits {
     awaited: Mutex<Vec<AwaitedCommit>>,
     /// Notified when commits arrived, so that what waited for them starts.
     pub(crate) arrived: Notify,
+    /// Notified when commits were copied in here other than by a fetch, so that the refs pass
+    /// looks again at once.
+    copied: Notify,
 }
 
 impl Commits {
@@ -82,6 +86,15 @@ impl Commits {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone()
+    }
+
+    /// Says that commits were copied into the repository here other than by a fetch, as an import
+    /// from an agent's repository does: if any were awaited, the refs pass looks at once, and
+    /// tells what waited for them.
+    pub(crate) fn copied_here(&self) {
+        if !self.awaited().is_empty() {
+            self.copied.notify_one();
+        }
     }
 
     fn set_awaited(&self, awaited: Vec<AwaitedCommit>) {
@@ -131,20 +144,23 @@ impl Fetches {
         fetcher: &Arc<dyn CommitFetcher>,
     ) {
         let (fetcher, slots) = (Arc::clone(fetcher), Arc::clone(&self.slots));
-        let task = self.running.spawn(async move {
-            let _slot = slots.acquire_owned().await;
-            for device in devices {
-                match fetcher.fetch(device, commit).await {
-                    Ok(()) => return true,
-                    Err(error) => tracing::debug!(
-                        "could not fetch {} from {}: {error}",
-                        commit.short(),
-                        device.fmt_short()
-                    ),
+        let task = self.running.spawn(
+            async move {
+                let _slot = slots.acquire_owned().await;
+                for device in devices {
+                    match fetcher.fetch(device, commit).await {
+                        Ok(()) => return true,
+                        Err(error) => tracing::debug!(
+                            "could not fetch {} from {}: {error}",
+                            commit.short(),
+                            device.fmt_short()
+                        ),
+                    }
                 }
+                false
             }
-            false
-        });
+            .with_current_subscriber(),
+        );
         self.running_commits.insert(task.id(), commit);
     }
 
@@ -453,6 +469,7 @@ pub(crate) async fn run_commits(
             }
             // A fetch ended: the next pass sets the refs and tells what waited for it.
             () = fetches.next_done() => {}
+            () = loaded.commits.copied.notified() => {}
             () = async { let _ = halted.wait_for(|halted| *halted).await; } => return,
             () = tokio::time::sleep(wait) => {}
         }
@@ -742,6 +759,43 @@ mod tests {
         assert_eq!(scene.reconcile().await, None);
         scene.daemon.require_commit(workforce, head).await.unwrap();
         assert!(scene.loaded.commits.awaited().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_awaited_commit_copied_in_here_is_told_of_at_once() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        let session = scene.work_session(item).await;
+        let head = scene.remote.work("wf/work", "a.txt", "a\n");
+        scene.name_head(session, item, head).await;
+        // The daemon's own refs pass finds that no device can give it, and leaves it for a while.
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while !matches!(
+            scene.loaded.commits.awaited().as_slice(),
+            [AwaitedCommit {
+                fetching: Fetching::Unavailable { .. },
+                ..
+            }]
+        ) {
+            assert!(Instant::now() < deadline, "the head is not awaited");
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+
+        // It turns up without a fetch, as the commits of a session do when they are imported. The
+        // pass that finds it here tells the dispatcher, which waits on `arrived`.
+        scene
+            .bare()
+            .fetch_commit_from_path(&scene.remote.directory(), head)
+            .unwrap();
+        scene.loaded.commits.copied_here();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while !scene.loaded.commits.awaited().is_empty() {
+            assert!(
+                Instant::now() < deadline,
+                "the refs pass looks again at once, not after {LOOK_AGAIN:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
     }
 
     #[tokio::test]

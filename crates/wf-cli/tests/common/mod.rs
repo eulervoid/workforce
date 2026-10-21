@@ -3,6 +3,7 @@
 #![allow(dead_code)]
 
 use std::os::unix::fs::PermissionsExt;
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Command, Output, Stdio};
 use std::sync::mpsc;
@@ -79,6 +80,7 @@ impl Sandbox {
             .env_remove("WF_WORKFORCE")
             // A session's `commit.gpgsign=false` would win over a test repository's signing.
             .env_remove("GIT_CONFIG_COUNT");
+        inherit_only_stdio(&mut command);
         command
     }
 
@@ -86,7 +88,8 @@ impl Sandbox {
         let output = output(&mut self.command(args));
         assert!(
             output.status.success(),
-            "wf {args:?} failed: {}",
+            "wf {args:?} failed ({}): {}",
+            output.status,
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap()
@@ -110,6 +113,20 @@ impl Sandbox {
         let mut all = vec!["item", "add"];
         all.extend_from_slice(args);
         self.json(&all)["id"].as_str().unwrap().to_string()
+    }
+}
+
+/// Has `command` inherit no descriptor beyond stdin, stdout and stderr. The tests spawn from many
+/// threads at once, and on macOS std sets close-on-exec on a new pipe in a second step: a `wf`
+/// spawned in between inherits the write end of another command's output, and one that lives
+/// long, as a daemon in the background does, keeps that command's output from ending.
+pub fn inherit_only_stdio(command: &mut Command) {
+    // SAFETY: setting close-on-exec only calls functions that are async-signal-safe.
+    unsafe {
+        command.pre_exec(|| {
+            close_fds::set_fds_cloexec(3, &[]);
+            Ok(())
+        });
     }
 }
 

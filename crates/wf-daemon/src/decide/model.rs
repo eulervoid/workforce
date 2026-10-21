@@ -248,7 +248,7 @@ mod tests {
             listener.local_addr().unwrap()
         ))
         .unwrap();
-        let task = tokio::spawn(async move {
+        let task = crate::spawn(async move {
             let (mut stream, _) = listener.accept().await.unwrap();
             let mut asked = Vec::new();
             let mut buffer = [0u8; 4096];

@@ -4,10 +4,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use tracing::instrument::WithSubscriber;
 use wf_core::event::EventBody;
 use wf_core::name::HarnessName;
 use wf_daemon::{Daemon, Launch};
@@ -36,6 +37,50 @@ struct World {
     scripts: BTreeMap<String, PathBuf>,
     /// How the fake agents offer to reopen a session: `resume`, `load` or not at all.
     reopens: &'static str,
+    log: DaemonLog,
+}
+
+/// What the daemons of a world logged, across restarts, so that a wait that times out tells what
+/// the daemon was doing.
+#[derive(Clone, Default)]
+struct DaemonLog(Arc<Mutex<Vec<u8>>>);
+
+/// What [`DaemonLog`] keeps: what `wf daemon start` logs, what the dispatcher does, and how each
+/// session's harness gets on.
+const LOG_FILTER: &str = "warn,wf_daemon=info,wf_daemon::runner::dispatch=debug,wf_daemon::runner::drive=debug,wf_net=info";
+/// How many lines of the daemon log a wait that times out prints.
+const LOG_TAIL: usize = 60;
+
+impl DaemonLog {
+    /// Where a daemon of the world logs: each daemon of the tests runs with a log of its own,
+    /// which its tasks inherit.
+    fn dispatch(&self) -> tracing::Dispatch {
+        let log = self.clone();
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(LOG_FILTER))
+            .with_ansi(false)
+            .with_writer(move || log.clone())
+            .finish()
+            .into()
+    }
+
+    /// The last `lines` lines.
+    fn tail(&self, lines: usize) -> String {
+        let text = String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned();
+        let all: Vec<&str> = text.lines().collect();
+        all[all.len().saturating_sub(lines)..].join("\n")
+    }
+}
+
+impl std::io::Write for DaemonLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The fake agents run without Fence, so what they are allowed to do is asked.
@@ -83,6 +128,7 @@ impl World {
             wf,
             scripts,
             reopens: "resume",
+            log: DaemonLog::default(),
         }
     }
 
@@ -92,7 +138,8 @@ impl World {
             let _ = shutdown.send(());
         }
         self.daemon.halt().await;
-        let (daemon, shutdown) = start_daemon(&self.wf, &self.scripts, self.reopens).await;
+        let (daemon, shutdown) =
+            start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
         self.daemon = daemon;
         self.shutdown = Some(shutdown);
     }
@@ -201,7 +248,21 @@ impl World {
             let output = common::output_within(&mut command, POLL_LIMIT);
             transcripts.push_str(&String::from_utf8_lossy(&output.stdout));
         }
-        panic!("timed out after {WAIT_LIMIT:?} waiting for {what}: {sessions:#?} {transcripts}");
+        panic!(
+            "timed out after {WAIT_LIMIT:?} waiting for {what}: {sessions:#?} {transcripts}\n\
+             the end of the daemon log:\n{}",
+            self.log.tail(LOG_TAIL)
+        );
+    }
+
+    /// Waits until the sessions so far, oldest first, ended as `ended` says, each as [`statuses`]
+    /// has it. A flow of several sessions waits for each in turn, as each is a step of its own.
+    async fn sessions_ended(&self, ended: &[&str]) {
+        self.wait(&format!("the sessions to be {ended:?}"), |world| {
+            let now = statuses(world);
+            now.len() >= ended.len() && now.iter().zip(ended).all(|(now, ended)| now == ended)
+        })
+        .await;
     }
 
     /// Waits until the only session is not live any more and returns it.
@@ -220,7 +281,11 @@ impl World {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        panic!("the session did not end within {WAIT_LIMIT:?}: {sessions:?}");
+        panic!(
+            "the session did not end within {WAIT_LIMIT:?}: {sessions:?}\n\
+             the end of the daemon log:\n{}",
+            self.log.tail(LOG_TAIL)
+        );
     }
 }
 
@@ -234,26 +299,31 @@ struct WorldSetup {
     /// The script of each harness.
     scripts: BTreeMap<String, PathBuf>,
     reopens: &'static str,
+    log: DaemonLog,
 }
 
 impl WorldSetup {
     async fn start_daemon(self) -> World {
-        let (daemon, shutdown) = start_daemon(&self.wf, &self.scripts, self.reopens).await;
+        let (daemon, shutdown) =
+            start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
         World {
             wf: self.wf,
             daemon,
             shutdown: Some(shutdown),
             scripts: self.scripts,
             reopens: self.reopens,
+            log: self.log,
         }
     }
 }
 
-/// Starts a daemon whose harnesses are the fake agent following `scripts`, and serves it.
+/// Starts a daemon whose harnesses are the fake agent following `scripts`, and serves it, logging
+/// to `log`.
 async fn start_daemon(
     wf: &Sandbox,
     scripts: &BTreeMap<String, PathBuf>,
     reopens: &str,
+    log: &DaemonLog,
 ) -> (Arc<Daemon>, tokio::sync::oneshot::Sender<()>) {
     let data = wf_daemon::DataDir::new(wf.data.join("workforce"));
     let device = data.device().unwrap().unwrap();
@@ -274,6 +344,7 @@ async fn start_daemon(
         );
     }
     let socket = wf.root.path().join("run/workforce/daemon.sock");
+    let dispatch = log.dispatch();
     let daemon = Daemon::start(
         Launch {
             data_dir: data.clone(),
@@ -287,12 +358,17 @@ async fn start_daemon(
         },
         device,
     )
+    .with_subscriber(dispatch.clone())
     .await
     .unwrap();
     let (shutdown, signal) = tokio::sync::oneshot::channel::<()>();
-    tokio::spawn(Arc::clone(&daemon).serve(async {
-        let _ = signal.await;
-    }));
+    tokio::spawn(
+        Arc::clone(&daemon)
+            .serve(async {
+                let _ = signal.await;
+            })
+            .with_subscriber(dispatch),
+    );
     for _ in 0..200 {
         if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
             return (daemon, shutdown);
@@ -1575,6 +1651,30 @@ async fn a_session_that_runs_too_long_is_cancelled_and_times_out() {
     assert_eq!(world.item(&item)["state"], "open");
 }
 
+/// A session whose time is up as its first turn begins: the cancel comes right after the turn
+/// is asked for, and ends it at once rather than after the grace for a cancelled turn.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_whose_time_is_up_as_its_turn_begins_is_cancelled_at_once() {
+    let world = World::new("hang\n").await;
+    world
+        .wf
+        .run(&["agent", "edit", "coder", "--max-duration", "1ms"]);
+    for round in 0..5 {
+        let item = world.wf.add(&["--title", &format!("Slow {round}")]);
+        start_session(&world, &item);
+        world
+            .wait("the session to time out", |world| {
+                world
+                    .sessions()
+                    .iter()
+                    .filter(|session| session["status"] == "timed_out")
+                    .count()
+                    > round
+            })
+            .await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn submitting_without_commits_finishes_the_item_and_leaves_no_branch() {
     let world = World::new("wf work submit --note \"Nothing to change\"\n").await;
@@ -1727,6 +1827,11 @@ wf work submit
     let first = world.wf.add(&["--title", "First"]);
     let second = world.wf.add(&["--title", "Second"]);
     world
+        .wait("an item done", |world| {
+            world.item(&first)["state"] == "done" || world.item(&second)["state"] == "done"
+        })
+        .await;
+    world
         .wait("both items done", |world| {
             world.item(&first)["state"] == "done" && world.item(&second)["state"] == "done"
         })
@@ -1795,6 +1900,11 @@ wf work submit
     ]);
     let item = world.wf.add(&["--title", "Parse durations"]);
     world
+        .wait("the answer", |world| {
+            ended_as(world, "supervise", "supervised") == 1
+        })
+        .await;
+    world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
         })
@@ -1838,6 +1948,16 @@ async fn a_diagnosis_comes_before_the_retry_and_the_principal_decides_after() {
     let item = world
         .wf
         .add(&["--title", "Install the parser", "--recovery", "diagnose"]);
+    world
+        .wait("the first release", |world| {
+            ended_as(world, "work", "released") == 1
+        })
+        .await;
+    world
+        .wait("the diagnosis", |world| {
+            ended_as(world, "diagnose", "diagnosed") == 1
+        })
+        .await;
     world
         .wait("the item left to the principal", |world| {
             world
@@ -1993,6 +2113,15 @@ async fn review_world(coder: &str, reviewer: &str) -> World {
     world
 }
 
+/// How many sessions of `role` have `status`.
+fn ended_as(world: &World, role: &str, status: &str) -> usize {
+    world
+        .sessions()
+        .iter()
+        .filter(|session| session["role"] == role && session["status"] == status)
+        .count()
+}
+
 fn statuses(world: &World) -> Vec<String> {
     let mut sessions = world.sessions();
     sessions.reverse();
@@ -2021,6 +2150,10 @@ async fn work_approved_by_a_reviewer_agent_is_merged() {
     )
     .await;
     let item = world.wf.add(&["--title", "Add hello", "--review", "light"]);
+    world.sessions_ended(&["coder submitted"]).await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed"])
+        .await;
     world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
@@ -2062,6 +2195,13 @@ sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" comme
     let item = world
         .wf
         .add(&["--title", "Add hello", "--review", "standard"]);
+    world.sessions_ended(&["coder submitted"]).await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed"])
+        .await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed", "coder submitted"])
+        .await;
     world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
@@ -2124,6 +2264,13 @@ sh \"$WF_BIN\" comment {item} \"not yet\" --request-change && \"$WF_BIN\" review
     let item = world
         .wf
         .add(&["--title", "Add hello", "--review", "bounded"]);
+    world.sessions_ended(&["coder submitted"]).await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed"])
+        .await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed", "coder submitted"])
+        .await;
     world
         .wait("the round limit", |world| {
             world.item(&item)["review_status"]["status"] == "round_limit_reached"
@@ -2466,6 +2613,7 @@ async fn an_escalated_review_goes_to_the_principal() {
     let item = world
         .wf
         .add(&["--title", "Add hello", "--review", "standard"]);
+    world.sessions_ended(&["coder submitted"]).await;
     world
         .wait("the principal step", |world| {
             world.item(&item)["review_status"]["steps"] == serde_json::json!(["principal"])
@@ -2589,6 +2737,9 @@ wf review --approve
     // The next session's submission rebases the branch and stops at the conflict; the session
     // stays live, is told of the file, resolves it, and its work is reviewed again and merges.
     std::fs::write(world.wf.data.join("again"), "").unwrap();
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed", "coder submitted"])
+        .await;
     world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
@@ -3255,6 +3406,29 @@ fn a_command_that_runs_past_its_limit_fails_with_what_it_ran() {
     assert!(message.contains("did not finish"), "{message}");
 }
 
+#[test]
+fn what_the_tests_spawn_inherits_no_descriptor_another_thread_just_opened() {
+    // A pipe as std has it on macOS between making it and setting close-on-exec on it.
+    let mut ends = [0; 2];
+    // SAFETY: `pipe` writes two descriptors into the array it is given.
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    let mut probe = Command::new("sh");
+    probe.args([
+        "-c",
+        r#"for path in /dev/fd/*; do echo "${path##*/}"; done"#,
+    ]);
+    common::inherit_only_stdio(&mut probe);
+    let held = String::from_utf8(common::output(&mut probe).stdout).unwrap();
+    for end in ends {
+        // SAFETY: both ends are this test's, and closed once.
+        unsafe { libc::close(end) };
+    }
+    // Only stdin, stdout, stderr and the listing, which holds its directory open as the lowest
+    // free descriptor.
+    let held: Vec<i32> = held.lines().filter_map(|line| line.parse().ok()).collect();
+    assert_eq!(held, [0, 1, 2, 3], "the pipe {ends:?} reached the child");
+}
+
 /// Adds `checks`, `[[merge.check]]` tables, to the policy.
 fn add_checks(world: &World, checks: &str) {
     let policy = world.wf.run(&["policy", "show"]);
@@ -3542,6 +3716,13 @@ turn
     add_checks(&world, &check);
     let item = world.wf.add(&["--title", "Break it again and again"]);
     start_session(&world, &item);
+    for round in 1..=2 {
+        world
+            .wait(&format!("failed run {round} to be told"), |world| {
+                comments_with(world, &item, "change_request", "`unbroken`").len() >= round
+            })
+            .await;
+    }
     world
         .wait("the blocker", |world| {
             !comments_with(world, &item, "blocker", "`unbroken`").is_empty()

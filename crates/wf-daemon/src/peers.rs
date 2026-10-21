@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Notify;
 use tokio::task::{AbortHandle, JoinSet};
+use tracing::instrument::WithSubscriber;
 use wf_core::claims::Presence;
 use wf_core::id::WorkforceId;
 use wf_core::identity::DeviceKey;
@@ -100,10 +101,13 @@ where
     let mut tasks = JoinSet::new();
     for (index, (device, label)) in peers.into_iter().enumerate() {
         let node = Arc::clone(node);
-        tasks.spawn(async move {
-            let result = node.sync_with(workforce, wf_net::endpoint_id(device)).await;
-            (index, PeerSync::from_result(device, label, result))
-        });
+        tasks.spawn(
+            async move {
+                let result = node.sync_with(workforce, wf_net::endpoint_id(device)).await;
+                (index, PeerSync::from_result(device, label, result))
+            }
+            .with_current_subscriber(),
+        );
     }
     let mut results = Vec::new();
     while let Some(joined) = tasks.join_next().await {
@@ -232,14 +236,17 @@ pub async fn run_peer_loop(
         for device in &devices {
             syncers.entry(*device).or_insert_with(|| {
                 let kick = Arc::new(Notify::new());
-                let task = tasks.spawn(keep_in_sync(
-                    Arc::clone(&node),
-                    workforce,
-                    storage.clone(),
-                    *device,
-                    Arc::clone(&presence),
-                    Arc::clone(&kick),
-                ));
+                let task = tasks.spawn(
+                    keep_in_sync(
+                        Arc::clone(&node),
+                        workforce,
+                        storage.clone(),
+                        *device,
+                        Arc::clone(&presence),
+                        Arc::clone(&kick),
+                    )
+                    .with_current_subscriber(),
+                );
                 (kick, task)
             });
         }

@@ -143,7 +143,7 @@ pub(crate) fn run_command(config: &NotifyConfig, notice: &Notice) {
     let Some(command) = config.command_for(notice) else {
         return;
     };
-    tokio::spawn(async move {
+    crate::spawn(async move {
         let Some((program, arguments)) = command.split_first() else {
             return;
         };
