@@ -207,7 +207,7 @@ git config gpg.ssh.allowedSignersFile .git/allowed_signers
 
 With a command under `[notify]`, the daemon runs it once for each new entry of `wf inbox`: a
 blocker, a proposal to decide, a review that is yours, sessions that did not
-finish, a permission request.
+finish, a comment that mentions you, a permission request.
 
 ```toml
 [notify]
@@ -218,7 +218,7 @@ command = ["terminal-notifier", "-title", "wf: {title}", "-message", "{what}"]  
 
 The command runs without a shell. In its arguments, `{kind}`, `{item}`, `{title}` and `{what}` are
 replaced as `wf inbox` shows them; `{kind}` is one of `blocker`, `proposal`, `principal_review`,
-`merge`, `recovery` and `permission`. What it already told you of is not told again after a
+`merge`, `recovery`, `mention` and `permission`. What it already told you of is not told again after a
 restart. A command that fails is logged in the daemon's log.
 
 ## Colours

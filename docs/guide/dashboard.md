@@ -184,6 +184,7 @@ The `WHAT` column says what to do. The kinds:
 | `proposal` | a decision to accept or reject | `wf item done <item>` or `wf item cancel <item>` |
 | `principal_review` | your step of a review, or a review that reached its round limit | `wf item diff <item>`, then `wf review <item> --approve` or `--request-changes` |
 | `recovery` | sessions that did not finish, and the item's recovery level leaves it to you | comment with what to do differently, or `wf session start <item>` |
+| `mention` | a comment that mentions you | `wf comment <item> "<answer>"`, or anything else you do to the item |
 | `permission` | an agent waits for an answer | `wf session allow <session>` or `deny` |
 
 `wf inbox` shows permission requests while the daemon runs. These are the entries the dashboard's Now tab

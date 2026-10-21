@@ -130,6 +130,13 @@ wf comment k3f7 "Done with the parser." --step 1 --done   # about step 1, and ti
 `#a8c2` in a comment refers to an item, `@ada/grace` mentions someone. A comment id, such as `q4tz`,
 is shown next to each comment.
 
+Comments reach the sessions they are for while they work, at the end of their current turn: a
+session is told every comment on its item, and every comment elsewhere that mentions its agent
+(`@ada/coder`) or the session itself (`@ada/coder/s4k2`). So a change of plan written on the item
+needs no restart. An agent with no live session finds the mentions in the brief of its next one. A
+comment that mentions you (`@ada`) waits in `wf inbox` until you act on its item: comment, edit or
+move it.
+
 `wf item check k3f7 1 3` ticks steps 1 and 3 without a comment; `--remove` unticks them.
 
 ## Blockers and change requests

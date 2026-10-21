@@ -9,9 +9,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::id::MIN_PREFIX_LEN;
 
-pub const PARSER_VERSION: u16 = 6;
+pub const PARSER_VERSION: u16 = 7;
 
-/// `@ada` or `@ada/coder`, as written.
+/// `@ada`, `@ada/coder` or `@ada/coder/s4k2`, as written.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 pub enum Mention {
     /// One segment. A principal handle, or the short form of an agent name.
@@ -20,6 +20,12 @@ pub enum Mention {
         principal: String,
         agent: String,
     },
+    /// A session of an agent, by a prefix of its id.
+    Session {
+        principal: String,
+        agent: String,
+        session: String,
+    },
 }
 
 impl std::fmt::Display for Mention {
@@ -27,6 +33,11 @@ impl std::fmt::Display for Mention {
         match self {
             Mention::Short(name) => write!(formatter, "@{name}"),
             Mention::Agent { principal, agent } => write!(formatter, "@{principal}/{agent}"),
+            Mention::Session {
+                principal,
+                agent,
+                session,
+            } => write!(formatter, "@{principal}/{agent}/{session}"),
         }
     }
 }
@@ -166,6 +177,11 @@ fn parse_mention(rest: &str) -> (Option<Token>, usize) {
             principal: owned(principal),
             agent: owned(agent),
         },
+        [principal, agent, session] => Mention::Session {
+            principal: owned(principal),
+            agent: owned(agent),
+            session: owned(session),
+        },
         _ => return (None, length),
     };
     (Some(Token::Mention(mention)), length)
@@ -214,8 +230,15 @@ mod tests {
     }
 
     #[test]
-    fn three_segments_are_not_a_mention() {
-        assert_eq!(parse("@ada/coder/s4k2 is stuck"), Vec::new());
+    fn three_segments_name_a_session() {
+        assert_eq!(
+            parse("@ada/coder/s4k2 is stuck"),
+            Vec::from([Token::Mention(Mention::Session {
+                principal: "ada".into(),
+                agent: "coder".into(),
+                session: "s4k2".into()
+            })])
+        );
     }
 
     #[test]

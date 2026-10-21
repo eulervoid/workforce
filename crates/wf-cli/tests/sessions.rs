@@ -1416,12 +1416,21 @@ wf work submit
 ";
     let mut world = World::new(script).await;
     let item = world.wf.add(&["--title", "Survives a restart"]);
+    world.wf.run(&["comment", short(&item), "In the brief"]);
     start_session(&world, &item);
     world
         .wait("the first turn", |world| {
             world.transcript(&item).contains("started")
         })
         .await;
+    world
+        .wait("the brief to be kept as told", |world| {
+            agent_session_record(&world.wf.data)["told"]
+                .as_array()
+                .is_some_and(|told| told.len() == 1)
+        })
+        .await;
+    world.wf.run(&["comment", short(&item), "Since the brief"]);
     world.restart().await;
     let session = world.ended_session().await;
     assert_eq!(world.sessions().len(), 1, "the same session went on");
@@ -1432,6 +1441,81 @@ wf work submit
         transcript.contains("wf restarted while you were working"),
         "{transcript}"
     );
+    assert!(
+        transcript.contains("Written for you since:\n  - @ada (comment "),
+        "{transcript}"
+    );
+    let (_, restarted) = transcript.split_once("wf restarted").unwrap();
+    assert!(restarted.contains("): Since the brief"), "{transcript}");
+    assert!(
+        !restarted.contains("In the brief"),
+        "the brief told it: {transcript}"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_comment_in_a_prompt_the_agent_did_not_accept_before_a_restart_is_told_again() {
+    // The agent neither takes the brief up nor answers it, as if the daemon stopped between
+    // sending the prompt and the agent reading it. The restart prompt it then accepts only by
+    // answering, a while after it submitted: the session is submitted before its turn ends.
+    let script = "\
+silent
+sh echo done > a.txt && git add a.txt && git commit -q -m a
+sh \"$WF_BIN\" work submit && sleep 1
+";
+    let mut world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Told again"]);
+    world.wf.run(&["comment", short(&item), "In the brief"]);
+    start_session(&world, &item);
+    world
+        .wait("the brief to be sent", |world| {
+            world
+                .transcript(&item)
+                .contains("You are the agent `coder`")
+        })
+        .await;
+    let record = agent_session_record(&world.wf.data);
+    assert!(record["prompted_ms"].is_u64(), "{record}");
+    assert_eq!(
+        record["told"],
+        serde_json::json!([]),
+        "nothing is told before the agent accepted the prompt"
+    );
+    world.restart().await;
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+    let transcript = world.transcript(&item);
+    let (_, restarted) = transcript.split_once("wf restarted").unwrap();
+    assert!(
+        restarted.contains("): In the brief"),
+        "the brief was not accepted: {transcript}"
+    );
+    world
+        .wait("the restart prompt to be kept as accepted", |world| {
+            agent_session_record(&world.wf.data)["told"]
+                .as_array()
+                .is_some_and(|told| told.len() == 1)
+        })
+        .await;
+}
+
+/// The record the daemon keeps of the one session's agent, somewhere under `data`.
+fn agent_session_record(data: &Path) -> Value {
+    fn find(directory: &Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(directory).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path) {
+                    return Some(found);
+                }
+            } else if path.to_string_lossy().ends_with(".agent-session.json") {
+                return Some(path);
+            }
+        }
+        None
+    }
+    let path = find(data).expect("a session record");
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1464,13 +1548,71 @@ wf work submit
     assert_eq!(session["status"], "submitted", "{session}");
     let transcript = world.transcript(&item);
     assert!(
-        transcript.contains("- @ada: Use humantime"),
+        transcript.contains("Written for you meanwhile:\n  - @ada (comment "),
         "the answer is named by its principal: {transcript}"
     );
+    assert!(transcript.contains("): Use humantime"), "{transcript}");
     assert!(
         !transcript.contains("wf restarted while you were working"),
         "a parked session is told what it waited for, nothing else: {transcript}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_is_written_for_a_working_session_is_told_once_at_the_end_of_its_turn() {
+    let script = "\
+say started
+sh while [ ! -f \"$XDG_DATA_HOME/go\" ]; do sleep 0.1; done
+turn
+say second
+turn
+sh echo done > a.txt && git add a.txt && git commit -q -m a
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Told while working"]);
+    let elsewhere = world.wf.add(&["--title", "Elsewhere"]);
+    let session = start_session(&world, &item);
+    world
+        .wait("the first turn", |world| {
+            world.transcript(&item).contains("started")
+        })
+        .await;
+    world
+        .wf
+        .run(&["comment", short(&item), "Change of plan: use humantime"]);
+    world.wf.run(&[
+        "comment",
+        short(&elsewhere),
+        "@ada/coder this changes the API",
+    ]);
+    world.wf.run(&[
+        "comment",
+        short(&elsewhere),
+        &format!("@ada/coder/{} and you", short(&session)),
+    ]);
+    world
+        .wf
+        .run(&["comment", short(&elsewhere), "not for coder"]);
+    std::fs::write(world.wf.data.join("go"), "").unwrap();
+    let ended = world.ended_session().await;
+    assert_eq!(ended["status"], "submitted", "{ended}");
+
+    let transcript = world.transcript(&item);
+    assert!(
+        transcript.contains("Written for you during your turn:"),
+        "{transcript}"
+    );
+    let on_elsewhere = format!("on #{} Elsewhere (comment ", short(&elsewhere));
+    assert_eq!(transcript.matches(&on_elsewhere).count(), 2, "{transcript}");
+    for told in [
+        "): Change of plan: use humantime",
+        "): @ada/coder this changes the API",
+        "and you",
+    ] {
+        assert_eq!(transcript.matches(told).count(), 1, "{told}: {transcript}");
+    }
+    assert!(!transcript.contains("not for coder"), "{transcript}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3901,7 +4043,8 @@ wf work submit
     wait_for("the resumed session to submit", "submitted");
     assert_eq!(sessions().len(), 1, "the same session went on");
     let transcript = wf.run(&["session", "watch", short(&item), "--no-follow"]);
-    assert!(transcript.contains("- @ada: Use humantime"), "{transcript}");
+    assert!(transcript.contains("- @ada (comment "), "{transcript}");
+    assert!(transcript.contains("): Use humantime"), "{transcript}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

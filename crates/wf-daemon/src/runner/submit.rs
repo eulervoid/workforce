@@ -33,7 +33,16 @@ enum Checks {
     /// Passed on the merge of `commit`, so that submitting it ends the session.
     Passed { commit: CommitId },
     /// Failed by the work's fault: the next prompt of the session, which has not been given yet.
-    Failed { prompt: String },
+    Failed(ChecksFailed),
+}
+
+/// What the session is told of checks that failed by its work.
+pub(super) struct ChecksFailed {
+    /// Which checks failed and how, and what to do.
+    pub(super) prompt: String,
+    /// The change request on the item that says the same, which the prompt tells; `None` when
+    /// the checks could not run, which the item does not hear of.
+    pub(super) comment: Option<CommentId>,
 }
 
 impl SubmissionChecks {
@@ -113,10 +122,10 @@ impl SubmissionChecks {
     }
 
     /// The prompt that tells `session` which checks failed, once.
-    pub(super) fn take_failure(&self, session: SessionId) -> Option<String> {
+    pub(super) fn take_failure(&self, session: SessionId) -> Option<ChecksFailed> {
         let mut sessions = self.lock();
         match sessions.remove(&session) {
-            Some(Checks::Failed { prompt }) => Some(prompt),
+            Some(Checks::Failed(failed)) => Some(failed),
             Some(other) => {
                 sessions.insert(session, other);
                 None
@@ -186,14 +195,15 @@ impl Daemon {
                             submission.session.short(),
                             wf_core::error_chain(&error)
                         );
-                        Some(Checks::Failed {
+                        Some(Checks::Failed(ChecksFailed {
                             prompt: format!(
                                 "Your submission was not sent to review: the checks could not \
                                  run: {}\nSubmit again to try again, or release the item with \
                                  `wf work release --note \"<why>\"`.",
                                 wf_core::error_chain(&error)
                             ),
-                        })
+                            comment: None,
+                        }))
                     }
                 };
                 daemon
@@ -336,9 +346,10 @@ impl Daemon {
                     )
                     .await?;
                 let comment = CommentId::from(written.id());
-                Ok(Some(Checks::Failed {
+                Ok(Some(Checks::Failed(ChecksFailed {
                     prompt: wf_core::brief::checks_failed_nudge(item, &comment.short(), &failures),
-                }))
+                    comment: Some(comment),
+                })))
             }
             AfterFailedChecks::WaitsForPrincipal { runs } => {
                 let text = format!(

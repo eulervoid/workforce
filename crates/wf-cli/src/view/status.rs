@@ -620,7 +620,10 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
                     state.recovery_waits(entry.item, &role, failures, last)
                 ))
             }
-            Waiting::Blocker { .. } | Waiting::Proposal | Waiting::PrincipalReview { .. } => None,
+            Waiting::Blocker { .. }
+            | Waiting::Proposal
+            | Waiting::PrincipalReview { .. }
+            | Waiting::Mention { .. } => None,
         })
         .collect();
     let ready_items = state.ready_items().len();

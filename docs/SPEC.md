@@ -537,7 +537,7 @@ last until one is set. `item list` orders by priority, then creation, then id (`
 | `depends_on` | `ItemLinked`, many, acyclic | readiness; allowed target types per type |
 | `supersedes` | `ItemLinked`, one, decisions only, not removable | the target keeps its state and shows as superseded |
 | references | `#k3f7a2` or `#k3f7a2/c7f2` in body and comments | backlinks to an item or a comment |
-| mentions | `@ada`, `@ada/coder` in body and comments | `wf mentions`; a blocker goes to the first one it names |
+| mentions | `@ada`, `@ada/coder`, `@ada/coder/s4k2` in body and comments | `wf mentions`; delivered (below); a blocker goes to the first one it names |
 
 * No parent/child: decomposition is "the big task depends on its parts", which makes it ready for
   integration exactly when the parts are done. `item show` lists dependents as "required by".
@@ -545,9 +545,18 @@ last until one is set. `item list` orders by priority, then creation, then id (`
 * References and mentions are parsed with `pulldown-cmark`, skipping code, by a versioned parser in
   the fold; a better parser means a refold. Item ids take any unique prefix of at least 4 characters.
   A handle wins over an agent name; a short `@coder` resolves when exactly one agent has the name.
+  `@ada/coder/s4k2` names a session of that agent by a prefix of its id.
 
-**Planned (M3):** mentions are delivered: `@ada` to the principal's inbox, `@ada/coder` on an item to
-the agent's live session there or else the agent's inbox, `@ada/coder/s4k2` to a session.
+**Mentions are delivered** by the comments they are in; a mention in a body is shown, not delivered:
+
+* `@ada`: the comment waits in `wf inbox` as `mention` until a principal acts on its item after it
+  (comments, edits, moves, links, reviews or archives it, as for recovery), so answering it is what
+  takes it out. A blocker is in the inbox as a blocker instead, and a principal's own comment does
+  not mention them.
+* `@ada/coder`: every live session of the agent is told, wherever the comment is (section 9). Without
+  one, it waits in the agent's inbox, which is `wf mentions @ada/coder`; the brief of the agent's next
+  session lists the mentions written since its previous session started.
+* `@ada/coder/s4k2`: that session is told, while it is live.
 
 ### Archiving
 
@@ -753,7 +762,9 @@ for one that is not there. Ranking is pure (`wf-core`); waiting is the dispatche
 ### Briefs
 
 The first prompt is the brief (`wf work brief` prints it again): the agent's instructions, the item
-with its numbered steps, and every earlier comment with its kind. By role it adds:
+with its numbered steps, every earlier comment with its kind, and the comments elsewhere that
+mention the agent and were written since its previous session started (the agent's inbox, section
+8). By role it adds:
 
 * **Work:** dependencies with their last comment; open change requests, each to resolve; the rules:
   commit small on the branch, tick steps (`wf item check`), report per step (`wf comment --step
@@ -768,6 +779,39 @@ with its numbered steps, and every earlier comment with its kind. By role it add
   blocker mentioning the principal that resolves the old one.
 * **Diagnose:** the attempts that did not finish, with their reasons and last words.
 
+### What a session is told
+
+A live session is told the comments written **for it**: every comment on its item by someone else
+(a principal, another session or `@daemon`), every comment on another item that mentions the
+session, and every one there that mentions its agent and was written since the agent's previous
+session started (section 8). Never what it wrote, and one comment twice only after a crash (What
+was told, below). A body edit is not told; who wants a session to know comments.
+
+ACP takes one prompt at a time, so a comment is told with the next prompt the session gets:
+
+| Prompt | Tells |
+|---|---|
+| the brief | everything for it so far (Briefs, above) |
+| the end of a turn that goes on (a nudge, or the checks that failed) | what was written for it and not told yet, before the nudge; a check failure's own change request is told by the prompt it is in |
+| the end of a park ("What you were waiting for is resolved") | the same, so what came during the turn that parked and while parked |
+| a resume after a restart ("wf restarted") | the same, so nothing is told again that the agent accepted before |
+
+A parked session is not woken by a comment, only by its item being ready. `State::untold(session,
+told)` in `wf-core` says what to tell, from the state and the comments the session was told already;
+the daemon sends it and adds it to the told ones.
+
+**What was told** is kept by the device running the session, in the session's resume record beside
+its transcript (section 4), never in the log: only that device prompts the session. What a prompt
+tells is written once the agent accepted the prompt, with its first update in the turn that works on
+it (a message, a thought, a tool call, a plan) or its answer, not when it is sent. An update about
+the session (its commands, mode, title or usage) does not count, as an agent sends those when it
+likes, also before it read the prompt. A crash in between tells those comments again on the resume rather
+than never. A lost comment is the worse failure, as it is often a change of plan or an answer and
+nothing shows it was lost; one told twice is harmless to an agent. A record from before this,
+without the told comments, counts as told every comment for the session written before its last
+prompt. Across devices nothing new goes on the wire: the
+comment syncs, and the device that runs the session tells it at the end of the session's turn.
+
 ### Turn end
 
 When a prompt turn returns, the runner checks, in order (`State::turn_outcome`):
@@ -777,9 +821,9 @@ When a prompt turn returns, the runner checks, in order (`State::turn_outcome`):
 | the session ended | close the harness |
 | a work session's item moved on (review, done, cancelled, draft, archived) | end `Cancelled` |
 | the machine is at fault | end `MachineFault` |
-| a work session's item has an open blocker or an unfinished dependency | **park**: keep the harness and its conversation; once the item is ready, prompt again with the comments written meanwhile; end `TimedOut` after `park_timeout` |
+| a work session's item has an open blocker or an unfinished dependency | **park**: keep the harness and its conversation; once the item is ready, prompt again with what is untold; end `TimedOut` after `park_timeout` |
 | `nudges` turns in a row without a new commit on the branch (for other roles: without a verdict, answer or diagnosis) | end `Released`, by `@daemon`, with the agent's last words |
-| otherwise | nudge: a role-specific "continue"; with a rebase stopped by a refused submission, name its files |
+| otherwise | nudge: what is untold, then a role-specific "continue"; with a rebase stopped by a refused submission, name its files |
 
 ### Recovery levels
 
@@ -808,10 +852,10 @@ default level; an item can name another (`--recovery`).
 
 * **Restart.** A daemon that stops cancels its sessions' turns and closes their harnesses, but leaves
   the sessions live. It keeps, beside each transcript, the agent's ACP session id, the time of the
-  last prompt and the model. The next daemon resumes each session in the agent's own conversation
-  (ACP `session/resume`, else `session/load` with the replayed history left out of the transcript): a
-  working session is told that wf restarted and what was written on its item since its last prompt,
-  a parked one parks again, and `max_duration` counts from the resume. A session whose item moved on
+  last prompt, the model and the comments the session was told. The next daemon resumes each session
+  in the agent's own conversation (ACP `session/resume`, else `session/load` with the replayed history
+  left out of the transcript): a working session is told that wf restarted and what is untold, a
+  parked one parks again, and `max_duration` counts from the resume. A session whose item moved on
   ends `Cancelled`; one the agent cannot resume ends `Interrupted`, which costs no recovery step.
 * **No silent stalls.** A harness has 3 minutes to start, else `HarnessUnreachable`; a turn silent for
   20 minutes with no permission request pending ends the session `Failed`; ACP `AuthRequired` is
@@ -1373,7 +1417,7 @@ for dispatch and turn-end decisions uses the same protocol.
 
 With `[notify] command` in the machine config, the daemon runs it, without a shell, once for each new
 inbox entry that waits on the principal: a blocker, a proposal, a principal review step, a recovery
-left to the principal, and a held permission request.
+left to the principal, a mention, and a held permission request.
 `{kind}`, `{item}`, `{title}` and `{what}` in its arguments are replaced. Entries are announced after
 each dispatcher round, so work about to merge is not announced. What was announced is kept in
 `<wf>/announced.json`, so a restart does not repeat it, and an entry that goes and comes back (a
@@ -1651,8 +1695,9 @@ wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | f
   commented `state = "draft"` for new items), then the body verbatim. Unknown keys are refused. State
   changes only through the verbs.
 * **`wf inbox`** lists what waits on the principal: `blocker`, `proposal` (an item in `review` without
-  submitted work, such as a decision), `principal_review`, `recovery`, `permission`,
-  `machine_fault` and `lost_push`, each with the command that answers it. `wf status` summarises the workforce, flags
+  submitted work, such as a decision), `principal_review`, `recovery`, `mention` (a comment that
+  mentions the principal, section 8), `permission`, `machine_fault` and `lost_push`, each with the
+  command that answers it. `wf status` summarises the workforce, flags
   what needs someone (stranded items, steps no agent can take, unknown states, an unreadable policy)
   and says what to do next.
 * **`--json`** gives `{"schema": 9, "data": ...}` for every command with output to read (not the

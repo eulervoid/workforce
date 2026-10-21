@@ -499,7 +499,9 @@ fn waiting(
                 stale,
                 reason,
             },
-            InboxWaiting::Proposal | InboxWaiting::Recovery { .. } => InboxEntry::Notice {
+            InboxWaiting::Proposal
+            | InboxWaiting::Recovery { .. }
+            | InboxWaiting::Mention { .. } => InboxEntry::Notice {
                 kind: entry.waiting.kind(),
                 what: state.what_waits(&entry),
                 item,

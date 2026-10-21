@@ -37,6 +37,7 @@ fn briefs() -> Vec<String> {
         }],
         change_requests: open("c4d2e1"),
         earlier: earlier(),
+        mentioned: vec![],
         diverged: vec![],
     };
     let review = |commit: Option<&str>| ReviewBrief {
@@ -50,6 +51,7 @@ fn briefs() -> Vec<String> {
         checks: vec!["test".into()],
         step: wf_core::brief::StepBrief::default(),
         earlier: earlier(),
+        mentioned: vec![],
         diff: "+added".into(),
     };
     let supervise = SuperviseBrief {
@@ -59,6 +61,7 @@ fn briefs() -> Vec<String> {
         title: "Add the summary command".into(),
         body: String::new(),
         earlier: earlier(),
+        mentioned: vec![],
         blockers: open("b7e3f0"),
         principal: "@ada".into(),
     };
