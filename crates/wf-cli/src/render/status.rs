@@ -83,7 +83,7 @@ pub fn session_choice(session: &SessionView) -> String {
         session.id.short(),
         session.agent,
         session.item.short(),
-        session.status.name(),
+        session.status.label(),
         session.title
     )
 }
@@ -100,7 +100,7 @@ pub fn session(session: &SessionView) -> String {
     if let Some(model) = &session.model {
         let _ = writeln!(out, "  model    {model}");
     }
-    let _ = writeln!(out, "  status   {}", session.status.name());
+    let _ = writeln!(out, "  status   {}", session.status.label());
     let _ = writeln!(out, "  started  {}", short_time(session.started));
     if let SessionStatus::Ended { at, .. } = session.status {
         let _ = writeln!(out, "  ended    {}", short_time(at));
@@ -186,5 +186,30 @@ mod tests {
                 "devices: laptop (this), vm (seen {seen}), server (gone, seen {seen}), pi (gone), box"
             )
         );
+    }
+
+    #[test]
+    fn a_session_that_lost_its_claim_reads_as_words() {
+        let at = crate::view::timestamp_ms(1_700_000_000_000);
+        for (reason, label) in [
+            (wf_core::session::EndReason::LeaseExpired, "lease expired"),
+            (wf_core::session::EndReason::Outclaimed, "outclaimed"),
+        ] {
+            let view = SessionView {
+                id: wf_core::id::SessionId::from_bytes([3; 32]),
+                agent: "@ada/coder".to_string(),
+                item: wf_core::id::ItemId::from_bytes([1; 32]),
+                title: "Parse".to_string(),
+                role: wf_core::session::SessionRole::Work,
+                status: SessionStatus::Ended { reason, at },
+                started: at,
+                model: None,
+                commit: None,
+                steps: None,
+            };
+            let shown = session(&view);
+            assert!(shown.contains(&format!("  status   {label}\n")), "{shown}");
+            assert!(session_choice(&view).contains(&format!("({label})")));
+        }
     }
 }

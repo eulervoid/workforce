@@ -199,7 +199,7 @@ pub fn sessions(sessions: &[SessionView]) -> String {
             session.title.clone(),
             steps_label(session.steps),
             session.role.name().to_string(),
-            session.status.name().to_string(),
+            session.status.label(),
             short_time(session.started),
         ]);
     }
