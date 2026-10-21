@@ -1138,12 +1138,14 @@ Every move of the target names the tip it moved from, so every device agrees whe
   nor an ancestor of the tip in the log is a push, from the merge base of the two (from the branch
   it last saw while the log has no tip). A merge found landed in the target moves nothing and has
   no `onto`.
-* **The chain.** It starts at the earliest move whose `onto` no move made, and at each tip goes on
-  with the earliest move onto it, by `(hlc, EventId)`; a commit it reaches twice ends it, so moves
-  that go round in a circle cannot loop. The target is the end of the chain, and its tip is fetched
-  like any other commit the log names, from the device that moved it there.
-* **Forks.** Two moves with the same `onto` are a fork: the earliest wins, on every device alike,
-  and the moves off the chain are lost, with every move made on top of them.
+* **The chain.** It starts at the earliest move by `(hlc, EventId)`, whose `onto` no earlier move
+  made, and at each tip goes on with the earliest later move onto it. Moves that go round in a
+  circle (before the log names a tip, a branch the principal deleted and pushed again goes back) are
+  followed round it, and the chain cannot loop, as every move on it is later than the one before.
+  The target is the end of the chain, and its tip is fetched like any other commit the log names,
+  from the device that moved it there.
+* **Forks.** Two moves onto the same tip of the chain are a fork: the earliest wins, on every device
+  alike, and the moves off the chain are lost, with every move made on top of them.
 * **Following.** Each daemon moves its `<wf>/git` target to the tip once the commit is there,
   forward or back by compare-and-swap; this resets a move that lost to the winner (wf's ref, not the
   principal's checkout), and it puts back a target the principal rewound without pushing anything new.

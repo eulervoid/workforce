@@ -298,7 +298,7 @@ fn a_device_of_the_principal_sends_back_a_lost_merge_once_its_maker_is_gone() {
 }
 
 #[test]
-fn the_chain_starts_at_the_earliest_move_from_a_tip_no_move_made() {
+fn the_chain_starts_at_the_earliest_move() {
     let (fixture, state, _) = submitted();
     // Two devices whose targets were apart before the log named a tip.
     let mut first = state.clone();
@@ -328,7 +328,7 @@ fn the_chain_starts_at_the_earliest_move_from_a_tip_no_move_made() {
 }
 
 #[test]
-fn moves_that_go_round_in_a_circle_end_the_chain() {
+fn moves_that_go_round_in_a_circle_are_followed_round_it() {
     let (fixture, mut state, _) = submitted();
     write(
         &fixture,
@@ -351,7 +351,34 @@ fn moves_that_go_round_in_a_circle_end_the_chain() {
         3_002,
         target_moved(commit(11), commit(12)),
     );
-    assert_eq!(state.target(), Some(commit(12)));
+    assert_eq!(state.target(), Some(commit(11)));
+    assert_eq!(state.lost_moves(fixture.devices[0].key()).count(), 0);
+}
+
+#[test]
+fn a_circle_before_the_log_named_a_tip_leaves_the_target_where_it_went() {
+    let (fixture, state, _) = submitted();
+    // The target is at 11: the principal deletes it, pushes 10 and then 11 again, and then a
+    // commit on top of it.
+    let mut pushing = state.clone();
+    let moves = [
+        (3_000, commit(10), commit(11)),
+        (3_001, commit(11), commit(10)),
+        (3_002, commit(12), commit(11)),
+    ]
+    .map(|(now_ms, moved_to, onto)| {
+        write(
+            &fixture,
+            &mut pushing,
+            0,
+            now_ms,
+            target_moved(moved_to, onto),
+        )
+    });
+    assert_eq!(pushing.target(), Some(commit(12)));
+    assert_eq!(pushing.lost_moves(fixture.devices[0].key()).count(), 0);
+    let [first, second, third] = &moves;
+    assert_eq!(received(&state, &[third, second, first]), pushing);
 }
 
 #[test]

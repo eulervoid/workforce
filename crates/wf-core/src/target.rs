@@ -1,10 +1,12 @@
 //! The target branch as a chain in the log. Every move of it names the tip it moved from: a
 //! `Merged` with `onto`, or a `TargetMoved` a daemon wrote for a push of the principal. Two moves
-//! with the same `onto` are a fork, and the earliest by `(hlc, EventId)` wins on every device; the
-//! target is the end of the chain of winners. The chain starts at the earliest move whose `onto`
-//! no move made, the tip the target had before the log named one.
+//! onto the same tip of the chain are a fork, and the earliest by `(hlc, EventId)` wins on every
+//! device; the target is the end of the chain of winners. The chain starts at the earliest move,
+//! whose `onto` no earlier move made: the tip the target had before the log named one. At each
+//! tip it goes on with the earliest later move onto it, so a move made from a commit before the
+//! chain came back to it is no fork, and moves that go round in a circle are followed round it.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -44,36 +46,18 @@ pub enum MoveCause {
 
 /// The ids of the moves on the chain, in order, from the moves of the log.
 pub(crate) fn chain(moves: &BTreeMap<EventId, TargetMove>) -> Vec<EventId> {
-    let made: BTreeSet<CommitId> = moves.values().map(|step| step.commit).collect();
-    let mut by_onto: BTreeMap<CommitId, &TargetMove> = BTreeMap::new();
-    for step in moves.values() {
-        by_onto
-            .entry(step.onto)
-            .and_modify(|earliest| {
-                if step.stamp < earliest.stamp {
-                    *earliest = step;
-                }
-            })
-            .or_insert(step);
-    }
-    let Some(start) = moves
-        .values()
-        .filter(|step| !made.contains(&step.onto))
-        .min_by_key(|step| step.stamp)
-    else {
+    let mut by_stamp: Vec<&TargetMove> = moves.values().collect();
+    by_stamp.sort_by_key(|step| step.stamp);
+    let Some((start, later)) = by_stamp.split_first() else {
         return Vec::new();
     };
     let mut chain = vec![start.stamp.id];
-    // A commit the chain reached already ends it, so moves that go round in a circle (no device
-    // writes them, as a push only fast-forwards) cannot make it endless.
-    let mut reached = BTreeSet::from([start.onto, start.commit]);
     let mut tip = start.commit;
-    while let Some(next) = by_onto.get(&tip) {
-        if !reached.insert(next.commit) {
-            break;
+    for step in later {
+        if step.onto == tip {
+            chain.push(step.stamp.id);
+            tip = step.commit;
         }
-        chain.push(next.stamp.id);
-        tip = next.commit;
     }
     chain
 }
