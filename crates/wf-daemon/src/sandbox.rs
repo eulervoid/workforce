@@ -102,10 +102,12 @@ fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
 
     let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
     let mut allow_write: Vec<PathBuf> = [paths(ALLOW_WRITE), writable].concat();
-    // Where nothing is allowed, nothing is written, so this denies key files everywhere but in
-    // the agents' cargo home, which holds no keys of the principal: it is wf's, made for agents.
+    // Fence writes every deny after every allow, so key files are denied below each writable
+    // directory but the agents' cargo home, which holds no keys of the principal: it is wf's, made
+    // for agents.
     let key_files: Vec<PathBuf> = allow_write
         .iter()
+        .chain(&paths(FENCE_ALLOW_WRITE))
         .flat_map(|root| key_files_below(root))
         .collect();
     allow_write.push(access.data_dir.agent_cargo_home());
@@ -313,6 +315,10 @@ const HARNESS_CONFIG: &[&str] = &[
     "~/.kiro/hooks",
     "~/.kiro/extensions",
 ];
+
+/// Directories Fence allows writing to itself, whatever the profile says, besides devices and its
+/// temporary directory in `/tmp`.
+const FENCE_ALLOW_WRITE: &[&str] = &["~/.npm/_logs", "~/.fence/debug"];
 
 /// Files that hold keys or secrets, by name.
 const KEY_FILES: &[&str] = &[".env", ".env.*", "*.pem", "*.p12", "*.pfx"];
@@ -597,6 +603,8 @@ mod tests {
             "~/.claude/key.pem",
             "/opt/cache/key.pem",
             "./key.pem",
+            "~/.npm/_logs/key.pem",
+            "~/.fence/debug/.env",
         ] {
             assert!(covers("denyWrite", path), "{path} is not writable");
         }
