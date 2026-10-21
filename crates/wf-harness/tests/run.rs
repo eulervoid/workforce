@@ -295,19 +295,24 @@ async fn an_agent_inherits_no_descriptor_while_other_threads_create_pipes() {
             })
         })
         .collect();
-    let mut agents = tokio::task::JoinSet::new();
-    for number in 0..100 {
-        let held = directory.path().join(format!("agent-{number}"));
-        let agent =
-            agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
-                .env("FAKE_AGENT_DESCRIPTORS", held.to_string_lossy());
-        let directory = directory.path().to_path_buf();
-        agents.spawn(async move {
-            wf_harness::models(agent, directory).await.unwrap();
-            std::fs::read_to_string(held).unwrap()
-        });
+    // Many starts give the race many chances; a few at a time keep the open files well under a
+    // default limit of 256.
+    let mut held = Vec::new();
+    for batch in (0..100).collect::<Vec<_>>().chunks(8) {
+        let mut agents = tokio::task::JoinSet::new();
+        for number in batch {
+            let descriptors = directory.path().join(format!("agent-{number}"));
+            let agent =
+                agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
+                    .env("FAKE_AGENT_DESCRIPTORS", descriptors.to_string_lossy());
+            let directory = directory.path().to_path_buf();
+            agents.spawn(async move {
+                wf_harness::models(agent, directory).await.unwrap();
+                std::fs::read_to_string(descriptors).unwrap()
+            });
+        }
+        held.extend(agents.join_all().await);
     }
-    let held = agents.join_all().await;
     stop.store(true, std::sync::atomic::Ordering::Relaxed);
     for command in commands {
         command.join().unwrap();
