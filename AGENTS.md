@@ -41,3 +41,9 @@
 - The `wf-cli` test `Sandbox` removes `WF_SESSION`, `WF_SESSION_TOKEN` and `WF_WORKFORCE` (which the daemon sets in sessions) from itself and from every `wf` it spawns; a new helper that spawns `wf` must go through `Sandbox::command`, or `cargo test` fails inside a session with "the local log for workforce ... is missing or does not match"
 - Any other failing test is yours to explain: never report a failure as "sandbox-only", and fix or explain it before you submit
 - The principal, or a check outside the sandbox, runs the marked tests with `cargo test --workspace -- --ignored` (the slow ones among them are marked "slow" and run in release mode)
+
+## Sharing the machine
+- Several sessions build and test on one machine at once: while you work, run the tests of the crate you change (`cargo test -p <crate>`), and `cargo test --workspace` once before you submit
+- Never load the machine on purpose (`yes`, stress tools, many test runs at once) to reproduce a race; make the race deterministic instead: paused tokio time, an injected delay or clock, a hook that holds one side
+- Nothing you start may outlive the command that started it: no background processes left behind by a turn, and a test that spawns a process stops it also when the test fails (a process that ends by itself, such as `sleep 120`, rather than one that runs forever, such as `yes`)
+- New tests wait for the event they expect, not for a fixed time; a deadline only bounds a wait so that a hang fails instead of running forever
