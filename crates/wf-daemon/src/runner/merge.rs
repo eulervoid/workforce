@@ -5,9 +5,9 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
 
 use tokio::sync::Notify;
-use wf_core::event::{Commented, EventBody, Merged};
+use wf_core::event::{Commented, EventBody, MergeClaimed, Merged};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::Actor;
+use wf_core::identity::{Actor, PrincipalKey};
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::lifecycle::{MergeFailure, MergePlan};
 use wf_core::policy::MergeMode;
@@ -16,6 +16,7 @@ use wf_core::session::CommitId;
 use wf_vcs::{CommitSigning, GitCli, MergeOutcome, MergeTree};
 
 use super::check::CheckStage;
+use super::target::TargetAt;
 use super::{SessionError, blocking};
 use crate::machine_config::MergeSigningConfig;
 use crate::{Daemon, Loaded};
@@ -238,6 +239,13 @@ impl Daemon {
             .await?;
             return Ok(());
         }
+        // Another device that is there holds the merge: it makes it.
+        if !self
+            .hold_merge(loaded, principal, item, commit, Claiming::Claim)
+            .await?
+        {
+            return Ok(());
+        }
         let target = policy.merge.target.clone();
         let message = format!("Merge #{}: {}", HashId::short(&item), live.title());
         let open = state.after_failed_merge(item, MergeFailure::Conflict);
@@ -274,8 +282,15 @@ impl Daemon {
         let mut outcome = MergeOutcome::TargetMoved;
         // The tip the merge moved the target from; none for work found landed already.
         let mut onto = None;
+        // Held from moving the target until the merge is written, so it is not taken for a push.
+        let mut moving = None;
         for _ in 0..MERGE_ATTEMPTS {
             onto = None;
+            moving = None;
+            // A merge starts only on the tip the log names, or a fork would be made on purpose.
+            if self.follow_target(workforce, loaded).await? == TargetAt::Elsewhere {
+                return Ok(());
+            }
             let made = {
                 let (repository, target) = (repository.clone(), target.clone());
                 blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit))
@@ -316,6 +331,14 @@ impl Daemon {
                             .await?;
                         return Ok(());
                     }
+                    // Another device's claim, which came while the checks ran, holds it now.
+                    if !self
+                        .hold_merge(loaded, principal, item, commit, Claiming::Keep)
+                        .await?
+                    {
+                        return Ok(());
+                    }
+                    moving = Some(loaded.target.seen.lock().await);
                     let (repository, target, message, signing) = (
                         repository.clone(),
                         target.clone(),
@@ -355,6 +378,9 @@ impl Daemon {
                     }),
                 )
                 .await?;
+                if let Some(mut seen) = moving.take() {
+                    *seen = Some(merged);
+                }
                 // The refs pass removes its branch and repository: a merged item is finished.
                 self.move_item(
                     loaded,
@@ -387,7 +413,52 @@ impl Daemon {
     }
 }
 
+/// Whether a device that holds no claim on a merge claims it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Claiming {
+    Claim,
+    /// Only asks whether its claim still holds.
+    Keep,
+}
+
 impl Daemon {
+    /// Whether this device holds the merge of the reviewed `commit` of `item`: its claim is the
+    /// earliest of a device that is there. With `Claiming::Claim` it claims a merge nobody holds,
+    /// if it meets `[merge] requires`.
+    pub(super) async fn hold_merge(
+        &self,
+        loaded: &Loaded,
+        principal: PrincipalKey,
+        item: ItemId,
+        commit: CommitId,
+        claiming: Claiming,
+    ) -> Result<bool, SessionError> {
+        let (own, presence, now_ms) = (self.device(), self.presence_now(), wf_store::now_ms());
+        let (holder, may_merge) = self
+            .read(loaded, move |state| {
+                let holder = state
+                    .merge_holder(item, commit, own, &presence, now_ms)
+                    .map(|claim| claim.device);
+                (holder, state.may_merge(own))
+            })
+            .await?;
+        match (holder, claiming) {
+            (Some(device), Claiming::Claim | Claiming::Keep) => Ok(device == own),
+            (None, Claiming::Keep) => Ok(false),
+            // Its hardware does not meet `[merge] requires`: a device that does merges it.
+            (None, Claiming::Claim) if !may_merge => Ok(false),
+            (None, Claiming::Claim) => {
+                self.author(
+                    loaded,
+                    Actor::Daemon(principal),
+                    EventBody::MergeClaimed(MergeClaimed { item, commit }),
+                )
+                .await?;
+                Ok(true)
+            }
+        }
+    }
+
     /// How the merge commit is signed, as the machine config says now.
     fn merge_signing(&self) -> Result<CommitSigning, SessionError> {
         Ok(match self.machine_config()?.commits.merge_signing {

@@ -110,6 +110,7 @@ pub(crate) struct Loaded {
     /// holds it, so it never acts on a state older than a write before it. Only the refs pass
     /// removes them.
     pub(crate) item_refs: tokio::sync::Mutex<()>,
+    pub(crate) target: runner::TargetBranch,
 }
 
 /// Serves the workforce to its other devices and keeps in sync with them, from when it first has
@@ -516,12 +517,18 @@ impl Daemon {
             merges: runner::MergeQueue::default(),
             commits: commits::Commits::default(),
             item_refs: tokio::sync::Mutex::new(()),
+            target: runner::TargetBranch::default(),
         });
         self.loaded
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(id, Arc::clone(&entry));
         tokio::spawn(runner::run_merger(
+            Arc::downgrade(self),
+            id,
+            Arc::clone(&entry),
+        ));
+        tokio::spawn(runner::run_target(
             Arc::downgrade(self),
             id,
             Arc::clone(&entry),

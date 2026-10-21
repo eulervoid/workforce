@@ -3679,10 +3679,10 @@ wf work submit
     assert!(!comments_with(&world, &item, "change_request", "conflicts in file.txt").is_empty());
     assert_eq!(world.item(&item)["state"], "review");
     assert!(world.wf.run(&["inbox"]).contains("review of"));
-    // The target goes back to where it was: the principal rewinds it, which a push refuses
-    // (`receive.denyNonFastForwards`), so it is done where the target is kept.
-    let moved = git_in(repository, &["rev-parse", "HEAD~1"]);
-    git_in(&world.bare(), &["update-ref", "refs/heads/main", &moved]);
+    // The principal reverts the change: a rewind of the target would be moved forward again to
+    // the tip the log names.
+    git_in(repository, &["revert", "--quiet", "--no-edit", "HEAD"]);
+    git_in(repository, &["push", "--quiet"]);
     world.wf.run(&["comment", short(&item), "main moved back"]);
     world
         .wait("the stale marker to clear", |world| {
