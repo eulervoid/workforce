@@ -40,10 +40,15 @@ principal key. `--max-sessions` and `--agent` say how many sessions it runs and 
 `wf device edit` does later (see [agents.md](agents.md#where-agents-run)). `--hardware` says what it
 has, such as `gpu, os:linux`; left out, its os and architecture.
 
-Each daemon starts sessions for the agents its machine hosts. Two daemons do not yet agree in advance
-on which of them takes an item, so give each agent one machine to run on, with `wf device edit
---agent`. When two machines start a session on one item before they sync, the later session ends
-`outclaimed` once they do, keeping its commits.
+Each daemon starts sessions for the agents its machine hosts, and one agent may run on several
+machines. When more than one machine could start a session (a free slot for an agent that would
+take it, what the item requires, and heard from within the lease), every machine ranks them alike:
+first the machine the item's work last ran on, for a review the one that submitted the work, for a
+blocker the one whose session asked; the rest by a hash that spreads items evenly. The first starts
+at once, the second after 15 s, the third after 30 s, and each only if no other session started
+meanwhile. So when the first cannot start (its harness needs a login, say), the next takes over
+after its wait. With one machine nothing waits. When two machines still start a session on one item
+before they sync, the later session ends `outclaimed` once they do, keeping its commits.
 
 A session lasts as long as its machine is there. When a machine has not been heard from for the
 policy's `[claims] lease` (3 minutes by default, see [policy.md](policy.md#claims)), another machine

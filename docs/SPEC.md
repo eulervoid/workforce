@@ -712,29 +712,38 @@ is of the step named by `--step`; without it, of the only open step that no live
 else of the unnamed one. When several are open and none fits, a terminal offers them in a picker, and
 a script is told the open steps. Supervision and diagnosis need hosted `start = auto` agents.
 
-**Planned (M3): across devices.** The dispatch target stays an agent; any device that hosts it with a
+**Placement across devices.** The dispatch target stays an agent; any device that hosts it with a
 free slot may run it. Claims (above) keep two devices from working on one thing for long, and
 **placement** makes it rare that they try: every device ranks, by the same rules, the devices that
-could take a claimable thing, and only the first starts at once. Left out are devices whose lease
-ran out, that have no free slot for an agent that may take it (as the log says), or that do not meet
-its `requires`. The rest rank by, first to last:
+could take a claimable thing (an item in a role, as claims count it), and only the first starts at
+once (`State::placement`, `wf-core::placement`). Ranked are the devices with a hosted `start = auto`
+agent that has a free slot and would be offered the thing, as the log says (lanes, `requires`
+against capabilities and hardware, recovery, never worked on the item); left out are those whose
+lease ran out, though a device never leaves itself out. The rest rank by, first to last:
 
 1. **where the work is**: the next work session of an item goes to the device of its latest one,
    which has its agent repository, branch and build caches;
 2. **where it was written**: a review goes to the device of the work session that submitted it,
    where the commit is and the checks just ran;
-3. **where it was reviewed**: a merge goes to the device of the review session that approved it;
-4. **where it waits**: a supervise session goes to the device of the session the blocker waits on;
-5. a hash of the thing and the device (rendezvous hashing), which spreads the rest evenly.
+3. **where it waits**: a supervise session goes to the device of the session that wrote the oldest
+   blocker a supervisor answers;
+4. a hash of the thing and the device (rendezvous hashing, blake3), which spreads the rest evenly
+   and moves only a leaving device's share. Each review step is a thing of its own, so the steps of
+   one entry spread too. A diagnosis has no device of its own and goes by the hash alone.
+
+*Planned (M3, with merges by any device):* **where it was reviewed**, a merge goes to the device of
+the review session that approved it, before the hash.
 
 The device of rank *r* waits *r* times 15 s (well above the few seconds a claim takes to sync)
-before it starts, and then only if no claim arrived. The ranking reads only the log, profiles and
-presence, so devices agree on it; what only one device knows (a warm cache, its load) may make it
-wait longer, never start sooner. A ranking that is wrong costs a delay or a race the claims
-resolve, never correctness. With one device nothing waits. Ranking is pure (`wf-core`); waiting is
-the dispatcher's.
-
-Until then, two daemons do not coordinate, so each agent should be hosted on one machine.
+from when its dispatcher first saw the thing claimable, and then starts it only if no claim arrived;
+meanwhile it goes on to what it ranks first. A thing it stops seeing (a claim arrived, or it has no
+slot) is forgotten, and waits from the start once it is claimable again. The dispatcher sleeps until
+the next wait is over rather than for its tick. The ranking reads only the log, profiles and
+presence, so devices agree on it; what only one device knows (a failed start, a harness at fault, a
+commit not yet here) makes it skip the thing, and the next device takes over after its wait, never
+sooner. A ranking that is wrong costs a delay or a race the claims resolve, never correctness. With
+one device nothing waits; a daemon that just started counts every device as present, so it may wait
+for one that is not there. Ranking is pure (`wf-core`); waiting is the dispatcher's.
 
 ### Briefs
 

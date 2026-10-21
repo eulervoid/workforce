@@ -95,7 +95,8 @@ wf device edit --hardware "gpu, os:linux"        # items that require `gpu` can 
 `wf agent add --start auto` and `wf agent edit --start auto` add the agent to this machine with one
 session, unless the machine lists it already. A machine runs one session at a time unless you raise
 `--max-sessions`; parked sessions count. `wf status` flags an agent that starts on its own
-but that no machine runs.
+but that no machine runs. An agent may run on several machines; which of them takes an item is
+in [machines.md](machines.md#adding-a-machine).
 
 ## Running a session by hand
 
