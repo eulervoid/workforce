@@ -1312,7 +1312,7 @@ model the harness does not offer fails the session with the list.
 
 The CLI and the dashboard are thin layers over the same daemon calls.
 
-*Planned:* a `wf` MCP server attached at `session/new` (M3); `wf attach <session>` over an iroh ALPN `wf/acp/1`
+*Planned:* a `wf` MCP server attached at `session/new` (not scheduled: agents use the `wf` CLI); `wf attach <session>` over an iroh ALPN `wf/acp/1`
 (M5); probing harnesses with ACP `initialize`.
 
 ### Permission requests
@@ -1681,7 +1681,7 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 | M2.2 | Daily use on one machine (**stage 1**): recovery levels, machine faults, resume after restart, daemon management, export and import, network off for one device, notifications | built |
 | M2.3 | The dashboard | built |
 | — | Since: merge checks and `wf check`, rebase at submit, fixed states with verbs, commit signing, storage budget, `[theme]`, `wf stats` | built |
-| M3 | Sessions across devices (**stage 2**): claims and leases, placement, repositories across devices (`wf/git/1`, `<wf>/git`), `wf` MCP server, mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
+| M3 | Sessions across devices (**stage 2**): claims and leases, placement, repositories across devices (`wf/git/1`, `<wf>/git`), mention delivery, overlap notifications from touched files, secret brokering, redaction, merge mode `origin` | next |
 | M4 | Decision ratification, distill items, hybrid search | |
 | M5 | Several principals, member invites, threads, scopes, `wf attach` (**stage 3**) | |
 | M6 | `seen` and compaction | |
