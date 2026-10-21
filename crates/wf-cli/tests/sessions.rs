@@ -3578,6 +3578,12 @@ async fn a_check_that_fails_on_the_target_too_waits_for_the_principal() {
             !comments_with(world, &item, "blocker", "`unbroken`").is_empty()
         })
         .await;
+    // The blocker is written before the session ends and the item goes to review.
+    world
+        .wait("the item in review", |world| {
+            world.item(&item)["state"] == "review"
+        })
+        .await;
     tokio::time::sleep(Duration::from_millis(300)).await;
     assert_eq!(world.item(&item)["state"], "review");
     let blocker = &comments_with(&world, &item, "blocker", "`unbroken`")[0];

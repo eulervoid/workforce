@@ -2,7 +2,7 @@
 //! the work is reviewed and again before the target moves.
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, SystemTime};
 
 use wf_core::event::{CommentKind, Commented, EventBody};
 use wf_core::id::{ItemId, WorkforceId};
@@ -104,14 +104,66 @@ pub(super) enum Blame {
     TimedOut(Duration),
 }
 
+/// How many logs of each check are kept: those of older runs are deleted as checks run.
+const LOGS_KEPT_PER_CHECK: usize = 10;
+
+/// How long a pass is kept. The trees checked again are those of work in review, and a pass on
+/// one that is older is only run again.
+const PASSES_KEPT_FOR: Duration = Duration::from_secs(14 * 24 * 60 * 60);
+
+/// Deletes all but the last [`LOGS_KEPT_PER_CHECK`] logs of each check in `logs`, which has a
+/// directory per check and a file per run whose name starts with the time it started.
+fn prune_check_logs(logs: &Path) -> std::io::Result<()> {
+    let checks = match std::fs::read_dir(logs) {
+        Ok(checks) => checks,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    for check in checks {
+        let check = check?;
+        if !check.file_type()?.is_dir() {
+            continue;
+        }
+        let mut runs = std::fs::read_dir(check.path())?
+            .map(|run| run.map(|run| run.path()))
+            .collect::<std::io::Result<Vec<_>>>()?;
+        runs.sort();
+        let older = runs.len().saturating_sub(LOGS_KEPT_PER_CHECK);
+        for run in &runs[..older] {
+            std::fs::remove_file(run)?;
+        }
+    }
+    Ok(())
+}
+
 /// The checks that passed on this machine, by tree, command and sandbox: one empty file each. A
 /// check's result depends on nothing else, so one that passed on a tree in a sandbox does not run
 /// there again.
+#[derive(Clone)]
 struct PassedChecks {
     directory: PathBuf,
 }
 
 impl PassedChecks {
+    /// Deletes the passes older than [`PASSES_KEPT_FOR`] at `now`.
+    fn prune(&self, now: SystemTime) -> std::io::Result<()> {
+        let passes = match std::fs::read_dir(&self.directory) {
+            Ok(passes) => passes,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+            Err(error) => return Err(error),
+        };
+        for pass in passes {
+            let pass = pass?;
+            let age = now
+                .duration_since(pass.metadata()?.modified()?)
+                .unwrap_or_default();
+            if age > PASSES_KEPT_FOR {
+                std::fs::remove_file(pass.path())?;
+            }
+        }
+        Ok(())
+    }
+
     fn contains(&self, tree: GitOid, check: &CheckConfig, sandbox: &SandboxConfig) -> bool {
         self.path(tree, check, sandbox).exists()
     }
@@ -136,9 +188,9 @@ impl PassedChecks {
             key.update(&(argument.len() as u64).to_le_bytes());
             key.update(argument.as_bytes());
         }
-        // What the sandbox allows is all of its debug form, so that a changed config is another
+        // What the sandbox allows is all of its config, so that a changed config is another
         // sandbox.
-        key.update(format!("{sandbox:?}").as_bytes());
+        key.update(&serde_json::to_vec(sandbox).expect("a sandbox config serializes"));
         self.directory.join(key.finalize().to_hex().as_str())
     }
 }
@@ -206,6 +258,19 @@ impl Daemon {
             directory.join("sandbox").join("check.gitconfig"),
             directory.join("check-logs"),
         );
+        let passed = PassedChecks {
+            directory: directory.join("checks-passed"),
+        };
+        {
+            let (logs, passed) = (logs.clone(), passed.clone());
+            let pruned = blocking(move || {
+                prune_check_logs(&logs).and_then(|()| passed.prune(SystemTime::now()))
+            })
+            .await?;
+            if let Err(error) = pruned {
+                tracing::warn!("could not delete old check logs or passes: {error}");
+            }
+        }
         let checker = Checker {
             runner: CommandRunner {
                 git: &git,
@@ -223,9 +288,7 @@ impl Daemon {
                 ),
                 logs: &logs,
             },
-            passed: PassedChecks {
-                directory: directory.join("checks-passed"),
-            },
+            passed,
             limits: &config.check,
             sandbox,
         };
@@ -404,5 +467,59 @@ mod tests {
         assert!(!passed.contains(tree, &check(&["cargot", "est"]), &fence));
         // A pass in one sandbox is not one in another.
         assert!(!passed.contains(tree, &test, &SandboxConfig::Off {}));
+    }
+
+    #[test]
+    fn the_last_logs_of_each_check_are_kept() {
+        let directory = tempfile::tempdir().unwrap();
+        let logs = directory.path().join("check-logs");
+        let runs = |check: &str| {
+            let mut runs: Vec<_> = std::fs::read_dir(logs.join(check))
+                .unwrap()
+                .map(|run| run.unwrap().file_name().into_string().unwrap())
+                .collect();
+            runs.sort();
+            runs
+        };
+        for check in ["test", "lint"] {
+            std::fs::create_dir_all(logs.join(check)).unwrap();
+        }
+        for run in 0..LOGS_KEPT_PER_CHECK + 3 {
+            let name = format!("20261021T1200{run:02}.000Z-abc1234.log");
+            std::fs::write(logs.join("test").join(name), "").unwrap();
+        }
+        std::fs::write(
+            logs.join("lint").join("20261021T120000.000Z-abc1234.log"),
+            "",
+        )
+        .unwrap();
+
+        prune_check_logs(&logs).unwrap();
+        let kept = runs("test");
+        assert_eq!(kept.len(), LOGS_KEPT_PER_CHECK);
+        assert!(kept[0].starts_with("20261021T120003"), "{kept:?}");
+        assert_eq!(runs("lint").len(), 1);
+        prune_check_logs(&directory.path().join("never-checked")).unwrap();
+    }
+
+    #[test]
+    fn old_passes_are_forgotten() {
+        let directory = tempfile::tempdir().unwrap();
+        let passed = PassedChecks {
+            directory: directory.path().join("checks-passed"),
+        };
+        passed.prune(SystemTime::now()).unwrap();
+        let (tree, test, fence) = (
+            GitOid::from_bytes([1; 20]),
+            check(&["cargo", "test"]),
+            SandboxConfig::default(),
+        );
+        passed.insert(tree, &test, &fence).unwrap();
+        passed.prune(SystemTime::now()).unwrap();
+        assert!(passed.contains(tree, &test, &fence));
+        passed
+            .prune(SystemTime::now() + PASSES_KEPT_FOR + Duration::from_secs(1))
+            .unwrap();
+        assert!(!passed.contains(tree, &test, &fence));
     }
 }

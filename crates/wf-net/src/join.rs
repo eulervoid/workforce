@@ -42,19 +42,26 @@ pub(crate) enum JoinReply {
 }
 
 /// The device each invite has been served to. The first device that is let in is the only one
-/// that can use the invite, even if its join does not finish and it has to ask again; the invite
-/// is then good until it is redeemed or expires. A restart forgets it.
+/// that can use the invite, even if its join does not finish and it has to ask again. The
+/// reservation ends when that join finishes or the log refuses the invite as redeemed or expired,
+/// since the log then decides who may use it. A restart forgets it.
 #[derive(Clone, Default)]
 pub(crate) struct Reservations(Arc<Mutex<BTreeMap<EventId, DeviceKey>>>);
 
 impl Reservations {
     /// Whether `device` may use `invite`: nobody else has been served with it.
     fn reserve(&self, invite: EventId, device: DeviceKey) -> bool {
-        let mut held = self
-            .0
+        *self.held().entry(invite).or_insert(device) == device
+    }
+
+    fn release(&self, invite: EventId) {
+        self.held().remove(&invite);
+    }
+
+    fn held(&self) -> std::sync::MutexGuard<'_, BTreeMap<EventId, DeviceKey>> {
+        self.0
             .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        *held.entry(invite).or_insert(device) == device
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 }
 
@@ -75,9 +82,14 @@ impl<L: SyncLog + Clone + 'static> JoinHandler<L> {
             .registry
             .get(&request.workforce)
             .ok_or(JoinRefusal::NotServed)?;
-        log.check_join(request.invite, joiner, request.proof)
+        let checked = log
+            .check_join(request.invite, joiner, request.proof)
             .await
-            .map_err(|_| JoinRefusal::Unreadable)??;
+            .map_err(|_| JoinRefusal::Unreadable)?;
+        if let Err(JoinRefusal::Redeemed | JoinRefusal::Expired) = checked {
+            self.reservations.release(request.invite);
+        }
+        checked?;
         if !self.reservations.reserve(request.invite, joiner) {
             return Err(JoinRefusal::Reserved);
         }
@@ -124,6 +136,8 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for JoinHandler<L> {
                 return Err(AcceptError::from_err(error));
             }
         }
+        // The joiner's events redeemed the invite.
+        self.reservations.release(request.invite);
         let _ = send.finish();
         linger(&connection).await;
         Ok(())
@@ -254,5 +268,10 @@ mod tests {
         assert!(reservations.reserve(invite, first), "it may ask again");
         assert!(!reservations.reserve(invite, second));
         assert!(reservations.reserve(EventId::of(b"other"), second));
+        reservations.release(invite);
+        assert!(
+            reservations.reserve(invite, second),
+            "a released invite is free"
+        );
     }
 }
