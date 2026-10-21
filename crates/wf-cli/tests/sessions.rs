@@ -1939,12 +1939,16 @@ fn told_of(file: &Path) -> Vec<String> {
 async fn review_world(coder: &str, reviewer: &str) -> World {
     let world = World::agents(&[("coder", coder), ("reviewer", reviewer)]).await;
     world.automate("coder", "default");
+    // Out of the lane of the work, so the reviewer only reviews: an item that arrives while a pass
+    // of the dispatcher is past the coder would otherwise be worked on by the reviewer.
     world.wf.run(&[
         "agent",
         "edit",
         "reviewer",
         "--start",
         "auto",
+        "--lane",
+        "meta",
         "--capability",
         "review",
         "--capability",
