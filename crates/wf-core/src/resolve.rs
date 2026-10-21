@@ -224,7 +224,9 @@ impl State {
             .collect()
     }
 
-    /// Where `target` is mentioned, in live items only. Mentions are shown, not delivered, in M0.
+    /// Where `target` is mentioned, in live items only. A mention in a comment is also delivered:
+    /// to sessions by [`State::written_for`], to a principal by the inbox; one in a body is only
+    /// shown here.
     pub fn mentions_of(&self, target: &MentionTarget) -> Vec<Source> {
         let resolver = self.resolver();
         let mut sources = Vec::new();
