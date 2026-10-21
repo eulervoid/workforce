@@ -2452,7 +2452,16 @@ wf review --approve
         .unwrap();
     let approved = first["commit"].as_str().unwrap().to_string();
 
-    // Main moves while the review runs, so the approved work conflicts with it.
+    // Main moves while the review runs, so the approved work conflicts with it. Moved before the
+    // review starts, the work would go back when offered, with a change request, and never merge.
+    world
+        .wait("the review session", |world| {
+            world
+                .sessions()
+                .iter()
+                .any(|session| session["role"] == "review")
+        })
+        .await;
     let repository = &world.bare();
     world.push_file("file.txt", "main\n", "main moves on");
     let main = git_in(repository, &["rev-parse", "main"]);
