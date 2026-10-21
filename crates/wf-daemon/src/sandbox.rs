@@ -318,6 +318,7 @@ const HARNESS_CONFIG: &[&str] = &[
 const KEY_FILES: &[&str] = &[".env", ".env.*", "*.pem", "*.p12", "*.pfx"];
 
 /// Globs of the key files anywhere below `root`, a path or a glob that Fence allows writing to.
+/// What a glob root matches itself stays writable: `~/.claude*` allows `~/.claude.pem`.
 fn key_files_below(root: &Path) -> impl Iterator<Item = PathBuf> {
     let root = root.to_string_lossy();
     let root = PathBuf::from(root.strip_suffix("/**").unwrap_or(&root));
