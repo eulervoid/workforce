@@ -3454,6 +3454,41 @@ async fn passing_checks_end_the_session_submitted_and_the_merge_reuses_the_pass(
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn passing_checks_end_the_session_with_the_checked_commit_though_the_branch_moved() {
+    let root = tempfile::tempdir().unwrap();
+    let moved = root.path().join("moved");
+    // The agent commits again while the checks run, and only then lets them finish.
+    let script = format!(
+        "{ADD_HELLO}sh echo later > later.txt && git add later.txt && git commit -q -m later && \
+         touch \"{}\"\n",
+        moved.display()
+    );
+    let world = World::new(&script).await;
+    let (check, check_runs) = counted_check(
+        &world,
+        "hello",
+        &format!(
+            "test -f hello.txt && while [ ! -f \"{}\" ]; do sleep 0.1; done",
+            moved.display()
+        ),
+    );
+    add_checks(&world, &check);
+    let item = world.wf.add(&["--title", "Add hello"]);
+    start_session(&world, &item);
+    world
+        .wait("the merge", |world| world.item(&item)["state"] == "done")
+        .await;
+    assert_eq!(
+        runs(&check_runs),
+        1,
+        "the checks ran on the submission only"
+    );
+    let files = git_in(&world.bare(), &["ls-tree", "--name-only", "main"]);
+    assert!(files.lines().any(|file| file == "hello.txt"), "{files}");
+    assert!(!files.lines().any(|file| file == "later.txt"), "{files}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn submitting_answers_at_once_while_the_checks_run() {
     let script = "\
 wf work submit
