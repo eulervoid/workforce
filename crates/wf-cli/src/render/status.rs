@@ -158,7 +158,8 @@ mod tests {
 
     #[test]
     fn status_says_which_devices_are_gone_and_when_each_was_seen() {
-        let seen = Some(crate::view::timestamp_ms(1_700_000_000_000));
+        let at = crate::view::timestamp_ms(1_700_000_000_000);
+        let seen = Some(at);
         let device = |name: &str, presence| DeviceStatus {
             name: name.to_string(),
             presence,
@@ -178,7 +179,7 @@ mod tests {
             .lines()
             .find(|line| line.starts_with("devices:"))
             .unwrap();
-        let seen = short_time(seen.unwrap());
+        let seen = short_time(at);
         assert_eq!(
             line,
             format!(
