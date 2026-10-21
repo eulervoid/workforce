@@ -48,6 +48,9 @@ pub(super) async fn run_session(
         .await
         .unwrap_or(false);
     if ended {
+        // The harness's process group is gone with it; what left the group is not, and nothing
+        // may run on for a session that ended, or write into its directory.
+        crate::processes::stop_session(run.workforce, run.session).await;
         daemon
             .discard_session_directory(run.workforce, run.item, run.session, run.role)
             .await;

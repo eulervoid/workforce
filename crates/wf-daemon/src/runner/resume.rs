@@ -112,6 +112,31 @@ impl Daemon {
         }
     }
 
+    /// Stops what the sessions of `workforce` that ended left running: those that ended while no
+    /// daemon ran, or before a daemon stopped what a session left at its end. A live session,
+    /// resumed or not, keeps its processes, and so does one the workforce does not know.
+    pub(crate) async fn stop_what_ended_sessions_left(
+        &self,
+        workforce: WorkforceId,
+        loaded: &Loaded,
+    ) {
+        let running = crate::processes::marked_sessions(workforce).await;
+        if running.is_empty() {
+            return;
+        }
+        let Ok(state) = self.snapshot(loaded).await else {
+            return;
+        };
+        for session in running {
+            if state
+                .session(session)
+                .is_some_and(|session| !session.is_live())
+            {
+                crate::processes::stop_session(workforce, session).await;
+            }
+        }
+    }
+
     async fn resume_session(
         self: &Arc<Self>,
         workforce: WorkforceId,

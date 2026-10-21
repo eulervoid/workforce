@@ -22,6 +22,7 @@ mod open_files;
 mod panics;
 mod peers;
 mod permissions;
+mod processes;
 pub mod proto;
 mod runner;
 mod sandbox;
@@ -563,6 +564,7 @@ impl Daemon {
         let started = Arc::clone(&entry);
         crate::spawn(async move {
             daemon.resume_sessions(id, &started).await;
+            daemon.stop_what_ended_sessions_left(id, &started).await;
             daemon.remove_stray_repositories(id, &started).await;
             daemon.keep_caches_in_budget(id, &started).await;
             let weak = Arc::downgrade(&daemon);
