@@ -1456,11 +1456,12 @@ wf work submit
 #[tokio::test(flavor = "multi_thread")]
 async fn a_comment_in_a_prompt_the_agent_did_not_accept_before_a_restart_is_told_again() {
     // The agent neither takes the brief up nor answers it, as if the daemon stopped between
-    // sending the prompt and the agent reading it.
+    // sending the prompt and the agent reading it. The restart prompt it then accepts only by
+    // answering, a while after it submitted: the session is submitted before its turn ends.
     let script = "\
 silent
 sh echo done > a.txt && git add a.txt && git commit -q -m a
-wf work submit
+sh \"$WF_BIN\" work submit && sleep 1
 ";
     let mut world = World::new(script).await;
     let item = world.wf.add(&["--title", "Told again"]);
@@ -1489,12 +1490,13 @@ wf work submit
         restarted.contains("): In the brief"),
         "the brief was not accepted: {transcript}"
     );
-    let record = agent_session_record(&world.wf.data);
-    assert_eq!(
-        record["told"].as_array().unwrap().len(),
-        1,
-        "the restart prompt was accepted: {record}"
-    );
+    world
+        .wait("the restart prompt to be kept as accepted", |world| {
+            agent_session_record(&world.wf.data)["told"]
+                .as_array()
+                .is_some_and(|told| told.len() == 1)
+        })
+        .await;
 }
 
 /// The record the daemon keeps of the one session's agent, somewhere under `data`.
