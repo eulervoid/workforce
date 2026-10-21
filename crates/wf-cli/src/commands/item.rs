@@ -696,7 +696,7 @@ fn dispatchable_items(
     };
     Ok(Some(
         state
-            .dispatchable(device, &agent)
+            .dispatchable(device, &agent, &Default::default())
             .iter()
             .map(|item| item.id())
             .collect(),

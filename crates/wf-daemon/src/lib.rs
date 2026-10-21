@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tokio::net::UnixListener;
+use wf_core::claims::Presence;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{SessionId, WorkforceId};
 use wf_core::identity::DeviceSigner;
@@ -44,7 +45,7 @@ pub use data_dir::DataDir;
 pub use faults::{HarnessAtFault, MachineFaults, OutOfSpace, RETRY_HARNESS, Retry};
 pub use git_service::{FetchError, run_git_bridge};
 pub use panics::{Panics, watch_panics};
-pub use peers::{PeerOutcome, PeerSync, Presence, peers_of, sync_all};
+pub use peers::{PeerOutcome, PeerSync, peers_of, sync_all};
 pub use runner::{SessionError, session_model};
 pub use storage::{StorageClosed, StorageHandle};
 
@@ -152,7 +153,7 @@ async fn go_online_when_needed(
         }
     };
     daemon.serve_on(&node, id, &storage);
-    let presence = daemon.presence.clone();
+    let presence = Arc::clone(&daemon.presence);
     drop(daemon);
     peers::run_peer_loop(node, id, storage, presence).await;
 }
@@ -223,7 +224,8 @@ pub struct Daemon {
     /// Started when a workforce first needs the network, so that a workforce on one device never
     /// goes online.
     node: tokio::sync::OnceCell<Arc<Node<StorageHandle>>>,
-    presence: Presence,
+    /// What this daemon heard of the other devices since it started, to tell which are gone.
+    presence: Arc<Mutex<Presence>>,
     runners: runner::Runners,
     /// The checks the daemon runs as sessions submit.
     submissions: runner::SubmissionChecks,
@@ -269,7 +271,7 @@ impl Daemon {
             launch,
             device,
             node: tokio::sync::OnceCell::new(),
-            presence: Presence::default(),
+            presence: Arc::new(Mutex::new(Presence::new(wf_store::now_ms(), []))),
             runners: runner::Runners::default(),
             submissions: runner::SubmissionChecks::default(),
             checking: Default::default(),
@@ -319,6 +321,23 @@ impl Daemon {
     #[doc(hidden)]
     pub fn write_failed(&self, what: &str, error: &std::io::Error) -> bool {
         self.faults.note_space(what, error)
+    }
+
+    /// Has this daemon start, and hear what it heard, `by` earlier. For the tests, which cannot
+    /// wait out a lease.
+    #[doc(hidden)]
+    pub fn backdate_presence(&self, by: std::time::Duration) {
+        let by_ms = u64::try_from(by.as_millis()).unwrap_or(u64::MAX);
+        let mut presence = self
+            .presence
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        *presence = Presence::new(
+            presence.started_ms().saturating_sub(by_ms),
+            presence
+                .heard_ms()
+                .map(|(device, at)| (device, at.saturating_sub(by_ms))),
+        );
     }
 
     /// Has the next write of an event that `matching` accepts fail once, as a write fails on a
@@ -752,8 +771,16 @@ impl Daemon {
         Ok(listener)
     }
 
-    pub(crate) fn presence(&self) -> &Presence {
+    pub(crate) fn presence(&self) -> &Mutex<Presence> {
         &self.presence
+    }
+
+    /// What this daemon has heard of the other devices so far.
+    pub(crate) fn presence_now(&self) -> Presence {
+        self.presence
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
     }
 
     pub(crate) fn signer(&self) -> &DeviceSigner {

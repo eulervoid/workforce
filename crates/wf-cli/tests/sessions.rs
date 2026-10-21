@@ -2086,7 +2086,9 @@ sh \"$WF_BIN\" comment {item} \"not yet\" --request-change && \"$WF_BIN\" review
     )
     .unwrap();
     world.wf.run(&["policy", "apply", path.to_str().unwrap()]);
-    let item = world.wf.add(&["--title", "Add hello", "--review", "bounded"]);
+    let item = world
+        .wf
+        .add(&["--title", "Add hello", "--review", "bounded"]);
     world
         .wait("the round limit", |world| {
             world.item(&item)["review_status"]["status"] == "round_limit_reached"

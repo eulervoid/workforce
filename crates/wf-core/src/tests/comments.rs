@@ -4,6 +4,7 @@ use crate::item::{Item, ItemEntry, ItemState};
 use crate::state::{State, Trust};
 use crate::testing::*;
 use crate::validate::PolicyViolation;
+use std::collections::BTreeSet;
 
 fn live(state: &State, item: ItemId) -> &Item {
     match state.item(item).unwrap() {
@@ -268,13 +269,20 @@ mod supervision {
         fixture.apply(&mut state, 0, 2_004, start_session("helper", task));
         fixture.apply(&mut state, 0, 2_005, blocker(task, "which crate?"));
 
-        assert_eq!(state.supervisable(&agent(&fixture, "boss")), [task]);
+        assert_eq!(
+            state.supervisable(&agent(&fixture, "boss"), &BTreeSet::new()),
+            [task]
+        );
         assert!(
-            state.supervisable(&agent(&fixture, "helper")).is_empty(),
+            state
+                .supervisable(&agent(&fixture, "helper"), &BTreeSet::new())
+                .is_empty(),
             "it worked on the item"
         );
         assert!(
-            state.supervisable(&agent(&fixture, "coder")).is_empty(),
+            state
+                .supervisable(&agent(&fixture, "coder"), &BTreeSet::new())
+                .is_empty(),
             "not a supervisor"
         );
 
@@ -289,7 +297,9 @@ mod supervision {
             }),
         );
         assert!(
-            state.supervisable(&agent(&fixture, "boss")).is_empty(),
+            state
+                .supervisable(&agent(&fixture, "boss"), &BTreeSet::new())
+                .is_empty(),
             "one supervise session at a time"
         );
     }

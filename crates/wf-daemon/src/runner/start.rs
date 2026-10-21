@@ -156,7 +156,8 @@ impl Daemon {
         role: SessionRole,
     ) -> Result<SessionId, SessionError> {
         // A start by hand and one by the dispatcher must not both see the item free: the state is
-        // read and the claim checked under a lock held until `SessionStarted` is written.
+        // read and the claim checked under a lock held until `SessionStarted` is written. What a
+        // gone device's session claims is taken over: its session ends `LeaseExpired` first.
         let _starting = match role {
             SessionRole::Work => Some(
                 self.starting
@@ -167,7 +168,9 @@ impl Daemon {
         };
         let state = self.snapshot(loaded).await?;
         let setup = self.setup(&state, workforce, agent, item, &role)?;
-        state.ensure_unclaimed(item, &role)?;
+        let presence = self.presence_now();
+        let takeover =
+            state.claimable(item, &role, self.device(), &presence, wf_store::now_ms())?;
         self.ensure_bare_repository(workforce, &loaded.storage)
             .await;
         // What the log names as the start of the work, or as the work to review, has to be here.
@@ -189,6 +192,9 @@ impl Daemon {
         let repository = self.bare_repository(workforce);
         let git = blocking(move || GitCli::open(&repository)).await??;
 
+        for session in takeover {
+            self.take_over(loaded, session, &presence).await?;
+        }
         let started = self
             .author(
                 loaded,

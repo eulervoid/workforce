@@ -1,4 +1,5 @@
 use std::collections::BTreeMap;
+use std::collections::BTreeSet;
 
 use crate::autonomy::{Autonomy, StartMode};
 use crate::event::{AgentDefined, DeviceProfile, EventBody, ItemCreated};
@@ -91,7 +92,7 @@ impl Scene {
 
     fn offered(&self) -> Vec<String> {
         self.state
-            .dispatchable(self.device(), &self.coder)
+            .dispatchable(self.device(), &self.coder, &BTreeSet::new())
             .iter()
             .map(|item| item.title().to_string())
             .collect()
@@ -310,11 +311,16 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
         Recovery::Diagnose { failures: 1, .. }
     ));
     assert!(scene.offered().is_empty(), "no work before the diagnosis");
-    assert_eq!(scene.state.diagnosable(scene.device(), &doctor), [item]);
+    assert_eq!(
+        scene
+            .state
+            .diagnosable(scene.device(), &doctor, &BTreeSet::new()),
+        [item]
+    );
     assert!(
         scene
             .state
-            .diagnosable(scene.device(), &scene.coder)
+            .diagnosable(scene.device(), &scene.coder, &BTreeSet::new())
             .is_empty(),
         "the coder lacks the capability"
     );
@@ -324,7 +330,10 @@ fn a_diagnosis_comes_between_a_failure_and_the_next_attempt() {
         .id()
         .into();
     assert!(
-        scene.state.diagnosable(scene.device(), &doctor).is_empty(),
+        scene
+            .state
+            .diagnosable(scene.device(), &doctor, &BTreeSet::new())
+            .is_empty(),
         "one diagnosis at a time"
     );
     scene.apply(end_session(diagnosis, EndReason::Diagnosed));

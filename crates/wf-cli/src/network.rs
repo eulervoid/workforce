@@ -27,7 +27,7 @@ pub(crate) async fn sync_devices(
     node: &Arc<Node<StorageHandle>>,
     workforce: wf_core::id::WorkforceId,
     devices: Vec<DeviceKey>,
-    presence: Option<&wf_daemon::Presence>,
+    presence: Option<&std::sync::Mutex<wf_core::claims::Presence>>,
 ) -> Vec<PeerSync> {
     let peers = devices
         .into_iter()

@@ -3,6 +3,7 @@
 
 mod brief;
 mod check;
+mod claims;
 mod dispatch;
 mod drive;
 mod end;
@@ -228,6 +229,11 @@ impl Runners {
         if let Some(stop) = self.lock().remove(&session) {
             let _ = stop.send(how);
         }
+    }
+
+    /// The sessions whose tasks run here.
+    fn running(&self) -> Vec<SessionId> {
+        self.lock().keys().copied().collect()
     }
 
     pub(crate) fn is_running(&self, session: SessionId) -> bool {

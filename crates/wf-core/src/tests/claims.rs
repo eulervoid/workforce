@@ -1,11 +1,13 @@
+use std::collections::BTreeSet;
 use std::time::Duration;
 
 use crate::claims::Presence;
 use crate::event::{Event, EventBody, SessionEnded};
 use crate::id::{ItemId, SessionId};
-use crate::identity::Actor;
+use crate::identity::{Actor, AgentId};
+use crate::item::ItemState;
 use crate::lifecycle::{Interruption, SessionEnd};
-use crate::name::ReviewStepName;
+use crate::name::{AgentName, LaneName, ReviewStepName};
 use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::{State, Trust};
 use crate::testing::*;
@@ -216,6 +218,17 @@ fn a_daemon_takes_over_the_claim_of_a_gone_device_of_its_principal() {
         claimable(&state, other, &silent, later).is_err(),
         "a device does not take over its own session"
     );
+    // Without presence, what only a session on another device of the principal holds may yet be
+    // taken over; one on the asking device may not.
+    assert_eq!(
+        state.ensure_takeable(task, &SessionRole::Work, asking),
+        Ok(())
+    );
+    assert!(
+        state
+            .ensure_takeable(task, &SessionRole::Work, other)
+            .is_err()
+    );
     assert_eq!(
         state.claimable(task, &SessionRole::Supervise, asking, &heard, later),
         Ok(vec![]),
@@ -259,6 +272,11 @@ fn a_claim_of_another_principal_is_not_taken_over() {
         )
         .unwrap_err();
     assert_eq!(claim.item, task);
+    assert!(
+        state
+            .ensure_takeable(task, &SessionRole::Work, fixture.devices[0].key())
+            .is_err()
+    );
 }
 
 #[test]
@@ -402,5 +420,115 @@ fn a_takeover_and_a_late_end_from_the_returning_device_converge() {
             .claimable(task, &SessionRole::Work, returning, &hears_the_other, now)
             .is_err(),
         "the device that came back finds the claim held"
+    );
+}
+
+/// The active item of a gone device's work session is offered to the dispatcher of another
+/// device of the principal, to take over; while the device is there, it is not.
+#[test]
+fn the_dispatcher_is_offered_the_work_of_a_gone_device() {
+    let (fixture, mut state, task) = with_task();
+    let asking = fixture.devices[0].key();
+    let EventBody::AgentDefined(coder) = define_agent("coder") else {
+        unreachable!()
+    };
+    let in_the_default_lane = EventBody::AgentDefined(crate::event::AgentDefined {
+        lanes: vec![LaneName::new("default").unwrap()],
+        ..coder
+    });
+    fixture.apply(&mut state, 0, 2_500, in_the_default_lane);
+    let gone: SessionId = fixture
+        .apply(&mut state, 1, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    fixture.apply(&mut state, 1, 3_001, moved(task, ItemState::Active));
+    let coder = AgentId {
+        principal: fixture.founder.key(),
+        name: AgentName::new("coder").unwrap(),
+    };
+    let started = 10 * MINUTE_MS;
+    let later = started + 4 * MINUTE_MS;
+    let offered = |expired: &BTreeSet<SessionId>| -> Vec<ItemId> {
+        state
+            .dispatchable(asking, &coder, expired)
+            .iter()
+            .map(|item| item.id())
+            .collect()
+    };
+
+    let heard = Presence::new(started, [(fixture.devices[1].key(), later)]);
+    let present = state.expired(asking, &heard, later);
+    assert!(present.is_empty());
+    assert!(offered(&present).is_empty());
+    assert!(state.held(task, &SessionRole::Work, &present));
+
+    let expired = state.expired(asking, &Presence::new(started, []), later);
+    assert_eq!(expired, BTreeSet::from([gone]));
+    assert_eq!(offered(&expired), [task]);
+    assert!(!state.held(task, &SessionRole::Work, &expired));
+    assert!(
+        state
+            .expired(fixture.devices[1].key(), &Presence::new(started, []), later)
+            .is_empty(),
+        "a device's own sessions never expire for it"
+    );
+}
+
+/// The device of a work session that was taken over comes back and names the session's last
+/// head in a comment as its agent; every device then knows the commits.
+#[test]
+fn a_returning_device_names_the_last_head_of_its_session_that_was_taken_over() {
+    let (fixture, mut state, task) = with_task();
+    let returning = fixture.devices[1].key();
+    let gone: SessionId = fixture
+        .apply(&mut state, 1, 3_000, start_session("coder", task))
+        .id()
+        .into();
+    let daemon = Actor::Daemon(fixture.founder.key());
+    let expired = fixture.author_as(
+        &state,
+        0,
+        daemon,
+        4_000,
+        end_session(gone, EndReason::LeaseExpired),
+    );
+    state.receive(expired, Trust::Untrusted).unwrap();
+
+    let agent = fixture.agent_actor("coder", gone);
+    let named = EventBody::Commented(crate::event::Commented {
+        head: Some(commit(7)),
+        ..crate::event::Commented::plain(task, "the last commit of the session")
+    });
+    assert_eq!(state.check_actor(returning, &agent, &named), Ok(()));
+    let plain = comment(task, "anything else");
+    assert!(
+        state.check_actor(returning, &agent, &plain).is_err(),
+        "an ended session writes nothing else"
+    );
+    assert!(
+        state
+            .check_actor(fixture.devices[0].key(), &agent, &named)
+            .is_err(),
+        "only the session's own device names its head"
+    );
+    let event = fixture.author_as(&state, 1, agent, 5_000, named.clone());
+    state.receive(event, Trust::Untrusted).unwrap();
+    assert_eq!(state.session(gone).unwrap().head(), Some(commit(7)));
+
+    // A session its own device ended had its head named at the end.
+    let released: SessionId = fixture
+        .apply(&mut state, 1, 6_000, start_session("coder", task))
+        .id()
+        .into();
+    fixture.apply(
+        &mut state,
+        1,
+        7_000,
+        end_session(released, EndReason::Released),
+    );
+    let agent = fixture.agent_actor("coder", released);
+    assert!(
+        state.check_actor(returning, &agent, &named).is_err(),
+        "only a session that was taken over names its head after its end"
     );
 }

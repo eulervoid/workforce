@@ -146,10 +146,11 @@ pub fn carry_out(
 
 /// The agents of the principal of this machine, the policy's default agent first. A draft can be
 /// released for the dispatcher too, which comes first. An item that a live session holds is
-/// refused right away, before a starter is picked for nothing.
+/// refused right away, before a starter is picked for nothing, unless the daemon could take it
+/// over: whether its device is gone, the daemon answers.
 fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     let state = workspace.state();
-    state.ensure_unclaimed(item, &SessionRole::Work)?;
+    state.ensure_takeable(item, &SessionRole::Work, workspace.device_key())?;
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let draft = matches!(
         state.item(item),
