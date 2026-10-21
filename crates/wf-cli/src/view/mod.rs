@@ -83,6 +83,15 @@ pub fn actor_view(state: &State, actor: &Actor) -> ActorView {
     }
 }
 
+/// `laptop`: the name of a device's profile, or its short key while it has none.
+pub fn device_name(state: &State, device: wf_core::identity::DeviceKey) -> String {
+    state
+        .devices()
+        .find(|info| info.device == device)
+        .and_then(|info| info.profile.map(|profile| profile.name.clone()))
+        .unwrap_or_else(|| device.fmt_short())
+}
+
 /// `@ada (3f9a2c)`: whose device it is and which one.
 pub fn device_label(state: &State, device: wf_core::identity::DeviceKey) -> String {
     match state.principal_of(&device) {

@@ -572,9 +572,7 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
     let devices = state
         .devices()
         .map(|info| DeviceStatus {
-            name: info
-                .profile
-                .map_or_else(|| info.device.fmt_short(), |profile| profile.name.clone()),
+            name: super::device_name(state, info.device),
             presence: DevicePresence::of(state, info.device, own, presence, now_ms),
         })
         .collect();

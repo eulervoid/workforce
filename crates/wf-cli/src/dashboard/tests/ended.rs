@@ -203,3 +203,45 @@ fn a_session_in_view_has_a_successor_once_it_ended_and_its_item_went_on() {
     assert_eq!(successor_of(&state, stopped), Some(next));
     assert_eq!(successor_of(&state, next), None, "the one it went on in");
 }
+
+/// The coder's session lost its claim, and `successor` on the vm has it.
+fn coder_lost_its_claim(reason: EndReason) -> Snapshot {
+    let mut snapshot = snapshot();
+    let coder = with_status(snapshot.working.remove(0), ended(reason, 0));
+    snapshot.waiting.remove(0);
+    let successor = crate::dashboard::snapshot::SessionInfo {
+        place: crate::dashboard::snapshot::Place::Elsewhere("vm".to_owned()),
+        ..next_session()
+    };
+    snapshot.working.insert(0, successor.clone());
+    snapshot.in_view = Some(InView::Session {
+        info: Box::new(coder),
+        successor: Some(Box::new(successor)),
+    });
+    snapshot
+}
+
+#[test]
+fn a_session_that_lost_its_claim_says_so_and_who_has_it() {
+    for (reason, name, said) in [
+        (
+            EndReason::LeaseExpired,
+            "lease_expired",
+            "■ ended: lease expired · taken over by coder · work · 1m ◆ on vm",
+        ),
+        (
+            EndReason::Outclaimed,
+            "outclaimed",
+            "■ ended: outclaimed · outclaimed by coder · work · 1m ◆ on vm",
+        ),
+    ] {
+        let mut app = app();
+        let coder = app.snapshot.working[0].clone();
+        app.transcribed(coder.id, &coder_transcript());
+        press(&mut app, KeyCode::Enter);
+        app.refresh(coder_lost_its_claim(reason));
+        let screen = screen(&mut app, 90, 16);
+        assert!(screen.contains(said), "{screen}");
+        insta::assert_snapshot!(name, screen);
+    }
+}

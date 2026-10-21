@@ -234,8 +234,9 @@ pub enum InView {
     /// Boxed, as a session is several times larger than what the other variants hold.
     Session {
         info: Box<SessionInfo>,
-        /// Once it ended, the session of its item that `enter` opens from the item now, when
-        /// that is another: the live one, else the latest.
+        /// Once it ended, the session its item went on in: the one that took over its claim
+        /// when it ended `LeaseExpired` or `Outclaimed` ([`State::taken_over_by`]), else the one
+        /// `enter` opens from the item now, when that is another: the live one, else the latest.
         successor: Option<Box<SessionInfo>>,
     },
     /// What a diff shows besides the diff, which the loop reads from git: the comments on its
@@ -516,12 +517,7 @@ fn session_info(
     let place = if session.device() == own {
         Place::Here
     } else {
-        let name = state
-            .devices()
-            .find(|info| info.device == session.device())
-            .and_then(|info| info.profile.map(|profile| profile.name.clone()))
-            .unwrap_or_else(|| session.device().fmt_short());
-        Place::Elsewhere(name)
+        Place::Elsewhere(view::device_name(state, session.device()))
     };
     SessionInfo {
         view: view::session_view(state, graph, session, None),
@@ -560,7 +556,9 @@ impl InView {
             }
             Detail::Session(id) => {
                 let session = state.session(id)?;
-                let successor = item_session(state, session.item())
+                let successor = state
+                    .taken_over_by(session)
+                    .or_else(|| item_session(state, session.item()))
                     .filter(|successor| !session.is_live() && successor.id() != id)
                     .map(|successor| Box::new(session_info(state, graph, own, successor)));
                 Some(InView::Session {
