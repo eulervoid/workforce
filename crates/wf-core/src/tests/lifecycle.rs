@@ -659,9 +659,15 @@ impl crate::brief::Sources for Texts {
 
 impl Scene {
     /// Writes `body` as the principal and remembers its `text`.
-    fn say(&mut self, texts: &mut Texts, body: crate::event::EventBody, text: &str) {
-        let written = self.apply(body);
-        texts.0.insert(written.id().into(), text.to_string());
+    fn say(
+        &mut self,
+        texts: &mut Texts,
+        body: crate::event::EventBody,
+        text: &str,
+    ) -> crate::id::CommentId {
+        let written = self.apply(body).id().into();
+        texts.0.insert(written, text.to_string());
+        written
     }
 
     /// Writes `body` as the agent of `session` and remembers its `text`.
@@ -717,26 +723,116 @@ fn a_session_that_asked_a_blocker_since_it_was_prompted_resumes_as_waiting() {
 }
 
 #[test]
-fn a_restarted_session_is_told_what_others_wrote_since_it_was_prompted() {
+fn a_session_is_told_what_others_wrote_on_its_item_and_what_mentions_it_elsewhere() {
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    scene.apply(define_agent("other"));
+    let task = scene.item(create("task", "work"));
+    let elsewhere = scene.item(create("task", "elsewhere"));
+    let session = scene.start(task);
+    let mut say = |item: ItemId, text: &str| scene.say(&mut texts, comment(item, text), text);
+    let on_the_item = say(task, "on the item");
+    let mentions_agent = say(elsewhere, "@ada/coder see this");
+    let mentions_session = say(
+        elsewhere,
+        &format!("@ada/coder/{} and you", session.short()),
+    );
+    say(elsewhere, "nobody");
+    say(elsewhere, "@ada and @ada/other");
+    scene.say_as_agent(&mut texts, session, comment(task, "my own"), "my own");
+    let written = [on_the_item, mentions_agent, mentions_session];
+
+    let for_it: Vec<_> = scene
+        .state
+        .written_for(session)
+        .into_iter()
+        .map(|written| written.comment)
+        .collect();
+    assert_eq!(for_it, written);
+
+    let told = [written[0]].into();
+    let untold: Vec<_> = scene
+        .state
+        .untold(session, &told)
+        .into_iter()
+        .map(|written| written.comment)
+        .collect();
+    assert_eq!(untold, written[1..]);
+}
+
+#[test]
+fn mentions_of_the_agent_before_its_previous_session_started_are_not_for_the_next() {
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    let task = scene.item(create("task", "work"));
+    let elsewhere = scene.item(create("task", "elsewhere"));
+    scene.say(
+        &mut texts,
+        comment(elsewhere, "@coder long ago"),
+        "long ago",
+    );
+    let first = scene.start(task);
+    assert_eq!(scene.state.written_for(first).len(), 1, "no session before");
+    scene.say(&mut texts, comment(elsewhere, "@coder lately"), "lately");
+    scene.end(first, EndReason::Released);
+    let second = scene.start(task);
+    let for_second = scene.state.written_for(second);
+    assert_eq!(for_second.len(), 1);
+    assert_eq!(texts.0[&for_second[0].comment], "lately");
+}
+
+#[test]
+fn a_session_without_told_comments_kept_was_told_what_came_before_its_last_prompt() {
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    scene.say(&mut texts, comment(task, "before"), "before");
+    let prompted = scene.clock;
+    scene.say(&mut texts, comment(task, "after"), "after");
+    let told = scene.state.told_before(session, prompted);
+    let untold = scene.state.untold(session, &told);
+    assert_eq!(untold.len(), 1);
+    assert_eq!(texts.0[&untold[0].comment], "after");
+}
+
+#[test]
+fn a_restarted_session_is_told_what_it_was_not_told() {
     use crate::brief::restarted_text;
     let mut scene = Scene::new();
     let mut texts = Texts(Default::default());
     let task = scene.item(create("task", "work"));
     let session = scene.start(task);
     scene.say(&mut texts, comment(task, "earlier note"), "earlier note");
-    let prompted = scene.clock;
-    let quiet = restarted_text(&scene.state, session, prompted, &texts);
-    assert!(!quiet.contains("Written on the item since"), "{quiet}");
+    let told = scene
+        .state
+        .written_for(session)
+        .into_iter()
+        .map(|written| written.comment)
+        .collect();
+    let quiet = restarted_text(
+        &scene.state,
+        session,
+        &scene.state.untold(session, &told),
+        &texts,
+    );
+    assert!(!quiet.contains("Written for you since"), "{quiet}");
     assert!(quiet.ends_with("Continue."), "{quiet}");
 
     scene.say_as_agent(&mut texts, session, comment(task, "my own"), "my own");
-    scene.say(&mut texts, comment(task, "use serde"), " use serde ");
-    let told = restarted_text(&scene.state, session, prompted, &texts);
-    assert!(told.contains("Written on the item since:\n- "), "{told}");
-    assert!(told.contains(": use serde"), "{told}");
+    scene.say(&mut texts, change_request(task, "use serde"), " use serde ");
+    let untold = scene.state.untold(session, &told);
+    let text = restarted_text(&scene.state, session, &untold, &texts);
     assert!(
-        !told.contains("earlier note") && !told.contains("my own"),
-        "{told}"
+        text.contains(&format!(
+            "Written for you since:\n- @ada (change request {}): use serde",
+            untold[0].comment.short()
+        )),
+        "{text}"
+    );
+    assert!(
+        !text.contains("earlier note") && !text.contains("my own"),
+        "{text}"
     );
 }
 
@@ -750,6 +846,12 @@ fn a_resumed_session_is_told_the_answers_and_what_its_dependencies_left() {
     scene.apply(depends_on(task, first));
     let session = scene.start(task);
     scene.say(&mut texts, comment(task, "old"), "old");
+    let told = scene
+        .state
+        .written_for(session)
+        .into_iter()
+        .map(|written| written.comment)
+        .collect();
     scene.say_as_agent(
         &mut texts,
         session,
@@ -763,22 +865,75 @@ fn a_resumed_session_is_told_the_answers_and_what_its_dependencies_left() {
         "chose postgres",
     );
 
-    let told = resumed_text(&scene.state, session, &texts);
+    let untold = scene.state.untold(session, &told);
+    let text = resumed_text(&scene.state, session, &untold, &texts);
     assert!(
-        told.starts_with("What you were waiting for is resolved."),
-        "{told}"
+        text.starts_with("What you were waiting for is resolved.\nWritten for you meanwhile:"),
+        "{text}"
     );
-    assert!(told.contains(": sqlite"), "{told}");
+    assert!(text.contains(": sqlite"), "{text}");
     assert!(
-        told.contains(&format!(
+        text.contains(&format!(
             "#{} pick a database: chose postgres",
             first.short()
         )),
-        "{told}"
+        "{text}"
     );
     assert!(
-        !told.contains("old") && !told.contains("which one?"),
-        "{told}"
+        !text.contains("old") && !text.contains("which one?"),
+        "{text}"
     );
-    assert!(told.ends_with("\nContinue."), "{told}");
+    assert!(text.ends_with("\nContinue."), "{text}");
+}
+
+#[test]
+fn the_prompt_at_the_end_of_a_turn_tells_the_comments_from_elsewhere_by_their_item() {
+    use crate::brief::with_untold;
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    let task = scene.item(create("task", "work"));
+    let elsewhere = scene.item(create("task", "elsewhere"));
+    let session = scene.start(task);
+    assert_eq!(
+        with_untold(&scene.state, session, &[], &texts, "Continue.".into()),
+        "Continue."
+    );
+    scene.say(
+        &mut texts,
+        comment(elsewhere, "@coder mind the API"),
+        "@coder mind the API",
+    );
+    let untold = scene.state.untold(session, &Default::default());
+    let text = with_untold(&scene.state, session, &untold, &texts, "Continue.".into());
+    assert_eq!(
+        text,
+        format!(
+            "Written for you during your turn:\n- @ada on #{} elsewhere (comment {}): @coder mind the API\n\nContinue.",
+            elsewhere.short(),
+            untold[0].comment.short()
+        )
+    );
+}
+
+#[test]
+fn the_brief_lists_the_mentions_of_the_agent_elsewhere() {
+    use crate::brief::Brief;
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    let task = scene.item(create("task", "work"));
+    let elsewhere = scene.item(create("task", "elsewhere"));
+    scene.say(
+        &mut texts,
+        comment(elsewhere, "@coder mind the API"),
+        "@coder mind the API",
+    );
+    let session = scene.start(task);
+    let brief = Brief::of(&scene.state, session, &texts).unwrap().render();
+    assert!(
+        brief.contains(&format!(
+            "## Mentions of you elsewhere\n\n- @ada on #{} elsewhere: @coder mind the API\n",
+            elsewhere.short()
+        )),
+        "{brief}"
+    );
 }

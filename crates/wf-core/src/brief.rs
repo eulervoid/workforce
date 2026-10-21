@@ -6,12 +6,13 @@ use std::fmt::Write;
 use crate::event::CommentKind;
 use crate::id::{CommentId, HashId, ItemId, SessionId};
 use crate::identity::Actor;
-use crate::item::{Comment, Item, ItemEntry};
+use crate::item::{Item, ItemEntry};
 use crate::name::ReviewStepName;
 use crate::policy::ReviewStep;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::State;
+use crate::told::ItemComment;
 
 /// What a brief tells that the state does not hold: the texts of comments, which only the log
 /// has, and the branch and diffs of the repository.
@@ -56,6 +57,7 @@ impl Brief {
         let instructions = state
             .agent(&agent.name, agent.principal)
             .and_then(|definition| definition.instructions.clone());
+        let mentioned = mentioned(state, session.id(), item.id(), sources);
         Some(match session.role() {
             SessionRole::Work => Brief::Work(WorkBrief {
                 agent: agent.name.to_string(),
@@ -69,6 +71,7 @@ impl Brief {
                 dependencies: dependencies(state, item, sources),
                 change_requests: open_change_requests(state, item, sources),
                 earlier: earlier(state, item, sources),
+                mentioned,
                 diverged: diverged(state, item, sources),
             }),
             SessionRole::Review { commit, step } => Brief::Review(ReviewBrief {
@@ -83,6 +86,7 @@ impl Brief {
                 checks,
                 step: review_step(state, item.id(), &step),
                 earlier: earlier(state, item, sources),
+                mentioned,
             }),
             SessionRole::Supervise => {
                 let blockers = state
@@ -103,6 +107,7 @@ impl Brief {
                     title: item.title().to_string(),
                     body: item.body().render_numbered(),
                     earlier: earlier(state, item, sources),
+                    mentioned,
                     blockers,
                     principal,
                 })
@@ -141,6 +146,7 @@ impl Brief {
                     title: item.title().to_string(),
                     body: item.body().render_numbered(),
                     earlier: earlier(state, item, sources),
+                    mentioned,
                     attempts,
                 })
             }
@@ -169,27 +175,24 @@ pub fn speaker(state: &State, actor: &Actor) -> String {
     }
 }
 
-/// What to say to a session whose wait is over: what others wrote on its item since the
-/// session's last blocker, and what finished dependencies left.
-pub fn resumed_text(state: &State, session: SessionId, sources: &impl Sources) -> String {
+/// What to say to a session whose wait is over: what was written for it and not told yet, the
+/// `untold` comments of [`State::untold`], and what finished dependencies left.
+pub fn resumed_text(
+    state: &State,
+    session: SessionId,
+    untold: &[ItemComment],
+    sources: &impl Sources,
+) -> String {
     let mut text = String::from("What you were waiting for is resolved.");
     let Some(folded) = state.session(session) else {
         text.push_str("\nContinue.");
         return text;
     };
     let item = folded.item();
-    if let Some(ItemEntry::Live(live)) = state.item(item) {
-        let asked = live
-            .comments()
-            .values()
-            .filter(|comment| comment.session() == Some(session))
-            .filter(|comment| comment.kind == CommentKind::Blocker)
-            .map(|comment| comment.at)
-            .max();
-        if let Some(asked) = asked {
-            written_since(state, live, session, sources, |comment| comment.at > asked)
-                .for_each(|line| text.push_str(&line));
-        }
+    let lines = told_lines(state, item, untold, sources);
+    if !lines.is_empty() {
+        text.push_str("\nWritten for you meanwhile:");
+        lines.iter().for_each(|line| text.push_str(line));
     }
     let graph = state.dependency_graph();
     for dependency in graph.depends_on(item) {
@@ -208,26 +211,22 @@ pub fn resumed_text(state: &State, session: SessionId, sources: &impl Sources) -
     text
 }
 
-/// What to say to a session the daemon resumed after a restart: that it was, and what others
-/// wrote on its item since the session was last prompted, at `prompted_ms`.
+/// What to say to a session the daemon resumed after a restart: that it was, and the `untold`
+/// comments written for it.
 pub fn restarted_text(
     state: &State,
     session: SessionId,
-    prompted_ms: u64,
+    untold: &[ItemComment],
     sources: &impl Sources,
 ) -> String {
     let mut text = String::from(
         "wf restarted while you were working, and resumed this conversation. A command you ran \
          may not have finished; check before you go on.",
     );
-    let item = state.session(session).map(|folded| folded.item());
-    if let Some(ItemEntry::Live(live)) = item.and_then(|item| state.item(item)) {
-        let lines: Vec<_> = written_since(state, live, session, sources, |comment| {
-            comment.at.wall_ms() > prompted_ms
-        })
-        .collect();
+    if let Some(folded) = state.session(session) {
+        let lines = told_lines(state, folded.item(), untold, sources);
         if !lines.is_empty() {
-            text.push_str("\nWritten on the item since:");
+            text.push_str("\nWritten for you since:");
         }
         lines.iter().for_each(|line| text.push_str(line));
     }
@@ -235,29 +234,57 @@ pub fn restarted_text(
     text
 }
 
-/// The comments on `item` that `keep` selects and `session` did not write, oldest first, each as
-/// a line of a list.
-fn written_since<'a>(
-    state: &'a State,
-    item: &'a Item,
+/// The prompt at the end of a turn, `prompt`, after the `untold` comments written for `session`.
+pub fn with_untold(
+    state: &State,
     session: SessionId,
-    sources: &'a impl Sources,
-    keep: impl Fn(&Comment) -> bool + 'a,
-) -> impl Iterator<Item = String> + 'a {
-    let mut since: Vec<_> = item
-        .comments()
-        .iter()
-        .filter(|(_, comment)| keep(comment) && comment.session() != Some(session))
-        .collect();
-    since.sort_by_key(|(id, comment)| (comment.at, **id));
-    since.into_iter().filter_map(move |(id, comment)| {
-        let written = sources.text(*id)?;
-        Some(format!(
-            "\n- {}: {}",
-            speaker(state, &comment.by),
-            written.trim()
-        ))
-    })
+    untold: &[ItemComment],
+    sources: &impl Sources,
+    prompt: String,
+) -> String {
+    let Some(folded) = state.session(session) else {
+        return prompt;
+    };
+    let lines = told_lines(state, folded.item(), untold, sources);
+    if lines.is_empty() {
+        return prompt;
+    }
+    let mut text = String::from("Written for you during your turn:");
+    lines.iter().for_each(|line| text.push_str(line));
+    text.push_str("\n\n");
+    text.push_str(&prompt);
+    text
+}
+
+/// The comments in `told`, each as a line of a list with who wrote it, its kind and its id; one
+/// on another item than `own`, the item of the session, names the item.
+fn told_lines(
+    state: &State,
+    own: ItemId,
+    told: &[ItemComment],
+    sources: &impl Sources,
+) -> Vec<String> {
+    told.iter()
+        .filter_map(|written| {
+            let Some(ItemEntry::Live(item)) = state.item(written.item) else {
+                return None;
+            };
+            let comment = item.comments().get(&written.comment)?;
+            let text = sources.text(written.comment)?;
+            let on = if written.item == own {
+                String::new()
+            } else {
+                format!(" on #{} {}", HashId::short(&written.item), item.title())
+            };
+            Some(format!(
+                "\n- {}{on} ({} {}): {}",
+                speaker(state, &comment.by),
+                comment.kind.label(),
+                written.comment.short(),
+                text.trim()
+            ))
+        })
+        .collect()
 }
 
 /// Everything said on the item, oldest first.
@@ -271,6 +298,33 @@ fn earlier(state: &State, item: &Item, sources: &impl Sources) -> Vec<Earlier> {
                 by: speaker(state, &comment.by),
                 kind: comment.kind.label(),
                 text: sources.text(*id)?,
+            })
+        })
+        .collect()
+}
+
+/// The comments on other items written for `session`, which holds `own`: the agent's inbox, and
+/// so far nothing that mentions the session.
+fn mentioned(
+    state: &State,
+    session: SessionId,
+    own: ItemId,
+    sources: &impl Sources,
+) -> Vec<Mentioned> {
+    state
+        .written_for(session)
+        .into_iter()
+        .filter(|written| written.item != own)
+        .filter_map(|written| {
+            let Some(ItemEntry::Live(item)) = state.item(written.item) else {
+                return None;
+            };
+            let comment = item.comments().get(&written.comment)?;
+            Some(Mentioned {
+                by: speaker(state, &comment.by),
+                item: HashId::short(&item.id()),
+                title: item.title().to_string(),
+                text: sources.text(written.comment)?,
             })
         })
         .collect()
@@ -393,6 +447,15 @@ pub struct Earlier {
     pub text: String,
 }
 
+/// A comment on another item that mentions the agent.
+pub struct Mentioned {
+    pub by: String,
+    /// The short id of the item it is on.
+    pub item: String,
+    pub title: String,
+    pub text: String,
+}
+
 /// A blocker or change request nothing has resolved yet.
 pub struct OpenComment {
     /// The short id `--resolve` takes.
@@ -428,6 +491,8 @@ pub struct WorkBrief {
     /// The change requests the work has to resolve before it is submitted.
     pub change_requests: Vec<OpenComment>,
     pub earlier: Vec<Earlier>,
+    /// Comments on other items that mention the agent, since its previous session started.
+    pub mentioned: Vec<Mentioned>,
     /// Work of sessions that lost the claim, which is not in the branch.
     pub diverged: Vec<Diverged>,
 }
@@ -489,6 +554,7 @@ impl WorkBrief {
             text.push('\n');
         }
         history(&mut text, &self.earlier);
+        mentions(&mut text, &self.mentioned);
         let _ = writeln!(
             text,
             "## How to work\n\n\
@@ -580,6 +646,8 @@ pub struct ReviewBrief {
     /// Which step of the review level this is.
     pub step: StepBrief,
     pub earlier: Vec<Earlier>,
+    /// Comments on other items that mention the agent, since its previous session started.
+    pub mentioned: Vec<Mentioned>,
     pub diff: String,
 }
 
@@ -631,6 +699,7 @@ impl ReviewBrief {
             }
         }
         history(&mut text, &self.earlier);
+        mentions(&mut text, &self.mentioned);
         let _ = writeln!(
             text,
             "## How to review\n\n\
@@ -681,6 +750,8 @@ pub struct SuperviseBrief {
     pub title: String,
     pub body: String,
     pub earlier: Vec<Earlier>,
+    /// Comments on other items that mention the agent, since its previous session started.
+    pub mentioned: Vec<Mentioned>,
     /// The blockers the supervisor is asked to answer or escalate.
     pub blockers: Vec<OpenComment>,
     /// The handle of the principal to escalate to, as in `@ada`.
@@ -699,6 +770,7 @@ impl SuperviseBrief {
         instructions(&mut text, self.instructions.as_deref());
         task(&mut text, &self.body);
         history(&mut text, &self.earlier);
+        mentions(&mut text, &self.mentioned);
         text.push_str("## Waiting on you\n\n");
         open_comments(&mut text, &self.blockers);
         let resolve: Vec<String> = self
@@ -733,6 +805,8 @@ pub struct DiagnoseBrief {
     pub title: String,
     pub body: String,
     pub earlier: Vec<Earlier>,
+    /// Comments on other items that mention the agent, since its previous session started.
+    pub mentioned: Vec<Mentioned>,
     /// The work sessions that did not finish, oldest first, as `@ada/coder released`.
     pub attempts: Vec<String>,
 }
@@ -749,6 +823,7 @@ impl DiagnoseBrief {
         instructions(&mut text, self.instructions.as_deref());
         task(&mut text, &self.body);
         history(&mut text, &self.earlier);
+        mentions(&mut text, &self.mentioned);
         if !self.attempts.is_empty() {
             text.push_str("## Attempts that did not finish\n\n");
             for attempt in &self.attempts {
@@ -866,6 +941,24 @@ fn history(text: &mut String, earlier: &[Earlier]) {
     text.push('\n');
 }
 
+fn mentions(text: &mut String, mentioned: &[Mentioned]) {
+    if mentioned.is_empty() {
+        return;
+    }
+    text.push_str("## Mentions of you elsewhere\n\n");
+    for mention in mentioned {
+        let _ = writeln!(
+            text,
+            "- {} on #{} {}: {}",
+            mention.by,
+            mention.item,
+            mention.title,
+            mention.text.trim()
+        );
+    }
+    text.push('\n');
+}
+
 fn open_comments(text: &mut String, open: &[OpenComment]) {
     for comment in open {
         let _ = writeln!(
@@ -968,6 +1061,7 @@ mod tests {
             }],
             change_requests: vec![],
             earlier: earlier(),
+            mentioned: vec![],
             diverged: vec![],
         };
         let text = brief.render();
@@ -1012,6 +1106,7 @@ mod tests {
                 text: "Exit with 2 on a missing file".into(),
             }],
             earlier: vec![],
+            mentioned: vec![],
             diverged: vec![],
         };
         let text = brief.render();
@@ -1040,6 +1135,7 @@ mod tests {
             checks: vec![],
             step: StepBrief::default(),
             earlier: vec![],
+            mentioned: vec![],
             diff: String::new(),
         };
         let text = brief.render();
@@ -1067,6 +1163,7 @@ mod tests {
                 at_once: 3,
             },
             earlier: vec![],
+            mentioned: vec![],
             diff: "+added".into(),
         };
         let text = brief.render();
@@ -1101,6 +1198,7 @@ mod tests {
             dependencies: vec![],
             change_requests: vec![],
             earlier: vec![],
+            mentioned: vec![],
             diverged: vec![],
         };
         let review = ReviewBrief {
@@ -1114,6 +1212,7 @@ mod tests {
             checks: vec!["fmt".into(), "test".into()],
             step: StepBrief::default(),
             earlier: vec![],
+            mentioned: vec![],
             diff: "+added".into(),
         };
         let text = work.render();
@@ -1157,6 +1256,7 @@ mod tests {
             dependencies: vec![],
             change_requests: vec![],
             earlier: vec![],
+            mentioned: vec![],
             diverged: vec![],
         };
         let text = brief.render();

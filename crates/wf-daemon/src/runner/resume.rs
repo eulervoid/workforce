@@ -2,11 +2,12 @@
 //! next to its transcript, and a daemon that starts reopens the conversation by it, so that a
 //! restart costs the agent nothing. A session that cannot be resumed ends `Interrupted`.
 
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use serde::{Deserialize, Serialize};
-use wf_core::id::{HashId, SessionId, WorkforceId};
+use wf_core::id::{CommentId, HashId, SessionId, WorkforceId};
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
 use wf_vcs::GitCli;
 
@@ -24,6 +25,9 @@ pub(crate) struct AgentSessionRecord {
     /// The current value of the agent's model option once the session opened; `None` when the
     /// agent has no model option or the record is older than this field.
     pub(crate) model: Option<String>,
+    /// The comments written for the session that its prompts told so far; `None` in a record older
+    /// than this field.
+    pub(crate) told: Option<BTreeSet<CommentId>>,
 }
 
 /// Where the record of `session` is kept, beside its transcript.

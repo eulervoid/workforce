@@ -1,6 +1,7 @@
 //! The task of a running session: prompts the harness turn after turn, parks it while its
 //! item waits, and ends it when nobody else does.
 
+use std::collections::BTreeSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
@@ -8,14 +9,14 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use wf_core::id::{HashId, SessionId};
+use wf_core::id::{CommentId, HashId, SessionId};
 use wf_core::lifecycle::{Interruption, Resume, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_core::state::State;
 use wf_harness::{AgentSessionId, Conversation, Launch, Opening};
 use wf_vcs::{ImportMode, StoppedRebase};
 
-use super::brief::{brief, restarted, resumed};
+use super::brief::{Prompt, after_turn, brief, restarted, resumed};
 use super::resume::AgentSessionRecord;
 use super::start::sandboxed;
 use super::{Begin, CANCEL_GRACE, End, GRACE, Run, SILENCE_LIMIT, START_TIMEOUT, Stop, blocking};
@@ -258,6 +259,10 @@ async fn drive(
                 Begin::New => None,
                 Begin::Resume(record) => record.model.clone(),
             }),
+        told: match &run.begin {
+            Begin::New => Some(BTreeSet::new()),
+            Begin::Resume(record) => record.told.clone(),
+        },
     };
     // Without the record, a restart could not resume the session.
     if let Err(error) = record.write(&run.agent_session) {
@@ -279,10 +284,12 @@ async fn turns(
 ) -> End {
     // A resumed session's time counts from the resume: how long the daemon was down is unknown.
     let mut deadline = run.max_duration.map(|duration| Instant::now() + duration);
-    let mut prompt = match first_prompt(daemon, loaded, run, stopped, &deadline, record).await {
-        Ok(prompt) => prompt,
-        Err(end) => return end,
-    };
+    let mut told = told_so_far(daemon, loaded, run.session, record).await;
+    let mut prompt =
+        match first_prompt(daemon, loaded, run, stopped, &deadline, record, &told).await {
+            Ok(prompt) => prompt,
+            Err(end) => return end,
+        };
     let cancel = conversation.cancel();
     let mut last_head = branch_head(run);
     let mut turns_without_commit = 0;
@@ -290,11 +297,14 @@ async fn turns(
     let mut importing = tokio::time::interval(IMPORT_EVERY);
     importing.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
+        // Told before it goes out, so that a restart in between does not tell it again.
+        told.extend(prompt.tells);
+        record.told = Some(told.clone());
         record.prompted_ms = Some(wf_store::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
             return not_kept(&daemon.faults, &run.agent_session, &error);
         }
-        let turn = conversation.reply(prompt);
+        let turn = conversation.reply(prompt.text);
         tokio::pin!(turn);
         let result = loop {
             tokio::select! {
@@ -371,10 +381,12 @@ async fn turns(
         }
         let waited = waiting_since.elapsed();
         deadline = deadline.map(|deadline| deadline + waited);
-        if let Some(failures) = daemon.submissions.take_failure(run.session) {
+        if let Some(failed) = daemon.submissions.take_failure(run.session) {
             last_head = branch_head(run);
             turns_without_commit = 0;
-            prompt = failures;
+            // The prompt tells the change request that says which checks failed.
+            told.extend(failed.comment);
+            prompt = after_turn(loaded, run, &told, failed.prompt).await;
             continue;
         }
 
@@ -400,7 +412,9 @@ async fn turns(
         };
         match outcome {
             TurnOutcome::Close => return closed(live),
-            TurnOutcome::Continue => prompt = nudge(run).await,
+            TurnOutcome::Continue => {
+                prompt = after_turn(loaded, run, &told, nudge(run).await).await
+            }
             TurnOutcome::MachineFault(fault) => {
                 return End::Interrupt(Interruption::MachineFault(fault));
             }
@@ -412,7 +426,7 @@ async fn turns(
             }
             TurnOutcome::Park => match park(daemon, loaded, run, stopped, &deadline).await {
                 None => {
-                    prompt = resumed(loaded, run).await;
+                    prompt = resumed(loaded, run, &told).await;
                     turns_without_commit = 0;
                 }
                 Some(end) => return end,
@@ -421,8 +435,27 @@ async fn turns(
     }
 }
 
-/// What the session is told first: its brief, or after a restart that it was resumed. A session
-/// that was parked when the daemon stopped waits until its item is ready again.
+/// The comments the session was told, as its record keeps them. A record older than that knows
+/// only when the session was last prompted, and counts what was written for it until then.
+async fn told_so_far(
+    daemon: &Arc<Daemon>,
+    loaded: &Arc<Loaded>,
+    session: SessionId,
+    record: &AgentSessionRecord,
+) -> BTreeSet<CommentId> {
+    match (&record.told, record.prompted_ms) {
+        (Some(told), _) => told.clone(),
+        (None, Some(prompted_ms)) => daemon
+            .read(loaded, move |state| state.told_before(session, prompted_ms))
+            .await
+            .unwrap_or_default(),
+        (None, None) => BTreeSet::new(),
+    }
+}
+
+/// What the session is told first: its brief, or after a restart that it was resumed, with what
+/// was written for it and not `told` yet. A session that was parked when the daemon stopped waits
+/// until its item is ready again.
 async fn first_prompt(
     daemon: &Arc<Daemon>,
     loaded: &Arc<Loaded>,
@@ -430,7 +463,8 @@ async fn first_prompt(
     stopped: &mut mpsc::UnboundedReceiver<Stop>,
     deadline: &Option<Instant>,
     record: &AgentSessionRecord,
-) -> Result<String, End> {
+    told: &BTreeSet<CommentId>,
+) -> Result<Prompt, End> {
     let Some(prompted_ms) = record.prompted_ms else {
         return brief(loaded, run).await.map_err(failed);
     };
@@ -451,12 +485,12 @@ async fn first_prompt(
     match outcome {
         TurnOutcome::MachineFault(fault) => Err(End::Interrupt(Interruption::MachineFault(fault))),
         TurnOutcome::Continue | TurnOutcome::GiveUp => match resume {
-            Resume::AfterWait => Ok(resumed(loaded, run).await),
-            Resume::AfterRestart => Ok(restarted(loaded, run, prompted_ms).await),
+            Resume::AfterWait => Ok(resumed(loaded, run, told).await),
+            Resume::AfterRestart => Ok(restarted(loaded, run, told).await),
         },
         TurnOutcome::Close => Err(closed(live)),
         TurnOutcome::Park => match park(daemon, loaded, run, stopped, deadline).await {
-            None => Ok(resumed(loaded, run).await),
+            None => Ok(resumed(loaded, run, told).await),
             Some(end) => Err(end),
         },
     }

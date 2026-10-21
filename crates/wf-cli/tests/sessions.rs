@@ -1416,12 +1416,14 @@ wf work submit
 ";
     let mut world = World::new(script).await;
     let item = world.wf.add(&["--title", "Survives a restart"]);
+    world.wf.run(&["comment", short(&item), "In the brief"]);
     start_session(&world, &item);
     world
         .wait("the first turn", |world| {
             world.transcript(&item).contains("started")
         })
         .await;
+    world.wf.run(&["comment", short(&item), "Since the brief"]);
     world.restart().await;
     let session = world.ended_session().await;
     assert_eq!(world.sessions().len(), 1, "the same session went on");
@@ -1431,6 +1433,16 @@ wf work submit
     assert!(
         transcript.contains("wf restarted while you were working"),
         "{transcript}"
+    );
+    assert!(
+        transcript.contains("Written for you since:\n  - @ada (comment "),
+        "{transcript}"
+    );
+    let (_, restarted) = transcript.split_once("wf restarted").unwrap();
+    assert!(restarted.contains("): Since the brief"), "{transcript}");
+    assert!(
+        !restarted.contains("In the brief"),
+        "the brief told it: {transcript}"
     );
 }
 
@@ -1464,13 +1476,71 @@ wf work submit
     assert_eq!(session["status"], "submitted", "{session}");
     let transcript = world.transcript(&item);
     assert!(
-        transcript.contains("- @ada: Use humantime"),
+        transcript.contains("Written for you meanwhile:\n  - @ada (comment "),
         "the answer is named by its principal: {transcript}"
     );
+    assert!(transcript.contains("): Use humantime"), "{transcript}");
     assert!(
         !transcript.contains("wf restarted while you were working"),
         "a parked session is told what it waited for, nothing else: {transcript}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn what_is_written_for_a_working_session_is_told_once_at_the_end_of_its_turn() {
+    let script = "\
+say started
+sh while [ ! -f \"$XDG_DATA_HOME/go\" ]; do sleep 0.1; done
+turn
+say second
+turn
+sh echo done > a.txt && git add a.txt && git commit -q -m a
+wf work submit
+";
+    let world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Told while working"]);
+    let elsewhere = world.wf.add(&["--title", "Elsewhere"]);
+    let session = start_session(&world, &item);
+    world
+        .wait("the first turn", |world| {
+            world.transcript(&item).contains("started")
+        })
+        .await;
+    world
+        .wf
+        .run(&["comment", short(&item), "Change of plan: use humantime"]);
+    world.wf.run(&[
+        "comment",
+        short(&elsewhere),
+        "@ada/coder this changes the API",
+    ]);
+    world.wf.run(&[
+        "comment",
+        short(&elsewhere),
+        &format!("@ada/coder/{} and you", short(&session)),
+    ]);
+    world
+        .wf
+        .run(&["comment", short(&elsewhere), "not for coder"]);
+    std::fs::write(world.wf.data.join("go"), "").unwrap();
+    let ended = world.ended_session().await;
+    assert_eq!(ended["status"], "submitted", "{ended}");
+
+    let transcript = world.transcript(&item);
+    assert!(
+        transcript.contains("Written for you during your turn:"),
+        "{transcript}"
+    );
+    let on_elsewhere = format!("on #{} Elsewhere (comment ", short(&elsewhere));
+    assert_eq!(transcript.matches(&on_elsewhere).count(), 2, "{transcript}");
+    for told in [
+        "): Change of plan: use humantime",
+        "): @ada/coder this changes the API",
+        "and you",
+    ] {
+        assert_eq!(transcript.matches(told).count(), 1, "{told}: {transcript}");
+    }
+    assert!(!transcript.contains("not for coder"), "{transcript}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3901,7 +3971,8 @@ wf work submit
     wait_for("the resumed session to submit", "submitted");
     assert_eq!(sessions().len(), 1, "the same session went on");
     let transcript = wf.run(&["session", "watch", short(&item), "--no-follow"]);
-    assert!(transcript.contains("- @ada: Use humantime"), "{transcript}");
+    assert!(transcript.contains("- @ada (comment "), "{transcript}");
+    assert!(transcript.contains("): Use humantime"), "{transcript}");
 }
 
 #[tokio::test(flavor = "multi_thread")]

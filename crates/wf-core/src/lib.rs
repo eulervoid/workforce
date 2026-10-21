@@ -34,6 +34,7 @@ pub mod stats;
 pub mod supervision;
 pub mod sync;
 pub mod target;
+pub mod told;
 pub mod validate;
 
 pub use error_chain::error_chain;
