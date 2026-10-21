@@ -129,6 +129,7 @@ async fn dispatch_loop(
     loaded: &Arc<Loaded>,
 ) {
     let mut heads = loaded.storage.watch_heads();
+    let mut arrived = loaded.commits.arrived.subscribe();
     let mut failed = FailedStarts::new();
     let mut checked = CheckedReviews::new();
     let mut waits = Waits::default();
@@ -175,7 +176,7 @@ async fn dispatch_loop(
                 }
                 tracing::debug!("dispatching: the log changed");
             }
-            () = loaded.commits.arrived.notified() => {
+            _ = arrived.changed() => {
                 tracing::debug!("dispatching: commits arrived");
             }
             _ = backdated.changed() => {

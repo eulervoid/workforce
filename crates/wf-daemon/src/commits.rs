@@ -72,8 +72,9 @@ impl CommitFetcher for DeviceFetcher {
 #[derive(Default)]
 pub(crate) struct Commits {
     awaited: Mutex<Vec<AwaitedCommit>>,
-    /// Notified when commits arrived, so that what waited for them starts.
-    pub(crate) arrived: Notify,
+    /// Sent to when commits arrived, so that what waited for them starts: the dispatcher, and the
+    /// target branch, which follows a tip that arrived after the event naming it.
+    pub(crate) arrived: tokio::sync::watch::Sender<()>,
     /// Notified when commits were copied in here other than by a fetch, so that the refs pass
     /// looks again at once.
     copied: Notify,
@@ -352,7 +353,7 @@ pub(crate) async fn reconcile(
         Err(error) => tracing::warn!("could not move the refs of the items: {error}"),
     }
     if arrived {
-        loaded.commits.arrived.notify_one();
+        loaded.commits.arrived.send_replace(());
     }
     if fetches.tracked.is_empty() {
         return None;
