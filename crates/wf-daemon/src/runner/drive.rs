@@ -8,7 +8,7 @@ use std::time::Duration;
 use jiff::Timestamp;
 use tokio::sync::mpsc;
 use tokio::time::Instant;
-use wf_core::id::SessionId;
+use wf_core::id::{HashId, SessionId};
 use wf_core::lifecycle::{Interruption, Resume, SessionEnd, TurnOutcome};
 use wf_core::session::{CommitId, HarnessFault, MachineFault, SessionRole};
 use wf_core::state::State;
@@ -243,6 +243,7 @@ async fn drive(
             );
         }
     };
+    tracing::debug!("session {}: {} started", run.session.short(), run.harness);
     let mut record = AgentSessionRecord {
         id: conversation.session().0.clone(),
         prompted_ms: match &run.begin {
@@ -312,6 +313,7 @@ async fn turns(
                     return End::Over;
                 }
                 () = sleep_until(deadline) => {
+                    tracing::debug!("session {}: ran out of time, cancelling its turn", run.session.short());
                     cancel.cancel();
                     let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
                     return End::Interrupt(Interruption::TimedOut);

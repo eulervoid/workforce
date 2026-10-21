@@ -86,7 +86,8 @@ impl Sandbox {
         let output = output(&mut self.command(args));
         assert!(
             output.status.success(),
-            "wf {args:?} failed: {}",
+            "wf {args:?} failed ({}): {}",
+            output.status,
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap()
