@@ -940,4 +940,46 @@ mod tests {
         assert!(line.contains("since 2023-11-14"), "{line}");
         assert!(!line.contains("waiting"), "{line}");
     }
+
+    #[test]
+    fn a_device_is_there_until_its_lease_runs_out_and_unknown_without_a_daemon() {
+        let fixture = Fixture::new(2);
+        let state = fixture.state();
+        let (own, other) = (fixture.devices[0].key(), fixture.devices[1].key());
+        let lease = u64::try_from(state.lease().as_millis()).unwrap();
+        let started = 1_700_000_000_000;
+        let heard = started + 1_000;
+        let presence = Presence::new(started, [(other, heard)]);
+        let of = |device, presence, now_ms| {
+            DevicePresence::of(&state, device, Some(own), presence, now_ms)
+        };
+        assert_eq!(of(own, Some(&presence), heard), DevicePresence::ThisDevice);
+        assert_eq!(of(other, None, heard), DevicePresence::Unknown);
+        let last_seen = Some(timestamp_ms(heard));
+        assert_eq!(
+            of(other, Some(&presence), heard + lease),
+            DevicePresence::There { last_seen }
+        );
+        assert_eq!(
+            of(other, Some(&presence), heard + lease + 1),
+            DevicePresence::Gone { last_seen }
+        );
+        let never_heard = Presence::new(started, []);
+        assert_eq!(
+            of(other, Some(&never_heard), started + lease),
+            DevicePresence::There { last_seen: None },
+            "the daemon has not run for a lease"
+        );
+        assert_eq!(
+            of(other, Some(&never_heard), started + lease + 1),
+            DevicePresence::Gone { last_seen: None }
+        );
+        let json = serde_json::to_value(DeviceStatus {
+            name: "vm".into(),
+            presence: DevicePresence::Gone { last_seen },
+        })
+        .unwrap();
+        assert_eq!(json["presence"], "gone");
+        assert_eq!(json["last_seen"], "2023-11-14T22:13:21Z");
+    }
 }

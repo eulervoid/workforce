@@ -115,9 +115,8 @@ pub fn session(session: &SessionView) -> String {
 mod tests {
     use super::*;
 
-    #[test]
-    fn status_prints_what_waits_on_the_principal_apart_from_items() {
-        let view = StatusView {
+    fn demo_status() -> StatusView {
+        StatusView {
             name: "demo".to_string(),
             id: "abc".to_string(),
             members: vec!["@eulervoid (owner)".to_string()],
@@ -140,7 +139,12 @@ mod tests {
             caches: None,
             awaiting_commits: Vec::new(),
             checkout_target: None,
-        };
+        }
+    }
+
+    #[test]
+    fn status_prints_what_waits_on_the_principal_apart_from_items() {
+        let view = demo_status();
         let output = status(&view);
         let lines: Vec<&str> = output.lines().collect();
         assert!(lines.contains(&"items: 6 ready, 3 archived"), "{output}");
@@ -150,5 +154,36 @@ mod tests {
             .find(|line| line.starts_with("items:"))
             .unwrap();
         assert!(!items_line.contains("waiting"), "{output}");
+    }
+
+    #[test]
+    fn status_says_which_devices_are_gone_and_when_each_was_seen() {
+        let seen = Some(crate::view::timestamp_ms(1_700_000_000_000));
+        let device = |name: &str, presence| DeviceStatus {
+            name: name.to_string(),
+            presence,
+        };
+        let view = StatusView {
+            devices: vec![
+                device("laptop", DevicePresence::ThisDevice),
+                device("vm", DevicePresence::There { last_seen: seen }),
+                device("server", DevicePresence::Gone { last_seen: seen }),
+                device("pi", DevicePresence::Gone { last_seen: None }),
+                device("box", DevicePresence::Unknown),
+            ],
+            ..demo_status()
+        };
+        let output = status(&view);
+        let line = output
+            .lines()
+            .find(|line| line.starts_with("devices:"))
+            .unwrap();
+        let seen = short_time(seen.unwrap());
+        assert_eq!(
+            line,
+            format!(
+                "devices: laptop (this), vm (seen {seen}), server (gone, seen {seen}), pi (gone), box"
+            )
+        );
     }
 }
