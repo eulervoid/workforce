@@ -646,19 +646,19 @@ event is written for it. Of two live claims on the same thing, the earliest by `
 holds it. Starts take a per-item lock and refuse what a live session already claims. A session is
 live until its `SessionEnded`, so liveness is read from the log alone, the same on every device.
 
-**Leases.** Across devices nothing coordinates a start. Two devices that claim one thing before
-they sync find the earlier claim once they do, and the later session ends itself `Outclaimed`, as an
+**Leases.** Across devices nothing coordinates a start. Two devices that claim one thing before they
+sync find the earlier claim once they do, and the later session ends itself `Outclaimed`, as an
 interruption that keeps its commits: every dispatcher pass, which follows each change of the log,
 first ends this device's sessions that `State::outclaimed` names. A session that dies on a running
 device is ended by that device's daemon, as on one machine, so the only death others must notice is
-the device's, which gossip already announces (section 14). The lease of a claim is therefore the presence of its session's device: a device not
-heard from for the policy's `[claims] lease` (default and least 3 minutes, measured by the
-receiver's clock from the last announcement it accepted, so two lost announcements do not expire it)
-counts as gone, once the receiver's daemon has itself run that long, so a daemon that just started
-does not count every device as gone. Nothing is written per renewal; `State::claimable` takes the
-presence of devices and the time as parameters, and the dispatcher's candidates take the sessions
-whose leases expired (`State::expired`), so it is offered what only they hold, an active item among
-them.
+the device's, which gossip already announces (section 14). The lease of a claim is therefore the
+presence of its session's device: a device not heard from for the policy's `[claims] lease` (default
+and least 3 minutes, measured by the receiver's clock from the last announcement it accepted, so two
+lost announcements do not expire it) counts as gone, once the receiver's daemon has itself run that
+long, so a daemon that just started does not count every device as gone. Nothing is written per
+renewal; `State::claimable` takes the presence of devices and the time as parameters, and the
+dispatcher's candidates take the sessions whose leases expired (`State::expired`), so it is offered
+what only they hold, an active item among them.
 
 A device that would claim what a gone device's session claims first ends that session
 `LeaseExpired`, with a comment saying which device was gone and since when, and moves the item back
@@ -672,8 +672,8 @@ finds its sessions ended, stops them, and names the last head of each work sessi
 written as the session's agent (the one event an ended session may still write, only after a
 `LeaseExpired` end, and only its device's daemon writes it, since an agent never names a head
 itself), so what they committed reaches every device (section 10) and the brief of the next session
-names it, to rebase onto. The overlap is accepted, not prevented: for a few minutes two sessions may work on
-one thing. `LeaseExpired` and `Outclaimed`, like `Interrupted`, cost no recovery step.
+names it, to rebase onto. The overlap is accepted, not prevented: for a few minutes two sessions may
+work on one thing. `LeaseExpired` and `Outclaimed`, like `Interrupted`, cost no recovery step.
 
 One branch per item: every work session on it (after a release, a crash or requested changes)
 continues `wf/<item>`. Context carries over within a session in the conversation, and across sessions
