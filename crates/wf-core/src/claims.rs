@@ -17,7 +17,7 @@ use std::time::Duration;
 use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::DeviceKey;
 use crate::policy::Policy;
-use crate::session::{Session, SessionRole};
+use crate::session::{EndReason, Session, SessionRole};
 use crate::state::State;
 
 /// A session cannot start on what a live session holds.
@@ -112,6 +112,41 @@ impl State {
             })
             .map(Session::id)
             .collect()
+    }
+
+    /// For a session that lost its claim, the session that has it instead. For one ended
+    /// `LeaseExpired`, the first of the same item and role that started after the end: the
+    /// takeover's. For one ended `Outclaimed`, the earliest of them that started before it and had
+    /// not ended by then: the holder. `None` for a live session, for the other ends, and while the
+    /// session that has it has not arrived.
+    pub fn taken_over_by(&self, session: &Session) -> Option<&Session> {
+        let ended = session.ended()?;
+        let rivals = self
+            .sessions_of(session.item())
+            .filter(|other| other.role == session.role && other.id() != session.id());
+        match ended.reason {
+            EndReason::LeaseExpired => rivals
+                .filter(|other| other.started() > ended.stamp)
+                .min_by_key(|other| other.started()),
+            EndReason::Outclaimed => rivals
+                .filter(|other| {
+                    other.started() < session.started()
+                        && other
+                            .ended()
+                            .is_none_or(|end| end.stamp > session.started())
+                })
+                .min_by_key(|other| other.started()),
+            EndReason::Submitted
+            | EndReason::Reviewed
+            | EndReason::Supervised
+            | EndReason::Released
+            | EndReason::TimedOut
+            | EndReason::Failed
+            | EndReason::Cancelled
+            | EndReason::Interrupted
+            | EndReason::Diagnosed
+            | EndReason::MachineFault(_) => None,
+        }
     }
 
     /// The policy's `[claims] lease`.
