@@ -3406,6 +3406,29 @@ fn a_command_that_runs_past_its_limit_fails_with_what_it_ran() {
     assert!(message.contains("did not finish"), "{message}");
 }
 
+#[test]
+fn what_the_tests_spawn_inherits_no_descriptor_another_thread_just_opened() {
+    // A pipe as std has it on macOS between making it and setting close-on-exec on it.
+    let mut ends = [0; 2];
+    // SAFETY: `pipe` writes two descriptors into the array it is given.
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    let mut probe = Command::new("sh");
+    probe.args([
+        "-c",
+        r#"for path in /dev/fd/*; do echo "${path##*/}"; done"#,
+    ]);
+    common::inherit_only_stdio(&mut probe);
+    let held = String::from_utf8(common::output(&mut probe).stdout).unwrap();
+    for end in ends {
+        // SAFETY: both ends are this test's, and closed once.
+        unsafe { libc::close(end) };
+    }
+    // Only stdin, stdout, stderr and the listing, which holds its directory open as the lowest
+    // free descriptor.
+    let held: Vec<i32> = held.lines().filter_map(|line| line.parse().ok()).collect();
+    assert_eq!(held, [0, 1, 2, 3], "the pipe {ends:?} reached the child");
+}
+
 /// Adds `checks`, `[[merge.check]]` tables, to the policy.
 fn add_checks(world: &World, checks: &str) {
     let policy = world.wf.run(&["policy", "show"]);
