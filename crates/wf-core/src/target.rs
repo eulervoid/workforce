@@ -8,10 +8,11 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
+use crate::claims::Presence;
 use crate::crdt::Stamp;
 use crate::id::{EventId, ItemId};
 use crate::identity::{DeviceKey, PrincipalKey};
-use crate::item::{ItemEntry, ItemState};
+use crate::item::ItemState;
 use crate::session::CommitId;
 use crate::state::State;
 
@@ -111,33 +112,36 @@ impl State {
             .filter(move |step| step.device == device && self.move_lost(step.event()))
     }
 
-    /// The items whose merge `device` made lost a fork while they are done: its daemon moves them
-    /// back to `review`, where they wait for their merge again. Only the latest merge of an item
-    /// counts, so an item merged again since stays done.
-    pub fn lost_merges(&self, device: DeviceKey) -> Vec<ItemId> {
+    /// The items done whose merge lost a fork, that the daemon on `device` moves back to `review`,
+    /// where they wait for their merge again: those whose merge it made, and those of a device of
+    /// its principal that is gone, as `presence` says at `now_ms`, which may never return to. Only
+    /// the latest merge of an item counts, so an item merged again since stays done.
+    pub fn lost_merges(&self, device: DeviceKey, presence: &Presence, now_ms: u64) -> Vec<ItemId> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
             return Vec::new();
         };
-        let lost: BTreeSet<ItemId> = self
-            .lost_moves(device)
-            .filter_map(|step| match step.cause {
-                MoveCause::Merge { item } => Some(item),
-                MoveCause::Push => None,
+        let (principal, lease) = (self.principal_of(&device), self.lease());
+        let sends_back = |maker: DeviceKey| {
+            maker == device
+                || (principal.is_some()
+                    && self.principal_of(&maker) == principal
+                    && presence.gone(maker, lease, now_ms))
+        };
+        self.live_items()
+            .filter(|live| live.state(policy) == ItemState::Done)
+            .filter(|live| {
+                live.all_merges()
+                    .max_by_key(|merge| merge.stamp)
+                    .filter(|latest| latest.lost)
+                    .and_then(|latest| self.target_move(latest.stamp.id))
+                    .is_some_and(|step| sends_back(step.device))
             })
-            .collect();
-        lost.into_iter()
-            .filter(|item| {
-                matches!(
-                    self.item(*item),
-                    Some(ItemEntry::Live(live))
-                        if live.state(policy) == ItemState::Done
-                            && live
-                                .all_merges()
-                                .max_by_key(|merge| merge.stamp)
-                                .is_some_and(|merge| merge.lost)
-                )
-            })
+            .map(|live| live.id())
             .collect()
+    }
+
+    fn target_move(&self, event: EventId) -> Option<&TargetMove> {
+        self.workforce.as_ref()?.target_moves.get(&event)
     }
 
     /// The pushes of `principal` to the target that lost a fork, the latest of each of its

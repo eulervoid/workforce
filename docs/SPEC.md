@@ -1146,8 +1146,8 @@ Every move of the target names the tip it moved from, so every device agrees whe
   forward or back by compare-and-swap; this resets a move that lost to the winner (wf's ref, not the
   principal's checkout), and it puts back a target the principal rewound without pushing anything new.
 * **A lost merge** no longer counts: the device that made it moves its item back to `review` with a
-  comment from `@daemon`, and it waits for its merge again, which runs on the new tip, checks
-  included.
+  comment from `@daemon`, or any device of its principal once it is gone (its lease, as for merge
+  claims), and it waits for its merge again, which runs on the new tip, checks included.
 * **A lost push** of the principal waits in their inbox (`lost_push`), the latest of each device,
   until a later push from it is on the chain: rebase onto the target (`git pull --rebase`) and push
   again. A principal who pulled a merge that later lost finds their next push lost the same way.

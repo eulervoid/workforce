@@ -202,12 +202,14 @@ fn a_merge_that_lost_a_fork_waits_for_its_merge_again() {
     );
     fixture.apply(&mut state, 1, 5_001, moved(task, ItemState::Done));
     let device = fixture.devices[1].key();
-    assert!(state.lost_merges(device).is_empty());
+    let there = everyone_there(&fixture);
+    let lost_merges = |state: &State, device| state.lost_merges(device, &there, NOW_MS);
+    assert!(lost_merges(&state, device).is_empty());
 
     state.receive(push, Trust::Untrusted).unwrap();
     assert_eq!(state.target(), Some(commit(13)));
-    assert_eq!(state.lost_merges(device), vec![task]);
-    assert!(state.lost_merges(fixture.devices[0].key()).is_empty());
+    assert_eq!(lost_merges(&state, device), vec![task]);
+    assert!(lost_merges(&state, fixture.devices[0].key()).is_empty());
     let Some(ItemEntry::Live(live)) = state.item(task) else {
         panic!("the task is live")
     };
@@ -225,7 +227,7 @@ fn a_merge_that_lost_a_fork_waits_for_its_merge_again() {
 
     // Its daemon moves it back to review, and it waits for its merge again.
     fixture.apply(&mut state, 1, 6_000, moved(task, ItemState::Review));
-    assert!(state.lost_merges(device).is_empty());
+    assert!(lost_merges(&state, device).is_empty());
     assert_eq!(
         state.pending_merges(),
         vec![PendingMerge {
@@ -246,6 +248,53 @@ fn a_merge_that_lost_a_fork_waits_for_its_merge_again() {
         merge_of(&state, task),
         Some(ReviewStatus::Merged { .. })
     ));
+}
+
+const NOW_MS: u64 = 10_000_000;
+
+fn everyone_there(fixture: &Fixture) -> Presence {
+    Presence::new(
+        0,
+        fixture.devices.iter().map(|device| (device.key(), NOW_MS)),
+    )
+}
+
+#[test]
+fn a_device_of_the_principal_sends_back_a_lost_merge_once_its_maker_is_gone() {
+    let (fixture, mut state, task) = submitted();
+    write(
+        &fixture,
+        &mut state,
+        0,
+        3_000,
+        target_moved(commit(11), commit(10)),
+    );
+    let push = fixture.author_as(
+        &state,
+        0,
+        daemon(&fixture),
+        4_000,
+        target_moved(commit(13), commit(11)),
+    );
+    write(
+        &fixture,
+        &mut state,
+        1,
+        5_000,
+        merged_onto(task, commit(1), commit(12), commit(11)),
+    );
+    fixture.apply(&mut state, 1, 5_001, moved(task, ItemState::Done));
+    state.receive(push, Trust::Untrusted).unwrap();
+    let [other, maker] = [0, 1].map(|index| fixture.devices[index].key());
+
+    // While the maker is there, it alone sends the item back.
+    let there = everyone_there(&fixture);
+    assert_eq!(state.lost_merges(maker, &there, NOW_MS), vec![task]);
+    assert!(state.lost_merges(other, &there, NOW_MS).is_empty());
+    // Once it is gone, which may be for good, the other device of the principal does.
+    let lease_ms = u64::try_from(state.lease().as_millis()).unwrap();
+    let maker_gone = Presence::new(0, [(other, NOW_MS), (maker, NOW_MS - lease_ms - 1)]);
+    assert_eq!(state.lost_merges(other, &maker_gone, NOW_MS), vec![task]);
 }
 
 #[test]

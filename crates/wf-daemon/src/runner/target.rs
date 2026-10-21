@@ -7,9 +7,10 @@ use std::collections::BTreeSet;
 use std::sync::{Arc, Weak};
 use std::time::Duration;
 
+use wf_core::claims::Presence;
 use wf_core::event::{Commented, EventBody, TargetMoved};
 use wf_core::id::{CommentId, ItemId, WorkforceId};
-use wf_core::identity::{Actor, PrincipalKey};
+use wf_core::identity::{Actor, DeviceKey, PrincipalKey};
 use wf_core::item::ItemState;
 use wf_core::session::CommitId;
 use wf_core::state::State;
@@ -59,14 +60,14 @@ struct Reading {
     /// Every commit a move of the target made, on the chain or not.
     made: BTreeSet<CommitId>,
     principal: Option<PrincipalKey>,
-    /// The items whose merge this device made lost a fork, with the commit it made.
+    /// The items whose merge lost a fork that this device sends back, with the commit it made.
     lost_merges: Vec<(ItemId, CommitId)>,
 }
 
-fn read(state: &State, own: wf_core::identity::DeviceKey) -> Option<Reading> {
+fn read(state: &State, own: DeviceKey, presence: &Presence, now_ms: u64) -> Option<Reading> {
     let policy = &state.policy()?.policy;
     let lost_merges = state
-        .lost_merges(own)
+        .lost_merges(own, presence, now_ms)
         .into_iter()
         .filter_map(|item| {
             let wf_core::item::ItemEntry::Live(live) = state.item(item)? else {
@@ -174,7 +175,11 @@ impl Daemon {
         // A push written in the first round is settled by the log in the second.
         let mut at = TargetAt::Elsewhere;
         for _ in 0..2 {
-            let Some(reading) = self.read(loaded, move |state| read(state, own)).await? else {
+            let (presence, now_ms) = (self.presence_now(), wf_store::now_ms());
+            let reading = self
+                .read(loaded, move |state| read(state, own, &presence, now_ms))
+                .await?;
+            let Some(reading) = reading else {
                 return Ok(TargetAt::Elsewhere);
             };
             let (git_repository, last) = (repository.clone(), *seen);
@@ -217,8 +222,8 @@ impl Daemon {
         Ok(at)
     }
 
-    /// Moves each item whose merge this device made lost a fork back to `review`, with a comment
-    /// that says why. There it waits for its merge again, which runs its checks again.
+    /// Moves each item whose merge lost a fork back to `review`, if this device made it or its
+    /// maker is gone, with a comment that says why. There it waits for its merge again, which runs its checks again.
     async fn send_back_lost_merges(
         &self,
         loaded: &Loaded,
@@ -507,12 +512,68 @@ mod tests {
         assert_eq!(scene.main(), winner);
         let state = scene.state().await;
         assert_eq!(state.live_state(item), Some(ItemState::Review));
-        assert!(state.lost_merges(scene.fixture.devices[0].key()).is_empty());
+        let own = scene.fixture.devices[0].key();
+        assert!(
+            state
+                .lost_merges(own, &scene.daemon.presence_now(), wf_store::now_ms())
+                .is_empty()
+        );
         assert!(
             state
                 .pending_merges()
                 .iter()
                 .any(|pending| pending.item == item && pending.commit == reviewed)
+        );
+    }
+
+    #[tokio::test]
+    async fn a_lost_merge_of_a_device_that_is_gone_goes_back_to_review_here() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        let founder = scene.fixture.founder_actor();
+        scene.write(0, founder.clone(), define_agent("coder")).await;
+        let item: ItemId = scene
+            .write(0, founder.clone(), create("task", "work"))
+            .await
+            .id()
+            .into();
+        let session = scene
+            .write(0, founder.clone(), start_session("coder", item))
+            .await
+            .id()
+            .into();
+        scene
+            .write(0, founder.clone(), moved(item, ItemState::Review))
+            .await;
+        let reviewed = CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap());
+        scene
+            .write(0, founder.clone(), submit_session(session, reviewed))
+            .await;
+        let winner = scene.commit("winner");
+        let apart = scene.written_apart(&scene.state().await, target_moved(winner, main));
+        // Device 1 merged it onto the same tip later, and was not heard from since.
+        let lost = CommitId::Git("33221100ffeeddccbbaa99887766554433221100".parse().unwrap());
+        let daemon = scene.daemon_actor();
+        scene
+            .write(1, daemon, merged_onto(item, reviewed, lost, main))
+            .await;
+        scene.write(1, founder, moved(item, ItemState::Done)).await;
+        scene.receive(apart).await;
+        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(
+            scene.state().await.live_state(item),
+            Some(ItemState::Done),
+            "device 1 may still send it back itself"
+        );
+
+        let lease = scene.state().await.lease();
+        scene
+            .daemon
+            .backdate_presence(lease + Duration::from_secs(60));
+        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(
+            scene.state().await.live_state(item),
+            Some(ItemState::Review)
         );
     }
 
