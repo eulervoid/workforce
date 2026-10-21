@@ -13,7 +13,10 @@
 //! - the paths of wf that would let an agent act outside its sandbox are denied;
 //! - the config of the harnesses, and cargo's registry, are not writable: both run code with the
 //!   principal's privileges the next time the principal runs the harness or builds. Agents get a
-//!   `CARGO_HOME` of their own instead.
+//!   `CARGO_HOME` of their own instead;
+//! - key files are denied below each writable path but the agents' `CARGO_HOME`, not everywhere:
+//!   Fence writes every deny after every allow, so a deny of `**/*.pem` would keep cargo from
+//!   unpacking a crate that ships one as a test fixture.
 
 use std::path::{Path, PathBuf};
 
@@ -79,14 +82,10 @@ pub(crate) const CARGO_HOME: &str = "CARGO_HOME";
 
 /// The sandbox profile Fence runs the agent with.
 fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
-    let writable: Vec<PathBuf> = [
-        access.directory.to_path_buf(),
-        access.socket.to_path_buf(),
-        access.data_dir.agent_cargo_home(),
-    ]
-    .into_iter()
-    .chain(config.allow_write.iter().cloned())
-    .collect();
+    let writable: Vec<PathBuf> = [access.directory.to_path_buf(), access.socket.to_path_buf()]
+        .into_iter()
+        .chain(config.allow_write.iter().cloned())
+        .collect();
 
     // With these an agent signs as the device or the principal, has the daemon act for the
     // principal, or turns its sandbox off.
@@ -102,15 +101,24 @@ fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
     let git_config = [PathBuf::from("~/.config/git")];
 
     let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
+    let mut allow_write: Vec<PathBuf> = [paths(ALLOW_WRITE), writable].concat();
+    // Fence writes every deny after every allow, so key files are denied below each writable
+    // directory but the agents' cargo home, which holds no keys of the principal: it is wf's, made
+    // for agents.
+    let key_files: Vec<PathBuf> = allow_write
+        .iter()
+        .chain(&paths(FENCE_ALLOW_WRITE))
+        .flat_map(|root| key_files_below(root))
+        .collect();
+    allow_write.push(access.data_dir.agent_cargo_home());
     let deny_read: Vec<PathBuf> = [paths(DENY_READ), secrets.clone()].concat();
     let deny_write: Vec<PathBuf> = [
-        paths(DENY_WRITE),
+        key_files,
         paths(HARNESS_CONFIG),
         secrets,
         git_config.to_vec(),
     ]
     .concat();
-    let allow_write: Vec<PathBuf> = [paths(ALLOW_WRITE), writable].concat();
     let allowed_domains: Vec<&str> = ALLOWED_DOMAINS
         .iter()
         .copied()
@@ -308,7 +316,20 @@ const HARNESS_CONFIG: &[&str] = &[
     "~/.kiro/extensions",
 ];
 
-const DENY_WRITE: &[&str] = &["**/.env", "**/.env.*", "**/*.pem", "**/*.p12", "**/*.pfx"];
+/// Directories Fence allows writing to itself, whatever the profile says, besides devices and its
+/// temporary directory in `/tmp`.
+const FENCE_ALLOW_WRITE: &[&str] = &["~/.npm/_logs", "~/.fence/debug"];
+
+/// Files that hold keys or secrets, by name.
+const KEY_FILES: &[&str] = &[".env", ".env.*", "*.pem", "*.p12", "*.pfx"];
+
+/// Globs of the key files anywhere below `root`, a path or a glob that Fence allows writing to.
+/// What a glob root matches itself stays writable: `~/.claude*` allows `~/.claude.pem`.
+fn key_files_below(root: &Path) -> impl Iterator<Item = PathBuf> {
+    let root = root.to_string_lossy();
+    let root = PathBuf::from(root.strip_suffix("/**").unwrap_or(&root));
+    KEY_FILES.iter().map(move |file| root.join("**").join(file))
+}
 
 const DENY_READ: &[&str] = &[
     // SSH private keys and config
@@ -568,6 +589,102 @@ mod tests {
             "allowWrite",
             "/home/ada/.local/share/workforce/cargo/registry/src/x/serde-1.0.0/build.rs"
         ));
+    }
+
+    #[test]
+    fn key_files_are_denied_everywhere_but_in_the_agents_cargo_home() {
+        for path in [
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/.env",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/deploy/key.pem",
+            "/home/ada/.local/share/workforce/w1/repos/k3f9/.env.local",
+            "/tmp/cert.p12",
+            "/tmp/x/cert.pfx",
+            "~/.cache/x/key.pem",
+            "~/.claude/key.pem",
+            "/opt/cache/key.pem",
+            "./key.pem",
+            "~/.npm/_logs/key.pem",
+            "~/.fence/debug/.env",
+        ] {
+            assert!(covers("denyWrite", path), "{path} is not writable");
+        }
+        for path in [
+            "/home/ada/.local/share/workforce/cargo/registry/src/x/ed25519-3.0.0/tests/examples/pkcs8-v1.pem",
+            "/home/ada/.local/share/workforce/cargo/registry/src/x/dotenvy-0.15.7/.env",
+        ] {
+            assert!(covers("allowWrite", path), "{path} is writable");
+            assert!(!covers("denyWrite", path), "{path} is not denied");
+        }
+    }
+
+    /// Runs `script` as the agent, in Fence with the profile `wrap` writes, and says whether it
+    /// succeeded.
+    fn in_fence(access: &Access<'_>, profile_file: &Path, script: &str) -> bool {
+        let agent = AcpAgentConfig::new("sh").arg("-c").arg(script);
+        let wrapped = wrap(&FenceConfig::default(), access, &agent, profile_file).unwrap();
+        std::process::Command::new(wrapped.command())
+            .args(wrapped.arguments())
+            .envs(wrapped.environment())
+            .status()
+            .unwrap()
+            .success()
+    }
+
+    #[test]
+    fn a_crate_with_key_files_unpacks_into_the_agents_cargo_home_in_fence() {
+        if wf_core::testing::skip_in_fence("Fence in Fence denies what the outer one denies") {
+            return;
+        }
+        if !fence_installed() {
+            eprintln!("skipped: fence is not installed");
+            return;
+        }
+        // Canonical, as Fence matches the paths the kernel sees, such as `/private/var/...`.
+        let directory = tempfile::tempdir().unwrap();
+        let root = directory.path().canonicalize().unwrap();
+        let fixture = root.join("fixture");
+        std::fs::create_dir_all(fixture.join("ed25519-3.0.0/tests/examples")).unwrap();
+        std::fs::write(fixture.join("ed25519-3.0.0/Cargo.toml"), "").unwrap();
+        std::fs::write(
+            fixture.join("ed25519-3.0.0/tests/examples/pkcs8-v1.pem"),
+            "-----BEGIN PRIVATE KEY-----\n",
+        )
+        .unwrap();
+        let crate_file = root.join("ed25519-3.0.0.crate");
+        let packed = std::process::Command::new("tar")
+            .arg("-czf")
+            .arg(&crate_file)
+            .arg("-C")
+            .arg(&fixture)
+            .arg("ed25519-3.0.0")
+            .status()
+            .unwrap();
+        assert!(packed.success());
+        let repository = root.join("k3f9");
+        std::fs::create_dir(&repository).unwrap();
+        let data_dir = DataDir::new(root.join("data"));
+        let access = Access {
+            directory: &repository,
+            data_dir: &data_dir,
+            ..access()
+        };
+        let profile_file = root.join("sandbox/session.json");
+
+        // As cargo unpacks a crate it downloaded into its registry.
+        let unpack = format!(
+            r#"mkdir -p "$CARGO_HOME/registry/src/index" && tar -xzf '{}' -C "$CARGO_HOME/registry/src/index""#,
+            crate_file.display()
+        );
+        assert!(in_fence(&access, &profile_file, &unpack));
+        assert!(
+            data_dir
+                .agent_cargo_home()
+                .join("registry/src/index/ed25519-3.0.0/tests/examples/pkcs8-v1.pem")
+                .is_file()
+        );
+
+        assert!(!in_fence(&access, &profile_file, "echo key > key.pem"));
+        assert!(!repository.join("key.pem").exists());
     }
 
     #[test]
