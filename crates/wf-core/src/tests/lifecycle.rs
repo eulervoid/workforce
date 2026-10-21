@@ -996,3 +996,45 @@ fn a_comment_that_mentions_the_principal_waits_in_the_inbox_until_they_act_on_th
         "the principal acted on the item"
     );
 }
+
+#[test]
+fn a_principal_comment_that_mentions_another_principal_waits_until_a_principal_acts_after_it() {
+    use crate::inbox::Waiting;
+    use crate::state::Trust;
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    scene.clock += 1;
+    let by_ada = scene.fixture.apply(
+        &mut scene.state,
+        0,
+        scene.clock,
+        comment(task, "@grace can you look?"),
+    );
+    let mentions = |state: &State| {
+        state
+            .inbox()
+            .into_iter()
+            .filter_map(|entry| {
+                let Waiting::Mention { comment } = entry.waiting else {
+                    return None;
+                };
+                Some(comment)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(mentions(&scene.state), vec![by_ada.id().into()]);
+
+    scene.clock += 1;
+    let grace = Actor::Principal(scene.fixture.member.key());
+    let answer = scene
+        .state
+        .builder(scene.fixture.member_device.key(), grace, scene.clock)
+        .unwrap()
+        .sign(&scene.fixture.member_device, comment(task, "on it"))
+        .unwrap();
+    scene.state.receive(answer, Trust::Untrusted).unwrap();
+    assert!(
+        mentions(&scene.state).is_empty(),
+        "a principal acted on the item after the mention"
+    );
+}

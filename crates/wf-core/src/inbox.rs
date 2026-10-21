@@ -260,7 +260,9 @@ impl State {
 
 impl State {
     /// The comments on `item`, oldest first, that mention a principal other than their writer and
-    /// that no principal acted on the item after. A blocker waits in the inbox as a blocker.
+    /// that no principal acted on the item after. Writing a comment touches the item at the
+    /// comment's own stamp, so a principal's comment that mentions another waits as well. A
+    /// blocker waits in the inbox as a blocker.
     fn unanswered_mentions(&self, item: &Item) -> Vec<CommentId> {
         let resolver = self.resolver();
         let mut mentions: Vec<_> = item
@@ -269,7 +271,7 @@ impl State {
             .filter(|(_, comment)| comment.kind != CommentKind::Blocker)
             .filter(|(_, comment)| {
                 item.principal_touched()
-                    .is_none_or(|touched| touched < comment.at)
+                    .is_none_or(|touched| touched <= comment.at)
             })
             .filter(|(_, comment)| {
                 comment.tokens.iter().any(|token| match token {
