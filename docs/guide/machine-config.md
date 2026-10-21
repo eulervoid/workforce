@@ -51,10 +51,16 @@ The daemon runs every agent in [Fence](https://github.com/fencesandbox/fence), w
 installed. Inside it, an agent may:
 
 * write in its own repository and talk to the daemon (your repository is read-only to it);
+* write the state, sessions and login of its harness, and caches;
 * reach model APIs and package registries.
 
 Everything else is denied. Whatever you add, an agent never reads wf's keys or config, and never
-changes git's config. Because the sandbox holds agents in, an agent with
+changes git's config or the config of a harness (settings, hooks, commands, agents, skills,
+plugins, MCP servers): those run the next time *you* run git or the harness, outside the sandbox.
+For the same reason agents build with a cargo home of their own,
+`~/.local/share/workforce/cargo`, and do not touch the registry in your `~/.cargo`; your
+`~/.cargo/config.toml` does not apply to them. One gap remains: Claude Code keeps its state and its
+user-scope MCP servers in one file, `~/.claude.json`, which agents can write. Because the sandbox holds agents in, an agent with
 `--permissions allow` (the default) is allowed what it asks without anyone being asked.
 
 ```toml
