@@ -736,8 +736,10 @@ lease ran out, though a device never leaves itself out. The rest rank by, first 
 the review session that approved it, before the hash.
 
 The device of rank *r* waits *r* times 15 s (well above the few seconds a claim takes to sync)
-from when its dispatcher first saw the thing claimable, and then starts it only if no claim arrived;
-meanwhile it goes on to what it ranks first. A thing it stops seeing (a claim arrived, or it has no
+from when its dispatcher first saw the thing claimable, and then starts it only if no claim arrived.
+Meanwhile the agent waits with it rather than start something after it in its order (a lower
+priority it ranks first), so priority holds when the device ahead fails to start; the claim of the
+device ahead usually arrives within seconds, and the agent goes on to its next thing. A thing it stops seeing (a claim arrived, or it has no
 slot) is forgotten, and waits from the start once it is claimable again. The dispatcher sleeps until
 the next wait is over rather than for its tick. The ranking reads only the log, profiles and
 presence, so devices agree on it; what only one device knows (a failed start, a harness at fault, a

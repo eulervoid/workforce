@@ -54,6 +54,24 @@ impl Waits {
         if at <= now { Due::Now } else { Due::At(at) }
     }
 
+    /// What an agent starts of its `candidates` (each with this device's rank), taken in the
+    /// order it takes them: the first, once it is due. Until then it waits for it, rather than
+    /// fill its slot with something less urgent that this device ranks first. The rest count as
+    /// seen, so their waits run meanwhile.
+    fn choose(&mut self, candidates: Vec<(ItemId, SessionRole, usize)>, now: Instant) -> Choice {
+        let mut choice = Choice::Nothing;
+        for (index, (item, role, rank)) in candidates.into_iter().enumerate() {
+            let due = self.due(item, &role, rank, now);
+            if index == 0 {
+                choice = match due {
+                    Due::Now => Choice::Start(item, role),
+                    Due::At(at) => Choice::Wait(at),
+                };
+            }
+        }
+        choice
+    }
+
     /// Forgets what was not seen since the last call.
     fn end_pass(&mut self) {
         let seen = std::mem::take(&mut self.seen);
@@ -66,6 +84,15 @@ impl Waits {
 enum Due {
     Now,
     At(Instant),
+}
+
+/// What an agent does next ([`Waits::choose`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum Choice {
+    Start(ItemId, SessionRole),
+    /// Its first candidate is due at this instant.
+    Wait(Instant),
+    Nothing,
 }
 
 /// Starts agents on the ready items of a workforce for as long as the daemon runs and the
@@ -144,7 +171,8 @@ async fn dispatch_loop(
 /// first item it may take. Whatever could not be started is tried again after
 /// [`RETRY_FAILED_START`]. Nothing is started while the disk is full, and no agent of a harness
 /// whose login lapsed or that cannot be reached until it is tried again. What another device
-/// ranks before this one waits its turn ([`Waits`]); returns when the first of those is due.
+/// ranks before this one waits its turn, and the agent with it ([`Waits::choose`]); returns when
+/// the first of those is due.
 async fn dispatch_once(
     daemon: &Arc<Daemon>,
     workforce: WorkforceId,
@@ -273,19 +301,13 @@ async fn dispatch_once(
             else {
                 return None;
             };
-            let now = Instant::now();
-            let mut due = None;
-            for (item, role, rank) in candidates {
-                match waits.due(item, &role, rank, now) {
-                    Due::Now => {
-                        due = Some((item, role));
-                        break;
-                    }
-                    Due::At(at) => next = Some(next.map_or(at, |next: Instant| next.min(at))),
+            let (item, role) = match waits.choose(candidates, Instant::now()) {
+                Choice::Start(item, role) => (item, role),
+                Choice::Wait(at) => {
+                    next = Some(next.map_or(at, |next: Instant| next.min(at)));
+                    break;
                 }
-            }
-            let Some((item, role)) = due else {
-                break;
+                Choice::Nothing => break,
             };
             let started = daemon
                 .start_session(workforce, loaded, agent.name.clone(), item, role)
@@ -428,5 +450,37 @@ mod tests {
             Due::At(again + RANK_DELAY)
         );
         assert_eq!(waits.due(item(1), &SessionRole::Work, 1, again), Due::Now);
+    }
+
+    #[test]
+    fn an_agent_waits_for_its_most_urgent_candidate_rather_than_start_a_later_one() {
+        let mut waits = Waits::default();
+        let seen = Instant::now();
+        let (urgent, other) = (item(1), item(2));
+        let both = || {
+            vec![
+                (urgent, SessionRole::Work, 1),
+                (other, SessionRole::Work, 0),
+            ]
+        };
+        let wait = Choice::Wait(seen + RANK_DELAY);
+        assert_eq!(waits.choose(both(), seen), wait);
+        waits.end_pass();
+        assert_eq!(waits.choose(both(), seen + RANK_DELAY / 2), wait);
+        waits.end_pass();
+        assert_eq!(
+            waits.choose(both(), seen + RANK_DELAY),
+            Choice::Start(urgent, SessionRole::Work)
+        );
+
+        // Claimed by the device ahead, the urgent one is no candidate any more.
+        let mut waits = Waits::default();
+        assert_eq!(waits.choose(both(), seen), wait);
+        waits.end_pass();
+        assert_eq!(
+            waits.choose(vec![(other, SessionRole::Work, 0)], seen + RANK_DELAY / 2),
+            Choice::Start(other, SessionRole::Work)
+        );
+        assert_eq!(waits.choose(Vec::new(), seen), Choice::Nothing);
     }
 }
