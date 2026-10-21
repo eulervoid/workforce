@@ -330,6 +330,9 @@ pub struct Launch<W> {
 struct Turn {
     prompt: String,
     reply: oneshot::Sender<Result<(StopReason, String), Error>>,
+    /// How many cancels were asked for when the turn was: a later one cancels it, also one that
+    /// came before the task picked the turn up.
+    cancels_before: u64,
 }
 
 /// How long [`Conversation::close`] waits for the agent to exit before it kills it.
@@ -546,8 +549,9 @@ impl Conversation {
                     let _ = ready.send((session_id.clone(), current));
                     while let Some(turn) = incoming.recv().await {
                         // A cancel asked for while no turn ran, or too late for the last one,
-                        // is not meant for this turn.
-                        cancelled_turn.mark_unchanged();
+                        // is not meant for this turn; one since it was asked for is.
+                        let cancelled_early =
+                            *cancelled_turn.borrow_and_update() != turn.cancels_before;
                         said.lock()
                             .unwrap_or_else(|poisoned| poisoned.into_inner())
                             .clear();
@@ -562,6 +566,11 @@ impl Conversation {
                             ))
                             .block_task();
                         tokio::pin!(request);
+                        // Sent after the prompt, which `send_request` has sent already.
+                        if cancelled_early {
+                            connection
+                                .send_notification(CancelNotification::new(session_id.clone()))?;
+                        }
                         // A turn whose transcript cannot be written, or whose agent went silent,
                         // fails: nobody could follow it, or it hangs.
                         let response = loop {
@@ -654,6 +663,7 @@ impl Conversation {
         let turn = Turn {
             prompt: prompt.into(),
             reply,
+            cancels_before: *self.cancel.borrow(),
         };
         self.turns.send(turn).await.map_err(|_| Error::Ended)?;
         answer.await.map_err(|_| Error::Ended)?

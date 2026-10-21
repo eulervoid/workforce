@@ -460,6 +460,27 @@ async fn a_cancel_during_a_turn_ends_it() {
 }
 
 #[tokio::test]
+async fn a_cancel_right_after_a_turn_is_asked_for_ends_it() {
+    let (_directory, mut conversation) = start_fake_agent(true).await;
+    let cancel = conversation.cancel();
+    let ended = {
+        let turn = conversation.reply("hang");
+        tokio::pin!(turn);
+        // Polled once, the turn is asked for, and the conversation may not have picked it up yet.
+        assert!(
+            tokio::time::timeout(Duration::ZERO, &mut turn)
+                .await
+                .is_err()
+        );
+        cancel.cancel();
+        tokio::time::timeout(Duration::from_secs(10), turn).await
+    };
+    let (stop_reason, _) = ended.expect("the turn ends").unwrap();
+    assert!(matches!(stop_reason, StopReason::Cancelled));
+    let _ = conversation.close().await;
+}
+
+#[tokio::test]
 async fn a_cancel_between_turns_does_not_cancel_the_next_turn() {
     let (_directory, mut conversation) = start_fake_agent(false).await;
     conversation.cancel().cancel();

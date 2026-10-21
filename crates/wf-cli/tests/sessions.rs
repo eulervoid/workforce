@@ -1651,6 +1651,30 @@ async fn a_session_that_runs_too_long_is_cancelled_and_times_out() {
     assert_eq!(world.item(&item)["state"], "open");
 }
 
+/// A session whose time is up as its first turn begins: the cancel comes right after the turn
+/// is asked for, and ends it at once rather than after the grace for a cancelled turn.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_whose_time_is_up_as_its_turn_begins_is_cancelled_at_once() {
+    let world = World::new("hang\n").await;
+    world
+        .wf
+        .run(&["agent", "edit", "coder", "--max-duration", "1ms"]);
+    for round in 0..5 {
+        let item = world.wf.add(&["--title", &format!("Slow {round}")]);
+        start_session(&world, &item);
+        world
+            .wait("the session to time out", |world| {
+                world
+                    .sessions()
+                    .iter()
+                    .filter(|session| session["status"] == "timed_out")
+                    .count()
+                    > round
+            })
+            .await;
+    }
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn submitting_without_commits_finishes_the_item_and_leaves_no_branch() {
     let world = World::new("wf work submit --note \"Nothing to change\"\n").await;

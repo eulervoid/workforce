@@ -298,6 +298,9 @@ async fn turns(
         tokio::pin!(turn);
         let result = loop {
             tokio::select! {
+                // The turn first, so that it is asked for before its time or a stop cancels it: a
+                // cancel before that is not meant for it.
+                biased;
                 result = &mut turn => break result,
                 // The work so far is copied while the turn goes on, for whoever looks at it.
                 _ = importing.tick() => import_progress(daemon, loaded, run, &mut imported).await,
