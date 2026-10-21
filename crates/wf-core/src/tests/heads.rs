@@ -218,7 +218,10 @@ fn the_log_names_the_heads_and_the_submission_with_the_device_that_wrote_them() 
     let item = scene.item();
     let session = scene.start(item, SessionRole::Work);
     scene.comment_naming(session, item, commit(1));
-    assert_eq!(named(&scene), vec![(commit(1), Naming::Head { session })]);
+    assert_eq!(
+        named(&scene),
+        vec![(commit(1), Naming::Head { item, session })]
+    );
 
     scene.apply(submit_session(session, commit(1)));
     scene.apply(moved(item, ItemState::Review));
@@ -226,8 +229,8 @@ fn the_log_names_the_heads_and_the_submission_with_the_device_that_wrote_them() 
     assert_eq!(
         named(&scene),
         vec![
-            (commit(1), Naming::Head { session }),
-            (commit(1), Naming::Submitted),
+            (commit(1), Naming::Head { item, session }),
+            (commit(1), Naming::Submitted { item }),
         ]
     );
     let device = scene.fixture.devices[0].key();

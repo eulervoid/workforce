@@ -516,7 +516,31 @@ pub fn merged(item: ItemId, reviewed: CommitId, commit: CommitId) -> EventBody {
         item,
         reviewed,
         commit,
+        onto: None,
     })
+}
+
+/// A merge that moved the target from `onto` to `commit`.
+pub fn merged_onto(
+    item: ItemId,
+    reviewed: CommitId,
+    commit: CommitId,
+    onto: CommitId,
+) -> EventBody {
+    EventBody::Merged(crate::event::Merged {
+        item,
+        reviewed,
+        commit,
+        onto: Some(onto),
+    })
+}
+
+pub fn target_moved(commit: CommitId, onto: CommitId) -> EventBody {
+    EventBody::TargetMoved(crate::event::TargetMoved { commit, onto })
+}
+
+pub fn merge_claimed(item: ItemId, commit: CommitId) -> EventBody {
+    EventBody::MergeClaimed(crate::event::MergeClaimed { item, commit })
 }
 
 pub fn check_failure(item: ItemId, text: &str) -> EventBody {

@@ -99,11 +99,9 @@ impl State {
             return None;
         };
         let (commit, submitted) = self.submission(item)?;
-        if let Some(merge) = commit.and_then(|commit| {
-            live.merges()
-                .values()
-                .find(|merge| merge.reviewed == commit)
-        }) {
+        if let Some(merge) =
+            commit.and_then(|commit| live.merges().find(|merge| merge.reviewed == commit))
+        {
             return Some(ReviewStatus::Merged {
                 commit: merge.commit,
             });

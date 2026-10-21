@@ -307,6 +307,8 @@ impl State {
                 | EventBody::SessionEnded(_)
                 | EventBody::Reviewed(_)
                 | EventBody::Merged(_)
+                | EventBody::TargetMoved(_)
+                | EventBody::MergeClaimed(_)
                 | EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
                 | EventBody::BoundPolicySet(_)
@@ -376,8 +378,10 @@ impl State {
             | EventBody::SessionStarted(_)
             | EventBody::SessionEnded(_)
             | EventBody::Reviewed(_)
-            | EventBody::Merged(_) => self.item_of(event) == Some(item),
+            | EventBody::Merged(_)
+            | EventBody::MergeClaimed(_) => self.item_of(event) == Some(item),
             EventBody::Genesis(_)
+            | EventBody::TargetMoved(_)
             | EventBody::PolicySet(_)
             | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
@@ -407,7 +411,9 @@ impl State {
             }
             EventBody::Reviewed(review) => Some(review.item),
             EventBody::Merged(merged) => Some(merged.item),
+            EventBody::MergeClaimed(claimed) => Some(claimed.item),
             EventBody::Genesis(_)
+            | EventBody::TargetMoved(_)
             | EventBody::PolicySet(_)
             | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)

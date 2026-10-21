@@ -15,16 +15,17 @@ use crate::state::State;
 pub enum Naming {
     /// The head of a work session of an item that is not finished, named by one of its comments or
     /// by its end: the branch of the item, or work set apart from it.
-    Head { session: SessionId },
+    Head { item: ItemId, session: SessionId },
     /// The commit an item in review was submitted at, which a review and the merge start on.
-    Submitted,
+    Submitted { item: ItemId },
+    /// The tip of the target branch, the end of its chain in the log.
+    Target,
 }
 
 /// A commit the log names, and the device that wrote the event, which has it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NamedCommit {
     pub commit: CommitId,
-    pub item: ItemId,
     pub author: DeviceKey,
     pub naming: Naming,
 }
@@ -77,8 +78,8 @@ pub struct ItemHeads {
 
 impl State {
     /// The commits that something on a device still needs: the heads of items that are not
-    /// finished (the holder's, and the others' to keep apart), and the commit an item in review
-    /// was submitted at, which its reviews and its merge start on. What finished items or heads
+    /// finished (the holder's, and the others' to keep apart), the commit an item in review
+    /// was submitted at, which its reviews and its merge start on, and the tip of the target. What finished items or heads
     /// rewritten away once named, or verdicts on them, is not here: no device is asked for it.
     pub fn named_commits(&self) -> Vec<NamedCommit> {
         let Some(policy) = self.policy().map(|document| &document.policy) else {
@@ -89,9 +90,9 @@ impl State {
             for head in heads.holder.iter().chain(&heads.others) {
                 named.push(NamedCommit {
                     commit: head.commit,
-                    item: heads.item,
                     author: head.device,
                     naming: Naming::Head {
+                        item: heads.item,
                         session: head.session,
                     },
                 });
@@ -109,11 +110,17 @@ impl State {
             {
                 named.push(NamedCommit {
                     commit,
-                    item: id,
                     author: session.device(),
-                    naming: Naming::Submitted,
+                    naming: Naming::Submitted { item: id },
                 });
             }
+        }
+        if let Some(tip) = self.target_tip() {
+            named.push(NamedCommit {
+                commit: tip.commit,
+                author: tip.device,
+                naming: Naming::Target,
+            });
         }
         named
     }
@@ -151,9 +158,7 @@ impl State {
                     })
                     .collect();
                 let merged = holder.is_some_and(|holder| {
-                    item.merges()
-                        .values()
-                        .any(|merge| merge.reviewed == holder.commit)
+                    item.merges().any(|merge| merge.reviewed == holder.commit)
                 });
                 ItemHeads {
                     item: id,

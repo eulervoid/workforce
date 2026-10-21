@@ -156,11 +156,7 @@ impl MergePlan {
     pub fn of(item: &Item, policy: &Policy, commit: CommitId) -> MergePlan {
         if item.state(policy) == ItemState::Done {
             MergePlan::Nothing
-        } else if item
-            .merges()
-            .values()
-            .any(|merged| merged.reviewed == commit)
-        {
+        } else if item.merges().any(|merged| merged.reviewed == commit) {
             MergePlan::MoveToDone
         } else {
             MergePlan::Merge

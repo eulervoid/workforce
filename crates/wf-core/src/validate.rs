@@ -494,6 +494,8 @@ impl State {
             | EventBody::SessionEnded(_)
             | EventBody::Reviewed(_)
             | EventBody::Merged(_)
+            | EventBody::TargetMoved(_)
+            | EventBody::MergeClaimed(_)
             | EventBody::Unknown { .. } => self.check_author(event)?,
         }
         self.check_body(event, trust)?;
@@ -695,7 +697,9 @@ impl State {
                 }
             }
             EventBody::Reviewed(crate::event::Reviewed { item, .. })
-            | EventBody::Merged(crate::event::Merged { item, .. }) => known_item(item),
+            | EventBody::Merged(crate::event::Merged { item, .. })
+            | EventBody::MergeClaimed(crate::event::MergeClaimed { item, .. }) => known_item(item),
+            EventBody::TargetMoved(_) => Ok(()),
             EventBody::ItemEdited(ItemEdited { item, .. })
             | EventBody::ItemMoved(ItemMoved { item, .. })
             | EventBody::ItemArchived(crate::event::ItemRef { item })
@@ -900,6 +904,8 @@ impl State {
                 | EventBody::SessionEnded(_)
                 | EventBody::Reviewed(_)
                 | EventBody::Merged(_)
+                | EventBody::TargetMoved(_)
+                | EventBody::MergeClaimed(_)
                 | EventBody::Unknown { .. } => Ok(()),
             };
         };
@@ -936,7 +942,9 @@ impl State {
             | EventBody::DeviceBound(_)
             | EventBody::ForkAnnounced(_)
             | EventBody::SessionStarted(_)
-            | EventBody::Merged(_) => Err(PolicyViolation::AgentCannotWrite(body.name())),
+            | EventBody::Merged(_)
+            | EventBody::TargetMoved(_)
+            | EventBody::MergeClaimed(_) => Err(PolicyViolation::AgentCannotWrite(body.name())),
             EventBody::SessionEnded(ended) if ended.session != *session => {
                 Err(PolicyViolation::SessionEndsAnother)
             }
@@ -1165,7 +1173,9 @@ impl State {
             | EventBody::DeviceProfile(_)
             | EventBody::ForkAnnounced(_)
             | EventBody::SessionStarted(_)
-            | EventBody::Merged(_) => Ok(()),
+            | EventBody::Merged(_)
+            | EventBody::TargetMoved(_)
+            | EventBody::MergeClaimed(_) => Ok(()),
             EventBody::SessionEnded(ended) => {
                 let submitted = matches!(ended.reason, crate::session::EndReason::Submitted);
                 let item = workforce

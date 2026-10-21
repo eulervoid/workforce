@@ -272,7 +272,10 @@ impl Daemon {
             MergeMode::Local => policy.merge.checks.as_slice(),
         };
         let mut outcome = MergeOutcome::TargetMoved;
+        // The tip the merge moved the target from; none for work found landed already.
+        let mut onto = None;
         for _ in 0..MERGE_ATTEMPTS {
+            onto = None;
             let made = {
                 let (repository, target) = (repository.clone(), target.clone());
                 blocking(move || GitCli::open(&repository)?.merge_tree(&target, commit))
@@ -290,6 +293,7 @@ impl Daemon {
                 MergeTree::Landed { commit } => MergeOutcome::Merged { commit },
                 MergeTree::Conflict { paths } => MergeOutcome::Conflict { paths },
                 MergeTree::Clean { base, tree } => {
+                    onto = Some(base);
                     let failed = match self
                         .check_merge(
                             workforce,
@@ -347,6 +351,7 @@ impl Daemon {
                         item,
                         reviewed: commit,
                         commit: merged,
+                        onto,
                     }),
                 )
                 .await?;

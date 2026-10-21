@@ -15,6 +15,7 @@ use crate::name::{AgentName, Handle, HarnessName, LaneName, Requirement};
 use crate::policy::{DEFAULT_POLICY_TOML, Policy, PolicyError};
 use crate::session::{Session, SessionRole};
 use crate::sync::{FeedVersion, Versions};
+use crate::target::TargetMove;
 use crate::validate::Invalid;
 
 /// Events that wait for missing parents are capped so a malformed `deps` cannot grow memory forever.
@@ -294,6 +295,11 @@ pub(crate) struct Workforce {
     pub(crate) sessions: BTreeMap<SessionId, Session>,
     /// The ids of the sessions of each item, kept by the fold next to `sessions`.
     pub(crate) sessions_by_item: BTreeMap<ItemId, BTreeSet<SessionId>>,
+    /// Every move of the target branch that names the tip it moved from.
+    pub(crate) target_moves: BTreeMap<EventId, TargetMove>,
+    /// The moves of the target's chain, oldest first, made again by the fold from
+    /// `target_moves` whenever one is added.
+    pub(crate) target_chain: Vec<EventId>,
 }
 
 impl Workforce {

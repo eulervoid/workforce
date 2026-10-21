@@ -154,7 +154,7 @@ impl Simulation {
             "cancelled",
         ];
         let label = Label::new(format!("l{}", second % 3)).unwrap();
-        match (operation % 20, item) {
+        match (operation % 22, item) {
             (0 | 1, _) => {
                 let kind = types[usize::from(first) % types.len()];
                 let body = match other {
@@ -476,6 +476,28 @@ impl Simulation {
                         .bind(&self.replicas[device], joiner, invite, secret, now_ms);
                 self.receive_unchecked(device, bound);
             }
+            (20, _) => {
+                // A move of the target onto what this replica thinks its tip is, or onto an
+                // older one: concurrent moves fork, and a few go round in a circle.
+                let onto = match (second % 3, self.replicas[device].target()) {
+                    (0, _) | (_, None) => commit(10 + first % 4),
+                    (_, Some(tip)) => tip,
+                };
+                // Tips the log never moves to, where chains start, and commits moves make.
+                let moved_to = commit(20 + (first ^ second) % 40);
+                let daemon = Actor::Daemon(self.fixture.founder.key());
+                let body = match item {
+                    Some(item) if first % 2 == 0 => {
+                        merged_onto(item, commit(second % 2), moved_to, onto)
+                    }
+                    Some(_) | None => target_moved(moved_to, onto),
+                };
+                self.submit_event_as(device, daemon, body);
+            }
+            (21, Some(item)) => {
+                let daemon = Actor::Daemon(self.fixture.founder.key());
+                self.submit_event_as(device, daemon, merge_claimed(item, commit(second % 2)));
+            }
             _ => {}
         }
         if operation % 16 == 15 {
@@ -578,6 +600,7 @@ proptest! {
         }
 
         // The derived views agree as well.
+        prop_assert_eq!(reference.target(), simulation.replicas[1].target());
         let graph = reference.dependency_graph();
         let other = simulation.replicas[1].dependency_graph();
         prop_assert_eq!(graph.ignored(), other.ignored());
@@ -682,6 +705,15 @@ fn the_generator_exercises_real_histories() {
     let bindings = count(|body| matches!(body, EventBody::DeviceBound(_)));
     let submissions = count(
         |body| matches!(body, EventBody::SessionEnded(ended) if matches!(ended.reason, EndReason::Submitted)),
+    );
+    let lost_moves = state
+        .target_moves()
+        .filter(|step| state.move_lost(step.event()))
+        .count();
+    let claims = count(|body| matches!(body, EventBody::MergeClaimed(_)));
+    assert!(
+        state.target().is_some() && lost_moves > 0 && claims > 0,
+        "{lost_moves} lost moves, {claims} merge claims"
     );
     let heads = count(|body| {
         matches!(

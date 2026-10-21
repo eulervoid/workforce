@@ -79,7 +79,7 @@ impl State {
                 stats.done_lately += 1;
                 leads.extend(self.lead_ms(item, policy));
             }
-            if !item.merges().is_empty() {
+            if item.merges().next().is_some() {
                 stats.merged += 1;
                 stats.change_requests += item
                     .comments()
