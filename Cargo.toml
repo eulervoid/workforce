@@ -1,6 +1,7 @@
 [workspace]
 resolver = "3"
 members = ["crates/*"]
+exclude = ["vendor"]
 
 [workspace.package]
 version = "0.0.0"
@@ -51,3 +52,7 @@ debug = "line-tables-only"
 # A new variant of an enum we own must fail to compile where it needs handling. Matches on
 # enums of other crates carry an `#[expect]` saying why a wildcard is right there.
 wildcard_enum_match_arm = "warn"
+
+# A copy of an upstream crate with one change; vendor/README.md says which and why.
+[patch.crates-io]
+netwatch = { path = "vendor/netwatch" }

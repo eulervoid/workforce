@@ -130,9 +130,6 @@ async fn eventually(what: &str, mut check: impl FnMut() -> bool) {
 // Multi-threaded: the daemons serve on the runtime while the test waits on them.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_head_named_on_one_device_is_fetched_by_the_other_over_wf_git() {
-    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
-        return;
-    }
     let fixture = Fixture::new(2);
     let workforce = fixture.workforce();
     let laptop = within("starting the laptop", Device::start(&fixture, 0)).await;

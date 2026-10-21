@@ -1476,7 +1476,9 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
 * **Network:** model APIs, git hosts and package registries, plus `allow_domains`; cloud metadata and
   telemetry are denied. Local binding and outbound connections to local ports stay allowed, as
   tests bind and reach local ports; a local service that trusts any local caller is reachable from
-  the sandbox.
+  the sandbox. The macOS routing socket (`AF_ROUTE`), which iroh opens to watch network changes, is
+  denied; a patched netwatch (`vendor/`) lets iroh run without watching then, so the two-daemon
+  tests run in Fence like every other. What still cannot run in Fence is starting Fence itself.
 * **Commands denied:** pushing and merging with git (`reset`, `clean`, `checkout --` and `rebase` only change the agent's own repository), publishing packages, `sudo`,
   and `gh` commands that change anything.
 * **Always denied, whatever the config adds:**

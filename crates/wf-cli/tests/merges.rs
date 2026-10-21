@@ -296,9 +296,6 @@ fn merged(state: &State, item: ItemId) -> bool {
 // Multi-threaded: the daemons serve on the runtime while the test waits on them.
 #[tokio::test(flavor = "multi_thread")]
 async fn two_devices_that_reach_each_other_merge_an_item_once_by_the_earliest_claim() {
-    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
-        return;
-    }
     let fixture = Fixture::new(2);
     let checks = TempDir::new().unwrap();
     let runs = checks.path().canonicalize().unwrap().join("runs.txt");
@@ -377,9 +374,6 @@ async fn two_devices_that_reach_each_other_merge_an_item_once_by_the_earliest_cl
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_fork_made_while_cut_off_resolves_and_the_lost_merge_runs_again_on_the_winner() {
-    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
-        return;
-    }
     let fixture = Fixture::new(2);
     let principal = fixture.founder.key();
     let checks = TempDir::new().unwrap();

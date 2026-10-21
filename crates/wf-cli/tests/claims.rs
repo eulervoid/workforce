@@ -377,9 +377,6 @@ async fn a_takeover_whose_start_fails_leaves_the_item_open_for_the_next_start() 
 
 #[tokio::test(flavor = "multi_thread")]
 async fn two_devices_that_claim_one_item_before_they_sync_end_the_later_session_outclaimed() {
-    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
-        return;
-    }
     let fixture = Fixture::new(2);
     let workforce = fixture.workforce();
     let (events, item) = workforce_with_a_task(&fixture);
@@ -430,9 +427,6 @@ async fn two_devices_that_claim_one_item_before_they_sync_end_the_later_session_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn a_silent_device_is_taken_over_after_the_lease_and_stops_its_session_when_it_hears() {
-    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
-        return;
-    }
     let fixture = Fixture::new(2);
     let workforce = fixture.workforce();
     let (events, item) = workforce_with_a_task(&fixture);
@@ -573,9 +567,6 @@ async fn the_device_ranked_second_waits_until_it_hears_from_the_first_and_takes_
 
 #[tokio::test(flavor = "multi_thread")]
 async fn of_two_devices_that_could_start_an_item_the_first_by_rank_does_and_the_other_does_not() {
-    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
-        return;
-    }
     let fixture = Fixture::new(2);
     let workforce = fixture.workforce();
     let (events, item, [first, second]) = workforce_with_an_auto_agent(&fixture);
