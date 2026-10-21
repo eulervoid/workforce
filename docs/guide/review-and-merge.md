@@ -164,6 +164,11 @@ No warning is shown with `--json` or inside a session.
 
 Work on an item whose level has no steps is merged as soon as the session submits.
 
+With several machines, the first to claim an item's merge makes it, among those that meet the
+policy's `[merge] requires` and have the approved commit; another takes over only once it is gone. See
+[machines.md](machines.md#the-target-across-devices) for what happens when machines that cannot
+reach each other move `main` at once.
+
 Two things can hold a merge: the checks, below, and this:
 
 * **A conflict.** The daemon comments `Merging into main conflicts in src/parse.rs. The next session

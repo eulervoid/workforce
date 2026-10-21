@@ -78,6 +78,21 @@ that named it and since when, and asked for again every few minutes. When two se
 later one lost the claim, its commits are kept under `refs/wf/diverged/<session>` in wf's
 repository, and the brief of the next session on the item names them.
 
+## The target across devices
+
+Each move of the target is in the log: a merge, and a push of yours to `wf`, which the daemon of
+that machine notices within seconds. Every machine moves its `main` in wf's repository to the last
+move the log names, so a merge made on one machine is in the others' `main` once its commit arrives.
+
+Machines that cannot reach each other can both move `main` from the same commit. When they meet, the
+earlier move wins on every machine, and the other machine puts its `main` back on the winner:
+
+* **A merge that lost** goes back to review, with a comment from `@daemon`, and is merged again on
+  the new `main`, checks included.
+* **A push of yours that lost** waits in `wf inbox` as `lost_push`, and on the dashboard: rebase onto
+  `main` with `git pull --rebase` and push again. The same happens to a push on top of a merge you
+  pulled before it lost.
+
 ## Syncing
 
 With the daemon running, devices find each other and exchange events by themselves. Without one:
