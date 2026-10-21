@@ -1,10 +1,10 @@
 //! The target branch as a chain in the log. Every move of it names the tip it moved from: a
 //! `Merged` with `onto`, or a `TargetMoved` a daemon wrote for a push of the principal. Two moves
 //! onto the same tip of the chain are a fork, and the earliest by `(hlc, EventId)` wins on every
-//! device; the target is the end of the chain of winners. The chain starts at the earliest move, whose `onto`
-//! no earlier move made: the tip the target had before the log named one. At each tip it goes on
-//! with the earliest later move onto it, so a move made from a commit before the chain came back
-//! to it is no fork, and moves that go round in a circle are followed round it.
+//! device; the target is the end of the chain of winners. The chain starts at the earliest move,
+//! whose `onto` no earlier move made: the tip the target had before the log named one. At each
+//! tip it goes on with the earliest later move onto it, so a move made from a commit before the
+//! chain came back to it is no fork, and moves that go round in a circle are followed round it.
 
 use std::collections::BTreeMap;
 
