@@ -8,6 +8,7 @@
 //! - `sh <command>`: runs the command with `sh -c` in the directory of the session.
 //! - `wf <args>`: runs `$WF_BIN` with the arguments; double quotes group words.
 //! - `tool <title>`: announces a tool call.
+//! - `commands`: tells the commands it offers, an update about the session and not the turn.
 //! - `permission`: asks for a permission and says what the answer was. A cancel while it waits
 //!   ends the turn once the request is answered, and so does a request answered `cancelled`.
 //! - `permission <command>`: asks to run the command.
@@ -74,6 +75,18 @@ fn tool_call(title: &str) {
             "toolCallId": "call-1",
             "title": title,
             "status": "pending",
+        }},
+    }));
+}
+
+/// The commands the agent offers, which it tells when it likes.
+fn available_commands() {
+    send(json!({
+        "jsonrpc": "2.0",
+        "method": "session/update",
+        "params": {"sessionId": "fake", "update": {
+            "sessionUpdate": "available_commands_update",
+            "availableCommands": [{"name": "review", "description": "Reviews the changes"}],
         }},
     }));
 }
@@ -245,6 +258,7 @@ fn main() {
                     match name {
                         "say" => say(rest),
                         "tool" => tool_call(rest),
+                        "commands" => available_commands(),
                         "silent" => continue 'requests,
                         "sh" => {
                             let status = Command::new("sh")

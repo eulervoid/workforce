@@ -401,6 +401,11 @@ async fn a_prompt_is_accepted_once_the_agent_takes_it_up() {
         *accepted.borrow()
     }
     assert_eq!(accepted("silent").await, 0, "sent, but never taken up");
+    assert_eq!(
+        accepted("commands\nsilent").await,
+        0,
+        "an update about the session is not about the prompt"
+    );
     assert_eq!(accepted("say on it\nsilent").await, 1);
 }
 

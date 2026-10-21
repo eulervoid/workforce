@@ -248,6 +248,21 @@ fn spawned(agent: AcpAgentConfig) -> AcpAgent {
     }
 }
 
+/// Whether `update` is the agent working on the prompt, so that it read it. Updates about the
+/// session (its commands, mode, options, title, usage) come when the agent likes, also before it
+/// read a prompt that was sent; so does a notice or a compaction.
+fn works_on_the_turn(update: &SessionUpdate) -> bool {
+    matches!(
+        update,
+        SessionUpdate::UserMessageChunk(_)
+            | SessionUpdate::AgentMessageChunk(_)
+            | SessionUpdate::AgentThoughtChunk(_)
+            | SessionUpdate::ToolCall(_)
+            | SessionUpdate::ToolCallUpdate(_)
+            | SessionUpdate::Plan(_)
+    )
+}
+
 /// Closes every descriptor above stderr, then runs its arguments in its place.
 const CLOSE_INHERITED: &str = r#"for path in /dev/fd/*; do
     descriptor=${path##*/}
@@ -421,7 +436,7 @@ impl Conversation {
         let said = Arc::new(Mutex::new(String::new()));
         let chunks = Arc::clone(&said);
         // Whether the prompt of the turn that runs was sent and not accepted yet: the agent
-        // accepts it with its first update in the turn, or with its answer.
+        // accepts it with its first update that works on the turn, or with its answer.
         let unaccepted = Arc::new(AtomicBool::new(false));
         let accepting = Arc::clone(&unaccepted);
         let (accepted, _) = watch::channel(0u64);
@@ -435,6 +450,7 @@ impl Conversation {
                 .on_receive_notification(
                     async move |notification: SessionNotification, _connection| {
                         if !unheard.load(Ordering::SeqCst)
+                            && works_on_the_turn(&notification.update)
                             && accepting.swap(false, Ordering::SeqCst)
                         {
                             acceptor.send_modify(|turns| *turns += 1);
@@ -696,9 +712,9 @@ impl Conversation {
         CancelHandle(Arc::clone(&self.cancel))
     }
 
-    /// Counts the turns whose prompt the agent accepted: it took it up with its first update in
-    /// the turn, or answered it. A prompt that is sent is not yet accepted, as the agent may never
-    /// read it.
+    /// Counts the turns whose prompt the agent accepted: it took it up with its first update that
+    /// works on the turn, or answered it. A prompt that is sent is not yet accepted, as the agent
+    /// may never read it.
     pub fn accepted(&self) -> watch::Receiver<u64> {
         self.accepted.subscribe()
     }

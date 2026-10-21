@@ -802,8 +802,10 @@ the daemon sends it and adds it to the told ones.
 
 **What was told** is kept by the device running the session, in the session's resume record beside
 its transcript (section 4), never in the log: only that device prompts the session. What a prompt
-tells is written once the agent accepted the prompt, with its first update in the turn or its
-answer, not when it is sent: a crash in between tells those comments again on the resume rather
+tells is written once the agent accepted the prompt, with its first update in the turn that works on
+it (a message, a thought, a tool call, a plan) or its answer, not when it is sent. An update about
+the session (its commands, mode, title or usage) does not count, as an agent sends those when it
+likes, also before it read the prompt. A crash in between tells those comments again on the resume rather
 than never. A lost comment is the worse failure, as it is often a change of plan or an answer and
 nothing shows it was lost; one told twice is harmless to an agent. A record from before this,
 without the told comments, counts as told every comment for the session written before its last
