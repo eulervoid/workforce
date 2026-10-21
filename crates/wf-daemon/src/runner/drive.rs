@@ -51,8 +51,11 @@ pub(super) async fn run_session(
     if let Some(((started_ms, ended_ms), spared)) = ended {
         // The harness's process group is gone with it; what left the group is not, and nothing
         // may run on for a session that ended, or write into its directory.
-        let place =
-            crate::processes::Place::new(&run.directory, at_ms(started_ms), Some(at_ms(ended_ms)));
+        let place = crate::processes::Place::session(
+            &run.directory,
+            at_ms(started_ms),
+            Some(at_ms(ended_ms)),
+        );
         crate::processes::stop_session(run.workforce, run.session, place, spared).await;
         daemon
             .discard_session_directory(run.workforce, run.item, run.session, run.role)
