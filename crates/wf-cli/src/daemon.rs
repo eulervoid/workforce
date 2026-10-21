@@ -208,6 +208,7 @@ fn run(json: bool, args: DaemonArgs, data: DataDir) -> anyhow::Result<()> {
         .with_ansi(std::io::IsTerminal::is_terminal(&std::io::stderr()))
         .init();
     let mut panics = wf_daemon::watch_panics();
+    wf_daemon::raise_open_file_limit();
 
     let device = data
         .device()?

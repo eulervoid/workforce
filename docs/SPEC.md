@@ -94,6 +94,10 @@ daemon answers `Call::Events { from }` with a page of the log from a position, w
 polls with. *Planned:* when folding the whole `State` grows too slow, a local fold cache on top of
 it, or a subscription.
 
+**The daemon raises its open-file limit as it starts**: the soft `RLIMIT_NOFILE` goes up to the
+hard limit, at most 65536 (and on macOS `kern.maxfilesperproc`), so its sessions, checks and
+harnesses inherit it rather than the 256 a macOS terminal gives; it logs a warning if it cannot.
+
 ### Files
 
 `<data>` is `$XDG_DATA_HOME/workforce` (`~/.local/share/workforce`); `<wf>` is `<data>/<workforce id>`.
