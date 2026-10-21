@@ -3,6 +3,7 @@
 
 mod brief;
 mod check;
+mod check_turns;
 mod claims;
 mod dispatch;
 mod drive;
@@ -15,6 +16,7 @@ mod start;
 mod submit;
 mod target;
 
+pub(crate) use check_turns::CheckTurns;
 pub(crate) use dispatch::run_dispatcher;
 pub(crate) use merge::{MergeQueue, run_merger};
 pub use resume::session_model;

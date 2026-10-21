@@ -1052,7 +1052,9 @@ agents' environment without `CARGO_TARGET_DIR` (a shared target could give a fal
 git config with signing off, and a sandbox of the machine config (section 13). Each run's output stays
 in `check-logs/<name>/`. A pass is kept per tree, command and sandbox on this machine, so a check does
 not run twice on the same tree in the same sandbox. Runs of one workforce take turns in the check
-worktree.
+worktree: a waiting merge goes before a waiting submission, since its work is approved and every merge
+moves the target under the merges behind it; merges keep the merge queue's order, submissions the
+order they came in.
 
 * **At submission.** After the submit rebase the daemon builds the merge of the branch into the target
   and runs the checks on it in `[sandbox]` (every agent's sandbox without what `[agent.<name>]`
