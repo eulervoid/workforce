@@ -1457,8 +1457,9 @@ An agent's environment is only: what wf sets (`WF_SESSION`, `WF_SESSION_TOKEN`, 
 `PATH` with `<data>/bin` first, `GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, signing through
 `GIT_CONFIG_*`, and `CARGO_HOME` in Fence); what every program expects (`HOME`, `USER`, `LOGNAME`,
 `SHELL`, `TMPDIR`, `LANG`, `LC_*`, `XDG_*_HOME`); and what the machine config inherits or sets, for
-all agents or one (the agent's value wins). wf's own variables cannot be set there. A variable allows
-nothing in the sandbox by itself: a directory to write to also goes in `allow_write`.
+all agents or one (the agent's value wins). wf's own variables cannot be set or inherited there,
+`CARGO_HOME` included when agents or checks run in Fence. A variable allows nothing in the sandbox
+by itself: a directory to write to also goes in `allow_write`.
 
 ### Planned: secrets and transcripts (M3, M7)
 

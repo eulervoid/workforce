@@ -80,7 +80,8 @@ each permission request goes through the deciders and then to you. `allow_write`
 
 Agents do not get the daemon's environment. They get:
 
-* what wf sets: `WF_SESSION`, `WF_WORKFORCE`, `PATH` and their git identity;
+* what wf sets: `WF_SESSION`, `WF_WORKFORCE`, `PATH`, their git identity and, in Fence,
+  `CARGO_HOME`;
 * what every program expects: `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `LC_ALL`,
   `LC_CTYPE` and the `XDG_*_HOME` directories;
 * what the machine config names.
@@ -96,7 +97,8 @@ set = { CARGO_TARGET_DIR = "~/.cache/workforce/target" }
 Values under `set` are expanded when the config is read: `~`, `$NAME` and `${NAME}` come from the
 daemon's environment, and `$$` is a literal `$`. A variable that is not set is an error. A relative
 path is relative to the agent's directory, its repository. wf's own variables (`PATH`, `WF_*`,
-`GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, `GIT_CONFIG_*`) cannot be set here.
+`GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, `GIT_CONFIG_*`, and `CARGO_HOME` when agents or checks run
+in Fence) cannot be set or inherited here.
 
 Setting a variable allows nothing by itself: a directory an agent is to write to goes in
 `allow_write` as well.

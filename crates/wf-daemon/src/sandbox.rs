@@ -74,7 +74,8 @@ pub(crate) fn wrap(
         .env(CARGO_HOME, cargo_home.to_string_lossy()))
 }
 
-const CARGO_HOME: &str = "CARGO_HOME";
+/// Set by wf in Fence, so the machine config must not set or inherit it there.
+pub(crate) const CARGO_HOME: &str = "CARGO_HOME";
 
 /// The sandbox profile Fence runs the agent with.
 fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
