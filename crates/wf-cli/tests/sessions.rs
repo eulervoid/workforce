@@ -101,6 +101,22 @@ impl World {
         self.shutdown = Some(shutdown);
     }
 
+    /// Stops the daemon as `wf daemon stop` does, leaving its sessions live.
+    async fn halt(&mut self) {
+        if let Some(shutdown) = self.shutdown.take() {
+            let _ = shutdown.send(());
+        }
+        self.daemon.halt().await;
+    }
+
+    /// Starts a daemon on the same data again, after [`World::halt`].
+    async fn start_again(&mut self) {
+        let (daemon, shutdown) =
+            start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
+        self.daemon = daemon;
+        self.shutdown = Some(shutdown);
+    }
+
     /// wf's bare repository of the workforce, where the daemon merges.
     fn bare(&self) -> PathBuf {
         let (_, workforce) = wf_cli::workspace::find_workforce(&self.wf.repository).unwrap();
@@ -1458,6 +1474,12 @@ sh \"$WF_BIN\" work submit && sleep 1
 
 /// The record the daemon keeps of the one session's agent, somewhere under `data`.
 fn agent_session_record(data: &Path) -> Value {
+    let path = agent_session_record_path(data);
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+}
+
+/// Where the only session's record is kept, beside its transcript.
+fn agent_session_record_path(data: &Path) -> PathBuf {
     fn find(directory: &Path) -> Option<PathBuf> {
         for entry in std::fs::read_dir(directory).ok()?.flatten() {
             let path = entry.path();
@@ -1471,8 +1493,7 @@ fn agent_session_record(data: &Path) -> Value {
         }
         None
     }
-    let path = find(data).expect("a session record");
-    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
+    find(data).expect("a session record")
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -4175,6 +4196,195 @@ wf work release --note \"not yet\"
     world
         .wait("the work to start again", |world| {
             world.sessions().len() == 2
+        })
+        .await;
+}
+
+/// Starts `/usr/bin/yes` as a daemon does, by a double fork out of the session's process group
+/// and session, so that `launchd` or init adopts it, and writes its pid to the file it is given.
+/// macOS hides the environment of its own programs, such as `yes`.
+const DAEMONIZE_YES: &str = "use POSIX; exit if fork; POSIX::setsid(); exit if fork;
+select undef, undef, undef, 0.01 while getppid() != 1;
+open F, '>', \"$ARGV[0].written\"; print F $$; close F; rename \"$ARGV[0].written\", $ARGV[0];
+open STDIN, '<', '/dev/null'; open STDOUT, '>', '/dev/null'; open STDERR, '>', '/dev/null';
+exec '/usr/bin/yes';
+";
+
+/// The orphans a test's sessions started, by the files they wrote their pids to. Each keeps a core
+/// busy, so whatever runs of them when the test ends is killed.
+struct Orphans {
+    directory: PathBuf,
+}
+
+impl Orphans {
+    fn new(world: &World) -> Self {
+        let directory = world.wf.root.path().join("orphans");
+        std::fs::create_dir_all(&directory).unwrap();
+        std::fs::write(directory.join("daemonize.pl"), DAEMONIZE_YES).unwrap();
+        Self { directory }
+    }
+
+    /// The script line that orphans `yes` named `name`, from the directory `cd` goes to, if any.
+    fn line(&self, name: &str, cd: Option<&Path>) -> String {
+        let start = format!(
+            "perl {} {}",
+            self.directory.join("daemonize.pl").display(),
+            self.directory.join(format!("{name}.pid")).display()
+        );
+        match cd {
+            Some(directory) => format!("sh cd {} && {start}\n", directory.display()),
+            None => format!("sh {start}\n"),
+        }
+    }
+
+    /// The pid of the orphan named `name`, once it runs.
+    async fn pid(&self, world: &World, name: &str) -> i32 {
+        let file = self.directory.join(format!("{name}.pid"));
+        world
+            .wait(&format!("{name} to run"), |_| file.is_file())
+            .await;
+        std::fs::read_to_string(&file)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap()
+    }
+}
+
+impl Drop for Orphans {
+    fn drop(&mut self) {
+        for entry in std::fs::read_dir(&self.directory).into_iter().flatten() {
+            let path = entry.unwrap().path();
+            if path.extension().is_some_and(|extension| extension == "pid")
+                && let Ok(pid) = std::fs::read_to_string(&path).unwrap().trim().parse()
+            {
+                // SAFETY: a signal to a pid touches no memory of this process.
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+    }
+}
+
+/// Whether `pid` runs, given a moment to be reaped by `launchd` or init once it ended.
+async fn running(pid: i32) -> bool {
+    for _ in 0..100 {
+        // SAFETY: signal 0 only asks whether the process is there.
+        if unsafe { libc::kill(pid, 0) } != 0 {
+            return false;
+        }
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+    true
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions() {
+    let mut world = World::agents(&[("coder", ""), ("keeper", "")]).await;
+    let orphans = Orphans::new(&world);
+    let outside = world.wf.root.path().join("outside");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(
+        &world.scripts["fake-keeper"],
+        // A second hang for the resume after the restart.
+        format!("{}hang\nhang\n", orphans.line("kept", None)),
+    )
+    .unwrap();
+    std::fs::write(
+        &world.scripts["fake-coder"],
+        format!(
+            "{}{}wf work release --note done\n",
+            orphans.line("inside", None),
+            orphans.line("outside", Some(&outside)),
+        ),
+    )
+    .unwrap();
+    let kept_item = world.wf.add(&["--title", "Keeps running"]);
+    world
+        .wf
+        .run(&["session", "start", short(&kept_item), "--agent", "keeper"]);
+    let kept = orphans.pid(&world, "kept").await;
+
+    let item = world.wf.add(&["--title", "Leaves yes running"]);
+    start_session(&world, &item);
+    let (inside, outside) = (
+        orphans.pid(&world, "inside").await,
+        orphans.pid(&world, "outside").await,
+    );
+    world
+        .wait("the session to be released", |world| {
+            statuses(world)
+                .iter()
+                .any(|status| status.ends_with("released"))
+        })
+        .await;
+    world
+        .wait("the orphan in its directory to be stopped", |_| {
+            // SAFETY: signal 0 only asks whether the process is there.
+            unsafe { libc::kill(inside, 0) != 0 }
+        })
+        .await;
+    world
+        .wait("the daemon to say what it stopped", |world| {
+            world.log.contains("stopped 1 process it left running")
+        })
+        .await;
+    assert!(running(kept).await, "a live session keeps its orphan");
+    // On Linux every process shows its environment, and the orphan carries the session's mark
+    // wherever it runs; on macOS that of `yes` is hidden, and it is the session's only where the
+    // session runs.
+    assert_eq!(
+        running(outside).await,
+        cfg!(target_os = "macos"),
+        "an orphan of an Apple program outside the session's directory"
+    );
+
+    world.restart().await;
+    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    assert!(running(kept).await, "a resumed session keeps its orphan");
+    let live = world
+        .sessions()
+        .into_iter()
+        .find(|session| session["status"] == "live")
+        .unwrap();
+    world
+        .wf
+        .run(&["session", "stop", short(live["id"].as_str().unwrap())]);
+    world
+        .wait("the stopped session's orphan to be stopped", |_| {
+            // SAFETY: signal 0 only asks whether the process is there.
+            unsafe { libc::kill(kept, 0) != 0 }
+        })
+        .await;
+    drop(world);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_starting_daemon_stops_what_a_session_that_ended_meanwhile_left_running() {
+    let mut world = World::new("").await;
+    let orphans = Orphans::new(&world);
+    std::fs::write(
+        &world.scripts["fake-coder"],
+        format!("{}hang\n", orphans.line("left", None)),
+    )
+    .unwrap();
+    let item = world.wf.add(&["--title", "Ends as the next daemon starts"]);
+    start_session(&world, &item);
+    let left = orphans.pid(&world, "left").await;
+    world.halt().await;
+    assert!(running(left).await, "a session left live keeps its orphan");
+    // Without its record the next daemon cannot resume the session, and ends it as it starts.
+    std::fs::remove_file(agent_session_record_path(&world.wf.data)).unwrap();
+    world.start_again().await;
+    world.sessions_ended(&["coder interrupted"]).await;
+    world
+        .wait("the ended session's orphan to be stopped", |_| {
+            // SAFETY: signal 0 only asks whether the process is there.
+            unsafe { libc::kill(left, 0) != 0 }
+        })
+        .await;
+    world
+        .wait("the daemon to say what it stopped", |world| {
+            world.log.contains("stopped 1 process it left running")
         })
         .await;
 }

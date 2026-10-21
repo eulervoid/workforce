@@ -209,6 +209,11 @@ impl DaemonLog {
             .into()
     }
 
+    /// Whether any of it holds `text`.
+    pub fn contains(&self, text: &str) -> bool {
+        String::from_utf8_lossy(&self.0.lock().unwrap()).contains(text)
+    }
+
     /// The last `lines` lines.
     pub fn tail(&self, lines: usize) -> String {
         let text = String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned();
