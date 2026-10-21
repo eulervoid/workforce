@@ -523,6 +523,13 @@ pub(crate) mod testing {
             std::thread::sleep(Duration::from_millis(100));
             orphan
         }
+
+        /// Asserts that it ended, and forgets it, so that the drop does not kill a process that
+        /// was given its pid since.
+        pub(crate) fn assert_ended(self) {
+            assert!(!running(self.0), "the orphan {} runs on", self.0);
+            std::mem::forget(self);
+        }
     }
 
     impl Drop for OrphanedSleep {
@@ -595,7 +602,7 @@ mod tests {
         let escaped = daemonized(&mark.variables(), directory.path());
         let others = daemonized(&other.variables(), directory.path());
         let mut unmarked = Command::new("sleep")
-            .arg("600")
+            .arg("120")
             .stdin(Stdio::null())
             .spawn()
             .unwrap();
@@ -792,7 +799,7 @@ mod tests {
         let unmarked = daemonized_in(&inside);
 
         assert_eq!(stop(owner).await, stopped(1));
-        assert!(!running(orphan.0));
+        orphan.assert_ended();
         assert!(running(before.0), "an orphan older than its owner runs on");
         assert!(
             running(elsewhere.0),
