@@ -612,7 +612,10 @@ wf work submit --note \"all done\"
     assert!(subject.starts_with("Merge #"), "{subject}");
     assert_eq!(git_in(repository, &["status", "--porcelain"]), "");
     world.no_item_branches().await;
-    assert_eq!(git_in(&world.bare(), &["worktree", "list"]).lines().count(), 1);
+    assert_eq!(
+        git_in(&world.bare(), &["worktree", "list"]).lines().count(),
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
