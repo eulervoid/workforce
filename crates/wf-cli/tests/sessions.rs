@@ -254,6 +254,16 @@ impl World {
         );
     }
 
+    /// Waits until the sessions so far, oldest first, ended as `ended` says, each as [`statuses`]
+    /// has it. A flow of several sessions waits for each in turn, as each is a step of its own.
+    async fn sessions_ended(&self, ended: &[&str]) {
+        self.wait(&format!("the sessions to be {ended:?}"), |world| {
+            let now = statuses(world);
+            now.len() >= ended.len() && now.iter().zip(ended).all(|(now, ended)| now == ended)
+        })
+        .await;
+    }
+
     /// Waits until the only session is not live any more and returns it.
     async fn ended_session(&self) -> Value {
         let deadline = Instant::now() + WAIT_LIMIT;
@@ -1792,6 +1802,11 @@ wf work submit
     let first = world.wf.add(&["--title", "First"]);
     let second = world.wf.add(&["--title", "Second"]);
     world
+        .wait("an item done", |world| {
+            world.item(&first)["state"] == "done" || world.item(&second)["state"] == "done"
+        })
+        .await;
+    world
         .wait("both items done", |world| {
             world.item(&first)["state"] == "done" && world.item(&second)["state"] == "done"
         })
@@ -1860,6 +1875,11 @@ wf work submit
     ]);
     let item = world.wf.add(&["--title", "Parse durations"]);
     world
+        .wait("the answer", |world| {
+            ended_as(world, "supervise", "supervised") == 1
+        })
+        .await;
+    world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
         })
@@ -1903,6 +1923,16 @@ async fn a_diagnosis_comes_before_the_retry_and_the_principal_decides_after() {
     let item = world
         .wf
         .add(&["--title", "Install the parser", "--recovery", "diagnose"]);
+    world
+        .wait("the first release", |world| {
+            ended_as(world, "work", "released") == 1
+        })
+        .await;
+    world
+        .wait("the diagnosis", |world| {
+            ended_as(world, "diagnose", "diagnosed") == 1
+        })
+        .await;
     world
         .wait("the item left to the principal", |world| {
             world
@@ -2058,6 +2088,15 @@ async fn review_world(coder: &str, reviewer: &str) -> World {
     world
 }
 
+/// How many sessions of `role` have `status`.
+fn ended_as(world: &World, role: &str, status: &str) -> usize {
+    world
+        .sessions()
+        .iter()
+        .filter(|session| session["role"] == role && session["status"] == status)
+        .count()
+}
+
 fn statuses(world: &World) -> Vec<String> {
     let mut sessions = world.sessions();
     sessions.reverse();
@@ -2086,6 +2125,10 @@ async fn work_approved_by_a_reviewer_agent_is_merged() {
     )
     .await;
     let item = world.wf.add(&["--title", "Add hello", "--review", "light"]);
+    world.sessions_ended(&["coder submitted"]).await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed"])
+        .await;
     world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
@@ -2127,6 +2170,13 @@ sh if [ -f test.txt ]; then \"$WF_BIN\" review --approve; else \"$WF_BIN\" comme
     let item = world
         .wf
         .add(&["--title", "Add hello", "--review", "standard"]);
+    world.sessions_ended(&["coder submitted"]).await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed"])
+        .await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed", "coder submitted"])
+        .await;
     world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
@@ -2531,6 +2581,7 @@ async fn an_escalated_review_goes_to_the_principal() {
     let item = world
         .wf
         .add(&["--title", "Add hello", "--review", "standard"]);
+    world.sessions_ended(&["coder submitted"]).await;
     world
         .wait("the principal step", |world| {
             world.item(&item)["review_status"]["steps"] == serde_json::json!(["principal"])
@@ -3607,6 +3658,13 @@ turn
     add_checks(&world, &check);
     let item = world.wf.add(&["--title", "Break it again and again"]);
     start_session(&world, &item);
+    for round in 1..=2 {
+        world
+            .wait(&format!("failed run {round} to be told"), |world| {
+                comments_with(world, &item, "change_request", "`unbroken`").len() >= round
+            })
+            .await;
+    }
     world
         .wait("the blocker", |world| {
             !comments_with(world, &item, "blocker", "`unbroken`").is_empty()
