@@ -1012,7 +1012,9 @@ impl GitCli {
 mod tests {
     use super::*;
     use crate::testing::{TestRepository as TestRepo, git_in};
-    use crate::{Import, ImportMode, agent_branch_head, remove_agent_repository};
+    use crate::{
+        Import, ImportMode, agent_branch_head, registered_worktrees, remove_agent_repository,
+    };
 
     impl GitCli {
         /// A rebase without the git config of this process's environment, which a test run in a
@@ -1779,6 +1781,38 @@ mod tests {
         std::fs::write(&elsewhere, format!("{}\n", repo.main())).unwrap();
         std::os::unix::fs::symlink(&elsewhere, &reference).unwrap();
         assert_eq!(agent_branch_head(&path, "wf/k3f9"), None);
+    }
+
+    #[test]
+    fn the_worktrees_an_agent_added_are_read_and_a_forged_entry_is_not() {
+        let repo = TestRepo::new();
+        let (path, _) = agent_repository(&repo);
+        assert_eq!(registered_worktrees(&path), Vec::<PathBuf>::new());
+        let added = repo.root.path().join("compare");
+        git_in(
+            &path,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                "--detach",
+                added.to_str().unwrap(),
+            ],
+        );
+        // Points at a directory that is not a worktree of the repository.
+        let forged = path.join(".git/worktrees/forged");
+        std::fs::create_dir_all(&forged).unwrap();
+        let elsewhere = repo.root.path().join("elsewhere");
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        std::fs::write(
+            forged.join("gitdir"),
+            format!("{}\n", elsewhere.join(".git").display()),
+        )
+        .unwrap();
+        assert_eq!(
+            registered_worktrees(&path),
+            vec![added.canonicalize().unwrap()]
+        );
     }
 
     #[test]

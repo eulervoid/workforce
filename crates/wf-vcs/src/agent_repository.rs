@@ -5,7 +5,7 @@
 //! principal's. What it commits is copied into the principal's repository by the daemon, which
 //! never runs git with the config, hooks or attributes of the agent's repository to do so.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Stdio;
 
 use wf_core::id::ItemId;
@@ -284,6 +284,35 @@ pub fn agent_branch_head(repository: &Path, branch: &str) -> Option<CommitId> {
             .to_string(),
     };
     text.trim().parse::<GitOid>().ok().map(CommitId::Git)
+}
+
+/// The canonical directories of the linked worktrees registered in the repository at
+/// `repository`, as `git worktree add` registers them, read from `.git/worktrees/*/gitdir`
+/// without git. An agent can write anything there: a worktree counts only if its directory is
+/// there and its `.git` file names the entry back, as `git worktree add` leaves it.
+pub fn registered_worktrees(repository: &Path) -> Vec<PathBuf> {
+    let git_directory = repository.join(".git");
+    if !std::fs::symlink_metadata(&git_directory).is_ok_and(|metadata| metadata.is_dir()) {
+        return Vec::new();
+    }
+    let Ok(entries) = std::fs::read_dir(git_directory.join("worktrees")) else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| {
+            let entry = entry.ok()?.path();
+            let dot_git = PathBuf::from(read_regular_file(&entry.join("gitdir"), 4096)?.trim());
+            // Relative with `worktree.useRelativePaths`.
+            let worktree = entry.join(dot_git).parent()?.canonicalize().ok()?;
+            let back = read_regular_file(&worktree.join(".git"), 4096)?;
+            let back = PathBuf::from(back.trim().strip_prefix("gitdir:")?.trim());
+            let names_entry = worktree
+                .join(back)
+                .canonicalize()
+                .is_ok_and(|back| Some(back) == entry.canonicalize().ok());
+            names_entry.then_some(worktree)
+        })
+        .collect()
 }
 
 /// The text of the file at `path`, if it is a regular file (not a link, FIFO or device, which
