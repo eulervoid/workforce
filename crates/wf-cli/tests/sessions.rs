@@ -365,6 +365,29 @@ async fn manual_start_uses_the_policy_agent_unless_overridden() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn adding_an_item_and_starting_a_session_warn_of_commits_wfs_repository_lacks() {
+    let world = World::new("say hello\n").await;
+    let repository = &world.wf.repository;
+    std::fs::write(repository.join("own.txt"), "own\n").unwrap();
+    git_in(repository, &["add", "own.txt"]);
+    git_in(repository, &["commit", "--quiet", "-m", "own"]);
+    let stderr = |args: &[&str]| {
+        let output = common::output(&mut world.wf.command(args));
+        assert!(output.status.success(), "wf {args:?} failed");
+        String::from_utf8(output.stderr).unwrap()
+    };
+    let warning = "warning: main here has 1 commit that wf's repository lacks, and agents start \
+                   from wf's: `git push wf main`\n";
+
+    assert_eq!(stderr(&["item", "add", "--title", "Stale start"]), warning);
+    let item = world.wf.add(&["--title", "Started"]);
+    assert_eq!(
+        stderr(&["session", "start", short(&item), "--agent", "coder"]),
+        warning
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_session_shows_the_model_it_runs_with() {
     let world = World::new("say hello\nhang\n").await;
     let default = world.wf.add(&["--title", "Default model"]);
