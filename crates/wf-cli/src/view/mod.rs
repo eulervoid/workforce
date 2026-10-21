@@ -111,7 +111,7 @@ pub fn timestamp_now() -> Timestamp {
 pub fn mention_view(state: &State, target: &MentionTarget) -> ActorView {
     let kind = match target {
         MentionTarget::Principal(_) => ActorKind::Principal,
-        MentionTarget::Agent(_) => ActorKind::Agent,
+        MentionTarget::Agent(_) | MentionTarget::Session(_) => ActorKind::Agent,
     };
     ActorView {
         kind,
@@ -129,6 +129,14 @@ pub fn mention_label(state: &State, target: &MentionTarget) -> String {
             );
             format!("@{handle}/{}", agent.name)
         }
+        MentionTarget::Session(session) => match state.session(*session) {
+            Some(folded) => format!(
+                "{}/{}",
+                mention_label(state, &MentionTarget::Agent(folded.agent().clone())),
+                wf_core::id::HashId::short(session)
+            ),
+            None => wf_core::id::HashId::short(session),
+        },
     }
 }
 

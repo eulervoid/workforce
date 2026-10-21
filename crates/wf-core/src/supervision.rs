@@ -40,6 +40,10 @@ impl State {
         });
         match mentioned {
             Some(MentionTarget::Agent(agent)) => WaitsOn::Agent(agent),
+            Some(MentionTarget::Session(session)) => match self.session(session) {
+                Some(session) => WaitsOn::Agent(session.agent().clone()),
+                None => WaitsOn::Principal(comment.by.principal()),
+            },
             Some(MentionTarget::Principal(principal)) => WaitsOn::Principal(principal),
             None if self.has_supervisor() => WaitsOn::Supervisor,
             None => WaitsOn::Principal(comment.by.principal()),

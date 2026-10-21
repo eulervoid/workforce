@@ -16,6 +16,7 @@ use crate::state::State;
 pub enum MentionTarget {
     Principal(PrincipalKey),
     Agent(AgentId),
+    Session(SessionId),
 }
 
 /// What a `#` reference points at.
@@ -75,7 +76,8 @@ impl State {
 
 impl State {
     /// `@ada` is a principal. Without a matching handle, a short `@coder` names an agent if
-    /// exactly one agent has that name. Sessions arrive in M2 and never resolve yet.
+    /// exactly one agent has that name. `@ada/coder/s4k2` names the session of that agent whose id
+    /// starts with `s4k2`, as item ids are resolved.
     pub fn mention(&self, mention: &Mention) -> Option<MentionTarget> {
         match mention {
             Mention::Short(name) => {
@@ -91,15 +93,34 @@ impl State {
                     _ => None,
                 }
             }
-            Mention::Agent { principal, agent } => {
-                let (principal, _) = self
-                    .members()
-                    .find(|(_, member)| member.handle.as_str() == principal)?;
-                self.agents()
-                    .find(|(id, _)| id.principal == *principal && id.name.as_str() == agent)
-                    .map(|(id, _)| MentionTarget::Agent(id.clone()))
+            Mention::Agent { principal, agent } => self
+                .mentioned_agent(principal, agent)
+                .map(MentionTarget::Agent),
+            Mention::Session {
+                principal,
+                agent,
+                session,
+            } => {
+                let agent = self.mentioned_agent(principal, agent)?;
+                let sessions = self
+                    .sessions()
+                    .filter(|candidate| *candidate.agent() == agent)
+                    .map(Session::id);
+                resolve_prefix(session, sessions)
+                    .ok()
+                    .map(MentionTarget::Session)
             }
         }
+    }
+
+    /// The agent `@principal/agent` names.
+    fn mentioned_agent(&self, principal: &str, agent: &str) -> Option<AgentId> {
+        let (principal, _) = self
+            .members()
+            .find(|(_, member)| member.handle.as_str() == principal)?;
+        self.agents()
+            .find(|(id, _)| id.principal == *principal && id.name.as_str() == agent)
+            .map(|(id, _)| id.clone())
     }
 }
 
