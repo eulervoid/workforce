@@ -263,6 +263,10 @@ pub struct Daemon {
     cache_usage: Mutex<BTreeMap<WorkforceId, caches::CacheUsage>>,
     /// For the tests: the next write of an event this matches fails once.
     failing_write: Mutex<Option<WriteMatcher>>,
+    /// For the tests: runs once, after the next merge found the target at the tip and before it
+    /// reads the target to merge onto.
+    #[cfg(test)]
+    before_merge_tree: Mutex<Option<Box<dyn FnOnce() + Send>>>,
     /// How many principal reviews the daemon found to merge into the target when it first checked
     /// them; the tests wait on it to know a check ran.
     reviews_found_merging: std::sync::atomic::AtomicUsize,
@@ -295,6 +299,8 @@ impl Daemon {
             faults: faults::Faults::default(),
             cache_usage: Mutex::new(BTreeMap::new()),
             failing_write: Mutex::new(None),
+            #[cfg(test)]
+            before_merge_tree: Mutex::new(None),
             reviews_found_merging: Default::default(),
         });
         daemon.load_stored_workforces().await;

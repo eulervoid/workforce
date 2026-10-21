@@ -33,8 +33,9 @@ pub(crate) struct TargetBranch {
 /// Whether the target branch of `<wf>/git` is where the log says after a pass.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum TargetAt {
-    /// At the end of the chain, or the log names no tip yet: a merge may start on it.
-    Tip,
+    /// At `at`, the end of the chain, or where it was when the log names no tip yet: a merge may
+    /// start on it, and only on it.
+    Tip { at: CommitId },
     /// Elsewhere: the tip is still to arrive, or a push was just written and the log has not
     /// settled on it. A merge waits.
     Elsewhere,
@@ -43,8 +44,8 @@ pub(super) enum TargetAt {
 /// What a pass does with the target branch.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Follow {
-    /// It is where the log says.
-    Stays,
+    /// It is where the log says, at `at`.
+    Stays { at: CommitId },
     /// It cannot follow yet: the tip has not arrived, or it is unrelated to the tip.
     Waits,
     /// The principal pushed: write the move.
@@ -98,7 +99,7 @@ fn decide(
         Err(error) => return Err(error),
     };
     let follow = match reading.tip {
-        Some(tip) if tip == branch => Follow::Stays,
+        Some(tip) if tip == branch => Follow::Stays { at: tip },
         Some(tip) if !git.has_commit(tip)? => Follow::Waits,
         // A move of the log, or behind its tip: the branch goes to the tip, forward or back.
         Some(tip) if reading.made.contains(&branch) || git.is_ancestor(branch, tip)? => {
@@ -121,7 +122,7 @@ fn decide(
                 commit: branch,
                 onto: seen,
             },
-            Some(_) | None => Follow::Stays,
+            Some(_) | None => Follow::Stays { at: branch },
         },
     };
     Ok((Some(branch), follow))
@@ -191,7 +192,7 @@ impl Daemon {
             *seen = branch.or(*seen);
             self.send_back_lost_merges(loaded, &reading).await?;
             match follow {
-                Follow::Stays => return Ok(TargetAt::Tip),
+                Follow::Stays { at } => return Ok(TargetAt::Tip { at }),
                 Follow::Waits => return Ok(TargetAt::Elsewhere),
                 Follow::Moves { from, to } => {
                     let (repository, target) = (repository.clone(), reading.target.clone());
@@ -200,7 +201,7 @@ impl Daemon {
                             .await??;
                     if moved {
                         *seen = Some(to);
-                        return Ok(TargetAt::Tip);
+                        return Ok(TargetAt::Tip { at: to });
                     }
                     // Something moved it meanwhile, a push say: the next pass sees it.
                     return Ok(TargetAt::Elsewhere);
@@ -223,7 +224,8 @@ impl Daemon {
     }
 
     /// Moves each item whose merge lost a fork back to `review`, if this device made it or its
-    /// maker is gone, with a comment that says why. There it waits for its merge again, which runs its checks again.
+    /// maker is gone, with a comment that says why. There it waits for its merge again, which
+    /// runs its checks again.
     async fn send_back_lost_merges(
         &self,
         loaded: &Loaded,
@@ -296,13 +298,16 @@ mod tests {
             .unwrap();
             replica.receive(fixture.genesis.clone()).unwrap();
             drop(replica);
+            // Merged unsigned, whatever the git config of the one running the tests says.
+            let machine_config = directory.path().join("config.toml");
+            std::fs::write(&machine_config, "[commits]\nmerge_signing = \"unsigned\"\n").unwrap();
             let daemon = Daemon::start(
                 Launch {
                     data_dir: DataDir::new(directory.path().to_path_buf()),
                     socket: directory.path().join("daemon.sock"),
                     network: Network::Direct,
                     harnesses: Default::default(),
-                    machine_config: None,
+                    machine_config: Some(machine_config),
                     wf_binary: None,
                 },
                 fixture.devices[0].clone(),
@@ -390,11 +395,17 @@ mod tests {
                 .unwrap();
         }
 
-        async fn follow(&self) -> TargetAt {
-            self.daemon
+        /// Where a pass leaves the branch, if at the tip.
+        async fn follow(&self) -> Option<CommitId> {
+            match self
+                .daemon
                 .follow_target(self.fixture.workforce(), &self.loaded)
                 .await
                 .unwrap()
+            {
+                TargetAt::Tip { at } => Some(at),
+                TargetAt::Elsewhere => None,
+            }
         }
 
         /// The log names `main` of the repository as the tip, moved there by device 1.
@@ -411,11 +422,11 @@ mod tests {
     async fn a_push_of_the_principal_is_written_onto_the_tip_the_log_names() {
         let mut scene = Scene::new().await;
         let main = scene.tip_at_main().await;
-        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(scene.follow().await, Some(main));
 
         let pushed = scene.commit("pushed");
         scene.push("pushed");
-        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(scene.follow().await, Some(pushed));
         let state = scene.state().await;
         assert_eq!(state.target(), Some(pushed));
         let tip = state.target_tip().unwrap();
@@ -435,11 +446,11 @@ mod tests {
         let ahead = scene.repository.work("ahead", "ahead.txt", "x\n");
         let actor = scene.daemon_actor();
         scene.write(1, actor, target_moved(ahead, main)).await;
-        assert_eq!(scene.follow().await, TargetAt::Elsewhere, "not here yet");
+        assert_eq!(scene.follow().await, None, "not here yet");
         assert_eq!(scene.main(), main);
 
         scene.fetch("ahead", "refs/test/ahead");
-        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(scene.follow().await, Some(ahead));
         assert_eq!(scene.main(), ahead);
     }
 
@@ -454,7 +465,7 @@ mod tests {
         scene.push("pushed");
         scene.follow().await;
         scene.receive(apart.clone()).await;
-        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(scene.follow().await, Some(winner));
         assert_eq!(scene.main(), winner);
         let state = scene.state().await;
         assert_eq!(state.target(), Some(winner));
@@ -463,6 +474,78 @@ mod tests {
             .map(|step| step.cause)
             .collect();
         assert_eq!(lost, vec![MoveCause::Push]);
+    }
+
+    /// The principal pushes after the merge found the target at the tip, and before it reads the
+    /// target to merge onto, while nothing wakes the follower to write the push down.
+    #[tokio::test(flavor = "multi_thread")]
+    async fn a_push_just_before_a_merge_is_written_and_the_merge_goes_onto_it() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        assert_eq!(scene.follow().await, Some(main));
+        let pushed = scene.repository.work("pushed", "pushed.txt", "x\n");
+        let (source, bare) = (scene.repository.directory().to_path_buf(), scene.bare());
+        *scene.daemon.before_merge_tree.lock().unwrap() = Some(Box::new(move || {
+            // The follower's pass for the last write ends first.
+            std::thread::sleep(Duration::from_millis(500));
+            let source = source.display().to_string();
+            git_in(
+                &bare,
+                &["fetch", "--quiet", &source, "+pushed:refs/heads/main"],
+            );
+        }));
+
+        let founder = scene.fixture.founder_actor();
+        scene.write(0, founder.clone(), define_agent("coder")).await;
+        let item: ItemId = scene
+            .write(0, founder.clone(), create("task", "work"))
+            .await
+            .id()
+            .into();
+        let session = scene
+            .write(0, founder.clone(), start_session("coder", item))
+            .await
+            .id()
+            .into();
+        scene
+            .write(0, founder.clone(), moved(item, ItemState::Review))
+            .await;
+        let reviewed = scene.commit("reviewed");
+        // Claimed already, so that the merge writes nothing before it reads the target.
+        let daemon = scene.daemon_actor();
+        scene.write(0, daemon, merge_claimed(item, reviewed)).await;
+        scene
+            .write(0, founder, submit_session(session, reviewed))
+            .await;
+
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(30);
+        let state = loop {
+            let state = scene.state().await;
+            if state.live_state(item) == Some(ItemState::Done) {
+                break state;
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "the dispatcher merges it"
+            );
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        };
+        let steps: Vec<_> = state
+            .target_moves()
+            .map(|step| (step.onto, step.cause))
+            .collect();
+        assert!(
+            steps.contains(&(main, MoveCause::Push)),
+            "the push is written"
+        );
+        let tip = state.target_tip().unwrap();
+        assert_eq!(
+            (tip.onto, tip.cause),
+            (pushed, MoveCause::Merge { item }),
+            "the merge went onto the push"
+        );
+        assert!(state.lost_pushes(scene.fixture.founder.key()).is_empty());
+        assert_eq!(scene.main(), tip.commit);
     }
 
     #[tokio::test]
@@ -504,11 +587,11 @@ mod tests {
         *seen = Some(merge);
         drop(seen);
         scene.write(0, founder, moved(item, ItemState::Done)).await;
-        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(scene.follow().await, Some(merge));
         assert_eq!(scene.state().await.live_state(item), Some(ItemState::Done));
 
         scene.receive(apart).await;
-        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(scene.follow().await, Some(winner));
         assert_eq!(scene.main(), winner);
         let state = scene.state().await;
         assert_eq!(state.live_state(item), Some(ItemState::Review));
@@ -559,7 +642,7 @@ mod tests {
             .await;
         scene.write(1, founder, moved(item, ItemState::Done)).await;
         scene.receive(apart).await;
-        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(scene.follow().await, Some(winner));
         assert_eq!(
             scene.state().await.live_state(item),
             Some(ItemState::Done),
@@ -570,7 +653,7 @@ mod tests {
         scene
             .daemon
             .backdate_presence(lease + Duration::from_secs(60));
-        assert_eq!(scene.follow().await, TargetAt::Tip);
+        assert_eq!(scene.follow().await, Some(winner));
         assert_eq!(
             scene.state().await.live_state(item),
             Some(ItemState::Review)

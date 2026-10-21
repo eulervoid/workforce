@@ -288,8 +288,12 @@ impl Daemon {
             onto = None;
             moving = None;
             // A merge starts only on the tip the log names, or a fork would be made on purpose.
-            if self.follow_target(workforce, loaded).await? == TargetAt::Elsewhere {
+            let TargetAt::Tip { at } = self.follow_target(workforce, loaded).await? else {
                 return Ok(());
+            };
+            #[cfg(test)]
+            if let Some(hook) = self.before_merge_tree.lock().unwrap().take() {
+                hook();
             }
             let made = {
                 let (repository, target) = (repository.clone(), target.clone());
@@ -307,6 +311,9 @@ impl Daemon {
             outcome = match made {
                 MergeTree::Landed { commit } => MergeOutcome::Merged { commit },
                 MergeTree::Conflict { paths } => MergeOutcome::Conflict { paths },
+                // A push came since the pass, which the next one writes down first: merged onto
+                // it now, the merge would start from a commit no move made, and lose.
+                MergeTree::Clean { base, .. } if base != at => MergeOutcome::TargetMoved,
                 MergeTree::Clean { base, tree } => {
                     onto = Some(base);
                     let failed = match self
