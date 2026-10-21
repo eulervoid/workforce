@@ -3741,18 +3741,26 @@ wf work release --note \"not yet\"
     );
     let repositories = bare.parent().unwrap().join("repositories");
     let _ = std::fs::remove_dir_all(&repositories);
-    git_in(
-        &bare,
-        &["update-ref", "-d", &format!("refs/heads/{branch}")],
-    );
-    git_in(&bare, &["gc", "--quiet", "--prune=now"]);
-    assert!(
+    let head_is_here = || {
         std::process::Command::new("git")
             .args(["-C", bare.to_str().unwrap(), "cat-file", "-e", &head])
             .status()
-            .is_ok_and(|status| !status.success()),
-        "the head is gone"
-    );
+            .is_ok_and(|status| status.success())
+    };
+    // A refs pass that read the log while the head was still here sets the branch again, as it
+    // should: the branch goes again until no pass brings it back.
+    for _ in 0..20 {
+        git_in(
+            &bare,
+            &["update-ref", "-d", &format!("refs/heads/{branch}")],
+        );
+        git_in(&bare, &["gc", "--quiet", "--prune=now"]);
+        if !head_is_here() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(!head_is_here(), "the head is gone");
 
     world.automate("coder", "default");
     world
