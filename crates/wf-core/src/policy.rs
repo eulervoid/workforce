@@ -917,6 +917,23 @@ mod tests {
     }
 
     #[test]
+    fn after_merge_commands_are_not_config_yet() {
+        // `[[merge.after]]` and `[merge] after_device` are planned (SPEC section 10): until they
+        // run, a policy that names them is refused rather than read as if they did.
+        let after_device =
+            DEFAULT_POLICY_TOML.replace("[merge]\n", "[merge]\nafter_device = \"server\"\n");
+        assert_ne!(after_device, DEFAULT_POLICY_TOML);
+        let after =
+            with_custom("[[merge.after]]\nname = \"deploy\"\nrun = [\"make\", \"deploy\"]\n");
+        for source in [after_device, after] {
+            assert!(
+                matches!(Policy::parse(&source), Err(PolicyError::Parse(_))),
+                "{source}"
+            );
+        }
+    }
+
+    #[test]
     fn rejects_unknown_targets() {
         let unknown_target = with_custom(
             "[types.bug]\nlane = \"default\"\ninitial = \"open\"\ndepends_on = [\"ghost\"]\n\

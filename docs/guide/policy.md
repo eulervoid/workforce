@@ -222,6 +222,9 @@ target = "main"
 requires = ["os:linux"]
 ```
 
+Commands that run after a merge, such as a release or a deploy, are planned (`[[merge.after]]`, on
+the one machine `[merge] after_device` names); a policy that names them is refused for now.
+
 ### Checks
 
 `[[merge.check]]` names a command that has to pass on the merge result before the target moves. Each

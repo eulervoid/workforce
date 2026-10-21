@@ -1571,7 +1571,8 @@ machine's config gives checks, so each machine's principal decides what they may
 they check.
 
 *Planned:* `[compaction] after` (M6),
-`[merge] after_device` (M3, section 10),
+`[[merge.after]]` and `[merge] after_device` (M3, section 10; a policy that names them is refused
+until then),
 `[transcripts] publish` (M7), `[governance]` (advisory, M7), `wf policy diff`. *Open:* whether
 `default_agent`, a convenience of one principal, belongs in the machine config instead.
 
