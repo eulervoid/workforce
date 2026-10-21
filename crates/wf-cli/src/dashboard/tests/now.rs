@@ -545,3 +545,21 @@ fn an_action_error_goes_away_after_its_time() {
     app.refresh(later(STATUS_LASTS_MS));
     assert!(!screen(&mut app, 60, 8).contains("✓ allowed"));
 }
+
+#[test]
+fn the_bar_of_a_selected_row_of_two_lines_looks_the_same_on_both() {
+    let mut app = app();
+    press(&mut app, KeyCode::Char('j'));
+    let drawn = Drawn::of(&mut app, 60, 22);
+    let (_, first) = drawn.find("⧗ #aibaea blocker");
+    let lines = drawn.lines();
+    let shown: String = (first..first + 2)
+        .map(|y| {
+            let line = &lines[usize::from(y)];
+            let (bar, text) = (drawn.style_at(0, y), drawn.style_at(3, y));
+            format!("{line:?}\n  bar:  {bar:?}\n  text: {text:?}\n")
+        })
+        .collect();
+    assert_eq!(drawn.style_at(0, first), drawn.style_at(0, first + 1));
+    insta::assert_snapshot!(shown);
+}

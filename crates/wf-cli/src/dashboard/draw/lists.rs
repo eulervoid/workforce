@@ -238,17 +238,16 @@ impl RowLines {
             // Across the whole width, for the background of the selection.
             None => spans.push(Span::raw(" ".repeat(width.saturating_sub(used)))),
         }
-        let mut first = Line::from(spans);
         if self.selected {
-            first = first.themed(theme::text_bold());
+            spans = under(spans, Style::from(theme::text_bold()));
         }
-        let mut lines = vec![first];
+        let mut lines = vec![Line::from(spans)];
         for line in more {
             let mut spans = vec![self.marker()];
             spans.extend(cut_spans(line.spans, width.saturating_sub(1)));
             let used: usize = spans.iter().map(Span::width).sum();
             spans.push(Span::raw(" ".repeat(width.saturating_sub(used))));
-            lines.push(Line::from(spans).style(line.style));
+            lines.push(Line::from(under(spans, line.style)));
         }
         if self.selected {
             lines = lines.into_iter().map(|line| line.bg(self.accent)).collect();
@@ -264,6 +263,20 @@ impl RowLines {
             Span::raw(" ")
         }
     }
+}
+
+/// `spans` with `style` under each but the first, the marker, as the style of their line would
+/// be: so the bar of the selection looks the same on every line of a row.
+fn under(spans: Vec<Span<'static>>, style: Style) -> Vec<Span<'static>> {
+    let mut spans = spans.into_iter();
+    let marker = spans.next();
+    marker
+        .into_iter()
+        .chain(spans.map(|span| {
+            let style = style.patch(span.style);
+            span.style(style)
+        }))
+        .collect()
 }
 
 /// `spans` cut to `room` columns, ending in `…` when anything was cut.
