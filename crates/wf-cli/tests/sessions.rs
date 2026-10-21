@@ -45,8 +45,9 @@ struct World {
 #[derive(Clone, Default)]
 struct DaemonLog(Arc<Mutex<Vec<u8>>>);
 
-/// What [`DaemonLog`] keeps: what `wf daemon start` logs, and what the dispatcher does.
-const LOG_FILTER: &str = "warn,wf_daemon=info,wf_daemon::runner::dispatch=debug,wf_net=info";
+/// What [`DaemonLog`] keeps: what `wf daemon start` logs, what the dispatcher does, and how each
+/// session's harness gets on.
+const LOG_FILTER: &str = "warn,wf_daemon=info,wf_daemon::runner::dispatch=debug,wf_daemon::runner::drive=debug,wf_net=info";
 /// How many lines of the daemon log a wait that times out prints.
 const LOG_TAIL: usize = 60;
 
@@ -2239,6 +2240,13 @@ sh \"$WF_BIN\" comment {item} \"not yet\" --request-change && \"$WF_BIN\" review
     let item = world
         .wf
         .add(&["--title", "Add hello", "--review", "bounded"]);
+    world.sessions_ended(&["coder submitted"]).await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed"])
+        .await;
+    world
+        .sessions_ended(&["coder submitted", "reviewer reviewed", "coder submitted"])
+        .await;
     world
         .wait("the round limit", |world| {
             world.item(&item)["review_status"]["status"] == "round_limit_reached"
