@@ -2364,6 +2364,43 @@ async fn a_review_started_by_hand_takes_the_step_asked_for() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn reviews_of_one_step_started_at_once_start_one_session() {
+    let world = wide_review_world([APPROVE_WHEN_LET; 3]).await;
+    for name in ["alpha", "beta", "gamma"] {
+        world.wf.run(&["agent", "edit", name, "--start", "manual"]);
+    }
+    let item = world.wf.add(&["--title", "Add hello", "--review", "wide"]);
+    world
+        .wait("the item in review", |world| {
+            world.item(&item)["state"] == "review"
+        })
+        .await;
+
+    // Without the lock of the item and role, about every other run lets two through.
+    let starts: Vec<_> = ["alpha", "beta", "gamma"]
+        .map(|agent| {
+            let mut command = world.wf.command(&[
+                "session",
+                "start",
+                short(&item),
+                "-a",
+                agent,
+                "--step",
+                "style",
+            ]);
+            std::thread::spawn(move || common::output(&mut command))
+        })
+        .into_iter()
+        .map(|start| start.join().unwrap())
+        .collect();
+    let started = starts.iter().filter(|start| start.status.success()).count();
+    assert_eq!(started, 1, "{starts:?}");
+    // A start the other refused would still be running had both been let through.
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    assert_eq!(live_reviews(&world).len(), 1, "{:?}", world.sessions());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn a_critical_item_waits_for_a_person_after_the_agent_approves() {
     let world = review_world(COMMIT_AND_SUBMIT, "wf review --approve\n").await;
     let item = world
