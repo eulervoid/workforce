@@ -1455,9 +1455,12 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
 
 * **Write:** the session's directory (its own repository, whole: `.git` included), temporary files,
   `~/.cache` and the caches and state of agent tools and package managers, the daemon's socket, and
-  `allow_write`. Not `.env*` or key files (`*.pem`, `*.p12`, `*.pfx`) below any of these, which Fence
-  could not deny everywhere but the cargo home: it writes every deny after every allow, and the last
-  rule wins. The principal's repository is read-only, and so are the repositories of other items.
+  `allow_write`. Not `.env*` or key files (`*.pem`, `*.p12`, `*.pfx`) below any of these, nor below
+  the directories Fence allows writing to itself (`~/.npm/_logs`, `~/.fence/debug`): one global
+  deny could not leave the cargo home out, as Fence writes every deny after every allow and the
+  last rule wins. What a writable pattern matches itself stays writable: `~/.claude*` allows
+  `~/.claude.pem`. The principal's repository is read-only, and so are the repositories of other
+  items.
 * **Cargo:** agents get `CARGO_HOME=<data>/cargo`, shared by the agents of the machine; the
   principal's `~/.cargo` is not writable, as cargo runs the `build.rs` of its registry with the
   principal's privileges at the principal's next build. The principal's `~/.cargo/config.toml` does
