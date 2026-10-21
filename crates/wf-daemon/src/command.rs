@@ -196,8 +196,20 @@ impl Confinement<'_> {
             }
         }
         // What it starts carries the mark, so that what leaves its group is found by it.
-        let mark = crate::processes::Mark::new_command_run();
-        process.envs(mark.variables());
+        let owner = crate::processes::Owner {
+            mark: crate::processes::Mark::new_command_run(),
+            // In a session, the command runs where the session does, whose end finds its orphans.
+            place: match self {
+                Confinement::Agents { access, .. } => Some(crate::processes::Place::new(
+                    access.directory,
+                    jiff::Timestamp::now(),
+                    None,
+                )),
+                Confinement::Session { .. } => None,
+            },
+            spared: Vec::new(),
+        };
+        process.envs(owner.mark.variables());
         crate::inherit::only_stdio(&mut process);
         let mut child = process.spawn().map_err(|source| CommandError::Io {
             path: command.command().to_path_buf(),
@@ -221,7 +233,7 @@ impl Confinement<'_> {
             // The group may be gone already; then there is nothing left to stop.
             let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
         }
-        crate::processes::stop(mark).await;
+        crate::processes::stop(owner).await;
         if matches!(outcome, Outcome::TimedOut) {
             child.wait().await.map_err(io_error)?;
         }
@@ -601,7 +613,7 @@ git cat-file commit HEAD | grep -q gpgsig"#;
         let argv: Vec<String> = [
             "sh",
             "-c",
-            "cat file.txt; echo ${CARGO_TARGET_DIR-unset}; env | grep ^WF_ || echo none",
+            "cat file.txt; echo ${CARGO_TARGET_DIR-unset}; env | grep -E '^WF_(SESSION|WORKFORCE)' || echo none",
         ]
         .map(String::from)
         .to_vec();

@@ -9,9 +9,12 @@ use std::sync::Arc;
 use serde::{Deserialize, Serialize};
 use wf_core::id::{CommentId, HashId, SessionId, WorkforceId};
 use wf_core::lifecycle::{Interruption, SessionEnd, TurnOutcome};
+use wf_core::state::State;
 use wf_vcs::GitCli;
 
+use super::drive::at_ms;
 use super::{Begin, SessionError, blocking};
+use crate::processes::{Mark, Owner, Place};
 use crate::{Daemon, Loaded};
 
 /// What the daemon keeps of the agent's side of a session.
@@ -112,29 +115,67 @@ impl Daemon {
         }
     }
 
-    /// Stops what the sessions of `workforce` that ended left running: those that ended while no
-    /// daemon ran, or before a daemon stopped what a session left at its end. A live session,
-    /// resumed or not, keeps its processes, and so does one the workforce does not know.
+    /// Stops what the sessions of this device in `workforce` that ended left running: those
+    /// that ended while no daemon ran, or before a daemon stopped what a session left at its end.
+    /// A live session, resumed or not, keeps its processes, and so does one the workforce does not
+    /// know.
     pub(crate) async fn stop_what_ended_sessions_left(
         &self,
         workforce: WorkforceId,
         loaded: &Loaded,
     ) {
-        let running = crate::processes::marked_sessions(workforce).await;
-        if running.is_empty() {
-            return;
-        }
         let Ok(state) = self.snapshot(loaded).await else {
             return;
         };
-        for session in running {
-            if state
-                .session(session)
-                .is_some_and(|session| !session.is_live())
-            {
-                crate::processes::stop_session(workforce, session).await;
-            }
+        let spared = self.live_places(&state, workforce);
+        let ended: Vec<Owner> = state
+            .sessions()
+            .filter(|session| session.device() == self.device())
+            .filter_map(|session| {
+                let ended = session.ended()?.at().wall_ms();
+                let directory = self.session_directory(
+                    workforce,
+                    session.item(),
+                    session.id(),
+                    &session.role(),
+                );
+                Some(Owner {
+                    mark: Mark::Session {
+                        workforce,
+                        session: session.id(),
+                    },
+                    place: Some(Place::new(
+                        &directory,
+                        at_ms(session.started().hlc.wall_ms()),
+                        Some(at_ms(ended)),
+                    )),
+                    spared: spared.clone(),
+                })
+            })
+            .collect();
+        for owner in crate::processes::with_processes(ended).await {
+            let (Mark::Session { session, .. }, Some(place)) = (owner.mark, owner.place) else {
+                continue;
+            };
+            crate::processes::stop_session(workforce, session, place, spared.clone()).await;
         }
+    }
+
+    /// Where the sessions of this device in `workforce` that are live run, and since when.
+    pub(crate) fn live_places(&self, state: &State, workforce: WorkforceId) -> Vec<Place> {
+        state
+            .live_sessions()
+            .filter(|session| session.device() == self.device())
+            .map(|session| {
+                let directory = self.session_directory(
+                    workforce,
+                    session.item(),
+                    session.id(),
+                    &session.role(),
+                );
+                Place::new(&directory, at_ms(session.started().hlc.wall_ms()), None)
+            })
+            .collect()
     }
 
     async fn resume_session(
