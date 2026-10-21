@@ -69,6 +69,12 @@ impl Presence {
         self.heard_ms.iter().map(|(device, at)| (*device, *at))
     }
 
+    /// Whether this daemon has heard from `device` since it started: before that, nothing `device`
+    /// wrote, a claim among it, could have reached it.
+    pub fn heard(&self, device: DeviceKey) -> bool {
+        self.heard_ms.contains_key(&device)
+    }
+
     /// Since when `device` has been silent as far as this daemon knows: since it was last heard
     /// from, or since the daemon started when it was not heard from since.
     pub fn silent_since_ms(&self, device: DeviceKey) -> u64 {

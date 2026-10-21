@@ -1,8 +1,9 @@
 //! Placement: which device takes a claimable thing (an item in a role, as [`crate::claims`] says)
 //! when several could. Every device ranks the devices that could take it by the same rules, from
 //! the log, the profiles and the presence of devices, so they agree; the dispatcher of the device
-//! of rank *r* waits *r* times [`RANK_DELAY`] before it starts. Claims keep a wrong ranking
-//! correct: it costs a delay or a race, never two holders. Pure functions of the state.
+//! of rank *r* waits *r* times [`RANK_DELAY`] before it starts, and only once it has heard from
+//! the devices ranked ahead of it ([`Turn`]). Claims keep a wrong ranking correct: it costs a
+//! delay or a race, never two holders. Pure functions of the state.
 
 use std::cmp::Reverse;
 use std::collections::{BTreeMap, BTreeSet};
@@ -47,6 +48,36 @@ impl Placement {
     pub fn delay(rank: usize) -> Duration {
         RANK_DELAY * u32::try_from(rank).unwrap_or(u32::MAX)
     }
+
+    /// When `device` may start `item` in `role`, as far as it can tell from what it heard
+    /// (`presence`): after its rank's delay, but only once it has heard from every device ranked
+    /// ahead of it, since a claim of one it has not heard from could not have reached it yet.
+    pub fn turn(
+        &self,
+        item: ItemId,
+        role: &SessionRole,
+        device: DeviceKey,
+        presence: &Presence,
+    ) -> Turn {
+        let rank = self.rank(item, role, device);
+        match self.ranked(item, role)[..rank]
+            .iter()
+            .find(|ahead| !presence.heard(**ahead))
+        {
+            Some(ahead) => Turn::Unheard(*ahead),
+            None => Turn::Rank(rank),
+        }
+    }
+}
+
+/// When a device may start a claimable thing ([`Placement::turn`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Turn {
+    /// After its rank times [`RANK_DELAY`]: it heard from every device ranked ahead of it.
+    Rank(usize),
+    /// Not yet: it has not heard from this device, ranked ahead of it, since its daemon started.
+    /// Once the device's lease runs out it is left out of the ranking.
+    Unheard(DeviceKey),
 }
 
 impl State {

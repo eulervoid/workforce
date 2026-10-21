@@ -2,7 +2,7 @@
 //! they sync end one session `Outclaimed`, and a device that went silent has its session taken
 //! over after the lease, which it stops once it hears of it, naming its last head. Placement: of
 //! two devices that could start an agent on an item, the first by rank starts and the other waits
-//! its turn, and takes over when the first does not start.
+//! its turn, once it has heard from the first, and takes over when the first is gone.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tempfile::TempDir;
+use tracing::instrument::WithSubscriber;
 use wf_core::event::{AgentDefined, Event, EventBody};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
 use wf_core::identity::DeviceKey;
@@ -26,6 +27,10 @@ use wf_net::Network;
 use wf_store::{RedbStore, Replica};
 use wf_vcs::GitCli;
 use wf_vcs::testing::{TestRepository, git_in};
+
+mod common;
+
+use common::{DaemonLog, LOG_TAIL};
 
 /// Commits once, then works until it is stopped.
 const SCRIPT: &str = "\
@@ -113,6 +118,21 @@ struct Device {
     directory: TempDir,
     daemon: Arc<Daemon>,
     socket: PathBuf,
+    key: DeviceKey,
+    log: DaemonLog,
+}
+
+/// A test that fails, by a wait that timed out or an assertion, tells what each daemon was doing.
+impl Drop for Device {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!(
+                "the end of the daemon log of device {}:\n{}",
+                self.key,
+                self.log.tail(LOG_TAIL)
+            );
+        }
+    }
 }
 
 impl Device {
@@ -146,6 +166,8 @@ impl Device {
             AcpAgentConfig::new(fake_agent()).env("FAKE_AGENT_SCRIPT", script.to_string_lossy()),
         )]);
         let socket = directory.path().join("daemon.sock");
+        let log = DaemonLog::default();
+        let dispatch = log.dispatch();
         let daemon = Daemon::start(
             Launch {
                 data_dir: DataDir::new(directory.path().to_path_buf()),
@@ -158,13 +180,20 @@ impl Device {
             },
             fixture.devices[device].clone(),
         )
+        .with_subscriber(dispatch.clone())
         .await
         .unwrap();
-        tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
+        tokio::spawn(
+            Arc::clone(&daemon)
+                .serve(std::future::pending())
+                .with_subscriber(dispatch),
+        );
         let started = Self {
             directory,
             daemon,
             socket,
+            key: fixture.devices[device].key(),
+            log,
         };
         let bare = started.bare(fixture.workforce());
         eventually("the bare repository is made", || {
@@ -510,31 +539,36 @@ async fn a_silent_device_is_taken_over_after_the_lease_and_stops_its_session_whe
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn the_device_ranked_second_waits_its_turn_and_takes_over_when_the_first_does_not_start() {
-    // One daemon, so it runs in Fence too: the device ranked first never starts, and the other,
-    // which has just started, counts it as present.
+async fn the_device_ranked_second_waits_until_it_hears_from_the_first_and_takes_over_once_it_is_gone()
+ {
+    // One daemon, so it runs in Fence too: the device ranked first is never heard from, so a claim
+    // of it could not have arrived, however long the device ranked second has waited its turn.
     let fixture = Fixture::new(2);
     let workforce = fixture.workforce();
     let (events, item, [_, second]) = workforce_with_an_auto_agent(&fixture);
     let repository = TestRepository::new();
-    let started = std::time::Instant::now();
     let device = within(
         "starting the device ranked second",
         Device::start(&fixture, second, &events, &repository),
     )
     .await;
 
-    tokio::time::sleep(RANK_DELAY - Duration::from_secs(3)).await;
+    tokio::time::sleep(RANK_DELAY + Duration::from_secs(5)).await;
     assert!(
         work_sessions(&device.state(workforce).await, item).is_empty(),
-        "the device ranked second waits for the first"
+        "the device ranked second waits to hear from the first"
     );
+
+    // The device ranked first has not been heard from for longer than the lease.
+    let lease = device.state(workforce).await.lease();
+    device
+        .daemon
+        .backdate_presence(lease + Duration::from_secs(60));
     device
         .wait_for(workforce, "the device ranked second takes over", |state| {
             !work_sessions(state, item).is_empty()
         })
         .await;
-    assert!(started.elapsed() >= RANK_DELAY);
     assert_eq!(
         work_sessions(&device.state(workforce).await, item)
             .into_iter()
