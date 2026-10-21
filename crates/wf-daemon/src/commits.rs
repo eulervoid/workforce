@@ -855,6 +855,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_pass_reading_from_before_an_end_does_not_bring_back_the_branch_the_end_removed() {
+        let mut scene = Scene::new().await;
+        let item = scene.item().await;
+        let holder = scene.work_session(item).await;
+        let head = scene.remote.work("wf/work", "a.txt", "a\n");
+        scene.name_head(holder, item, head).await;
+        scene.reconcile().await;
+        assert_eq!(scene.bare().branch_head(&item_branch(item)).unwrap(), head);
+
+        // A pass reads the log just before the end, and sets the refs just after it.
+        let own = scene.daemon.device();
+        let stale = scene
+            .loaded
+            .storage
+            .with(move |replica| read(replica.state(), own))
+            .await
+            .unwrap();
+        scene.end(holder, EndReason::Submitted).await;
+        let founder = scene.fixture.founder_actor();
+        scene.write(0, founder, moved(item, ItemState::Done)).await;
+        scene.bare().delete_branch(&item_branch(item)).unwrap();
+        let workforce = scene.fixture.workforce();
+        set_refs(
+            &scene.daemon.bare_repository(workforce),
+            &scene.daemon.workforce_directory(workforce),
+            &stale,
+            &BTreeSet::new(),
+        )
+        .unwrap();
+        assert!(scene.bare().item_branches().unwrap().is_empty());
+    }
+
+    #[tokio::test]
     async fn the_branch_follows_the_claim_when_it_passes_and_the_new_holder_is_not_set_apart() {
         let mut scene = Scene::new().await;
         let item = scene.item().await;
