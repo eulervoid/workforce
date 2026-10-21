@@ -128,23 +128,23 @@ impl Daemon {
         let item = folded.item();
         let role = folded.role();
         let head = match &end {
-            SessionEnd::Finish(Finish::Submit { .. }) => {
+            SessionEnd::Finish(Finish::Submit { .. }) => match self.submissions.passed(session) {
+                // Checks that passed end the session with the commit they ran on: what the agent
+                // committed since is not copied, and neither runs them again nor goes unrebased.
+                Some(checked) => Some(checked),
                 // The agent rebased the branch onto the target before it submitted (`wf work
                 // submit`), unless it is approved already; either way what it committed is
-                // copied into this repository now, and checks that passed on that head are not
-                // run again.
-                // Checks that passed are not run again because the target moved meanwhile, nor is
-                // the branch rebased under them.
-                let mode = if state.rebases_at_submit(session)
-                    && self.submissions.passed(session).is_none()
-                {
-                    ImportMode::Submission
-                } else {
-                    ImportMode::InProgress
-                };
-                self.import_commits(workforce, loaded, &state, item, mode)
-                    .await?
-            }
+                // copied into this repository now.
+                None => {
+                    let mode = if state.rebases_at_submit(session) {
+                        ImportMode::Submission
+                    } else {
+                        ImportMode::InProgress
+                    };
+                    self.import_commits(workforce, loaded, &state, item, mode)
+                        .await?
+                }
+            },
             SessionEnd::Finish(
                 Finish::Release { .. } | Finish::Reviewed | Finish::Supervised | Finish::Diagnosed,
             )
