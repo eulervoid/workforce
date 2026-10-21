@@ -873,6 +873,26 @@ default level; an item can name another (`--recovery`).
   once in `wf inbox` as `machine_fault` rather than as a comment on every item. A `UsageLimit` holds
   them until the reset its message gives (`resets 7:50pm (Europe/Berlin)`); the 10 minutes are the
   fallback when no reset is given. A session end that cannot be written is retried.
+* **Processes end with the session.** When a session ends, for any reason (`Outclaimed`,
+  `LeaseExpired` and a stop among them), the daemon stops every process the session started that
+  still runs: the harness's process group, and what left it, in a group or session of its own and
+  reparented to `launchd` or init, as a server an agent daemonized or a job in the background of
+  its harness. `TERM` first, `KILL` 2 s later; the daemon log says how many it stopped. A
+  session's process is one of the daemon's user that carries the session's `WF_SESSION` and
+  `WF_WORKFORCE` in the environment it was started with (`/proc/<pid>/environ` on Linux,
+  `KERN_PROCARGS2` on macOS). macOS hides that environment for Apple's own programs (`sh`,
+  `sleep`, `yes`); such a process is the session's only if it is an orphan (its parent is
+  `launchd`), its working directory is inside the session's directory (canonical, compared by path
+  component) and it started while the session was live, and no live session's directory and time
+  hold it as well, since the work sessions of an item run in one repository one after the other.
+  One whose working directory macOS does not give is counted in the log and left running. A
+  process whose environment is readable is judged by the mark alone: without it, it is not the
+  session's, wherever it runs. A live session keeps its processes, also over a restart; daemon
+  start does the same for the sessions of the device that ended while no daemon ran. A command
+  the daemon runs on code (a check) runs in its own process group, killed when it exits or times
+  out, and carries a `WF_COMMAND_RUN` of its own, by which what left the group is stopped the same
+  way, with the check worktree as its directory; one `wf check` runs in a session leaves its
+  orphans of Apple programs to the session's end, as it runs in the session's directory.
 * **Storage.** Daemon start removes stray repositories. With a `[storage]` budget in the machine config,
   the build caches of the least recently built idle repositories are deleted until the rest fits.
 
@@ -1505,6 +1525,18 @@ sandbox:
   installs and their `bin`, and `~/.cache` holds e.g. pre-commit's hook repositories (#vfbuiv).
 
 A `CLAUDE_CONFIG_DIR` of each agent's own closes the first two later.
+
+**What can outlive a session** (section 9): its processes are found by the mark in their
+environment, and on macOS an orphan of an Apple program by its directory, so
+
+* on Linux, a process that cleared its environment (`env -i`) escapes, and so does one started
+  through something outside the session, such as `systemd-run --user` (on Linux a cgroup per
+  session would be a mark nothing escapes; Fence's bubblewrap could carry it);
+* on macOS, an Apple program that also left the session's directory (`cd /tmp && yes &`), or whose
+  working directory macOS does not give, escapes, as does anything `launchd` starts for the
+  session (`open`, `launchctl`);
+* on macOS, an orphaned Apple program the principal started inside an agent's session directory
+  while that session was live is stopped with the session.
 
 **Repository maintenance** (`gc`, `pack-refs`, repacking) in the agent's repository is the agent's
 own business and changes nothing the import relies on. The git the daemon runs in the principal's
