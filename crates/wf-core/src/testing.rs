@@ -722,11 +722,35 @@ pub fn golden_state() -> State {
         7_006,
         end_session(reviewing, EndReason::Reviewed),
     );
+    // A push, the merge on top of it, and a push from the same tip that lost to the merge.
     act(
         &mut state,
         0,
         7_007,
-        merged(reviewed, golden_commit(1), golden_commit(9)),
+        target_moved(golden_commit(8), golden_commit(7)),
+    );
+    act(
+        &mut state,
+        0,
+        7_008,
+        merge_claimed(reviewed, golden_commit(1)),
+    );
+    act(
+        &mut state,
+        0,
+        7_009,
+        merged_onto(
+            reviewed,
+            golden_commit(1),
+            golden_commit(9),
+            golden_commit(8),
+        ),
+    );
+    act(
+        &mut state,
+        0,
+        7_010,
+        target_moved(golden_commit(10), golden_commit(8)),
     );
 
     let child_workforce: WorkforceId = state.workforce_id().unwrap();
