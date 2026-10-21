@@ -497,11 +497,11 @@ pub(crate) mod testing {
         }
     }
 
-    /// An orphaned `/usr/bin/yes`, an Apple program whose environment macOS hides, started by a
-    /// double fork in `directory`. Killed when dropped, as it keeps a core busy.
-    pub(crate) struct OrphanedYes(pub(crate) Pid);
+    /// An orphaned `/bin/sleep 120`, an Apple program whose environment macOS hides, started by a
+    /// double fork in `directory`. Killed when dropped; one a failed test leaves ends by itself.
+    pub(crate) struct OrphanedSleep(pub(crate) Pid);
 
-    impl OrphanedYes {
+    impl OrphanedSleep {
         pub(crate) fn start(directory: &Path) -> Self {
             let pid_file = directory.join(format!(".{}.pid", rand::random::<u64>()));
             let daemonize = "exit if fork; POSIX::setsid(); exit if fork; \
@@ -509,7 +509,7 @@ pub(crate) mod testing {
                 open F, '>', $ARGV[0] . '.written'; print F $$; close F; \
                 rename $ARGV[0] . '.written', $ARGV[0]; \
                 open STDIN, '<', '/dev/null'; open STDOUT, '>', '/dev/null'; \
-                exec '/usr/bin/yes'";
+                exec '/bin/sleep', '120'";
             let status = Command::new("/usr/bin/perl")
                 .args(["-MPOSIX", "-e", daemonize])
                 .arg(&pid_file)
@@ -517,15 +517,15 @@ pub(crate) mod testing {
                 .status()
                 .unwrap();
             assert!(status.success());
-            let yes = Self(sleeper_pid(&pid_file));
+            let orphan = Self(sleeper_pid(&pid_file));
             std::fs::remove_file(&pid_file).unwrap();
-            // Until it runs `yes`, it is perl.
+            // Until it runs `sleep`, it is perl.
             std::thread::sleep(Duration::from_millis(100));
-            yes
+            orphan
         }
     }
 
-    impl Drop for OrphanedYes {
+    impl Drop for OrphanedSleep {
         fn drop(&mut self) {
             let _ = nix::sys::signal::kill(self.0, nix::sys::signal::Signal::SIGKILL);
         }
@@ -560,7 +560,7 @@ pub(crate) mod testing {
         let written = Path::new(&pid_file).with_extension("written");
         std::fs::write(&written, std::process::id().to_string()).unwrap();
         std::fs::rename(&written, &pid_file).unwrap();
-        std::thread::sleep(Duration::from_secs(600));
+        std::thread::sleep(Duration::from_secs(120));
     }
 }
 
@@ -778,21 +778,21 @@ mod tests {
     #[cfg(target_os = "macos")]
     #[tokio::test]
     async fn an_orphaned_apple_program_in_the_owners_directory_is_stopped() {
-        use super::testing::OrphanedYes;
+        use super::testing::OrphanedSleep;
         let root = tempfile::tempdir().unwrap();
         let (inside, outside) = (root.path().join("sess-ab"), root.path().join("sess-abc"));
         std::fs::create_dir_all(inside.join("src")).unwrap();
         std::fs::create_dir_all(&outside).unwrap();
-        let before = OrphanedYes::start(&inside);
+        let before = OrphanedSleep::start(&inside);
         tokio::time::sleep(Duration::from_millis(20)).await;
         let owner = owner_from_now(&inside);
-        let yes = OrphanedYes::start(&inside.join("src"));
-        let elsewhere = OrphanedYes::start(&outside);
+        let orphan = OrphanedSleep::start(&inside.join("src"));
+        let elsewhere = OrphanedSleep::start(&outside);
         // Its environment is readable: only a mark makes it the owner's.
         let unmarked = daemonized_in(&inside);
 
         assert_eq!(stop(owner).await, stopped(1));
-        assert!(!running(yes.0));
+        assert!(!running(orphan.0));
         assert!(running(before.0), "an orphan older than its owner runs on");
         assert!(
             running(elsewhere.0),

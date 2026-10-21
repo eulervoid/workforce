@@ -4200,18 +4200,18 @@ wf work release --note \"not yet\"
         .await;
 }
 
-/// Starts `/usr/bin/yes` as a daemon does, by a double fork out of the session's process group
+/// Starts `/bin/sleep 120` as a daemon does, by a double fork out of the session's process group
 /// and session, so that `launchd` or init adopts it, and writes its pid to the file it is given.
-/// macOS hides the environment of its own programs, such as `yes`.
-const DAEMONIZE_YES: &str = "use POSIX; exit if fork; POSIX::setsid(); exit if fork;
+/// macOS hides the environment of its own programs, such as `sleep`.
+const DAEMONIZE_SLEEP: &str = "use POSIX; exit if fork; POSIX::setsid(); exit if fork;
 select undef, undef, undef, 0.01 while getppid() != 1;
 open F, '>', \"$ARGV[0].written\"; print F $$; close F; rename \"$ARGV[0].written\", $ARGV[0];
 open STDIN, '<', '/dev/null'; open STDOUT, '>', '/dev/null'; open STDERR, '>', '/dev/null';
-exec '/usr/bin/yes';
+exec '/bin/sleep', '120';
 ";
 
-/// The orphans a test's sessions started, by the files they wrote their pids to. Each keeps a core
-/// busy, so whatever runs of them when the test ends is killed.
+/// The orphans a test's sessions started, by the files they wrote their pids to. Whatever runs of
+/// them when the test ends is killed; one a test that is killed leaves ends by itself.
 struct Orphans {
     directory: PathBuf,
 }
@@ -4220,11 +4220,11 @@ impl Orphans {
     fn new(world: &World) -> Self {
         let directory = world.wf.root.path().join("orphans");
         std::fs::create_dir_all(&directory).unwrap();
-        std::fs::write(directory.join("daemonize.pl"), DAEMONIZE_YES).unwrap();
+        std::fs::write(directory.join("daemonize.pl"), DAEMONIZE_SLEEP).unwrap();
         Self { directory }
     }
 
-    /// The script line that orphans `yes` named `name`, from the directory `cd` goes to, if any.
+    /// The script line that orphans `sleep` named `name`, from the directory `cd` goes to, if any.
     fn line(&self, name: &str, cd: Option<&Path>) -> String {
         let start = format!(
             "perl {} {}",
@@ -4304,7 +4304,7 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
         .run(&["session", "start", short(&kept_item), "--agent", "keeper"]);
     let kept = orphans.pid(&world, "kept").await;
 
-    let item = world.wf.add(&["--title", "Leaves yes running"]);
+    let item = world.wf.add(&["--title", "Leaves sleep running"]);
     start_session(&world, &item);
     let (inside, outside) = (
         orphans.pid(&world, "inside").await,
@@ -4330,7 +4330,7 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
         .await;
     assert!(running(kept).await, "a live session keeps its orphan");
     // On Linux every process shows its environment, and the orphan carries the session's mark
-    // wherever it runs; on macOS that of `yes` is hidden, and it is the session's only where the
+    // wherever it runs; on macOS that of `sleep` is hidden, and it is the session's only where the
     // session runs.
     assert_eq!(
         running(outside).await,
