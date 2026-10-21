@@ -238,9 +238,10 @@ const ALLOW_WRITE: &[&str] = &[
 
 /// What of the harnesses' directories in [`ALLOW_WRITE`] the harness runs or follows when the
 /// principal starts it, outside the sandbox: settings with hooks and MCP servers, commands, agents,
-/// skills, plugins, instructions and the harness's own binary. Their state, sessions and auth stay
-/// writable. `~/.claude.json` holds Claude Code's state and its user-scope MCP servers in one file,
-/// so it stays writable too.
+/// skills, plugins, instructions, the status line script, editor extensions and the harness's own
+/// binary. Their state, sessions and auth stay writable. `~/.claude.json` holds Claude Code's state
+/// and its user-scope MCP servers in one file, so it stays writable too, and so do the scripts
+/// settings point to elsewhere in `~/.claude`.
 const HARNESS_CONFIG: &[&str] = &[
     // Claude Code
     "~/.claude/settings.json",
@@ -252,6 +253,10 @@ const HARNESS_CONFIG: &[&str] = &[
     "~/.claude/skills",
     "~/.claude/plugins",
     "~/.claude/output-styles",
+    "~/.claude/statusline*",
+    "~/.claude/local",
+    // Amp
+    "~/.amp/bin",
     // Codex
     "~/.codex/config.toml",
     "~/.codex/hooks.json",
@@ -264,6 +269,8 @@ const HARNESS_CONFIG: &[&str] = &[
     "~/.cursor/mcp.json",
     "~/.cursor/rules",
     "~/.cursor/commands",
+    "~/.cursor/hooks.json",
+    "~/.cursor/extensions",
     // OpenCode, whose config is in `~/.config`
     "~/.opencode/bin",
     // Gemini CLI
@@ -290,12 +297,14 @@ const HARNESS_CONFIG: &[&str] = &[
     "~/.copilot/agents",
     "~/.copilot/skills",
     "~/.copilot/hooks",
+    "~/.copilot/pkg",
     // Kiro CLI
     "~/.kiro/settings",
     "~/.kiro/agents",
     "~/.kiro/steering",
     "~/.kiro/prompts",
     "~/.kiro/hooks",
+    "~/.kiro/extensions",
 ];
 
 const DENY_WRITE: &[&str] = &["**/.env", "**/.env.*", "**/*.pem", "**/*.p12", "**/*.pfx"];
@@ -504,14 +513,22 @@ mod tests {
             "~/.claude/plugins/marketplaces/x/plugin.json",
             "~/.codex/config.toml",
             "~/.codex/rules/default.rules",
+            "~/.claude/statusline.sh",
+            "~/.claude/statusline-command.sh",
+            "~/.claude/local/claude",
+            "~/.amp/bin/amp",
             "~/.cursor/mcp.json",
+            "~/.cursor/hooks.json",
+            "~/.cursor/extensions/x/extension.js",
             "~/.opencode/bin/opencode",
             "~/.gemini/settings.json",
             "~/.gemini/extensions/x/gemini-extension.json",
             "~/.factory/settings.json",
             "~/.pi/agent/extensions/x.ts",
             "~/.copilot/mcp-config.json",
+            "~/.copilot/pkg/universal/0.0.1/index.js",
             "~/.kiro/settings/mcp.json",
+            "~/.kiro/extensions/x/extension.js",
         ] {
             assert!(covers("denyWrite", path), "{path} is not writable");
         }
