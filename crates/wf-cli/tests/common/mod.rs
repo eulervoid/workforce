@@ -184,3 +184,46 @@ pub fn comments(shown: &Value) -> Value {
             .collect(),
     )
 }
+
+/// What a daemon of a test logged, across restarts, so that a wait that times out tells what the
+/// daemon was doing.
+#[derive(Clone, Default)]
+pub struct DaemonLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
+
+/// What [`DaemonLog`] keeps: what `wf daemon start` logs, what the dispatcher does, and how each
+/// session's harness gets on.
+const LOG_FILTER: &str = "warn,wf_daemon=info,wf_daemon::runner::dispatch=debug,wf_daemon::runner::drive=debug,wf_net=info";
+/// How many lines of the daemon log a wait that times out prints.
+pub const LOG_TAIL: usize = 60;
+
+impl DaemonLog {
+    /// Where a daemon of the test logs: each daemon of the tests runs with a log of its own,
+    /// which its tasks inherit.
+    pub fn dispatch(&self) -> tracing::Dispatch {
+        let log = self.clone();
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(LOG_FILTER))
+            .with_ansi(false)
+            .with_writer(move || log.clone())
+            .finish()
+            .into()
+    }
+
+    /// The last `lines` lines.
+    pub fn tail(&self, lines: usize) -> String {
+        let text = String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned();
+        let all: Vec<&str> = text.lines().collect();
+        all[all.len().saturating_sub(lines)..].join("\n")
+    }
+}
+
+impl std::io::Write for DaemonLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}

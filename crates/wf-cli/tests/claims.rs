@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tempfile::TempDir;
+use tracing::instrument::WithSubscriber;
 use wf_core::event::{AgentDefined, Event, EventBody};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
 use wf_core::identity::DeviceKey;
@@ -26,6 +27,10 @@ use wf_net::Network;
 use wf_store::{RedbStore, Replica};
 use wf_vcs::GitCli;
 use wf_vcs::testing::{TestRepository, git_in};
+
+mod common;
+
+use common::{DaemonLog, LOG_TAIL};
 
 /// Commits once, then works until it is stopped.
 const SCRIPT: &str = "\
@@ -113,6 +118,21 @@ struct Device {
     directory: TempDir,
     daemon: Arc<Daemon>,
     socket: PathBuf,
+    key: DeviceKey,
+    log: DaemonLog,
+}
+
+/// A test that fails, by a wait that timed out or an assertion, tells what each daemon was doing.
+impl Drop for Device {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!(
+                "the end of the daemon log of device {}:\n{}",
+                self.key,
+                self.log.tail(LOG_TAIL)
+            );
+        }
+    }
 }
 
 impl Device {
@@ -146,6 +166,8 @@ impl Device {
             AcpAgentConfig::new(fake_agent()).env("FAKE_AGENT_SCRIPT", script.to_string_lossy()),
         )]);
         let socket = directory.path().join("daemon.sock");
+        let log = DaemonLog::default();
+        let dispatch = log.dispatch();
         let daemon = Daemon::start(
             Launch {
                 data_dir: DataDir::new(directory.path().to_path_buf()),
@@ -158,13 +180,20 @@ impl Device {
             },
             fixture.devices[device].clone(),
         )
+        .with_subscriber(dispatch.clone())
         .await
         .unwrap();
-        tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
+        tokio::spawn(
+            Arc::clone(&daemon)
+                .serve(std::future::pending())
+                .with_subscriber(dispatch),
+        );
         let started = Self {
             directory,
             daemon,
             socket,
+            key: fixture.devices[device].key(),
+            log,
         };
         let bare = started.bare(fixture.workforce());
         eventually("the bare repository is made", || {
