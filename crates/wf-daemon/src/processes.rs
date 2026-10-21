@@ -74,59 +74,44 @@ pub(crate) struct Owner {
     pub(crate) spared: Vec<Place>,
 }
 
-/// The directories a session or a command runs in, and when it ran: an orphan whose environment
-/// is hidden belongs to it if it runs inside one of them and started while it ran. The work
-/// sessions of an item run in the same repository, one after the other.
+/// The directory a session or a command runs in, and when it ran: an orphan whose environment is
+/// hidden belongs to it if it runs inside the directory and started while it ran. The work sessions
+/// of an item run in the same repository, one after the other.
 #[derive(Debug, Clone)]
 pub(crate) struct Place {
     /// Canonical, as macOS gives the working directory of a process.
-    directories: Vec<PathBuf>,
+    directory: PathBuf,
     since: Timestamp,
     /// When it ended; `None` while it runs.
     until: Option<Timestamp>,
 }
 
 impl Place {
-    /// Where a command runs in `directory`, which may be gone already.
+    /// `directory`, which may be gone already, made canonical as far as it is there.
     pub(crate) fn new(directory: &Path, since: Timestamp, until: Option<Timestamp>) -> Self {
+        let mut missing = Vec::new();
+        let mut existing = directory;
+        let canonical = loop {
+            if let Ok(canonical) = existing.canonicalize() {
+                break canonical;
+            }
+            match (existing.parent(), existing.file_name()) {
+                (Some(parent), Some(name)) => {
+                    missing.push(name.to_os_string());
+                    existing = parent;
+                }
+                _ => break directory.to_path_buf(),
+            }
+        };
         Self {
-            directories: vec![canonical(directory)],
+            directory: missing
+                .iter()
+                .rev()
+                .fold(canonical, |path, name| path.join(name)),
             since,
             until,
         }
     }
-
-    /// Where a session runs: its directory, and the worktrees the agent registered in the
-    /// repository there, which can be anywhere, as long as the repository is there to tell.
-    pub(crate) fn session(directory: &Path, since: Timestamp, until: Option<Timestamp>) -> Self {
-        let mut place = Self::new(directory, since, until);
-        place
-            .directories
-            .extend(wf_vcs::registered_worktrees(directory));
-        place
-    }
-}
-
-/// `directory`, which may be gone already, made canonical as far as it is there.
-fn canonical(directory: &Path) -> PathBuf {
-    let mut missing = Vec::new();
-    let mut existing = directory;
-    let canonical = loop {
-        if let Ok(canonical) = existing.canonicalize() {
-            break canonical;
-        }
-        match (existing.parent(), existing.file_name()) {
-            (Some(parent), Some(name)) => {
-                missing.push(name.to_os_string());
-                existing = parent;
-            }
-            _ => break directory.to_path_buf(),
-        }
-    };
-    missing
-        .iter()
-        .rev()
-        .fold(canonical, |path, name| path.join(name))
 }
 
 /// A process of this user, other than the daemon.
@@ -206,14 +191,7 @@ impl Place {
         }
         match directory {
             // Component by component, so that `/x/sess-ab` holds nothing of `/x/sess-abc`.
-            Some(directory)
-                if self
-                    .directories
-                    .iter()
-                    .any(|own| directory.starts_with(own)) =>
-            {
-                Belongs::Yes
-            }
+            Some(directory) if directory.starts_with(&self.directory) => Belongs::Yes,
             Some(_) => Belongs::No,
             None => Belongs::Unknown,
         }
@@ -694,7 +672,7 @@ mod tests {
         Owner {
             mark: Mark::new_command_run(),
             place: Some(Place {
-                directories: vec![PathBuf::from(directory)],
+                directory: PathBuf::from(directory),
                 since: at(since),
                 until: until.map(at),
             }),
@@ -737,7 +715,7 @@ mod tests {
     fn a_hidden_orphan_where_a_live_session_runs_is_never_an_ended_ones() {
         let mut ended = owner_in("/data/repos/item", 100, Some(200));
         ended.spared = vec![Place {
-            directories: vec![PathBuf::from("/data/repos/item")],
+            directory: PathBuf::from("/data/repos/item"),
             since: at(190),
             until: None,
         }];
@@ -784,10 +762,7 @@ mod tests {
         let gone = directory.path().join("repos").join("sess-ab");
         let place = Place::new(&gone, at(0), None);
         let canonical = directory.path().canonicalize().unwrap();
-        assert_eq!(
-            place.directories,
-            vec![canonical.join("repos").join("sess-ab")]
-        );
+        assert_eq!(place.directory, canonical.join("repos").join("sess-ab"));
     }
 
     /// The owner of what runs in `directory` from now on.

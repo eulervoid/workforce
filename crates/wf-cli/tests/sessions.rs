@@ -4283,8 +4283,6 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
     let orphans = Orphans::new(&world);
     let outside = world.wf.root.path().join("outside");
     std::fs::create_dir_all(&outside).unwrap();
-    // A worktree the agent adds outside its directory, as one did in /tmp.
-    let compare = world.wf.root.path().join("compare");
     std::fs::write(
         &world.scripts["fake-keeper"],
         // A second hang for the resume after the restart.
@@ -4294,11 +4292,9 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
     std::fs::write(
         &world.scripts["fake-coder"],
         format!(
-            "{}{}sh git worktree add --quiet --detach {}\n{}wf work release --note done\n",
+            "{}{}wf work release --note done\n",
             orphans.line("inside", None),
             orphans.line("outside", Some(&outside)),
-            compare.display(),
-            orphans.line("worktree", Some(&compare)),
         ),
     )
     .unwrap();
@@ -4310,10 +4306,9 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
 
     let item = world.wf.add(&["--title", "Leaves yes running"]);
     start_session(&world, &item);
-    let (inside, outside, worktree) = (
+    let (inside, outside) = (
         orphans.pid(&world, "inside").await,
         orphans.pid(&world, "outside").await,
-        orphans.pid(&world, "worktree").await,
     );
     world
         .wait("the session to be released", |world| {
@@ -4323,20 +4318,14 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
         })
         .await;
     world
-        .wait(
-            "the orphans in its directory and its worktree to be stopped",
-            |_| {
-                // SAFETY: signal 0 only asks whether the process is there.
-                unsafe { libc::kill(inside, 0) != 0 && libc::kill(worktree, 0) != 0 }
-            },
-        )
+        .wait("the orphan in its directory to be stopped", |_| {
+            // SAFETY: signal 0 only asks whether the process is there.
+            unsafe { libc::kill(inside, 0) != 0 }
+        })
         .await;
-    let stopped = if cfg!(target_os = "macos") { 2 } else { 3 };
     world
         .wait("the daemon to say what it stopped", |world| {
-            world
-                .log
-                .contains(&format!("stopped {stopped} processes it left running"))
+            world.log.contains("stopped 1 process it left running")
         })
         .await;
     assert!(running(kept).await, "a live session keeps its orphan");

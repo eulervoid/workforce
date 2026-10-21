@@ -1012,9 +1012,7 @@ impl GitCli {
 mod tests {
     use super::*;
     use crate::testing::{TestRepository as TestRepo, git_in};
-    use crate::{
-        Import, ImportMode, agent_branch_head, registered_worktrees, remove_agent_repository,
-    };
+    use crate::{Import, ImportMode, agent_branch_head, remove_agent_repository};
 
     impl GitCli {
         /// A rebase without the git config of this process's environment, which a test run in a
@@ -1781,56 +1779,6 @@ mod tests {
         std::fs::write(&elsewhere, format!("{}\n", repo.main())).unwrap();
         std::os::unix::fs::symlink(&elsewhere, &reference).unwrap();
         assert_eq!(agent_branch_head(&path, "wf/k3f9"), None);
-    }
-
-    #[test]
-    fn the_worktrees_an_agent_added_are_read_and_a_forged_or_older_one_is_not() {
-        let repo = TestRepo::new();
-        // There before the repository, as `/tmp` is.
-        let earlier = repo.root.path().join("earlier");
-        std::fs::create_dir_all(&earlier).unwrap();
-        let (path, _) = agent_repository(&repo);
-        assert_eq!(registered_worktrees(&path), Vec::<PathBuf>::new());
-        let added = repo.root.path().join("compare");
-        git_in(
-            &path,
-            &[
-                "worktree",
-                "add",
-                "--quiet",
-                "--detach",
-                added.to_str().unwrap(),
-            ],
-        );
-        // Points at a directory that is not a worktree of the repository.
-        let forged = path.join(".git/worktrees/forged");
-        std::fs::create_dir_all(&forged).unwrap();
-        let elsewhere = repo.root.path().join("elsewhere");
-        std::fs::create_dir_all(&elsewhere).unwrap();
-        std::fs::write(
-            forged.join("gitdir"),
-            format!("{}\n", elsewhere.join(".git").display()),
-        )
-        .unwrap();
-        // Names the entry back, but was there before the repository.
-        let earlier_entry = path.join(".git/worktrees/earlier");
-        std::fs::create_dir_all(&earlier_entry).unwrap();
-        std::fs::write(
-            earlier_entry.join("gitdir"),
-            format!("{}\n", earlier.join(".git").display()),
-        )
-        .unwrap();
-        std::fs::write(
-            earlier.join(".git"),
-            format!("gitdir: {}\n", earlier_entry.display()),
-        )
-        .unwrap();
-        // Without a creation time (some Linux file systems), no worktree counts.
-        let expected = match added.metadata().unwrap().created() {
-            Ok(_) => vec![added.canonicalize().unwrap()],
-            Err(_) => Vec::new(),
-        };
-        assert_eq!(registered_worktrees(&path), expected);
     }
 
     #[test]

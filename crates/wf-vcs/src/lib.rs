@@ -19,7 +19,7 @@ use std::path::{Path, PathBuf};
 use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::session::{CommitId, GitOid, SessionRole};
 
-pub use agent_repository::{agent_branch_head, registered_worktrees, remove_agent_repository};
+pub use agent_repository::{agent_branch_head, remove_agent_repository};
 pub use bare_repository::REMOTE;
 pub use git::{BRIDGE_DESCRIPTOR, GitCli};
 pub use item_refs::diverged_ref;

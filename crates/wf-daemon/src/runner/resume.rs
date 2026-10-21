@@ -144,7 +144,7 @@ impl Daemon {
                         workforce,
                         session: session.id(),
                     },
-                    place: Some(Place::session(
+                    place: Some(Place::new(
                         &directory,
                         at_ms(session.started().hlc.wall_ms()),
                         Some(at_ms(ended)),
@@ -173,7 +173,7 @@ impl Daemon {
                     session.id(),
                     &session.role(),
                 );
-                Place::session(&directory, at_ms(session.started().hlc.wall_ms()), None)
+                Place::new(&directory, at_ms(session.started().hlc.wall_ms()), None)
             })
             .collect()
     }

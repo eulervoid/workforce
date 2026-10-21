@@ -883,15 +883,13 @@ default level; an item can name another (`--recovery`).
   `WF_WORKFORCE` in the environment it was started with (`/proc/<pid>/environ` on Linux,
   `KERN_PROCARGS2` on macOS). macOS hides that environment for Apple's own programs (`sh`,
   `sleep`, `yes`); such a process is the session's only if it is an orphan (its parent is
-  `launchd`), its working directory is inside one of the session's places (canonical, compared by
-  path component) and it started while the session was live, and no live session's places and time
-  hold it as well, since the work sessions of an item run in one repository one after the other.
-  A session's places are its directory and the worktrees registered in the repository there
-  (`git worktree add` from it, wherever they are), read from its `.git/worktrees` before the
-  directory is removed, or at daemon start while it is still there; as an agent can write
-  anything into its repository and into much outside it (`/tmp`), a worktree counts only if its
-  `.git` names the entry back and its directory was created after the session's repository (`git
-  worktree add` makes a new one), so a directory that was there before never does.
+  `launchd`), its working directory is inside the session's directory (canonical, compared by
+  path component) and it started while the session was live, and no live session's directory and
+  time hold it as well, since the work sessions of an item run in one repository one after the
+  other. Nothing outside the session's directory counts, not even a worktree registered in its
+  repository: every mark of one is something the agent can write, so it could point the rule at a
+  directory of the principal's, and stopping the principal's processes is worse than missing an
+  agent's leftover.
   One whose working directory macOS does not give is counted in the log and left running. A
   process whose environment is readable is judged by the mark alone: without it, it is not the
   session's, wherever it runs. A live session keeps its processes, also over a restart; daemon
@@ -1539,15 +1537,13 @@ environment, and on macOS an orphan of an Apple program by its directory, so
 * on Linux, a process that cleared its environment (`env -i`) escapes, and so does one started
   through something outside the session, such as `systemd-run --user` (on Linux a cgroup per
   session would be a mark nothing escapes; Fence's bubblewrap could carry it);
-* on macOS, an Apple program that runs in a directory the agent made outside the session's
-  directory and its registered worktrees (`mkdir /tmp/x && cd /tmp/x && yes &`), in a worktree
-  whose directory is gone by the time the daemon looks, or whose working directory macOS does not
-  give, escapes, as does anything `launchd` starts for the session (`open`, `launchctl`);
+* on macOS, an orphaned Apple program whose working directory is outside the session's directory
+  escapes, such as one in a worktree the agent added elsewhere (4 of the 16 `yes` of 2026-10-21
+  ran in `/private/tmp/wf-main-compare`) or in `mkdir /tmp/x && cd /tmp/x && yes &`, as does one
+  whose working directory macOS does not give, and anything `launchd` starts for the session
+  (`open`, `launchctl`);
 * on macOS, an orphaned Apple program the principal started inside an agent's session directory
-  or one of its registered worktrees while that session was live is stopped with the session;
-* on macOS, likewise one the principal started during the session in a directory an agent made
-  after the session's repository was and then forged into a worktree of its repository (a `.git` file and
-  an entry naming each other);
+  while that session was live is stopped with the session;
 * a process that `KILL` does not end (uninterruptible sleep on a mount that hangs) runs on, named
   in the daemon log.
 
