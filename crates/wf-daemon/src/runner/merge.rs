@@ -497,7 +497,9 @@ impl Daemon {
             .await?)
     }
 
-    /// Syncs with the other devices that are there and may merge, for [`CLAIM_SETTLE`] at most.
+    /// Syncs twice with the other devices that are there and may merge, for [`CLAIM_SETTLE`] at
+    /// most. A claim another device wrote while the first sync ran, before it had this one, is
+    /// with it once the first has ended, so the second brings it.
     async fn sync_with_merging_devices(&self, workforce: WorkforceId, loaded: &Loaded) {
         let (own, presence, now_ms) = (self.device(), self.presence_now(), wf_store::now_ms());
         let Ok(devices) = self
@@ -520,7 +522,11 @@ impl Daemon {
         let Ok(node) = self.node().await else {
             return;
         };
-        let synced = sync_all(&node, workforce, devices, Some(self.presence()));
+        let synced = async {
+            for _ in 0..2 {
+                sync_all(&node, workforce, devices.clone(), Some(self.presence())).await;
+            }
+        };
         let _ = tokio::time::timeout(CLAIM_SETTLE, synced).await;
     }
 
