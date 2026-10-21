@@ -3,8 +3,8 @@
 use std::collections::BTreeMap;
 
 use anyhow::{Context, bail};
-use jiff::Timestamp;
 use serde::Serialize;
+use wf_core::claims::Presence;
 use wf_core::event::{DeviceProfile, EventBody};
 use wf_core::identity::{DeviceKey, Role};
 use wf_core::name::AgentName;
@@ -14,11 +14,8 @@ use crate::cli::{DeviceCommand, DeviceEditArgs};
 use crate::commands::emit;
 use crate::network::parse_agents;
 use crate::render;
+use crate::view::DevicePresence;
 use crate::workspace::Workspace;
-
-/// When each device was last heard from, in milliseconds since the epoch. Local to this machine
-/// and not part of the workforce state.
-pub type LastSeen = BTreeMap<DeviceKey, u64>;
 
 #[derive(Serialize)]
 pub struct DeviceView {
@@ -28,12 +25,19 @@ pub struct DeviceView {
     pub hardware: Option<String>,
     pub max_sessions: Option<u32>,
     pub agents: BTreeMap<String, u32>,
-    pub last_seen: Option<Timestamp>,
-    pub this_device: bool,
+    #[serde(flatten)]
+    pub presence: DevicePresence,
     pub flags: Vec<String>,
 }
 
-pub fn device_views(state: &State, own: DeviceKey, last_seen: &LastSeen) -> Vec<DeviceView> {
+/// The devices of the workforce as `wf device list` shows them; `presence` is what the daemon
+/// knows of which are there, at `now_ms`.
+pub fn device_views(
+    state: &State,
+    own: DeviceKey,
+    presence: Option<&Presence>,
+    now_ms: u64,
+) -> Vec<DeviceView> {
     let mut views: Vec<DeviceView> = state
         .devices()
         .map(|info| {
@@ -60,10 +64,7 @@ pub fn device_views(state: &State, own: DeviceKey, last_seen: &LastSeen) -> Vec<
                             .collect()
                     })
                     .unwrap_or_default(),
-                last_seen: last_seen
-                    .get(&info.device)
-                    .map(|millis| crate::view::timestamp_ms(*millis)),
-                this_device: info.device == own,
+                presence: DevicePresence::of(state, info.device, Some(own), presence, now_ms),
                 flags,
             }
         })
@@ -116,7 +117,8 @@ pub fn device(json: bool, command: DeviceCommand, workspace: &mut Workspace) -> 
             let views = device_views(
                 workspace.state(),
                 workspace.device_key(),
-                &workspace.last_seen()?,
+                workspace.presence()?.as_ref(),
+                wf_store::now_ms(),
             );
             emit(json, &views, |views| render::devices(views))
         }

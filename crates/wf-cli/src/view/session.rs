@@ -98,6 +98,14 @@ impl SessionStatus {
             SessionStatus::Ended { reason, .. } => reason.name(),
         }
     }
+
+    /// The name for reading: `lease expired` rather than `lease_expired`.
+    pub fn label(&self) -> String {
+        match self {
+            SessionStatus::Live | SessionStatus::Parked => self.name().to_string(),
+            SessionStatus::Ended { reason, .. } => reason.label(),
+        }
+    }
 }
 
 fn serialize_role_name<S: Serializer>(

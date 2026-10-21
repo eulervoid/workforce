@@ -251,7 +251,7 @@ async fn reads_of_a_workforce_the_daemon_lacks_are_errors() {
         (
             client.permissions(unknown).map(drop),
             client.machine_faults(unknown).map(drop),
-            client.last_seen(unknown).map(drop),
+            client.presence(unknown).map(drop),
         )
     })
     .await;
@@ -416,8 +416,8 @@ async fn daemons_of_two_devices_converge_on_their_own() {
     let mut seen_vm = false;
     for _ in 0..200 {
         let socket = laptop_socket.clone();
-        let seen = blocking(move || connect(&socket).last_seen(workforce).unwrap()).await;
-        if seen.iter().any(|(device, _)| *device == vm.device()) {
+        let presence = blocking(move || connect(&socket).presence(workforce).unwrap()).await;
+        if presence.heard_ms().any(|(device, _)| device == vm.device()) {
             seen_vm = true;
             break;
         }

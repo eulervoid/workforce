@@ -18,6 +18,7 @@ use crate::dashboard::snapshot::{InView, InboxEntry, Place, SessionInfo};
 use crate::theme;
 use crate::transcript::Transcript;
 use crate::view::SessionStatus;
+use wf_core::session::EndReason;
 
 /// Draws a detail under its breadcrumb; returns where it was drawn, and adds its links to
 /// `spots`.
@@ -210,8 +211,24 @@ pub(super) fn draw_session(
         ];
         let next = NEXT_SESSION.text();
         let right = successor.map(|successor| {
-            line.push(Span::raw(" · its item goes on in "));
+            line.push(Span::raw(match reason {
+                EndReason::LeaseExpired => " · taken over by ",
+                EndReason::Outclaimed => " · claimed first by ",
+                EndReason::Submitted
+                | EndReason::Reviewed
+                | EndReason::Supervised
+                | EndReason::Released
+                | EndReason::TimedOut
+                | EndReason::Failed
+                | EndReason::Cancelled
+                | EndReason::Interrupted
+                | EndReason::Diagnosed
+                | EndReason::MachineFault(_) => " · its item goes on in ",
+            }));
             line.extend(session_crumb(app, successor));
+            if let Place::Elsewhere(device) = &successor.place {
+                line.push(Span::raw(format!(" on {device}")));
+            }
             Line::from(themed(next.clone(), theme::key()))
         });
         let first = RowLines::new(app, false, ended_bar.width)

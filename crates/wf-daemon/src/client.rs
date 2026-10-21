@@ -5,6 +5,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 
 use serde::de::DeserializeOwned;
+use wf_core::claims::Presence;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{EventId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::{AgentId, DeviceKey};
@@ -302,11 +303,8 @@ impl DaemonClient {
         )
     }
 
-    pub fn last_seen(
-        &mut self,
-        workforce: WorkforceId,
-    ) -> Result<Vec<(DeviceKey, u64)>, ClientError> {
-        self.call(workforce, Call::LastSeen)
+    pub fn presence(&mut self, workforce: WorkforceId) -> Result<Presence, ClientError> {
+        self.call(workforce, Call::Presence)
     }
 }
 

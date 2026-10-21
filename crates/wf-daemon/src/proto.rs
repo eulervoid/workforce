@@ -25,7 +25,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 24;
+pub const PROTOCOL_VERSION: u32 = 25;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -84,7 +84,7 @@ pub struct Request {
 /// Each call is answered with a [`Reply`] of the type its documentation names.
 ///
 /// A connection that acts for a session makes calls in the session's workforce only: the reads
-/// (`State`, `Event`, `Events`, `ItemEvents`, `AgentEvents`, `LastSeen`, `Permissions`,
+/// (`State`, `Event`, `Events`, `ItemEvents`, `AgentEvents`, `Presence`, `Permissions`,
 /// `MachineFaults`, `CacheUsage`), `Author`, `SyncNow` and `EndSession`. `EndSession` is for
 /// sessions only; the other calls are for the principal only.
 #[derive(Serialize, Deserialize)]
@@ -121,9 +121,9 @@ pub enum Call {
     /// about to learn the members of. The history comes from the parent when it is stored here.
     /// Answered with a `Vec<PeerSync>`.
     Follow(Vec<DeviceKey>),
-    /// When each device was last heard from, in milliseconds since the epoch, as
-    /// `Vec<(DeviceKey, u64)>`.
-    LastSeen,
+    /// When each device was last heard from and when the daemon started, as
+    /// [`wf_core::claims::Presence`].
+    Presence,
     /// Starts a session of `agent` on `item` by hand: a review
     /// of the named `step` (or of the only one open) when the item awaits a review, and a work
     /// session in a worktree otherwise. Answered with its `SessionId`.
@@ -229,6 +229,7 @@ pub fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<T, P
 
 #[cfg(test)]
 mod tests {
+    use wf_core::claims::Presence;
     use wf_core::id::EventId;
     use wf_core::identity::DeviceSigner;
     use wf_core::testing::{golden_forking_state, golden_state};
@@ -296,6 +297,10 @@ mod tests {
             ),
             ("CacheUsage", encoding::encode(&Reply::Ok(usage)).unwrap()),
             (
+                "Presence",
+                encoding::encode(&Reply::Ok(Presence::new(1_000, [(device, 2_000)]))).unwrap(),
+            ),
+            (
                 "LiveDiff",
                 encoding::encode(&Reply::Ok(live_diffs)).unwrap(),
             ),
@@ -338,7 +343,7 @@ mod tests {
             Call::Fork(_) => "Fork",
             Call::Join { .. } => "Join",
             Call::Follow(_) => "Follow",
-            Call::LastSeen => "LastSeen",
+            Call::Presence => "Presence",
             Call::StartSession { .. } => "StartSession",
             Call::EndSession { .. } => "EndSession",
             Call::StopSession(_) => "StopSession",
@@ -394,7 +399,7 @@ mod tests {
                 profile,
             },
             Call::Follow(vec![device]),
-            Call::LastSeen,
+            Call::Presence,
             Call::StartSession {
                 agent: AgentName::new("claude").unwrap(),
                 item,
@@ -510,7 +515,7 @@ mod tests {
             "ecwm4akw6r4k4bgmtfmavll7yd5gs6qe5sbrsxc25bwc4gttceoq",
         ),
         (
-            "LastSeen",
+            "Presence",
             34,
             "golkl4gskednp3cut32xd4n6uwakmtcymheyoatichlz2kej6xoa",
         ),
@@ -566,8 +571,8 @@ mod tests {
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 24;
-    const GOLDEN_REPLIES: [(&str, usize, &str); 7] = [
+    const GOLDEN_PROTOCOL_VERSION: u32 = 25;
+    const GOLDEN_REPLIES: [(&str, usize, &str); 8] = [
         (
             "State",
             23266,
@@ -592,6 +597,11 @@ mod tests {
             "CacheUsage",
             4,
             "4jbsfkwgblpmpv53kehzpspv6karstuuedmhfclxlcsqy7rt4whq",
+        ),
+        (
+            "Presence",
+            39,
+            "ihkffobvfi4c55lxe4x6fzf6hoef42zffuv4seleatghl3tyubya",
         ),
         (
             "LiveDiff",

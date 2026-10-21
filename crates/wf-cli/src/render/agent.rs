@@ -191,7 +191,7 @@ pub(super) fn agent_session(
         ),
         SessionStatus::Ended { reason, at } => (
             paint(theme::text_dimmed(), "·"),
-            format!("{} {} ago", reason.name().replace('_', " "), age(at)),
+            format!("{} {} ago", reason.label(), age(at)),
         ),
     };
     let label = paint_actor(&ActorView {

@@ -131,20 +131,22 @@ pub fn devices(devices: &[DeviceView]) -> String {
                 .chars()
                 .take(DEVICE_ID_LEN)
                 .collect::<String>(),
-            if device.this_device {
-                format!("{name} (this)")
-            } else {
-                name
+            match device.presence {
+                DevicePresence::ThisDevice => format!("{name} (this)"),
+                DevicePresence::Gone { .. } => format!("{name} (gone)"),
+                DevicePresence::Unknown | DevicePresence::There { .. } => name,
             },
             device.principal.clone(),
             device.hardware.clone().unwrap_or_else(|| "-".to_string()),
             device
                 .max_sessions
                 .map_or_else(|| "-".to_string(), |sessions| sessions.to_string()),
-            if device.this_device {
-                "now".to_string()
-            } else {
-                device.last_seen.map_or_else(|| "-".to_string(), short_time)
+            match device.presence {
+                DevicePresence::ThisDevice => "now".to_string(),
+                DevicePresence::Unknown => "-".to_string(),
+                DevicePresence::There { last_seen } | DevicePresence::Gone { last_seen } => {
+                    last_seen.map_or_else(|| "-".to_string(), short_time)
+                }
             },
             device.flags.join(", "),
         ]);
@@ -197,7 +199,7 @@ pub fn sessions(sessions: &[SessionView]) -> String {
             session.title.clone(),
             steps_label(session.steps),
             session.role.name().to_string(),
-            session.status.name().to_string(),
+            session.status.label(),
             short_time(session.started),
         ]);
     }

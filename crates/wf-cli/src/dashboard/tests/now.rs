@@ -563,3 +563,39 @@ fn the_bar_of_a_selected_row_of_two_lines_looks_the_same_on_both() {
     assert_eq!(drawn.style_at(0, first), drawn.style_at(0, first + 1));
     insta::assert_snapshot!(shown);
 }
+
+#[test]
+fn the_now_tab_lists_the_other_devices_with_when_each_was_seen_and_which_are_gone() {
+    use crate::view::{DevicePresence, DeviceStatus};
+
+    let seen = |minutes: u64| Some(crate::view::timestamp_ms(NOW_MS - minutes * 60_000));
+    let mut snapshot = snapshot();
+    snapshot.devices = vec![
+        DeviceStatus {
+            name: "vm".to_owned(),
+            presence: DevicePresence::There { last_seen: seen(1) },
+        },
+        DeviceStatus {
+            name: "server".to_owned(),
+            presence: DevicePresence::Gone {
+                last_seen: seen(120),
+            },
+        },
+        DeviceStatus {
+            name: "pi".to_owned(),
+            presence: DevicePresence::Gone { last_seen: None },
+        },
+    ];
+    let mut app = App::new(snapshot, TimeZone::UTC);
+    app.resize(60, 30);
+    let screen = screen(&mut app, 60, 30);
+    insta::assert_snapshot!(screen);
+    let (column, row) = find(&mut app, 60, 30, "gone · seen 2h00m ago");
+    // In the color of what needs attention.
+    let (flag_column, flag_row) = find(&mut app, 60, 30, "! #aqcaib");
+    let drawn = Drawn::of(&mut app, 60, 30);
+    assert_eq!(
+        drawn.style_at(column, row).fg,
+        drawn.style_at(flag_column, flag_row).fg
+    );
+}

@@ -132,11 +132,13 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 &machine_faults,
             );
             let awaited = workspace.awaited_commits()?;
+            let presence = workspace.presence()?;
             let context = view::StatusContext {
                 machine_faults: &machine_faults,
                 awaited: &awaited,
                 own: Some(workspace.device_key()),
-                last_seen: &workspace.last_seen()?,
+                presence: presence.as_ref(),
+                now_ms: wf_store::now_ms(),
                 daemon: workspace.follows_daemon(),
                 waiting_on_you,
                 refolded: refold,

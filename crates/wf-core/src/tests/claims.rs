@@ -423,6 +423,68 @@ fn a_takeover_and_a_late_end_from_the_returning_device_converge() {
     );
 }
 
+/// A session that lost its claim names the one that has it: the holder for an `Outclaimed` end,
+/// the takeover for a `LeaseExpired` one. Other ends name none.
+#[test]
+fn a_session_that_lost_its_claim_names_the_session_that_has_it() {
+    let (fixture, state, task, events) = claimed_concurrently(&SessionRole::Work);
+    let [earlier, later] = earlier_first(events);
+    let (holder, lost) = (SessionId::from(earlier.id()), SessionId::from(later.id()));
+    let device = |event: &Event| {
+        fixture
+            .devices
+            .iter()
+            .position(|device| device.key() == event.content.author)
+            .unwrap()
+    };
+    let taken_over_by = |state: &State, session: SessionId| {
+        state
+            .taken_over_by(state.session(session).unwrap())
+            .map(|session| session.id())
+    };
+    let mut state = state;
+    assert_eq!(taken_over_by(&state, lost), None, "live");
+    fixture.apply(
+        &mut state,
+        device(&later),
+        5_000,
+        end_session(lost, EndReason::Outclaimed),
+    );
+    assert_eq!(taken_over_by(&state, lost), Some(holder));
+
+    // The holder's device is gone, and the other takes over.
+    let taking_over = 1 - device(&earlier);
+    let daemon = Actor::Daemon(fixture.founder.key());
+    let expired = fixture.author_as(
+        &state,
+        taking_over,
+        daemon,
+        6_000,
+        end_session(holder, EndReason::LeaseExpired),
+    );
+    let mut state = received(&state, &[&expired]);
+    assert_eq!(
+        taken_over_by(&state, holder),
+        None,
+        "the takeover has not arrived"
+    );
+    let takeover: SessionId = fixture
+        .apply(&mut state, taking_over, 6_001, start_session("coder", task))
+        .id()
+        .into();
+    assert_eq!(taken_over_by(&state, holder), Some(takeover));
+    assert_eq!(taken_over_by(&state, lost), Some(holder), "unchanged");
+
+    fixture.apply(
+        &mut state,
+        taking_over,
+        7_000,
+        end_session(takeover, EndReason::Released),
+    );
+    fixture.apply(&mut state, taking_over, 7_001, start_session("coder", task));
+    assert_eq!(taken_over_by(&state, takeover), None, "released");
+}
+
 /// The active item of a gone device's work session is offered to the dispatcher of another
 /// device of the principal, to take over; while the device is there, it is not.
 #[test]

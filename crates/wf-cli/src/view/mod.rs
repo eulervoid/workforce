@@ -27,7 +27,7 @@ use wf_core::resolve::MentionTarget;
 use wf_core::state::State;
 
 /// Bump when a view changes shape incompatibly. Snapshot tests pin the current shapes.
-pub const SCHEMA_VERSION: u32 = 8;
+pub const SCHEMA_VERSION: u32 = 9;
 
 #[derive(Serialize)]
 pub struct Envelope<T> {
@@ -81,6 +81,15 @@ pub fn actor_view(state: &State, actor: &Actor) -> ActorView {
         kind,
         label: state.actor_label(actor),
     }
+}
+
+/// `laptop`: the name of a device's profile, or its short key while it has none.
+pub fn device_name(state: &State, device: wf_core::identity::DeviceKey) -> String {
+    state
+        .devices()
+        .find(|info| info.device == device)
+        .and_then(|info| info.profile.map(|profile| profile.name.clone()))
+        .unwrap_or_else(|| device.fmt_short())
 }
 
 /// `@ada (3f9a2c)`: whose device it is and which one.

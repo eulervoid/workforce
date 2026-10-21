@@ -59,6 +59,11 @@ session holds; the dashboard leaves that to the daemon, which alone knows whom i
 the machine comes back, it stops the sessions that were taken over and names the last commit of
 each in a comment, so that commit reaches every machine and the next session's brief names it.
 
+`wf status`, `wf device list` and the Now tab of the dashboard show when each machine was last heard
+from, and say `gone` once its lease ran out; only a running daemon knows. A session that ended
+`lease expired` or `outclaimed` names the session that has its claim and the machine it runs on, in
+the item's activity and under its transcript in the dashboard.
+
 ## Commits across devices
 
 The log names every commit that matters: where a session's branch is when it comments or ends, and
@@ -102,7 +107,7 @@ last diff it had, with its age. The answer is asked for when you look and is not
 ## Devices and members
 
 ```sh
-wf device list                   # name, principal, hardware, sessions, last seen, flags
+wf device list                   # name, principal, hardware, sessions, last seen or gone, flags
 wf device edit --name desktop    # what this machine says about itself
 wf members                       # members with their roles and machines
 ```

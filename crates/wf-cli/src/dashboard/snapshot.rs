@@ -39,6 +39,8 @@ pub struct Snapshot {
     pub working: Vec<SessionInfo>,
     /// What `wf status` flags.
     pub flagged: Vec<Flag>,
+    /// The other devices, with whether each is there.
+    pub devices: Vec<view::DeviceStatus>,
     /// What waits for a commit that has not arrived from another device, one line each.
     pub awaiting_commits: Vec<String>,
     /// How the target branch of the principal's checkout differs from wf's, if it does.
@@ -232,8 +234,9 @@ pub enum InView {
     /// Boxed, as a session is several times larger than what the other variants hold.
     Session {
         info: Box<SessionInfo>,
-        /// Once it ended, the session of its item that `enter` opens from the item now, when
-        /// that is another: the live one, else the latest.
+        /// Once it ended, the session its item went on in: the one that took over its claim
+        /// when it ended `LeaseExpired` or `Outclaimed` ([`State::taken_over_by`]), else the one
+        /// `enter` opens from the item now, when that is another: the live one, else the latest.
         successor: Option<Box<SessionInfo>>,
     },
     /// What a diff shows besides the diff, which the loop reads from git: the comments on its
@@ -323,13 +326,13 @@ pub struct Sources<'a> {
 
 impl Snapshot {
     /// Takes all the dashboard shows of the workforce; `held` are the permission requests the
-    /// daemon holds, and `last_seen` when it last heard from each device.
+    /// daemon holds, and `presence` what it knows of which devices are there.
     pub fn take(
         sources: &Sources,
         held: &[HeldPermission],
         machine_faults: &wf_daemon::MachineFaults,
         awaited: &[wf_core::commits::AwaitedCommit],
-        last_seen: &crate::devices::LastSeen,
+        presence: Option<&wf_core::claims::Presence>,
         checkout_target: Option<view::CheckoutTarget>,
         wanted: Wanted,
     ) -> Self {
@@ -347,7 +350,8 @@ impl Snapshot {
             machine_faults,
             awaited,
             own: Some(own),
-            last_seen,
+            presence,
+            now_ms,
             daemon: true,
             waiting_on_you: waiting.len(),
             refolded: false,
@@ -357,7 +361,13 @@ impl Snapshot {
         };
         let mut live: Vec<&Session> = state.live_sessions().collect();
         live.sort_by_key(|session| std::cmp::Reverse(session.started()));
-        let flagged = view::status(state, graph, context).flagged;
+        let status = view::status(state, graph, context);
+        let flagged = status.flagged;
+        let devices = status
+            .devices
+            .into_iter()
+            .filter(|device| device.presence != view::DevicePresence::ThisDevice)
+            .collect();
         Snapshot {
             name: state.name().unwrap_or("workforce").to_owned(),
             now_ms,
@@ -373,6 +383,7 @@ impl Snapshot {
                 .and_then(|wanted| InView::take(sources, &flagged, wanted)),
             flagged,
             awaiting_commits: view::awaiting_lines(state, awaited),
+            devices,
             checkout_target,
             agents: match wanted.listing {
                 Some(Listing::Agents) => agents(state, graph, own),
@@ -506,12 +517,7 @@ fn session_info(
     let place = if session.device() == own {
         Place::Here
     } else {
-        let name = state
-            .devices()
-            .find(|info| info.device == session.device())
-            .and_then(|info| info.profile.map(|profile| profile.name.clone()))
-            .unwrap_or_else(|| session.device().fmt_short());
-        Place::Elsewhere(name)
+        Place::Elsewhere(view::device_name(state, session.device()))
     };
     SessionInfo {
         view: view::session_view(state, graph, session, None),
@@ -550,7 +556,9 @@ impl InView {
             }
             Detail::Session(id) => {
                 let session = state.session(id)?;
-                let successor = item_session(state, session.item())
+                let successor = state
+                    .taken_over_by(session)
+                    .or_else(|| item_session(state, session.item()))
                     .filter(|successor| !session.is_live() && successor.id() != id)
                     .map(|successor| Box::new(session_info(state, graph, own, successor)));
                 Some(InView::Session {

@@ -24,7 +24,7 @@ use wf_core::supervision::WaitsOn;
 use super::item::{ItemSummary, summary};
 use super::session::session_label;
 use super::status::unstaffed_steps;
-use super::{ActorView, actor_view, mention_view, set_change, timestamp};
+use super::{ActorView, actor_view, device_name, mention_view, set_change, timestamp};
 
 #[derive(Serialize)]
 pub struct LinkView {
@@ -506,12 +506,22 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                 },
             ),
             Activity::SessionEnded {
+                session,
                 reason,
                 moved_to,
                 because,
                 head,
-                ..
             } => {
+                let taken_over_by = state
+                    .session(*session)
+                    .and_then(|ended| state.taken_over_by(ended))
+                    .map(|taker| {
+                        format!(
+                            "{} on {}",
+                            session_label(taker),
+                            device_name(state, taker.device())
+                        )
+                    });
                 let ended = match reason {
                     EndReason::Submitted => match head {
                         Some(commit) => format!("submitted {}", short_commit(commit)),
@@ -528,8 +538,14 @@ pub(super) fn activity_views(state: &State, item: &Item, entries: &[Entry]) -> V
                     EndReason::MachineFault(fault) => {
                         format!("was ended by the machine: {}", fault.label())
                     }
-                    EndReason::LeaseExpired => "was taken over: its device was gone".into(),
-                    EndReason::Outclaimed => "lost its claim to an earlier session".into(),
+                    EndReason::LeaseExpired => match taken_over_by {
+                        Some(taker) => format!("was taken over by {taker}: its device was gone"),
+                        None => "was taken over: its device was gone".into(),
+                    },
+                    EndReason::Outclaimed => match taken_over_by {
+                        Some(holder) => format!("lost its claim to {holder}, which claimed first"),
+                        None => "lost its claim to an earlier session".into(),
+                    },
                 };
                 let summary = match moved_to {
                     Some(to) => format!("{ended} → {to}"),
@@ -911,8 +927,9 @@ mod tests {
     use std::collections::BTreeMap;
 
     use wf_core::autonomy::StartMode;
-    use wf_core::event::{DeviceProfile, EventBody};
+    use wf_core::event::{DeviceProfile, Event, EventBody};
     use wf_core::id::SessionId;
+    use wf_core::identity::Actor;
     use wf_core::name::AgentName;
     use wf_core::testing::*;
 
@@ -972,5 +989,107 @@ mod tests {
             }),
         );
         assert!(!flags(&state, item).contains(&UNSTAFFED.to_string()));
+    }
+
+    /// A session that lost its claim says to which session, on which device.
+    #[test]
+    fn a_session_taken_over_or_outclaimed_names_the_session_that_has_its_claim() {
+        let fixture = Fixture::new(2);
+        let mut state = fixture.state();
+        let mut events = Vec::new();
+        let mut now = 2_000;
+        let mut apply =
+            |state: &mut State, events: &mut Vec<Event>, device, actor: Option<Actor>, body| {
+                now += 1;
+                let event = match actor {
+                    Some(actor) => fixture.author_as(state, device, actor, now, body),
+                    None => fixture.author(state, device, now, body),
+                };
+                state
+                    .receive(event.clone(), wf_core::state::Trust::Untrusted)
+                    .unwrap();
+                events.push(event.clone());
+                event
+            };
+        let laptop = |name: &str| {
+            EventBody::DeviceProfile(DeviceProfile {
+                name: name.into(),
+                hardware: String::new(),
+                agents: BTreeMap::new(),
+                max_sessions: 1,
+            })
+        };
+        apply(&mut state, &mut events, 0, None, laptop("laptop"));
+        apply(&mut state, &mut events, 1, None, laptop("vm"));
+        apply(&mut state, &mut events, 0, None, define_agent("coder"));
+        let item: ItemId = apply(&mut state, &mut events, 0, None, create("task", "work"))
+            .id()
+            .into();
+        let gone: SessionId = apply(
+            &mut state,
+            &mut events,
+            1,
+            None,
+            start_session("coder", item),
+        )
+        .id()
+        .into();
+        let daemon = Some(Actor::Daemon(fixture.founder.key()));
+        apply(
+            &mut state,
+            &mut events,
+            0,
+            daemon,
+            end_session(gone, EndReason::LeaseExpired),
+        );
+        let summaries = |state: &State, events: &[Event]| {
+            let ItemEntry::Live(live) = state.item(item).unwrap() else {
+                unreachable!("the item is live")
+            };
+            item_detail(state, &state.dependency_graph(), live, events)
+                .activity
+                .into_iter()
+                .map(|activity| activity.summary)
+                .collect::<Vec<_>>()
+        };
+        let before = summaries(&state, &events);
+        assert!(
+            before.contains(&"was taken over: its device was gone".to_string()),
+            "{before:?}"
+        );
+        let takeover: SessionId = apply(
+            &mut state,
+            &mut events,
+            0,
+            None,
+            start_session("coder", item),
+        )
+        .id()
+        .into();
+        let takeover = session_label(state.session(takeover).unwrap());
+        let after = summaries(&state, &events);
+        let taken_over = format!("was taken over by {takeover} on laptop: its device was gone");
+        assert!(after.contains(&taken_over), "{after:?}");
+
+        // The vm comes back with a session it started meanwhile, which the takeover outclaims.
+        let late: SessionId = apply(
+            &mut state,
+            &mut events,
+            1,
+            None,
+            start_session("coder", item),
+        )
+        .id()
+        .into();
+        apply(
+            &mut state,
+            &mut events,
+            1,
+            None,
+            end_session(late, EndReason::Outclaimed),
+        );
+        let outclaimed = format!("lost its claim to {takeover} on laptop, which claimed first");
+        let after = summaries(&state, &events);
+        assert!(after.contains(&outclaimed), "{after:?}");
     }
 }

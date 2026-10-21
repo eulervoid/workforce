@@ -17,7 +17,7 @@ use crate::render;
 use crate::text::{duration, prefix_within};
 use crate::theme;
 use crate::transcript::{self, Now, Transcript, Usage};
-use crate::view::{AgentView, ItemSummary, SessionStatus};
+use crate::view::{AgentView, DevicePresence, DeviceStatus, ItemSummary, SessionStatus};
 use wf_core::id::ItemId;
 use wf_core::inbox::PrincipalReviewReason;
 use wf_core::stats::ProjectStats;
@@ -595,7 +595,50 @@ pub(super) fn now_lines(app: &App, width: u16) -> ListText {
                 .themed(theme::text_dimmed()),
         );
     }
+    if !snapshot.devices.is_empty() {
+        list.push(Line::default());
+        list.push(section("DEVICES"));
+        let names = snapshot
+            .devices
+            .iter()
+            .map(|device| textwrap::core::display_width(&device.name))
+            .max()
+            .unwrap_or(0);
+        for device in &snapshot.devices {
+            list.push(device_line(device, names, snapshot.now_ms));
+        }
+    }
     list
+}
+
+/// `vm  seen 3m ago`, or `vm  gone · seen 2h ago` once its lease ran out; the name padded to
+/// `names` columns.
+fn device_line(device: &DeviceStatus, names: usize, now_ms: u64) -> Line<'static> {
+    let seen = |last_seen: Option<jiff::Timestamp>| match last_seen {
+        Some(at) => format!("seen {} ago", age(at, now_ms)),
+        None => "not heard from since the daemon started".to_string(),
+    };
+    let padding = names.saturating_sub(textwrap::core::display_width(&device.name));
+    let name = Span::raw(format!(" {}{}  ", device.name, " ".repeat(padding)));
+    match device.presence {
+        DevicePresence::Gone { last_seen } => Line::from(vec![
+            name,
+            themed("gone", theme::warning()),
+            Span::raw(format!(" · {}", seen(last_seen))).themed(theme::text_dimmed()),
+        ]),
+        DevicePresence::There { last_seen } => Line::from(vec![
+            name,
+            Span::raw(seen(last_seen)).themed(theme::text_dimmed()),
+        ]),
+        DevicePresence::Unknown => Line::from(vec![
+            name,
+            Span::raw("not known without the daemon").themed(theme::text_dimmed()),
+        ]),
+        DevicePresence::ThisDevice => Line::from(vec![
+            name,
+            Span::raw("this device").themed(theme::text_dimmed()),
+        ]),
+    }
 }
 
 /// `by state · sorted by merge · only ready · "parse"`: how the items are grouped, ordered and filtered.

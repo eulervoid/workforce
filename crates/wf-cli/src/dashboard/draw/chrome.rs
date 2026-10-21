@@ -314,7 +314,7 @@ pub(super) fn session_crumb(app: &App, session: &SessionInfo) -> Vec<Span<'stati
     let status = match session.status {
         SessionStatus::Live => themed(" ◆", theme::live()),
         SessionStatus::Parked => themed(" ◇ parked", theme::live()),
-        SessionStatus::Ended { reason, .. } => Span::raw(format!(" · {}", reason.name())),
+        SessionStatus::Ended { reason, .. } => Span::raw(format!(" · {}", reason.label())),
     };
     vec![
         Span::raw(format!(
