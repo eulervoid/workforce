@@ -397,12 +397,6 @@ impl Daemon {
             .map(|_| self.launch.data_dir.bin())
     }
 
-    /// Whether the network node has been started.
-    #[doc(hidden)]
-    pub fn network_is_on(&self) -> bool {
-        self.node.initialized()
-    }
-
     /// The network node of this machine, started on first use.
     pub async fn node(&self) -> Result<Arc<Node<StorageHandle>>, NetError> {
         self.node

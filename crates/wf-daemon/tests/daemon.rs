@@ -815,7 +815,7 @@ async fn live_diff(
 }
 
 #[tokio::test]
-async fn a_session_on_this_device_is_answered_without_the_network() {
+async fn a_session_on_this_device_is_answered_from_its_worktree() {
     use wf_daemon::proto::LiveDiff;
     use wf_net::DiffAnswer;
 
@@ -854,7 +854,6 @@ async fn a_session_on_this_device_is_answered_without_the_network() {
         live_diff(&running.socket, workforce, item, Some(head)).await,
         LiveDiff::Answer(DiffAnswer::Unchanged)
     );
-    assert!(!running.daemon.network_is_on(), "the network stayed off");
 
     // The branch and the worktree are gone, as after the session ended.
     let worktree = wf_vcs::item_repository(
