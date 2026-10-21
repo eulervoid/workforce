@@ -128,6 +128,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             let machine_faults = workspace.machine_faults()?;
             let waiting_on_you = view::inbox_count(
                 workspace.state(),
+                workspace.device_key(),
                 &workspace.held_permissions()?,
                 &machine_faults,
             );
@@ -165,6 +166,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             let workspace = open(json, data, cwd)?;
             let views = view::inbox_views(
                 workspace.state(),
+                workspace.device_key(),
                 &workspace.held_permissions()?,
                 &workspace.machine_faults()?,
             );

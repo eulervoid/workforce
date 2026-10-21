@@ -396,7 +396,7 @@ pub(super) fn waiting_lines(entry: &InboxEntry, row: RowLines) -> Vec<Line<'stat
             let more = Line::from(format!("  {kind}: {what}")).themed(theme::text_dimmed());
             row.lines(first, None, vec![more])
         }
-        InboxEntry::MachineFault { title, what } => {
+        InboxEntry::MachineFault { title, what } | InboxEntry::LostPush { title, what, .. } => {
             let first = vec![themed("! ", theme::attention()), Span::raw(title.clone())];
             let more = Line::from(format!("  {what}")).themed(theme::text_dimmed());
             row.lines(first, None, vec![more])

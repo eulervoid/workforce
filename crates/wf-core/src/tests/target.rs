@@ -150,6 +150,23 @@ fn of_two_moves_onto_the_same_tip_the_earliest_wins_on_every_device() {
         merge_of(&one, task),
         Some(ReviewStatus::Merged { commit: merge }) if merge == commit(12)
     ));
+    // The principal hears of the latest push that lost, until a later one is on the chain.
+    let principal = fixture.founder.key();
+    let pushes: Vec<EventId> = one
+        .lost_pushes(principal)
+        .iter()
+        .map(|push| push.event())
+        .collect();
+    assert_eq!(pushes, [after.id()]);
+    let mut rebased = one.clone();
+    write(
+        &fixture,
+        &mut rebased,
+        0,
+        6_000,
+        target_moved(commit(15), commit(12)),
+    );
+    assert_eq!(rebased.lost_pushes(principal), []);
 }
 
 fn sorted(mut ids: [EventId; 2]) -> Vec<EventId> {

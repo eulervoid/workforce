@@ -395,7 +395,9 @@ pub(super) fn hints(app: &App) -> Vec<Hint> {
             // In the diff, `v` selects lines.
             InboxEntry::Review { .. } if app.diff_has_keys() => &[REVIEW_IN_DIFF],
             InboxEntry::Review { .. } => &[REVIEW, DIFF],
-            InboxEntry::Notice { .. } | InboxEntry::MachineFault { .. } => &[],
+            InboxEntry::Notice { .. }
+            | InboxEntry::MachineFault { .. }
+            | InboxEntry::LostPush { .. } => &[],
         };
         for key in keys {
             if !acts.contains(key) {

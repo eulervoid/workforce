@@ -104,7 +104,8 @@ fn drafts_that_were_posted_before_a_failure_are_not_drafts_any_more() {
 }
 
 #[test]
-fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faults() {
+fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faults_and_lost_pushes()
+{
     use crate::dashboard::snapshot::{Sources, Wanted};
     use wf_core::testing::*;
     use wf_daemon::{HarnessAtFault, MachineFaults, OutOfSpace};
@@ -122,6 +123,25 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
     };
     let item: ItemId = apply(&mut state, create("task", "Held")).id().into();
     apply(&mut state, blocker(item, "which database?"));
+    // Two pushes from the same tip: the later one lost.
+    let commit = |byte: u8| -> wf_core::session::CommitId {
+        let text: String = std::iter::repeat_n(format!("{byte:02x}"), 20).collect();
+        wf_core::session::CommitId::Git(text.parse().unwrap())
+    };
+    let daemon = wf_core::identity::Actor::Daemon(fixture.founder.key());
+    for (now_ms, pushed) in [(2_100, 11), (2_200, 12)] {
+        let event = fixture.author_as(
+            &state,
+            0,
+            daemon.clone(),
+            now_ms,
+            target_moved(commit(pushed), commit(10)),
+        );
+        state
+            .receive(event.clone(), wf_core::state::Trust::Untrusted)
+            .unwrap();
+        events.push(event);
+    }
     let faults = MachineFaults {
         out_of_space: Some(OutOfSpace {
             since_ms: 1_000,
@@ -150,14 +170,26 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
         detail_width: 80,
     };
     let snapshot = Snapshot::take(&sources, &[], &faults, &[], None, None, Wanted::default());
-    let in_inbox = crate::view::inbox_views(&state, &[], &faults).len();
+    let own = fixture.devices[0].key();
+    let in_inbox = crate::view::inbox_views(&state, own, &[], &faults).len();
     assert_eq!(snapshot.waiting.len(), in_inbox);
     assert_eq!(
-        crate::view::inbox_count(&state, &[], &faults),
+        crate::view::inbox_count(&state, own, &[], &faults),
         in_inbox,
         "the count is of the entries"
     );
-    assert_eq!(snapshot.waiting.len(), 3);
+    assert_eq!(snapshot.waiting.len(), 4);
+    let lost: Vec<_> = snapshot
+        .waiting
+        .iter()
+        .filter_map(|entry| {
+            let InboxEntry::LostPush { commit, .. } = entry else {
+                return None;
+            };
+            Some(*commit)
+        })
+        .collect();
+    assert_eq!(lost, [commit(12)]);
     let titles: Vec<&str> = snapshot
         .waiting
         .iter()
