@@ -31,7 +31,7 @@ fn fake_agent() -> PathBuf {
 /// A workforce in a git repository, a daemon, and agents that follow their scripts.
 struct World {
     wf: Sandbox,
-    /// None only while [`World::restart`] replaces it.
+    /// None only between [`World::halt`] and [`World::start_again`].
     daemon: Option<Arc<Daemon>>,
     shutdown: Option<tokio::sync::oneshot::Sender<()>>,
     /// The script of each harness.
@@ -94,9 +94,15 @@ impl World {
         self.daemon.as_ref().expect("a daemon")
     }
 
-    /// Stops the daemon as `wf daemon stop` does and starts another on the same data, once the
-    /// stopped one has let go of the store, as its process does when it exits.
+    /// Stops the daemon as `wf daemon stop` does and starts another on the same data.
     async fn restart(&mut self) {
+        self.halt().await;
+        self.start_again().await;
+    }
+
+    /// Stops the daemon as `wf daemon stop` does, leaving its sessions live, and waits until it
+    /// has let go of the store, as its process does when it exits.
+    async fn halt(&mut self) {
         if let Some(shutdown) = self.shutdown.take() {
             let _ = shutdown.send(());
         }
@@ -117,25 +123,13 @@ impl World {
                 Err(error) => panic!("the stopped daemon keeps the store: {error}"),
             }
         }
-        let (daemon, shutdown) =
-            start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
-        self.daemon = Some(daemon);
-        self.shutdown = Some(shutdown);
-    }
-
-    /// Stops the daemon as `wf daemon stop` does, leaving its sessions live.
-    async fn halt(&mut self) {
-        if let Some(shutdown) = self.shutdown.take() {
-            let _ = shutdown.send(());
-        }
-        self.daemon.halt().await;
     }
 
     /// Starts a daemon on the same data again, after [`World::halt`].
     async fn start_again(&mut self) {
         let (daemon, shutdown) =
             start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
-        self.daemon = daemon;
+        self.daemon = Some(daemon);
         self.shutdown = Some(shutdown);
     }
 
