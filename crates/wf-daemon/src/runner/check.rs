@@ -188,9 +188,9 @@ impl PassedChecks {
             key.update(&(argument.len() as u64).to_le_bytes());
             key.update(argument.as_bytes());
         }
-        // What the sandbox allows is all of its debug form, so that a changed config is another
+        // What the sandbox allows is all of its config, so that a changed config is another
         // sandbox.
-        key.update(format!("{sandbox:?}").as_bytes());
+        key.update(&serde_json::to_vec(sandbox).expect("a sandbox config serializes"));
         self.directory.join(key.finalize().to_hex().as_str())
     }
 }

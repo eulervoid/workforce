@@ -7,7 +7,7 @@ use std::path::{Component, Path, PathBuf};
 use std::time::Duration;
 
 use bytesize::ByteSize;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use url::Url;
 use wf_core::autonomy::PermissionMode;
 use wf_core::inbox::InboxKind;
@@ -245,7 +245,7 @@ impl AgentSigningConfig {
 }
 
 /// How agents are isolated on this machine.
-#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum SandboxConfig {
     Fence(FenceConfig),
@@ -277,7 +277,7 @@ impl SandboxConfig {
 /// reach the model APIs and package registries of Fence's `code` template; everything else is
 /// denied. What this adds is on top of that, except for wf's keys and config and git's config and
 /// hooks, which the sandbox always denies.
-#[derive(Debug, Clone, Default, PartialEq, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FenceConfig {
     /// More paths the agent may write to, expanded as the values of `[environment.set]`.
