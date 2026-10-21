@@ -8,6 +8,7 @@ mod fork;
 mod heads;
 mod items;
 mod lifecycle;
+mod placement;
 mod review;
 mod search;
 mod sessions;
