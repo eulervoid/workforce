@@ -549,9 +549,10 @@ last until one is set. `item list` orders by priority, then creation, then id (`
 
 **Mentions are delivered** by the comments they are in; a mention in a body is shown, not delivered:
 
-* `@ada`: the comment waits in `wf inbox` as `mention` until the principal acts on its item after it
-  (comments, edits, moves, links, reviews or archives it, as for recovery). A blocker is in the inbox
-  as a blocker instead, and a principal's own comment does not mention them.
+* `@ada`: the comment waits in `wf inbox` as `mention` until a principal acts on its item after it
+  (comments, edits, moves, links, reviews or archives it, as for recovery), so answering it is what
+  takes it out. A blocker is in the inbox as a blocker instead, and a principal's own comment does
+  not mention them.
 * `@ada/coder`: every live session of the agent is told, wherever the comment is (section 9). Without
   one, it waits in the agent's inbox, which is `wf mentions @ada/coder`; the brief of the agent's next
   session lists the mentions written since its previous session started.

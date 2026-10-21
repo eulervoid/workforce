@@ -2,10 +2,15 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::brief::speaker;
+use crate::event::CommentKind;
 use crate::id::{CommentId, HashId, ItemId, SessionId};
-use crate::item::{ItemEntry, ItemState};
+use crate::identity::Actor;
+use crate::item::{Item, ItemEntry, ItemState};
 use crate::policy::ReviewStep;
 use crate::recovery::Recovery;
+use crate::refs::Token;
+use crate::resolve::MentionTarget;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, SessionRole};
 use crate::state::State;
@@ -33,6 +38,9 @@ pub enum Waiting {
         failures: usize,
         last: SessionId,
     },
+    /// A comment on the item mentions a principal, who has not acted on the item since: acting on
+    /// it (commenting, editing, moving it) takes it out of the inbox.
+    Mention { comment: CommentId },
 }
 
 /// Why a review waits for the principal.
@@ -64,6 +72,7 @@ pub enum InboxKind {
     Proposal,
     PrincipalReview,
     Recovery,
+    Mention,
     Permission,
     MachineFault,
     LostPush,
@@ -77,6 +86,7 @@ impl InboxKind {
             InboxKind::Proposal => "proposal",
             InboxKind::PrincipalReview => "principal_review",
             InboxKind::Recovery => "recovery",
+            InboxKind::Mention => "mention",
             InboxKind::Permission => "permission",
             InboxKind::MachineFault => "machine_fault",
             InboxKind::LostPush => "lost_push",
@@ -97,6 +107,7 @@ impl Waiting {
             Waiting::Proposal => InboxKind::Proposal,
             Waiting::PrincipalReview { .. } => InboxKind::PrincipalReview,
             Waiting::Recovery { .. } => InboxKind::Recovery,
+            Waiting::Mention { .. } => InboxKind::Mention,
         }
     }
 }
@@ -231,8 +242,50 @@ impl State {
                 ));
             }
         }
+        for item in self.live_items() {
+            for comment in self.unanswered_mentions(item) {
+                entries.push((
+                    item.updated(),
+                    InboxEntry {
+                        item: item.id(),
+                        waiting: Waiting::Mention { comment },
+                    },
+                ));
+            }
+        }
         entries.sort_by(|left, right| right.0.cmp(&left.0).then(left.1.item.cmp(&right.1.item)));
         entries.into_iter().map(|(_, entry)| entry).collect()
+    }
+}
+
+impl State {
+    /// The comments on `item`, oldest first, that mention a principal other than their writer and
+    /// that no principal acted on the item after. A blocker waits in the inbox as a blocker.
+    fn unanswered_mentions(&self, item: &Item) -> Vec<CommentId> {
+        let resolver = self.resolver();
+        let mut mentions: Vec<_> = item
+            .comments()
+            .iter()
+            .filter(|(_, comment)| comment.kind != CommentKind::Blocker)
+            .filter(|(_, comment)| {
+                item.principal_touched()
+                    .is_none_or(|touched| touched < comment.at)
+            })
+            .filter(|(_, comment)| {
+                comment.tokens.iter().any(|token| match token {
+                    Token::Mention(mention) => match resolver.mention(mention) {
+                        Some(MentionTarget::Principal(principal)) => {
+                            comment.by != Actor::Principal(principal)
+                        }
+                        Some(MentionTarget::Agent(_) | MentionTarget::Session(_)) | None => false,
+                    },
+                    Token::ItemRef(_) | Token::CommentRef { .. } => false,
+                })
+            })
+            .map(|(id, comment)| (comment.at, *id))
+            .collect();
+        mentions.sort();
+        mentions.into_iter().map(|(_, id)| id).collect()
     }
 }
 
@@ -309,6 +362,23 @@ impl State {
                 failures,
                 last,
             } => self.recovery_waits(entry.item, role, *failures, *last),
+            Waiting::Mention { comment } => {
+                let by = self
+                    .item(entry.item)
+                    .and_then(|item| match item {
+                        ItemEntry::Live(item) => item.comments().get(comment),
+                        ItemEntry::Archived(_) => None,
+                    })
+                    .map_or_else(
+                        || "someone".to_string(),
+                        |written| speaker(self, &written.by),
+                    );
+                format!(
+                    "{by} mentions you in {}: answer with `wf comment {} \"...\"`",
+                    comment.short(),
+                    entry.item.short()
+                )
+            }
         }
     }
 

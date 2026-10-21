@@ -490,6 +490,7 @@ pub(super) fn notices(detail: &ItemDetail, width: Option<usize>, format: Format)
                         InboxKind::Blocker
                         | InboxKind::Proposal
                         | InboxKind::PrincipalReview
+                        | InboxKind::Mention
                         | InboxKind::Permission => theme::attention(),
                     };
                     let paragraphs = std::iter::once(&waiting.what)

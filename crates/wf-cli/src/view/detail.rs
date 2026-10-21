@@ -720,6 +720,14 @@ fn waiting_views(state: &State, item: &Item, entries: &[Entry]) -> Vec<WaitingVi
                     ("blocker".to_string(), points_to)
                 }
                 Waiting::Proposal => ("proposal".to_string(), Vec::new()),
+                Waiting::Mention { comment } => {
+                    let mut points_to = Vec::new();
+                    if let Some((entry, _, text)) = comments().find(|(_, id, _)| *id == comment) {
+                        points_to.push(format!("from {}:", state.actor_label(&entry.by)));
+                        points_to.push(quoted(text));
+                    }
+                    ("mention".to_string(), points_to)
+                }
                 Waiting::PrincipalReview {
                     reason: PrincipalReviewReason::Step,
                     ..

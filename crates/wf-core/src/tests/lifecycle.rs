@@ -937,3 +937,62 @@ fn the_brief_lists_the_mentions_of_the_agent_elsewhere() {
         "{brief}"
     );
 }
+
+#[test]
+fn a_comment_that_mentions_the_principal_waits_in_the_inbox_until_they_act_on_the_item() {
+    use crate::inbox::Waiting;
+    let mut scene = Scene::new();
+    let mut texts = Texts(Default::default());
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    scene.say(
+        &mut texts,
+        comment(task, "@ada note to self"),
+        "note to self",
+    );
+    scene.say_as_agent(
+        &mut texts,
+        session,
+        comment(task, "no one named"),
+        "no one named",
+    );
+    scene.say_as_agent(
+        &mut texts,
+        session,
+        blocker(task, "@ada which crate?"),
+        "which crate?",
+    );
+    scene.say_as_agent(
+        &mut texts,
+        session,
+        comment(task, "@ada FYI the API changed"),
+        "FYI",
+    );
+    let mentions = |state: &State| {
+        state
+            .inbox()
+            .into_iter()
+            .filter(|entry| matches!(entry.waiting, Waiting::Mention { .. }))
+            .collect::<Vec<_>>()
+    };
+    let waiting = mentions(&scene.state);
+    assert_eq!(waiting.len(), 1, "{waiting:?}");
+    let Waiting::Mention { comment: mention } = waiting[0].waiting else {
+        unreachable!()
+    };
+    assert_eq!(texts.0[&mention], "FYI");
+    assert!(
+        scene
+            .state
+            .what_waits(&waiting[0])
+            .starts_with(&format!("@ada/coder mentions you in {}", mention.short())),
+        "{}",
+        scene.state.what_waits(&waiting[0])
+    );
+
+    scene.say(&mut texts, comment(task, "Thanks"), "Thanks");
+    assert!(
+        mentions(&scene.state).is_empty(),
+        "the principal acted on the item"
+    );
+}
