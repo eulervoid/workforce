@@ -37,6 +37,7 @@
 - Use one line commit messages; if you'd need more than one line, your commit is too big
 
 ## Tests
+- A test guards a real scenario, not itself: its setup (sizes, concurrency, timing, load) matches what can happen in use. When a test fails because of its environment (open files, time limits, load), first ask whether it models anything real; if not, change the test, not the system or the machine to fit it
 - A test that needs more than Fence allows (the network for iroh) starts with `if wf_core::testing::skip_in_fence("...") { return; }`, so `cargo test` in a session passes or fails for real and runs everything outside Fence; a test that needs git signing, which a session's `GIT_CONFIG_*` would override, runs `git` without them (`wf_vcs::testing`, `Sandbox`)
 - The `wf-cli` test `Sandbox` removes `WF_SESSION`, `WF_SESSION_TOKEN` and `WF_WORKFORCE` (which the daemon sets in sessions) from itself and from every `wf` it spawns; a new helper that spawns `wf` must go through `Sandbox::command`, or `cargo test` fails inside a session with "the local log for workforce ... is missing or does not match"
 - Any other failing test is yours to explain: never report a failure as "sandbox-only", and fix or explain it before you submit
