@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(&found)"
 ---
 {
-  "schema": 8,
+  "schema": 9,
   "data": [
     {
       "item": {

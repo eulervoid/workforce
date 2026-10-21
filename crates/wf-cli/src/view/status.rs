@@ -6,10 +6,11 @@ use jiff::Timestamp;
 use serde::Serialize;
 use wf_core::autonomy::StartMode;
 use wf_core::brief::speaker;
+use wf_core::claims::Presence;
 use wf_core::commits::{AwaitedCommit, Fetching, Naming};
 use wf_core::graph::{DependencyGraph, Readiness};
 use wf_core::id::{HashId, ItemId};
-use wf_core::identity::Actor;
+use wf_core::identity::{Actor, DeviceKey};
 use wf_core::inbox::Waiting;
 use wf_core::item::ItemEntry;
 use wf_core::name::{AgentName, ReviewStepName};
@@ -371,8 +372,10 @@ impl Serialize for CheckoutTarget {
 pub struct StatusContext<'a> {
     /// How the target branch of the principal's checkout differs from wf's, if it does.
     pub checkout_target: Option<CheckoutTarget>,
-    pub own: Option<wf_core::identity::DeviceKey>,
-    pub last_seen: &'a std::collections::BTreeMap<wf_core::identity::DeviceKey, u64>,
+    pub own: Option<DeviceKey>,
+    /// What the daemon knows of which devices are there; `None` without a daemon.
+    pub presence: Option<&'a Presence>,
+    pub now_ms: u64,
     pub daemon: bool,
     pub waiting_on_you: usize,
     pub refolded: bool,
@@ -421,18 +424,63 @@ pub fn awaiting_lines(state: &State, awaited: &[AwaitedCommit]) -> Vec<String> {
         .collect()
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 pub struct DeviceStatus {
     pub name: String,
-    pub this_device: bool,
-    /// Only a running daemon knows.
-    pub last_seen: Option<Timestamp>,
+    #[serde(flatten)]
+    pub presence: DevicePresence,
+}
+
+/// Whether a device is there, as far as this machine knows. Written as `presence` with its name,
+/// and `last_seen` beside it where there is one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(tag = "presence", rename_all = "snake_case")]
+pub enum DevicePresence {
+    /// The device that asks.
+    ThisDevice,
+    /// No daemon runs here, and only a running daemon hears from devices.
+    Unknown,
+    /// Heard from within the lease, or the daemon has not run for a lease yet. `last_seen` is
+    /// `None` while it was not heard from since the daemon started.
+    There { last_seen: Option<Timestamp> },
+    /// Silent for longer than the lease: another device of its principal takes over what its
+    /// sessions claim.
+    Gone { last_seen: Option<Timestamp> },
+}
+
+impl DevicePresence {
+    /// Of `device` at `now_ms`, read from what the daemon knows, `presence`, against the lease of
+    /// the policy.
+    pub fn of(
+        state: &State,
+        device: DeviceKey,
+        own: Option<DeviceKey>,
+        presence: Option<&Presence>,
+        now_ms: u64,
+    ) -> Self {
+        if Some(device) == own {
+            return DevicePresence::ThisDevice;
+        }
+        let Some(presence) = presence else {
+            return DevicePresence::Unknown;
+        };
+        let last_seen = presence
+            .heard_ms()
+            .find(|(heard, _)| *heard == device)
+            .map(|(_, at)| timestamp_ms(at));
+        if presence.gone(device, state.lease(), now_ms) {
+            DevicePresence::Gone { last_seen }
+        } else {
+            DevicePresence::There { last_seen }
+        }
+    }
 }
 
 pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) -> StatusView {
     let StatusContext {
         own,
-        last_seen,
+        presence,
+        now_ms,
         daemon,
         waiting_on_you,
         refolded,
@@ -527,10 +575,7 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
             name: info
                 .profile
                 .map_or_else(|| info.device.fmt_short(), |profile| profile.name.clone()),
-            this_device: Some(info.device) == own,
-            last_seen: last_seen
-                .get(&info.device)
-                .map(|millis| timestamp_ms(*millis)),
+            presence: DevicePresence::of(state, info.device, own, presence, now_ms),
         })
         .collect();
     for announcement in state.announcements() {
@@ -709,7 +754,8 @@ mod tests {
                 machine_faults,
                 awaited: &[],
                 own: Some(fixture.devices[0].key()),
-                last_seen: &BTreeMap::new(),
+                presence: None,
+                now_ms: 0,
                 daemon: true,
                 waiting_on_you: 0,
                 refolded: false,

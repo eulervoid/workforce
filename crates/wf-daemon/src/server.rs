@@ -107,7 +107,7 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::StopSession(_)
         | Call::Permissions
         | Call::AnswerPermission { .. }
-        | Call::LastSeen
+        | Call::Presence
         | Call::MachineFaults
         | Call::CacheUsage
         | Call::LiveDiff { .. }
@@ -160,7 +160,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         | Call::AgentEvents(_)
         | Call::Author { .. }
         | Call::SyncNow
-        | Call::LastSeen
+        | Call::Presence
         | Call::MachineFaults
         | Call::CacheUsage
         | Call::Permissions
@@ -345,7 +345,7 @@ async fn call(
             let results = sync_all(&node, workforce, peers, Some(daemon.presence())).await;
             reply(results)
         }
-        Call::LastSeen => reply(daemon.presence_now().heard_ms().collect::<Vec<_>>()),
+        Call::Presence => reply(daemon.presence_now()),
         Call::MachineFaults => reply(daemon.faults.current()),
         Call::CacheUsage => reply(daemon.cache_usage_of(workforce)),
         Call::AwaitedCommits => reply(loaded.commits.awaited()),

@@ -149,15 +149,7 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
         now_ms: 3_000,
         detail_width: 80,
     };
-    let snapshot = Snapshot::take(
-        &sources,
-        &[],
-        &faults,
-        &[],
-        &Default::default(),
-        None,
-        Wanted::default(),
-    );
+    let snapshot = Snapshot::take(&sources, &[], &faults, &[], None, None, Wanted::default());
     let in_inbox = crate::view::inbox_views(&state, &[], &faults).len();
     assert_eq!(snapshot.waiting.len(), in_inbox);
     assert_eq!(
@@ -223,15 +215,7 @@ fn the_items_list_holds_the_items_found_in_titles_bodies_and_comments() {
                 search: Query::parse(search),
             })),
         };
-        let snapshot = Snapshot::take(
-            &sources,
-            &[],
-            &Default::default(),
-            &[],
-            &Default::default(),
-            None,
-            wanted,
-        );
+        let snapshot = Snapshot::take(&sources, &[], &Default::default(), &[], None, None, wanted);
         let mut titles: Vec<String> = snapshot
             .items
             .iter()

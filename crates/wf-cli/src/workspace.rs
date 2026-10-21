@@ -289,15 +289,14 @@ impl Workspace {
         crate::view::CheckoutTarget::new(target, standing)
     }
 
-    /// When devices were last heard from. Only a running daemon knows.
-    pub fn last_seen(&self) -> anyhow::Result<crate::devices::LastSeen> {
+    /// When devices were last heard from and when the daemon started. Only a running daemon
+    /// knows: `None` without one.
+    pub fn presence(&self) -> anyhow::Result<Option<wf_core::claims::Presence>> {
         match &self.source {
-            Source::Local(..) => Ok(crate::devices::LastSeen::new()),
-            Source::Daemon { client, .. } => Ok(client
-                .borrow_mut()
-                .last_seen(self.workforce)?
-                .into_iter()
-                .collect()),
+            Source::Local(..) => Ok(None),
+            Source::Daemon { client, .. } => {
+                Ok(Some(client.borrow_mut().presence(self.workforce)?))
+            }
         }
     }
 

@@ -39,6 +39,8 @@ pub struct Snapshot {
     pub working: Vec<SessionInfo>,
     /// What `wf status` flags.
     pub flagged: Vec<Flag>,
+    /// The other devices, with whether each is there.
+    pub devices: Vec<view::DeviceStatus>,
     /// What waits for a commit that has not arrived from another device, one line each.
     pub awaiting_commits: Vec<String>,
     /// How the target branch of the principal's checkout differs from wf's, if it does.
@@ -323,13 +325,13 @@ pub struct Sources<'a> {
 
 impl Snapshot {
     /// Takes all the dashboard shows of the workforce; `held` are the permission requests the
-    /// daemon holds, and `last_seen` when it last heard from each device.
+    /// daemon holds, and `presence` what it knows of which devices are there.
     pub fn take(
         sources: &Sources,
         held: &[HeldPermission],
         machine_faults: &wf_daemon::MachineFaults,
         awaited: &[wf_core::commits::AwaitedCommit],
-        last_seen: &crate::devices::LastSeen,
+        presence: Option<&wf_core::claims::Presence>,
         checkout_target: Option<view::CheckoutTarget>,
         wanted: Wanted,
     ) -> Self {
@@ -347,7 +349,8 @@ impl Snapshot {
             machine_faults,
             awaited,
             own: Some(own),
-            last_seen,
+            presence,
+            now_ms,
             daemon: true,
             waiting_on_you: waiting.len(),
             refolded: false,
@@ -357,7 +360,13 @@ impl Snapshot {
         };
         let mut live: Vec<&Session> = state.live_sessions().collect();
         live.sort_by_key(|session| std::cmp::Reverse(session.started()));
-        let flagged = view::status(state, graph, context).flagged;
+        let status = view::status(state, graph, context);
+        let flagged = status.flagged;
+        let devices = status
+            .devices
+            .into_iter()
+            .filter(|device| device.presence != view::DevicePresence::ThisDevice)
+            .collect();
         Snapshot {
             name: state.name().unwrap_or("workforce").to_owned(),
             now_ms,
@@ -373,6 +382,7 @@ impl Snapshot {
                 .and_then(|wanted| InView::take(sources, &flagged, wanted)),
             flagged,
             awaiting_commits: view::awaiting_lines(state, awaited),
+            devices,
             checkout_target,
             agents: match wanted.listing {
                 Some(Listing::Agents) => agents(state, graph, own),

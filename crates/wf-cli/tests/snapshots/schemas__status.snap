@@ -1,9 +1,9 @@
 ---
 source: crates/wf-cli/tests/schemas.rs
-expression: "Envelope::new(view::status(&scenario.state,\n&scenario.state.dependency_graph(), view::StatusContext\n{\n    machine_faults: &Default::default(), awaited: &[], own: None, last_seen:\n    &Default::default(), daemon: false, waiting_on_you: 0, refolded: false,\n    caches: None, checkout_target:\n    view::CheckoutTarget::new(\"main\", wf_vcs::TargetStanding::Behind\n    { commits: 2 }),\n}))"
+expression: "Envelope::new(view::status(&scenario.state,\n&scenario.state.dependency_graph(), view::StatusContext\n{\n    machine_faults: &Default::default(), awaited: &[], own: None, presence:\n    None, now_ms: 0, daemon: false, waiting_on_you: 0, refolded: false,\n    caches: None, checkout_target:\n    view::CheckoutTarget::new(\"main\", wf_vcs::TargetStanding::Behind\n    { commits: 2 }),\n}))"
 ---
 {
-  "schema": 8,
+  "schema": 9,
   "data": {
     "name": "demo",
     "id": "pu5thppy6zqyj53pnvm73lxpaotujcc6mrlwxmwuthirenjctkua",
@@ -20,13 +20,11 @@ expression: "Envelope::new(view::status(&scenario.state,\n&scenario.state.depend
     "devices": [
       {
         "name": "2bc2800b33",
-        "this_device": false,
-        "last_seen": null
+        "presence": "unknown"
       },
       {
         "name": "43a72e7144",
-        "this_device": false,
-        "last_seen": null
+        "presence": "unknown"
       }
     ],
     "daemon": false,

@@ -34,7 +34,7 @@ pub struct ItemClaimed {
 /// started. A device not heard from for the policy's `[claims] lease` is gone, counted by this
 /// daemon's clock and only once the daemon has run that long, since before that it could not have
 /// heard from anyone. Computed when asked, never stored.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Presence {
     /// When the daemon started, in milliseconds since the epoch.
     started_ms: u64,

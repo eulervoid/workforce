@@ -22,10 +22,18 @@ pub fn status(view: &StatusView) -> String {
     let devices: Vec<String> = view
         .devices
         .iter()
-        .map(|device| match (&device.last_seen, device.this_device) {
-            (_, true) => format!("{} (this)", device.name),
-            (Some(seen), false) => format!("{} (seen {})", device.name, short_time(*seen)),
-            (None, false) => device.name.clone(),
+        .map(|device| match device.presence {
+            DevicePresence::ThisDevice => format!("{} (this)", device.name),
+            DevicePresence::There {
+                last_seen: Some(seen),
+            } => format!("{} (seen {})", device.name, short_time(seen)),
+            DevicePresence::Gone {
+                last_seen: Some(seen),
+            } => format!("{} (gone, seen {})", device.name, short_time(seen)),
+            DevicePresence::Gone { last_seen: None } => format!("{} (gone)", device.name),
+            DevicePresence::Unknown | DevicePresence::There { last_seen: None } => {
+                device.name.clone()
+            }
         })
         .collect();
     let _ = writeln!(out, "devices: {}", devices.join(", "));

@@ -1599,7 +1599,7 @@ wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | f
   `machine_fault`, each with the command that answers it. `wf status` summarises the workforce, flags
   what needs someone (stranded items, steps no agent can take, unknown states, an unreadable policy)
   and says what to do next.
-* **`--json`** gives `{"schema": 8, "data": ...}` for every command with output to read (not the
+* **`--json`** gives `{"schema": 9, "data": ...}` for every command with output to read (not the
   dashboard or `session watch`; `log --follow` prints one object per line). The number is bumped on
   incompatible changes, and the shapes are snapshot-tested.
 * **Plain output**: lists are borderless tables built by one function in `wf-cli`; times are local;

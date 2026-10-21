@@ -3,7 +3,7 @@ source: crates/wf-cli/tests/schemas.rs
 expression: "Envelope::new(view::item_stats_views(&state))"
 ---
 {
-  "schema": 8,
+  "schema": 9,
   "data": [
     {
       "id": "iuvz7damji2bepk6zs7jwstwfh53jv4yplx4ratzieath72crnsq",

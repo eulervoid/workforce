@@ -718,7 +718,7 @@ fn devices_and_members_are_listed_and_editable() {
     let devices = devices.as_array().unwrap();
     assert_eq!(devices.len(), 1);
     assert_eq!(devices[0]["name"], "laptop");
-    assert_eq!(devices[0]["this_device"], true);
+    assert_eq!(devices[0]["presence"], "this_device");
     assert_eq!(devices[0]["principal"], "@ada");
 
     sandbox.run(&[
