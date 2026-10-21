@@ -429,6 +429,32 @@ impl GitCli {
         }
     }
 
+    /// Moves the branch `target` from `from` to `commit`, forward or not, unless something moved
+    /// it meanwhile: where the log says the target is. Returns whether it moved.
+    pub fn move_target(
+        &self,
+        target: &str,
+        from: CommitId,
+        commit: CommitId,
+    ) -> Result<bool, VcsError> {
+        self.move_branch(target, Some(from), commit)
+    }
+
+    /// The best common ancestor of `one` and `other`, `None` for unrelated histories.
+    pub fn merge_base(&self, one: CommitId, other: CommitId) -> Result<Option<CommitId>, VcsError> {
+        let found = self.run(
+            &self.repository,
+            &[],
+            ["merge-base", &one.to_string(), &other.to_string()],
+        )?;
+        // Exit status 1 without output: no common ancestor.
+        if !found.success && found.stdout.trim().is_empty() && found.stderr.trim().is_empty() {
+            return Ok(None);
+        }
+        let output = found.ok()?;
+        self.oid("merge-base", &output).map(Some)
+    }
+
     /// The commit that brought `commit` into `head`, when it is there already: the merge with
     /// `commit` as a parent, or `commit` itself when it came in without a merge.
     fn landed(&self, commit: CommitId, head: CommitId) -> Result<Option<CommitId>, VcsError> {

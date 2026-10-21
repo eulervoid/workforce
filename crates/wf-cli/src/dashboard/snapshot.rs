@@ -154,6 +154,12 @@ pub enum InboxEntry {
     },
     /// Something wrong with the machine: what it is and what the principal does about it.
     MachineFault { title: String, what: String },
+    /// A push of the principal that lost a fork of the target, and what to do about it.
+    LostPush {
+        commit: CommitId,
+        title: String,
+        what: String,
+    },
 }
 
 /// What tells an entry that waits apart from the others, across refreshes.
@@ -170,6 +176,7 @@ pub enum InboxKey {
     },
     /// The title tells machine faults apart: the machine has one of each.
     MachineFault(String),
+    LostPush(CommitId),
 }
 
 impl InboxEntry {
@@ -191,6 +198,7 @@ impl InboxEntry {
                 kind: *kind,
             },
             InboxEntry::MachineFault { title, .. } => InboxKey::MachineFault(title.clone()),
+            InboxEntry::LostPush { commit, .. } => InboxKey::LostPush(*commit),
         }
     }
 }
@@ -345,7 +353,7 @@ impl Snapshot {
             now_ms,
             detail_width: _,
         } = *sources;
-        let waiting = waiting(state, event, held, machine_faults);
+        let waiting = waiting(state, own, event, held, machine_faults);
         let context = view::StatusContext {
             machine_faults,
             awaited,
@@ -434,6 +442,7 @@ fn who(state: &State, actor: &Actor) -> String {
 
 fn waiting(
     state: &State,
+    own: DeviceKey,
     event: &dyn Fn(EventId) -> Option<Event>,
     held: &[HeldPermission],
     machine_faults: &wf_daemon::MachineFaults,
@@ -497,6 +506,14 @@ fn waiting(
             },
         });
     }
+    waiting.extend(view::lost_pushes(state, own).iter().map(|push| {
+        let view = view::lost_push_view(state, push);
+        InboxEntry::LostPush {
+            commit: push.commit,
+            title: view.title,
+            what: view.what,
+        }
+    }));
     waiting.extend(
         view::machine_fault_views(machine_faults)
             .into_iter()
@@ -770,7 +787,8 @@ impl InboxEntry {
             InboxEntry::Permission { .. }
             | InboxEntry::Review { .. }
             | InboxEntry::Notice { .. }
-            | InboxEntry::MachineFault { .. } => None,
+            | InboxEntry::MachineFault { .. }
+            | InboxEntry::LostPush { .. } => None,
         }
     }
 
@@ -781,7 +799,8 @@ impl InboxEntry {
             InboxEntry::Permission { .. }
             | InboxEntry::Blocker { .. }
             | InboxEntry::Notice { .. }
-            | InboxEntry::MachineFault { .. } => None,
+            | InboxEntry::MachineFault { .. }
+            | InboxEntry::LostPush { .. } => None,
         }
     }
 
@@ -806,7 +825,8 @@ impl InboxEntry {
             InboxEntry::Blocker { .. }
             | InboxEntry::Review { .. }
             | InboxEntry::Notice { .. }
-            | InboxEntry::MachineFault { .. } => None,
+            | InboxEntry::MachineFault { .. }
+            | InboxEntry::LostPush { .. } => None,
         }
     }
 }

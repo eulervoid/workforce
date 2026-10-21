@@ -612,7 +612,10 @@ wf work submit --note \"all done\"
     assert!(subject.starts_with("Merge #"), "{subject}");
     assert_eq!(git_in(repository, &["status", "--porcelain"]), "");
     world.no_item_branches().await;
-    assert_eq!(git_in(&world.bare(), &["worktree", "list"]).lines().count(), 1);
+    assert_eq!(
+        git_in(&world.bare(), &["worktree", "list"]).lines().count(),
+        1
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1939,12 +1942,16 @@ fn told_of(file: &Path) -> Vec<String> {
 async fn review_world(coder: &str, reviewer: &str) -> World {
     let world = World::agents(&[("coder", coder), ("reviewer", reviewer)]).await;
     world.automate("coder", "default");
+    // Out of the lane of the work, so the reviewer only reviews: an item that arrives while a pass
+    // of the dispatcher is past the coder would otherwise be worked on by the reviewer.
     world.wf.run(&[
         "agent",
         "edit",
         "reviewer",
         "--start",
         "auto",
+        "--lane",
+        "meta",
         "--capability",
         "review",
         "--capability",
@@ -2452,7 +2459,16 @@ wf review --approve
         .unwrap();
     let approved = first["commit"].as_str().unwrap().to_string();
 
-    // Main moves while the review runs, so the approved work conflicts with it.
+    // Main moves while the review runs, so the approved work conflicts with it. Moved before the
+    // review starts, the work would go back when offered, with a change request, and never merge.
+    world
+        .wait("the review session", |world| {
+            world
+                .sessions()
+                .iter()
+                .any(|session| session["role"] == "review")
+        })
+        .await;
     let repository = &world.bare();
     world.push_file("file.txt", "main\n", "main moves on");
     let main = git_in(repository, &["rev-parse", "main"]);
@@ -3679,10 +3695,10 @@ wf work submit
     assert!(!comments_with(&world, &item, "change_request", "conflicts in file.txt").is_empty());
     assert_eq!(world.item(&item)["state"], "review");
     assert!(world.wf.run(&["inbox"]).contains("review of"));
-    // The target goes back to where it was: the principal rewinds it, which a push refuses
-    // (`receive.denyNonFastForwards`), so it is done where the target is kept.
-    let moved = git_in(repository, &["rev-parse", "HEAD~1"]);
-    git_in(&world.bare(), &["update-ref", "refs/heads/main", &moved]);
+    // The principal reverts the change: a rewind of the target would be moved forward again to
+    // the tip the log names.
+    git_in(repository, &["revert", "--quiet", "--no-edit", "HEAD"]);
+    git_in(repository, &["push", "--quiet"]);
     world.wf.run(&["comment", short(&item), "main moved back"]);
     world
         .wait("the stale marker to clear", |world| {
@@ -3725,18 +3741,26 @@ wf work release --note \"not yet\"
     );
     let repositories = bare.parent().unwrap().join("repositories");
     let _ = std::fs::remove_dir_all(&repositories);
-    git_in(
-        &bare,
-        &["update-ref", "-d", &format!("refs/heads/{branch}")],
-    );
-    git_in(&bare, &["gc", "--quiet", "--prune=now"]);
-    assert!(
+    let head_is_here = || {
         std::process::Command::new("git")
             .args(["-C", bare.to_str().unwrap(), "cat-file", "-e", &head])
             .status()
-            .is_ok_and(|status| !status.success()),
-        "the head is gone"
-    );
+            .is_ok_and(|status| status.success())
+    };
+    // A refs pass that read the log while the head was still here sets the branch again, as it
+    // should: the branch goes again until no pass brings it back.
+    for _ in 0..20 {
+        git_in(
+            &bare,
+            &["update-ref", "-d", &format!("refs/heads/{branch}")],
+        );
+        git_in(&bare, &["gc", "--quiet", "--prune=now"]);
+        if !head_is_here() {
+            break;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(!head_is_here(), "the head is gone");
 
     world.automate("coder", "default");
     world

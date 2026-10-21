@@ -889,6 +889,70 @@ pub struct Merged {
     pub item: ItemId,
     pub reviewed: CommitId,
     pub commit: CommitId,
+    /// The tip of the target the merge moved it from: a link of the target's chain. `None` for a
+    /// merge that did not move the target, as one found landed already, and in events written
+    /// before the target was a chain.
+    pub onto: Option<CommitId>,
+}
+
+/// The wire form of `Merged` before it named the tip it moved the target from, and still for one
+/// that names none. Borrows nothing: every field is a copy.
+#[derive(Serialize, Deserialize)]
+struct MergedWithoutOnto {
+    item: ItemId,
+    reviewed: CommitId,
+    commit: CommitId,
+}
+
+impl Merged {
+    fn to_tagged(&self) -> Result<(u16, Vec<u8>), EncodingError> {
+        match self.onto {
+            Some(_) => Ok((tag::MERGED_ONTO, encoding::encode(self)?)),
+            None => Ok((
+                tag::MERGED,
+                encoding::encode(&MergedWithoutOnto {
+                    item: self.item,
+                    reviewed: self.reviewed,
+                    commit: self.commit,
+                })?,
+            )),
+        }
+    }
+
+    /// One without `onto` would encode to other bytes than were signed.
+    fn with_onto(payload: &[u8]) -> Result<Self, EncodingError> {
+        let merged: Merged = encoding::decode(payload)?;
+        match merged.onto {
+            Some(_) => Ok(merged),
+            None => Err(EncodingError::malformed()),
+        }
+    }
+
+    fn without_onto(payload: &[u8]) -> Result<Self, EncodingError> {
+        let old: MergedWithoutOnto = encoding::decode(payload)?;
+        Ok(Merged {
+            item: old.item,
+            reviewed: old.reviewed,
+            commit: old.commit,
+            onto: None,
+        })
+    }
+}
+
+/// The target branch moved from `onto` to `commit` by other than a merge: a push of the principal
+/// to the device's `<wf>/git`, as its daemon saw it. A link of the target's chain, like a merge.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct TargetMoved {
+    pub commit: CommitId,
+    pub onto: CommitId,
+}
+
+/// The device that writes it claims the merge of the reviewed `commit` of `item`: of the claims on
+/// it, the earliest by `(hlc, EventId)` whose device is still there makes the merge.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeClaimed {
+    pub item: ItemId,
+    pub commit: CommitId,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -913,6 +977,8 @@ pub enum EventBody {
     SessionEnded(SessionEnded),
     Reviewed(Reviewed),
     Merged(Merged),
+    TargetMoved(TargetMoved),
+    MergeClaimed(MergeClaimed),
     /// A body from a newer peer. Stored and relayed, ignored by the fold.
     Unknown {
         tag: u16,
@@ -970,6 +1036,11 @@ mod tag {
     pub const SESSION_ENDED_CLAIM_LOST: u16 = 32;
     /// `Reviewed` of a request for changes that reached the round limit of its review level.
     pub const REVIEW_AT_ROUND_LIMIT: u16 = 33;
+    /// `Merged` that names the tip it moved the target from; one that names none is still
+    /// written as `MERGED`.
+    pub const MERGED_ONTO: u16 = 34;
+    pub const TARGET_MOVED: u16 = 35;
+    pub const MERGE_CLAIMED: u16 = 36;
 }
 
 /// The wire form of a body: an explicit tag and a length-prefixed payload, so a peer can
@@ -1003,6 +1074,8 @@ impl EventBody {
             EventBody::SessionEnded(_) => "SessionEnded",
             EventBody::Reviewed(_) => "Reviewed",
             EventBody::Merged(_) => "Merged",
+            EventBody::TargetMoved(_) => "TargetMoved",
+            EventBody::MergeClaimed(_) => "MergeClaimed",
             EventBody::Unknown { .. } => "Unknown",
         }
     }
@@ -1034,6 +1107,8 @@ impl EventBody {
             EventBody::SessionEnded(body) => body.serialize(serializer),
             EventBody::Reviewed(body) => body.serialize(serializer),
             EventBody::Merged(body) => body.serialize(serializer),
+            EventBody::TargetMoved(body) => body.serialize(serializer),
+            EventBody::MergeClaimed(body) => body.serialize(serializer),
             EventBody::Unknown { tag, payload } => (tag, payload).serialize(serializer),
         }
     }
@@ -1059,7 +1134,9 @@ impl EventBody {
             EventBody::SessionStarted(body) => body.to_tagged()?,
             EventBody::SessionEnded(body) => body.to_tagged()?,
             EventBody::Reviewed(body) => body.to_tagged()?,
-            EventBody::Merged(body) => (tag::MERGED, encoding::encode(body)?),
+            EventBody::Merged(body) => body.to_tagged()?,
+            EventBody::TargetMoved(body) => (tag::TARGET_MOVED, encoding::encode(body)?),
+            EventBody::MergeClaimed(body) => (tag::MERGE_CLAIMED, encoding::encode(body)?),
             EventBody::Unknown { tag, payload } => (*tag, payload.clone()),
         };
         Ok(TaggedBody { tag, payload })
@@ -1108,7 +1185,10 @@ impl EventBody {
             }
             tag::REVIEW => EventBody::Reviewed(Reviewed::without_round_limit(payload)?),
             tag::REVIEW_AT_ROUND_LIMIT => EventBody::Reviewed(Reviewed::at_round_limit(payload)?),
-            tag::MERGED => EventBody::Merged(encoding::decode(payload)?),
+            tag::MERGED => EventBody::Merged(Merged::without_onto(payload)?),
+            tag::MERGED_ONTO => EventBody::Merged(Merged::with_onto(payload)?),
+            tag::TARGET_MOVED => EventBody::TargetMoved(encoding::decode(payload)?),
+            tag::MERGE_CLAIMED => EventBody::MergeClaimed(encoding::decode(payload)?),
             tag => EventBody::Unknown {
                 tag,
                 payload: tagged.payload,
@@ -1354,6 +1434,7 @@ mod tests {
                 item,
                 reviewed: commit,
                 commit,
+                onto: None,
             }),
             EventBody::SessionEnded(SessionEnded {
                 session,

@@ -152,7 +152,7 @@ use crate::crdt::{AddWinsSet, Lww, Stamp};
 use crate::event::{CommentKind, WrittenState};
 use crate::hlc::Hlc;
 use crate::id::{CommentId, EventId, ItemId, SessionId};
-use crate::identity::Actor;
+use crate::identity::{Actor, DeviceKey};
 use crate::name::{Label, LaneName, RecoveryLevelName, Requirement, ReviewLevelName, TypeName};
 use crate::policy::Policy;
 use crate::refs::Token;
@@ -217,6 +217,9 @@ pub struct Merge {
     pub reviewed: CommitId,
     /// The merge commit on the target branch.
     pub commit: CommitId,
+    /// Whether it moved the target on a fork that lost ([`crate::target`]): the work is not in the
+    /// target, and waits for its merge again.
+    pub(crate) lost: bool,
     pub(crate) stamp: Stamp,
 }
 
@@ -224,6 +227,25 @@ impl Merge {
     /// When the merge was recorded.
     pub fn merged_at(&self) -> Hlc {
         self.stamp.hlc
+    }
+
+    pub fn lost(&self) -> bool {
+        self.lost
+    }
+}
+
+/// A device's claim on the merge of a reviewed commit of the item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MergeClaim {
+    /// The reviewed commit.
+    pub commit: CommitId,
+    pub device: DeviceKey,
+    pub(crate) stamp: Stamp,
+}
+
+impl MergeClaim {
+    pub fn event(&self) -> EventId {
+        self.stamp.id
     }
 }
 
@@ -261,6 +283,7 @@ pub struct Item {
     pub(crate) comments: BTreeMap<CommentId, Comment>,
     pub(crate) verdicts: BTreeMap<EventId, Review>,
     pub(crate) merges: BTreeMap<EventId, Merge>,
+    pub(crate) merge_claims: BTreeMap<EventId, MergeClaim>,
     /// When the principal last did something to the item. It starts its recovery level again.
     pub(crate) principal_touched: Option<Hlc>,
 }
@@ -401,13 +424,25 @@ impl Item {
         &self.verdicts
     }
 
-    pub fn merges(&self) -> &BTreeMap<EventId, Merge> {
-        &self.merges
+    /// The merges of the item's work that are in the target branch: those that did not lose a
+    /// fork of it.
+    pub fn merges(&self) -> impl Iterator<Item = &Merge> {
+        self.merges.values().filter(|merge| !merge.lost)
+    }
+
+    /// Every merge of the item's work the log names, those that lost a fork of the target too.
+    pub fn all_merges(&self) -> impl Iterator<Item = &Merge> {
+        self.merges.values()
     }
 
     /// The latest merge of the item's work into the target branch, if any.
     pub fn latest_merge(&self) -> Option<&Merge> {
-        self.merges.values().max_by_key(|merge| merge.stamp)
+        self.merges().max_by_key(|merge| merge.stamp)
+    }
+
+    /// The claims of devices on the merge of the item's work.
+    pub fn merge_claims(&self) -> impl Iterator<Item = &MergeClaim> {
+        self.merge_claims.values()
     }
 
     /// The lane the item is routed to: its own, else its type's.
@@ -523,6 +558,7 @@ impl Item {
             comments: BTreeMap::new(),
             verdicts: BTreeMap::new(),
             merges: BTreeMap::new(),
+            merge_claims: BTreeMap::new(),
             principal_touched,
         }
     }

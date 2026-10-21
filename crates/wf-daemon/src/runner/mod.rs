@@ -13,12 +13,14 @@ mod repositories;
 mod resume;
 mod start;
 mod submit;
+mod target;
 
 pub(crate) use dispatch::run_dispatcher;
 pub(crate) use merge::{MergeQueue, run_merger};
 pub use resume::session_model;
 pub(crate) use start::sandboxed_in;
 pub(crate) use submit::SubmissionChecks;
+pub(crate) use target::{TargetBranch, run_target};
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

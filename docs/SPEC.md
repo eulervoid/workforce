@@ -305,6 +305,9 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 | 22 | `Reviewed` | `item`, `commit: Option` (none: submitted without commits), `verdict` (`Approve`, `RequestChanges`, `Escalate`), `because: Option<CommentId>` |
 | 33 | `Reviewed` | as tag 22, plus `round_limit_reached: u32`, for a `RequestChanges` at the round limit of its level (section 10); a verdict without it keeps tag 22 |
 | 23 | `Merged` | `item`, `reviewed`, `commit` |
+| 34 | `Merged` | as tag 23, plus `onto: CommitId`, the tip of the target it moved from (section 10); a merge found landed in the target, which moved nothing, keeps tag 23 |
+| 35 | `TargetMoved` | `commit`, `onto`: the principal pushed the target from `onto` to `commit` (section 10) |
+| 36 | `MergeClaimed` | `item`, `commit`: the device that writes it makes the merge of the approved `commit` (section 10) |
 | 24 | retired | (`Report`, now a comment) |
 | 25 | `SessionEnded` | as tag 21, plus `because: CommentId`, the comment that says why |
 | 26 | `Commented` | as tag 16, plus `lines: LineAnchor`, the lines of the diff it is about (section 11); a comment without lines is written under tag 16 |
@@ -324,8 +327,7 @@ statement cannot be replayed into another workforce; an invite proof covers `wf/
 * Policy travels as TOML text, so the stored policy is exactly what the owner wrote. Peers do not
   parse it to admit it: a policy that does not parse (from a newer version) is flagged in `wf status`,
   and the workforce keeps running on the last policy that parsed, or the default.
-* Tags are never reused. *Planned (M3):* `MergeClaimed{item, commit}`, `TargetMoved{commit, onto}`;
-  `onto: CommitId` on `Merged` (section 10).
+* Tags are never reused.
 
 ### Store
 
@@ -962,16 +964,28 @@ requests; a comment naming a file and lines as data.
 
 ### Merge
 
-`[merge] mode = "local"` merges approved work into `[merge] target` in `<wf>/git`. One **merge
-task** per workforce merges one item at a time, outside the dispatch loop; the dispatcher and session
-ends only queue work for it. Work without a review level waits in `review` while queued.
+`[merge] mode = "local"` merges approved work into `[merge] target` in `<wf>/git`. Any device that
+meets the policy's `[merge] requires` (its checks run there) merges: on each, one **merge task** per
+workforce merges one item at a time, outside the dispatch loop; the dispatcher and session ends only
+queue work for it. Work without a review level waits in `review` while queued.
 
-1. Build the merge with `git merge-tree --write-tree`.
-2. Run the policy's checks on that tree (below), unless they passed on it in the same sandbox.
-3. Commit it (`Merge #<item>: <title>`) with `git commit-tree`, and advance the target by
-   compare-and-swap with `git update-ref`. A target that moved meanwhile (a push of the principal,
-   say) is tried again on top of the new tip (3 times, then one comment).
-4. Write `Merged{item, reviewed, commit}`, remove the branch and the agent repository, move the item to done.
+1. Claim the merge once the approved commit is here: `MergeClaimed{item, commit}`, unless another
+   claim holds it (below). Then sync with the other devices that are there and meet `[merge]
+   requires` (5 s at most), so that a claim one of them wrote at the same time is seen, and go on
+   only if this claim still holds.
+2. Build the merge with `git merge-tree --write-tree` on the target's tip in the log (below).
+3. Run the policy's checks on that tree (below), unless they passed on it in the same sandbox.
+4. Commit it (`Merge #<item>: <title>`) with `git commit-tree`, and advance the target by
+   compare-and-swap with `git update-ref`, if the claim still holds. A target that moved meanwhile
+   (a push of the principal, say) is tried again on top of the new tip (3 times, then one comment).
+5. Write `Merged{item, reviewed, commit, onto}`, remove the branch and the agent repository, move the
+   item to done.
+
+* **The claim.** The earliest `MergeClaimed` by `(hlc, EventId)` for the approved commit holds the
+  merge, among those of devices that meet `[merge] requires` and are there: its lease is its device's
+  presence (section 9), so the claim of a device gone for longer than the lease passes to the next.
+  No event ends a claim; a device writes one only when none holds the merge. Devices that reach each
+  other therefore never merge the same item at once; only devices cut off from each other can.
 
 * A **conflict** sends the item back to its open state with a comment naming the files; approved work
   is never rewritten. The next session's submission rebases it.
@@ -1111,25 +1125,34 @@ devices, nothing new for the principal to run.
   how to point a checkout at it: `git remote add wf <wf>/git` and `git fetch wf`. Without a daemon
   there is nothing to fetch with, and the daemon fills the repository from the commits the log
   names when it starts.
-
-**Planned (M3):**
-
-* **The target is a chain in the log.** Every move of it names the tip it moved from: `Merged`
-  gains `onto`, and a push of the principal to `wf` is written by that device's daemon as
-  `TargetMoved{commit, onto}` when it sees the target move. The target is the end of that chain, and
-  its commits are fetched like any other the log names. Two moves with the same `onto` are a fork:
-  the earliest by `(hlc, EventId)` wins, on every device alike.
-* **Any device merges.** One that meets the policy's `[merge] requires` (its checks run there) and
-  has the approved commit claims the item's merge with `MergeClaimed{item, commit}`, like a session's claim: the earliest claim
-  wins, its lease is its device's presence (section 9), and the merge task runs as it is, in
-  `<wf>/git`. Devices that reach each other therefore never merge at once; only devices cut off
-  from each other can fork the target. A device whose move lost resets its `<wf>/git` target to the
-  winner (wf's ref, not the principal's checkout); a lost merge goes back to waiting for its merge
-  and runs again on the new tip, checks included; a lost push of the principal goes to the inbox, to
-  rebase. A principal who pulled a merge that later lost finds their next push refused as diverged,
-  in the inbox.
 * **Not iroh-blobs.** Packs are built per request, so they have no stable hash to fetch by, and git
   verifies what it receives. iroh-blobs stays for files that are not git (transcripts, attachments).
+
+### The target is a chain in the log
+
+Every move of the target names the tip it moved from, so every device agrees where it is.
+
+* **Moves.** A merge writes `Merged{.., onto}`; a push of the principal to `wf` is written by the
+  daemon of the device pushed to as `TargetMoved{commit, onto}`. The daemon looks for pushes every
+  5 s, and follows the log whenever what it says of the target changes: a target branch in `<wf>/git` that is neither a commit some move made
+  nor an ancestor of the tip in the log is a push, from the merge base of the two (from the branch
+  it last saw while the log has no tip). A merge found landed in the target moves nothing and has
+  no `onto`.
+* **The chain.** It starts at the earliest move whose `onto` no move made, and at each tip goes on
+  with the earliest move onto it, by `(hlc, EventId)`; a commit it reaches twice ends it, so moves
+  that go round in a circle cannot loop. The target is the end of the chain, and its tip is fetched
+  like any other commit the log names, from the device that moved it there.
+* **Forks.** Two moves with the same `onto` are a fork: the earliest wins, on every device alike,
+  and the moves off the chain are lost, with every move made on top of them.
+* **Following.** Each daemon moves its `<wf>/git` target to the tip once the commit is there,
+  forward or back by compare-and-swap; this resets a move that lost to the winner (wf's ref, not the
+  principal's checkout), and it puts back a target the principal rewound without pushing anything new.
+* **A lost merge** no longer counts: the device that made it moves its item back to `review` with a
+  comment from `@daemon`, or any device of its principal once it is gone (its lease, as for merge
+  claims), and it waits for its merge again, which runs on the new tip, checks included.
+* **A lost push** of the principal waits in their inbox (`lost_push`), the latest of each device,
+  until a later push from it is on the chain: rebase onto the target (`git pull --rebase`) and push
+  again. A principal who pulled a merge that later lost finds their next push lost the same way.
 
 ### Commit identity and signatures
 
@@ -1536,7 +1559,7 @@ fold, so it does not depend on arrival order.
 | `[types.<name>]` | `lane`, `fields`, `depends_on`, `states`, `initial`, `review`, `recovery` (section 8) |
 | `[[review]]` | `name`, `steps`: `{ name, requires, instructions }`, `"principal"` or a list of them that run at once, `max_rounds` (optional, positive; section 10) |
 | `[[recovery]]` | `name`, `steps`: `"retry"`, `{ agent = { requires = [...] } }` or `"principal"` (section 9) |
-| `[merge]` | `mode = "local"`, `target` (default `main`) |
+| `[merge]` | `mode = "local"`, `target` (default `main`), `requires`: what the hardware of a device must offer for it to merge (default none: any device; section 10) |
 | `[[merge.check]]` | `name` (unique), `run` (argv, no shell, not empty), `timeout` (default 30m) |
 | `[claims]` | `lease` (default and least `3m`): how long a device may be silent before its claims can be taken over (section 9) |
 
@@ -1550,7 +1573,8 @@ machine's config gives checks, so each machine's principal decides what they may
 they check.
 
 *Planned:* `[compaction] after` (M6),
-`[merge] requires` and `after_device` (M3, section 10),
+`[[merge.after]]` and `[merge] after_device` (M3, section 10; a policy that names them is refused
+until then),
 `[transcripts] publish` (M7), `[governance]` (advisory, M7), `wf policy diff`. *Open:* whether
 `default_agent`, a convenience of one principal, belongs in the machine config instead.
 
@@ -1598,8 +1622,8 @@ wf fork [--exclude <device|@member>]... [--new-principal] | fork accept <id> | f
   commented `state = "draft"` for new items), then the body verbatim. Unknown keys are refused. State
   changes only through the verbs.
 * **`wf inbox`** lists what waits on the principal: `blocker`, `proposal` (an item in `review` without
-  submitted work, such as a decision), `principal_review`, `recovery`, `permission` and
-  `machine_fault`, each with the command that answers it. `wf status` summarises the workforce, flags
+  submitted work, such as a decision), `principal_review`, `recovery`, `permission`,
+  `machine_fault` and `lost_push`, each with the command that answers it. `wf status` summarises the workforce, flags
   what needs someone (stranded items, steps no agent can take, unknown states, an unreadable policy)
   and says what to do next.
 * **`--json`** gives `{"schema": 9, "data": ...}` for every command with output to read (not the

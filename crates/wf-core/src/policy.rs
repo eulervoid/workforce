@@ -164,6 +164,9 @@ pub struct MergeConfig {
     /// What has to pass on the merge result before the target moves, in this order.
     #[serde(rename = "check", default)]
     pub checks: Vec<CheckConfig>,
+    /// What the hardware of a device must offer for it to make merges, as its checks run there.
+    #[serde(default)]
+    pub requires: Vec<Requirement>,
 }
 
 impl MergeConfig {
@@ -178,6 +181,7 @@ impl Default for MergeConfig {
             mode: MergeMode::default(),
             target: Self::default_target(),
             checks: Vec::new(),
+            requires: Vec::new(),
         }
     }
 }
@@ -910,6 +914,23 @@ mod tests {
                 lane: LaneName::new("ghost").unwrap()
             })
         );
+    }
+
+    #[test]
+    fn after_merge_commands_are_not_config_yet() {
+        // `[[merge.after]]` and `[merge] after_device` are planned (SPEC section 10): until they
+        // run, a policy that names them is refused rather than read as if they did.
+        let after_device =
+            DEFAULT_POLICY_TOML.replace("[merge]\n", "[merge]\nafter_device = \"server\"\n");
+        assert_ne!(after_device, DEFAULT_POLICY_TOML);
+        let after =
+            with_custom("[[merge.after]]\nname = \"deploy\"\nrun = [\"make\", \"deploy\"]\n");
+        for source in [after_device, after] {
+            assert!(
+                matches!(Policy::parse(&source), Err(PolicyError::Parse(_))),
+                "{source}"
+            );
+        }
     }
 
     #[test]

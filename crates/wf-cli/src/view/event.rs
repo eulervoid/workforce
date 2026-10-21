@@ -200,7 +200,27 @@ pub fn describe(body: &EventBody) -> String {
             };
             format!("{} reviewed: {verdict}", item(&review.item))
         }
-        EventBody::Merged(merged) => format!("{} merged as {}", item(&merged.item), merged.commit),
+        EventBody::Merged(merged) => match merged.onto {
+            Some(onto) => format!(
+                "{} merged as {} onto {}",
+                item(&merged.item),
+                merged.commit,
+                onto.short()
+            ),
+            None => format!("{} merged as {}", item(&merged.item), merged.commit),
+        },
+        EventBody::TargetMoved(moved) => {
+            format!(
+                "target moved to {} onto {}",
+                moved.commit,
+                moved.onto.short()
+            )
+        }
+        EventBody::MergeClaimed(claimed) => format!(
+            "{} merge of {} claimed",
+            item(&claimed.item),
+            claimed.commit.short()
+        ),
         EventBody::Unknown { tag, .. } => {
             format!("unknown body {tag}")
         }
@@ -259,6 +279,8 @@ pub fn event_view(
         | EventBody::Commented(_)
         | EventBody::SessionStarted(_)
         | EventBody::Merged(_)
+        | EventBody::TargetMoved(_)
+        | EventBody::MergeClaimed(_)
         | EventBody::Unknown { .. } => None,
     };
     EventView {

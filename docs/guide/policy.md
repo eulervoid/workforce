@@ -212,6 +212,19 @@ waits for you.
 `[merge] target` is the branch approved work is merged into, `main` by default. `mode = "local"`
 merges in this repository; see [review-and-merge.md](review-and-merge.md#the-merge).
 
+Any machine of the workforce may merge, the first to claim the merge of an item. `[merge] requires`
+keeps merges, and with them the checks, on machines whose hardware offers what it lists, the way an
+item's `requires` keeps its sessions there:
+
+```toml
+[merge]
+target = "main"
+requires = ["os:linux"]
+```
+
+Commands that run after a merge, such as a release or a deploy, are planned (`[[merge.after]]`, on
+the one machine `[merge] after_device` names); a policy that names them is refused for now.
+
 ### Checks
 
 `[[merge.check]]` names a command that has to pass on the merge result before the target moves. Each

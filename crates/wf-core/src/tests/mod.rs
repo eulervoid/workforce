@@ -13,4 +13,5 @@ mod review;
 mod search;
 mod sessions;
 mod stats;
+mod target;
 mod validation;

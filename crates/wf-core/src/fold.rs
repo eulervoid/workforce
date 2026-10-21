@@ -6,14 +6,17 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::crdt::{Lww, Stamp};
 use crate::event::{Change, CommentKind, Event, EventBody, ItemLinked, Link};
 use crate::id::{CommentId, EventId, ItemId, SessionId};
+use crate::identity::DeviceKey;
 use crate::identity::{Actor, AgentId, Role};
-use crate::item::{Comment, Item, ItemState, Merge, Resolved, Review};
+use crate::item::{Comment, Item, ItemState, Merge, MergeClaim, Resolved, Review};
 use crate::refs;
+use crate::session::CommitId;
 use crate::session::{Ended, Session, Verdict};
 use crate::state::{
     AgentDefinition, Announcement, Binding, Feed, FeedHead, ForkState, Invite, Known, Member,
     Neighbours, Origin, PolicyBinding, PolicyDoc, State, Workforce,
 };
+use crate::target::{self, MoveCause, TargetMove};
 
 impl State {
     /// Applies an event that [`State::receive`] has admitted.
@@ -94,6 +97,9 @@ impl State {
                 items: BTreeMap::new(),
                 sessions: BTreeMap::new(),
                 sessions_by_item: BTreeMap::new(),
+                target_moves: BTreeMap::new(),
+                target_chain: Vec::new(),
+                target_moved_from: BTreeSet::new(),
                 invites: BTreeMap::new(),
                 profiles: BTreeMap::new(),
                 fork: genesis
@@ -184,6 +190,8 @@ impl State {
                     | EventBody::SessionEnded(_)
                     | EventBody::Reviewed(_)
                     | EventBody::Merged(_)
+                    | EventBody::TargetMoved(_)
+                    | EventBody::MergeClaimed(_)
                     | EventBody::Unknown { .. }
             )
         {
@@ -380,6 +388,27 @@ impl State {
                         Merge {
                             reviewed: merged.reviewed,
                             commit: merged.commit,
+                            lost: false,
+                            stamp,
+                        },
+                    );
+                }
+                if let Some(onto) = merged.onto {
+                    let cause = MoveCause::Merge { item: merged.item };
+                    workforce.move_target(merged.commit, onto, cause, content.author, stamp);
+                }
+            }
+            EventBody::TargetMoved(moved) => {
+                let cause = MoveCause::Push;
+                workforce.move_target(moved.commit, moved.onto, cause, content.author, stamp);
+            }
+            EventBody::MergeClaimed(claimed) => {
+                if let Some(item) = workforce.items.get_mut(&claimed.item) {
+                    item.merge_claims.insert(
+                        id,
+                        MergeClaim {
+                            commit: claimed.commit,
+                            device: content.author,
                             stamp,
                         },
                     );
@@ -468,6 +497,60 @@ impl State {
                         }
                     }
                 }
+            }
+        }
+    }
+}
+
+impl Workforce {
+    /// Records a move of the target, makes its chain again, and marks the merges that lost a
+    /// fork of it. The chain is a function of the set of moves, so the order they come in does
+    /// not matter.
+    ///
+    /// Most moves are onto the tip, from a tip no other move left, to a commit no move left:
+    /// such a move only extends the chain, and loses no other. Only the rest make the chain
+    /// again from every move, which would make a fold of many moves quadratic.
+    fn move_target(
+        &mut self,
+        commit: CommitId,
+        onto: CommitId,
+        cause: MoveCause,
+        device: DeviceKey,
+        stamp: Stamp,
+    ) {
+        let step = TargetMove {
+            commit,
+            onto,
+            cause,
+            device,
+            stamp,
+        };
+        let tip = self
+            .target_chain
+            .last()
+            .and_then(|last| self.target_moves.get(last))
+            .map(|last| last.commit);
+        let extends = tip == Some(onto)
+            && commit != onto
+            && !self.target_moved_from.contains(&onto)
+            && !self.target_moved_from.contains(&commit)
+            && !self.target_moves.contains_key(&stamp.id);
+        self.target_moves.insert(stamp.id, step);
+        self.target_moved_from.insert(onto);
+        if extends {
+            self.target_chain.push(stamp.id);
+            return;
+        }
+        self.target_chain = target::chain(&self.target_moves);
+        let on_chain: BTreeSet<EventId> = self.target_chain.iter().copied().collect();
+        for step in self.target_moves.values() {
+            if let MoveCause::Merge { item } = step.cause
+                && let Some(merge) = self
+                    .items
+                    .get_mut(&item)
+                    .and_then(|item| item.merges.get_mut(&step.stamp.id))
+            {
+                merge.lost = !on_chain.contains(&step.stamp.id);
             }
         }
     }

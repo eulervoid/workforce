@@ -392,36 +392,44 @@ pub fn awaiting_lines(state: &State, awaited: &[AwaitedCommit]) -> Vec<String> {
     awaited
         .iter()
         .map(|AwaitedCommit { named, fetching }| {
-            let title = match state.item(named.item) {
-                Some(ItemEntry::Live(item)) => item.title().to_string(),
-                Some(ItemEntry::Archived(_)) | None => "(archived)".to_string(),
-            };
-            let what = match named.naming {
-                Naming::Head { session } => match state.session(session) {
-                    Some(session) => {
-                        format!("the work of {}", speaker(state, &session.actor()))
-                    }
-                    None => "the work of a session".to_string(),
-                },
-                Naming::Submitted => "the commit under review".to_string(),
-            };
-            let (item, commit, device) = (
-                named.item.short(),
-                named.commit.short(),
-                device_label(state, named.author),
-            );
-            match fetching {
-                Fetching::Underway => format!(
-                    "#{item} \"{title}\": waiting for commit {commit} ({what}) from {device}"
+            let (waiting, what) = match named.naming {
+                Naming::Head { item, session } => {
+                    let what = match state.session(session) {
+                        Some(session) => {
+                            format!("the work of {}", speaker(state, &session.actor()))
+                        }
+                        None => "the work of a session".to_string(),
+                    };
+                    (item_label(state, item), what)
+                }
+                Naming::Submitted { item } => (
+                    item_label(state, item),
+                    "the commit under review".to_string(),
                 ),
+                Naming::Target => ("the target".to_string(), "its tip".to_string()),
+            };
+            let (commit, device) = (named.commit.short(), device_label(state, named.author));
+            match fetching {
+                Fetching::Underway => {
+                    format!("{waiting}: waiting for commit {commit} ({what}) from {device}")
+                }
                 Fetching::Unavailable { since_ms } => format!(
-                    "#{item} \"{title}\": commit {commit} ({what}) is unavailable: {device} named \
+                    "{waiting}: commit {commit} ({what}) is unavailable: {device} named \
                      it, and no device has had it since {}",
                     super::timestamp_ms(*since_ms)
                 ),
             }
         })
         .collect()
+}
+
+/// `#abc123 "Title"`, as a line of what waits for commits names the item.
+fn item_label(state: &State, item: ItemId) -> String {
+    let title = match state.item(item) {
+        Some(ItemEntry::Live(live)) => live.title().to_string(),
+        Some(ItemEntry::Archived(_)) | None => "(archived)".to_string(),
+    };
+    format!("#{} \"{title}\"", item.short())
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]

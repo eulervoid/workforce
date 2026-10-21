@@ -10,14 +10,18 @@
 //! others must notice is the device's: its lease, read from the [`Presence`] of devices. A daemon
 //! of the principal takes over the claims of a gone device by ending its sessions `LeaseExpired`
 //! ([`State::claimable`]).
+//!
+//! A merge is claimed apart from sessions, by a device with `MergeClaimed` on the reviewed commit
+//! ([`State::merge_holder`]): it lasts as long as its device is there, and nothing ends it.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::time::Duration;
 
 use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::DeviceKey;
+use crate::item::MergeClaim;
 use crate::policy::Policy;
-use crate::session::{EndReason, Session, SessionRole};
+use crate::session::{CommitId, EndReason, Session, SessionRole};
 use crate::state::State;
 
 /// A session cannot start on what a live session holds.
@@ -215,6 +219,27 @@ impl State {
         self.sessions_of(item).any(|session| {
             session.is_live() && session.role == *role && !expired.contains(&session.id())
         })
+    }
+
+    /// The claim that holds the merge of the reviewed `commit` of `item`, as a daemon on `device`
+    /// sees it at `now_ms`: of the claims on it by devices that meet `[merge] requires`
+    /// ([`State::may_merge`]), the earliest whose device is `device` itself or is not gone. Its device makes the merge; with none, a device that can make it claims it. A
+    /// device that comes back holds its claim again, so devices that reach each other never merge
+    /// at once.
+    pub fn merge_holder(
+        &self,
+        item: ItemId,
+        commit: CommitId,
+        device: DeviceKey,
+        presence: &Presence,
+        now_ms: u64,
+    ) -> Option<&MergeClaim> {
+        let lease = self.lease();
+        self.item_including_archived(item)?
+            .merge_claims()
+            .filter(|claim| claim.commit == commit && self.may_merge(claim.device))
+            .filter(|claim| claim.device == device || !presence.gone(claim.device, lease, now_ms))
+            .min_by_key(|claim| claim.stamp)
     }
 
     /// Whether a daemon on `device` may start a session on `item` in `role` at `now_ms`, and which

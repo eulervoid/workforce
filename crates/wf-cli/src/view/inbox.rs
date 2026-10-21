@@ -2,9 +2,11 @@
 
 use serde::Serialize;
 use wf_core::id::{ItemId, SessionId};
+use wf_core::identity::DeviceKey;
 use wf_core::inbox::{InboxKind, permission_waits};
 use wf_core::session::HarnessFault;
 use wf_core::state::State;
+use wf_core::target::TargetMove;
 use wf_daemon::proto::HeldPermission;
 use wf_daemon::{MachineFaults, Retry};
 
@@ -19,10 +21,11 @@ pub struct InboxEntryView {
     pub passed: Vec<String>,
 }
 
-/// What waits on the principal: what the state says, the permission requests the daemon holds,
-/// and what is wrong with the machine.
+/// What waits on the principal of `own`: what the state says, the permission requests the
+/// daemon holds, and what is wrong with the machine.
 pub fn inbox_views(
     state: &State,
+    own: DeviceKey,
     held: &[HeldPermission],
     machine_faults: &MachineFaults,
 ) -> Vec<InboxEntryView> {
@@ -38,6 +41,11 @@ pub fn inbox_views(
             passed: Vec::new(),
         })
         .collect();
+    entries.extend(
+        lost_pushes(state, own)
+            .iter()
+            .map(|push| lost_push_view(state, push)),
+    );
     entries.extend(held.iter().map(|request| {
         let session = state.session(request.session);
         InboxEntryView {
@@ -60,10 +68,39 @@ pub fn inbox_views(
 /// How many entries [`inbox_views`] has, without building them.
 pub fn inbox_count(
     state: &State,
+    own: DeviceKey,
     held: &[HeldPermission],
     machine_faults: &MachineFaults,
 ) -> usize {
-    state.inbox().len() + held.len() + machine_faults.count()
+    state.inbox().len() + lost_pushes(state, own).len() + held.len() + machine_faults.count()
+}
+
+/// The pushes of the principal of `own` that lost a fork of the target.
+pub fn lost_pushes(state: &State, own: DeviceKey) -> Vec<TargetMove> {
+    state
+        .principal_of(&own)
+        .map_or_else(Vec::new, |principal| state.lost_pushes(principal))
+}
+
+/// The entry for a push that lost a fork of the target: another device moved it from the same
+/// commit first, so the pushed commit is not in it.
+pub fn lost_push_view(state: &State, push: &TargetMove) -> InboxEntryView {
+    let target = state.policy().map_or("the target", |document| {
+        document.policy.merge.target.as_str()
+    });
+    InboxEntryView {
+        kind: InboxKind::LostPush,
+        item: None,
+        session: None,
+        title: format!("The push of {} to {target} lost", push.commit.short()),
+        what: format!(
+            "rebase it onto {target}, such as with `git pull --rebase`, and push again: another \
+             device moved {target} from {} before the push from {}",
+            push.onto.short(),
+            super::device_name(state, push.device)
+        ),
+        passed: Vec::new(),
+    }
 }
 
 /// One entry for each thing wrong with the machine, however many sessions it ended: what it is

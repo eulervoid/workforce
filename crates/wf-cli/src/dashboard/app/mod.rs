@@ -643,7 +643,7 @@ impl App {
                 | InboxEntry::Review { item, .. }
                 | InboxEntry::Notice { item, .. } => Some(Detail::Item(item.id)),
                 // The row says all there is to say.
-                InboxEntry::MachineFault { .. } => None,
+                InboxEntry::MachineFault { .. } | InboxEntry::LostPush { .. } => None,
             },
             NowRow::Session(session) => Some(Detail::Session(*session)),
             // A flag about an item shows in the item's notice box.
@@ -797,7 +797,7 @@ impl App {
                 InboxEntry::Blocker { item, .. }
                 | InboxEntry::Review { item, .. }
                 | InboxEntry::Notice { item, .. } => Some(item),
-                InboxEntry::MachineFault { .. } => None,
+                InboxEntry::MachineFault { .. } | InboxEntry::LostPush { .. } => None,
             })
             .map(|item| (item.id, item.title.as_str()));
         let listed = snapshot
@@ -888,7 +888,8 @@ impl App {
                     InboxEntry::Blocker { item, .. } | InboxEntry::Review { item, .. } => item.id == id,
                     InboxEntry::Permission { .. }
                     | InboxEntry::Notice { .. }
-                    | InboxEntry::MachineFault { .. } => false,
+                    | InboxEntry::MachineFault { .. }
+                    | InboxEntry::LostPush { .. } => false,
                 })
                 .collect(),
             // A diff is looked at to review it.
@@ -898,7 +899,8 @@ impl App {
                     InboxEntry::Permission { .. }
                     | InboxEntry::Blocker { .. }
                     | InboxEntry::Notice { .. }
-                    | InboxEntry::MachineFault { .. } => false,
+                    | InboxEntry::MachineFault { .. }
+                    | InboxEntry::LostPush { .. } => false,
                 })
                 .collect(),
             Some(Detail::Agent(_) | Detail::Flag(_)) | None => Vec::new(),
