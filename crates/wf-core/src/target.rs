@@ -10,8 +10,8 @@ use serde::{Deserialize, Serialize};
 
 use crate::crdt::Stamp;
 use crate::id::{EventId, ItemId};
-use crate::identity::DeviceKey;
-use crate::item::ItemState;
+use crate::identity::{DeviceKey, PrincipalKey};
+use crate::item::{ItemEntry, ItemState};
 use crate::session::CommitId;
 use crate::state::State;
 
@@ -127,15 +127,61 @@ impl State {
             .collect();
         lost.into_iter()
             .filter(|item| {
-                self.live_items().any(|live| {
-                    live.id() == *item
-                        && live.state(policy) == ItemState::Done
-                        && live
-                            .all_merges()
-                            .max_by_key(|merge| merge.stamp)
-                            .is_some_and(|merge| merge.lost)
-                })
+                matches!(
+                    self.item(*item),
+                    Some(ItemEntry::Live(live))
+                        if live.state(policy) == ItemState::Done
+                            && live
+                                .all_merges()
+                                .max_by_key(|merge| merge.stamp)
+                                .is_some_and(|merge| merge.lost)
+                )
             })
             .collect()
+    }
+
+    /// The pushes of `principal` to the target that lost a fork, the latest of each of its
+    /// devices: their commits are not in the target, and wait for the principal to rebase them
+    /// onto it and push again. One is gone once a later push from that device is on the chain.
+    pub fn lost_pushes(&self, principal: PrincipalKey) -> Vec<TargetMove> {
+        let mut latest: BTreeMap<DeviceKey, &TargetMove> = BTreeMap::new();
+        for step in self.target_moves() {
+            if step.cause != MoveCause::Push || self.principal_of(&step.device) != Some(principal) {
+                continue;
+            }
+            latest
+                .entry(step.device)
+                .and_modify(|later| {
+                    if step.stamp > later.stamp {
+                        *later = step;
+                    }
+                })
+                .or_insert(step);
+        }
+        latest
+            .into_values()
+            .filter(|step| self.move_lost(step.event()))
+            .copied()
+            .collect()
+    }
+
+    /// Whether `device` meets the policy's `[merge] requires` with its hardware, so that it may
+    /// claim merges and make them.
+    pub fn may_merge(&self, device: DeviceKey) -> bool {
+        let Some(policy) = self.policy().map(|document| &document.policy) else {
+            return false;
+        };
+        if policy.merge.requires.is_empty() {
+            return true;
+        }
+        let Some(profile) = self.device_profile(device) else {
+            return false;
+        };
+        let hardware = profile.hardware_requirements();
+        policy
+            .merge
+            .requires
+            .iter()
+            .all(|requirement| hardware.contains(requirement))
     }
 }

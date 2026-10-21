@@ -164,6 +164,9 @@ pub struct MergeConfig {
     /// What has to pass on the merge result before the target moves, in this order.
     #[serde(rename = "check", default)]
     pub checks: Vec<CheckConfig>,
+    /// What the hardware of a device must offer for it to make merges, as its checks run there.
+    #[serde(default)]
+    pub requires: Vec<Requirement>,
 }
 
 impl MergeConfig {
@@ -178,6 +181,7 @@ impl Default for MergeConfig {
             mode: MergeMode::default(),
             target: Self::default_target(),
             checks: Vec::new(),
+            requires: Vec::new(),
         }
     }
 }
