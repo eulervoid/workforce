@@ -970,7 +970,9 @@ workforce merges one item at a time, outside the dispatch loop; the dispatcher a
 queue work for it. Work without a review level waits in `review` while queued.
 
 1. Claim the merge once the approved commit is here: `MergeClaimed{item, commit}`, unless another
-   claim holds it (below).
+   claim holds it (below). Then sync with the other devices that are there and meet `[merge]
+   requires` (5 s at most), so that a claim one of them wrote at the same time is seen, and go on
+   only if this claim still holds.
 2. Build the merge with `git merge-tree --write-tree` on the target's tip in the log (below).
 3. Run the policy's checks on that tree (below), unless they passed on it in the same sandbox.
 4. Commit it (`Merge #<item>: <title>`) with `git commit-tree`, and advance the target by
@@ -1131,8 +1133,8 @@ devices, nothing new for the principal to run.
 Every move of the target names the tip it moved from, so every device agrees where it is.
 
 * **Moves.** A merge writes `Merged{.., onto}`; a push of the principal to `wf` is written by the
-  daemon of the device pushed to as `TargetMoved{commit, onto}`. The daemon looks for pushes when
-  heads change and every 5 s: a target branch in `<wf>/git` that is neither a commit some move made
+  daemon of the device pushed to as `TargetMoved{commit, onto}`. The daemon looks for pushes every
+  5 s, and follows the log whenever what it says of the target changes: a target branch in `<wf>/git` that is neither a commit some move made
   nor an ancestor of the tip in the log is a push, from the merge base of the two (from the branch
   it last saw while the log has no tip). A merge found landed in the target moves nothing and has
   no `onto`.

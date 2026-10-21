@@ -128,34 +128,60 @@ fn decide(
     Ok((Some(branch), follow))
 }
 
+/// What the log says of the target that a pass acts on. A change of the log that leaves it as it
+/// was needs no pass, so that not every event runs git.
+#[derive(PartialEq, Eq)]
+struct Watched {
+    tip: Option<CommitId>,
+    moves: usize,
+    lost_merges: Vec<ItemId>,
+}
+
 /// Follows the target of a workforce for as long as the daemon runs and its storage does: when
-/// the log changes, and now and then for pushes.
+/// what the log says of it changes, and now and then for pushes, which nothing announces.
 pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loaded: Arc<Loaded>) {
     let Some(mut halted) = daemon.upgrade().map(|strong| strong.halted.subscribe()) else {
         return;
     };
     let mut heads = loaded.storage.watch_heads();
+    let mut watched = None;
+    // Ticks however often the log changes; the first tick is at once.
+    let mut look_for_pushes = tokio::time::interval(LOOK_FOR_PUSHES);
+    look_for_pushes.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        let Some(strong) = daemon.upgrade() else {
-            return;
-        };
-        if let Err(error) = strong.follow_target(workforce, &loaded).await {
-            tracing::warn!(
-                "could not follow the target branch: {}",
-                wf_core::error_chain(&error)
-            );
-        }
-        drop(strong);
-        tokio::select! {
+        let due = tokio::select! {
             changed = heads.changed() => {
                 if changed.is_err() {
                     return;
                 }
                 heads.borrow_and_update();
+                false
             }
             () = async { let _ = halted.wait_for(|halted| *halted).await; } => return,
-            () = tokio::time::sleep(LOOK_FOR_PUSHES) => {}
+            _ = look_for_pushes.tick() => true,
+        };
+        let Some(strong) = daemon.upgrade() else {
+            return;
+        };
+        let (own, presence, now_ms) = (strong.device(), strong.presence_now(), wf_store::now_ms());
+        let now = strong
+            .read(&loaded, move |state| Watched {
+                tip: state.target(),
+                moves: state.target_moves().count(),
+                lost_merges: state.lost_merges(own, &presence, now_ms),
+            })
+            .await
+            .ok();
+        if due || now != watched {
+            watched = now;
+            if let Err(error) = strong.follow_target(workforce, &loaded).await {
+                tracing::warn!(
+                    "could not follow the target branch: {}",
+                    wf_core::error_chain(&error)
+                );
+            }
         }
+        drop(strong);
     }
 }
 
