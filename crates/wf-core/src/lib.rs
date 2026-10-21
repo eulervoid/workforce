@@ -21,6 +21,7 @@ pub mod invite;
 pub mod item;
 pub mod lifecycle;
 pub mod name;
+pub mod placement;
 pub mod policy;
 pub mod recovery;
 pub mod refs;

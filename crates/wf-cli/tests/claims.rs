@@ -1,6 +1,8 @@
 //! Claims between the daemons of two devices of one principal: two that claim one item before
 //! they sync end one session `Outclaimed`, and a device that went silent has its session taken
-//! over after the lease, which it stops once it hears of it, naming its last head.
+//! over after the lease, which it stops once it hears of it, naming its last head. Placement: of
+//! two devices that could start an agent on an item, the first by rank starts and the other waits
+//! its turn, and takes over when the first does not start.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -10,8 +12,10 @@ use std::time::Duration;
 use tempfile::TempDir;
 use wf_core::event::{AgentDefined, Event, EventBody};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
+use wf_core::identity::DeviceKey;
 use wf_core::name::{AgentName, HarnessName};
-use wf_core::session::{CommitId, EndReason};
+use wf_core::placement::RANK_DELAY;
+use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::{State, Trust};
 use wf_core::testing::*;
 use wf_daemon::client::DaemonClient;
@@ -53,6 +57,56 @@ fn workforce_with_a_task(fixture: &Fixture) -> (Vec<Event>, ItemId) {
     let created = fixture.apply(&mut state, 0, 2_001, create("task", "claimed twice"));
     let item = created.id().into();
     (vec![defined, created], item)
+}
+
+/// The agent `coder`, started by the dispatcher, hosted by both devices, and a task for it; with
+/// the two devices in the order they rank for the task.
+fn workforce_with_an_auto_agent(fixture: &Fixture) -> (Vec<Event>, ItemId, [usize; 2]) {
+    let mut state = fixture.state();
+    let coder = EventBody::AgentDefined(AgentDefined {
+        name: AgentName::new("coder").unwrap(),
+        harness: HarnessName::new("fake").unwrap(),
+        model: None,
+        instructions: None,
+        capabilities: vec![],
+        lanes: vec![wf_core::name::LaneName::new("default").unwrap()],
+        autonomy: wf_core::autonomy::Autonomy {
+            start: wf_core::autonomy::StartMode::Auto,
+            ..Default::default()
+        },
+    });
+    let mut events = vec![fixture.apply(&mut state, 0, 2_000, coder)];
+    for device in 0..2 {
+        let profile = EventBody::DeviceProfile(wf_core::event::DeviceProfile {
+            name: format!("device {device}"),
+            hardware: "test".into(),
+            agents: BTreeMap::from([(AgentName::new("coder").unwrap(), 1)]),
+            max_sessions: 1,
+        });
+        events.push(fixture.apply(&mut state, device, 2_001, profile));
+    }
+    let created = fixture.apply(&mut state, 0, 2_002, create("task", "placed"));
+    let item = created.id().into();
+    events.push(created);
+    let presence = wf_core::claims::Presence::new(2_002, []);
+    let placement = state.placement(fixture.devices[0].key(), &presence, 2_002);
+    let ranked = placement.ranked(item, &SessionRole::Work);
+    let index = |key| {
+        (0..2)
+            .find(|device| fixture.devices[*device].key() == key)
+            .unwrap()
+    };
+    assert_eq!(ranked.len(), 2, "both devices could take the task");
+    (events, item, [index(ranked[0]), index(ranked[1])])
+}
+
+/// The work sessions on `item`, with the device of each.
+fn work_sessions(state: &State, item: ItemId) -> Vec<(SessionId, DeviceKey)> {
+    state
+        .sessions_of(item)
+        .filter(|session| session.role() == SessionRole::Work)
+        .map(|session| (session.id(), session.device()))
+        .collect()
 }
 
 struct Device {
@@ -453,4 +507,95 @@ async fn a_silent_device_is_taken_over_after_the_lease_and_stops_its_session_whe
     );
     laptop.daemon.halt().await;
     vm.daemon.halt().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn the_device_ranked_second_waits_its_turn_and_takes_over_when_the_first_does_not_start() {
+    // One daemon, so it runs in Fence too: the device ranked first never starts, and the other,
+    // which has just started, counts it as present.
+    let fixture = Fixture::new(2);
+    let workforce = fixture.workforce();
+    let (events, item, [_, second]) = workforce_with_an_auto_agent(&fixture);
+    let repository = TestRepository::new();
+    let started = std::time::Instant::now();
+    let device = within(
+        "starting the device ranked second",
+        Device::start(&fixture, second, &events, &repository),
+    )
+    .await;
+
+    tokio::time::sleep(RANK_DELAY - Duration::from_secs(3)).await;
+    assert!(
+        work_sessions(&device.state(workforce).await, item).is_empty(),
+        "the device ranked second waits for the first"
+    );
+    device
+        .wait_for(workforce, "the device ranked second takes over", |state| {
+            !work_sessions(state, item).is_empty()
+        })
+        .await;
+    assert!(started.elapsed() >= RANK_DELAY);
+    assert_eq!(
+        work_sessions(&device.state(workforce).await, item)
+            .into_iter()
+            .map(|(_, on)| on)
+            .collect::<Vec<_>>(),
+        [fixture.devices[second].key()]
+    );
+    device.daemon.halt().await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn of_two_devices_that_could_start_an_item_the_first_by_rank_does_and_the_other_does_not() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
+    let fixture = Fixture::new(2);
+    let workforce = fixture.workforce();
+    let (events, item, [first, second]) = workforce_with_an_auto_agent(&fixture);
+    let repository = TestRepository::new();
+    let devices = [
+        within(
+            "starting device 0",
+            Device::start(&fixture, 0, &events, &repository),
+        )
+        .await,
+        within(
+            "starting device 1",
+            Device::start(&fixture, 1, &events, &repository),
+        )
+        .await,
+    ];
+    let started = std::time::Instant::now();
+    connect(&devices[0], &devices[1]).await;
+
+    devices[first]
+        .wait_for(workforce, "the device ranked first starts", |state| {
+            !work_sessions(state, item).is_empty()
+        })
+        .await;
+    assert!(
+        started.elapsed() < RANK_DELAY,
+        "the device ranked first does not wait"
+    );
+    let [(session, on)] = work_sessions(&devices[first].state(workforce).await, item)[..] else {
+        panic!("one work session");
+    };
+    assert_eq!(on, fixture.devices[first].key());
+    devices[second]
+        .wait_for(workforce, "the claim reaches the other device", |state| {
+            state.session(session).is_some()
+        })
+        .await;
+
+    // Past its turn, the device ranked second has seen the claim and started nothing.
+    tokio::time::sleep(RANK_DELAY + Duration::from_secs(5)).await;
+    for device in &devices {
+        let state = device.state(workforce).await;
+        assert_eq!(work_sessions(&state, item), [(session, on)]);
+        assert!(state.session(session).unwrap().is_live());
+    }
+    for device in devices {
+        device.daemon.halt().await;
+    }
 }
