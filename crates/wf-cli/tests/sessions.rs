@@ -1423,6 +1423,13 @@ wf work submit
             world.transcript(&item).contains("started")
         })
         .await;
+    world
+        .wait("the brief to be kept as told", |world| {
+            agent_session_record(&world.wf.data)["told"]
+                .as_array()
+                .is_some_and(|told| told.len() == 1)
+        })
+        .await;
     world.wf.run(&["comment", short(&item), "Since the brief"]);
     world.restart().await;
     let session = world.ended_session().await;
@@ -1444,6 +1451,69 @@ wf work submit
         !restarted.contains("In the brief"),
         "the brief told it: {transcript}"
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_comment_in_a_prompt_the_agent_did_not_accept_before_a_restart_is_told_again() {
+    // The agent neither takes the brief up nor answers it, as if the daemon stopped between
+    // sending the prompt and the agent reading it.
+    let script = "\
+silent
+sh echo done > a.txt && git add a.txt && git commit -q -m a
+wf work submit
+";
+    let mut world = World::new(script).await;
+    let item = world.wf.add(&["--title", "Told again"]);
+    world.wf.run(&["comment", short(&item), "In the brief"]);
+    start_session(&world, &item);
+    world
+        .wait("the brief to be sent", |world| {
+            world
+                .transcript(&item)
+                .contains("You are the agent `coder`")
+        })
+        .await;
+    let record = agent_session_record(&world.wf.data);
+    assert!(record["prompted_ms"].is_u64(), "{record}");
+    assert_eq!(
+        record["told"],
+        serde_json::json!([]),
+        "nothing is told before the agent accepted the prompt"
+    );
+    world.restart().await;
+    let session = world.ended_session().await;
+    assert_eq!(session["status"], "submitted", "{session}");
+    let transcript = world.transcript(&item);
+    let (_, restarted) = transcript.split_once("wf restarted").unwrap();
+    assert!(
+        restarted.contains("): In the brief"),
+        "the brief was not accepted: {transcript}"
+    );
+    let record = agent_session_record(&world.wf.data);
+    assert_eq!(
+        record["told"].as_array().unwrap().len(),
+        1,
+        "the restart prompt was accepted: {record}"
+    );
+}
+
+/// The record the daemon keeps of the one session's agent, somewhere under `data`.
+fn agent_session_record(data: &Path) -> Value {
+    fn find(directory: &Path) -> Option<PathBuf> {
+        for entry in std::fs::read_dir(directory).ok()?.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                if let Some(found) = find(&path) {
+                    return Some(found);
+                }
+            } else if path.to_string_lossy().ends_with(".agent-session.json") {
+                return Some(path);
+            }
+        }
+        None
+    }
+    let path = find(data).expect("a session record");
+    serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap()
 }
 
 #[tokio::test(flavor = "multi_thread")]

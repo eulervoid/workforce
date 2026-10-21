@@ -291,19 +291,21 @@ async fn turns(
             Err(end) => return end,
         };
     let cancel = conversation.cancel();
+    let mut accepted = conversation.accepted();
     let mut last_head = branch_head(run);
     let mut turns_without_commit = 0;
     let mut imported = None;
     let mut importing = tokio::time::interval(IMPORT_EVERY);
     importing.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        // Told before it goes out, so that a restart in between does not tell it again.
         told.extend(prompt.tells);
-        record.told = Some(told.clone());
         record.prompted_ms = Some(wf_store::now_ms());
         if let Err(error) = record.write(&run.agent_session) {
             return not_kept(&daemon.faults, &run.agent_session, &error);
         }
+        // What the prompt tells is kept as told once the agent accepted it, not before: a restart
+        // in between tells it again rather than never.
+        accepted.mark_unchanged();
         let turn = conversation.reply(prompt.text);
         tokio::pin!(turn);
         let result = loop {
@@ -312,6 +314,11 @@ async fn turns(
                 // cancel before that is not meant for it.
                 biased;
                 result = &mut turn => break result,
+                Ok(()) = accepted.changed() => {
+                    if let Err(end) = keep_told(daemon, run, record, &told) {
+                        return end;
+                    }
+                }
                 // The work so far is copied while the turn goes on, for whoever looks at it.
                 _ = importing.tick() => import_progress(daemon, loaded, run, &mut imported).await,
                 Some(how) = stopped.recv() => {
@@ -319,10 +326,15 @@ async fn turns(
                         && tokio::time::timeout(GRACE, &mut turn).await.is_ok()
                     {
                         import_progress(daemon, loaded, run, &mut imported).await;
-                        return End::Over;
+                    } else {
+                        cancel.cancel();
+                        let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
                     }
-                    cancel.cancel();
-                    let _ = tokio::time::timeout(CANCEL_GRACE, &mut turn).await;
+                    if accepted.has_changed().unwrap_or(false)
+                        && let Err(end) = keep_told(daemon, run, record, &told)
+                    {
+                        return end;
+                    }
                     return End::Over;
                 }
                 () = sleep_until(deadline) => {
@@ -333,6 +345,12 @@ async fn turns(
                 }
             }
         };
+        // The turn may end before the loop above saw that it was accepted.
+        if accepted.has_changed().unwrap_or(false)
+            && let Err(end) = keep_told(daemon, run, record, &told)
+        {
+            return end;
+        }
         let (_stop_reason, last_message) = match result {
             Ok(reply) => reply,
             Err(error) if error.needs_login() => {
@@ -433,6 +451,20 @@ async fn turns(
             },
         }
     }
+}
+
+/// Keeps `told` in the session's record, once the agent accepted the prompt that told the last of
+/// them.
+fn keep_told(
+    daemon: &Daemon,
+    run: &Run,
+    record: &mut AgentSessionRecord,
+    told: &BTreeSet<CommentId>,
+) -> Result<(), End> {
+    record.told = Some(told.clone());
+    record
+        .write(&run.agent_session)
+        .map_err(|error| not_kept(&daemon.faults, &run.agent_session, &error))
 }
 
 /// The comments the session was told, as its record keeps them. A record older than that knows

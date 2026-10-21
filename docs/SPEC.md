@@ -784,8 +784,8 @@ mention the agent and were written since its previous session started (the agent
 A live session is told the comments written **for it**: every comment on its item by someone else
 (a principal, another session or `@daemon`), every comment on another item that mentions the
 session, and every one there that mentions its agent and was written since the agent's previous
-session started (section 8). Never what it wrote, and never one comment twice. A body edit is not
-told; who wants a session to know comments.
+session started (section 8). Never what it wrote, and one comment twice only after a crash (What
+was told, below). A body edit is not told; who wants a session to know comments.
 
 ACP takes one prompt at a time, so a comment is told with the next prompt the session gets:
 
@@ -794,17 +794,20 @@ ACP takes one prompt at a time, so a comment is told with the next prompt the se
 | the brief | everything for it so far (Briefs, above) |
 | the end of a turn that goes on (a nudge, or the checks that failed) | what was written for it and not told yet, before the nudge; a check failure's own change request is told by the prompt it is in |
 | the end of a park ("What you were waiting for is resolved") | the same, so what came during the turn that parked and while parked |
-| a resume after a restart ("wf restarted") | the same, so nothing is told again that the session was told before |
+| a resume after a restart ("wf restarted") | the same, so nothing is told again that the agent accepted before |
 
 A parked session is not woken by a comment, only by its item being ready. `State::untold(session,
 told)` in `wf-core` says what to tell, from the state and the comments the session was told already;
 the daemon sends it and adds it to the told ones.
 
 **What was told** is kept by the device running the session, in the session's resume record beside
-its transcript (section 4), never in the log: only that device prompts the session. It is written
-before the prompt goes out, so a crash in between loses a comment for that session rather than
-telling it twice. A record from before this, without the told comments, counts as told every comment
-for the session written before its last prompt. Across devices nothing new goes on the wire: the
+its transcript (section 4), never in the log: only that device prompts the session. What a prompt
+tells is written once the agent accepted the prompt, with its first update in the turn or its
+answer, not when it is sent: a crash in between tells those comments again on the resume rather
+than never. A lost comment is the worse failure, as it is often a change of plan or an answer and
+nothing shows it was lost; one told twice is harmless to an agent. A record from before this,
+without the told comments, counts as told every comment for the session written before its last
+prompt. Across devices nothing new goes on the wire: the
 comment syncs, and the device that runs the session tells it at the end of the session's turn.
 
 ### Turn end

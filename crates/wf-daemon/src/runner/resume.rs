@@ -25,8 +25,8 @@ pub(crate) struct AgentSessionRecord {
     /// The current value of the agent's model option once the session opened; `None` when the
     /// agent has no model option or the record is older than this field.
     pub(crate) model: Option<String>,
-    /// The comments written for the session that its prompts told so far; `None` in a record older
-    /// than this field.
+    /// The comments written for the session that its prompts told so far, kept once the agent
+    /// accepted the prompt; `None` in a record older than this field.
     pub(crate) told: Option<BTreeSet<CommentId>>,
 }
 
