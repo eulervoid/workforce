@@ -448,9 +448,19 @@ impl Daemon {
         claiming: Claiming,
     ) -> Result<bool, SessionError> {
         let own = self.device();
+        let held_here = |holder: Option<DeviceKey>| {
+            if let Some(device) = holder.filter(|device| *device != own) {
+                tracing::info!(
+                    "#{}: device {} holds the merge, so it merges",
+                    item.short(),
+                    device.fmt_short()
+                );
+            }
+            holder == Some(own)
+        };
         let (holder, may_merge) = self.merge_holder(loaded, item, commit).await?;
         match (holder, claiming) {
-            (Some(device), Claiming::Claim | Claiming::Keep) => Ok(device == own),
+            (Some(_), Claiming::Claim | Claiming::Keep) => Ok(held_here(holder)),
             (None, Claiming::Keep) => Ok(false),
             // Its hardware does not meet `[merge] requires`: a device that does merges it.
             (None, Claiming::Claim) if !may_merge => Ok(false),
@@ -473,7 +483,7 @@ impl Daemon {
                 // it claims.
                 self.sync_with_merging_devices(workforce, loaded).await;
                 let (holder, _) = self.merge_holder(loaded, item, commit).await?;
-                Ok(holder == Some(own))
+                Ok(held_here(holder))
             }
         }
     }

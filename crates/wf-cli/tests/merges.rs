@@ -10,9 +10,10 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use tempfile::TempDir;
+use tracing::instrument::WithSubscriber;
 use wf_core::claims::Presence;
 use wf_core::event::{Event, EventBody};
-use wf_core::id::{ItemId, SessionId, WorkforceId};
+use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{Item, ItemEntry, ItemState};
 use wf_core::session::CommitId;
@@ -29,7 +30,7 @@ use wf_vcs::testing::{TestRepository, git_in};
 
 mod common;
 
-use common::{bare_repository_with_main, serving};
+use common::{DaemonLog, LOG_TAIL, bare_repository_with_main, serving};
 
 /// The policy of the fixture, whose work needs no review, with a check that writes down the
 /// directory it runs in, the check worktree of the device that runs it, in `runs`.
@@ -73,6 +74,20 @@ struct Device {
     daemon: Arc<Daemon>,
     socket: PathBuf,
     workforce: WorkforceId,
+    log: DaemonLog,
+}
+
+/// A test that fails, by a wait that timed out or an assertion, tells what each daemon was doing.
+impl Drop for Device {
+    fn drop(&mut self) {
+        if std::thread::panicking() {
+            eprintln!(
+                "the end of the daemon log of device {}:\n{}",
+                self.daemon.device().fmt_short(),
+                self.log.tail(LOG_TAIL)
+            );
+        }
+    }
 }
 
 impl Device {
@@ -108,6 +123,8 @@ impl Device {
         )
         .unwrap();
         let socket = directory.path().join("daemon.sock");
+        let log = DaemonLog::default();
+        let dispatch = log.dispatch();
         let daemon = Daemon::start(
             Launch {
                 data_dir,
@@ -120,15 +137,21 @@ impl Device {
             },
             fixture.devices[device].clone(),
         )
+        .with_subscriber(dispatch.clone())
         .await
         .unwrap();
-        tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
+        tokio::spawn(
+            Arc::clone(&daemon)
+                .serve(std::future::pending())
+                .with_subscriber(dispatch),
+        );
         serving(&socket).await;
         Self {
             directory,
             daemon,
             socket,
             workforce,
+            log,
         }
     }
 
@@ -333,8 +356,29 @@ async fn two_devices_that_reach_each_other_merge_an_item_once_by_the_earliest_cl
             })
             .await;
     }
-    // Long enough for a second merge, had the other device made one, and for <wf>/git to follow.
-    tokio::time::sleep(Duration::from_secs(10)).await;
+
+    // The device that did not merge leaves the merge to the one that did, rather than make a
+    // second one.
+    let merger = devices[0]
+        .state()
+        .await
+        .target_tip()
+        .expect("the merge moved the target")
+        .device;
+    let other = devices
+        .iter()
+        .find(|device| device.daemon.device() != merger)
+        .unwrap();
+    let left_to_merger = format!(
+        "#{}: device {} holds the merge, so it merges",
+        item.short(),
+        merger.fmt_short()
+    );
+    eventually(
+        "the other device leaves the merge to the one that made it",
+        || other.log.contains(&left_to_merger),
+    )
+    .await;
 
     let now_ms = wf_store::now_ms();
     let everyone_there = Presence::new(
@@ -363,7 +407,7 @@ async fn two_devices_that_reach_each_other_merge_an_item_once_by_the_earliest_cl
             "the device whose claim is earliest merged"
         );
         assert_eq!(state.target_moves().count(), 1);
-        assert_eq!(device.main(), tip.commit, "<wf>/git is at the merge");
+        eventually("<wf>/git follows the merge", || device.main() == tip.commit).await;
         targets.push(tip.commit);
     }
     assert_eq!(targets[0], targets[1]);
