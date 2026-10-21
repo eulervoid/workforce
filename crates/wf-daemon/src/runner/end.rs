@@ -478,6 +478,7 @@ impl Daemon {
             Ok::<_, VcsError>(Ok((git.commits_ahead(&onto, head)? > 0).then_some(head)))
         })
         .await??;
+        loaded.commits.copied_here();
         imported.map_err(|()| SessionError::BehindTarget { target })
     }
 }

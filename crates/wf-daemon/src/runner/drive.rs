@@ -578,7 +578,10 @@ async fn import_progress(
         blocking(move || git.import_commits(&directory, item, &target, ImportMode::InProgress))
             .await;
     match copied {
-        Ok(Ok(_)) => *imported = head,
+        Ok(Ok(_)) => {
+            *imported = head;
+            loaded.commits.copied_here();
+        }
         Ok(Err(error)) => tracing::warn!(
             "session {}: could not copy its commits: {}",
             run.session,
