@@ -195,6 +195,9 @@ impl Confinement<'_> {
                 }
             }
         }
+        // What it starts carries the mark, so that what leaves its group is found by it.
+        let mark = crate::processes::Mark::new_command_run();
+        process.envs(mark.variables());
         crate::inherit::only_stdio(&mut process);
         let mut child = process.spawn().map_err(|source| CommandError::Io {
             path: command.command().to_path_buf(),
@@ -218,6 +221,7 @@ impl Confinement<'_> {
             // The group may be gone already; then there is nothing left to stop.
             let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
         }
+        crate::processes::stop(mark).await;
         if matches!(outcome, Outcome::TimedOut) {
             child.wait().await.map_err(io_error)?;
         }
@@ -440,6 +444,38 @@ mod tests {
         assert_eq!(run.outcome, Outcome::Passed);
         tokio::time::sleep(Duration::from_millis(1500)).await;
         assert!(!setup.path("check").join("late.txt").exists());
+    }
+
+    #[tokio::test]
+    async fn what_a_command_daemonized_is_stopped_when_it_exits() {
+        use crate::processes::testing::{SLEEP, running, sleeper_pid};
+        let setup = Setup::new();
+        let pid_file = setup.path("sleeper.pid");
+        let environment = EnvironmentConfig {
+            inherit: Vec::new(),
+            set: BTreeMap::from([(SLEEP.to_string(), pid_file.to_string_lossy().into_owned())]),
+        };
+        // It forks, leaves the command's session and forks again, so that init adopts it, and
+        // the command exits once it runs.
+        let daemonize = "if (fork) { sleep 1 until -e $ENV{WF_TEST_SLEEP}; exit } \
+            POSIX::setsid(); exit if fork; \
+            exec $ARGV[0], '--exact', 'processes::testing::sleeper', '--ignored'";
+        let test_binary = std::env::current_exe().unwrap();
+        let run = setup
+            .run_with(
+                &environment,
+                &[
+                    "perl",
+                    "-MPOSIX",
+                    "-e",
+                    daemonize,
+                    test_binary.to_str().unwrap(),
+                ],
+                Duration::from_secs(30),
+            )
+            .await;
+        assert_eq!(run.outcome, Outcome::Passed, "{}", run.tail);
+        assert!(!running(sleeper_pid(&pid_file)));
     }
 
     #[tokio::test]
