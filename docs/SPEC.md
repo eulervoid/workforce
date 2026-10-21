@@ -888,8 +888,10 @@ default level; an item can name another (`--recovery`).
   hold it as well, since the work sessions of an item run in one repository one after the other.
   A session's places are its directory and the worktrees registered in the repository there
   (`git worktree add` from it, wherever they are), read from its `.git/worktrees` before the
-  directory is removed, or at daemon start while it is still there; a worktree counts only if its
-  `.git` names the entry back, as an agent can write anything into its repository.
+  directory is removed, or at daemon start while it is still there; as an agent can write
+  anything into its repository and into much outside it (`/tmp`), a worktree counts only if its
+  `.git` names the entry back and its directory was created after the session's repository (`git
+  worktree add` makes a new one), so a directory that was there before never does.
   One whose working directory macOS does not give is counted in the log and left running. A
   process whose environment is readable is judged by the mark alone: without it, it is not the
   session's, wherever it runs. A live session keeps its processes, also over a restart; daemon
@@ -1543,6 +1545,9 @@ environment, and on macOS an orphan of an Apple program by its directory, so
   give, escapes, as does anything `launchd` starts for the session (`open`, `launchctl`);
 * on macOS, an orphaned Apple program the principal started inside an agent's session directory
   or one of its registered worktrees while that session was live is stopped with the session;
+* on macOS, likewise one the principal started during the session in a directory an agent made
+  after the session's repository was and then forged into a worktree of its repository (a `.git` file and
+  an entry naming each other);
 * a process that `KILL` does not end (uninterruptible sleep on a mount that hangs) runs on, named
   in the daemon log.
 

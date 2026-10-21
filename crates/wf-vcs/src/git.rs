@@ -1784,8 +1784,11 @@ mod tests {
     }
 
     #[test]
-    fn the_worktrees_an_agent_added_are_read_and_a_forged_entry_is_not() {
+    fn the_worktrees_an_agent_added_are_read_and_a_forged_or_older_one_is_not() {
         let repo = TestRepo::new();
+        // There before the repository, as `/tmp` is.
+        let earlier = repo.root.path().join("earlier");
+        std::fs::create_dir_all(&earlier).unwrap();
         let (path, _) = agent_repository(&repo);
         assert_eq!(registered_worktrees(&path), Vec::<PathBuf>::new());
         let added = repo.root.path().join("compare");
@@ -1809,10 +1812,25 @@ mod tests {
             format!("{}\n", elsewhere.join(".git").display()),
         )
         .unwrap();
-        assert_eq!(
-            registered_worktrees(&path),
-            vec![added.canonicalize().unwrap()]
-        );
+        // Names the entry back, but was there before the repository.
+        let earlier_entry = path.join(".git/worktrees/earlier");
+        std::fs::create_dir_all(&earlier_entry).unwrap();
+        std::fs::write(
+            earlier_entry.join("gitdir"),
+            format!("{}\n", earlier.join(".git").display()),
+        )
+        .unwrap();
+        std::fs::write(
+            earlier.join(".git"),
+            format!("gitdir: {}\n", earlier_entry.display()),
+        )
+        .unwrap();
+        // Without a creation time (some Linux file systems), no worktree counts.
+        let expected = match added.metadata().unwrap().created() {
+            Ok(_) => vec![added.canonicalize().unwrap()],
+            Err(_) => Vec::new(),
+        };
+        assert_eq!(registered_worktrees(&path), expected);
     }
 
     #[test]

@@ -289,12 +289,19 @@ pub fn agent_branch_head(repository: &Path, branch: &str) -> Option<CommitId> {
 /// The canonical directories of the linked worktrees registered in the repository at
 /// `repository`, as `git worktree add` registers them, read from `.git/worktrees/*/gitdir`
 /// without git. An agent can write anything there: a worktree counts only if its directory is
-/// there and its `.git` file names the entry back, as `git worktree add` leaves it.
+/// there, its `.git` file names the entry back, as `git worktree add` leaves it, and the
+/// directory was created after the repository was, as `git worktree add` makes a new one. The
+/// last keeps out a directory that was there before, such as `/tmp`, which an agent that can
+/// write in it could otherwise turn into a worktree. Without a creation time, none counts.
 pub fn registered_worktrees(repository: &Path) -> Vec<PathBuf> {
     let git_directory = repository.join(".git");
-    if !std::fs::symlink_metadata(&git_directory).is_ok_and(|metadata| metadata.is_dir()) {
+    let repository_created = match std::fs::symlink_metadata(&git_directory) {
+        Ok(metadata) if metadata.is_dir() => metadata.created(),
+        _ => return Vec::new(),
+    };
+    let Ok(repository_created) = repository_created else {
         return Vec::new();
-    }
+    };
     let Ok(entries) = std::fs::read_dir(git_directory.join("worktrees")) else {
         return Vec::new();
     };
@@ -304,6 +311,10 @@ pub fn registered_worktrees(repository: &Path) -> Vec<PathBuf> {
             let dot_git = PathBuf::from(read_regular_file(&entry.join("gitdir"), 4096)?.trim());
             // Relative with `worktree.useRelativePaths`.
             let worktree = entry.join(dot_git).parent()?.canonicalize().ok()?;
+            let created = std::fs::metadata(&worktree).ok()?.created().ok()?;
+            if created < repository_created {
+                return None;
+            }
             let back = read_regular_file(&worktree.join(".git"), 4096)?;
             let back = PathBuf::from(back.trim().strip_prefix("gitdir:")?.trim());
             let names_entry = worktree
