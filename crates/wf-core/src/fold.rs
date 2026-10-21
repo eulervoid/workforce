@@ -525,12 +525,11 @@ impl Workforce {
             device,
             stamp,
         };
-        let tip = self
+        let last = self
             .target_chain
             .last()
-            .and_then(|last| self.target_moves.get(last))
-            .map(|last| last.commit);
-        let extends = tip == Some(onto)
+            .and_then(|last| self.target_moves.get(last));
+        let extends = last.is_some_and(|last| last.commit == onto && last.stamp < stamp)
             && commit != onto
             && !self.target_moved_from.contains(&onto)
             && !self.target_moved_from.contains(&commit)
