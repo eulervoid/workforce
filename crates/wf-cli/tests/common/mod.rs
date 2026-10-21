@@ -227,3 +227,31 @@ impl std::io::Write for DaemonLog {
         Ok(())
     }
 }
+
+/// Makes wf's bare repository of `workforce` under `data_dir` as a daemon does, with the `main` of
+/// `repository`, for a daemon that is yet to start there: one that made it itself could dispatch a
+/// session before the test fetched `main` into it, and the session would fail without it.
+pub fn bare_repository_with_main(
+    data_dir: &wf_daemon::DataDir,
+    workforce: wf_core::id::WorkforceId,
+    repository: &wf_vcs::testing::TestRepository,
+) {
+    let bare = wf_vcs::bare_repository(&data_dir.workforce(&workforce));
+    wf_vcs::GitCli::create_bare_repository(&bare, "main", None).unwrap();
+    let source = repository.directory().display().to_string();
+    wf_vcs::testing::git_in(
+        &bare,
+        &["fetch", "--quiet", &source, "main:refs/heads/main"],
+    );
+}
+
+/// Waits until a daemon serves on `socket`, for up to five seconds.
+pub async fn serving(socket: &std::path::Path) {
+    for _ in 0..200 {
+        if std::os::unix::net::UnixStream::connect(socket).is_ok() {
+            return;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
+    panic!("the daemon does not serve on {}", socket.display());
+}

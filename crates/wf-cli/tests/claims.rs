@@ -26,11 +26,11 @@ use wf_harness::AcpAgentConfig;
 use wf_net::Network;
 use wf_store::{RedbStore, Replica};
 use wf_vcs::GitCli;
-use wf_vcs::testing::{TestRepository, git_in};
+use wf_vcs::testing::TestRepository;
 
 mod common;
 
-use common::{DaemonLog, LOG_TAIL};
+use common::{DaemonLog, LOG_TAIL, bare_repository_with_main, serving};
 
 /// Commits once, then works until it is stopped.
 const SCRIPT: &str = "\
@@ -157,6 +157,8 @@ impl Device {
             replica.receive(event.clone()).unwrap();
         }
         drop(replica);
+        let data_dir = DataDir::new(directory.path().to_path_buf());
+        bare_repository_with_main(&data_dir, fixture.workforce(), repository);
         let script = directory.path().join("script");
         std::fs::write(&script, SCRIPT).unwrap();
         let machine_config = directory.path().join("config.toml");
@@ -170,7 +172,7 @@ impl Device {
         let dispatch = log.dispatch();
         let daemon = Daemon::start(
             Launch {
-                data_dir: DataDir::new(directory.path().to_path_buf()),
+                data_dir,
                 socket: socket.clone(),
                 network: Network::Direct,
                 harnesses,
@@ -188,24 +190,14 @@ impl Device {
                 .serve(std::future::pending())
                 .with_subscriber(dispatch),
         );
-        let started = Self {
+        serving(&socket).await;
+        Self {
             directory,
             daemon,
             socket,
             key: fixture.devices[device].key(),
             log,
-        };
-        let bare = started.bare(fixture.workforce());
-        eventually("the bare repository is made", || {
-            bare.join("HEAD").is_file()
-        })
-        .await;
-        let source = repository.directory().display().to_string();
-        git_in(
-            &bare,
-            &["fetch", "--quiet", &source, "main:refs/heads/main"],
-        );
-        started
+        }
     }
 
     /// A client of this device's daemon. Connecting blocks until the daemon answers the

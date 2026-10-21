@@ -19,7 +19,11 @@ use wf_daemon::{Daemon, DataDir, Launch};
 use wf_harness::AcpAgentConfig;
 use wf_net::Network;
 use wf_store::{RedbStore, Replica};
-use wf_vcs::testing::{TestRepository, git_in};
+use wf_vcs::testing::TestRepository;
+
+mod common;
+
+use common::{bare_repository_with_main, serving};
 
 fn fake_agent() -> PathBuf {
     let test = std::env::current_exe().unwrap();
@@ -77,6 +81,8 @@ impl Device {
             replica.receive(event.clone()).unwrap();
         }
         drop(replica);
+        let data_dir = DataDir::new(directory.path().to_path_buf());
+        bare_repository_with_main(&data_dir, fixture.workforce(), repository);
         let script_file = directory.path().join("script");
         std::fs::write(&script_file, script).unwrap();
         let machine_config = directory.path().join("config.toml");
@@ -89,7 +95,7 @@ impl Device {
         let socket = directory.path().join("daemon.sock");
         let daemon = Daemon::start(
             Launch {
-                data_dir: DataDir::new(directory.path().to_path_buf()),
+                data_dir,
                 socket: socket.clone(),
                 network: Network::Direct,
                 harnesses,
@@ -101,22 +107,12 @@ impl Device {
         .await
         .unwrap();
         tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
-        let started = Self {
+        serving(&socket).await;
+        Self {
             directory,
             daemon,
             socket,
-        };
-        let bare = wf_vcs::bare_repository(&started.data_dir().workforce(&fixture.workforce()));
-        eventually("the bare repository is made", || {
-            bare.join("HEAD").is_file()
-        })
-        .await;
-        let source = repository.directory().display().to_string();
-        git_in(
-            &bare,
-            &["fetch", "--quiet", &source, "main:refs/heads/main"],
-        );
-        started
+        }
     }
 
     fn data_dir(&self) -> DataDir {

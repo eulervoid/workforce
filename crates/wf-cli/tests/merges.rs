@@ -27,6 +27,10 @@ use wf_store::{RedbStore, Replica};
 use wf_vcs::GitCli;
 use wf_vcs::testing::{TestRepository, git_in};
 
+mod common;
+
+use common::{bare_repository_with_main, serving};
+
 /// The policy of the fixture, whose work needs no review, with a check that writes down the
 /// directory it runs in, the check worktree of the device that runs it, in `runs`.
 fn policy_with_a_check(runs: &Path) -> String {
@@ -95,6 +99,8 @@ impl Device {
             replica.receive(event.clone()).unwrap();
         }
         drop(replica);
+        let data_dir = DataDir::new(directory.path().to_path_buf());
+        bare_repository_with_main(&data_dir, workforce, repository);
         let machine_config = directory.path().join("config.toml");
         std::fs::write(
             &machine_config,
@@ -104,7 +110,7 @@ impl Device {
         let socket = directory.path().join("daemon.sock");
         let daemon = Daemon::start(
             Launch {
-                data_dir: DataDir::new(directory.path().to_path_buf()),
+                data_dir,
                 socket: socket.clone(),
                 network: Network::Direct,
                 harnesses: BTreeMap::new(),
@@ -117,19 +123,13 @@ impl Device {
         .await
         .unwrap();
         tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
-        let started = Self {
+        serving(&socket).await;
+        Self {
             directory,
             daemon,
             socket,
             workforce,
-        };
-        let bare = started.bare();
-        eventually("the bare repository is made", || {
-            bare.join("HEAD").is_file()
-        })
-        .await;
-        started.fetch(repository, "main", "refs/heads/main");
-        started
+        }
     }
 
     /// Fetches `branch` of `repository` into `reference` of the bare repository.
