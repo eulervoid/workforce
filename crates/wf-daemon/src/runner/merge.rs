@@ -3,11 +3,12 @@
 use std::collections::{BTreeSet, VecDeque};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, Weak};
+use std::time::Duration;
 
 use tokio::sync::Notify;
 use wf_core::event::{Commented, EventBody, MergeClaimed, Merged};
 use wf_core::id::{CommentId, HashId, ItemId, SessionId, WorkforceId};
-use wf_core::identity::{Actor, PrincipalKey};
+use wf_core::identity::{Actor, DeviceKey, PrincipalKey};
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::lifecycle::{MergeFailure, MergePlan};
 use wf_core::policy::MergeMode;
@@ -19,10 +20,14 @@ use super::check::CheckStage;
 use super::target::TargetAt;
 use super::{SessionError, blocking};
 use crate::machine_config::MergeSigningConfig;
+use crate::peers::{peers_of, sync_all};
 use crate::{Daemon, Loaded};
 
 /// How often a merge that found the target moved is tried again before giving up for now.
 const MERGE_ATTEMPTS: usize = 3;
+
+/// How long a device that claimed a merge waits at most to hear from the others that are there.
+const CLAIM_SETTLE: Duration = Duration::from_secs(5);
 
 /// Whether a merge is the first try of a piece of work, or one more try of work that waited.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -431,7 +436,8 @@ pub(super) enum Claiming {
 impl Daemon {
     /// Whether this device holds the merge of the reviewed `commit` of `item`: its claim is the
     /// earliest of a device that is there. With `Claiming::Claim` it claims a merge nobody holds,
-    /// if it meets `[merge] requires` and has the commit.
+    /// if it meets `[merge] requires` and has the commit, and holds it once it has heard from the
+    /// devices that could have claimed it too.
     pub(super) async fn hold_merge(
         &self,
         workforce: WorkforceId,
@@ -441,15 +447,8 @@ impl Daemon {
         commit: CommitId,
         claiming: Claiming,
     ) -> Result<bool, SessionError> {
-        let (own, presence, now_ms) = (self.device(), self.presence_now(), wf_store::now_ms());
-        let (holder, may_merge) = self
-            .read(loaded, move |state| {
-                let holder = state
-                    .merge_holder(item, commit, own, &presence, now_ms)
-                    .map(|claim| claim.device);
-                (holder, state.may_merge(own))
-            })
-            .await?;
+        let own = self.device();
+        let (holder, may_merge) = self.merge_holder(loaded, item, commit).await?;
         match (holder, claiming) {
             (Some(device), Claiming::Claim | Claiming::Keep) => Ok(device == own),
             (None, Claiming::Keep) => Ok(false),
@@ -469,9 +468,60 @@ impl Daemon {
                     EventBody::MergeClaimed(MergeClaimed { item, commit }),
                 )
                 .await?;
-                Ok(true)
+                // Another device that is there may have claimed it just now, earlier, and not be
+                // heard from yet: a sync with each brings its claim, or gives it this one before
+                // it claims.
+                self.sync_with_merging_devices(workforce, loaded).await;
+                let (holder, _) = self.merge_holder(loaded, item, commit).await?;
+                Ok(holder == Some(own))
             }
         }
+    }
+
+    /// The device whose claim holds the merge of `commit` of `item` now, and whether this device
+    /// may merge at all.
+    async fn merge_holder(
+        &self,
+        loaded: &Loaded,
+        item: ItemId,
+        commit: CommitId,
+    ) -> Result<(Option<DeviceKey>, bool), SessionError> {
+        let (own, presence, now_ms) = (self.device(), self.presence_now(), wf_store::now_ms());
+        Ok(self
+            .read(loaded, move |state| {
+                let holder = state
+                    .merge_holder(item, commit, own, &presence, now_ms)
+                    .map(|claim| claim.device);
+                (holder, state.may_merge(own))
+            })
+            .await?)
+    }
+
+    /// Syncs with the other devices that are there and may merge, for [`CLAIM_SETTLE`] at most.
+    async fn sync_with_merging_devices(&self, workforce: WorkforceId, loaded: &Loaded) {
+        let (own, presence, now_ms) = (self.device(), self.presence_now(), wf_store::now_ms());
+        let Ok(devices) = self
+            .read(loaded, move |state| {
+                let lease = state.lease();
+                peers_of(state, own)
+                    .into_iter()
+                    .filter(|device| state.may_merge(*device))
+                    .filter(|device| !presence.gone(*device, lease, now_ms))
+                    .map(|device| (device, device.fmt_short()))
+                    .collect::<Vec<_>>()
+            })
+            .await
+        else {
+            return;
+        };
+        if devices.is_empty() {
+            return;
+        }
+        let Ok(node) = self.node().await else {
+            return;
+        };
+        let synced = sync_all(&node, workforce, devices, Some(self.presence()));
+        let _ = tokio::time::timeout(CLAIM_SETTLE, synced).await;
     }
 
     /// How the merge commit is signed, as the machine config says now.
