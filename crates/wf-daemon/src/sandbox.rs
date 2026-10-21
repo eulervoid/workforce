@@ -4,13 +4,16 @@
 //! repository is not writable at all, and the daemon copies the commits an agent submits into it.
 //! So the profile has no rule about the parts of a `.git`.
 //!
-//! The profile is Fence's `code` template (Fence 0.1.67) with three changes, written out here
+//! The profile is Fence's `code` template (Fence 0.1.67) with these changes, written out here
 //! because a profile that extends a template can only add to its lists:
 //! - no writing to all of `~/.config` and `~/.local/share`, where wf keeps its config, keys,
 //!   stores and the repositories of other items;
 //! - no deny on writing `**/*.key`, which kept `wf init` and the test suites from writing keys in
 //!   their temporary directories; the keys wf keeps are denied where they are instead;
-//! - the paths of wf that would let an agent act outside its sandbox are denied.
+//! - the paths of wf that would let an agent act outside its sandbox are denied;
+//! - the config of the harnesses, and cargo's registry, are not writable: both run code with the
+//!   principal's privileges the next time the principal runs the harness or builds. Agents get a
+//!   `CARGO_HOME` of their own instead.
 
 use std::path::{Path, PathBuf};
 
@@ -52,6 +55,9 @@ pub(crate) fn wrap(
         profile_file,
         serde_json::to_vec_pretty(&profile(config, access))?,
     )?;
+    // Made here, as Fence leaves out a path to write to that does not exist.
+    let cargo_home = access.data_dir.agent_cargo_home();
+    std::fs::create_dir_all(&cargo_home)?;
     // Fence allows writes to "." of the directory it runs in, so it has to start there.
     Ok(AcpAgentConfig::new("sh")
         .arg("-c")
@@ -64,15 +70,23 @@ pub(crate) fn wrap(
         .arg("--")
         .arg(agent.command().to_string_lossy())
         .args(agent.arguments())
-        .envs(agent.environment()))
+        .envs(agent.environment())
+        .env(CARGO_HOME, cargo_home.to_string_lossy()))
 }
+
+/// Set by wf in Fence, so the machine config must not set or inherit it there.
+pub(crate) const CARGO_HOME: &str = "CARGO_HOME";
 
 /// The sandbox profile Fence runs the agent with.
 fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
-    let writable: Vec<PathBuf> = [access.directory.to_path_buf(), access.socket.to_path_buf()]
-        .into_iter()
-        .chain(config.allow_write.iter().cloned())
-        .collect();
+    let writable: Vec<PathBuf> = [
+        access.directory.to_path_buf(),
+        access.socket.to_path_buf(),
+        access.data_dir.agent_cargo_home(),
+    ]
+    .into_iter()
+    .chain(config.allow_write.iter().cloned())
+    .collect();
 
     // With these an agent signs as the device or the principal, has the daemon act for the
     // principal, or turns its sandbox off.
@@ -89,7 +103,13 @@ fn profile(config: &FenceConfig, access: &Access<'_>) -> serde_json::Value {
 
     let paths = |paths: &[&str]| paths.iter().map(PathBuf::from).collect::<Vec<_>>();
     let deny_read: Vec<PathBuf> = [paths(DENY_READ), secrets.clone()].concat();
-    let deny_write: Vec<PathBuf> = [paths(DENY_WRITE), secrets, git_config.to_vec()].concat();
+    let deny_write: Vec<PathBuf> = [
+        paths(DENY_WRITE),
+        paths(HARNESS_CONFIG),
+        secrets,
+        git_config.to_vec(),
+    ]
+    .concat();
     let allow_write: Vec<PathBuf> = [paths(ALLOW_WRITE), writable].concat();
     let allowed_domains: Vec<&str> = ALLOWED_DOMAINS
         .iter()
@@ -213,11 +233,79 @@ const ALLOW_WRITE: &[&str] = &[
     "~/.npm/_cacache",
     "~/.npm/_npx",
     "~/.bun/**",
-    "~/.cargo/registry/**",
-    "~/.cargo/git/**",
-    "~/.cargo/.package-cache",
     // Shell completion cache
     "~/.zcompdump*",
+];
+
+/// What of the harnesses' directories in [`ALLOW_WRITE`] the harness runs or follows when the
+/// principal starts it, outside the sandbox: settings with hooks and MCP servers, commands, agents,
+/// skills, plugins, instructions, the status line script, editor extensions and the harness's own
+/// binary. Their state, sessions and auth stay writable. `~/.claude.json` holds Claude Code's state
+/// and its user-scope MCP servers in one file, so it stays writable too, and so do the scripts
+/// settings point to elsewhere in `~/.claude`.
+const HARNESS_CONFIG: &[&str] = &[
+    // Claude Code
+    "~/.claude/settings.json",
+    "~/.claude/settings.local.json",
+    "~/.claude/CLAUDE.md",
+    "~/.claude/hooks",
+    "~/.claude/commands",
+    "~/.claude/agents",
+    "~/.claude/skills",
+    "~/.claude/plugins",
+    "~/.claude/output-styles",
+    "~/.claude/statusline*",
+    "~/.claude/local",
+    // Amp
+    "~/.amp/bin",
+    // Codex
+    "~/.codex/config.toml",
+    "~/.codex/hooks.json",
+    "~/.codex/AGENTS.md",
+    "~/.codex/prompts",
+    "~/.codex/skills",
+    "~/.codex/rules",
+    // Cursor
+    "~/.cursor/cli-config.json",
+    "~/.cursor/mcp.json",
+    "~/.cursor/rules",
+    "~/.cursor/commands",
+    "~/.cursor/hooks.json",
+    "~/.cursor/extensions",
+    // OpenCode, whose config is in `~/.config`
+    "~/.opencode/bin",
+    // Gemini CLI
+    "~/.gemini/settings.json",
+    "~/.gemini/GEMINI.md",
+    "~/.gemini/commands",
+    "~/.gemini/extensions",
+    // Factory CLI (droid)
+    "~/.factory/settings.json",
+    "~/.factory/mcp.json",
+    "~/.factory/AGENTS.md",
+    "~/.factory/droids",
+    "~/.factory/commands",
+    "~/.factory/hooks",
+    "~/.factory/skills",
+    // Pi
+    "~/.pi/agent/settings.json",
+    "~/.pi/agent/AGENTS.md",
+    "~/.pi/agent/extensions",
+    "~/.pi/agent/skills",
+    "~/.pi/agent/prompts",
+    // Copilot
+    "~/.copilot/mcp-config.json",
+    "~/.copilot/agents",
+    "~/.copilot/skills",
+    "~/.copilot/hooks",
+    "~/.copilot/pkg",
+    // Kiro CLI
+    "~/.kiro/settings",
+    "~/.kiro/agents",
+    "~/.kiro/steering",
+    "~/.kiro/prompts",
+    "~/.kiro/hooks",
+    "~/.kiro/extensions",
 ];
 
 const DENY_WRITE: &[&str] = &["**/.env", "**/.env.*", "**/*.pem", "**/*.p12", "**/*.pfx"];
@@ -336,8 +424,10 @@ mod tests {
             .env("WF_SESSION", "s1");
         let repository = directory.path().join("k3f9");
         std::fs::create_dir(&repository).unwrap();
+        let data_dir = DataDir::new(directory.path().join("data"));
         let access = Access {
             directory: &repository,
+            data_dir: &data_dir,
             ..access()
         };
         let wrapped = wrap(&config(), &access, &agent, &profile_file).unwrap();
@@ -356,6 +446,12 @@ mod tests {
             ]
         );
         assert_eq!(wrapped.environment()["WF_SESSION"], "s1");
+        let cargo_home = data_dir.agent_cargo_home();
+        assert_eq!(
+            wrapped.environment()["CARGO_HOME"],
+            cargo_home.to_str().unwrap()
+        );
+        assert!(cargo_home.is_dir());
 
         let written: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&profile_file).unwrap()).unwrap();
@@ -405,6 +501,73 @@ mod tests {
     #[test]
     fn the_global_git_config_cannot_be_written() {
         assert!(covers("denyWrite", "~/.config/git/config"));
+    }
+
+    #[test]
+    fn the_harnesses_config_cannot_be_written() {
+        for path in [
+            "~/.claude/settings.json",
+            "~/.claude/hooks/notify.sh",
+            "~/.claude/commands/deploy.md",
+            "~/.claude/agents/helper.md",
+            "~/.claude/skills/review/SKILL.md",
+            "~/.claude/plugins/marketplaces/x/plugin.json",
+            "~/.codex/config.toml",
+            "~/.codex/rules/default.rules",
+            "~/.claude/statusline.sh",
+            "~/.claude/statusline-command.sh",
+            "~/.claude/local/claude",
+            "~/.amp/bin/amp",
+            "~/.cursor/mcp.json",
+            "~/.cursor/hooks.json",
+            "~/.cursor/extensions/x/extension.js",
+            "~/.opencode/bin/opencode",
+            "~/.gemini/settings.json",
+            "~/.gemini/extensions/x/gemini-extension.json",
+            "~/.factory/settings.json",
+            "~/.pi/agent/extensions/x.ts",
+            "~/.copilot/mcp-config.json",
+            "~/.copilot/pkg/universal/0.0.1/index.js",
+            "~/.kiro/settings/mcp.json",
+            "~/.kiro/extensions/x/extension.js",
+        ] {
+            assert!(covers("denyWrite", path), "{path} is not writable");
+        }
+    }
+
+    #[test]
+    fn the_harnesses_keep_their_state_sessions_and_auth() {
+        for path in [
+            "~/.claude.json",
+            "~/.claude/.credentials.json",
+            "~/.claude/projects/-work-repo/session.jsonl",
+            "~/.claude/todos/x.json",
+            "~/.codex/auth.json",
+            "~/.codex/sessions/2026/10/21/rollout.jsonl",
+            "~/.gemini/oauth_creds.json",
+            "~/.gemini/tmp/x/chats/session.json",
+            "~/.factory/sessions/x.jsonl",
+            "~/.copilot/session-state/x.jsonl",
+        ] {
+            assert!(covers("allowWrite", path), "{path} is writable");
+            assert!(!covers("denyWrite", path), "{path} is not denied");
+        }
+    }
+
+    #[test]
+    fn agents_build_with_a_cargo_home_of_their_own() {
+        for path in [
+            "~/.cargo/registry/src/index.crates.io-1949cf8c6b5b557f/serde-1.0.0/build.rs",
+            "~/.cargo/git/checkouts/x/build.rs",
+            "~/.cargo/bin/cargo",
+            "~/.cargo/config.toml",
+        ] {
+            assert!(!covers("allowWrite", path), "{path} is not writable");
+        }
+        assert!(covers(
+            "allowWrite",
+            "/home/ada/.local/share/workforce/cargo/registry/src/x/serde-1.0.0/build.rs"
+        ));
     }
 
     #[test]

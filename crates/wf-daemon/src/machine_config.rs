@@ -16,6 +16,8 @@ use wf_core::policy::CheckConfig;
 use wf_harness::Decider;
 use wf_vcs::CommitSigning;
 
+use crate::sandbox::CARGO_HOME;
+
 #[derive(Debug, thiserror::Error)]
 pub enum MachineConfigError {
     #[error("{path}: {source}")]
@@ -441,6 +443,26 @@ impl MachineConfig {
                 SandboxConfig::Off {} | SandboxConfig::Fence(_) => {}
             }
         }
+        let in_fence = [Some(&config.sandbox), config.check.sandbox.as_ref()]
+            .into_iter()
+            .flatten()
+            .any(|sandbox| matches!(sandbox, SandboxConfig::Fence(_)));
+        if in_fence {
+            let environments = std::iter::once(("[environment]".to_string(), &config.environment))
+                .chain(config.agents.iter().map(|(agent, agent_config)| {
+                    (
+                        format!("[agent.{agent}.environment]"),
+                        &agent_config.environment,
+                    )
+                }));
+            for (table, environment) in environments {
+                if environment.names().any(|name| name == CARGO_HOME) {
+                    return Err(ParseError::Invalid(format!(
+                        "{table}: wf sets `{CARGO_HOME}` itself in Fence"
+                    )));
+                }
+            }
+        }
         config.environment.expand(variable)?;
         for sandbox in [Some(&mut config.sandbox), config.check.sandbox.as_mut()]
             .into_iter()
@@ -514,8 +536,13 @@ fn expand(text: &str, variable: &dyn Fn(&str) -> Option<String>) -> Result<Strin
 }
 
 impl EnvironmentConfig {
+    /// The variables it inherits or sets.
+    fn names(&self) -> impl Iterator<Item = &String> {
+        self.inherit.iter().chain(self.set.keys())
+    }
+
     fn check(&self) -> Result<(), String> {
-        for name in self.inherit.iter().chain(self.set.keys()) {
+        for name in self.names() {
             if name.is_empty() || name.contains(['=', '\0']) {
                 return Err(format!("`{name}` is not a variable name"));
             }
@@ -741,6 +768,19 @@ mod tests {
     }
 
     #[test]
+    fn the_cargo_home_can_be_set_only_outside_fence() {
+        let text = "[sandbox]\nkind = \"off\"\n[environment]\nset = { CARGO_HOME = \"/x\" }";
+        assert!(MachineConfig::parse_in(text, &|_| None).is_ok());
+        assert!(
+            MachineConfig::parse_in(
+                &format!("{text}\n[check.sandbox]\nkind = \"fence\""),
+                &|_| None
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn an_agent_gets_the_environment_and_sandbox_of_every_agent_and_its_own() {
         let text = r#"
             [environment]
@@ -800,6 +840,9 @@ mod tests {
             "[agent.coder.environment]\ninherit = [\"GIT_AUTHOR_NAME\"]",
             "[sandbox]\nkind = \"off\"\n[agent.coder.sandbox]\nallow_write = [\"/x\"]",
             "[agent.coder.sandbox]\nkind = \"off\"",
+            "[environment]\nset = { CARGO_HOME = \"/x\" }",
+            "[agent.coder.environment]\ninherit = [\"CARGO_HOME\"]",
+            "[sandbox]\nkind = \"off\"\n[check.sandbox]\nkind = \"fence\"\n[environment]\ninherit = [\"CARGO_HOME\"]",
         ] {
             assert!(MachineConfig::parse_in(text, &|_| None).is_err(), "{text}");
         }

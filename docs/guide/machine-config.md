@@ -51,11 +51,19 @@ The daemon runs every agent in [Fence](https://github.com/fencesandbox/fence), w
 installed. Inside it, an agent may:
 
 * write in its own repository and talk to the daemon (your repository is read-only to it);
+* write the state, sessions and login of its harness, and caches;
 * reach model APIs and package registries.
 
 Everything else is denied. Whatever you add, an agent never reads wf's keys or config, and never
-changes git's config. Because the sandbox holds agents in, an agent with
-`--permissions allow` (the default) is allowed what it asks without anyone being asked.
+changes git's config or the config of a harness (settings, hooks, commands, agents, skills,
+plugins, MCP servers): those run the next time *you* run git or the harness, outside the sandbox.
+For the same reason agents build with a cargo home of their own,
+`~/.local/share/workforce/cargo`, and do not touch the registry in your `~/.cargo`; your
+`~/.cargo/config.toml` does not apply to them. Some gaps remain: agents can write `~/.claude.json`,
+where Claude Code keeps its state and its user-scope MCP servers in one file, scripts your Claude
+Code settings point to, and caches such as `~/.npm/_npx` and `~/.bun` (see SPEC §13). Because the
+sandbox holds agents in, an agent with `--permissions allow` (the default) is allowed what it asks
+without anyone being asked.
 
 ```toml
 [sandbox]
@@ -72,7 +80,8 @@ each permission request goes through the deciders and then to you. `allow_write`
 
 Agents do not get the daemon's environment. They get:
 
-* what wf sets: `WF_SESSION`, `WF_WORKFORCE`, `PATH` and their git identity;
+* what wf sets: `WF_SESSION`, `WF_WORKFORCE`, `PATH`, their git identity and, in Fence,
+  `CARGO_HOME`;
 * what every program expects: `HOME`, `USER`, `LOGNAME`, `SHELL`, `TMPDIR`, `LANG`, `LC_ALL`,
   `LC_CTYPE` and the `XDG_*_HOME` directories;
 * what the machine config names.
@@ -88,7 +97,8 @@ set = { CARGO_TARGET_DIR = "~/.cache/workforce/target" }
 Values under `set` are expanded when the config is read: `~`, `$NAME` and `${NAME}` come from the
 daemon's environment, and `$$` is a literal `$`. A variable that is not set is an error. A relative
 path is relative to the agent's directory, its repository. wf's own variables (`PATH`, `WF_*`,
-`GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, `GIT_CONFIG_*`) cannot be set here.
+`GIT_AUTHOR_NAME`, `GIT_COMMITTER_NAME`, `GIT_CONFIG_*`, and `CARGO_HOME` when agents or checks run
+in Fence) cannot be set or inherited here.
 
 Setting a variable allows nothing by itself: a directory an agent is to write to goes in
 `allow_write` as well.
