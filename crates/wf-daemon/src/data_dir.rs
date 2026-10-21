@@ -100,6 +100,12 @@ impl DataDir {
         self.root.join("bin")
     }
 
+    /// The `CARGO_HOME` of sandboxed agents: the registry and git checkouts they download, whose
+    /// build scripts the principal's own cargo never runs.
+    pub fn agent_cargo_home(&self) -> PathBuf {
+        self.root.join("cargo")
+    }
+
     pub fn workforce(&self, id: &WorkforceId) -> PathBuf {
         self.root.join(id.to_string())
     }
