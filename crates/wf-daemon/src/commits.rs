@@ -264,6 +264,9 @@ pub(crate) async fn reconcile(
     if !bare.join("HEAD").is_file() {
         return None;
     }
+    // Read only once no other write of the refs is under way, so that none comes between the
+    // reading and the refs set from it.
+    let _writing = loaded.item_refs.lock().await;
     let reading = loaded
         .storage
         .with(move |replica| read(replica.state(), own))
@@ -346,9 +349,10 @@ pub(crate) async fn reconcile(
 }
 
 /// Moves the refs of the items to the heads the log names, for those whose commits are here,
-/// and removes what finished items left. Each branch moves only from where it was read, so an
-/// import or a start that moved it meanwhile wins, and not at all while a work session of this
-/// device runs on the item.
+/// and removes what finished items left: nothing else removes them. Runs while it holds
+/// [`Loaded::item_refs`], which the imports and starts that move a branch hold too. Each branch
+/// moves only from where it was read, and not at all while a work session of this device runs on
+/// the item.
 fn set_refs(
     bare: &std::path::Path,
     workforce_directory: &std::path::Path,
@@ -855,7 +859,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_pass_reading_from_before_an_end_does_not_bring_back_the_branch_the_end_removed() {
+    async fn the_end_leaves_the_branch_to_the_refs_pass_so_a_stale_pass_brings_nothing_back() {
         let mut scene = Scene::new().await;
         let item = scene.item().await;
         let holder = scene.work_session(item).await;
@@ -875,7 +879,8 @@ mod tests {
         scene.end(holder, EndReason::Submitted).await;
         let founder = scene.fixture.founder_actor();
         scene.write(0, founder, moved(item, ItemState::Done)).await;
-        scene.bare().delete_branch(&item_branch(item)).unwrap();
+        // The end removes nothing itself: the refs pass is the only one that does, and each reads
+        // the log only once no other write of the refs is under way.
         let workforce = scene.fixture.workforce();
         set_refs(
             &scene.daemon.bare_repository(workforce),
@@ -884,6 +889,8 @@ mod tests {
             &BTreeSet::new(),
         )
         .unwrap();
+        assert_eq!(scene.bare().branch_head(&item_branch(item)).unwrap(), head);
+        assert_eq!(scene.reconcile().await, None);
         assert!(scene.bare().item_branches().unwrap().is_empty());
     }
 

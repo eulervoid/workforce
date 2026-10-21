@@ -558,6 +558,9 @@ async fn import_progress(
         return;
     }
     let session = run.session;
+    // Whether it is live is read while this holds the refs: an end written after it is read by
+    // the refs pass that follows the copy, which removes a branch the item no longer needs.
+    let _writing = loaded.item_refs.lock().await;
     let live = daemon
         .read(loaded, move |state| session_is_live(state, session))
         .await

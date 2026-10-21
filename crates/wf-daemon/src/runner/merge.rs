@@ -13,7 +13,7 @@ use wf_core::lifecycle::{MergeFailure, MergePlan};
 use wf_core::policy::MergeMode;
 use wf_core::review::PendingMerge;
 use wf_core::session::CommitId;
-use wf_vcs::{CommitSigning, GitCli, MergeOutcome, MergeTree, item_branch, item_repository};
+use wf_vcs::{CommitSigning, GitCli, MergeOutcome, MergeTree};
 
 use super::check::CheckStage;
 use super::{SessionError, blocking};
@@ -350,23 +350,7 @@ impl Daemon {
                     }),
                 )
                 .await?;
-                let (branch, directory) = (
-                    item_branch(item),
-                    item_repository(&self.workforce_directory(workforce), item),
-                );
-                let cleaned = blocking(move || {
-                    let git = GitCli::open(&repository)?;
-                    wf_vcs::remove_agent_repository(&directory)?;
-                    git.delete_branch(&branch)
-                })
-                .await?;
-                if let Err(error) = cleaned {
-                    tracing::warn!(
-                        "could not remove the branch of #{}: {}",
-                        item.short(),
-                        wf_core::error_chain(&error)
-                    );
-                }
+                // The refs pass removes its branch and repository: a merged item is finished.
                 self.move_item(
                     loaded,
                     principal,

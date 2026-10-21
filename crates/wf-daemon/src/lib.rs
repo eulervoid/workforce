@@ -105,6 +105,11 @@ pub(crate) struct Loaded {
     pub(crate) storage: StorageHandle,
     pub(crate) merges: runner::MergeQueue,
     pub(crate) commits: commits::Commits,
+    /// Held by whatever writes the refs of items in the bare repository (`wf/<item>` and the work
+    /// set apart): the refs pass, imports and starts. The refs pass reads the log only once it
+    /// holds it, so it never acts on a state older than a write before it. Only the refs pass
+    /// removes them.
+    pub(crate) item_refs: tokio::sync::Mutex<()>,
 }
 
 /// Serves the workforce to its other devices and keeps in sync with them, from when it first has
@@ -510,6 +515,7 @@ impl Daemon {
             storage,
             merges: runner::MergeQueue::default(),
             commits: commits::Commits::default(),
+            item_refs: tokio::sync::Mutex::new(()),
         });
         self.loaded
             .lock()
