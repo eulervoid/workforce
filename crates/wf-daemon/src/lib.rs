@@ -246,8 +246,9 @@ pub struct Daemon {
     runners: runner::Runners,
     /// The checks the daemon runs as sessions submit.
     submissions: runner::SubmissionChecks,
-    /// Taken while checks run in the check worktree of a workforce, which they share.
-    checking: Arc<keyed_locks::KeyedLocks<WorkforceId>>,
+    /// Taken while checks run in the check worktree of a workforce, which they share; merges
+    /// take it before submissions.
+    checking: Arc<runner::CheckTurns>,
     /// Taken while a session starts, from reading the state until `SessionStarted` is written.
     starting: runner::StartLocks,
     /// Taken while a session ends, so that two ends of one session, such as the agent's submit

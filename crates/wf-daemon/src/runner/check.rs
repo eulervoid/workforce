@@ -244,7 +244,7 @@ impl Daemon {
             return Ok(Vec::new());
         }
         // One run at a time per workforce: they share the check worktree.
-        let _running = self.checking.lock(workforce).await;
+        let _running = self.checking.take(workforce, stage).await;
         let config = self.machine_config()?;
         let git = {
             let repository = repository.to_path_buf();
