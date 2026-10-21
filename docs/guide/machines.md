@@ -142,6 +142,9 @@ The daemon logs to `~/.local/share/workforce/daemon.log`, which `wf daemon log` 
 `WF_LOG=debug`. To run it as a service, have a systemd user unit or a launchd agent run `wf daemon
 run`, which stays in the foreground and stops on SIGTERM.
 
+The daemon raises its soft open-file limit to the hard limit (at most 65536) as it starts, and its
+sessions and checks inherit it, so a daemon started from a macOS terminal does not keep its 256.
+
 While the daemon runs it owns the store: `wf` commands ask it instead of opening the store
 themselves. Without a daemon, commands open the store directly; agents and the dashboard need the
 daemon.
