@@ -60,8 +60,8 @@ pub enum SessionError {
     Archived(ItemId),
     #[error(transparent)]
     Claimed(#[from] ItemClaimed),
-    #[error("a session is already starting on #{}", .0.short())]
-    Starting(ItemId),
+    #[error("a {} session is already starting on #{}", .1.name(), .0.short())]
+    Starting(ItemId, SessionRole),
     #[error("commit {} has not arrived from the device that has it yet", .0.short())]
     AwaitingCommit(CommitId),
     #[error("there is no session {}", .0.short())]
@@ -131,7 +131,7 @@ impl SessionError {
             | Self::UnknownItem(_)
             | Self::Archived(_)
             | Self::Claimed(_)
-            | Self::Starting(_)
+            | Self::Starting(..)
             | Self::AwaitingCommit(_)
             | Self::UnknownSession(_)
             | Self::NotOurs(_)
@@ -249,38 +249,42 @@ impl Runners {
     }
 }
 
-/// The items one kind of operation runs on right now, such as starting a session, so that it runs on an
-/// item once at a time.
+/// The sessions starting right now, by item and role, so that two starts of one session, such as
+/// one by hand and one by the dispatcher, do not both see it free. Different roles on one item,
+/// such as reviews of different steps, start side by side.
 #[derive(Default)]
-pub(crate) struct ItemLocks {
-    items: Mutex<std::collections::BTreeSet<ItemId>>,
+pub(crate) struct StartLocks {
+    starting: Mutex<std::collections::BTreeSet<(ItemId, SessionRole)>>,
 }
 
-pub(crate) struct ItemLock<'a> {
-    locks: &'a ItemLocks,
-    item: ItemId,
+pub(crate) struct StartLock<'a> {
+    locks: &'a StartLocks,
+    key: (ItemId, SessionRole),
 }
 
-impl ItemLocks {
-    /// The lock of `item`, or `None` while someone else holds it.
-    fn take(&self, item: ItemId) -> Option<ItemLock<'_>> {
-        let mut items = self
-            .items
+impl StartLocks {
+    /// The lock of a session of `role` on `item`, or `None` while someone else holds it.
+    fn take(&self, item: ItemId, role: &SessionRole) -> Option<StartLock<'_>> {
+        let mut starting = self
+            .starting
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let key = (item, role.clone());
         // Built only when taken: a lock built and dropped here would release the holder's, and
-        // deadlock on `items` besides.
-        items.insert(item).then(|| ItemLock { locks: self, item })
+        // deadlock on `starting` besides.
+        starting
+            .insert(key.clone())
+            .then(|| StartLock { locks: self, key })
     }
 }
 
-impl Drop for ItemLock<'_> {
+impl Drop for StartLock<'_> {
     fn drop(&mut self) {
         self.locks
-            .items
+            .starting
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
-            .remove(&self.item);
+            .remove(&self.key);
     }
 }
 

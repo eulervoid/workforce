@@ -155,17 +155,14 @@ impl Daemon {
         item: ItemId,
         role: SessionRole,
     ) -> Result<SessionId, SessionError> {
-        // A start by hand and one by the dispatcher must not both see the item free: the state is
-        // read and the claim checked under a lock held until `SessionStarted` is written. What a
+        // A start by hand and one by the dispatcher must not both see the item, or the review
+        // step, free: the state is read and the claim checked under a lock of the item and role
+        // held until `SessionStarted` is written. What a
         // gone device's session claims is taken over: its session ends `LeaseExpired` first.
-        let _starting = match role {
-            SessionRole::Work => Some(
-                self.starting
-                    .take(item)
-                    .ok_or(SessionError::Starting(item))?,
-            ),
-            SessionRole::Review { .. } | SessionRole::Supervise | SessionRole::Diagnose => None,
-        };
+        let _starting = self
+            .starting
+            .take(item, &role)
+            .ok_or_else(|| SessionError::Starting(item, role.clone()))?;
         let state = self.snapshot(loaded).await?;
         let setup = self.setup(&state, workforce, agent, item, &role)?;
         let presence = self.presence_now();

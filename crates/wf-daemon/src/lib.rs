@@ -237,7 +237,8 @@ pub struct Daemon {
     submissions: runner::SubmissionChecks,
     /// Taken while checks run in the check worktree of a workforce, which they share.
     checking: Arc<keyed_locks::KeyedLocks<WorkforceId>>,
-    starting: runner::ItemLocks,
+    /// Taken while a session starts, from reading the state until `SessionStarted` is written.
+    starting: runner::StartLocks,
     /// Taken while a session ends, so that two ends of one session, such as the agent's submit
     /// and a timeout, do not both act; ends of other sessions do not wait.
     ending: Arc<keyed_locks::KeyedLocks<SessionId>>,
@@ -285,7 +286,7 @@ impl Daemon {
             runners: runner::Runners::default(),
             submissions: runner::SubmissionChecks::default(),
             checking: Default::default(),
-            starting: runner::ItemLocks::default(),
+            starting: runner::StartLocks::default(),
             ending: Default::default(),
             opening: Default::default(),
             repositories: Default::default(),
