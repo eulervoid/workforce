@@ -13,7 +13,7 @@ use crate::identity::{Actor, AgentId, DeviceKey, InviteKey, PrincipalKey, Role};
 use crate::item::{Item, ItemEntry};
 use crate::name::{AgentName, Handle, HarnessName, LaneName, Requirement};
 use crate::policy::{DEFAULT_POLICY_TOML, Policy, PolicyError};
-use crate::session::{Session, SessionRole};
+use crate::session::{CommitId, Session, SessionRole};
 use crate::sync::{FeedVersion, Versions};
 use crate::target::TargetMove;
 use crate::validate::Invalid;
@@ -300,6 +300,9 @@ pub(crate) struct Workforce {
     /// The moves of the target's chain, oldest first, made again by the fold from
     /// `target_moves` whenever one is added.
     pub(crate) target_chain: Vec<EventId>,
+    /// The `onto` of every move in `target_moves`, so that the fold sees at once whether a new
+    /// move only extends the chain.
+    pub(crate) target_moved_from: BTreeSet<CommitId>,
 }
 
 impl Workforce {

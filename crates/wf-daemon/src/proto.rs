@@ -575,8 +575,8 @@ mod tests {
     const GOLDEN_REPLIES: [(&str, usize, &str); 8] = [
         (
             "State",
-            24453,
-            "ssb74kl6ue6ofsh2flrqyj3xhodviv6nk2jowz3gs7hmyf5kwixa",
+            24499,
+            "a7a6siegwlfg7lnbdw6wjttic4lslviiuers7mcpqpsam66aegqa",
         ),
         (
             "Permissions",

@@ -99,6 +99,7 @@ impl State {
                 sessions_by_item: BTreeMap::new(),
                 target_moves: BTreeMap::new(),
                 target_chain: Vec::new(),
+                target_moved_from: BTreeSet::new(),
                 invites: BTreeMap::new(),
                 profiles: BTreeMap::new(),
                 fork: genesis
@@ -505,6 +506,10 @@ impl Workforce {
     /// Records a move of the target, makes its chain again, and marks the merges that lost a
     /// fork of it. The chain is a function of the set of moves, so the order they come in does
     /// not matter.
+    ///
+    /// Most moves are onto the tip, from a tip no other move left, to a commit no move left:
+    /// such a move only extends the chain, and loses no other. Only the rest make the chain
+    /// again from every move, which would make a fold of many moves quadratic.
     fn move_target(
         &mut self,
         commit: CommitId,
@@ -520,7 +525,22 @@ impl Workforce {
             device,
             stamp,
         };
+        let tip = self
+            .target_chain
+            .last()
+            .and_then(|last| self.target_moves.get(last))
+            .map(|last| last.commit);
+        let extends = tip == Some(onto)
+            && commit != onto
+            && !self.target_moved_from.contains(&onto)
+            && !self.target_moved_from.contains(&commit)
+            && !self.target_moves.contains_key(&stamp.id);
         self.target_moves.insert(stamp.id, step);
+        self.target_moved_from.insert(onto);
+        if extends {
+            self.target_chain.push(stamp.id);
+            return;
+        }
         self.target_chain = target::chain(&self.target_moves);
         let on_chain: BTreeSet<EventId> = self.target_chain.iter().copied().collect();
         for step in self.target_moves.values() {
