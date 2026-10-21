@@ -239,9 +239,11 @@ impl Daemon {
             .await?;
             return Ok(());
         }
+        self.ensure_bare_repository(workforce, &loaded.storage)
+            .await;
         // Another device that is there holds the merge: it makes it.
         if !self
-            .hold_merge(loaded, principal, item, commit, Claiming::Claim)
+            .hold_merge(workforce, loaded, principal, item, commit, Claiming::Claim)
             .await?
         {
             return Ok(());
@@ -269,8 +271,6 @@ impl Daemon {
                 Ok::<_, SessionError>(())
             }
         };
-        self.ensure_bare_repository(workforce, &loaded.storage)
-            .await;
         let repository = self.bare_repository(workforce);
         let signing = match self.merge_signing() {
             Ok(signing) => signing,
@@ -333,7 +333,7 @@ impl Daemon {
                     }
                     // Another device's claim, which came while the checks ran, holds it now.
                     if !self
-                        .hold_merge(loaded, principal, item, commit, Claiming::Keep)
+                        .hold_merge(workforce, loaded, principal, item, commit, Claiming::Keep)
                         .await?
                     {
                         return Ok(());
@@ -424,9 +424,10 @@ pub(super) enum Claiming {
 impl Daemon {
     /// Whether this device holds the merge of the reviewed `commit` of `item`: its claim is the
     /// earliest of a device that is there. With `Claiming::Claim` it claims a merge nobody holds,
-    /// if it meets `[merge] requires`.
+    /// if it meets `[merge] requires` and has the commit.
     pub(super) async fn hold_merge(
         &self,
+        workforce: WorkforceId,
         loaded: &Loaded,
         principal: PrincipalKey,
         item: ItemId,
@@ -448,6 +449,13 @@ impl Daemon {
             // Its hardware does not meet `[merge] requires`: a device that does merges it.
             (None, Claiming::Claim) if !may_merge => Ok(false),
             (None, Claiming::Claim) => {
+                // Without it, its claim would hold up the devices that could merge it now.
+                let repository = self.bare_repository(workforce);
+                let here =
+                    blocking(move || GitCli::open(&repository)?.has_commit(commit)).await??;
+                if !here {
+                    return Ok(false);
+                }
                 self.author(
                     loaded,
                     Actor::Daemon(principal),

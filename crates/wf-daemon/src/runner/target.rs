@@ -586,7 +586,14 @@ mod tests {
     ) -> bool {
         scene
             .daemon
-            .hold_merge(&scene.loaded, principal, item, reviewed, claiming)
+            .hold_merge(
+                scene.fixture.workforce(),
+                &scene.loaded,
+                principal,
+                item,
+                reviewed,
+                claiming,
+            )
             .await
             .unwrap()
     }
@@ -628,5 +635,28 @@ mod tests {
             "device 0 claimed it once device 1 was gone"
         );
         assert!(hold(&scene, principal, item, reviewed, Claiming::Claim).await);
+    }
+
+    #[tokio::test]
+    async fn a_device_claims_no_merge_before_it_has_the_commit() {
+        let mut scene = Scene::new().await;
+        let founder = scene.fixture.founder_actor();
+        let item: ItemId = scene
+            .write(0, founder, create("task", "work"))
+            .await
+            .id()
+            .into();
+        let principal = scene.fixture.founder.key();
+        let reviewed = scene.repository.work("reviewed", "reviewed.txt", "x\n");
+        assert!(!hold(&scene, principal, item, reviewed, Claiming::Claim).await);
+        let claims = |state: &State| match state.item(item) {
+            Some(wf_core::item::ItemEntry::Live(live)) => live.merge_claims().count(),
+            _ => panic!("the item is live"),
+        };
+        assert_eq!(claims(&scene.state().await), 0, "not claimed");
+
+        scene.fetch("reviewed", "refs/test/reviewed");
+        assert!(hold(&scene, principal, item, reviewed, Claiming::Claim).await);
+        assert_eq!(claims(&scene.state().await), 1);
     }
 }
