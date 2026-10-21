@@ -149,6 +149,19 @@ fn work_goes_first_to_the_device_of_the_latest_work_session() {
 }
 
 #[test]
+fn work_does_not_go_to_the_device_that_lost_the_race_for_it() {
+    let mut scene = Scene::new();
+    let task: ItemId = scene.apply(0, create("task", "raced")).id().into();
+    scene.apply(0, start_session("coder", task));
+    let lost: SessionId = scene.apply(1, start_session("coder", task)).id().into();
+    scene.apply(1, end_session(lost, EndReason::Outclaimed));
+    assert_eq!(
+        scene.state.home(task, &SessionRole::Work),
+        Some(scene.device(0))
+    );
+}
+
+#[test]
 fn a_review_goes_first_to_the_device_that_submitted_the_work() {
     for submitter in 0..3 {
         let mut scene = Scene::new();

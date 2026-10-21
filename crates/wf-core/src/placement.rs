@@ -11,7 +11,7 @@ use std::time::Duration;
 use crate::claims::Presence;
 use crate::id::{HashId, ItemId, SessionId};
 use crate::identity::{Actor, AgentId, DeviceKey};
-use crate::session::SessionRole;
+use crate::session::{EndReason, SessionRole};
 use crate::state::State;
 use crate::supervision::WaitsOn;
 
@@ -122,15 +122,22 @@ impl State {
     }
 
     /// The device `item` in `role` goes to first, if any: for work, where the work is (the device
-    /// of the item's latest work session, with its repository, branch and build caches); for a
-    /// review, where it was written (the device of the work session that submitted it, where the
-    /// commit is and the checks just ran); for supervision, where it waits (the device of the
-    /// session that wrote the oldest blocker a supervisor answers). A diagnosis has none.
+    /// of the item's latest work session that did not end `Outclaimed`, with its repository,
+    /// branch and build caches); for a review, where it was written (the device of the work
+    /// session that submitted it, where the commit is and the checks just ran); for supervision,
+    /// where it waits (the device of the session that wrote the oldest blocker an agent answers,
+    /// a supervisor or the agent it names). A diagnosis has none.
     pub fn home(&self, item: ItemId, role: &SessionRole) -> Option<DeviceKey> {
         match role {
             SessionRole::Work => self
                 .sessions_of(item)
                 .filter(|session| session.role() == SessionRole::Work)
+                // The loser of a race does not have the winning branch.
+                .filter(|session| {
+                    session
+                        .ended()
+                        .is_none_or(|ended| ended.reason != EndReason::Outclaimed)
+                })
                 .max_by_key(|session| session.started())
                 .map(|session| session.device()),
             SessionRole::Review { .. } => self
@@ -142,7 +149,10 @@ impl State {
                 };
                 self.open_blockers_of(live)
                     .into_iter()
-                    .filter(|blocker| !matches!(blocker.waits_on, WaitsOn::Principal(_)))
+                    .filter(|blocker| match blocker.waits_on {
+                        WaitsOn::Supervisor | WaitsOn::Agent(_) => true,
+                        WaitsOn::Principal(_) => false,
+                    })
                     .filter_map(|blocker| live.comments().get(&blocker.comment))
                     .min_by_key(|comment| comment.at)
                     .and_then(|comment| match comment.by {

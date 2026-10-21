@@ -722,11 +722,12 @@ against capabilities and hardware, recovery, never worked on the item); left out
 lease ran out, though a device never leaves itself out. The rest rank by, first to last:
 
 1. **where the work is**: the next work session of an item goes to the device of its latest one,
-   which has its agent repository, branch and build caches;
+   which has its agent repository, branch and build caches; one that ended `Outclaimed` does not
+   count, as the loser of a race does not have the winning branch;
 2. **where it was written**: a review goes to the device of the work session that submitted it,
    where the commit is and the checks just ran;
 3. **where it waits**: a supervise session goes to the device of the session that wrote the oldest
-   blocker a supervisor answers;
+   blocker an agent answers (a supervisor, or the agent it names);
 4. a hash of the thing and the device (rendezvous hashing, blake3), which spreads the rest evenly
    and moves only a leaving device's share. Each review step is a thing of its own, so the steps of
    one entry spread too. A diagnosis has no device of its own and goes by the hash alone.
