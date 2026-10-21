@@ -748,6 +748,10 @@ the review session that approved it, before the hash.
 
 The device of rank *r* waits *r* times 15 s (well above the few seconds a claim takes to sync)
 from when its dispatcher first saw the thing claimable, and then starts it only if no claim arrived.
+Its wait begins only once its daemon has heard from every device ranked ahead of it since it
+started (a sync or an announcement, as for leases), since until then a claim of theirs could not
+have reached it, however long it waited; a device it never hears from is left out of the ranking
+once its lease runs out (`Placement::turn`).
 Meanwhile the agent waits with it rather than start something after it in its order (a lower
 priority it ranks first), so priority holds when the device ahead fails to start; the claim of the
 device ahead usually arrives within seconds, and the agent goes on to its next thing. A thing it stops seeing (a claim arrived, or it has no
@@ -756,8 +760,8 @@ the next wait is over rather than for its tick. The ranking reads only the log, 
 presence, so devices agree on it; what only one device knows (a failed start, a harness at fault, a
 commit not yet here) makes it skip the thing, and the next device takes over after its wait, never
 sooner. A ranking that is wrong costs a delay or a race the claims resolve, never correctness. With
-one device nothing waits; a daemon that just started counts every device as present, so it may wait
-for one that is not there. Ranking is pure (`wf-core`); waiting is the dispatcher's.
+one device nothing waits; a daemon that just started counts every device as present, so it waits
+out the lease for one that is not there. Ranking is pure (`wf-core`); waiting is the dispatcher's.
 
 ### Briefs
 

@@ -7,7 +7,7 @@ use crate::id::{EventId, ItemId, SessionId};
 use crate::identity::DeviceKey;
 use crate::item::ItemState;
 use crate::name::{AgentName, HarnessName, LaneName, Requirement};
-use crate::placement::{Placement, RANK_DELAY, rendezvous};
+use crate::placement::{Placement, RANK_DELAY, Turn, rendezvous};
 use crate::session::{CommitId, EndReason, SessionRole};
 use crate::state::State;
 use crate::testing::*;
@@ -285,6 +285,27 @@ fn left_out_are_devices_without_a_free_slot_or_what_is_required_or_a_lease() {
         0,
         "a device that could not take it comes after all that could"
     );
+}
+
+#[test]
+fn a_device_takes_its_turn_only_once_it_heard_from_every_device_ranked_ahead() {
+    let mut scene = Scene::new();
+    let task: ItemId = scene.apply(0, create("task", "new")).id().into();
+    let ranked = scene.ranked(task, &SessionRole::Work);
+    let placement = scene.placement(0);
+    let turn = |heard: &[DeviceKey], device: DeviceKey| {
+        let presence = Presence::new(scene.clock, heard.iter().map(|key| (*key, scene.clock)));
+        placement.turn(task, &SessionRole::Work, device, &presence)
+    };
+
+    // The first has no one ahead to hear from.
+    assert_eq!(turn(&[], ranked[0]), Turn::Rank(0));
+    // Before it heard from a device ahead, a claim of that device could not have reached it.
+    assert_eq!(turn(&[], ranked[2]), Turn::Unheard(ranked[0]));
+    assert_eq!(turn(&[ranked[0]], ranked[2]), Turn::Unheard(ranked[1]));
+    assert_eq!(turn(&[ranked[0], ranked[1]], ranked[2]), Turn::Rank(2));
+    // Who comes after it does not matter.
+    assert_eq!(turn(&[ranked[0]], ranked[1]), Turn::Rank(1));
 }
 
 #[test]

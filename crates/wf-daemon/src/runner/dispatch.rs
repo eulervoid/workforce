@@ -10,7 +10,7 @@ use wf_core::identity::AgentId;
 use wf_core::identity::DeviceKey;
 use wf_core::item::ItemState;
 use wf_core::name::{AgentName, HarnessName};
-use wf_core::placement::Placement;
+use wf_core::placement::{Placement, Turn};
 use wf_core::review::PendingMerge;
 use wf_core::session::SessionRole;
 use wf_core::state::State;
@@ -33,10 +33,10 @@ const RETRY_FAILED_START: Duration = Duration::from_secs(10 * 60);
 /// When each agent last failed to start on an item.
 type FailedStarts = std::collections::BTreeMap<(ItemId, AgentName), Instant>;
 
-/// When this device first saw each claimable thing, an item in a role, so that it waits as long
-/// as its rank asks ([`Placement::delay`]) from then on. A thing it no longer sees, because a
-/// claim arrived or it cannot take it any more, is forgotten, so its wait starts over once it is
-/// claimable again.
+/// When this device first saw each claimable thing, an item in a role, with its turn come, so that
+/// it waits as long as its rank asks ([`Placement::delay`]) from then on. A thing it no longer
+/// sees, because a claim arrived or it cannot take it any more, is forgotten, and so is one it has
+/// to hear from a device ranked ahead for, so its wait starts over once it is claimable again.
 #[derive(Debug, Default)]
 struct Waits {
     since: BTreeMap<(ItemId, SessionRole), Instant>,
@@ -44,9 +44,14 @@ struct Waits {
 }
 
 impl Waits {
-    /// Whether this device may start `item` in `role` at `now`, being of `rank` for it, and
-    /// otherwise when it may.
-    fn due(&mut self, item: ItemId, role: &SessionRole, rank: usize, now: Instant) -> Due {
+    /// Whether this device may start `item` in `role` at `now`, at `turn` for it, and otherwise
+    /// when it may.
+    fn due(&mut self, item: ItemId, role: &SessionRole, turn: Turn, now: Instant) -> Due {
+        let rank = match turn {
+            Turn::Rank(rank) => rank,
+            // Not seen, so its wait is forgotten at the end of the pass.
+            Turn::Unheard(_) => return Due::Unheard,
+        };
         let thing = (item, role.clone());
         self.seen.insert(thing.clone());
         let since = *self.since.entry(thing).or_insert(now);
@@ -54,18 +59,19 @@ impl Waits {
         if at <= now { Due::Now } else { Due::At(at) }
     }
 
-    /// What an agent starts of its `candidates` (each with this device's rank), taken in the
+    /// What an agent starts of its `candidates` (each with this device's turn), taken in the
     /// order it takes them: the first, once it is due. Until then it waits for it, rather than
     /// fill its slot with something less urgent that this device ranks first. The rest count as
     /// seen, so their waits run meanwhile.
-    fn choose(&mut self, candidates: Vec<(ItemId, SessionRole, usize)>, now: Instant) -> Choice {
+    fn choose(&mut self, candidates: Vec<(ItemId, SessionRole, Turn)>, now: Instant) -> Choice {
         let mut choice = Choice::Nothing;
-        for (index, (item, role, rank)) in candidates.into_iter().enumerate() {
-            let due = self.due(item, &role, rank, now);
+        for (index, (item, role, turn)) in candidates.into_iter().enumerate() {
+            let due = self.due(item, &role, turn, now);
             if index == 0 {
                 choice = match due {
                     Due::Now => Choice::Start(item, role),
                     Due::At(at) => Choice::Wait(at),
+                    Due::Unheard => Choice::Hear,
                 };
             }
         }
@@ -84,6 +90,8 @@ impl Waits {
 enum Due {
     Now,
     At(Instant),
+    /// Once it has heard from a device ranked ahead ([`Turn::Unheard`]).
+    Unheard,
 }
 
 /// What an agent does next ([`Waits::choose`]).
@@ -92,6 +100,9 @@ enum Choice {
     Start(ItemId, SessionRole),
     /// Its first candidate is due at this instant.
     Wait(Instant),
+    /// Its first candidate waits for this device to hear from a device ranked ahead, which the
+    /// next pass looks at again.
+    Hear,
     Nothing,
 }
 
@@ -313,7 +324,7 @@ async fn dispatch_once(
                     next = Some(next.map_or(at, |next: Instant| next.min(at)));
                     break;
                 }
-                Choice::Nothing => break,
+                Choice::Hear | Choice::Nothing => break,
             };
             let started = daemon
                 .start_session(workforce, loaded, agent.name.clone(), item, role)
@@ -345,7 +356,7 @@ async fn dispatch_once(
 }
 
 /// What `agent` could start on this device, in the order it takes them, leaving out what is in
-/// `skipped`, each with the rank of this device for it ([`State::placement`]): nothing when it has
+/// `skipped`, each with the turn of this device for it ([`Placement::turn`]): nothing when it has
 /// no free slot; a review first, then a blocker to supervise, then work to diagnose, then the
 /// items it may take. What only sessions whose lease expired hold is free to take over.
 fn ranked_starts(
@@ -355,7 +366,7 @@ fn ranked_starts(
     skipped: &BTreeSet<ItemId>,
     presence: &Presence,
     now_ms: u64,
-) -> Vec<(ItemId, SessionRole, usize)> {
+) -> Vec<(ItemId, SessionRole, Turn)> {
     let expired = state.expired(device, presence, now_ms);
     let startable: Vec<_> = state
         .startable(device, agent, &expired)
@@ -369,8 +380,8 @@ fn ranked_starts(
     startable
         .into_iter()
         .map(|(item, role)| {
-            let rank = placement.rank(item, &role, device);
-            (item, role, rank)
+            let turn = placement.turn(item, &role, device, presence);
+            (item, role, turn)
         })
         .collect()
 }
@@ -415,9 +426,12 @@ mod tests {
     fn rank_0_starts_at_once_and_rank_r_waits_r_delays_from_when_it_was_first_seen() {
         let mut waits = Waits::default();
         let seen = Instant::now();
-        assert_eq!(waits.due(item(1), &SessionRole::Work, 0, seen), Due::Now);
         assert_eq!(
-            waits.due(item(2), &SessionRole::Work, 2, seen),
+            waits.due(item(1), &SessionRole::Work, Turn::Rank(0), seen),
+            Due::Now
+        );
+        assert_eq!(
+            waits.due(item(2), &SessionRole::Work, Turn::Rank(2), seen),
             Due::At(seen + RANK_DELAY * 2)
         );
         waits.end_pass();
@@ -425,12 +439,17 @@ mod tests {
         // Seen again later, it still counts from the first time.
         let later = seen + RANK_DELAY;
         assert_eq!(
-            waits.due(item(2), &SessionRole::Work, 2, later),
+            waits.due(item(2), &SessionRole::Work, Turn::Rank(2), later),
             Due::At(seen + RANK_DELAY * 2)
         );
         waits.end_pass();
         assert_eq!(
-            waits.due(item(2), &SessionRole::Work, 2, seen + RANK_DELAY * 2),
+            waits.due(
+                item(2),
+                &SessionRole::Work,
+                Turn::Rank(2),
+                seen + RANK_DELAY * 2
+            ),
             Due::Now
         );
     }
@@ -443,19 +462,50 @@ mod tests {
             commit: None,
             step: None,
         };
-        waits.due(item(1), &review, 1, seen);
-        waits.due(item(1), &SessionRole::Work, 1, seen);
+        waits.due(item(1), &review, Turn::Rank(1), seen);
+        waits.due(item(1), &SessionRole::Work, Turn::Rank(1), seen);
         waits.end_pass();
         // A claim arrived for the review, so it is not seen in this pass.
-        waits.due(item(1), &SessionRole::Work, 1, seen);
+        waits.due(item(1), &SessionRole::Work, Turn::Rank(1), seen);
         waits.end_pass();
 
         let again = seen + RANK_DELAY * 3;
         assert_eq!(
-            waits.due(item(1), &review, 1, again),
+            waits.due(item(1), &review, Turn::Rank(1), again),
             Due::At(again + RANK_DELAY)
         );
-        assert_eq!(waits.due(item(1), &SessionRole::Work, 1, again), Due::Now);
+        assert_eq!(
+            waits.due(item(1), &SessionRole::Work, Turn::Rank(1), again),
+            Due::Now
+        );
+    }
+
+    #[test]
+    fn a_device_that_has_not_heard_from_one_ranked_ahead_waits_its_rank_from_when_it_does() {
+        let mut waits = Waits::default();
+        let seen = Instant::now();
+        let ahead = wf_core::identity::DeviceSigner::generate([1; 32]).key();
+        let (unheard, other) = (item(1), item(2));
+        let both = |turn| {
+            vec![
+                (unheard, SessionRole::Work, turn),
+                (other, SessionRole::Work, Turn::Rank(0)),
+            ]
+        };
+        // However long it waits, the agent waits with it.
+        for later in [seen, seen + RANK_DELAY * 10] {
+            assert_eq!(
+                waits.choose(both(Turn::Unheard(ahead)), later),
+                Choice::Hear
+            );
+            waits.end_pass();
+        }
+
+        let heard = seen + RANK_DELAY * 11;
+        assert_eq!(
+            waits.choose(both(Turn::Rank(1)), heard),
+            Choice::Wait(heard + RANK_DELAY)
+        );
     }
 
     #[test]
@@ -465,8 +515,8 @@ mod tests {
         let (urgent, other) = (item(1), item(2));
         let both = || {
             vec![
-                (urgent, SessionRole::Work, 1),
-                (other, SessionRole::Work, 0),
+                (urgent, SessionRole::Work, Turn::Rank(1)),
+                (other, SessionRole::Work, Turn::Rank(0)),
             ]
         };
         let wait = Choice::Wait(seen + RANK_DELAY);
@@ -484,7 +534,10 @@ mod tests {
         assert_eq!(waits.choose(both(), seen), wait);
         waits.end_pass();
         assert_eq!(
-            waits.choose(vec![(other, SessionRole::Work, 0)], seen + RANK_DELAY / 2),
+            waits.choose(
+                vec![(other, SessionRole::Work, Turn::Rank(0))],
+                seen + RANK_DELAY / 2
+            ),
             Choice::Start(other, SessionRole::Work)
         );
         assert_eq!(waits.choose(Vec::new(), seen), Choice::Nothing);
