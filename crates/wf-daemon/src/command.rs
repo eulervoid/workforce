@@ -195,6 +195,21 @@ impl Confinement<'_> {
                 }
             }
         }
+        // What it starts carries the mark, so that what leaves its group is found by it.
+        let owner = crate::processes::Owner {
+            mark: crate::processes::Mark::new_command_run(),
+            // In a session, the command runs where the session does, whose end finds its orphans.
+            place: match self {
+                Confinement::Agents { access, .. } => Some(crate::processes::Place::new(
+                    access.directory,
+                    jiff::Timestamp::now(),
+                    None,
+                )),
+                Confinement::Session { .. } => None,
+            },
+            spared: Vec::new(),
+        };
+        process.envs(owner.mark.variables());
         crate::inherit::only_stdio(&mut process);
         let mut child = process.spawn().map_err(|source| CommandError::Io {
             path: command.command().to_path_buf(),
@@ -217,6 +232,14 @@ impl Confinement<'_> {
         if let Some(group) = group {
             // The group may be gone already; then there is nothing left to stop.
             let _ = nix::sys::signal::killpg(group, nix::sys::signal::Signal::SIGKILL);
+        }
+        let stopped = crate::processes::stop(owner).await;
+        if stopped.running > 0 {
+            tracing::warn!(
+                "{}: {} still running after KILL",
+                command.command().display(),
+                crate::processes::processes(stopped.running)
+            );
         }
         if matches!(outcome, Outcome::TimedOut) {
             child.wait().await.map_err(io_error)?;
@@ -443,6 +466,38 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn what_a_command_daemonized_is_stopped_when_it_exits() {
+        use crate::processes::testing::{SLEEP, running, sleeper_pid};
+        let setup = Setup::new();
+        let pid_file = setup.path("sleeper.pid");
+        let environment = EnvironmentConfig {
+            inherit: Vec::new(),
+            set: BTreeMap::from([(SLEEP.to_string(), pid_file.to_string_lossy().into_owned())]),
+        };
+        // It forks, leaves the command's session and forks again, so that init adopts it, and
+        // the command exits once it runs.
+        let daemonize = "if (fork) { sleep 1 until -e $ENV{WF_TEST_SLEEP}; exit } \
+            POSIX::setsid(); exit if fork; \
+            exec $ARGV[0], '--exact', 'processes::testing::sleeper', '--ignored'";
+        let test_binary = std::env::current_exe().unwrap();
+        let run = setup
+            .run_with(
+                &environment,
+                &[
+                    "perl",
+                    "-MPOSIX",
+                    "-e",
+                    daemonize,
+                    test_binary.to_str().unwrap(),
+                ],
+                Duration::from_secs(30),
+            )
+            .await;
+        assert_eq!(run.outcome, Outcome::Passed, "{}", run.tail);
+        assert!(!running(sleeper_pid(&pid_file)));
+    }
+
+    #[tokio::test]
     async fn only_the_end_of_the_output_is_returned_and_the_log_has_all_of_it() {
         let setup = Setup::new();
         let run = setup.run(&["seq", "1", "100"]).await;
@@ -565,7 +620,7 @@ git cat-file commit HEAD | grep -q gpgsig"#;
         let argv: Vec<String> = [
             "sh",
             "-c",
-            "cat file.txt; echo ${CARGO_TARGET_DIR-unset}; env | grep ^WF_ || echo none",
+            "cat file.txt; echo ${CARGO_TARGET_DIR-unset}; env | grep -E '^WF_(SESSION|WORKFORCE)' || echo none",
         ]
         .map(String::from)
         .to_vec();

@@ -43,16 +43,30 @@ pub(super) async fn run_session(
     daemon.submissions.clear(run.session);
     // A session that is still live was only stopped, as when the daemon halts.
     let session = run.session;
-    let ended = daemon
-        .read(&loaded, move |state| !session_is_live(state, session))
-        .await
-        .unwrap_or(false);
-    if ended {
+    let ended = daemon.snapshot(&loaded).await.ok().and_then(|state| {
+        let ended = state.session(session)?;
+        let times = (ended.started().hlc.wall_ms(), ended.ended()?.at().wall_ms());
+        Some((times, daemon.live_places(&state, run.workforce)))
+    });
+    if let Some(((started_ms, ended_ms), spared)) = ended {
+        // The harness's process group is gone with it; what left the group is not, and nothing
+        // may run on for a session that ended, or write into its directory.
+        let place =
+            crate::processes::Place::new(&run.directory, at_ms(started_ms), Some(at_ms(ended_ms)));
+        crate::processes::stop_session(run.workforce, run.session, place, spared).await;
         daemon
             .discard_session_directory(run.workforce, run.item, run.session, run.role)
             .await;
         daemon.keep_caches_in_budget(run.workforce, &loaded).await;
     }
+}
+
+/// The time `ms` milliseconds after the epoch, as the log gives when a session started or ended.
+pub(super) fn at_ms(ms: u64) -> Timestamp {
+    i64::try_from(ms)
+        .ok()
+        .and_then(|ms| Timestamp::from_millisecond(ms).ok())
+        .unwrap_or(Timestamp::MAX)
 }
 
 /// How often the commits of a running turn are copied into the principal's repository.
