@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use n0_future::boxed::BoxFuture;
 use tokio::sync::{Notify, Semaphore};
 use tokio::task::JoinSet;
+use tracing::instrument::WithSubscriber;
 use wf_core::commits::{AwaitedCommit, Fetching, ItemHeads, NamedCommit};
 use wf_core::id::{ItemId, SessionId, WorkforceId};
 use wf_core::identity::DeviceKey;
@@ -131,20 +132,23 @@ impl Fetches {
         fetcher: &Arc<dyn CommitFetcher>,
     ) {
         let (fetcher, slots) = (Arc::clone(fetcher), Arc::clone(&self.slots));
-        let task = self.running.spawn(async move {
-            let _slot = slots.acquire_owned().await;
-            for device in devices {
-                match fetcher.fetch(device, commit).await {
-                    Ok(()) => return true,
-                    Err(error) => tracing::debug!(
-                        "could not fetch {} from {}: {error}",
-                        commit.short(),
-                        device.fmt_short()
-                    ),
+        let task = self.running.spawn(
+            async move {
+                let _slot = slots.acquire_owned().await;
+                for device in devices {
+                    match fetcher.fetch(device, commit).await {
+                        Ok(()) => return true,
+                        Err(error) => tracing::debug!(
+                            "could not fetch {} from {}: {error}",
+                            commit.short(),
+                            device.fmt_short()
+                        ),
+                    }
                 }
+                false
             }
-            false
-        });
+            .with_current_subscriber(),
+        );
         self.running_commits.insert(task.id(), commit);
     }
 

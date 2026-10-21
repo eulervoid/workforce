@@ -33,6 +33,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use tokio::net::UnixListener;
+use tracing::instrument::WithSubscriber;
 use wf_core::claims::Presence;
 use wf_core::event::{DeviceProfile, Event, EventBody};
 use wf_core::id::{SessionId, WorkforceId};
@@ -53,6 +54,16 @@ pub use storage::{StorageClosed, StorageHandle};
 /// before wf had a bare repository of its own. A daemon that finds it makes the bare repository
 /// from that repository once, and removes the file.
 const LEGACY_REPOSITORY_FILE: &str = "repository";
+
+/// Spawns `task` logging where its caller logs, so that a daemon run with a log of its own, as
+/// each daemon of the tests is, keeps everything its tasks log in it.
+pub(crate) fn spawn<F>(task: F) -> tokio::task::JoinHandle<F::Output>
+where
+    F: Future + Send + 'static,
+    F::Output: Send + 'static,
+{
+    tokio::spawn(task.with_current_subscriber())
+}
 
 #[derive(Debug, thiserror::Error)]
 pub enum DaemonError {
@@ -305,7 +316,7 @@ impl Daemon {
             reviews_found_merging: Default::default(),
         });
         daemon.load_stored_workforces().await;
-        tokio::spawn(rescan(Arc::downgrade(&daemon)));
+        crate::spawn(rescan(Arc::downgrade(&daemon)));
         Ok(daemon)
     }
 
@@ -469,7 +480,7 @@ impl Daemon {
         // The open runs as a task of its own, so a caller that gives up halfway cannot leave a
         // finished open behind that nobody inserts, with the lock released.
         let daemon = Arc::clone(self);
-        tokio::spawn(async move { daemon.open_workforce(id).await })
+        crate::spawn(async move { daemon.open_workforce(id).await })
             .await
             .map_err(|error| DaemonError::Io {
                 path: self.launch.data_dir.store(&id),
@@ -513,7 +524,7 @@ impl Daemon {
         if let Some(node) = self.node.get() {
             self.serve_on(node, id, &storage);
         }
-        tokio::spawn(go_online_when_needed(
+        crate::spawn(go_online_when_needed(
             Arc::downgrade(self),
             id,
             storage.clone(),
@@ -530,17 +541,17 @@ impl Daemon {
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .insert(id, Arc::clone(&entry));
-        tokio::spawn(runner::run_merger(
+        crate::spawn(runner::run_merger(
             Arc::downgrade(self),
             id,
             Arc::clone(&entry),
         ));
-        tokio::spawn(runner::run_target(
+        crate::spawn(runner::run_target(
             Arc::downgrade(self),
             id,
             Arc::clone(&entry),
         ));
-        tokio::spawn(commits::run_commits(
+        crate::spawn(commits::run_commits(
             Arc::downgrade(self),
             id,
             Arc::clone(&entry),
@@ -548,7 +559,7 @@ impl Daemon {
         ));
         let daemon = Arc::clone(self);
         let started = Arc::clone(&entry);
-        tokio::spawn(async move {
+        crate::spawn(async move {
             daemon.resume_sessions(id, &started).await;
             daemon.remove_stray_repositories(id, &started).await;
             daemon.keep_caches_in_budget(id, &started).await;
@@ -626,7 +637,7 @@ impl Daemon {
         let store = self.launch.data_dir.store(&id);
         // A task of its own, like the open in `workforce`, so it finishes whatever the caller does.
         let daemon = Arc::clone(self);
-        tokio::spawn(async move {
+        crate::spawn(async move {
             // Redb allows one open, so the pre-create waits for a concurrent `workforce` open.
             let _opening = daemon.opening.lock(id).await;
             if daemon.loaded_workforce(&id).is_none() {
@@ -750,7 +761,7 @@ impl Daemon {
                         tokio::time::sleep(ACCEPT_RETRY_DELAY).await;
                         continue;
                     };
-                    tokio::spawn(server::handle(Arc::clone(&self), stream));
+                    crate::spawn(server::handle(Arc::clone(&self), stream));
                 }
             }
         }

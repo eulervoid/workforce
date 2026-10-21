@@ -4,10 +4,11 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use serde_json::Value;
+use tracing::instrument::WithSubscriber;
 use wf_core::event::EventBody;
 use wf_core::name::HarnessName;
 use wf_daemon::{Daemon, Launch};
@@ -36,6 +37,49 @@ struct World {
     scripts: BTreeMap<String, PathBuf>,
     /// How the fake agents offer to reopen a session: `resume`, `load` or not at all.
     reopens: &'static str,
+    log: DaemonLog,
+}
+
+/// What the daemons of a world logged, across restarts, so that a wait that times out tells what
+/// the daemon was doing.
+#[derive(Clone, Default)]
+struct DaemonLog(Arc<Mutex<Vec<u8>>>);
+
+/// What [`DaemonLog`] keeps: what `wf daemon start` logs, and what the dispatcher does.
+const LOG_FILTER: &str = "warn,wf_daemon=info,wf_daemon::runner::dispatch=debug,wf_net=info";
+/// How many lines of the daemon log a wait that times out prints.
+const LOG_TAIL: usize = 60;
+
+impl DaemonLog {
+    /// Where a daemon of the world logs: each daemon of the tests runs with a log of its own,
+    /// which its tasks inherit.
+    fn dispatch(&self) -> tracing::Dispatch {
+        let log = self.clone();
+        tracing_subscriber::fmt()
+            .with_env_filter(tracing_subscriber::EnvFilter::new(LOG_FILTER))
+            .with_ansi(false)
+            .with_writer(move || log.clone())
+            .finish()
+            .into()
+    }
+
+    /// The last `lines` lines.
+    fn tail(&self, lines: usize) -> String {
+        let text = String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned();
+        let all: Vec<&str> = text.lines().collect();
+        all[all.len().saturating_sub(lines)..].join("\n")
+    }
+}
+
+impl std::io::Write for DaemonLog {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
 }
 
 /// The fake agents run without Fence, so what they are allowed to do is asked.
@@ -83,6 +127,7 @@ impl World {
             wf,
             scripts,
             reopens: "resume",
+            log: DaemonLog::default(),
         }
     }
 
@@ -92,7 +137,8 @@ impl World {
             let _ = shutdown.send(());
         }
         self.daemon.halt().await;
-        let (daemon, shutdown) = start_daemon(&self.wf, &self.scripts, self.reopens).await;
+        let (daemon, shutdown) =
+            start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
         self.daemon = daemon;
         self.shutdown = Some(shutdown);
     }
@@ -201,7 +247,11 @@ impl World {
             let output = common::output_within(&mut command, POLL_LIMIT);
             transcripts.push_str(&String::from_utf8_lossy(&output.stdout));
         }
-        panic!("timed out after {WAIT_LIMIT:?} waiting for {what}: {sessions:#?} {transcripts}");
+        panic!(
+            "timed out after {WAIT_LIMIT:?} waiting for {what}: {sessions:#?} {transcripts}\n\
+             the end of the daemon log:\n{}",
+            self.log.tail(LOG_TAIL)
+        );
     }
 
     /// Waits until the only session is not live any more and returns it.
@@ -220,7 +270,11 @@ impl World {
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
-        panic!("the session did not end within {WAIT_LIMIT:?}: {sessions:?}");
+        panic!(
+            "the session did not end within {WAIT_LIMIT:?}: {sessions:?}\n\
+             the end of the daemon log:\n{}",
+            self.log.tail(LOG_TAIL)
+        );
     }
 }
 
@@ -234,26 +288,31 @@ struct WorldSetup {
     /// The script of each harness.
     scripts: BTreeMap<String, PathBuf>,
     reopens: &'static str,
+    log: DaemonLog,
 }
 
 impl WorldSetup {
     async fn start_daemon(self) -> World {
-        let (daemon, shutdown) = start_daemon(&self.wf, &self.scripts, self.reopens).await;
+        let (daemon, shutdown) =
+            start_daemon(&self.wf, &self.scripts, self.reopens, &self.log).await;
         World {
             wf: self.wf,
             daemon,
             shutdown: Some(shutdown),
             scripts: self.scripts,
             reopens: self.reopens,
+            log: self.log,
         }
     }
 }
 
-/// Starts a daemon whose harnesses are the fake agent following `scripts`, and serves it.
+/// Starts a daemon whose harnesses are the fake agent following `scripts`, and serves it, logging
+/// to `log`.
 async fn start_daemon(
     wf: &Sandbox,
     scripts: &BTreeMap<String, PathBuf>,
     reopens: &str,
+    log: &DaemonLog,
 ) -> (Arc<Daemon>, tokio::sync::oneshot::Sender<()>) {
     let data = wf_daemon::DataDir::new(wf.data.join("workforce"));
     let device = data.device().unwrap().unwrap();
@@ -274,6 +333,7 @@ async fn start_daemon(
         );
     }
     let socket = wf.root.path().join("run/workforce/daemon.sock");
+    let dispatch = log.dispatch();
     let daemon = Daemon::start(
         Launch {
             data_dir: data.clone(),
@@ -287,12 +347,17 @@ async fn start_daemon(
         },
         device,
     )
+    .with_subscriber(dispatch.clone())
     .await
     .unwrap();
     let (shutdown, signal) = tokio::sync::oneshot::channel::<()>();
-    tokio::spawn(Arc::clone(&daemon).serve(async {
-        let _ = signal.await;
-    }));
+    tokio::spawn(
+        Arc::clone(&daemon)
+            .serve(async {
+                let _ = signal.await;
+            })
+            .with_subscriber(dispatch),
+    );
     for _ in 0..200 {
         if std::os::unix::net::UnixStream::connect(&socket).is_ok() {
             return (daemon, shutdown);

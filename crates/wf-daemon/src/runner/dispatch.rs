@@ -152,16 +152,22 @@ async fn dispatch_loop(
             at.saturating_duration_since(Instant::now())
                 .min(DISPATCH_TICK)
         });
+        tracing::debug!("dispatched: waiting for a change, or {tick:?}");
         let halted = async { strong.until_halted().await };
         tokio::select! {
             changed = heads.changed() => {
                 if changed.is_err() {
                     return;
                 }
+                tracing::debug!("dispatching: the log changed");
             }
-            () = loaded.commits.arrived.notified() => {}
+            () = loaded.commits.arrived.notified() => {
+                tracing::debug!("dispatching: commits arrived");
+            }
             () = halted => return,
-            () = tokio::time::sleep(tick) => {}
+            () = tokio::time::sleep(tick) => {
+                tracing::debug!("dispatching: {tick:?} passed");
+            }
         }
     }
 }

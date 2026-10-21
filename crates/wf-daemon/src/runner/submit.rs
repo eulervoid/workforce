@@ -177,7 +177,7 @@ impl Daemon {
         let (daemon, loaded) = (Arc::clone(self), Arc::clone(loaded));
         let (session, commit) = (submission.session, submission.commit);
         self.submissions.begin(session, commit, move || {
-            tokio::spawn(async move {
+            crate::spawn(async move {
                 let settled = match daemon.check_submission(&loaded, &submission, &checks).await {
                     Ok(settled) => settled,
                     Err(error) => {
