@@ -2738,6 +2738,9 @@ wf review --approve
     // stays live, is told of the file, resolves it, and its work is reviewed again and merges.
     std::fs::write(world.wf.data.join("again"), "").unwrap();
     world
+        .sessions_ended(&["coder submitted", "reviewer reviewed", "coder submitted"])
+        .await;
+    world
         .wait("the item done", |world| {
             world.item(&item)["state"] == "done"
         })
