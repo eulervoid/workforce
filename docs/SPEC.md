@@ -853,8 +853,8 @@ default level; an item can name another (`--recovery`).
   The agent can write all of it and none of `<wf>/git`, so no rule about which
   parts of a `.git` it may write exists (and any sandbox that cannot express per-ref write rules,
   such as a container, works the same way). Later sessions on the item continue in the same
-  repository; it is removed after the merge, when the item is cancelled, or at once when a session
-  submits without commits. A review gets a throwaway repository of the same kind with the commit
+  repository; it is removed once the item is merged, done or cancelled (a session that submits
+  without commits makes it done). A review gets a throwaway repository of the same kind with the commit
   checked out, detached, in `<item>-review-<session>` (an empty `<item>-review-<session>` directory
   for a submission without commits), removed when it ends.
 * **Import.** The daemon copies the agent's commits into `<wf>/git` at the end of
@@ -1099,8 +1099,11 @@ devices, nothing new for the principal to run.
   for a session that lost the claim after a partition. A head of another work session, if neither
   the holder's nor an ancestor of it, is kept under `refs/wf/diverged/<session>` and named in the
   brief of the next work session; the ref goes once its session holds the claim or its head is in
-  the branch. When the item is done or cancelled every device removes the refs and its agent
-  repository (unless one of its sessions still runs there).
+  the branch. When the item is merged, done or cancelled every device removes the refs and its
+  agent repository (unless one of its sessions still runs there). The pass that moves the refs is
+  the only one that removes them, and the imports and starts that move a branch take turns with
+  it: it reads the log only once none is under way, so it never brings back a branch on a reading
+  older than the removal.
 * **Joining.** A device that joins starts with the repository the daemon makes, then fetches the
   branches of the device it joined through, so it has the target and the item branches at once:
   into a repository without branches they are taken as they are, and a branch the repository has

@@ -9,7 +9,7 @@ use wf_core::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::Actor;
 use wf_core::item::{ItemEntry, ItemState};
 use wf_core::lifecycle::{AfterEnd, Closing, Finish, Interruption, SessionEnd};
-use wf_core::session::{CommitId, EndReason, SessionRole};
+use wf_core::session::{CommitId, SessionRole};
 use wf_core::state::State;
 use wf_vcs::{GitCli, Import, ImportMode, VcsError, item_branch, item_repository};
 
@@ -142,7 +142,8 @@ impl Daemon {
                 } else {
                     ImportMode::InProgress
                 };
-                self.import_commits(workforce, &state, item, mode).await?
+                self.import_commits(workforce, loaded, &state, item, mode)
+                    .await?
             }
             SessionEnd::Finish(
                 Finish::Release { .. } | Finish::Reviewed | Finish::Supervised | Finish::Diagnosed,
@@ -153,7 +154,7 @@ impl Daemon {
                 match role {
                     SessionRole::Work => {
                         match self
-                            .import_commits(workforce, &state, item, ImportMode::InProgress)
+                            .import_commits(workforce, loaded, &state, item, ImportMode::InProgress)
                             .await
                         {
                             Ok(head) => head,
@@ -288,9 +289,6 @@ impl Daemon {
             self.discard_session_directory(workforce, item, session, role)
                 .await;
         }
-        if reason == EndReason::Submitted && head.is_none() {
-            self.discard_branch(workforce, item).await;
-        }
         effect?;
         Ok(EndAnswer::Ended)
     }
@@ -418,7 +416,7 @@ impl Daemon {
             return None;
         }
         let head = match self
-            .import_commits(workforce, &state, item, ImportMode::InProgress)
+            .import_commits(workforce, loaded, &state, item, ImportMode::InProgress)
             .await
         {
             Ok(head) => head?,
@@ -432,36 +430,6 @@ impl Daemon {
             }
         };
         (folded.head() != Some(head)).then_some(head)
-    }
-
-    /// Removes the agent's repository and the branch of an item whose work left nothing to keep.
-    async fn discard_branch(&self, workforce: WorkforceId, item: ItemId) {
-        let repository = self.bare_repository(workforce);
-        let branch = item_branch(item);
-        let directory = item_repository(&self.workforce_directory(workforce), item);
-        let removed = blocking(move || {
-            let git = GitCli::open(&repository)?;
-            wf_vcs::remove_agent_repository(&directory)?;
-            git.delete_branch(&branch)
-        })
-        .await;
-        match removed {
-            Ok(Ok(())) => {}
-            Ok(Err(error)) => {
-                tracing::warn!(
-                    "could not remove the branch of #{}: {}",
-                    item.short(),
-                    wf_core::error_chain(&error)
-                );
-            }
-            Err(error) => {
-                tracing::warn!(
-                    "could not remove the branch of #{}: {}",
-                    item.short(),
-                    wf_core::error_chain(&error)
-                );
-            }
-        }
     }
 
     /// The commit the target branch is at in the principal's repository.
@@ -483,6 +451,7 @@ impl Daemon {
     pub(super) async fn import_commits(
         &self,
         workforce: WorkforceId,
+        loaded: &Loaded,
         state: &State,
         item: ItemId,
         mode: ImportMode,
@@ -492,6 +461,7 @@ impl Daemon {
         let agent_repository = item_repository(&self.workforce_directory(workforce), item);
         let branch = item_branch(item);
         let onto = target.clone();
+        let _writing = loaded.item_refs.lock().await;
         let imported = blocking(move || {
             let git = GitCli::open(&repository)?;
             let import = git.import_commits(&agent_repository, item, &onto, mode)?;

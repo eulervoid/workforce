@@ -172,6 +172,15 @@ impl World {
 
     /// Waits until `condition` holds. The 20s are for a daemon that starts a session while the rest
     /// of the suite loads the machine (about 1s alone); the polls and the report count against them.
+    /// Waits until the bare repository has no item branches: the refs pass removes those of
+    /// finished items after the event that finishes them.
+    async fn no_item_branches(&self) {
+        self.wait("the item branches to go", |world| {
+            git_in(&world.bare(), &["branch", "--list", "wf/*"]).is_empty()
+        })
+        .await;
+    }
+
     async fn wait(&self, what: &str, condition: impl Fn(&World) -> bool) {
         let deadline = Instant::now() + WAIT_LIMIT;
         while Instant::now() < deadline {
@@ -602,12 +611,8 @@ wf work submit --note \"all done\"
     let subject = git_in(repository, &["log", "-1", "--format=%s", "main"]);
     assert!(subject.starts_with("Merge #"), "{subject}");
     assert_eq!(git_in(repository, &["status", "--porcelain"]), "");
-    let bare = world.bare();
-    assert!(
-        git_in(&bare, &["branch", "--list", "wf/*"]).is_empty(),
-        "the branch of a merged item is removed"
-    );
-    assert_eq!(git_in(&bare, &["worktree", "list"]).lines().count(), 1);
+    world.no_item_branches().await;
+    assert_eq!(git_in(&world.bare(), &["worktree", "list"]).lines().count(), 1);
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1554,7 +1559,7 @@ async fn submitting_without_commits_finishes_the_item_and_leaves_no_branch() {
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
     assert_eq!(world.item(&item)["state"], "done");
-    assert!(git_in(&world.bare(), &["branch", "--list", "wf/*"]).is_empty());
+    world.no_item_branches().await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -2004,8 +2009,8 @@ async fn work_approved_by_a_reviewer_agent_is_merged() {
 
     world.pull();
     assert!(world.wf.repository.join("hello.txt").is_file());
+    world.no_item_branches().await;
     let bare = world.bare();
-    assert!(git_in(&bare, &["branch", "--list", "wf/*"]).is_empty());
     // The reviewer's checkout goes once its harness has closed.
     world
         .wait("only the bare repository left", |_| {

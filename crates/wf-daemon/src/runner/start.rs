@@ -217,6 +217,7 @@ impl Daemon {
                     let path = directory.clone();
                     let (branch, target, git) =
                         (item_branch(item), setup.target.clone(), git.clone());
+                    let _writing = loaded.item_refs.lock().await;
                     blocking(move || {
                         if let Some(head) = head {
                             git.bring_item_branch_to(item, head)?;

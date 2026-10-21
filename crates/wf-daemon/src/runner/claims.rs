@@ -108,7 +108,7 @@ impl Daemon {
         }
         let item = folded.item();
         let head = self
-            .import_commits(workforce, &state, item, ImportMode::InProgress)
+            .import_commits(workforce, loaded, &state, item, ImportMode::InProgress)
             .await?;
         let Some(head) = head.filter(|head| folded.head() != Some(*head)) else {
             return Ok(());
