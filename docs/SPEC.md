@@ -1455,12 +1455,15 @@ agents with the principal's privileges, and then `allow` is treated as `ask`.
 
 * **Write:** the session's directory (its own repository, whole: `.git` included), temporary files,
   `~/.cache` and the caches and state of agent tools and package managers, the daemon's socket, and
-  `allow_write`. Not `.env*` or key files. The principal's repository is read-only, and so are the
-  repositories of other items.
+  `allow_write`. Not `.env*` or key files (`*.pem`, `*.p12`, `*.pfx`) below any of these, which Fence
+  could not deny everywhere but the cargo home: it writes every deny after every allow, and the last
+  rule wins. The principal's repository is read-only, and so are the repositories of other items.
 * **Cargo:** agents get `CARGO_HOME=<data>/cargo`, shared by the agents of the machine; the
   principal's `~/.cargo` is not writable, as cargo runs the `build.rs` of its registry with the
   principal's privileges at the principal's next build. The principal's `~/.cargo/config.toml` does
-  not apply to agents.
+  not apply to agents. The cargo home holds no keys of the principal, so agents may write key files
+  there: cargo unpacks crates that ship `.pem` test fixtures whole. A crate cargo could not unpack
+  whole gets no `.cargo-ok`, and cargo unpacks it again at the next build that needs it.
 * **Network:** model APIs, git hosts and package registries, plus `allow_domains`; cloud metadata and
   telemetry are denied. Local binding and outbound connections to local ports stay allowed, as
   tests bind and reach local ports; a local service that trusts any local caller is reachable from

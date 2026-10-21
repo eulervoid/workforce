@@ -59,7 +59,8 @@ changes git's config or the config of a harness (settings, hooks, commands, agen
 plugins, MCP servers): those run the next time *you* run git or the harness, outside the sandbox.
 For the same reason agents build with a cargo home of their own,
 `~/.local/share/workforce/cargo`, and do not touch the registry in your `~/.cargo`; your
-`~/.cargo/config.toml` does not apply to them. Some gaps remain: agents can write `~/.claude.json`,
+`~/.cargo/config.toml` does not apply to them. Agents never write `.env*` or key files (`*.pem`,
+`*.p12`, `*.pfx`), except in that cargo home, where crates ship them as test fixtures. Some gaps remain: agents can write `~/.claude.json`,
 where Claude Code keeps its state and its user-scope MCP servers in one file, scripts your Claude
 Code settings point to, and caches such as `~/.npm/_npx` and `~/.bun` (see SPEC §13). Because the
 sandbox holds agents in, an agent with `--permissions allow` (the default) is allowed what it asks
