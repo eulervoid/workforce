@@ -279,6 +279,9 @@ pub struct Daemon {
     cache_usage: Mutex<BTreeMap<WorkforceId, caches::CacheUsage>>,
     /// For the tests: the next write of an event this matches fails once.
     failing_write: Mutex<Option<WriteMatcher>>,
+    /// For the tests: changes when [`Daemon::backdate_presence`] does, which wakes the
+    /// dispatchers, as their tick would have in the time it stands for.
+    backdated: tokio::sync::watch::Sender<()>,
     /// For the tests: runs once, after the next merge found the target at the tip and before it
     /// reads the target to merge onto.
     #[cfg(test)]
@@ -315,6 +318,7 @@ impl Daemon {
             faults: faults::Faults::default(),
             cache_usage: Mutex::new(BTreeMap::new()),
             failing_write: Mutex::new(None),
+            backdated: tokio::sync::watch::Sender::new(()),
             #[cfg(test)]
             before_merge_tree: Mutex::new(None),
             reviews_found_merging: Default::default(),
@@ -351,8 +355,8 @@ impl Daemon {
         self.faults.note_space(what, error)
     }
 
-    /// Has this daemon start, and hear what it heard, `by` earlier. For the tests, which cannot
-    /// wait out a lease.
+    /// Has this daemon start, and hear what it heard, `by` earlier, and look for what to start
+    /// again. For the tests, which cannot wait out a lease.
     #[doc(hidden)]
     pub fn backdate_presence(&self, by: std::time::Duration) {
         let by_ms = u64::try_from(by.as_millis()).unwrap_or(u64::MAX);
@@ -366,6 +370,8 @@ impl Daemon {
                 .heard_ms()
                 .map(|(device, at)| (device, at.saturating_sub(by_ms))),
         );
+        drop(presence);
+        self.backdated.send_replace(());
     }
 
     /// Has the next write of an event that `matching` accepts fail once, as a write fails on a
