@@ -192,7 +192,7 @@ pub struct DaemonLog(std::sync::Arc<std::sync::Mutex<Vec<u8>>>);
 
 /// What [`DaemonLog`] keeps: what `wf daemon start` logs, what the dispatcher does, and how each
 /// session's harness gets on.
-const LOG_FILTER: &str = "warn,wf_daemon=info,wf_daemon::runner::dispatch=debug,wf_daemon::runner::drive=debug,wf_net=info";
+const LOG_FILTER: &str = "warn,wf_daemon=info,wf_daemon::runner::dispatch=debug,wf_daemon::runner::drive=debug,wf_daemon::runner::resume=debug,wf_net=info";
 /// How many lines of the daemon log a wait that times out prints.
 pub const LOG_TAIL: usize = 60;
 
@@ -212,6 +212,13 @@ impl DaemonLog {
     /// Whether any of it holds `text`.
     pub fn contains(&self, text: &str) -> bool {
         String::from_utf8_lossy(&self.0.lock().unwrap()).contains(text)
+    }
+
+    /// How often it holds `text`.
+    pub fn count(&self, text: &str) -> usize {
+        String::from_utf8_lossy(&self.0.lock().unwrap())
+            .matches(text)
+            .count()
     }
 
     /// The last `lines` lines.

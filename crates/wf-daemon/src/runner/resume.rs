@@ -159,6 +159,7 @@ impl Daemon {
             };
             crate::processes::stop_session(workforce, session, place, spared.clone()).await;
         }
+        tracing::debug!("workforce {workforce}: stopped what ended sessions left running");
     }
 
     /// Where the sessions of this device in `workforce` that are live run, and since when.

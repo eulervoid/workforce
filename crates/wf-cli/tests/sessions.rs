@@ -4249,6 +4249,19 @@ impl Orphans {
             .parse()
             .unwrap()
     }
+
+    /// Waits until the orphan named `name` has ended and been reaped, and forgets it, so that the
+    /// drop does not kill a process that was given its pid since.
+    async fn wait_ended(&self, world: &World, name: &str) {
+        let pid = self.pid(world, name).await;
+        world
+            .wait(&format!("{name} to be stopped"), |_| {
+                // SAFETY: signal 0 only asks whether the process is there.
+                unsafe { libc::kill(pid, 0) != 0 }
+            })
+            .await;
+        std::fs::remove_file(self.directory.join(format!("{name}.pid"))).unwrap();
+    }
 }
 
 impl Drop for Orphans {
@@ -4306,10 +4319,8 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
 
     let item = world.wf.add(&["--title", "Leaves sleep running"]);
     start_session(&world, &item);
-    let (inside, outside) = (
-        orphans.pid(&world, "inside").await,
-        orphans.pid(&world, "outside").await,
-    );
+    orphans.pid(&world, "inside").await;
+    let outside = orphans.pid(&world, "outside").await;
     world
         .wait("the session to be released", |world| {
             statuses(world)
@@ -4317,12 +4328,7 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
                 .any(|status| status.ends_with("released"))
         })
         .await;
-    world
-        .wait("the orphan in its directory to be stopped", |_| {
-            // SAFETY: signal 0 only asks whether the process is there.
-            unsafe { libc::kill(inside, 0) != 0 }
-        })
-        .await;
+    orphans.wait_ended(&world, "inside").await;
     world
         .wait("the daemon to say what it stopped", |world| {
             world.log.contains("stopped 1 process it left running")
@@ -4337,9 +4343,19 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
         cfg!(target_os = "macos"),
         "an orphan of an Apple program outside the session's directory"
     );
+    if !cfg!(target_os = "macos") {
+        orphans.wait_ended(&world, "outside").await;
+    }
 
+    let swept = "stopped what ended sessions left running";
+    let sweeps = world.log.count(swept);
     world.restart().await;
-    tokio::time::sleep(Duration::from_millis(1_000)).await;
+    world
+        .wait(
+            "the restarted daemon to stop what ended sessions left",
+            |world| world.log.count(swept) > sweeps,
+        )
+        .await;
     assert!(running(kept).await, "a resumed session keeps its orphan");
     let live = world
         .sessions()
@@ -4349,12 +4365,7 @@ async fn a_session_stops_what_it_left_running_at_its_end_and_not_a_live_sessions
     world
         .wf
         .run(&["session", "stop", short(live["id"].as_str().unwrap())]);
-    world
-        .wait("the stopped session's orphan to be stopped", |_| {
-            // SAFETY: signal 0 only asks whether the process is there.
-            unsafe { libc::kill(kept, 0) != 0 }
-        })
-        .await;
+    orphans.wait_ended(&world, "kept").await;
     drop(world);
 }
 
@@ -4376,12 +4387,7 @@ async fn a_starting_daemon_stops_what_a_session_that_ended_meanwhile_left_runnin
     std::fs::remove_file(agent_session_record_path(&world.wf.data)).unwrap();
     world.start_again().await;
     world.sessions_ended(&["coder interrupted"]).await;
-    world
-        .wait("the ended session's orphan to be stopped", |_| {
-            // SAFETY: signal 0 only asks whether the process is there.
-            unsafe { libc::kill(left, 0) != 0 }
-        })
-        .await;
+    orphans.wait_ended(&world, "left").await;
     world
         .wait("the daemon to say what it stopped", |world| {
             world.log.contains("stopped 1 process it left running")
