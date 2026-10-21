@@ -1,0 +1,10 @@
+---
+source: crates/wf-cli/src/dashboard/tests/now.rs
+expression: shown
+---
+"▎⧗ #aibaea blocker from coder                             r "
+  bar:  Style::new().white().bg(Color::Rgb(30, 80, 160)).underline_color(Color::Reset)
+  text: Style::new().cyan().bg(Color::Rgb(30, 80, 160)).underline_color(Color::Reset).bold()
+"▎  \"Should the span live on ParseError or Location?\"        "
+  bar:  Style::new().white().bg(Color::Rgb(30, 80, 160)).underline_color(Color::Reset)
+  text: Style::new().fg(Color::Reset).bg(Color::Rgb(30, 80, 160)).underline_color(Color::Reset).dim()
