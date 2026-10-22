@@ -6103,6 +6103,7 @@ dependencies = [
  "agent-client-protocol",
  "humantime",
  "jiff",
+ "libc",
  "serde",
  "serde_json",
  "tempfile",

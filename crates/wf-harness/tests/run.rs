@@ -279,51 +279,28 @@ async fn an_agent_that_cannot_reopen_sessions_says_so() {
     assert!(matches!(reopen("").await, Err(Error::CannotResume)));
 }
 
-/// While other threads run short commands with piped output, which on macOS create pipes that
-/// are not close-on-exec for a moment, every agent started holds only stdin, stdout and stderr.
-#[tokio::test(flavor = "multi_thread")]
-async fn an_agent_inherits_no_descriptor_while_other_threads_create_pipes() {
+/// On macOS std creates pipes and sockets close-on-exec in two steps, so another thread can spawn
+/// a process in between that inherits one: an agent holds only stdin, stdout and stderr, whatever
+/// wf has open without close-on-exec when it starts.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn an_agent_inherits_no_descriptor_of_wf() {
+    use std::os::fd::FromRawFd;
+
+    let mut ends = [0; 2];
+    // SAFETY: `pipe` writes two descriptors into the array it is given.
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    // SAFETY: the descriptors were just opened and are owned here alone.
+    let _ends = ends.map(|end| unsafe { std::os::fd::OwnedFd::from_raw_fd(end) });
     let directory = tempfile::tempdir().unwrap();
-    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
-    let commands: Vec<_> = (0..4)
-        .map(|_| {
-            let stop = Arc::clone(&stop);
-            std::thread::spawn(move || {
-                while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                    std::process::Command::new("true").output().unwrap();
-                }
-            })
-        })
-        .collect();
-    // Many starts give the race many chances; a few at a time keep the open files well under a
-    // default limit of 256.
-    let mut held = Vec::new();
-    for batch in (0..100).collect::<Vec<_>>().chunks(8) {
-        let mut agents = tokio::task::JoinSet::new();
-        for number in batch {
-            let descriptors = directory.path().join(format!("agent-{number}"));
-            let agent =
-                agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
-                    .env("FAKE_AGENT_DESCRIPTORS", descriptors.to_string_lossy());
-            let directory = directory.path().to_path_buf();
-            agents.spawn(async move {
-                wf_harness::models(agent, directory).await.unwrap();
-                std::fs::read_to_string(descriptors).unwrap()
-            });
-        }
-        held.extend(agents.join_all().await);
-    }
-    stop.store(true, std::sync::atomic::Ordering::Relaxed);
-    for command in commands {
-        command.join().unwrap();
-    }
-    for descriptors in held {
-        let foreign: Vec<_> = descriptors
-            .lines()
-            .filter(|descriptor| descriptor.parse::<u32>().unwrap() > 2)
-            .collect();
-        assert!(foreign.is_empty(), "an agent holds {foreign:?}");
-    }
+    let held = directory.path().join("descriptors");
+    let agent = agent_client_protocol::AcpAgentConfig::new(env!("CARGO_BIN_EXE_fake-acp-agent"))
+        .env("FAKE_AGENT_DESCRIPTORS", held.to_string_lossy());
+    wf_harness::models(agent, directory.path().to_path_buf())
+        .await
+        .unwrap();
+    let descriptors = std::fs::read_to_string(held).unwrap();
+    assert_eq!(descriptors.lines().collect::<Vec<_>>(), ["0", "1", "2"]);
 }
 
 /// A transcript on a full disk.
