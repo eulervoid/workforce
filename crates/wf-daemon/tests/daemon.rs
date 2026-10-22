@@ -87,12 +87,7 @@ async fn start_with(prepare: impl FnOnce(&Path)) -> Running {
     let task = tokio::spawn(Arc::clone(&daemon).serve(async {
         let _ = signal.await;
     }));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    wait_for_socket(&socket).await;
     Running {
         _directory: directory,
         fixture,
@@ -113,6 +108,19 @@ fn connect(socket: &Path) -> DaemonClient {
     DaemonClient::connect(socket, token)
         .unwrap()
         .expect("a daemon")
+}
+
+/// Waits until the daemon listens on `socket`.
+async fn wait_for_socket(socket: &std::path::Path) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !socket.exists() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the daemon listens on {}",
+            socket.display()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
 }
 
 #[tokio::test]
@@ -363,12 +371,7 @@ async fn start_peer_as(
     .await
     .unwrap();
     tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    wait_for_socket(&socket).await;
     (directory, daemon, socket)
 }
 
@@ -565,12 +568,7 @@ async fn start_empty(
     .await
     .unwrap();
     tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    wait_for_socket(&socket).await;
     (directory, daemon, socket)
 }
 
@@ -681,12 +679,7 @@ async fn a_log_longer_than_a_page_arrives_whole_and_in_order() {
     .await
     .unwrap();
     tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
-    for _ in 0..100 {
-        if socket.exists() {
-            break;
-        }
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-    }
+    wait_for_socket(&socket).await;
     let workforce = fixture.workforce();
     let events = blocking(move || connect(&socket).events(workforce).unwrap()).await;
     assert_eq!(events, expected);
@@ -886,14 +879,17 @@ async fn a_device_reads_the_committed_work_of_a_session_on_another() {
     let head = give_work(vm_dir.path(), workforce, item, &repository);
 
     // The laptop knows the session once the vm's events arrive.
+    let mut known = false;
     for _ in 0..200 {
         let socket = laptop_socket.clone();
         let state = blocking(move || connect(&socket).state(workforce).unwrap()).await;
         if state.holder(item, &SessionRole::Work).is_some() {
+            known = true;
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(100)).await;
     }
+    assert!(known, "the laptop learns of the vm's session");
 
     let LiveDiff::Answer(DiffAnswer::Work(work)) =
         live_diff(&laptop_socket, workforce, item, None).await
