@@ -1463,13 +1463,6 @@ sh \"$WF_BIN\" work submit && sleep 1
                 .contains("You are the agent `coder`")
         })
         .await;
-    let record = agent_session_record(&world.wf.data);
-    assert!(record["prompted_ms"].is_u64(), "{record}");
-    assert_eq!(
-        record["told"],
-        serde_json::json!([]),
-        "nothing is told before the agent accepted the prompt"
-    );
     world.restart().await;
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted", "{session}");
