@@ -230,22 +230,44 @@ fn assert_converged(states: &[State]) {
     }
 }
 
+fn every_peer_converges(peers: usize, operations: Vec<Op>) {
+    runtime().block_on(async {
+        let mut cluster = Cluster::new(peers);
+        for operation in operations {
+            cluster.run(operation).await;
+        }
+        cluster.reconnect_everyone().await;
+        assert_converged(&cluster.states());
+    });
+}
+
 proptest! {
-    #![proptest_config(ProptestConfig { cases: 1000, ..ProptestConfig::default() })]
+    // A fixed seed keeps the default run reproducible; the wide run below explores.
+    #![proptest_config(ProptestConfig {
+        cases: 128,
+        rng_seed: proptest::test_runner::RngSeed::Fixed(0x5EED),
+        ..ProptestConfig::default()
+    })]
 
     #[test]
     fn every_peer_ends_with_the_same_state(
         peers in 3usize..=MAX_PEERS,
         operations in prop::collection::vec(op(), 1..40),
     ) {
-        runtime().block_on(async {
-            let mut cluster = Cluster::new(peers);
-            for operation in operations {
-                cluster.run(operation).await;
-            }
-            cluster.reconnect_everyone().await;
-            assert_converged(&cluster.states());
-        });
+        every_peer_converges(peers, operations);
+    }
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: 1000, ..ProptestConfig::default() })]
+
+    #[test]
+    #[ignore = "slow; run in release mode"]
+    fn every_peer_ends_with_the_same_state_across_many_random_runs(
+        peers in 3usize..=MAX_PEERS,
+        operations in prop::collection::vec(op(), 1..40),
+    ) {
+        every_peer_converges(peers, operations);
     }
 }
 
