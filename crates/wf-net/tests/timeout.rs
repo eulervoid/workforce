@@ -17,7 +17,7 @@ fn replica(fixture: &Fixture) -> SharedReplica<RedbStore> {
     SharedReplica::new(replica)
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_initiator_gives_up_on_a_peer_that_goes_silent() {
     let fixture = Fixture::new(1);
     let log = replica(&fixture);
@@ -29,7 +29,7 @@ async fn an_initiator_gives_up_on_a_peer_that_goes_silent() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_responder_gives_up_on_a_peer_that_goes_silent() {
     let fixture = Fixture::new(1);
     let log = replica(&fixture);

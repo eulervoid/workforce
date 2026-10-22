@@ -284,7 +284,7 @@ mod tests {
         assert!(matches!(result, Err(FrameError::TooLarge(_))), "{result:?}");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn the_deadline_is_for_each_piece_of_a_frame_not_the_whole() {
         let idle = Duration::from_millis(200);
         let message = vec![7u8; 3 * CHUNK_LEN];
@@ -313,7 +313,7 @@ mod tests {
         assert!(matches!(result, Err(FrameError::TimedOut)), "{result:?}");
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_write_to_a_peer_that_reads_nothing_times_out() {
         let (mut left, _unread) = tokio::io::duplex(1024);
         let result =

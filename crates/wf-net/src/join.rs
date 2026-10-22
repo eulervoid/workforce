@@ -229,7 +229,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_member_that_never_replies_to_the_request_is_given_up_on() {
         let request = JoinRequest {
             workforce: WorkforceId::from(EventId::of(b"workforce")),

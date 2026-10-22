@@ -21,4 +21,5 @@ tokio.workspace = true
 wf-store.workspace = true
 wf-core = { workspace = true, features = ["testing"] }
 proptest.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 tempfile.workspace = true

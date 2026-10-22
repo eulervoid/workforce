@@ -115,7 +115,7 @@ async fn work_above_the_largest_answer_is_told_apart_from_a_broken_connection() 
     assert_eq!(ask(&source, None).await, DiffAnswer::TooLarge);
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn an_initiator_gives_up_on_a_peer_that_goes_silent() {
     let fixture = Fixture::new(1);
     let (left, _silent) = tokio::io::duplex(8192);
@@ -131,7 +131,7 @@ async fn an_initiator_gives_up_on_a_peer_that_goes_silent() {
     );
 }
 
-#[tokio::test]
+#[tokio::test(start_paused = true)]
 async fn a_responder_gives_up_on_a_peer_that_does_not_read() {
     let fixture = Fixture::new(1);
     // A buffer of one byte that nobody drains: the answer cannot be written.
