@@ -36,6 +36,14 @@ pub struct RedbStore {
 
 impl RedbStore {
     pub fn open(path: impl AsRef<Path>) -> Result<Self, StoreError> {
+        Self::open_waiting(path, || {})
+    }
+
+    /// [`Self::open`], calling `on_locked` each time it finds the lock held, before it waits.
+    fn open_waiting(
+        path: impl AsRef<Path>,
+        mut on_locked: impl FnMut(),
+    ) -> Result<Self, StoreError> {
         let mut wait = LOCK_FIRST_WAIT;
         for attempt in 1..=LOCK_ATTEMPTS {
             match Database::create(path.as_ref()) {
@@ -45,6 +53,7 @@ impl RedbStore {
                     return Ok(store);
                 }
                 Err(DatabaseError::DatabaseAlreadyOpen) if attempt < LOCK_ATTEMPTS => {
+                    on_locked();
                     sleep(wait);
                     wait = (wait * 2).min(Duration::from_millis(400));
                 }
@@ -197,5 +206,28 @@ impl EventStore for RedbStore {
         }
         transaction.commit()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_second_handle_waits_for_the_lock() {
+        let directory = tempfile::TempDir::new().unwrap();
+        let path = directory.path().join("store.redb");
+        let first = RedbStore::open(&path).unwrap();
+        let (found_locked, locked) = std::sync::mpsc::channel();
+        // Released once the second open found it held, or once that open returned.
+        let holder = std::thread::spawn(move || {
+            let _ = locked.recv();
+            drop(first);
+        });
+        let second = RedbStore::open_waiting(&path, move || {
+            let _ = found_locked.send(());
+        });
+        holder.join().unwrap();
+        assert!(second.is_ok(), "the retry outlasts a short-lived writer");
     }
 }

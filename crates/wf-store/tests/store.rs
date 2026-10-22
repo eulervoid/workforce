@@ -293,20 +293,6 @@ fn invalid_events_are_refused_and_not_stored() {
 }
 
 #[test]
-fn a_second_handle_waits_for_the_lock() {
-    let directory = TempDir::new().unwrap();
-    let path = directory.path().join("store.redb");
-    let first = RedbStore::open(&path).unwrap();
-    let holder = std::thread::spawn(move || {
-        std::thread::sleep(std::time::Duration::from_millis(150));
-        drop(first);
-    });
-    let second = RedbStore::open(&path);
-    holder.join().unwrap();
-    assert!(second.is_ok(), "the retry outlasts a short-lived writer");
-}
-
-#[test]
 fn stored_events_decode_to_what_was_written() {
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);
