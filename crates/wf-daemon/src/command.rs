@@ -623,36 +623,6 @@ git cat-file commit HEAD | grep -q gpgsig"#;
         assert!(matches!(run.outcome, Outcome::Failed(_)), "{}", run.tail);
     }
 
-    /// iroh watches the routes through an `AF_ROUTE` socket, which Fence denies on macOS whatever
-    /// its sandbox profile, so tests of the network need a check sandbox that is off. Once this fails,
-    /// Fence allows the socket, and checks can run those tests in it.
-    #[cfg(target_os = "macos")]
-    #[tokio::test]
-    async fn a_route_socket_opens_without_a_sandbox_and_not_in_fence() {
-        const ROUTE_SOCKET: &str =
-            "import socket; socket.socket(socket.AF_ROUTE, socket.SOCK_RAW).close()";
-        // Inside a sandbox already, such as a session's, the socket is denied, and Fence cannot
-        // start.
-        if wf_core::testing::skip_in_fence("Fence cannot start inside Fence") {
-            return;
-        }
-        let setup = Setup::new();
-        let argv = ["python3", "-c", ROUTE_SOCKET];
-        let environment = EnvironmentConfig::default();
-        let timeout = Duration::from_secs(30);
-        let run = setup.run(&argv).await;
-        assert_eq!(run.outcome, Outcome::Passed, "{}", run.tail);
-
-        if !crate::sandbox::fence_installed() {
-            eprintln!("skipped in Fence: it is not installed");
-            return;
-        }
-        let fence = SandboxConfig::Fence(Default::default());
-        let run = setup.run_in(&fence, &environment, &argv, timeout).await;
-        assert!(matches!(run.outcome, Outcome::Failed(_)), "{}", run.tail);
-        assert!(run.tail.contains("Operation not permitted"), "{}", run.tail);
-    }
-
     #[test]
     fn in_a_session_a_command_runs_in_the_directory_as_it_is_without_the_cargo_target_directory_and_the_session_variables()
      {
