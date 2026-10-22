@@ -18,6 +18,8 @@ use wf_store::{RedbStore, Replica};
 use wf_vcs::GitCli;
 use wf_vcs::testing::{TestRepository, git_in};
 
+mod common;
+
 struct Device {
     directory: TempDir,
     daemon: Arc<Daemon>,
@@ -52,12 +54,7 @@ impl Device {
         .await
         .unwrap();
         tokio::spawn(Arc::clone(&daemon).serve(std::future::pending()));
-        for _ in 0..100 {
-            if socket.exists() {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(20)).await;
-        }
+        common::serving(&socket).await;
         Self {
             directory,
             daemon,
