@@ -42,4 +42,5 @@ sysinfo = { version = "0.37", default-features = false, features = ["system"] }
 wf-core = { workspace = true, features = ["testing"] }
 wf-vcs = { workspace = true, features = ["testing"] }
 tempfile.workspace = true
+tokio = { workspace = true, features = ["test-util"] }
 globset = "0.4.20"

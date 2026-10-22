@@ -588,7 +588,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_slow_merge_holds_up_only_the_merges_behind_it() {
         let queue = Arc::new(MergeQueue::default());
         let release = Arc::new(Notify::new());

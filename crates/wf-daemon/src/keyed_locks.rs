@@ -69,7 +69,7 @@ impl<K: Ord + Copy> Drop for KeyedGuard<K> {
 mod tests {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn keys_do_not_wait_on_each_other_and_locks_are_dropped() {
         let locks = Arc::new(KeyedLocks::<u8>::default());
         let first = locks.lock(1).await;
@@ -80,7 +80,7 @@ mod tests {
         assert!(locks.locks.lock().unwrap().is_empty());
     }
 
-    #[tokio::test]
+    #[tokio::test(start_paused = true)]
     async fn a_cancelled_waiter_leaves_no_lock_behind() {
         let locks = Arc::new(KeyedLocks::<u8>::default());
         let holder = locks.lock(1).await;
