@@ -540,12 +540,17 @@ fn causal_order(events: &[Event]) -> Vec<Event> {
     sorted
 }
 
-/// `PROPTEST_CASES=10000 cargo test --release` for the exit-criterion run.
-fn cases() -> u32 {
-    std::env::var("PROPTEST_CASES")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(128)
+/// `PROPTEST_CASES=10000 cargo test --release` for the exit-criterion run. The seed is fixed
+/// so that a default run is reproducible; `PROPTEST_RNG_SEED=<n>` explores other histories.
+fn config() -> ProptestConfig {
+    let mut config = ProptestConfig::default();
+    if std::env::var_os("PROPTEST_CASES").is_none() {
+        config.cases = 128;
+    }
+    if std::env::var_os("PROPTEST_RNG_SEED").is_none() {
+        config.rng_seed = proptest::test_runner::RngSeed::Fixed(0x5EED);
+    }
+    config
 }
 
 fn operations() -> impl Strategy<Value = Vec<(u8, u8, u8, u8)>> {
@@ -553,7 +558,7 @@ fn operations() -> impl Strategy<Value = Vec<(u8, u8, u8, u8)>> {
 }
 
 proptest! {
-    #![proptest_config(ProptestConfig::with_cases(cases()))]
+    #![proptest_config(config())]
 
     #[test]
     fn every_permutation_folds_to_the_same_state(operations in operations(), seeds in prop::array::uniform3(any::<u64>())) {
