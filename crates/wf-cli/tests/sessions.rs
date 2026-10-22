@@ -254,7 +254,9 @@ impl World {
         .await;
     }
 
-    /// Waits until the only session is not live any more and returns it.
+    /// Waits until the only session is not live any more and returns it. The daemon moves the
+    /// item before it writes the end, so the item is where the end leaves it by then; only a merge
+    /// comes after.
     async fn ended_session(&self) -> Value {
         let deadline = Instant::now() + WAIT_LIMIT;
         let mut sessions = Vec::new();
@@ -264,9 +266,7 @@ impl World {
                 && session["status"] != "live"
                 && session["status"] != "parked"
             {
-                // The item moves after the end, so give that a moment.
-                tokio::time::sleep(Duration::from_millis(300)).await;
-                return self.sessions_within(POLL_LIMIT)[0].clone();
+                return session.clone();
             }
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
