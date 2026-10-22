@@ -459,10 +459,27 @@ async fn start_fake_agent(hang: bool) -> (tempfile::TempDir, Conversation) {
 
 #[tokio::test]
 async fn a_cancel_during_a_turn_ends_it() {
-    let (_directory, mut conversation) = start_fake_agent(true).await;
+    let directory = tempfile::tempdir().unwrap();
+    let transcript = SharedBuffer::default();
+    let mut conversation = Conversation::start(Launch {
+        agent: scripted_agent(&directory, "hang"),
+        opening: Opening::New,
+        model: None,
+        directory: directory.path().to_path_buf(),
+        permissions: Arc::new(Permission::Allow),
+        transcript: transcript.clone(),
+        silence_limit: SILENCE_LIMIT,
+    })
+    .await
+    .unwrap();
     let cancel = conversation.cancel();
+    // Once the agent tells it got the prompt, the turn runs.
     let canceller = tokio::spawn(async move {
-        tokio::time::sleep(Duration::from_millis(500)).await;
+        let got_prompt =
+            || String::from_utf8_lossy(&transcript.0.lock().unwrap()).contains("got a prompt");
+        while !got_prompt() {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
         cancel.cancel();
     });
     let stop_reason = tokio::time::timeout(Duration::from_secs(10), conversation.prompt("hang"))
