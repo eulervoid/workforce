@@ -20,7 +20,9 @@ pub struct Sandbox {
 }
 
 /// A session's own identity, which `cargo test` inherits inside a session, must not reach the
-/// sandboxed workforce: `Workspace::open` in the test process reads it as well as `wf` does.
+/// sandboxed workforce: `Workspace::open` in the test process reads it as well as `wf` does. Nor
+/// may the machine's runtime directory, where `Workspace::open` would find the machine's daemon;
+/// every `wf` the sandbox runs is given a runtime directory of its own.
 fn clear_session_identity() {
     static CLEARED: std::sync::Once = std::sync::Once::new();
     CLEARED.call_once(|| {
@@ -29,6 +31,7 @@ fn clear_session_identity() {
             "WF_SESSION_TOKEN",
             "WF_WORKFORCE",
             "GIT_CONFIG_COUNT",
+            "XDG_RUNTIME_DIR",
         ] {
             // SAFETY: runs once, before the test that called it spawns or reads anything.
             unsafe { std::env::remove_var(variable) };

@@ -836,24 +836,31 @@ fn a_workspace_reads_again_after_it_reconnects_to_a_restarted_daemon() {
     use wf_cli::workspace::{Workspace, connection_broke};
     let sandbox = Sandbox::new();
     sandbox.run(&["init", "--name", "demo"]);
-    let first = sandbox.start_daemon();
-    // SAFETY: the only test of this binary that reads the environment of a session, which a
-    // connection in a session would present.
-    unsafe {
-        std::env::set_var("XDG_RUNTIME_DIR", sandbox.root.path().join("run"));
-        for variable in ["WF_SESSION", "WF_SESSION_TOKEN", "WF_WORKFORCE"] {
-            std::env::remove_var(variable);
-        }
-    }
+    // Without a runtime directory, which the sandbox removed from this process, the workspace
+    // here and `wf` both find the daemon's socket in the data directory.
+    let without_runtime_directory = |args: &[&str]| {
+        let mut command = sandbox.command(args);
+        command.env_remove("XDG_RUNTIME_DIR");
+        command
+    };
     let data = wf_daemon::DataDir::new(sandbox.data.join("workforce"));
+    let socket = data.daemon_socket();
+    let daemon_run = || without_runtime_directory(&["daemon", "run", "--no-network"]);
+    let first = RunningDaemon::start(daemon_run(), &socket);
     let mut workspace = Workspace::open(data, &sandbox.repository, false).unwrap();
     let known = workspace.events().unwrap().len() as u64;
     first.stop();
     let error = workspace.events_since(known).unwrap_err();
     assert!(connection_broke(&error), "{error:#}");
-    let _second = sandbox.start_daemon();
+    let _second = RunningDaemon::start(daemon_run(), &socket);
     workspace.reconnect().unwrap();
-    sandbox.add(&["--title", "Written after the restart"]);
+    let added = common::output(&mut without_runtime_directory(&[
+        "item",
+        "add",
+        "--title",
+        "Written after the restart",
+    ]));
+    assert!(added.status.success(), "{added:?}");
     assert_eq!(workspace.events_since(known).unwrap().len(), 1);
 }
 
