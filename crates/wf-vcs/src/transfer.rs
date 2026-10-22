@@ -199,6 +199,9 @@ mod tests {
     /// two threads: what a daemon does over iroh.
     struct Piped {
         directory: tempfile::TempDir,
+        upload_pack: std::process::Child,
+        /// Each thread holds a sender, so this disconnects once both have ended.
+        ended: std::sync::mpsc::Receiver<()>,
         threads: Vec<std::thread::JoinHandle<()>>,
     }
 
@@ -218,24 +221,31 @@ mod tests {
                         .success()
                 );
             }
-            let mut child = server.spawn_upload_pack().unwrap();
-            let mut input = child.stdin.take().unwrap();
-            let mut output = child.stdout.take().unwrap();
-            let into_process = std::thread::spawn(move || {
-                let mut requests = std::fs::File::open(requests).unwrap();
-                let _ = std::io::copy(&mut requests, &mut input);
+            let mut upload_pack = server.spawn_upload_pack().unwrap();
+            let mut input = upload_pack.stdin.take().unwrap();
+            let mut output = upload_pack.stdout.take().unwrap();
+            let (ended_sender, ended) = std::sync::mpsc::channel();
+            let into_process = std::thread::spawn({
+                let ended = ended_sender.clone();
+                move || {
+                    let _ended = ended;
+                    let mut requests = std::fs::File::open(requests).unwrap();
+                    let _ = std::io::copy(&mut requests, &mut input);
+                }
             });
             let from_process = std::thread::spawn(move || {
+                let _ended = ended_sender;
                 let mut answers = std::fs::OpenOptions::new()
                     .write(true)
                     .open(answers)
                     .unwrap();
                 let _ = std::io::copy(&mut output, &mut answers);
                 answers.flush().unwrap();
-                let _ = child.wait();
             });
             Self {
                 directory,
+                upload_pack,
+                ended,
                 threads: vec![into_process, from_process],
             }
         }
@@ -256,9 +266,57 @@ mod tests {
             }
         }
 
-        fn finish(self) {
-            for thread in self.threads {
+        fn finish(mut self) {
+            let ended = self.ended.recv_timeout(std::time::Duration::from_secs(30));
+            assert!(
+                matches!(ended, Err(std::sync::mpsc::RecvTimeoutError::Disconnected)),
+                "the bridge did not finish"
+            );
+            for thread in std::mem::take(&mut self.threads) {
                 thread.join().unwrap();
+            }
+            self.upload_pack.wait().unwrap();
+        }
+    }
+
+    /// A test that fails leaves no `upload-pack` and no thread blocked on a pipe behind.
+    impl Drop for Piped {
+        fn drop(&mut self) {
+            use std::os::unix::fs::OpenOptionsExt;
+            use std::sync::mpsc::RecvTimeoutError;
+            let _ = self.upload_pack.kill();
+            let _ = self.upload_pack.wait();
+            if self.threads.is_empty() {
+                return;
+            }
+            let pipe = |name: &str| self.directory.path().join(name);
+            // A reader of the answers lets the thread writing them open its end.
+            let _answers = std::fs::OpenOptions::new()
+                .read(true)
+                .custom_flags(libc::O_NONBLOCK)
+                .open(pipe("answers"));
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+            loop {
+                // A writer of the requests, gone at once, lets the thread reading them open its
+                // end and read to the end. It can open only while that thread waits to read.
+                let _ = std::fs::OpenOptions::new()
+                    .write(true)
+                    .custom_flags(libc::O_NONBLOCK)
+                    .open(pipe("requests"));
+                match self
+                    .ended
+                    .recv_timeout(std::time::Duration::from_millis(10))
+                {
+                    Err(RecvTimeoutError::Disconnected) => break,
+                    Ok(()) | Err(RecvTimeoutError::Timeout) => {
+                        if std::time::Instant::now() > deadline {
+                            return;
+                        }
+                    }
+                }
+            }
+            for thread in self.threads.drain(..) {
+                let _ = thread.join();
             }
         }
     }
