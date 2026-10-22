@@ -35,8 +35,14 @@ fn client() -> &'static reqwest::Client {
 
 impl ModelDecider<'_> {
     pub(super) async fn ask(&self, request: &DeciderRequest) -> Outcome {
+        self.ask_with(request, std::env::var(self.api_key_env).ok())
+            .await
+    }
+
+    /// Asks with `key`, the value of [`Self::api_key_env`] if it is set.
+    async fn ask_with(&self, request: &DeciderRequest, key: Option<String>) -> Outcome {
         let passed = |why: String| Outcome::Passed { why };
-        let Ok(key) = std::env::var(self.api_key_env) else {
+        let Some(key) = key else {
             return passed(format!("`{}` is not set", self.api_key_env));
         };
         let body = json!({
@@ -284,8 +290,6 @@ mod tests {
     #[tokio::test]
     async fn the_model_is_asked_over_the_system_one_api() {
         let (url, asked) = serve_once(noul(0.97)).await;
-        // SAFETY: tests that read this variable run in this process only here.
-        unsafe { std::env::set_var("WF_TEST_DECISION_KEY", "secret") };
         let decider = ModelDecider {
             url: &url,
             model: "jev-latest",
@@ -293,7 +297,9 @@ mod tests {
             question: NOUL,
             timeout: Duration::from_secs(5),
         };
-        let outcome = decider.ask(&crate::decide::tests::request()).await;
+        let outcome = decider
+            .ask_with(&crate::decide::tests::request(), Some("secret".to_string()))
+            .await;
         assert!(
             matches!(
                 outcome,
@@ -321,8 +327,6 @@ mod tests {
     #[tokio::test]
     #[ignore = "needs the network"]
     async fn typesafe_is_reached_over_tls() {
-        // SAFETY: tests that read this variable run in this process only here.
-        unsafe { std::env::set_var("WF_TEST_MADE_UP_KEY", "not-a-key") };
         let url = Url::parse("https://api.typesafe.ai/v1/systemone").unwrap();
         let decider = ModelDecider {
             url: &url,
@@ -331,7 +335,12 @@ mod tests {
             question: NOUL,
             timeout: Duration::from_secs(20),
         };
-        let outcome = decider.ask(&crate::decide::tests::request()).await;
+        let outcome = decider
+            .ask_with(
+                &crate::decide::tests::request(),
+                Some("not-a-key".to_string()),
+            )
+            .await;
         let Outcome::Passed { why } = outcome else {
             panic!("{outcome:?}")
         };
