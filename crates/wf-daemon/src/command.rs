@@ -470,17 +470,44 @@ mod tests {
         assert!(!setup.path("check").join("late.txt").exists());
     }
 
+    /// Set for this test binary when it runs one test alone in [`run_alone`].
+    const ALONE: &str = "WF_TEST_ALONE";
+
+    /// Runs the ignored test `name` of this binary in a process of its own with `variables` set,
+    /// as the process that runs the command, and asserts that it passed.
+    fn run_alone(name: &str, variables: &[(&str, &str)]) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", name, "--ignored"])
+            .env(ALONE, "1")
+            .envs(variables.iter().copied())
+            .output()
+            .unwrap();
+        let (stdout, stderr) = (
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr),
+        );
+        assert!(output.status.success(), "{stdout}{stderr}");
+        assert!(stdout.contains("1 passed"), "{stdout}");
+    }
+
+    /// Run by a daemon that carries a mark of its own, as one a check starts does: the command's
+    /// mark must reach what it starts all the same.
+    #[test]
+    fn what_a_command_daemonized_is_stopped_when_it_exits() {
+        use crate::processes::Mark;
+        let (name, value) = Mark::new_command_run().variables().remove(0);
+        run_alone(
+            "command::tests::what_a_command_daemonized_is_stopped_when_it_exits_alone",
+            &[(name, &value)],
+        );
+    }
+
     #[tokio::test]
-    async fn what_a_command_daemonized_is_stopped_when_it_exits() {
+    #[ignore = "runs alone, started by what_a_command_daemonized_is_stopped_when_it_exits"]
+    async fn what_a_command_daemonized_is_stopped_when_it_exits_alone() {
         use crate::processes::testing::{SLEEP, running, sleeper_pid};
-        use crate::processes::{COMMAND_RUN_VARIABLE, Mark};
-        // Run by a daemon that carries a mark of its own, as one a check starts does: the
-        // command's mark must reach what it starts all the same.
-        if std::env::var_os(COMMAND_RUN_VARIABLE).is_none() {
-            let (name, value) = Mark::new_command_run().variables().remove(0);
-            // SAFETY: what the tests of this crate start carries such a mark anyway when they run
-            // in a check, and no test reads it from this process.
-            unsafe { std::env::set_var(name, value) };
+        if std::env::var_os(ALONE).is_none() {
+            return;
         }
         let setup = Setup::new();
         let pid_file = setup.path("sleeper.pid");
@@ -625,9 +652,26 @@ git cat-file commit HEAD | grep -q gpgsig"#;
         assert!(run.tail.contains("Operation not permitted"), "{}", run.tail);
     }
 
-    #[tokio::test]
-    async fn in_a_session_a_command_runs_in_the_directory_as_it_is_without_the_cargo_target_directory_and_the_session_variables()
+    #[test]
+    fn in_a_session_a_command_runs_in_the_directory_as_it_is_without_the_cargo_target_directory_and_the_session_variables()
      {
+        run_alone(
+            "command::tests::a_command_in_a_session_alone",
+            &[
+                (CARGO_TARGET_DIR, "/shared/target"),
+                ("WF_SESSION", "s1"),
+                (crate::caller::SESSION_TOKEN_VARIABLE, "token"),
+                ("WF_WORKFORCE", "w1"),
+            ],
+        );
+    }
+
+    #[tokio::test]
+    #[ignore = "runs alone, started by in_a_session_a_command_runs_in_the_directory_as_it_is_..."]
+    async fn a_command_in_a_session_alone() {
+        if std::env::var_os(ALONE).is_none() {
+            return;
+        }
         let directory = tempfile::tempdir().unwrap();
         std::fs::write(directory.path().join("file.txt"), "uncommitted\n").unwrap();
         let log = directory.path().join("logs").join("test.log");
@@ -638,14 +682,6 @@ git cat-file commit HEAD | grep -q gpgsig"#;
         ]
         .map(String::from)
         .to_vec();
-        // SAFETY: no other test of this crate depends on these variables; the test of the agents'
-        // environment removes them either way.
-        unsafe {
-            std::env::set_var(CARGO_TARGET_DIR, "/shared/target");
-            std::env::set_var("WF_SESSION", "s1");
-            std::env::set_var(crate::caller::SESSION_TOKEN_VARIABLE, "token");
-            std::env::set_var("WF_WORKFORCE", "w1");
-        }
         let run = Confinement::Session {
             directory: directory.path(),
         }
