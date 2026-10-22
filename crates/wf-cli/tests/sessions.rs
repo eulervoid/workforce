@@ -1146,8 +1146,8 @@ async fn a_lapsed_login_ends_sessions_for_the_machine_and_the_inbox_says_so_once
         "the agent waits until it is time to try the harness again"
     );
 
+    // Live sessions are listed first, so the one that ends is the one just started.
     start_session(&world, &item);
-    tokio::time::sleep(Duration::from_millis(500)).await;
     let session = world.ended_session().await;
     assert_eq!(session["status"], "login_lapsed");
     let entries = inbox(&world);
