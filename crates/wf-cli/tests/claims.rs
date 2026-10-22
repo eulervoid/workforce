@@ -15,7 +15,6 @@ use wf_core::event::{AgentDefined, Event, EventBody};
 use wf_core::id::{HashId, ItemId, SessionId, WorkforceId};
 use wf_core::identity::DeviceKey;
 use wf_core::name::{AgentName, HarnessName};
-use wf_core::placement::RANK_DELAY;
 use wf_core::session::{CommitId, EndReason, SessionRole};
 use wf_core::state::{State, Trust};
 use wf_core::testing::*;
@@ -594,7 +593,8 @@ async fn of_two_devices_that_could_start_an_item_the_first_by_rank_does_and_the_
         )
         .await,
     ];
-    let started = std::time::Instant::now();
+    // What the device ranked second passed over before it could hear of a claim.
+    let passed_over = devices[second].log.count("coder has nothing to start");
     connect(&devices[0], &devices[1]).await;
 
     devices[first]
@@ -603,7 +603,9 @@ async fn of_two_devices_that_could_start_an_item_the_first_by_rank_does_and_the_
         })
         .await;
     assert!(
-        started.elapsed() < RANK_DELAY,
+        !devices[first]
+            .log
+            .contains(&format!("coder waits its turn for #{}", item.short())),
         "the device ranked first does not wait"
     );
     let [(session, on)] = work_sessions(&devices[first].state(workforce).await, item)[..] else {
@@ -619,7 +621,7 @@ async fn of_two_devices_that_could_start_an_item_the_first_by_rank_does_and_the_
     // The claim leaves the device ranked second nothing to start, so it has no turn left to wait
     // out, after which it would start.
     eventually("the device ranked second passes the task over", || {
-        devices[second].log.contains("coder has nothing to start")
+        devices[second].log.count("coder has nothing to start") > passed_over
     })
     .await;
     for device in &devices {
