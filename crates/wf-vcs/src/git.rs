@@ -1070,48 +1070,27 @@ mod tests {
         assert_eq!(less_staying_open(Some("-R -i")), "-R -i -+F");
     }
 
-    /// While other threads run short commands with piped output, which on macOS create pipes
-    /// that are not close-on-exec for a moment, a command git is run like holds only stdin,
+    /// A descriptor that is not close-on-exec, as a pipe another thread is creating on macOS
+    /// is for a moment, is not inherited by a command git is run like: it holds only stdin,
     /// stdout and stderr.
     #[test]
-    fn git_inherits_no_descriptor_while_other_threads_create_pipes() {
-        let stop = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
-        let commands: Vec<_> = (0..4)
-            .map(|_| {
-                let stop = std::sync::Arc::clone(&stop);
-                std::thread::spawn(move || {
-                    while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                        Command::new("true").output().unwrap();
-                    }
-                })
-            })
-            .collect();
+    fn git_inherits_no_descriptor_the_parent_left_open_across_exec() {
+        use std::os::fd::{FromRawFd, OwnedFd};
+        let mut ends = [0; 2];
+        // SAFETY: `ends` has room for the two descriptors `pipe` writes.
+        assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+        // SAFETY: `pipe` just opened both, and nothing else owns them.
+        let _pipe = unsafe { (OwnedFd::from_raw_fd(ends[0]), OwnedFd::from_raw_fd(ends[1])) };
+
+        let mut command = Command::new("sh");
+        command.args([
+            "-c",
+            r#"for path in /dev/fd/*; do echo "${path##*/}"; done"#,
+        ]);
+        inherit_only_stdio(&mut command);
+        let descriptors = String::from_utf8(command.output().unwrap().stdout).unwrap();
         // The listing holds the directory open as the lowest free descriptor, 3.
-        let probe = || {
-            let mut command = Command::new("sh");
-            command.args([
-                "-c",
-                r#"for path in /dev/fd/*; do echo "${path##*/}"; done"#,
-            ]);
-            inherit_only_stdio(&mut command);
-            String::from_utf8(command.output().unwrap().stdout).unwrap()
-        };
-        let held: Vec<String> = std::thread::scope(|scope| {
-            let probes: Vec<_> = (0..4)
-                .map(|_| scope.spawn(|| (0..400).map(|_| probe()).collect::<Vec<_>>()))
-                .collect();
-            probes
-                .into_iter()
-                .flat_map(|probes| probes.join().unwrap())
-                .collect()
-        });
-        stop.store(true, std::sync::atomic::Ordering::Relaxed);
-        for command in commands {
-            command.join().unwrap();
-        }
-        for descriptors in held {
-            assert_eq!(descriptors, "0\n1\n2\n3\n");
-        }
+        assert_eq!(descriptors, "0\n1\n2\n3\n");
     }
 
     /// The work on `commit` before it is merged into `main`.
