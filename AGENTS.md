@@ -37,6 +37,8 @@
 - Use one line commit messages; if you'd need more than one line, your commit is too big
 
 ## Tests
+- Tests are deterministic and test behaviour, not implementation: they assert what a user of the code can observe (a command's output, an event in the log, a file, a process that ends), not which function ran or in what order inside
+- Ask the principal, with a blocker, before any unusual test setup: generating load, stress or fuzz runs, many copies at once, changing system limits, tools or services outside the workspace. Say what it would show and why a deterministic test can't
 - A test guards a real scenario, not itself: its setup (sizes, concurrency, timing, load) matches what can happen in use. When a test fails because of its environment (open files, time limits, load), first ask whether it models anything real; if not, change the test, not the system or the machine to fit it
 - The network tests, two daemons over iroh included, run inside Fence: they use `Network::Direct` (no relays, no discovery), and a refused `AF_ROUTE` socket only means no watching of network changes (`vendor/netwatch`)
 - A test that needs more than Fence allows (today only starting Fence itself) starts with `if wf_core::testing::skip_in_fence("...") { return; }`, so `cargo test` in a session passes or fails for real and runs everything outside Fence; a test that needs git signing, which a session's `GIT_CONFIG_*` would override, runs `git` without them (`wf_vcs::testing`, `Sandbox`)
@@ -46,6 +48,6 @@
 
 ## Sharing the machine
 - Several sessions build and test on one machine at once: while you work, run the tests of the crate you change (`cargo test -p <crate>`), and `cargo test --workspace` once before you submit
-- Never load the machine on purpose (`yes`, stress tools, many test runs at once) to reproduce a race; make the race deterministic instead: paused tokio time, an injected delay or clock, a hook that holds one side
+- Don't load the machine on purpose (`yes`, stress tools, many test runs at once) to reproduce a race; make the race deterministic instead: paused tokio time, an injected delay or clock, a hook that holds one side. If that seems impossible, ask the principal first (see Tests)
 - Nothing you start may outlive the command that started it: no background processes left behind by a turn, and a test that spawns a process stops it also when the test fails (a process that ends by itself, such as `sleep 120`, rather than one that runs forever, such as `yes`)
 - New tests wait for the event they expect, not for a fixed time; a deadline only bounds a wait so that a hang fails instead of running forever
