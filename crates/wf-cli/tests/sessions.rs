@@ -255,8 +255,9 @@ impl World {
     }
 
     /// Waits until the only session is not live any more and returns it. The daemon moves the
-    /// item before it writes the end, so the item is where the end leaves it by then; only a merge
-    /// comes after.
+    /// item before it writes the end, so the item is where the end leaves it by then. A merge
+    /// comes after, and so does what the session's task does as it stops the harness: the agent's
+    /// last words, its token and its requests going; a test waits for those itself.
     async fn ended_session(&self) -> Value {
         let deadline = Instant::now() + WAIT_LIMIT;
         let mut sessions = Vec::new();
@@ -3328,10 +3329,12 @@ async fn a_denied_permission_is_told_no_and_stopping_a_session_drops_its_request
     assert!(message.contains("not waiting for an answer"), "{message}");
     world.wf.run(&["session", "stop", short(&id)]);
     world.ended_session().await;
-    let transcript = world
-        .wf
-        .run(&["session", "watch", short(&item), "--no-follow"]);
-    assert!(transcript.contains("permission: no"), "{transcript}");
+    // What the agent says to the answer may be recorded after the end, until its harness closes.
+    world
+        .wait("the agent to be told no", |world| {
+            world.transcript(&item).contains("permission: no")
+        })
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -3350,16 +3353,16 @@ async fn stopping_a_session_that_waits_on_a_permission_answers_it_cancelled() {
     world.wf.run(&["session", "stop", short(&id)]);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "cancelled");
-    assert!(
-        !inbox(&world)
-            .iter()
-            .any(|entry| entry["kind"] == "permission"),
-        "the request is gone"
-    );
-    let transcript = world
-        .wf
-        .run(&["session", "watch", short(&item), "--no-follow"]);
-    assert!(transcript.contains("permission: cancelled"), "{transcript}");
+    // The stop cancels the turn, and with it the request, once the end is written.
+    world
+        .wait("the request answered cancelled and gone", |world| {
+            world.transcript(&item).contains("permission: cancelled")
+                && !inbox(world)
+                    .iter()
+                    .any(|entry| entry["kind"] == "permission")
+        })
+        .await;
+    let transcript = world.transcript(&item);
     assert!(!transcript.contains("never"), "{transcript}");
 }
 
@@ -3544,7 +3547,12 @@ hang
     // The principal's CLI still can, and the token is over with its session.
     world.wf.run(&["session", "stop", short(&session_text)]);
     assert_eq!(world.ended_session().await["status"], "cancelled");
-    assert!(matches!(connect(token), Err(ClientError::Unrecognized)));
+    // The token goes as the session's task stops its harness, after the end is written.
+    world
+        .wait("the token to be refused", |_| {
+            matches!(connect(token.clone()), Err(ClientError::Unrecognized))
+        })
+        .await;
 }
 
 /// A command whose output another process keeps open, as an agent that inherited it did, fails
