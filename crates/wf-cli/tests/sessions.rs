@@ -1669,8 +1669,11 @@ wf work submit
         })
         .await;
     assert_eq!(world.item(&item)["state"], "active");
-    tokio::time::sleep(Duration::from_millis(1_000)).await;
-    assert_eq!(world.sessions()[0]["status"], "parked");
+    world
+        .wait("the session to park", |world| {
+            world.sessions()[0]["status"] == "parked"
+        })
+        .await;
     let live = world.wf.json(&["session", "list", "--live"]);
     assert_eq!(
         live.as_array().unwrap().len(),
