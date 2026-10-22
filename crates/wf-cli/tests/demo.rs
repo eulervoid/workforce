@@ -752,26 +752,34 @@ struct RunningDaemon {
 }
 
 impl Sandbox {
-    #[allow(clippy::zombie_processes)]
     fn start_daemon(&self) -> RunningDaemon {
-        let child = self
-            .command(&["daemon", "run", "--no-network"])
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .spawn()
-            .unwrap();
-        let socket = self.root.path().join("run/workforce/daemon.sock");
+        RunningDaemon::start(
+            self.command(&["daemon", "run", "--no-network"]),
+            &self.root.path().join("run/workforce/daemon.sock"),
+        )
+    }
+}
+
+impl RunningDaemon {
+    /// Runs `command`, a `wf daemon run`, until it serves on `socket`. One that does not is
+    /// stopped as the test fails.
+    fn start(mut command: std::process::Command, socket: &std::path::Path) -> Self {
+        let daemon = RunningDaemon {
+            child: command
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .unwrap(),
+        };
         for _ in 0..200 {
-            if socket.exists() && std::os::unix::net::UnixStream::connect(&socket).is_ok() {
-                return RunningDaemon { child };
+            if std::os::unix::net::UnixStream::connect(socket).is_ok() {
+                return daemon;
             }
             std::thread::sleep(std::time::Duration::from_millis(50));
         }
         panic!("the daemon did not start");
     }
-}
 
-impl RunningDaemon {
     fn stop(self) {
         drop(self);
     }
