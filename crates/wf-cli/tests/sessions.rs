@@ -2668,27 +2668,38 @@ async fn reviews_of_one_step_started_at_once_start_one_session() {
         })
         .await;
 
-    // Without the lock of the item and role, about every other run lets two through.
-    let starts: Vec<_> = ["alpha", "beta", "gamma"]
-        .map(|agent| {
-            let mut command = world.wf.command(&[
-                "session",
-                "start",
-                short(&item),
-                "-a",
-                agent,
-                "--step",
-                "style",
-            ]);
-            std::thread::spawn(move || common::output(&mut command))
-        })
-        .into_iter()
-        .map(|start| start.join().unwrap())
-        .collect();
-    let started = starts.iter().filter(|start| start.status.success()).count();
-    assert_eq!(started, 1, "{starts:?}");
-    // A start the other refused would still be running had both been let through.
-    tokio::time::sleep(Duration::from_millis(500)).await;
+    // The first start waits inside the lock of the item and role while the others come: they are
+    // refused at once, where without the lock they would wait beside it.
+    let held = world.daemon().hold_starts().await;
+    let (finished, starts) = std::sync::mpsc::channel();
+    for agent in ["alpha", "beta", "gamma"] {
+        let mut command = world.wf.command(&[
+            "session",
+            "start",
+            short(&item),
+            "-a",
+            agent,
+            "--step",
+            "style",
+        ]);
+        let finished = finished.clone();
+        std::thread::spawn(move || finished.send(common::output(&mut command)));
+    }
+    for _ in 0..2 {
+        let refused = starts
+            .recv_timeout(WAIT_LIMIT)
+            .expect("a start while another holds the lock is refused at once");
+        let error = String::from_utf8_lossy(&refused.stderr);
+        assert!(
+            !refused.status.success() && error.contains("already starting"),
+            "{refused:?}"
+        );
+    }
+    drop(held);
+    let started = starts
+        .recv_timeout(WAIT_LIMIT)
+        .expect("the first start ends");
+    assert!(started.status.success(), "{started:?}");
     assert_eq!(live_reviews(&world).len(), 1, "{:?}", world.sessions());
 }
 

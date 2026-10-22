@@ -282,6 +282,9 @@ pub struct Daemon {
     /// For the tests: changes when [`Daemon::backdate_presence`] does, which wakes the
     /// dispatchers, as their tick would have in the time it stands for.
     backdated: tokio::sync::watch::Sender<()>,
+    /// For the tests: held by [`Daemon::hold_starts`], while which a start waits once it took its
+    /// lock.
+    starts_held: tokio::sync::RwLock<()>,
     /// For the tests: runs once, after the next merge found the target at the tip and before it
     /// reads the target to merge onto.
     #[cfg(test)]
@@ -319,6 +322,7 @@ impl Daemon {
             cache_usage: Mutex::new(BTreeMap::new()),
             failing_write: Mutex::new(None),
             backdated: tokio::sync::watch::Sender::new(()),
+            starts_held: tokio::sync::RwLock::new(()),
             #[cfg(test)]
             before_merge_tree: Mutex::new(None),
             reviews_found_merging: Default::default(),
@@ -372,6 +376,14 @@ impl Daemon {
         );
         drop(presence);
         self.backdated.send_replace(());
+    }
+
+    /// Holds every session start, once it took the lock of its item and role and before it reads
+    /// the state, until the guard drops. For the tests, so that other starts come while the first
+    /// holds the lock.
+    #[doc(hidden)]
+    pub async fn hold_starts(&self) -> tokio::sync::RwLockWriteGuard<'_, ()> {
+        self.starts_held.write().await
     }
 
     /// Has the next write of an event that `matching` accepts fail once, as a write fails on a

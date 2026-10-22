@@ -163,6 +163,7 @@ impl Daemon {
             .starting
             .take(item, &role)
             .ok_or_else(|| SessionError::Starting(item, role.clone()))?;
+        drop(self.starts_held.read().await);
         let state = self.snapshot(loaded).await?;
         let setup = self.setup(&state, workforce, agent, item, &role)?;
         let presence = self.presence_now();
