@@ -520,7 +520,11 @@ pub(crate) mod testing {
             let orphan = Self(sleeper_pid(&pid_file));
             std::fs::remove_file(&pid_file).unwrap();
             // Until it runs `sleep`, it is perl.
-            std::thread::sleep(Duration::from_millis(100));
+            let deadline = Instant::now() + Duration::from_secs(20);
+            while !runs_sleep(orphan.0) {
+                assert!(Instant::now() < deadline, "the orphan did not run sleep");
+                std::thread::sleep(Duration::from_millis(10));
+            }
             orphan
         }
 
@@ -530,6 +534,22 @@ pub(crate) mod testing {
             assert!(!running(self.0), "the orphan {} runs on", self.0);
             std::mem::forget(self);
         }
+    }
+
+    /// Whether `pid` runs `/bin/sleep`.
+    fn runs_sleep(pid: Pid) -> bool {
+        use sysinfo::{ProcessRefreshKind, ProcessesToUpdate, System, UpdateKind};
+        let pid = sysinfo::Pid::from_u32(pid.as_raw() as u32);
+        let mut system = System::new();
+        system.refresh_processes_specifics(
+            ProcessesToUpdate::Some(&[pid]),
+            true,
+            ProcessRefreshKind::nothing().with_exe(UpdateKind::Always),
+        );
+        system
+            .process(pid)
+            .and_then(|process| process.exe())
+            .is_some_and(|executable| executable == Path::new("/bin/sleep"))
     }
 
     impl Drop for OrphanedSleep {
