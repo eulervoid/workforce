@@ -28,6 +28,9 @@ const LOOK_FOR_PUSHES: Duration = Duration::from_secs(5);
 #[derive(Default)]
 pub(crate) struct TargetBranch {
     pub(super) seen: tokio::sync::Mutex<Option<CommitId>>,
+    /// For the tests: the heads of the log the follower last finished with.
+    #[cfg(test)]
+    followed: tokio::sync::watch::Sender<BTreeSet<wf_core::id::EventId>>,
 }
 
 /// Whether the target branch of `<wf>/git` is where the log says after a pass.
@@ -167,6 +170,9 @@ pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loa
         let Some(strong) = daemon.upgrade() else {
             return;
         };
+        // What the state read below holds at least.
+        #[cfg(test)]
+        let reading = heads.borrow().clone();
         let (own, presence, now_ms) = (strong.device(), strong.presence_now(), wf_store::now_ms());
         let now = strong
             .read(&loaded, move |state| Watched {
@@ -185,6 +191,8 @@ pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loa
                 );
             }
         }
+        #[cfg(test)]
+        loaded.target.followed.send_replace(reading);
         drop(strong);
     }
 }
@@ -515,9 +523,19 @@ mod tests {
         assert_eq!(scene.follow().await, Some(main));
         let pushed = scene.repository.work("pushed", "pushed.txt", "x\n");
         let (source, bare) = (scene.repository.directory().to_path_buf(), scene.bare());
+        let loaded = Arc::clone(&scene.loaded);
         *scene.daemon.before_merge_tree.lock().unwrap() = Some(Box::new(move || {
             // The follower's pass for the last write ends first.
-            std::thread::sleep(Duration::from_millis(500));
+            let heads = loaded.storage.watch_heads().borrow().clone();
+            let mut followed = loaded.target.followed.subscribe();
+            tokio::task::block_in_place(|| {
+                tokio::runtime::Handle::current().block_on(async {
+                    followed
+                        .wait_for(|followed| *followed == heads)
+                        .await
+                        .unwrap();
+                })
+            });
             let source = source.display().to_string();
             git_in(
                 &bare,
