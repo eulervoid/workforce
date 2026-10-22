@@ -6,6 +6,7 @@ use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
 use std::os::unix::process::CommandExt;
 use std::process::Stdio;
+use std::time::Duration;
 
 mod common;
 
@@ -48,15 +49,10 @@ fn the_bridge_pipes_both_ways_and_passes_on_the_ends() {
     let mut input = bridge.stdin.take().unwrap();
     input.write_all(b"want a commit").unwrap();
     drop(input);
-    let mut answer = String::new();
-    bridge
-        .stdout
-        .take()
-        .unwrap()
-        .read_to_string(&mut answer)
-        .unwrap();
-    assert!(bridge.wait().unwrap().success());
-    assert_eq!(answer, "WANT A COMMIT");
+    // A bridge that does not pass on the ends is killed, which ends the daemon's side too.
+    let output = common::output_of(bridge, "wf git-bridge", Duration::from_secs(10));
+    assert!(output.status.success());
+    assert_eq!(String::from_utf8(output.stdout).unwrap(), "WANT A COMMIT");
     assert_eq!(daemon.join().unwrap(), "want a commit");
 }
 

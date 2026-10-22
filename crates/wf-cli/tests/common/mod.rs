@@ -152,6 +152,12 @@ pub fn output_within(command: &mut Command, limit: Duration) -> Output {
         .stderr(Stdio::piped())
         .spawn()
         .unwrap_or_else(|error| panic!("{ran} does not start: {error}"));
+    output_of(child, &ran, limit)
+}
+
+/// Waits for `child`, which runs `ran`, to end and reads its output, as
+/// `Child::wait_with_output` does; one that takes longer than `limit` is killed and fails the test.
+pub fn output_of(child: std::process::Child, ran: &str, limit: Duration) -> Output {
     let process = child.id();
     let (finished, outcome) = mpsc::channel();
     std::thread::spawn(move || finished.send(child.wait_with_output()));
