@@ -4137,7 +4137,7 @@ async fn work_whose_head_is_missing_waits_without_failing_and_starts_once_it_arr
 sh echo wip > wip.txt && git add wip.txt && git commit -q -m wip
 wf work release --note \"not yet\"
 ";
-    let world = World::new(script).await;
+    let mut world = World::new(script).await;
     let item = world.wf.add(&["--title", "Carry on"]);
     start_session(&world, &item);
     world.ended_session().await;
@@ -4169,20 +4169,16 @@ wf work release --note \"not yet\"
             .status()
             .is_ok_and(|status| status.success())
     };
-    // A refs pass that read the log while the head was still here sets the branch again, as it
-    // should: the branch goes again until no pass brings it back.
-    for _ in 0..20 {
-        git_in(
-            &bare,
-            &["update-ref", "-d", &format!("refs/heads/{branch}")],
-        );
-        git_in(&bare, &["gc", "--quiet", "--prune=now"]);
-        if !head_is_here() {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(200)).await;
-    }
+    // A refs pass that read the log while the head was still here would set the branch again,
+    // as it should, so the head goes while no daemon runs.
+    world.halt().await;
+    git_in(
+        &bare,
+        &["update-ref", "-d", &format!("refs/heads/{branch}")],
+    );
+    git_in(&bare, &["gc", "--quiet", "--prune=now"]);
     assert!(!head_is_here(), "the head is gone");
+    world.start_again().await;
 
     world.automate("coder", "default");
     world
