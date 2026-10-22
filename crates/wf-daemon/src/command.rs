@@ -163,8 +163,27 @@ impl Confinement<'_> {
         let Some((program, arguments)) = argv.split_first() else {
             return Err(CommandError::Empty(name.clone()));
         };
-        let command =
-            self.confined(AcpAgentConfig::new(program).args(arguments.iter().cloned()))?;
+        // What it starts carries the mark, so that what leaves its group is found by it.
+        let owner = crate::processes::Owner {
+            mark: crate::processes::Mark::new_command_run(),
+            // In a session, the command runs where the session does, whose end finds its orphans.
+            place: match self {
+                Confinement::Agents { access, .. } => Some(crate::processes::Place::new(
+                    access.directory,
+                    jiff::Timestamp::now(),
+                    None,
+                )),
+                Confinement::Session { .. } => None,
+            },
+            spared: Vec::new(),
+        };
+        // Set on the command, not on the process that starts it: the daemon may carry a mark of
+        // its own, as one started by a check does, which confining it removes.
+        let command = self.confined(
+            AcpAgentConfig::new(program)
+                .args(arguments.iter().cloned())
+                .envs(owner.mark.variables()),
+        )?;
         let io_error = |source| CommandError::Io {
             path: log.to_path_buf(),
             source,
@@ -177,7 +196,6 @@ impl Confinement<'_> {
         let mut process = tokio::process::Command::new(command.command());
         process
             .args(command.arguments())
-            .envs(command.environment())
             .env_remove(CARGO_TARGET_DIR)
             .current_dir(self.directory())
             .stdin(Stdio::null())
@@ -195,21 +213,8 @@ impl Confinement<'_> {
                 }
             }
         }
-        // What it starts carries the mark, so that what leaves its group is found by it.
-        let owner = crate::processes::Owner {
-            mark: crate::processes::Mark::new_command_run(),
-            // In a session, the command runs where the session does, whose end finds its orphans.
-            place: match self {
-                Confinement::Agents { access, .. } => Some(crate::processes::Place::new(
-                    access.directory,
-                    jiff::Timestamp::now(),
-                    None,
-                )),
-                Confinement::Session { .. } => None,
-            },
-            spared: Vec::new(),
-        };
-        process.envs(owner.mark.variables());
+        // After the removals, which the mark is among when the daemon carries one.
+        process.envs(command.environment());
         crate::inherit::only_stdio(&mut process);
         let mut child = process.spawn().map_err(|source| CommandError::Io {
             path: command.command().to_path_buf(),
@@ -468,6 +473,15 @@ mod tests {
     #[tokio::test]
     async fn what_a_command_daemonized_is_stopped_when_it_exits() {
         use crate::processes::testing::{SLEEP, running, sleeper_pid};
+        use crate::processes::{COMMAND_RUN_VARIABLE, Mark};
+        // Run by a daemon that carries a mark of its own, as one a check starts does: the
+        // command's mark must reach what it starts all the same.
+        if std::env::var_os(COMMAND_RUN_VARIABLE).is_none() {
+            let (name, value) = Mark::new_command_run().variables().remove(0);
+            // SAFETY: what the tests of this crate start carries such a mark anyway when they run
+            // in a check, and no test reads it from this process.
+            unsafe { std::env::set_var(name, value) };
+        }
         let setup = Setup::new();
         let pid_file = setup.path("sleeper.pid");
         let environment = EnvironmentConfig {
