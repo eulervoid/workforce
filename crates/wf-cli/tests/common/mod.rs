@@ -267,3 +267,28 @@ pub async fn serving(socket: &std::path::Path) {
     }
     panic!("the daemon does not serve on {}", socket.display());
 }
+
+/// A child process that is killed once this drops, also when the test that started it fails:
+/// for one that does not end by itself, such as `wf log --follow`.
+pub struct KillOnDrop(pub std::process::Child);
+
+impl std::ops::Deref for KillOnDrop {
+    type Target = std::process::Child;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for KillOnDrop {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+
+impl Drop for KillOnDrop {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}

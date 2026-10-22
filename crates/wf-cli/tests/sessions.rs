@@ -541,10 +541,12 @@ async fn interrupting_start_watch_detaches_without_stopping_the_agent() {
             Ok(())
         });
     }
-    let mut watcher = watcher_command
-        .stdout(Stdio::from(std::fs::File::create(&output_path).unwrap()))
-        .spawn()
-        .unwrap();
+    let mut watcher = common::KillOnDrop(
+        watcher_command
+            .stdout(Stdio::from(std::fs::File::create(&output_path).unwrap()))
+            .spawn()
+            .unwrap(),
+    );
     world
         .wait("watch output", |_| {
             std::fs::read_to_string(&output_path)
@@ -568,12 +570,14 @@ async fn interrupting_start_watch_detaches_without_stopping_the_agent() {
     std::fs::write(world.wf.data.join("go"), "").unwrap();
     let ended = world.ended_session().await;
     assert_eq!(ended["status"], "released", "{ended}");
-    let mut completed_watch = world
-        .wf
-        .command(&["session", "watch", short(&item)])
-        .stdout(Stdio::from(std::fs::File::create(&output_path).unwrap()))
-        .spawn()
-        .unwrap();
+    let mut completed_watch = common::KillOnDrop(
+        world
+            .wf
+            .command(&["session", "watch", short(&item)])
+            .stdout(Stdio::from(std::fs::File::create(&output_path).unwrap()))
+            .spawn()
+            .unwrap(),
+    );
     let status = wait_for_exit(
         &mut completed_watch,
         "`wf session watch` to drain the ended session",
@@ -1248,14 +1252,23 @@ async fn a_full_disk_ends_the_session_for_the_machine_and_the_inbox_says_so_once
 async fn a_session_whose_record_cannot_be_written_fails() {
     // The first turn takes the write permission of the directory the records of sessions are
     // kept in, beside the transcripts, as a full disk would; the next prompt cannot be recorded.
+    /// Makes everything under the path writable again once it drops, also when the test fails, so
+    /// that the directory can be removed.
+    struct WritableAgain<'a>(&'a Path);
+    impl Drop for WritableAgain<'_> {
+        fn drop(&mut self) {
+            let _ = Command::new("chmod")
+                .args(["-R", "u+w"])
+                .arg(self.0)
+                .status();
+        }
+    }
+
     let world = World::new("sh chmod a-w ../../transcripts\nturn\n").await;
+    let _writable_again = WritableAgain(world.wf.root.path());
     let item = world.wf.add(&["--title", "Full disk"]);
     start_session(&world, &item);
     let session = world.ended_session().await;
-    let _ = Command::new("chmod")
-        .args(["-R", "u+w"])
-        .arg(world.wf.root.path())
-        .status();
     assert_eq!(session["status"], "failed");
     assert_eq!(world.item(&item)["state"], "open");
     let failed = comments(&world.item(&item))
@@ -3134,12 +3147,14 @@ async fn log_follow_prints_events_as_they_arrive() {
             .await;
     let item = world.wf.add(&["--title", "Watched"]);
     world.wf.add(&["--title", "Not followed"]);
-    let mut follow = world
-        .wf
-        .command(&["log", "--follow", "--item", &item, "--json"])
-        .stdout(std::process::Stdio::piped())
-        .spawn()
-        .unwrap();
+    let mut follow = common::KillOnDrop(
+        world
+            .wf
+            .command(&["log", "--follow", "--item", &item, "--json"])
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap(),
+    );
     let stdout = follow.stdout.take().unwrap();
     let (lines, received) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
@@ -3169,8 +3184,7 @@ async fn log_follow_prints_events_as_they_arrive() {
             break;
         }
     }
-    follow.kill().unwrap();
-    follow.wait().unwrap();
+    drop(follow);
     assert!(kinds.contains(&"session_started".to_string()), "{kinds:?}");
     assert!(kinds.contains(&"comment".to_string()), "{kinds:?}");
     assert_eq!(
