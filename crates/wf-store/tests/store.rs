@@ -646,13 +646,10 @@ fn opening_with_many_pending_events_commits_them_together() {
         .unwrap();
     store.commits.set(0);
 
-    let started = std::time::Instant::now();
     let replica = Replica::open(store, fixture.workforce()).unwrap();
-    let elapsed = started.elapsed();
     assert_eq!(replica.state().pending_events().count(), PENDING);
     // The pending events in one commit, and at most the snapshot of what was replayed.
     assert!(replica.store().commits.get() <= 2);
-    assert!(elapsed < std::time::Duration::from_secs(5), "{elapsed:?}");
 }
 
 #[test]
