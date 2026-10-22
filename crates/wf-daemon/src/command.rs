@@ -327,6 +327,7 @@ mod tests {
 
     use super::*;
     use crate::DataDir;
+    use crate::processes::testing::{running, sleeper_pid};
 
     /// A repository with one commit, whose tree has `file.txt`, and a place for the worktree,
     /// the logs and the sandbox profile.
@@ -447,7 +448,7 @@ mod tests {
                 &[
                     "sh",
                     "-c",
-                    "echo working; (sleep 1; touch late.txt) & sleep 30",
+                    "sleep 120 & echo $! > started.pid; echo working; sleep 30",
                 ],
                 Duration::from_millis(300),
             )
@@ -455,19 +456,19 @@ mod tests {
         assert_eq!(run.outcome, Outcome::TimedOut);
         assert_eq!(run.tail, "working");
         assert!(started.elapsed() < Duration::from_secs(10));
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert!(!setup.path("check").join("late.txt").exists());
+        let started = sleeper_pid(&setup.path("check").join("started.pid"));
+        assert!(!running(started), "what it started runs on");
     }
 
     #[tokio::test]
     async fn what_a_command_leaves_running_is_stopped_when_it_exits() {
         let setup = Setup::new();
         let run = setup
-            .run(&["sh", "-c", "(sleep 1; touch late.txt) & exit 0"])
+            .run(&["sh", "-c", "sleep 120 & echo $! > started.pid; exit 0"])
             .await;
         assert_eq!(run.outcome, Outcome::Passed);
-        tokio::time::sleep(Duration::from_millis(1500)).await;
-        assert!(!setup.path("check").join("late.txt").exists());
+        let started = sleeper_pid(&setup.path("check").join("started.pid"));
+        assert!(!running(started), "what it started runs on");
     }
 
     /// Set for this test binary when it runs one test alone in [`run_alone`].
@@ -505,7 +506,7 @@ mod tests {
     #[tokio::test]
     #[ignore = "runs alone, started by what_a_command_daemonized_is_stopped_when_it_exits"]
     async fn what_a_command_daemonized_is_stopped_when_it_exits_alone() {
-        use crate::processes::testing::{SLEEP, running, sleeper_pid};
+        use crate::processes::testing::SLEEP;
         if std::env::var_os(ALONE).is_none() {
             return;
         }
