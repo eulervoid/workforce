@@ -69,7 +69,7 @@ pub struct CheckRunConfig {
     #[serde(default, with = "humantime_serde::option")]
     pub max_timeout: Option<Duration>,
     /// The sandbox checks run in, when it is not the one of every agent: `{ kind = "off" }` for
-    /// tests that need what Fence cannot allow, such as starting Fence itself.
+    /// tests that need what Fence cannot allow, such as the route socket iroh opens on macOS.
     pub sandbox: Option<SandboxConfig>,
 }
 

@@ -163,6 +163,9 @@ async fn node(fixture: &Fixture, signer: &DeviceSigner) -> Node<SharedReplica<Re
 
 #[tokio::test]
 async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     let fixture = Fixture::new(2);
     let holder = node(&fixture, &fixture.devices[0]).await;
     holder.serve_query(Arc::new(Worktree(Some(work(commit(1))))));
@@ -201,6 +204,9 @@ async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
 
 #[tokio::test]
 async fn a_node_that_serves_no_query_refuses_instead_of_hanging() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     let fixture = Fixture::new(2);
     let holder = node(&fixture, &fixture.devices[0]).await;
     let member = node(&fixture, &fixture.devices[1]).await;

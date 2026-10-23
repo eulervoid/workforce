@@ -244,6 +244,9 @@ fn waiting_script(go: &Path) -> String {
 // Multi-threaded: the daemons serve on the runtime while the test waits on them.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_comment_written_on_one_device_reaches_a_session_on_the_other_at_the_end_of_its_turn() {
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
     let fixture = Fixture::new(2);
     let workforce = fixture.workforce();
     let (events, task, other) = workforce_with_two_items(&fixture);
