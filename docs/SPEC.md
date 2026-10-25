@@ -1810,7 +1810,7 @@ when the daemon sends approved work back after a conflict. Keys are in `docs/gui
 |---|---|---|
 | M0 | Signed event log, identity, item model, fold, redb store with snapshots; one peer | built |
 | M1 | iroh sync, equivocation, device invites and `wf join`, device profiles, daemon, gossip, `wf fork` | built |
-| M2 | Agents on one machine: sessions, worktrees, ACP runner, turn end and parking, dispatcher, blockers, change requests, supervisors, review levels, local merge, permission modes, inbox, steps, reports, activity | built |
+| M2 | Agents on one machine: sessions, agent repositories, ACP runner, turn end and parking, dispatcher, blockers, change requests, supervisors, review levels, local merge, permission modes, inbox, steps, reports, activity | built |
 | M2.1 | Machine config, permission deciders, `wf item diff`, `checkout`, `path` | built |
 | M2.2 | Daily use on one machine (**stage 1**): recovery levels, machine faults, resume after restart, daemon management, export and import, network off for one device, notifications | built |
 | M2.3 | The dashboard | built |

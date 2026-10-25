@@ -1,9 +1,9 @@
 # workforce (`wf`)
 
 wf coordinates coding agents in a git repository. You write down the work as **items**. A daemon on
-your machine starts **agents** (Claude Code, opencode, Codex, Gemini CLI) on them, each in its own git
-worktree and branch. You answer their questions, review what they submit, and approved work is merged
-into your main branch.
+your machine starts **agents** (Claude Code, opencode, Codex, Gemini CLI) on them, each in its own clone
+of the repository, on the item's own branch. You answer their questions, review what they submit, and
+approved work is merged into your main branch.
 
 Everything that happens is an event in a signed log that every machine of yours keeps a copy of and
 syncs peer to peer. There is no server and no account: wf runs from your terminal.
@@ -12,7 +12,7 @@ syncs peer to peer. There is no server and no account: wf runs from your termina
 > wf is in early, rapid development. Expect breaking changes between versions, including to the
 > event log, the policy and the machine config.
 
-<p align="center"><img src="docs/img/lifecycle.svg" alt="An item goes open → active → review → done: an agent starts on it in its own worktree, submits its commits, and the work is merged into main once approved; a review can send it back to open, and the agent asks the principal when it has a question" width="100%"></p>
+<p align="center"><img src="docs/img/lifecycle.svg" alt="An item goes open → active → review → done: an agent starts on it in its own clone of the repository, submits its commits, and the work is merged into main once approved; a review can send it back to open, and the agent asks the principal when it has a question" width="100%"></p>
 
 ## Install
 
@@ -141,7 +141,7 @@ wf review k3f7 --request-changes # the item goes back to the agent, on the same 
 ```
 
 After the approval the daemon merges the work into `main` as `Merge #k3f7ab: Parse durations in policy`,
-removes the item's worktree and branch, and the item is done. If your checkout of `main` has
+removes the agent's clone and the item's branch, and the item is done. If your checkout of `main` has
 uncommitted changes, the merge waits until you commit or stash them.
 
 ## Concepts
@@ -152,7 +152,7 @@ signs what only you may do: the policy, invites, new machines.
 **Agent.** A worker you define once: a harness, a model, capabilities, lanes and how much it may do on
 its own (`--start`, `--permissions`). Addressed as `@ada/cecilia`.
 
-**Session.** One run of one agent on one item, on one machine, in the item's worktree. It ends when the
+**Session.** One run of one agent on one item, on one machine, in the item's clone of the repository. It ends when the
 agent submits or releases the item, or runs out of time.
 
 **Device.** A machine bound to the workforce. Each says how many sessions it runs, and of which agents.

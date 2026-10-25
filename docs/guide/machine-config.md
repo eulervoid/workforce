@@ -38,7 +38,7 @@ command = ["terminal-notifier", "-title", "wf: {title}", "-message", "{what}"]
 max_timeout = "15m"
 
 [permissions]
-guidance = "Allow reading anything and writing in the worktree. Ask about the network."
+guidance = "Allow reading anything and writing in the agent's repository. Ask about the network."
 
 [theme]
 accent = "#1e50a0"

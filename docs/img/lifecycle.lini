@@ -14,7 +14,7 @@
 }
 
 |rect#open| [ "open"; |block| "wf item add" .sub ]
-|rect#active| [ "active"; |block| "worktree wf/<item>" .sub ]
+|rect#active| [ "active"; |block| "clone on wf/<item>" .sub ]
 |rect#review| [ "review"; |block| "commits submitted" .sub ]
 |rect#done| .end [ "done"; |block| "merged into main" .sub ]
 ""

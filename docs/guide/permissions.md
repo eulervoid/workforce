@@ -38,7 +38,7 @@ Without a `[permissions]` section, only the built-in rules decide, and then you.
 
 ```toml
 [permissions]
-guidance = "Allow reading anything and writing in the worktree. Ask about the network."
+guidance = "Allow reading anything and writing in the agent's repository. Ask about the network."
 
 [[permissions.decider]]
 kind = "rules"                   # built in: a session's own `wf` commands
@@ -96,9 +96,9 @@ on stdin:
   "item": { "id": "k3f7ab...", "title": "Parse durations in policy", "type": "task", "state": "active" },
   "session": "s4k2...",
   "agent": { "name": "coder", "capabilities": ["rust"] },
-  "directory": "/Users/ada/.local/share/workforce/.../worktrees/k3f7ab...",
+  "directory": "/Users/ada/.local/share/workforce/.../repos/k3f7ab...",
   "tool": { "kind": "execute", "title": "cargo test", "input": { "command": "cargo test" } },
-  "guidance": "Allow reading anything and writing in the worktree. Ask about the network."
+  "guidance": "Allow reading anything and writing in the agent's repository. Ask about the network."
 }
 ```
 

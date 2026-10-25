@@ -38,7 +38,7 @@
       <text class="lini-text" x="0" y="-11.5" dy="0.358em" style="font-family: &quot;Lini Sans Code&quot;, &quot;Google Sans Code&quot;">active</text>
       <g class="lini-node lini-block lini-style-sub" transform="translate(0,12.5)">
         <rect x="-59.4" y="-5.5" width="118.8" height="11" rx="0" ry="0"/>
-        <text class="lini-text" x="0" y="0" dy="0.358em" style="font-family: &quot;Lini Sans Code&quot;, &quot;Google Sans Code&quot;">worktree wf/&lt;item&gt;</text>
+        <text class="lini-text" x="0" y="0" dy="0.358em" style="font-family: &quot;Lini Sans Code&quot;, &quot;Google Sans Code&quot;">clone on wf/&lt;item&gt;</text>
       </g>
     </g>
     <g class="lini-node lini-rect lini-box lini-block" data-id="review" transform="translate(135.9,-62.5)">

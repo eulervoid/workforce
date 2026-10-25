@@ -158,7 +158,7 @@ supports that.
 
 | What | Where |
 |---|---|
-| the store of a workforce, its worktrees and transcripts | `~/.local/share/workforce/<workforce id>/` |
+| the store of a workforce, its repository, the agents' clones and transcripts | `~/.local/share/workforce/<workforce id>/` |
 | your principal key, one per workforce | `~/.local/share/workforce/<workforce id>/principal.key` |
 | this machine's device key | `~/.local/share/workforce/keys/device.key` |
 | the machine config | `~/.config/workforce/config.toml` |
