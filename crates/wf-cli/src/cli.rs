@@ -14,10 +14,11 @@ use wf_core::name::{
 #[derive(Parser)]
 #[command(
     name = "wf",
+    max_term_width = 80,
     version,
     about = "Coordination for coding agents and their principals\n\n\
-             Plain `wf` at a terminal opens the dashboard: what waits on you, who works on what, \
-             items and agents."
+             Plain `wf` at a terminal opens the dashboard: what waits on you,\n\
+             who works on what, items and agents."
 )]
 pub struct Cli {
     /// Print machine-readable output with a versioned schema.
@@ -104,7 +105,9 @@ pub enum Command {
     /// Create and manage items: tasks, decisions.
     #[command(subcommand)]
     Item(ItemCommand),
-    /// Comment on an item. Without text, opens the editor when run at a terminal.
+    /// Comment on an item.
+    ///
+    /// Without text, opens the editor when run at a terminal.
     Comment(CommentArgs),
     /// Show where a principal or agent is mentioned.
     Mentions {
@@ -116,6 +119,8 @@ pub enum Command {
     Policy(PolicyCommand),
     /// Print every event of the log, verified.
     Log(LogArgs),
+    /// Sessions, submissions and change requests of each item worked on.
+    ///
     /// For each item that was worked on: its sessions, submissions, change requests and the time
     /// from its first work session to done. The most submissions first.
     Stats,
@@ -127,15 +132,17 @@ pub enum Command {
     Work(WorkCommand),
     /// Give a verdict on the submitted work of an item.
     Review(ReviewArgs),
-    /// Run the policy's checks on this checkout as it is, in the sandbox of checks, as they run
-    /// before a merge: `wf check` before `wf work submit`, `wf check clippy` for one.
+    /// Run the policy's checks on this checkout as it is.
+    ///
+    /// In the sandbox of checks, as they run before a merge: `wf check` before `wf work submit`,
+    /// `wf check clippy` for one.
     Check {
         /// The checks to run, by their names in the policy. Defaults to all of them.
         names: Vec<CommandName>,
     },
-    /// What waits on you: blockers, reviews, merges and permission requests.
+    /// What waits on you: blockers, reviews, merges, permission requests.
     Inbox,
-    /// Try out how this machine decides the permission requests of agents.
+    /// Try out how this machine decides agents' permission requests.
     #[command(subcommand)]
     Permissions(PermissionsCommand),
     /// The agent harnesses this machine can start.
@@ -156,7 +163,9 @@ pub enum Command {
     Device(DeviceCommand),
     /// List the members of the workforce, with their roles and machines.
     Members,
-    /// Start a new workforce from this one, without the devices or members that were lost.
+    /// Fork the workforce, without the devices or members that were lost.
+    ///
+    /// Starts a new workforce from this one.
     #[command(args_conflicts_with_subcommands = true)]
     Fork {
         #[command(flatten)]
@@ -170,10 +179,14 @@ pub enum Command {
         #[arg(long)]
         refold: bool,
     },
-    /// Print every event of the log as JSON lines, for backups and for reading with `jq`.
+    /// Print the log as JSON lines, for backups and for `jq`.
+    ///
+    /// Every event of the log, one per line.
     Export,
-    /// Add the events of a file `wf export` wrote to the store of their workforce on this
-    /// machine, creating it if there is none. The daemon must not run.
+    /// Add the events of a file `wf export` wrote to this machine.
+    ///
+    /// They go into the store of their workforce on this machine, which is created if there is
+    /// none. The daemon must not run.
     Import {
         /// The file `wf export` wrote.
         file: PathBuf,
@@ -198,8 +211,9 @@ pub struct LogArgs {
 
 #[derive(Subcommand)]
 pub enum PermissionsCommand {
-    /// Run the deciders of the machine config on a request, given as JSON on stdin as hooks get
-    /// it, or made up around a command.
+    /// Run the deciders of the machine config on a permission request.
+    ///
+    /// The request is given as JSON on stdin, as hooks get it, or made up around a command.
     Test {
         /// A shell command the request asks to run.
         #[arg(long)]
@@ -209,7 +223,9 @@ pub enum PermissionsCommand {
 
 #[derive(Subcommand)]
 pub enum HarnessCommand {
-    /// Start the harness and list the models it offers, which `wf agent add --model` takes.
+    /// List the models a harness offers, for `wf agent add --model`.
+    ///
+    /// Starts the harness to ask it.
     Models {
         /// `claude-code`, `opencode`, `codex` or `gemini-cli`.
         harness: HarnessName,
@@ -237,7 +253,7 @@ pub struct ReviewArgs {
 
 #[derive(Subcommand)]
 pub enum WorkCommand {
-    /// What this session is to do and how it reports back: the first prompt it was given.
+    /// The first prompt of this session: what to do and how to report.
     Brief,
     /// The work is finished: end the session and hand its commits on.
     Submit {
@@ -350,7 +366,9 @@ pub struct ForkArgs {
 
 #[derive(Subcommand)]
 pub enum ForkCommand {
-    /// Follow a fork this device is a member of: take it in and use it in this directory.
+    /// Follow a fork this device is a member of.
+    ///
+    /// Takes the fork in and uses it in this directory.
     Accept {
         /// The id of the new workforce, as shown by `wf status` or `wf fork list`.
         id: String,
@@ -368,7 +386,7 @@ pub enum DaemonCommand {
     Start(DaemonArgs),
     /// Stop the daemon and its sessions.
     Stop,
-    /// Stop the daemon if it runs, then start the binary of this command in the background.
+    /// Stop the daemon if it runs, then start this `wf` in the background.
     ///
     /// A rebuilt `wf` takes over: the new daemon is the one that runs this command's binary.
     Restart(DaemonArgs),
@@ -409,8 +427,9 @@ pub enum DeviceCommand {
     List,
     /// Change what this machine says about itself.
     Edit(DeviceEditArgs),
-    /// Print a git allowed-signers file of the workforce's devices, to check the merges they
-    /// sign: `wf device allowed-signers > .git/allowed_signers`, then
+    /// Print a git allowed-signers file of the workforce's devices.
+    ///
+    /// It checks the merges they sign: `wf device allowed-signers > .git/allowed_signers`, then
     /// `git config gpg.ssh.allowedSignersFile .git/allowed_signers`.
     AllowedSigners,
 }
@@ -509,14 +528,20 @@ pub enum AgentCommand {
     Add(AgentAddArgs),
     /// List your agents and those of the other members.
     List,
-    /// Show an agent: its definition, the devices that host it, its sessions and its activity.
+    /// Show an agent: its definition, devices, sessions and activity.
+    ///
+    /// The devices are those that host it.
     Show {
         /// The agent: its name for one of yours, `@ada/grace` for one of another member.
         agent: String,
     },
-    /// Change an agent of yours. Fields that are given replace the current value.
+    /// Change an agent of yours.
+    ///
+    /// Fields that are given replace the current value.
     Edit(AgentEditArgs),
-    /// Remove an agent of yours. Its sessions stay in the log; `wf agent add` brings it back.
+    /// Remove an agent of yours.
+    ///
+    /// Its sessions stay in the log; `wf agent add` brings it back.
     Remove {
         /// The agent to remove.
         name: AgentName,
@@ -617,30 +642,41 @@ pub struct AgentEditArgs {
 
 #[derive(Subcommand)]
 pub enum ItemCommand {
-    /// Create an item. Without `--title`, write it in `$VISUAL` or `$EDITOR` at a terminal.
+    /// Create an item; without `--title`, in `$VISUAL` or `$EDITOR`.
+    ///
+    /// Without `--title`, write it in `$VISUAL` or `$EDITOR` at a terminal.
     Add(ItemAddArgs),
     /// List the live items, filtered and grouped.
     List(ItemListArgs),
     /// Find items by words in their title, body and comments.
     Search(ItemSearchArgs),
-    /// Show an item with its comments, links, review and what happened to it.
+    /// Show an item: its comments, links, review and what happened to it.
     Show {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
-    /// Change an item. Without flags, edit it in `$VISUAL` or `$EDITOR` at a terminal.
+    /// Change an item; without flags, in `$VISUAL` or `$EDITOR`.
+    ///
+    /// Without flags, edit it in `$VISUAL` or `$EDITOR` at a terminal.
     Edit(ItemEditArgs),
-    /// Tick steps of an item, numbered as `wf item show` prints them: `wf item check k3f 1 3`.
-    /// `wf check` runs the policy's checks instead.
+    /// Tick steps of an item: `wf item check k3f 1 3`.
+    ///
+    /// The steps are numbered as `wf item show` prints them. `wf check` runs the policy's checks
+    /// instead.
     Check(ItemCheckArgs),
-    /// Release drafts for the dispatcher, or reopen items: `wf item open k3f a8c`.
+    /// Release drafts or reopen items: `wf item open k3f a8c`.
+    ///
+    /// Released drafts go to the dispatcher.
     Open(ItemMoveArgs),
-    /// Hold items back as drafts: nothing starts a draft until `wf item open`.
+    /// Hold items back as drafts, until `wf item open`.
+    ///
+    /// Nothing starts a draft until `wf item open`.
     Draft(ItemMoveArgs),
     /// Finish items without a session. For a proposed decision: accept it.
     Done(ItemMoveArgs),
-    /// Cancel an item. For a proposed decision: reject it. A session working on it stops after
-    /// its current turn.
+    /// Cancel an item. For a proposed decision: reject it.
+    ///
+    /// A session working on it stops after its current turn.
     Cancel {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
@@ -650,7 +686,9 @@ pub enum ItemCommand {
     },
     /// Add or remove a dependency, or say a decision supersedes another.
     Link(ItemLinkArgs),
-    /// Show the work of an item, through git: its pager, colors and diff settings apply.
+    /// Show the work of an item through git.
+    ///
+    /// The pager, colors and diff settings of git apply.
     Diff {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
@@ -658,7 +696,9 @@ pub enum ItemCommand {
         #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
         git_args: Vec<String>,
     },
-    /// Check out the work of an item in the main checkout, detached; `-` goes back.
+    /// Check out the work of an item in the main checkout; `-` goes back.
+    ///
+    /// The work is checked out detached.
     Checkout {
         /// The item, or `-` for where the checkout was before.
         item: Option<String>,
@@ -668,8 +708,9 @@ pub enum ItemCommand {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,
     },
-    /// Hide an item from lists; its history stays. `--done` and `--cancelled` archive every live
-    /// item that is done or cancelled.
+    /// Hide an item from lists; its history stays.
+    ///
+    /// `--done` and `--cancelled` archive every live item that is done or cancelled.
     Archive {
         /// The start of an item id. Without one, pick at a terminal.
         #[arg(conflicts_with_all = ["done", "cancelled"])]

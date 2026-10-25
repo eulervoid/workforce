@@ -19,7 +19,7 @@ anyhow = "1"
 blake3 = "1"
 bytesize = "2.7.0"
 close_fds = "0.3"
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
 comfy-table = { version = "8", features = ["custom_styling"] }
 iroh = "1.3"
 iroh-gossip = "0.101"
