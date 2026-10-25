@@ -120,7 +120,7 @@ fn device_answer(
         LiveDiff::Answer(DiffAnswer::Unchanged) => shown(device, DeviceDiff::Unchanged),
         LiveDiff::Unreachable { device, reason } => shown(device, DeviceDiff::Unreachable(reason)),
         LiveDiff::Answer(DiffAnswer::NotHere) => bail!(
-            "the device of the session of #{}, {}, has no branch or worktree of it",
+            "the device of the session of #{}, {}, has no branch or agent repository of it",
             id.short(),
             device.fmt_short()
         ),
@@ -416,7 +416,7 @@ mod tests {
             error
                 .unwrap()
                 .to_string()
-                .contains("has no branch or worktree")
+                .contains("has no branch or agent repository")
         );
         assert!(
             device_answer(id, device(), LiveDiff::NoSession)

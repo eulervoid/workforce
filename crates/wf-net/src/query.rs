@@ -1,4 +1,4 @@
-//! `wf/query/1`: ask the device that has the worktree of an item what its agent is changing.
+//! `wf/query/1`: ask the device that has the agent repository of an item what its agent is changing.
 //!
 //! The initiator sends one [`Query`] and the responder answers with one [`DiffAnswer`]. A live diff
 //! is local data nobody needs to keep (P11), so it is asked of the one device that has it and
@@ -45,7 +45,7 @@ pub enum DiffAnswer {
     /// Nothing moved since `since`.
     Unchanged,
     Work(Work),
-    /// This device has no branch or worktree of the item.
+    /// This device has no branch or agent repository of the item.
     NotHere,
     /// The work is larger than the largest answer; the asker sees it is not a broken connection.
     TooLarge,

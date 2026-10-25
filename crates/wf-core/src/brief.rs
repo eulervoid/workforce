@@ -558,7 +558,7 @@ impl WorkBrief {
         let _ = writeln!(
             text,
             "## How to work\n\n\
-             - You are in a git worktree on the branch `{branch}`, started from `{target}`. Work only here.\n\
+             - You are in your own clone of the repository, on the branch `{branch}`, started from `{target}`. Work only here.\n\
              - Commit small and often: only commits carry over to a later session.\n\
              - Tick each step as soon as it is done, not all at the end: `wf item check {item} <number>`\n\
              - Report while you work: `wf comment {item} \"<what you chose, what you rejected, and why>\" --step <number>`\n  \

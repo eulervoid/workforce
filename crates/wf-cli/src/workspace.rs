@@ -449,7 +449,7 @@ impl Workspace {
         }
     }
 
-    /// What the caches in the worktrees take, as the daemon last checked them against its budget;
+    /// What the caches in the agent repositories take, as the daemon last checked them against its budget;
     /// nothing without a daemon, or when the machine config sets no budget.
     pub fn cache_usage(&self) -> anyhow::Result<Option<CacheUsage>> {
         match &self.source {

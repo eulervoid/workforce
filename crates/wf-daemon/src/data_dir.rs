@@ -7,7 +7,8 @@
 //! <workforce>/principal.key   the principal key of the workforce
 //! <workforce>/store.redb      the store
 //! <workforce>/transcripts/    the transcripts of its sessions
-//! <workforce>/worktrees/      the worktrees of its items
+//! <workforce>/git/           wf's bare repository of the workforce
+//! <workforce>/repos/         the agent repositories of its items, and the directories of other sessions
 //! ```
 //!
 //! The key files are mode 0600, `keys/` is 0700, and the sandbox denies agents what

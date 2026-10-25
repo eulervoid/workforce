@@ -35,10 +35,10 @@ fn work(head: CommitId) -> Work {
     }
 }
 
-/// The work of the item in the worktree, if the device has one.
-struct Worktree(Option<Work>);
+/// The work of the item in the agent repository, if the device has one.
+struct AgentRepository(Option<Work>);
 
-impl QuerySource for Worktree {
+impl QuerySource for AgentRepository {
     fn diff(
         &self,
         _: WorkforceId,
@@ -63,7 +63,7 @@ fn request(workforce: WorkforceId, since: Option<CommitId>) -> Query {
 }
 
 /// Runs the request against `source` over an in-memory stream.
-async fn ask(source: &Worktree, since: Option<CommitId>) -> DiffAnswer {
+async fn ask(source: &AgentRepository, since: Option<CommitId>) -> DiffAnswer {
     let fixture = Fixture::new(1);
     let (left, mut right) = tokio::io::duplex(8192);
     let asked = request(fixture.workforce(), since);
@@ -79,7 +79,7 @@ async fn ask(source: &Worktree, since: Option<CommitId>) -> DiffAnswer {
 
 #[tokio::test]
 async fn a_diff_is_answered_with_the_work() {
-    let source = Worktree(Some(work(commit(1))));
+    let source = AgentRepository(Some(work(commit(1))));
     assert_eq!(ask(&source, None).await, DiffAnswer::Work(work(commit(1))));
     assert_eq!(
         ask(&source, Some(commit(2))).await,
@@ -89,13 +89,13 @@ async fn a_diff_is_answered_with_the_work() {
 
 #[tokio::test]
 async fn the_same_head_is_unchanged() {
-    let source = Worktree(Some(work(commit(1))));
+    let source = AgentRepository(Some(work(commit(1))));
     assert_eq!(ask(&source, Some(commit(1))).await, DiffAnswer::Unchanged);
 }
 
 #[tokio::test]
 async fn an_item_without_work_here_is_not_here() {
-    assert_eq!(ask(&Worktree(None), None).await, DiffAnswer::NotHere);
+    assert_eq!(ask(&AgentRepository(None), None).await, DiffAnswer::NotHere);
 }
 
 #[tokio::test]
@@ -103,7 +103,7 @@ async fn a_large_diff_fits_the_answer() {
     let mut big = work(commit(1));
     big.committed = "+".to_string() + &"x".repeat(100) + "\n";
     big.committed = big.committed.repeat(200_000);
-    let source = Worktree(Some(big.clone()));
+    let source = AgentRepository(Some(big.clone()));
     assert_eq!(ask(&source, None).await, DiffAnswer::Work(big));
 }
 
@@ -111,7 +111,7 @@ async fn a_large_diff_fits_the_answer() {
 async fn work_above_the_largest_answer_is_told_apart_from_a_broken_connection() {
     let mut huge = work(commit(1));
     huge.committed = "x".repeat(MAX_FRAME_LEN as usize + 1);
-    let source = Worktree(Some(huge));
+    let source = AgentRepository(Some(huge));
     assert_eq!(ask(&source, None).await, DiffAnswer::TooLarge);
 }
 
@@ -139,7 +139,7 @@ async fn a_responder_gives_up_on_a_peer_that_does_not_read() {
     let result = query_respond_within(
         right,
         request(fixture.workforce(), None),
-        &Worktree(Some(work(commit(1)))),
+        &AgentRepository(Some(work(commit(1)))),
         Duration::from_millis(100),
     )
     .await;
@@ -168,7 +168,7 @@ async fn a_bound_device_is_answered_and_a_stranger_is_refused() {
     }
     let fixture = Fixture::new(2);
     let holder = node(&fixture, &fixture.devices[0]).await;
-    holder.serve_query(Arc::new(Worktree(Some(work(commit(1))))));
+    holder.serve_query(Arc::new(AgentRepository(Some(work(commit(1))))));
     let member = node(&fixture, &fixture.devices[1]).await;
     let stranger = node(&fixture, &DeviceSigner::from_bytes(&[200; 32]).unwrap()).await;
 

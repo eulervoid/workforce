@@ -22,8 +22,8 @@ pub struct ItemWork {
     /// the merge.
     pub commit: CommitId,
     pub changes: Changes,
-    /// The files the worktree of the session has changed since `commit`, new files included;
-    /// `None` when no worktree was read. They are not part of the work that review and merge
+    /// The files the session has changed in its agent repository since `commit`, new files included;
+    /// `None` when the repository was not read. They are not part of the work that review and merge
     /// see, so no comment on lines goes to them.
     pub uncommitted: Option<Vec<FileDiff>>,
 }
@@ -306,7 +306,7 @@ impl DiffPane {
 
     fn take_in(&mut self, work: Result<ItemWork, String>) {
         // Rows of the uncommitted part come last, so a selection and a press in the commits
-        // stay as they are while only the worktree moves.
+        // stay as they are while only the uncommitted files move.
         let same_commits = match (&self.work, &work) {
             (Some(Ok(known)), Ok(new)) => {
                 known.commit == new.commit && known.changes == new.changes
@@ -340,7 +340,7 @@ impl DiffPane {
         }
     }
 
-    /// The files the worktree changed since the head; none while no worktree was read.
+    /// The files changed in the agent repository since the head; none while it was not read.
     pub fn uncommitted_files(&self) -> &[FileDiff] {
         match &self.work {
             Some(Ok(ItemWork {
@@ -381,7 +381,7 @@ impl DiffPane {
             .unwrap_or_default()
     }
 
-    /// Whether a worktree was read, so the uncommitted part is shown, even if it has no files.
+    /// Whether the agent repository was read, so the uncommitted part is shown, even if it has no files.
     pub fn has_uncommitted_part(&self) -> bool {
         matches!(
             &self.work,

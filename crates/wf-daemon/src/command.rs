@@ -21,8 +21,8 @@ const TAIL_LINES: usize = 40;
 /// How much of the end of the log is read for those lines at most.
 const TAIL_BYTES: u64 = 16 * 1024;
 
-/// The variable that would put cargo's build output outside the worktree, where the builds of
-/// other worktrees mix into it.
+/// The variable that would put cargo's build output outside the check worktree, where the builds
+/// of agent repositories mix into it.
 const CARGO_TARGET_DIR: &str = "CARGO_TARGET_DIR";
 
 /// The prefix of the variables wf sets for a session: `WF_SESSION`, `WF_SESSION_TOKEN`,
@@ -42,7 +42,7 @@ pub(crate) struct CommandRunner<'a> {
 pub enum Confinement<'a> {
     /// In the sandbox and environment the machine config gives agents.
     Agents {
-        /// The directory it runs in, which [`Access::worktree`] names, and what else the sandbox
+        /// The directory it runs in, which [`Access::directory`] names, and what else the sandbox
         /// allows.
         access: Access<'a>,
         sandbox: &'a SandboxConfig,

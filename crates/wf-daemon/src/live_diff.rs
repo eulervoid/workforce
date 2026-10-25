@@ -1,6 +1,6 @@
 //! The live diff of an item: what its work session on some device has changed so far.
 //!
-//! The device of the session answers from its own worktree over `wf/query/1`, and a device that
+//! The device of the session answers from its own agent repository over `wf/query/1`, and a device that
 //! asks for it dials that one, so the answer is the diff as the session's device shows it, against
 //! the target it has.
 
@@ -33,8 +33,8 @@ pub enum LiveDiffError {
 
 impl Daemon {
     /// The work of `item` as this device has it: the head of its branch against the target, read
-    /// the way `wf item diff` reads it. [`DiffAnswer::NotHere`] when there is no worktree or
-    /// branch of the item here, and [`DiffAnswer::Unchanged`] while the head is `since`.
+    /// the way `wf item diff` reads it. [`DiffAnswer::NotHere`] when there is no agent repository
+    /// or branch of the item here, and [`DiffAnswer::Unchanged`] while the head is `since`.
     pub(crate) async fn diff_here(
         &self,
         workforce: WorkforceId,
@@ -56,11 +56,13 @@ impl Daemon {
             .ok_or(LiveDiffError::NoPolicy)?;
         self.ensure_bare_repository(workforce, &loaded.storage)
             .await;
-        let worktree = item_repository(&self.workforce_directory(workforce), item);
+        let agent_repository = item_repository(&self.workforce_directory(workforce), item);
         let repository = self.bare_repository(workforce);
-        tokio::task::spawn_blocking(move || read_work(repository, worktree, item, &target, since))
-            .await
-            .map_err(LiveDiffError::Task)?
+        tokio::task::spawn_blocking(move || {
+            read_work(repository, agent_repository, item, &target, since)
+        })
+        .await
+        .map_err(LiveDiffError::Task)?
     }
 
     /// The live diff of `item`, from the device of its live work session: here without the
@@ -108,12 +110,12 @@ impl Daemon {
 
 fn read_work(
     repository: PathBuf,
-    worktree: PathBuf,
+    agent_repository: PathBuf,
     item: ItemId,
     target: &str,
     since: Option<CommitId>,
 ) -> Result<DiffAnswer, LiveDiffError> {
-    if !worktree.is_dir() {
+    if !agent_repository.is_dir() {
         return Ok(DiffAnswer::NotHere);
     }
     let git = GitCli::open(&repository)?;
@@ -131,16 +133,16 @@ fn read_work(
     }))
 }
 
-/// Answers `wf/query/1` from the worktrees of this machine.
-pub(crate) struct WorktreeQuery(Weak<Daemon>);
+/// Answers `wf/query/1` from the agent repositories of this machine.
+pub(crate) struct RepositoryQuery(Weak<Daemon>);
 
-impl WorktreeQuery {
+impl RepositoryQuery {
     pub(crate) fn new(daemon: &Arc<Daemon>) -> Arc<Self> {
         Arc::new(Self(Arc::downgrade(daemon)))
     }
 }
 
-impl wf_net::QuerySource for WorktreeQuery {
+impl wf_net::QuerySource for RepositoryQuery {
     fn diff(
         &self,
         workforce: WorkforceId,

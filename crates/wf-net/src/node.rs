@@ -636,7 +636,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         result.map_err(|source| NetError::Git { peer: name, source })
     }
 
-    /// Asks a device for the diff of an item, which it answers from its worktree.
+    /// Asks a device for the diff of an item, which it answers from its agent repository.
     pub async fn query_diff(
         &self,
         peer: impl Into<EndpointAddr>,

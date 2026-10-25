@@ -96,8 +96,8 @@ impl Daemon {
         .await;
     }
 
-    /// While the caches in the worktrees of `workforce` take more than the budget, deletes those
-    /// of the least recently used worktree that no live session runs in. Without `[storage]` in
+    /// While the caches in the agent repositories of `workforce` take more than the budget, deletes those
+    /// of the least recently used repository that no live session runs in. Without `[storage]` in
     /// the machine config, nothing is deleted. Measuring walks every cache, so it happens at most
     /// every [`MEASURE_CACHES_EVERY`], unless the disk is full.
     pub(crate) async fn keep_caches_in_budget(&self, workforce: WorkforceId, loaded: &Loaded) {
@@ -132,22 +132,22 @@ impl Daemon {
         let Ok(used_bytes) = blocking(move || {
             let measured = caches::measure(&directory, &storage.caches);
             let mut used_bytes = caches::total(&measured);
-            for worktree in caches::over_budget(&measured, budget_bytes, &busy) {
-                match caches::delete(worktree, &storage.caches) {
+            for repository in caches::over_budget(&measured, budget_bytes, &busy) {
+                match caches::delete(repository, &storage.caches) {
                     Ok(()) => {
                         used_bytes -= measured
                             .iter()
-                            .find(|caches| caches.worktree == worktree)
+                            .find(|caches| caches.repository == repository)
                             .map_or(0, |caches| caches.bytes);
                         tracing::info!(
                             "deleted the caches of {} to stay under the budget of {}",
-                            worktree.display(),
+                            repository.display(),
                             storage.budget.display().si()
                         );
                     }
                     Err(error) => tracing::warn!(
                         "could not delete the caches of {}: {error}",
-                        worktree.display()
+                        repository.display()
                     ),
                 }
             }

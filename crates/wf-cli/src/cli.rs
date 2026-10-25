@@ -271,7 +271,7 @@ pub enum WorkCommand {
 
 #[derive(Subcommand)]
 pub enum SessionCommand {
-    /// Start an agent on an item, in its own worktree. Needs the daemon.
+    /// Start an agent on an item, in its own clone of the repository. Needs the daemon.
     Start(SessionStartArgs),
     /// List the sessions, live ones first.
     List {
@@ -703,7 +703,7 @@ pub enum ItemCommand {
         /// The item, or `-` for where the checkout was before.
         item: Option<String>,
     },
-    /// Print the worktree of an item, as in `cd $(wf item path k3f7)`.
+    /// Print the directory of the agent repository of an item, as in `cd $(wf item path k3f7)`.
     Path {
         /// The start of an item id. Without one, pick at a terminal.
         item: Option<String>,

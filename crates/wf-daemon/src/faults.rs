@@ -307,7 +307,7 @@ mod tests {
             .expect("a full disk is remembered");
         assert!(first.what.starts_with("the log: writing the log failed"));
         faults.note_space(
-            "a worktree",
+            "an agent repository",
             &std::io::Error::other("fatal: Unable to create 'x.lock': No space left on device"),
         );
         assert_eq!(

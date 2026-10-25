@@ -381,12 +381,12 @@ impl GitCli {
         Ok(parse_worktrees(&listing))
     }
 
-    /// The tracked files edited in `worktree`. Untracked files do not count, such as the marker
+    /// The tracked files edited in `directory`. Untracked files do not count, such as the marker
     /// `wf init` leaves: git itself refuses to overwrite one, and nothing else is at risk.
-    fn changed_paths(&self, worktree: &Path) -> Result<Vec<String>, VcsError> {
+    fn changed_paths(&self, directory: &Path) -> Result<Vec<String>, VcsError> {
         let status = self
             .run(
-                worktree,
+                directory,
                 &[],
                 ["status", "--porcelain", "-z", "--untracked-files=no"],
             )?
@@ -409,8 +409,8 @@ impl GitCli {
         Ok(paths)
     }
 
-    fn is_clean(&self, worktree: &Path) -> Result<bool, VcsError> {
-        Ok(self.changed_paths(worktree)?.is_empty())
+    fn is_clean(&self, directory: &Path) -> Result<bool, VcsError> {
+        Ok(self.changed_paths(directory)?.is_empty())
     }
 
     /// Moves `target` from `old` to `new`, if nothing moved it in the meantime: a compare-and-swap
@@ -833,36 +833,36 @@ impl GitCli {
         onto: CommitId,
         session_config: Vec<(String, String)>,
     ) -> Result<Rebase, VcsError> {
-        let worktree = self.repository.as_path();
+        let directory = self.repository.as_path();
         let mut args = Vec::new();
-        match self.stopped_rebase(worktree)? {
+        match self.stopped_rebase(directory)? {
             StoppedRebase::Conflict { .. } | StoppedRebase::Stopped => {
                 let unresolved: Vec<String> = self
-                    .conflicts(worktree)?
+                    .conflicts(directory)?
                     .into_iter()
-                    .filter(|conflict| !conflict.is_resolved_in(worktree))
+                    .filter(|conflict| !conflict.is_resolved_in(directory))
                     .map(|conflict| conflict.path)
                     .collect();
                 if !unresolved.is_empty() {
                     return Ok(Rebase::Conflict { paths: unresolved });
                 }
-                self.run(worktree, &[], ["add", "--update"])?.ok()?;
+                self.run(directory, &[], ["add", "--update"])?.ok()?;
                 args.extend(["rebase", "--continue"].map(str::to_string));
             }
             StoppedRebase::NotStopped => {
                 let onto = onto.to_string();
                 let contained = self.run(
-                    worktree,
+                    directory,
                     &[],
                     ["merge-base", "--is-ancestor", onto.as_str(), "HEAD"],
                 )?;
                 if contained.success {
                     return Ok(Rebase::UpToDate);
                 }
-                let paths = self.changed_paths(worktree)?;
+                let paths = self.changed_paths(directory)?;
                 if !paths.is_empty() {
                     return Ok(Rebase::DirtyCheckout(DirtyCheckout {
-                        worktree: worktree.to_path_buf(),
+                        directory: directory.to_path_buf(),
                         paths,
                     }));
                 }
@@ -887,30 +887,30 @@ impl GitCli {
             .map(|(name, value)| (name.as_str(), value.as_str()))
             .collect();
         environment.push(("GIT_EDITOR", "true"));
-        let rebased = self.run(worktree, &environment, &args)?;
+        let rebased = self.run(directory, &environment, &args)?;
         if rebased.success {
             return Ok(Rebase::Rebased);
         }
-        match self.stopped_rebase(worktree)? {
+        match self.stopped_rebase(directory)? {
             StoppedRebase::Conflict { paths } => Ok(Rebase::Conflict { paths }),
             // Git refused before it began, or stopped for something other than a conflict.
             StoppedRebase::Stopped | StoppedRebase::NotStopped => Err(rebased.error()),
         }
     }
 
-    /// Whether a rebase is stopped in `worktree`, and at which files.
-    pub fn stopped_rebase(&self, worktree: &Path) -> Result<StoppedRebase, VcsError> {
+    /// Whether a rebase is stopped in `directory`, and at which files.
+    pub fn stopped_rebase(&self, directory: &Path) -> Result<StoppedRebase, VcsError> {
         let mut stopped = false;
         for state in ["rebase-merge", "rebase-apply"] {
             let args = ["rev-parse", "--path-format=absolute", "--git-path", state];
-            let directory = self.run(worktree, &[], args)?.ok()?;
-            stopped |= Path::new(directory.trim()).is_dir();
+            let state_directory = self.run(directory, &[], args)?.ok()?;
+            stopped |= Path::new(state_directory.trim()).is_dir();
         }
         if !stopped {
             return Ok(StoppedRebase::NotStopped);
         }
         let paths: Vec<String> = self
-            .conflicts(worktree)?
+            .conflicts(directory)?
             .into_iter()
             .map(|conflict| conflict.path)
             .collect();
@@ -955,15 +955,15 @@ struct Conflict {
 }
 
 impl Conflict {
-    /// Whether the file in `worktree` is resolved though the index still has it unmerged. Only a
+    /// Whether the file in `directory` is resolved though the index still has it unmerged. Only a
     /// text file with both sides is: git leaves markers in it, and once they are gone it has been
     /// edited. A binary file or a file one side deleted holds no markers either way, so its
     /// content says nothing; it is resolved when it is staged, and then it is not unmerged.
-    fn is_resolved_in(&self, worktree: &Path) -> bool {
+    fn is_resolved_in(&self, directory: &Path) -> bool {
         if !(self.in_target && self.in_commit) {
             return false;
         }
-        match std::fs::read(worktree.join(&self.path)) {
+        match std::fs::read(directory.join(&self.path)) {
             Ok(text) => !text.contains(&0) && !has_conflict_markers(&text),
             Err(_) => false,
         }
@@ -977,10 +977,10 @@ fn has_conflict_markers(text: &[u8]) -> bool {
 }
 
 impl GitCli {
-    /// The files the index has unmerged in `worktree`, relative to it.
-    fn conflicts(&self, worktree: &Path) -> Result<Vec<Conflict>, VcsError> {
+    /// The files the index has unmerged in `directory`, relative to it.
+    fn conflicts(&self, directory: &Path) -> Result<Vec<Conflict>, VcsError> {
         let listing = self
-            .run(worktree, &[], ["ls-files", "--unmerged", "-z"])?
+            .run(directory, &[], ["ls-files", "--unmerged", "-z"])?
             .ok()?;
         // Each entry reads `<mode> <object> <stage>\t<path>`: stage 2 is the target's version,
         // stage 3 the rebased commit's.
@@ -2091,22 +2091,22 @@ mod tests {
     #[test]
     fn the_branch_is_rebased_onto_the_target_once() {
         let repo = TestRepo::new();
-        let (worktree, agent) = agent_repository(&repo);
-        commit_in(&worktree, "a.txt", "a\n");
-        commit_in(&worktree, "c.txt", "c\n");
+        let (directory, agent) = agent_repository(&repo);
+        commit_in(&directory, "a.txt", "a\n");
+        commit_in(&directory, "c.txt", "c\n");
         let target = commit_to_main(&repo, "b.txt", "b\n");
 
         assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
-        assert_eq!(ahead(&worktree, target), 2);
+        assert_eq!(ahead(&directory, target), 2);
         assert_eq!(
-            git_in(&worktree, &["rev-parse", "HEAD~2"]),
+            git_in(&directory, &["rev-parse", "HEAD~2"]),
             target.to_string()
         );
         assert_eq!(
-            git_in(&worktree, &["log", "-2", "--format=%s"]),
+            git_in(&directory, &["log", "-2", "--format=%s"]),
             "change c.txt\nchange a.txt"
         );
-        assert!(worktree.join("b.txt").is_file());
+        assert!(directory.join("b.txt").is_file());
 
         let head = agent.branch_head("wf/k3f9").unwrap();
         assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::UpToDate);
@@ -2116,9 +2116,9 @@ mod tests {
     #[test]
     fn a_rebase_stops_at_each_conflict_until_the_files_are_resolved() {
         let repo = TestRepo::new();
-        let (worktree, agent) = agent_repository(&repo);
-        commit_in(&worktree, "file.txt", "one\nTWO\nthree\n");
-        let work = commit_in(&worktree, "file.txt", "one\nTWO\nTHREE\n");
+        let (directory, agent) = agent_repository(&repo);
+        commit_in(&directory, "file.txt", "one\nTWO\nthree\n");
+        let work = commit_in(&directory, "file.txt", "one\nTWO\nTHREE\n");
         let target = commit_to_main(&repo, "file.txt", "one\n2\n3\n");
         let conflict = Rebase::Conflict {
             paths: vec!["file.txt".into()],
@@ -2126,7 +2126,7 @@ mod tests {
 
         assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
         assert_eq!(
-            agent.stopped_rebase(&worktree).unwrap(),
+            agent.stopped_rebase(&directory).unwrap(),
             StoppedRebase::Conflict {
                 paths: vec!["file.txt".to_string()]
             }
@@ -2134,26 +2134,26 @@ mod tests {
         // Nothing resolved yet: the same files are named again.
         assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
         // Given up, the branch is checked out as it was; the next rebase stops at the same place.
-        git_in(&worktree, &["rebase", "--abort"]);
+        git_in(&directory, &["rebase", "--abort"]);
         assert_eq!(
-            agent.stopped_rebase(&worktree).unwrap(),
+            agent.stopped_rebase(&directory).unwrap(),
             StoppedRebase::NotStopped
         );
-        assert_eq!(git_in(&worktree, &["rev-parse", "HEAD"]), work.to_string());
+        assert_eq!(git_in(&directory, &["rev-parse", "HEAD"]), work.to_string());
         assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
 
         // The first commit is resolved; the second conflicts in turn.
-        repo.write(&worktree, "file.txt", "one\nTWO\n3\n");
+        repo.write(&directory, "file.txt", "one\nTWO\n3\n");
         assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
-        repo.write(&worktree, "file.txt", "one\nTWO\nTHREE\n");
+        repo.write(&directory, "file.txt", "one\nTWO\nTHREE\n");
         assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
         assert_eq!(
-            agent.stopped_rebase(&worktree).unwrap(),
+            agent.stopped_rebase(&directory).unwrap(),
             StoppedRebase::NotStopped
         );
-        assert_eq!(ahead(&worktree, target), 2);
+        assert_eq!(ahead(&directory, target), 2);
         assert_eq!(
-            std::fs::read_to_string(worktree.join("file.txt")).unwrap(),
+            std::fs::read_to_string(directory.join("file.txt")).unwrap(),
             "one\nTWO\nTHREE\n"
         );
     }
@@ -2163,22 +2163,22 @@ mod tests {
         let repo = TestRepo::new();
         std::fs::write(repo.directory().join("img.bin"), b"\0base").unwrap();
         repo.commit(&repo.directory(), "add the file");
-        let (worktree, agent) = agent_repository(&repo);
-        std::fs::write(worktree.join("img.bin"), b"\0work").unwrap();
-        git_in(&worktree, &["add", "img.bin"]);
-        git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
+        let (directory, agent) = agent_repository(&repo);
+        std::fs::write(directory.join("img.bin"), b"\0work").unwrap();
+        git_in(&directory, &["add", "img.bin"]);
+        git_in(&directory, &["commit", "--quiet", "-m", "work"]);
         std::fs::write(repo.directory().join("img.bin"), b"\0main").unwrap();
         let target = repo.commit(&repo.directory(), "main side");
         let conflict = Rebase::Conflict {
             paths: vec!["img.bin".into()],
         };
         assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
-        // The worktree holds the target's version without markers; that is not a resolution.
+        // The directory holds the target's version without markers; that is not a resolution.
         assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
-        std::fs::write(worktree.join("img.bin"), b"\0work").unwrap();
-        git_in(&worktree, &["add", "img.bin"]);
+        std::fs::write(directory.join("img.bin"), b"\0work").unwrap();
+        git_in(&directory, &["add", "img.bin"]);
         assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
-        assert_eq!(std::fs::read(worktree.join("img.bin")).unwrap(), b"\0work");
+        assert_eq!(std::fs::read(directory.join("img.bin")).unwrap(), b"\0work");
     }
 
     #[test]
@@ -2188,18 +2188,18 @@ mod tests {
             let base = repo.directory();
             std::fs::write(base.join("gone.txt"), "base\n").unwrap();
             repo.commit(&base, "add the file");
-            let (worktree, agent) = agent_repository(&repo);
+            let (directory, agent) = agent_repository(&repo);
             let target = if deleted_by_main {
-                std::fs::write(worktree.join("gone.txt"), "work\n").unwrap();
-                git_in(&worktree, &["add", "gone.txt"]);
-                git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
+                std::fs::write(directory.join("gone.txt"), "work\n").unwrap();
+                git_in(&directory, &["add", "gone.txt"]);
+                git_in(&directory, &["commit", "--quiet", "-m", "work"]);
                 git_in(&base, &["rm", "--quiet", "gone.txt"]);
                 git_in(&base, &["commit", "--quiet", "-m", "main side"]);
                 repo.main()
             } else {
                 // The branch deletes the file the target modified.
-                git_in(&worktree, &["rm", "--quiet", "gone.txt"]);
-                git_in(&worktree, &["commit", "--quiet", "-m", "work"]);
+                git_in(&directory, &["rm", "--quiet", "gone.txt"]);
+                git_in(&directory, &["commit", "--quiet", "-m", "work"]);
                 std::fs::write(base.join("gone.txt"), "main\n").unwrap();
                 repo.commit(&base, "main side")
             };
@@ -2208,7 +2208,7 @@ mod tests {
             };
             assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
             assert_eq!(agent.rebase_plain(target).unwrap(), conflict);
-            git_in(&worktree, &["rm", "--quiet", "--force", "gone.txt"]);
+            git_in(&directory, &["rm", "--quiet", "--force", "gone.txt"]);
             assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
         }
     }
@@ -2216,11 +2216,11 @@ mod tests {
     #[test]
     fn a_rebase_stopped_with_the_apply_backend_is_found() {
         let repo = TestRepo::new();
-        let (worktree, agent) = agent_repository(&repo);
-        commit_in(&worktree, "file.txt", "one\nTWO\n");
+        let (directory, agent) = agent_repository(&repo);
+        commit_in(&directory, "file.txt", "one\nTWO\n");
         commit_to_main(&repo, "file.txt", "one\n2\n");
         let output = Command::new("git")
-            .current_dir(&worktree)
+            .current_dir(&directory)
             .args([
                 "-c",
                 "rebase.backend=apply",
@@ -2231,7 +2231,7 @@ mod tests {
             .unwrap();
         assert!(!output.status.success());
         let rebase_apply = git_in(
-            &worktree,
+            &directory,
             &[
                 "rev-parse",
                 "--path-format=absolute",
@@ -2241,7 +2241,7 @@ mod tests {
         );
         assert!(Path::new(rebase_apply.trim()).is_dir());
         assert_eq!(
-            agent.stopped_rebase(&worktree).unwrap(),
+            agent.stopped_rebase(&directory).unwrap(),
             StoppedRebase::Conflict {
                 paths: vec!["file.txt".into()],
             }
@@ -2251,20 +2251,20 @@ mod tests {
     #[test]
     fn a_branch_with_uncommitted_changes_is_not_rebased() {
         let repo = TestRepo::new();
-        let (worktree, agent) = agent_repository(&repo);
-        let work = commit_in(&worktree, "a.txt", "a\n");
+        let (directory, agent) = agent_repository(&repo);
+        let work = commit_in(&directory, "a.txt", "a\n");
         let target = commit_to_main(&repo, "b.txt", "b\n");
-        repo.write(&worktree, "file.txt", "uncommitted\n");
+        repo.write(&directory, "file.txt", "uncommitted\n");
         assert_eq!(
             agent.rebase_plain(target).unwrap(),
             Rebase::DirtyCheckout(DirtyCheckout {
-                worktree: agent.repository().to_path_buf(),
+                directory: agent.repository().to_path_buf(),
                 paths: vec!["file.txt".into()],
             })
         );
         assert_eq!(agent.branch_head("wf/k3f9").unwrap(), work);
         assert_eq!(
-            std::fs::read_to_string(worktree.join("file.txt")).unwrap(),
+            std::fs::read_to_string(directory.join("file.txt")).unwrap(),
             "uncommitted\n"
         );
     }
@@ -2273,9 +2273,9 @@ mod tests {
     fn rebased_commits_are_signed_as_the_config_of_the_repository_says() {
         let repo = TestRepo::new();
         repo.sign_with_a_fake_signer();
-        let (worktree, agent) = agent_repository(&repo);
-        commit_in(&worktree, "a.txt", "a\n");
-        let signed = || git_in(&worktree, &["cat-file", "commit", "HEAD"]).contains("gpgsig");
+        let (directory, agent) = agent_repository(&repo);
+        commit_in(&directory, "a.txt", "a\n");
+        let signed = || git_in(&directory, &["cat-file", "commit", "HEAD"]).contains("gpgsig");
         for (signing, expected) in [("false", false), ("true", true)] {
             let target = commit_to_main(&repo, "b.txt", &format!("{signing}\n"));
             for (key, value) in [
@@ -2287,7 +2287,7 @@ mod tests {
                     repo.root.path().join("fake-sign").to_str().unwrap(),
                 ),
             ] {
-                git_in(&worktree, &["config", key, value]);
+                git_in(&directory, &["config", key, value]);
             }
             assert_eq!(agent.rebase_plain(target).unwrap(), Rebase::Rebased);
             assert_eq!(signed(), expected, "gpgsign={signing}");
@@ -2312,7 +2312,7 @@ mod tests {
     #[test]
     fn a_long_list_of_changed_files_is_cut_short() {
         let dirty = DirtyCheckout {
-            worktree: PathBuf::from("/repo"),
+            directory: PathBuf::from("/repo"),
             paths: (1..=13).map(|number| format!("{number}.txt")).collect(),
         };
         assert_eq!(

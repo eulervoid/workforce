@@ -973,14 +973,14 @@ sh echo wip > wip.txt && git add wip.txt && git commit -q -m wip && mkdir target
 wf work release --note \"later\"
 ";
     let mut world = World::new(script).await;
-    let item = world.wf.add(&["--title", "Open with a worktree"]);
+    let item = world.wf.add(&["--title", "Open with an agent repository"]);
     start_session(&world, &item);
     world.ended_session().await;
-    let worktree = PathBuf::from(world.wf.run(&["item", "path", short(&item)]).trim());
-    let worktrees = worktree.parent().unwrap().to_path_buf();
-    let stray_checkout = worktrees.join("stray-12345678");
+    let agent_repository = PathBuf::from(world.wf.run(&["item", "path", short(&item)]).trim());
+    let repositories = agent_repository.parent().unwrap().to_path_buf();
+    let stray_checkout = repositories.join("stray-12345678");
     std::fs::create_dir_all(stray_checkout.join(".git")).unwrap();
-    let stray_directory = worktrees.join("stray-supervise");
+    let stray_directory = repositories.join("stray-supervise");
     std::fs::create_dir_all(&stray_directory).unwrap();
     world.machine_config("[storage]\nbudget = \"0B\"\ncaches = [\"target\"]\n");
 
@@ -989,7 +989,7 @@ wf work release --note \"later\"
         .wait("the strays and the cache gone", |_| {
             !stray_checkout.exists()
                 && !stray_directory.exists()
-                && !worktree.join("target").exists()
+                && !agent_repository.join("target").exists()
         })
         .await;
     world
@@ -1000,8 +1000,8 @@ wf work release --note \"later\"
         })
         .await;
     assert!(
-        worktree.join("wip.txt").is_file(),
-        "an open item keeps its worktree"
+        agent_repository.join("wip.txt").is_file(),
+        "an open item keeps its agent repository"
     );
 }
 

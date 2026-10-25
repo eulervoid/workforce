@@ -126,7 +126,7 @@ pub enum Call {
     Presence,
     /// Starts a session of `agent` on `item` by hand: a review
     /// of the named `step` (or of the only one open) when the item awaits a review, and a work
-    /// session in a worktree otherwise. Answered with its `SessionId`.
+    /// session in the item's agent repository otherwise. Answered with its `SessionId`.
     StartSession {
         agent: AgentName,
         item: ItemId,
@@ -150,7 +150,7 @@ pub enum Call {
     /// What is wrong with the machine, as [`MachineFaults`](crate::MachineFaults): that the
     /// daemon's writes fail for lack of space, and the harnesses whose sessions cannot run.
     MachineFaults,
-    /// What the caches in the worktrees of the workforce took when the daemon last checked them
+    /// What the caches in the agent repositories of the workforce took when the daemon last checked them
     /// against the budget of the machine config, as `Option<CacheUsage>`; `None` without a budget.
     CacheUsage,
     /// The work of an item as the device of its live work session shows it, for the principal;

@@ -81,19 +81,19 @@ impl CheckRunConfig {
     }
 }
 
-/// How much disk the caches in the worktrees of each workforce may take on this machine.
+/// How much disk the caches in the agent repositories of each workforce may take on this machine.
 #[derive(Debug, Clone, PartialEq, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct StorageConfig {
-    /// Over it, the daemon deletes the caches of the least recently used worktrees, such as
+    /// Over it, the daemon deletes the caches of the least recently used agent repositories, such as
     /// `"20GB"`.
     pub budget: ByteSize,
-    /// The paths inside a worktree that can be rebuilt, such as `["target"]`.
+    /// The paths inside an agent repository that can be rebuilt, such as `["target"]`.
     pub caches: Vec<PathBuf>,
 }
 
 impl StorageConfig {
-    /// A cache must stay inside its worktree, so that deleting it never deletes anything else.
+    /// A cache must stay inside its repository, so that deleting it never deletes anything else.
     fn check(&self) -> Result<(), String> {
         for cache in &self.caches {
             let inside = cache.components().next().is_some()
@@ -102,7 +102,7 @@ impl StorageConfig {
                     .all(|component| matches!(component, Component::Normal(_)));
             if !inside {
                 return Err(format!(
-                    "`{}` under `[storage]` is not a path inside a worktree",
+                    "`{}` under `[storage]` is not a path inside an agent repository",
                     cache.display()
                 ));
             }
@@ -273,7 +273,7 @@ impl SandboxConfig {
 }
 
 /// Runs agents in [Fence](https://github.com/fencesandbox/fence), which has to be installed. An
-/// agent may write in its worktree and where it needs to commit and talk to the daemon, and
+/// agent may write in its repository and where it needs to commit and talk to the daemon, and
 /// reach the model APIs and package registries of Fence's `code` template; everything else is
 /// denied. What this adds is on top of that, except for wf's keys and config and git's config and
 /// hooks, which the sandbox always denies.
@@ -703,7 +703,7 @@ mod tests {
     }
 
     #[test]
-    fn storage_has_a_budget_for_caches_inside_the_worktrees() {
+    fn storage_has_a_budget_for_caches_inside_the_agent_repositories() {
         assert_eq!(MachineConfig::parse("").ok().unwrap().storage, None);
         let text = "[storage]\nbudget = \"20GB\"\ncaches = [\"target\", \"web/node_modules\"]\n";
         assert_eq!(

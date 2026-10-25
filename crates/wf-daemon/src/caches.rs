@@ -1,4 +1,4 @@
-//! The caches in the worktrees of a workforce, such as build output, which the daemon keeps under
+//! The caches in the agent repositories of a workforce, such as build output, which the daemon keeps under
 //! the budget of `[storage]` in the machine config. It does not know what made them: a deleted
 //! cache only costs a cold build the next time.
 
@@ -9,7 +9,7 @@ use std::time::SystemTime;
 
 use serde::{Deserialize, Serialize};
 
-/// The disk the caches in the worktrees of a workforce take on this machine, and the budget the
+/// The disk the caches in the agent repositories of a workforce take on this machine, and the budget the
 /// daemon keeps them under.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CacheUsage {
@@ -17,33 +17,33 @@ pub struct CacheUsage {
     pub budget_bytes: u64,
 }
 
-/// The caches of one worktree, measured.
+/// The caches of one repository, measured.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct WorktreeCaches {
-    pub worktree: PathBuf,
+pub struct RepositoryCaches {
+    pub repository: PathBuf,
     /// The disk they take, each file counted once even when it has several links.
     pub bytes: u64,
     /// When anything in them was last written, such as by a build.
     pub last_used: SystemTime,
 }
 
-/// The caches of each directory in `worktrees` that has any, where `caches` are the paths of
-/// caches inside a worktree. A file linked from several places, as cargo links its outputs, is
+/// The caches of each directory in `repositories` that has any, where `caches` are the paths of
+/// caches inside a repository. A file linked from several places, as cargo links its outputs, is
 /// counted once.
-pub fn measure(worktrees: &Path, caches: &[PathBuf]) -> Vec<WorktreeCaches> {
-    let Ok(entries) = std::fs::read_dir(worktrees) else {
+pub fn measure(repositories: &Path, caches: &[PathBuf]) -> Vec<RepositoryCaches> {
+    let Ok(entries) = std::fs::read_dir(repositories) else {
         return Vec::new();
     };
     let mut seen = HashSet::new();
     let mut measured = Vec::new();
     for entry in entries.flatten() {
-        let worktree = entry.path();
+        let repository = entry.path();
         if !entry.file_type().is_ok_and(|kind| kind.is_dir()) {
             continue;
         }
         let mut found = None;
         for cache in caches {
-            for file in walkdir::WalkDir::new(worktree.join(cache))
+            for file in walkdir::WalkDir::new(repository.join(cache))
                 .into_iter()
                 .flatten()
             {
@@ -60,8 +60,8 @@ pub fn measure(worktrees: &Path, caches: &[PathBuf]) -> Vec<WorktreeCaches> {
             }
         }
         if let Some((bytes, last_used)) = found {
-            measured.push(WorktreeCaches {
-                worktree,
+            measured.push(RepositoryCaches {
+                repository,
                 bytes,
                 last_used,
             });
@@ -71,21 +71,21 @@ pub fn measure(worktrees: &Path, caches: &[PathBuf]) -> Vec<WorktreeCaches> {
 }
 
 /// The disk all `measured` caches take.
-pub fn total(measured: &[WorktreeCaches]) -> u64 {
+pub fn total(measured: &[RepositoryCaches]) -> u64 {
     measured.iter().map(|caches| caches.bytes).sum()
 }
 
-/// The worktrees whose caches to delete, least recently used first, until what is left fits
-/// `budget`. The caches of worktrees in `busy`, which sessions run in, are never deleted.
+/// The repositories whose caches to delete, least recently used first, until what is left fits
+/// `budget`. The caches of repositories in `busy`, which sessions run in, are never deleted.
 pub fn over_budget<'a>(
-    measured: &'a [WorktreeCaches],
+    measured: &'a [RepositoryCaches],
     budget: u64,
     busy: &BTreeSet<PathBuf>,
 ) -> Vec<&'a Path> {
     let mut used = total(measured);
-    let mut idle: Vec<&WorktreeCaches> = measured
+    let mut idle: Vec<&RepositoryCaches> = measured
         .iter()
-        .filter(|caches| !busy.contains(&caches.worktree))
+        .filter(|caches| !busy.contains(&caches.repository))
         .collect();
     idle.sort_by_key(|caches| caches.last_used);
     let mut deleted = Vec::new();
@@ -94,15 +94,15 @@ pub fn over_budget<'a>(
             break;
         }
         used -= caches.bytes;
-        deleted.push(caches.worktree.as_path());
+        deleted.push(caches.repository.as_path());
     }
     deleted
 }
 
-/// Deletes the caches of `worktree`, whole.
-pub fn delete(worktree: &Path, caches: &[PathBuf]) -> std::io::Result<()> {
+/// Deletes the caches of `repository`, whole.
+pub fn delete(repository: &Path, caches: &[PathBuf]) -> std::io::Result<()> {
     for cache in caches {
-        let path = worktree.join(cache);
+        let path = repository.join(cache);
         let removed = match std::fs::symlink_metadata(&path) {
             Ok(metadata) if metadata.is_dir() => std::fs::remove_dir_all(&path),
             Ok(_) => std::fs::remove_file(&path),
@@ -123,9 +123,9 @@ mod tests {
 
     use super::*;
 
-    fn caches(worktree: &str, bytes: u64, last_used_secs: u64) -> WorktreeCaches {
-        WorktreeCaches {
-            worktree: PathBuf::from(worktree),
+    fn caches(repository: &str, bytes: u64, last_used_secs: u64) -> RepositoryCaches {
+        RepositoryCaches {
+            repository: PathBuf::from(repository),
             bytes,
             last_used: SystemTime::UNIX_EPOCH + Duration::from_secs(last_used_secs),
         }
@@ -153,26 +153,26 @@ mod tests {
                 Path::new("/w/old"),
                 Path::new("/w/new")
             ],
-            "a busy worktree keeps its caches even over the budget"
+            "a busy repository keeps its caches even over the budget"
         );
     }
 
     #[test]
-    fn caches_are_measured_per_worktree_and_deleted_whole() {
+    fn caches_are_measured_per_repository_and_deleted_whole() {
         let root = tempfile::tempdir().unwrap();
-        let worktrees = root.path().join("worktrees");
-        let one = worktrees.join("one");
+        let repositories = root.path().join("repositories");
+        let one = repositories.join("one");
         std::fs::create_dir_all(one.join("target/debug")).unwrap();
         std::fs::create_dir_all(one.join("src")).unwrap();
         std::fs::write(one.join("target/debug/app"), vec![1; 64 * 1024]).unwrap();
         std::fs::hard_link(one.join("target/debug/app"), one.join("target/app")).unwrap();
         std::fs::write(one.join("src/main.rs"), vec![1; 64 * 1024]).unwrap();
-        std::fs::create_dir_all(worktrees.join("bare/src")).unwrap();
+        std::fs::create_dir_all(repositories.join("bare/src")).unwrap();
         let caches = [PathBuf::from("target"), PathBuf::from("web/node_modules")];
 
-        let measured = measure(&worktrees, &caches);
+        let measured = measure(&repositories, &caches);
         assert_eq!(measured.len(), 1, "{measured:?}");
-        assert_eq!(measured[0].worktree, one);
+        assert_eq!(measured[0].repository, one);
         let bytes = measured[0].bytes;
         assert!(
             (64 * 1024..2 * 64 * 1024).contains(&bytes),
@@ -182,6 +182,6 @@ mod tests {
         delete(&one, &caches).unwrap();
         assert!(!one.join("target").exists());
         assert!(one.join("src/main.rs").exists());
-        assert!(measure(&worktrees, &caches).is_empty());
+        assert!(measure(&repositories, &caches).is_empty());
     }
 }

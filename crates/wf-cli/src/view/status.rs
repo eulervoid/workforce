@@ -48,7 +48,7 @@ pub struct StatusView {
     /// What to do next, if anything stands out.
     pub next: Option<String>,
     pub refolded: bool,
-    /// What the caches in the worktrees take, when the machine config sets a budget.
+    /// What the caches in the agent repositories take, when the machine config sets a budget.
     pub caches: Option<CacheUsage>,
     /// What this device waits for before a session, a review or a merge can start, one line each.
     pub awaiting_commits: Vec<String>,

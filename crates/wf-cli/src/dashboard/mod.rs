@@ -315,7 +315,7 @@ struct Feed {
     taken: Option<Taken>,
     /// When each diff was last asked of the device of its session.
     asked_devices: Asks,
-    /// When the worktree of each diff on screen was last read.
+    /// When the agent repository of each diff on screen was last read.
     /// The executable as it was when the dashboard started.
     executable: Executable,
 }
@@ -328,7 +328,7 @@ enum Refreshed {
 }
 
 /// When each item was last asked about, however that came out, so a device that cannot be reached
-/// or a worktree is not read on every tick.
+/// or an agent repository is not read on every tick.
 struct Asks {
     every: Duration,
     at: HashMap<ItemId, Instant>,

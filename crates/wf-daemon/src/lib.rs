@@ -430,7 +430,7 @@ impl Daemon {
     }
 
     /// Has the node answer the other devices about `id`: sync from its log, and the work of its
-    /// items from this machine's worktrees.
+    /// items from this machine's agent repositories.
     fn serve_on(
         self: &Arc<Self>,
         node: &Node<StorageHandle>,
@@ -438,7 +438,7 @@ impl Daemon {
         storage: &StorageHandle,
     ) {
         node.serve(id, storage.clone());
-        node.serve_query(live_diff::WorktreeQuery::new(self));
+        node.serve_query(live_diff::RepositoryQuery::new(self));
         node.serve_git(git_service::UploadPack::new(self));
     }
 

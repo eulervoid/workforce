@@ -121,7 +121,7 @@ pub fn machine_fault_views(faults: &MachineFaults) -> Vec<InboxEntryView> {
             entry(
                 "The disk is full".to_string(),
                 format!(
-                    "free space on this machine, such as with `cargo clean` in old worktrees; \
+                    "free space on this machine, such as with `cargo clean` in old agent repositories; \
                      nothing is started until there is. Since {}, the daemon could not write {}",
                     timestamp(full.since_ms),
                     full.what

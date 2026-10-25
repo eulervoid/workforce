@@ -752,9 +752,10 @@ async fn a_join_with_an_invite_for_another_workforce_leaves_no_store_behind() {
     assert!(!data_dir.join(other.to_string()).exists());
 }
 
-/// Where `directory`, a daemon's data directory, has its worktrees, and a repository, standing in
-/// for the bare repository of the workforce, with the work of `item` on its branch in the
-/// worktree there; returns the head of the branch.
+/// Where `directory`, a daemon's data directory, has its agent repositories, and a repository,
+/// standing in for the bare repository of the workforce, with the work of `item` on its branch in
+/// the agent repository there (a worktree of the test repository); returns the head of the
+/// branch.
 fn give_work(
     directory: &Path,
     workforce: wf_core::id::WorkforceId,
@@ -768,10 +769,10 @@ fn give_work(
     let bare = wf_vcs::bare_repository(&workforce_directory);
     std::fs::remove_dir_all(&bare).unwrap();
     std::os::unix::fs::symlink(repository.directory(), bare).unwrap();
-    let worktree = wf_vcs::item_repository(&workforce_directory, item);
-    repository.prepare_worktree(&wf_vcs::item_branch(item), &worktree, "main");
-    repository.write(&worktree, "live.txt", "work in progress\n");
-    repository.commit(&worktree, "the first step")
+    let agent_repository = wf_vcs::item_repository(&workforce_directory, item);
+    repository.prepare_worktree(&wf_vcs::item_branch(item), &agent_repository, "main");
+    repository.write(&agent_repository, "live.txt", "work in progress\n");
+    repository.commit(&agent_repository, "the first step")
 }
 
 /// Starts a work session of a new item on the daemon behind `socket`, which has the item; returns
@@ -808,7 +809,7 @@ async fn live_diff(
 }
 
 #[tokio::test]
-async fn a_session_on_this_device_is_answered_from_its_worktree() {
+async fn a_session_on_this_device_is_answered_from_its_agent_repository() {
     use wf_daemon::proto::LiveDiff;
     use wf_net::DiffAnswer;
 
@@ -848,12 +849,12 @@ async fn a_session_on_this_device_is_answered_from_its_worktree() {
         LiveDiff::Answer(DiffAnswer::Unchanged)
     );
 
-    // The branch and the worktree are gone, as after the session ended.
-    let worktree = wf_vcs::item_repository(
+    // The branch and the agent repository are gone, as after the session ended.
+    let agent_repository = wf_vcs::item_repository(
         &DataDir::new(running._directory.path().to_path_buf()).workforce(&workforce),
         item,
     );
-    repository.remove_worktree(&worktree);
+    repository.remove_worktree(&agent_repository);
     repository
         .git
         .delete_branch(&wf_vcs::item_branch(item))
@@ -915,12 +916,12 @@ async fn a_device_reads_the_committed_work_of_a_session_on_another() {
         LiveDiff::Answer(DiffAnswer::Unchanged)
     );
 
-    // The branch and the worktree are gone, as after the session ended.
-    let worktree = wf_vcs::item_repository(
+    // The branch and the agent repository are gone, as after the session ended.
+    let agent_repository = wf_vcs::item_repository(
         &DataDir::new(vm_dir.path().to_path_buf()).workforce(&workforce),
         item,
     );
-    repository.remove_worktree(&worktree);
+    repository.remove_worktree(&agent_repository);
     repository
         .git
         .delete_branch(&wf_vcs::item_branch(item))

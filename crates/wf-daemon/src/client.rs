@@ -240,7 +240,7 @@ impl DaemonClient {
         self.call(workforce, Call::Permissions)
     }
 
-    /// What the caches in the worktrees took when the daemon last checked them against its budget;
+    /// What the caches in the agent repositories took when the daemon last checked them against its budget;
     /// `None` when the machine config sets none.
     pub fn cache_usage(
         &mut self,

@@ -99,7 +99,7 @@ pub fn bare_repository(workforce_directory: &Path) -> PathBuf {
     workforce_directory.join("git")
 }
 
-/// The name of the directory of the worktree of an item.
+/// The name of the directory of the agent repository of an item.
 pub fn item_name(item: ItemId) -> String {
     item.to_base32()[..NAME_LEN].to_string()
 }
@@ -246,27 +246,27 @@ pub enum Import {
     BehindTarget,
 }
 
-/// What happened when an item's branch was rebased onto the target branch, in its worktree.
+/// What happened when an item's branch was rebased onto the target branch, in its agent repository.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Rebase {
     /// The branch had everything of the target already, and nothing was rewritten.
     UpToDate,
     /// The branch's own commits are now on top of the target.
     Rebased,
-    /// The rebase stopped at a commit that conflicts in these files, relative to the worktree.
-    /// It is left in the worktree for whoever works there to resolve the files; the next rebase
+    /// The rebase stopped at a commit that conflicts in these files, relative to the repository.
+    /// It is left in the repository for whoever works there to resolve the files; the next rebase
     /// stages them and goes on.
     Conflict { paths: Vec<String> },
-    /// The worktree has uncommitted changes, which a rebase would have to carry along. Nothing
+    /// The repository has uncommitted changes, which a rebase would have to carry along. Nothing
     /// was rewritten.
     DirtyCheckout(DirtyCheckout),
 }
 
-/// Whether a rebase is stopped in a worktree.
+/// Whether a rebase is stopped in a repository.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum StoppedRebase {
     NotStopped,
-    /// Stopped at a commit that conflicts in these files, relative to the worktree.
+    /// Stopped at a commit that conflicts in these files, relative to the repository.
     Conflict {
         paths: Vec<String>,
     },
@@ -274,11 +274,11 @@ pub enum StoppedRebase {
     Stopped,
 }
 
-/// A worktree with uncommitted changes to tracked files.
+/// A repository with uncommitted changes to tracked files.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DirtyCheckout {
-    pub worktree: PathBuf,
-    /// The changed files, relative to the worktree.
+    pub directory: PathBuf,
+    /// The changed files, relative to the directory.
     pub paths: Vec<String>,
 }
 

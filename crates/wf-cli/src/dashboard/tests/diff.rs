@@ -542,7 +542,7 @@ fn the_uncommitted_part_is_a_section_after_the_committed_files_where_no_comment_
     press(&mut app, KeyCode::Char('c'));
     assert!(app.prompt.is_none());
 
-    // Once the worktree is gone only the commits are left.
+    // Once the agent repository is gone only the commits are left.
     let pane = app.diff_on_top_mut().unwrap();
     pane.read(Ok(crate::dashboard::diff::ItemWork {
         commit: work_commit(),
