@@ -222,6 +222,8 @@ pub fn fork(
     workspace.data.store_principal(&child, &founder_key)?;
 
     let history_events = state.event_count();
+    // Before the fork exists, so that a daemon that loads it finds the repository made.
+    make_repository(&workspace.data, parent, child, &state, cwd)?;
     workspace.create_fork(genesis_event)?;
 
     let announce = !args.new_principal
@@ -329,6 +331,17 @@ pub fn accept(
     }
     let own = workspace.device_key();
     let bootstrap = bootstrap_devices(workspace.state(), child, own);
+    let parent = workspace
+        .state()
+        .workforce_id()
+        .context("the workforce has no genesis")?;
+    let repository = wf_vcs::bare_repository(&data.workforce(&child));
+    let mut unfinished = Unfinished::new(repository.clone());
+    if repository.join("HEAD").is_file() {
+        unfinished.keep();
+    }
+    // Before the fork is followed, so that a daemon that loads it finds the repository made.
+    make_repository(&data, parent, child, workspace.state(), cwd)?;
     let (replicated, _) = workspace.into_replicated();
 
     // Whoever keeps the log of this machine (the daemon, or this process) takes the fork in. The
@@ -367,6 +380,7 @@ pub fn accept(
     };
     let file = toml::to_string(&WorkforceFile { id: child })?;
     std::fs::write(workspace::find_workforce(cwd)?.0, file)?;
+    unfinished.keep();
     emit(
         json,
         &AcceptView {
@@ -380,6 +394,35 @@ pub fn accept(
             )
         },
     )
+}
+
+/// Makes the repository of the fork `child` from that of `parent`, with the target `parent`
+/// has, and makes it the remote `wf` of the checkout at `cwd`, if there is one.
+fn make_repository(
+    data: &DataDir,
+    parent: WorkforceId,
+    child: WorkforceId,
+    state: &State,
+    cwd: &Path,
+) -> anyhow::Result<()> {
+    let target = &state
+        .policy()
+        .context("the workforce has no policy")?
+        .policy
+        .merge
+        .target;
+    let checkout = match wf_vcs::GitCli::checkout_root(cwd) {
+        Ok(root) => Some(root),
+        Err(wf_vcs::VcsError::NotARepository(_)) => None,
+        Err(error) => return Err(error.into()),
+    };
+    wf_vcs::GitCli::create_fork_repository(
+        &wf_vcs::bare_repository(&data.workforce(&child)),
+        target,
+        &wf_vcs::bare_repository(&data.workforce(&parent)),
+        checkout.as_deref(),
+    )?;
+    Ok(())
 }
 
 /// Where to look for a fork: the devices of the members the announcement says it keeps, so a

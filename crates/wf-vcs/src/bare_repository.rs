@@ -54,6 +54,32 @@ impl GitCli {
         made
     }
 
+    /// Makes the bare repository of a fork at `path` from `parent`, the bare repository of the
+    /// workforce it was forked from, and opens it; opens it as it is when it exists already. It
+    /// takes every object of the parent, so the commits its history names are there whether a
+    /// branch reaches them or not, its branches (the target and the item branches) and the config
+    /// the parent started with. With the principal's `checkout`, the checkout's remote `wf` moves
+    /// to it. Without a parent repository it is made as a new one, from the checkout.
+    pub fn create_fork_repository(
+        path: &Path,
+        target: &str,
+        parent: &Path,
+        checkout: Option<&Path>,
+    ) -> Result<GitCli, VcsError> {
+        if path.join("HEAD").is_file() {
+            return GitCli::open(path);
+        }
+        if !parent.join("HEAD").is_file() {
+            return Self::create_bare_repository(path, target, checkout);
+        }
+        let checkout = checkout.filter(|checkout| GitCli::open(checkout).is_ok());
+        let made = Self::clone_bare(path, target, parent, checkout);
+        if made.is_err() {
+            let _ = std::fs::remove_dir_all(path);
+        }
+        made
+    }
+
     fn make_bare(path: &Path, target: &str, checkout: Option<&Path>) -> Result<GitCli, VcsError> {
         std::fs::create_dir_all(path)?;
         // No templates: no hooks, whatever the principal's `init.templateDir` has.
@@ -61,20 +87,56 @@ impl GitCli {
         let args = ["init", "--quiet", "--bare", "--template=", &initial];
         crate::git::spawn(path, &[], args)?.ok()?;
         let bare = GitCli::open(path)?;
-        for (key, value) in [
-            ("receive.denyNonFastForwards", "true"),
-            // Nothing packs or prunes behind the daemon's back: the agents' repositories read its
-            // objects.
-            ("receive.autogc", "false"),
-        ] {
-            bare.run(path, &[], ["config", key, value])?.ok()?;
-        }
+        bare.configure_receive()?;
         if let Some(checkout) = checkout {
             bare.copy_config(checkout)?;
             bare.fetch_branches(checkout, target)?;
             GitCli::open(checkout)?.add_remote(path, target)?;
         }
         Ok(bare)
+    }
+
+    fn clone_bare(
+        path: &Path,
+        target: &str,
+        parent: &Path,
+        checkout: Option<&Path>,
+    ) -> Result<GitCli, VcsError> {
+        let above = path.parent().unwrap_or(path);
+        std::fs::create_dir_all(above)?;
+        // A local clone links the whole object directory, unreachable objects included.
+        let (parent_text, path_text) = (parent.to_string_lossy(), path.to_string_lossy());
+        let args = [
+            "clone",
+            "--quiet",
+            "--bare",
+            "--no-tags",
+            "--template=",
+            &parent_text,
+            &path_text,
+        ];
+        crate::git::spawn(above, &[], args)?.ok()?;
+        let bare = GitCli::open(path)?;
+        bare.run(path, &[], ["remote", "remove", "origin"])?.ok()?;
+        bare.configure_receive()?;
+        bare.copy_config(parent)?;
+        if let Some(checkout) = checkout {
+            GitCli::open(checkout)?.add_remote(path, target)?;
+        }
+        Ok(bare)
+    }
+
+    fn configure_receive(&self) -> Result<(), VcsError> {
+        for (key, value) in [
+            ("receive.denyNonFastForwards", "true"),
+            // Nothing packs or prunes behind the daemon's back: the agents' repositories read its
+            // objects.
+            ("receive.autogc", "false"),
+        ] {
+            self.run(&self.repository, &[], ["config", key, value])?
+                .ok()?;
+        }
+        Ok(())
     }
 
     /// Copies what `COPIED_CONFIG` names from the config of the repository at `from`, the keys it
@@ -240,6 +302,58 @@ mod tests {
             .unwrap();
         git_in(&repo.directory(), &["push", REMOTE, "main"]);
         assert_eq!(bare.branch_head("main").unwrap(), repo.main());
+    }
+
+    #[test]
+    fn a_fork_repository_takes_the_branches_and_commits_of_its_parent_and_the_checkout_moves_to_it()
+    {
+        let (repo, item_branch) = checkout_with_branches();
+        let checkout = repo.directory();
+        let parent = repo.root.path().join("parent-git");
+        let parent_bare = GitCli::create_bare_repository(&parent, "main", Some(&checkout)).unwrap();
+        let orphan = bare_commit(&parent, "wf/gone", "orphan.txt");
+        parent_bare.delete_branch("wf/gone").unwrap();
+
+        let path = repo.root.path().join("fork").join("git");
+        let fork = GitCli::create_fork_repository(&path, "main", &parent, Some(&checkout)).unwrap();
+        let mut found = branches(&path);
+        found.sort();
+        assert_eq!(found, ["main", item_branch.as_str()]);
+        assert_eq!(fork.branch_head("main").unwrap(), repo.main());
+        assert_eq!(
+            git_in(&path, &["cat-file", "-t", &orphan.to_string()]),
+            "commit",
+            "a commit no branch reaches comes along"
+        );
+        assert_eq!(git_in(&path, &["remote"]), "");
+        assert_eq!(
+            git_in(&path, &["config", "receive.denyNonFastForwards"]),
+            "true"
+        );
+
+        // The checkout pushes to the fork, not to the parent.
+        assert_eq!(
+            Path::new(&git_in(&checkout, &["remote", "get-url", REMOTE]))
+                .canonicalize()
+                .unwrap(),
+            path.canonicalize().unwrap()
+        );
+        repo.write(&checkout, "own.txt", "own\n");
+        let own = repo.commit(&checkout, "own");
+        git_in(&checkout, &["push", "--quiet"]);
+        assert_eq!(fork.branch_head("main").unwrap(), own);
+        assert_ne!(parent_bare.branch_head("main").unwrap(), own);
+    }
+
+    #[test]
+    fn a_fork_without_a_parent_repository_starts_from_the_checkout() {
+        let (repo, item_branch) = checkout_with_branches();
+        let path = repo.root.path().join("fork-git");
+        let parent = repo.root.path().join("no-parent-git");
+        GitCli::create_fork_repository(&path, "main", &parent, Some(&repo.directory())).unwrap();
+        let mut found = branches(&path);
+        found.sort();
+        assert_eq!(found, ["main", item_branch.as_str()]);
     }
 
     #[test]

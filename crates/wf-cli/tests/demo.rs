@@ -1699,6 +1699,32 @@ fn commands_warn_of_commits_on_the_target_that_wfs_repository_lacks() {
 }
 
 #[test]
+fn a_fork_starts_with_the_repository_of_its_parent_and_the_checkout_pushes_to_it() {
+    use wf_vcs::testing::{git_in, init_repository};
+
+    let wf = Sandbox::new();
+    init_repository(&wf.repository);
+    wf.run(&["init", "--name", "demo"]);
+    let fork = wf.json(&["fork"]);
+    let child: wf_core::id::WorkforceId = fork["workforce"].as_str().unwrap().parse().unwrap();
+    assert!(wf.json(&["status"])["checkout_target"].is_null());
+
+    std::fs::write(wf.repository.join("own.txt"), "own\n").unwrap();
+    git_in(&wf.repository, &["add", "own.txt"]);
+    git_in(&wf.repository, &["commit", "--quiet", "-m", "own"]);
+    assert!(!wf.json(&["status"])["checkout_target"].is_null());
+    git_in(&wf.repository, &["push", "--quiet", "wf", "main"]);
+    assert!(wf.json(&["status"])["checkout_target"].is_null());
+    let bare = wf_vcs::bare_repository(
+        &wf_daemon::DataDir::new(wf.data.join("workforce")).workforce(&child),
+    );
+    assert_eq!(
+        git_in(&bare, &["rev-parse", "main"]),
+        git_in(&wf.repository, &["rev-parse", "main"])
+    );
+}
+
+#[test]
 fn init_in_a_git_repository_makes_the_bare_repository_the_remote_of_the_checkout() {
     use wf_vcs::testing::{git_in, init_repository};
 

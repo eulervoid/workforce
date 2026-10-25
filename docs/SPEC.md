@@ -454,6 +454,9 @@ A fork is a **new genesis that points at a frozen point of the parent's history*
   is wanted, the history is folded at once in `(hlc, id)` order. Parent events after the fork point
   never get in. The fork's own events wait until the history is complete, and the device refuses to
   author before that, so it cannot equivocate against its own history.
+* **The repository carries over.** `wf fork` and `wf fork accept` make the fork's `<wf>/git` as a
+  local clone of the parent's: its branches and every object, so the commits the history names are
+  there whether a branch reaches them or not. The checkout they run in gets it as its remote `wf`.
 * What carries over: items, comments, links, the agents of kept members and the profiles of kept
   devices. What does not: policy, invites, bindings, sessions, reviews and merges.
 * Excluded members and devices are absent from the new seeds, so their events are not admitted and
