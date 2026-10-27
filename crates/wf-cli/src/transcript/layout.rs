@@ -102,6 +102,18 @@ impl Block {
             | Block::Footer { .. } => self.opens(),
         }
     }
+
+    /// Whether the block may show less abridged than in full.
+    pub fn can_abridge(&self) -> bool {
+        match self {
+            Block::Prompt { .. } | Block::Call { .. } | Block::Log(_) => true,
+            Block::Answer { .. }
+            | Block::Prose { .. }
+            | Block::Plan(_)
+            | Block::Error { .. }
+            | Block::Footer { .. } => false,
+        }
+    }
 }
 
 #[derive(Clone, PartialEq)]
@@ -136,6 +148,14 @@ impl Layout {
 
     pub fn verbosity(&self) -> Verbosity {
         self.verbosity
+    }
+
+    /// The same layout, showing as much as `verbosity` does.
+    pub fn with_verbosity(&self, verbosity: Verbosity) -> Self {
+        Self {
+            verbosity,
+            ..self.clone()
+        }
     }
 
     /// The lines of `block`, each ending in a newline; empty when it shows nothing.

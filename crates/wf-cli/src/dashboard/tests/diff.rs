@@ -130,7 +130,8 @@ fn i_in_a_diff_below_an_item_and_its_session_goes_back_to_the_item() {
     let mut snapshot = with_items();
     snapshot.in_view = Some(session_in_view(snapshot.working[0].clone()));
     app.refresh(snapshot);
-    press(&mut app, KeyCode::Enter);
+    // In a session, enter opens and closes an entry of the transcript; `l` goes on to the diff.
+    press(&mut app, KeyCode::Char('l'));
     assert!(matches!(
         app.path()[..],
         [Detail::Item(_), Detail::Session(_), Detail::Diff(_)]
