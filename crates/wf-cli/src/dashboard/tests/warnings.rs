@@ -97,19 +97,24 @@ fn only_new_daemon_moves_from_review_back_to_open_with_a_reason_warn() {
         back.because = Some(CommentId::from(note.id()));
     }
     let back = fixture.author_as(&state, 0, daemon, 3_001, back);
-    events.extend([note, back]);
+    let new = vec![note, back];
+    events.extend(new.clone());
+    // The events of the item, as the workspace gives them: all of them here.
+    let item_events = |_| events.as_slice();
 
     let warned = vec![MovedBack {
         item,
         reason: "merging into main conflicts in README.md".to_owned(),
     }];
-    assert_eq!(moves_back(&events, 2), warned);
-    // A move from before the dashboard started does not warn.
-    assert_eq!(moves_back(&events, events.len()), Vec::new());
+    assert_eq!(moves_back(&new, &item_events), warned);
+    // Read against the events of its item only, and not warned of again: a move read at an
+    // earlier refresh is not among the new events.
+    assert_eq!(moves_back(&[], &item_events), Vec::new());
     // Nor does one the principal made.
     let by_principal = fixture.author(&state, 0, 3_002, moved(item, ItemState::Open));
-    events.push(by_principal);
-    assert_eq!(moves_back(&events, events.len() - 1), Vec::new());
+    events.push(by_principal.clone());
+    let item_events = |_| events.as_slice();
+    assert_eq!(moves_back(&[by_principal], &item_events), Vec::new());
 }
 
 #[test]

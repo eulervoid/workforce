@@ -58,6 +58,7 @@ ratatui-core = { version = "0.1", features = ["anstyle"] }
 ansi-to-tui = "8"
 tui-input = "0.15"
 bytesize.workspace = true
+lru = "0.18"
 
 [dev-dependencies]
 wf-core = { workspace = true, features = ["testing"] }

@@ -95,7 +95,7 @@ fn concerns(state: &State, event: &Event, only: Option<ItemId>) -> bool {
 }
 
 fn show(json: bool, workspace: &Workspace, events: &[Event], new: &[Event]) -> anyhow::Result<()> {
-    for line in view::event_lines(workspace.state(), events, new) {
+    for line in view::event_lines(workspace.state(), &|_| events, new) {
         emit_line(json, &line, render::event_line)?;
     }
     Ok(())

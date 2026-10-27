@@ -163,7 +163,8 @@ fn the_dashboard_waits_on_as_many_things_as_wf_status_and_shows_the_machine_faul
     let sources = Sources {
         state: &state,
         graph: &graph,
-        events: &events,
+        detail_events: &[],
+        comment_texts: &Default::default(),
         event: &|id| events.iter().find(|event| event.id() == id).cloned(),
         own: fixture.devices[0].key(),
         now_ms: 3_000,
@@ -232,7 +233,8 @@ fn the_items_list_holds_the_items_found_in_titles_bodies_and_comments() {
     let sources = Sources {
         state: &state,
         graph: &graph,
-        events: &events,
+        detail_events: &[],
+        comment_texts: &crate::view::comment_texts(&events),
         event: &|_| None,
         own: fixture.devices[0].key(),
         now_ms: 3_000,

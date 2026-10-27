@@ -9,6 +9,7 @@ mod diff;
 mod elsewhere;
 mod ended;
 mod items;
+mod kept;
 mod links;
 mod now;
 mod paint;

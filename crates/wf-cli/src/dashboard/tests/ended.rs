@@ -179,7 +179,8 @@ fn a_session_in_view_has_a_successor_once_it_ended_and_its_item_went_on() {
         let sources = Sources {
             state,
             graph: &graph,
-            events: &[],
+            detail_events: &[],
+            comment_texts: &Default::default(),
             event: &|_| None,
             own: fixture.devices[0].key(),
             now_ms: 9_000,

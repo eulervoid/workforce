@@ -421,18 +421,23 @@ impl Workspace {
         }
     }
 
-    /// The events that can show in the activity of `item`, in the order this machine applied them.
-    pub fn item_events(&self, item: ItemId) -> anyhow::Result<Vec<Event>> {
+    /// The events that can show in the activity of any of `items`, in the order this machine
+    /// applied them: one read of the log for all of them.
+    pub fn item_events(&self, items: &[ItemId]) -> anyhow::Result<Vec<Event>> {
         match &self.source {
             Source::Local(replica, _) => Ok(replica
                 .store()
                 .log_since(0)?
                 .into_iter()
-                .filter(|event| replica.state().can_be_activity_of(item, event))
+                .filter(|event| {
+                    items
+                        .iter()
+                        .any(|item| replica.state().can_be_activity_of(*item, event))
+                })
                 .collect()),
-            Source::Daemon { client, .. } => {
-                Ok(client.borrow_mut().item_events(self.workforce, item)?)
-            }
+            Source::Daemon { client, .. } => Ok(client
+                .borrow_mut()
+                .item_events(self.workforce, items.to_vec())?),
         }
     }
 

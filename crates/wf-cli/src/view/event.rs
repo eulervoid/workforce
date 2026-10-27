@@ -24,11 +24,15 @@ pub struct EventLineView {
     pub activity: ActivityView,
 }
 
-/// What the `new` events did, one line for each thing, read against `events`: all that is known
-/// so far, which the activity of an item needs.
-pub fn event_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<EventLineView> {
+/// What the `new` events did, one line for each thing, read against `item_events`: for an item,
+/// the events known so far that can show in its activity (more do no harm), which it needs.
+pub fn event_lines<'a>(
+    state: &State,
+    item_events: &dyn Fn(ItemId) -> &'a [Event],
+    new: &[Event],
+) -> Vec<EventLineView> {
     let mut lines = Vec::new();
-    // The activity of an item is worked out from all events: once for each item, not each event.
+    // The activity of an item is worked out from its events: once for each item, not each event.
     let mut activities: HashMap<ItemId, Vec<Entry>> = HashMap::new();
     for event in new {
         let live = state.item_of(event).and_then(|id| match state.item(id) {
@@ -39,7 +43,7 @@ pub fn event_lines(state: &State, events: &[Event], new: &[Event]) -> Vec<EventL
             Some(item) => {
                 let entries: Vec<Entry> = activities
                     .entry(item.id())
-                    .or_insert_with(|| state.activity(item.id(), events))
+                    .or_insert_with(|| state.activity(item.id(), item_events(item.id())))
                     .iter()
                     .filter(|entry| entry.event == event.id())
                     .cloned()
