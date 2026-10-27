@@ -159,6 +159,7 @@ supports that.
 | What | Where |
 |---|---|
 | the store of a workforce, its repository, the agents' clones and transcripts | `~/.local/share/workforce/<workforce id>/` |
+| copies of the transcripts of your other machines' sessions, a cache you can delete | `~/.local/share/workforce/<workforce id>/transcript-copies/` |
 | your principal key, one per workforce | `~/.local/share/workforce/<workforce id>/principal.key` |
 | this machine's device key | `~/.local/share/workforce/keys/device.key` |
 | the machine config | `~/.config/workforce/config.toml` |

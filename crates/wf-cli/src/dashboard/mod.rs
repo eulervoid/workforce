@@ -431,7 +431,8 @@ impl Feed {
     }
 
     /// Hands the app what was written to the transcripts of this machine's live sessions, and
-    /// of the session on screen if it ran here; those of other sessions are let go.
+    /// of the session on screen; those of other sessions are let go. The transcript of a session
+    /// of another device is followed only while it is on screen, from the copy the daemon keeps.
     fn read_transcripts(&mut self, workspace: &Workspace, app: &mut App) {
         let own = workspace.device_key();
         let state = workspace.state();
@@ -441,11 +442,18 @@ impl Feed {
             .map(|session| session.id())
             .collect();
         if let Some(Detail::Session(session)) = app.wanted().detail
-            && state
-                .session(session)
-                .is_some_and(|session| session.device() == own)
+            && let Some(device) = state.session(session).map(|session| session.device())
         {
-            sessions.push(session);
+            if !sessions.contains(&session) {
+                sessions.push(session);
+            }
+            if device != own {
+                match workspace.follow_transcript(session) {
+                    Ok(Some(copy)) => app.copy_followed(session, copy),
+                    Ok(None) => {}
+                    Err(error) => app.transcript_failed(&error),
+                }
+            }
         }
         self.readers.retain(|session, _| sessions.contains(session));
         app.keep_transcripts(&sessions);
@@ -454,7 +462,8 @@ impl Feed {
                 std::collections::hash_map::Entry::Occupied(reader) => reader.into_mut(),
                 std::collections::hash_map::Entry::Vacant(vacant) => {
                     let path = crate::session::transcript_path(workspace, session);
-                    // The agent may not have written its transcript yet: try again next time.
+                    // The agent may not have written its transcript yet, nor the daemon fetched any
+                    // of it: try again next time.
                     let Ok(reader) = transcript::Reader::open(&path) else {
                         continue;
                     };

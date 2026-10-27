@@ -346,6 +346,15 @@ async fn start_peer_as(
     fixture: &Fixture,
     signer: wf_core::identity::DeviceSigner,
 ) -> (TempDir, Arc<Daemon>, std::path::PathBuf) {
+    start_peer_with(fixture, signer, |_| {}).await
+}
+
+/// Like [`start_peer_as`], with `prepare` run on the replica before the daemon starts.
+async fn start_peer_with(
+    fixture: &Fixture,
+    signer: wf_core::identity::DeviceSigner,
+    prepare: impl FnOnce(&mut Replica<RedbStore>),
+) -> (TempDir, Arc<Daemon>, std::path::PathBuf) {
     let directory = TempDir::new().unwrap();
     let store_directory = directory.path().join(fixture.workforce().to_string());
     std::fs::create_dir_all(&store_directory).unwrap();
@@ -355,6 +364,7 @@ async fn start_peer_as(
     )
     .unwrap();
     replica.receive(fixture.genesis.clone()).unwrap();
+    prepare(&mut replica);
     drop(replica);
     let socket = directory.path().join("daemon.sock");
     let daemon = Daemon::start(
@@ -930,4 +940,231 @@ async fn a_device_reads_the_committed_work_of_a_session_on_another() {
         live_diff(&laptop_socket, workforce, item, None).await,
         LiveDiff::Answer(DiffAnswer::NotHere)
     );
+}
+
+async fn follow_transcript(
+    socket: &Path,
+    workforce: wf_core::id::WorkforceId,
+    session: wf_core::id::SessionId,
+) -> Result<wf_daemon::proto::TranscriptCopy, ClientError> {
+    let socket = socket.to_path_buf();
+    blocking(move || connect(&socket).follow_transcript(workforce, session)).await
+}
+
+/// Follows the transcript of `session` through the daemon behind `socket` until its copy is
+/// `wanted` with `content`.
+async fn follow_until(
+    socket: &Path,
+    workforce: wf_core::id::WorkforceId,
+    session: wf_core::id::SessionId,
+    wanted: impl Fn(&wf_daemon::proto::TranscriptCopy) -> bool,
+    content: &[u8],
+) {
+    let copy =
+        DataDir::new(socket.parent().unwrap().to_path_buf()).transcript_copy(&workforce, session);
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let now = follow_transcript(socket, workforce, session).await.unwrap();
+        let copied = std::fs::read(&copy).unwrap_or_default();
+        if wanted(&now) && copied == content {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the copy came to {now:?} with {:?}, not what was wanted with {:?}",
+            String::from_utf8_lossy(&copied),
+            String::from_utf8_lossy(content),
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+/// Waits until the daemon behind `socket` knows `session`.
+async fn wait_for_session(
+    socket: &Path,
+    workforce: wf_core::id::WorkforceId,
+    session: wf_core::id::SessionId,
+    live: bool,
+) {
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let socket = socket.to_path_buf();
+        let state = blocking(move || connect(&socket).state(workforce).unwrap()).await;
+        if state
+            .session(session)
+            .is_some_and(|known| known.is_live() == live)
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the session reaches the other device"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn work_session(
+    socket: &Path,
+    workforce: wf_core::id::WorkforceId,
+    item: wf_core::id::ItemId,
+) -> wf_core::id::SessionId {
+    let socket = socket.to_path_buf();
+    blocking(move || {
+        connect(&socket)
+            .state(workforce)
+            .unwrap()
+            .holder(item, &SessionRole::Work)
+            .expect("a work session")
+            .id()
+    })
+    .await
+}
+
+#[tokio::test]
+async fn a_device_follows_the_transcript_of_a_session_on_another() {
+    use wf_core::session::EndReason;
+    use wf_daemon::proto::TranscriptCopy;
+
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
+    let fixture = Fixture::new(2);
+    let (laptop_dir, laptop, laptop_socket) = start_peer(&fixture, 0).await;
+    let (vm_dir, vm, vm_socket) = start_peer(&fixture, 1).await;
+    laptop
+        .node()
+        .await
+        .unwrap()
+        .remember(vm.node().await.unwrap().local_addr());
+    vm.node()
+        .await
+        .unwrap()
+        .remember(laptop.node().await.unwrap().local_addr());
+    let workforce = fixture.workforce();
+
+    let item = start_work_session(&vm_socket, workforce).await;
+    let session = work_session(&vm_socket, workforce, item).await;
+    let transcript = DataDir::new(vm_dir.path().to_path_buf()).transcript(&workforce, session);
+    std::fs::create_dir_all(transcript.parent().unwrap()).unwrap();
+    let first = b"{\"type\":\"user\"}\n";
+    std::fs::write(&transcript, first).unwrap();
+    wait_for_session(&laptop_socket, workforce, session, true).await;
+
+    follow_until(
+        &laptop_socket,
+        workforce,
+        session,
+        |copy| *copy == TranscriptCopy::CaughtUp,
+        first,
+    )
+    .await;
+    let both = b"{\"type\":\"user\"}\n{\"type\":\"assistant\"}\n";
+    std::fs::write(&transcript, both).unwrap();
+    follow_until(
+        &laptop_socket,
+        workforce,
+        session,
+        |copy| *copy == TranscriptCopy::CaughtUp,
+        both,
+    )
+    .await;
+    // The copy is kept apart from the transcripts of the laptop's own sessions.
+    let laptop_data = DataDir::new(laptop_dir.path().to_path_buf());
+    assert!(!laptop_data.transcript(&workforce, session).exists());
+
+    let socket = vm_socket.clone();
+    blocking(move || {
+        connect(&socket)
+            .author(workforce, end_session(session, EndReason::Cancelled))
+            .unwrap()
+    })
+    .await;
+    follow_until(
+        &laptop_socket,
+        workforce,
+        session,
+        |copy| *copy == TranscriptCopy::Complete,
+        both,
+    )
+    .await;
+
+    // A copy is a cache: once removed, it is fetched again.
+    std::fs::remove_file(laptop_data.transcript_copy(&workforce, session)).unwrap();
+    follow_until(
+        &laptop_socket,
+        workforce,
+        session,
+        |copy| *copy == TranscriptCopy::Complete,
+        both,
+    )
+    .await;
+
+    // The vm answers for its own sessions only.
+    let laptop_item = start_work_session(&laptop_socket, workforce).await;
+    let laptop_session = work_session(&laptop_socket, workforce, laptop_item).await;
+    wait_for_session(&vm_socket, workforce, laptop_session, true).await;
+    let answer = laptop
+        .node()
+        .await
+        .unwrap()
+        .query_transcript(
+            vm.node().await.unwrap().local_addr(),
+            workforce,
+            laptop_session,
+            0,
+        )
+        .await
+        .unwrap();
+    assert_eq!(answer, wf_net::TranscriptAnswer::NotHere);
+    // And the laptop keeps no copy of its own session's transcript.
+    assert!(
+        follow_transcript(&laptop_socket, workforce, laptop_session)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn the_transcript_of_a_device_that_cannot_be_reached_says_so() {
+    use wf_daemon::proto::TranscriptCopy;
+
+    if wf_core::testing::skip_in_fence("iroh needs the route socket") {
+        return;
+    }
+    let fixture = Fixture::new(2);
+    // The vm started a session and is gone: the laptop has its events, and nobody runs it.
+    let vm = fixture.devices[1].clone();
+    let mut item = None;
+    let (_laptop_dir, _laptop, laptop_socket) =
+        start_peer_with(&fixture, fixture.devices[0].clone(), |replica| {
+            let actor = fixture.founder_actor();
+            replica
+                .author(&vm, actor.clone(), 2_000, define_agent("coder"))
+                .unwrap();
+            let created = replica
+                .author(&vm, actor.clone(), 2_001, create("task", "on the vm"))
+                .unwrap();
+            replica
+                .author(
+                    &vm,
+                    actor,
+                    2_002,
+                    start_session("coder", created.id().into()),
+                )
+                .unwrap();
+            item = Some(created.id().into());
+        })
+        .await;
+    let workforce = fixture.workforce();
+    let session = work_session(&laptop_socket, workforce, item.unwrap()).await;
+
+    follow_until(
+        &laptop_socket,
+        workforce,
+        session,
+        |copy| matches!(copy, TranscriptCopy::Unreachable { device, .. } if *device == vm.key()),
+        b"",
+    )
+    .await;
 }

@@ -24,10 +24,12 @@ mod peers;
 mod permissions;
 mod processes;
 pub mod proto;
+mod query;
 mod runner;
 mod sandbox;
 mod server;
 mod storage;
+mod transcript_copy;
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -294,6 +296,8 @@ pub struct Daemon {
     /// How many principal reviews the daemon found to merge into the target when it first checked
     /// them; the tests wait on it to know a check ran.
     reviews_found_merging: std::sync::atomic::AtomicUsize,
+    /// The transcripts of sessions on other devices that the principal follows.
+    followed: transcript_copy::Followed,
 }
 
 impl Daemon {
@@ -328,6 +332,7 @@ impl Daemon {
             #[cfg(test)]
             before_merge_tree: Mutex::new(None),
             reviews_found_merging: Default::default(),
+            followed: Default::default(),
         });
         daemon.load_stored_workforces().await;
         crate::spawn(rescan(Arc::downgrade(&daemon)));
@@ -431,8 +436,8 @@ impl Daemon {
             .cloned()
     }
 
-    /// Has the node answer the other devices about `id`: sync from its log, and the work of its
-    /// items from this machine's agent repositories.
+    /// Has the node answer the other devices about `id`: sync from its log, and the work and the
+    /// transcripts of the sessions of this machine.
     fn serve_on(
         self: &Arc<Self>,
         node: &Node<StorageHandle>,
@@ -440,7 +445,7 @@ impl Daemon {
         storage: &StorageHandle,
     ) {
         node.serve(id, storage.clone());
-        node.serve_query(live_diff::RepositoryQuery::new(self));
+        node.serve_query(query::QueryResponder::new(self));
         node.serve_git(git_service::UploadPack::new(self));
     }
 

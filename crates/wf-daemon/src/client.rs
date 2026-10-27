@@ -260,6 +260,16 @@ impl DaemonClient {
         self.call(workforce, Call::LiveDiff { item, since })
     }
 
+    /// Follows the transcript of a session of another device for some seconds more: what its
+    /// copy came to so far.
+    pub fn follow_transcript(
+        &mut self,
+        workforce: WorkforceId,
+        session: wf_core::id::SessionId,
+    ) -> Result<crate::proto::TranscriptCopy, ClientError> {
+        self.call(workforce, Call::FollowTranscript(session))
+    }
+
     /// The commit the target branch is at.
     pub fn target_commit(
         &mut self,

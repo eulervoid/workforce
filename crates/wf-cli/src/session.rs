@@ -7,6 +7,7 @@ use anyhow::{anyhow, bail};
 use wf_core::id::{HashId, ItemId, SessionId};
 use wf_core::name::ReviewStepName;
 use wf_core::review::step_names;
+use wf_daemon::proto::TranscriptCopy;
 use wf_harness::Permission;
 
 use crate::cli::{SessionCommand, SessionStartArgs};
@@ -18,6 +19,9 @@ use crate::workspace::Workspace;
 
 const TRANSCRIPT_TIMEOUT: Duration = Duration::from_secs(10);
 const FOLLOW_INTERVAL: Duration = Duration::from_millis(200);
+/// How long the daemon may take to first hear from the device of a session about its transcript:
+/// longer than it tries to reach a device.
+const COPY_TIMEOUT: Duration = Duration::from_secs(60);
 
 pub fn session(
     json: bool,
@@ -154,7 +158,10 @@ fn pick_session(workspace: &Workspace, mode: Mode, which: Which) -> anyhow::Resu
         .filter(|session| match which {
             Which::LocalLive => session.is_live() && session.device() == workspace.device_key(),
             Which::Permission => permissions.iter().any(|held| held.session == session.id()),
-            Which::Transcript => transcript_path(workspace, session.id()).is_file(),
+            Which::Transcript => {
+                session.device() != workspace.device_key()
+                    || transcript_path(workspace, session.id()).is_file()
+            }
             Which::Any => true,
         })
         .map(|session| session.id())
@@ -295,14 +302,136 @@ pub(crate) fn transcripts(workspace: &Workspace) -> std::path::PathBuf {
     workspace.data.transcripts(&workspace.workforce())
 }
 
+/// Where the transcript of `session` is read: the transcript itself when the session runs on this
+/// device, and otherwise the copy the daemon keeps of it ([`Workspace::follow_transcript`]).
 pub(crate) fn transcript_path(workspace: &Workspace, session: SessionId) -> std::path::PathBuf {
-    workspace.data.transcript(&workspace.workforce(), session)
+    let elsewhere = workspace
+        .state()
+        .session(session)
+        .is_some_and(|session| session.device() != workspace.device_key());
+    if elsewhere {
+        workspace
+            .data
+            .transcript_copy(&workspace.workforce(), session)
+    } else {
+        workspace.data.transcript(&workspace.workforce(), session)
+    }
+}
+
+/// The copy the daemon keeps of the transcript of a session of another device, and what it last
+/// said of it.
+pub(crate) struct FollowedCopy {
+    session: SessionId,
+    /// The name of the device of the session.
+    device: String,
+    now: TranscriptCopy,
+    /// What [`FollowedCopy::news`] last said, so that a device that stays unreachable is said once.
+    said: Option<TranscriptCopy>,
+}
+
+impl FollowedCopy {
+    /// Starts following the transcript of `session` when it is a session of another device.
+    pub(crate) fn of(workspace: &Workspace, session: SessionId) -> anyhow::Result<Option<Self>> {
+        let state = workspace.state();
+        let Some(device) = state
+            .session(session)
+            .map(|session| session.device())
+            .filter(|device| *device != workspace.device_key())
+        else {
+            return Ok(None);
+        };
+        let mut copy = Self {
+            session,
+            device: view::device_name(state, device),
+            now: TranscriptCopy::Fetching,
+            said: None,
+        };
+        copy.ask(workspace)?;
+        Ok(Some(copy))
+    }
+
+    /// Has the daemon follow the transcript for some seconds more, and learns what the copy came
+    /// to.
+    pub(crate) fn ask(&mut self, workspace: &Workspace) -> anyhow::Result<()> {
+        self.now = workspace.follow_transcript(self.session)?.ok_or_else(|| {
+            anyhow!(
+                "the session runs on {}, and the daemon fetches its transcript; start it with \
+                 `wf daemon start`",
+                self.device
+            )
+        })?;
+        Ok(())
+    }
+
+    pub(crate) fn now(&self) -> &TranscriptCopy {
+        &self.now
+    }
+
+    /// Whether the device of the session answered since the copy was first followed: the copy
+    /// has what the transcript had then, or the device cannot tell.
+    fn answered(&self) -> bool {
+        match self.now {
+            TranscriptCopy::Fetching => false,
+            TranscriptCopy::CaughtUp
+            | TranscriptCopy::Complete
+            | TranscriptCopy::Unreachable { .. }
+            | TranscriptCopy::NotHere { .. } => true,
+        }
+    }
+
+    /// Why the copy falls behind the transcript, when that is new since the last call.
+    fn news(&mut self) -> Option<String> {
+        if self.said.as_ref() == Some(&self.now) {
+            return None;
+        }
+        self.said = Some(self.now.clone());
+        copy_behind(&self.device, &self.now)
+    }
+}
+
+/// Why the copy of a transcript of `device` falls behind it, as `now` says; `None` when it does
+/// not.
+pub(crate) fn copy_behind(device: &str, now: &TranscriptCopy) -> Option<String> {
+    match now {
+        TranscriptCopy::Unreachable { reason, .. } => Some(format!(
+            "{device} cannot be reached ({reason}); this is what was fetched before"
+        )),
+        TranscriptCopy::NotHere { .. } => Some(format!(
+            "{device} has no transcript of this session; this is what was fetched before"
+        )),
+        TranscriptCopy::Fetching | TranscriptCopy::CaughtUp | TranscriptCopy::Complete => None,
+    }
 }
 
 /// The model of a session as the daemon of this machine recorded it beside the transcript.
 fn session_model(workspace: &Workspace) -> impl Fn(SessionId) -> Option<String> {
     let transcripts = transcripts(workspace);
     move |session| wf_daemon::session_model(&transcripts, session)
+}
+
+/// Waits until the daemon has a copy of the transcript at `path`, or says why it has none.
+fn wait_for_copy(
+    workspace: &Workspace,
+    copy: &mut FollowedCopy,
+    path: &Path,
+) -> anyhow::Result<()> {
+    let deadline = std::time::Instant::now() + COPY_TIMEOUT;
+    while !path.exists() {
+        if copy.answered() {
+            let why = copy_behind(&copy.device, copy.now())
+                .unwrap_or_else(|| format!("{} has not written it yet", copy.device));
+            bail!("nothing of the transcript was fetched: {why}");
+        }
+        if std::time::Instant::now() >= deadline {
+            bail!(
+                "{} did not answer about the transcript in time",
+                copy.device
+            );
+        }
+        std::thread::sleep(FOLLOW_INTERVAL);
+        copy.ask(workspace)?;
+    }
+    Ok(())
 }
 
 /// Whether `watch` waits for the transcript to grow.
@@ -333,7 +462,12 @@ fn watch(
     format: Format,
     verbosity: Verbosity,
 ) -> anyhow::Result<()> {
-    let mut reader = transcript::Reader::open(&transcript_path(workspace, session))?;
+    let mut copy = FollowedCopy::of(workspace, session)?;
+    let path = transcript_path(workspace, session);
+    if let Some(copy) = &mut copy {
+        wait_for_copy(workspace, copy, &path)?;
+    }
+    let mut reader = transcript::Reader::open(&path)?;
     let agent = workspace.state().session(session).map_or_else(
         || "agent".to_owned(),
         |session| session.agent().name.to_string(),
@@ -351,7 +485,19 @@ fn watch(
             .session(session)
             .is_some_and(|session| !session.is_live())
     };
-    let mut ended = session_ended(workspace);
+    // A copy is all there once the daemon says so, which can be after the session ended.
+    let transcript_ended = |workspace: &Workspace, copy: &Option<FollowedCopy>| match copy {
+        None => session_ended(workspace),
+        Some(copy) => match copy.now() {
+            TranscriptCopy::Complete => true,
+            // What was fetched is all there is to show.
+            TranscriptCopy::Unreachable { .. } | TranscriptCopy::NotHere { .. } => {
+                session_ended(workspace)
+            }
+            TranscriptCopy::Fetching | TranscriptCopy::CaughtUp => false,
+        },
+    };
+    let mut ended = transcript_ended(workspace, &copy);
     let mut seen = workspace.state().event_count() as u64;
     let mut last_refresh = std::time::Instant::now();
     loop {
@@ -361,8 +507,13 @@ fn watch(
         }
         let entries = written.entries;
         if entries.is_empty() {
-            if matches!(follow, Follow::Once) || ended {
-                let session = if ended {
+            let once_done =
+                matches!(follow, Follow::Once) && copy.as_ref().is_none_or(FollowedCopy::answered);
+            if once_done || ended {
+                if let Some(news) = copy.as_mut().and_then(FollowedCopy::news) {
+                    anstream::eprintln!("wf: {news}");
+                }
+                let session = if session_ended(workspace) {
                     transcript::Session::Ended
                 } else {
                     transcript::Session::Live
@@ -379,8 +530,14 @@ fn watch(
                 if !new.is_empty() {
                     seen += new.len() as u64;
                     workspace.refresh()?;
-                    ended = session_ended(workspace);
                 }
+                if let Some(copy) = &mut copy {
+                    copy.ask(workspace)?;
+                    if let Some(news) = copy.news() {
+                        anstream::eprintln!("wf: {news}");
+                    }
+                }
+                ended = transcript_ended(workspace, &copy);
                 // Read again after observing the end to drain the final transcript entries.
                 if ended {
                     continue;

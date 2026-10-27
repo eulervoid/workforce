@@ -11,6 +11,7 @@ use wf_core::graph::Readiness;
 use wf_core::id::{ItemId, SessionId};
 use wf_core::search::Query;
 use wf_core::session::CommitId;
+use wf_daemon::proto::TranscriptCopy;
 use wf_harness::TranscriptEntry;
 
 mod clickable;
@@ -29,8 +30,8 @@ use crate::cli::{ItemGrouping, ItemOrder};
 use crate::dashboard::diff::{Changes, DiffPane, LineComment};
 use crate::dashboard::draw;
 use crate::dashboard::snapshot::{
-    Detail, InView, InboxEntry, InboxKey, ItemListing, Listing, MovedBack, Place, SessionInfo,
-    Snapshot, Wanted,
+    Detail, InView, InboxEntry, InboxKey, ItemListing, Listing, MovedBack, SessionInfo, Snapshot,
+    Wanted,
 };
 use crate::dashboard::transcript_lines::TranscriptLines;
 use crate::theme;
@@ -206,8 +207,12 @@ pub enum Status {
 
 pub struct App {
     pub snapshot: Snapshot,
-    /// The transcripts of the sessions this machine runs, as far as they are read.
+    /// The transcripts of the sessions this machine runs, and of the session on screen, as far as
+    /// they are read; that of a session of another device is read from the copy the daemon keeps.
     pub transcripts: HashMap<SessionId, Transcript>,
+    /// What the copy of the transcript of each session of another device followed came to, as
+    /// the daemon last said.
+    pub transcript_copies: HashMap<SessionId, TranscriptCopy>,
     /// The lines of the transcripts as last drawn, kept so that drawing lays out only what was
     /// added since.
     pub transcript_lines: HashMap<SessionId, TranscriptLines>,
@@ -251,6 +256,7 @@ impl App {
         let mut app = Self {
             snapshot: Snapshot::default(),
             transcripts: HashMap::new(),
+            transcript_copies: HashMap::new(),
             transcript_lines: HashMap::new(),
             diffs: HashMap::new(),
             tab: Tab::Now,
@@ -491,9 +497,17 @@ impl App {
         }
     }
 
+    /// Takes in what the copy of the transcript of `session`, a session of another device, came
+    /// to.
+    pub fn copy_followed(&mut self, session: SessionId, now: TranscriptCopy) {
+        self.transcript_copies.insert(session, now);
+    }
+
     /// Lets go of the transcripts of sessions other than `sessions`.
     pub fn keep_transcripts(&mut self, sessions: &[SessionId]) {
         self.transcripts
+            .retain(|session, _| sessions.contains(session));
+        self.transcript_copies
             .retain(|session, _| sessions.contains(session));
         self.transcript_lines
             .retain(|session, _| sessions.contains(session));
@@ -512,7 +526,7 @@ impl App {
         let Some(InView::Session { info, .. }) = self.in_view_of(&Detail::Session(session)) else {
             return;
         };
-        let (Place::Here, Some(transcript)) = (&info.place, self.transcripts.get(&session)) else {
+        let Some(transcript) = self.transcripts.get(&session) else {
             return;
         };
         let layout = transcript::Layout::new(

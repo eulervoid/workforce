@@ -5,11 +5,10 @@
 //! the target it has.
 
 use std::path::PathBuf;
-use std::sync::{Arc, Weak};
 
 use wf_core::id::{ItemId, WorkforceId};
 use wf_core::session::{CommitId, SessionRole};
-use wf_net::{DiffAnswer, SourceError, Work};
+use wf_net::{DiffAnswer, Work};
 use wf_vcs::{GitCli, VcsError, item_repository};
 
 use crate::proto::LiveDiff;
@@ -27,8 +26,6 @@ pub enum LiveDiffError {
     Git(#[from] VcsError),
     #[error("reading the work of the item was cut short")]
     Task(#[source] tokio::task::JoinError),
-    #[error("the daemon is shutting down")]
-    Gone,
 }
 
 impl Daemon {
@@ -131,28 +128,4 @@ fn read_work(
         head,
         committed: git.parseable_diff(&work)?,
     }))
-}
-
-/// Answers `wf/query/1` from the agent repositories of this machine.
-pub(crate) struct RepositoryQuery(Weak<Daemon>);
-
-impl RepositoryQuery {
-    pub(crate) fn new(daemon: &Arc<Daemon>) -> Arc<Self> {
-        Arc::new(Self(Arc::downgrade(daemon)))
-    }
-}
-
-impl wf_net::QuerySource for RepositoryQuery {
-    fn diff(
-        &self,
-        workforce: WorkforceId,
-        item: ItemId,
-        since: Option<CommitId>,
-    ) -> n0_future::boxed::BoxFuture<Result<DiffAnswer, SourceError>> {
-        let daemon = self.0.clone();
-        Box::pin(async move {
-            let daemon = daemon.upgrade().ok_or(LiveDiffError::Gone)?;
-            Ok(daemon.diff_here(workforce, item, since).await?)
-        })
-    }
 }

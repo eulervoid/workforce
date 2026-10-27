@@ -19,6 +19,7 @@ use crate::theme;
 use crate::transcript::Transcript;
 use crate::view::SessionStatus;
 use wf_core::session::EndReason;
+use wf_daemon::proto::TranscriptCopy;
 
 /// Draws a detail under its breadcrumb; returns where it was drawn, and adds its links to
 /// `spots`.
@@ -118,6 +119,30 @@ pub(super) fn draw_detail(
     Some(DrawnDetail::Text(scroll))
 }
 
+fn dimmed(text: String) -> Line<'static> {
+    Line::from(format!(" {text}")).themed(theme::text_dimmed())
+}
+
+/// What a session's transcript view says while nothing of the transcript was read: a session of
+/// another device says what its copy came to.
+fn no_transcript(place: &Place, copy: Option<&TranscriptCopy>) -> String {
+    let Place::Elsewhere(device) = place else {
+        return "no transcript yet".to_owned();
+    };
+    match copy {
+        // Without a daemon nothing fetches it.
+        None => format!("transcript on {device}"),
+        Some(TranscriptCopy::Fetching) => format!("fetching the transcript from {device}"),
+        Some(TranscriptCopy::CaughtUp | TranscriptCopy::Complete) => "no transcript yet".to_owned(),
+        Some(TranscriptCopy::Unreachable { reason, .. }) => format!(
+            "{device} cannot be reached ({reason}), and nothing of the transcript was fetched before"
+        ),
+        Some(TranscriptCopy::NotHere { .. }) => {
+            format!("{device} has no transcript of this session")
+        }
+    }
+}
+
 /// Draws a session's transcript, with its permission request under it, or once it ended, that it
 /// did and the `successor` its item went on in; returns the scroll it was drawn at, and adds the
 /// answers to the request and the key to the successor to `spots`.
@@ -130,21 +155,21 @@ pub(super) fn draw_session(
     body: Rect,
     spots: &mut Vec<Spot>,
 ) -> Scroll {
-    let (lines, open): (&[Line<'static>], Vec<Line<'static>>) =
-        match (&session.place, app.transcripts.get(&session.id)) {
-            (Place::Elsewhere(device), _) => (
-                &[],
-                vec![Line::from(format!(" transcript on {device}")).themed(theme::text_dimmed())],
-            ),
-            (Place::Here, None) => (
-                &[],
-                vec![Line::from(" no transcript yet").themed(theme::text_dimmed())],
-            ),
-            (Place::Here, Some(transcript)) => match app.transcript_lines.get(&session.id) {
+    let copy = app.transcript_copies.get(&session.id);
+    let (lines, mut open): (&[Line<'static>], Vec<Line<'static>>) =
+        match app.transcripts.get(&session.id) {
+            None => (&[], vec![dimmed(no_transcript(&session.place, copy))]),
+            Some(transcript) => match app.transcript_lines.get(&session.id) {
                 Some(laid_out) => (laid_out.lines(), laid_out.open_lines(transcript)),
                 None => (&[], Vec::new()),
             },
         };
+    if let (Place::Elsewhere(device), Some(copy), Some(_)) =
+        (&session.place, copy, app.transcripts.get(&session.id))
+        && let Some(behind) = crate::session::copy_behind(device, copy)
+    {
+        open.push(dimmed(behind));
+    }
     let asks: Vec<(&str, Request)> = app
         .snapshot
         .waiting
