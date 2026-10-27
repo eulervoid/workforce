@@ -35,6 +35,7 @@ use self::diff::{Changes, ItemWork};
 use self::restart::{Executable, Mismatch};
 use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
 use crate::commands::{DeviceDiff, ItemDiff};
+use crate::daemon::StartedDaemon;
 use crate::transcript::Format;
 use crate::workspace::{self, Movable, Reconnect, Workspace};
 use crate::{commands, render, transcript, view};
@@ -52,7 +53,12 @@ const BACKLOG: usize = 200;
 /// How many items the dashboard keeps the events of: those opened or touched by an event last.
 const ITEMS_KEPT: usize = 64;
 
-pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
+/// `started` is the daemon this command started for the dashboard, which it says it did.
+pub fn run(
+    workspace: &mut Workspace,
+    only: Option<ItemId>,
+    started: Option<StartedDaemon>,
+) -> anyhow::Result<()> {
     let executable = Executable::start()?;
     let rebuilt = executable.path().to_path_buf();
     let mut terminal = ratatui::init();
@@ -65,7 +71,7 @@ pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()
     }));
     let result = start_reports()
         .map_err(anyhow::Error::from)
-        .and_then(|()| event_loop(&mut terminal, workspace, only, executable));
+        .and_then(|()| event_loop(&mut terminal, workspace, only, started, executable));
     let _ = stop_reports();
     ratatui::restore();
     match result? {
@@ -125,11 +131,15 @@ fn event_loop(
     terminal: &mut DefaultTerminal,
     workspace: &mut Workspace,
     only: Option<ItemId>,
+    started: Option<StartedDaemon>,
     executable: Executable,
 ) -> anyhow::Result<Exit> {
     let mut app = App::new(Snapshot::default(), jiff::tz::TimeZone::system());
     let size = terminal.size()?;
     app.resize(size.width, size.height);
+    if let Some(started) = started {
+        app.did(started.to_string(), wf_store::now_ms());
+    }
     let mut feed = Feed::new(workspace, &mut app, executable)?;
     if let Some(item) = only {
         app.open_item(item);

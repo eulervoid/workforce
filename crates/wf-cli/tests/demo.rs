@@ -971,6 +971,176 @@ fn the_daemon_starts_in_the_background_and_stops() {
     assert_eq!(sandbox.json(&["item", "list"]).as_array().unwrap().len(), 1);
 }
 
+/// A `wf` that runs in a terminal of its own, as the session leader of it, so that it sees what
+/// it would see in a terminal window; killed also when the test fails.
+struct AtTerminal {
+    child: std::process::Child,
+    terminal: std::fs::File,
+    screen: std::sync::mpsc::Receiver<Vec<u8>>,
+}
+
+impl AtTerminal {
+    fn spawn(mut command: std::process::Command) -> Self {
+        use std::os::fd::FromRawFd;
+        use std::os::unix::process::CommandExt;
+
+        let (mut leader, mut follower) = (0, 0);
+        let mut size = libc::winsize {
+            ws_row: 40,
+            ws_col: 200,
+            ws_xpixel: 0,
+            ws_ypixel: 0,
+        };
+        // SAFETY: openpty writes the two descriptors it opens, which are owned from here on.
+        let opened = unsafe {
+            libc::openpty(
+                &mut leader,
+                &mut follower,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &mut size,
+            )
+        };
+        assert_eq!(opened, 0, "{}", std::io::Error::last_os_error());
+        let (terminal, follower) = unsafe {
+            (
+                std::fs::File::from_raw_fd(leader),
+                std::fs::File::from_raw_fd(follower),
+            )
+        };
+        command
+            .stdin(follower.try_clone().unwrap())
+            .stdout(follower.try_clone().unwrap())
+            .stderr(follower);
+        // SAFETY: setsid and ioctl are async-signal-safe.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 || libc::ioctl(0, libc::TIOCSCTTY as _, 0) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+        let child = command.spawn().unwrap();
+        // The terminal ends for the reader once nothing holds the follower side any more.
+        drop(command);
+        let (sender, screen) = std::sync::mpsc::channel();
+        let mut reader = terminal.try_clone().unwrap();
+        std::thread::spawn(move || {
+            let mut buffer = [0; 4096];
+            while let Ok(read @ 1..) = std::io::Read::read(&mut reader, &mut buffer) {
+                if sender.send(buffer[..read].to_vec()).is_err() {
+                    break;
+                }
+            }
+        });
+        Self {
+            child,
+            terminal,
+            screen,
+        }
+    }
+
+    /// What was drawn until `wanted` shows, without escape sequences and spaces: the screen is
+    /// drawn cell by cell, skipping the blank ones.
+    fn wait_for(&self, wanted: &str) -> String {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        let mut drawn = Vec::new();
+        loop {
+            let text = visible(&drawn);
+            if text.contains(wanted) {
+                return text;
+            }
+            let left = deadline.saturating_duration_since(std::time::Instant::now());
+            match self.screen.recv_timeout(left) {
+                Ok(chunk) => drawn.extend(chunk),
+                Err(_) => panic!("{wanted:?} never showed; the terminal showed:\n{text}"),
+            }
+        }
+    }
+
+    fn press(&mut self, keys: &str) {
+        std::io::Write::write_all(&mut self.terminal, keys.as_bytes()).unwrap();
+    }
+
+    /// Waits until the process ends by itself, failing the test if that takes over a minute.
+    fn wait(&mut self) -> std::process::ExitStatus {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+        loop {
+            if let Some(status) = self.child.try_wait().unwrap() {
+                return status;
+            }
+            assert!(std::time::Instant::now() < deadline, "wf did not end");
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+}
+
+impl Drop for AtTerminal {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+/// `drawn` without escape sequences, spaces and line breaks.
+fn visible(drawn: &[u8]) -> String {
+    let text = String::from_utf8_lossy(drawn);
+    let mut visible = String::new();
+    let mut characters = text.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\x1b' => {
+                // A control sequence ends with a byte from `@` to `~`; others with the next one.
+                if characters.next_if_eq(&'[').is_some() {
+                    while characters
+                        .next()
+                        .is_some_and(|byte| !('@'..='~').contains(&byte))
+                    {}
+                } else {
+                    characters.next();
+                }
+            }
+            character if character.is_whitespace() || character.is_control() => {}
+            character => visible.push(character),
+        }
+    }
+    visible
+}
+
+#[test]
+fn the_dashboard_starts_the_daemon_when_none_runs_and_says_so() {
+    let sandbox = Sandbox::new();
+    sandbox.run(&["init", "--name", "demo"]);
+    assert_eq!(sandbox.json(&["daemon", "status"])["running"], false);
+
+    let _daemon = BackgroundDaemon(&sandbox);
+    let mut dashboard = AtTerminal::spawn(sandbox.command(&[]));
+    let screen = dashboard.wait_for("startedthedaemon(pid");
+    let log = sandbox.json(&["daemon", "status"])["log"]
+        .as_str()
+        .unwrap()
+        .replace(' ', "");
+    assert!(screen.contains(&format!("itlogsto{log}")), "{screen}");
+    let pid: u64 = screen
+        .split_once("startedthedaemon(pid")
+        .unwrap()
+        .1
+        .split(')')
+        .next()
+        .unwrap()
+        .parse()
+        .unwrap();
+    dashboard.press("q");
+    assert!(dashboard.wait().success());
+
+    // It runs on after the dashboard, as one started by hand does.
+    let status = sandbox.json(&["daemon", "status"]);
+    assert_eq!(status["running"], true, "{status}");
+    assert_eq!(status["pid"], pid);
+    assert_eq!(sandbox.json(&["daemon", "stop"])["running"], false);
+}
+
 #[test]
 fn restarting_replaces_a_running_daemon_and_starts_one_when_none_runs() {
     let sandbox = Sandbox::new();

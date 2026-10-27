@@ -117,7 +117,25 @@ fn restart(json: bool, args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
     start(json, args, data)
 }
 
-fn spawn_daemon(args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
+/// A daemon this command started in the background, which outlives it.
+pub struct StartedDaemon {
+    pid: u32,
+    log: PathBuf,
+}
+
+impl std::fmt::Display for StartedDaemon {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            formatter,
+            "started the daemon (pid {}); it logs to {}; `wf daemon stop` stops it",
+            self.pid,
+            self.log.display()
+        )
+    }
+}
+
+/// Starts the daemon in the background and waits until it answers.
+pub fn spawn_daemon(args: DaemonArgs, data: &DataDir) -> anyhow::Result<StartedDaemon> {
     if answers(&data.daemon_socket()) {
         bail!("the daemon already runs; `wf daemon status` says where it logs");
     }
@@ -164,7 +182,10 @@ fn spawn_daemon(args: DaemonArgs, data: &DataDir) -> anyhow::Result<()> {
         }
         std::thread::sleep(Duration::from_millis(100));
     }
-    Ok(())
+    Ok(StartedDaemon {
+        pid: child.id(),
+        log: log_path,
+    })
 }
 
 fn stop(json: bool, data: &DataDir) -> anyhow::Result<()> {
