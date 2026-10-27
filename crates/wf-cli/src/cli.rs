@@ -187,9 +187,19 @@ pub enum Command {
     ///
     /// They go into the store of their workforce on this machine, which is created if there is
     /// none. The daemon must not run.
+    ///
+    /// With `--resign`, the export of an older wf, whose events this one does not read, becomes a
+    /// new workforce: every event is signed again by this device, under a new genesis signed with
+    /// the founder's principal key, which this machine must have. Ids change: a map of the old to
+    /// the new is written beside the new store, and the repositories, branches and transcripts of
+    /// this machine are moved over. Invites, binds, other devices and a fork's link to its parent
+    /// are left out. The old workforce's directory is left as it was.
     Import {
         /// The file `wf export` wrote.
         file: PathBuf,
+        /// Sign the export of an older wf again as a new workforce.
+        #[arg(long)]
+        resign: bool,
     },
     /// What `git fetch` runs to reach another device through the daemon: pipes its input and
     /// output to the socket the daemon handed git for the fetch, as descriptor 3.

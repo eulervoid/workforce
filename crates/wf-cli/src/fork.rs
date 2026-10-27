@@ -37,15 +37,15 @@ impl HistorySource for ParentReplica {
     }
 }
 
-/// The directory of a fork that is being made, removed again unless the fork is completed.
-struct Unfinished(Option<PathBuf>);
+/// The directory of a workforce that is being made, removed again unless it is completed.
+pub(crate) struct Unfinished(Option<PathBuf>);
 
 impl Unfinished {
-    fn new(directory: PathBuf) -> Self {
+    pub(crate) fn new(directory: PathBuf) -> Self {
         Self(Some(directory))
     }
 
-    fn keep(&mut self) {
+    pub(crate) fn keep(&mut self) {
         self.0 = None;
     }
 }
