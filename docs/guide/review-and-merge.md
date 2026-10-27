@@ -134,9 +134,29 @@ policy, `main` by default. It builds the merge commit,
 removes the agent's repository and the item's `wf/<item>` branch, and the item is done; what depended on
 it can start.
 
-wf never touches your checkout. `wf init` made wf's repository, `~/.local/share/workforce/<workforce
-id>/git`, with only the target and the item branches, and gave your checkout its path as the remote
-`wf`, the upstream of the target. Merged work comes into your checkout when you pull:
+`wf init` made wf's own repository, `~/.local/share/workforce/<workforce id>/git`, with only the
+target and the item branches, and gave your checkout its path as the remote `wf`, the upstream of the
+target. Agents start from `main` there, not from your checkout, and the daemon merges there. The two
+follow each other on their own, where one fast-forwards the other:
+
+* **Behind**, as after merges: every `wf` command run in your checkout, and the dashboard as it
+  refreshes, fast-forwards your `main`, so merged work shows up without a pull:
+  `main: fast-forwarded 3 merged commits from wf`. With `main` checked out, the files move with it as
+  `git merge --ff-only` moves them, which refuses to touch uncommitted changes; then it stays behind,
+  a hint in `wf status` and the dashboard's header, until you commit or stash them, or run
+  `git pull`. With another branch checked out, `main` moves alone.
+* **Ahead**, your `main` has commits wf's lacks: the commands that lead to agents starting from it,
+  `wf item add`, `wf item open`, `wf session start`, and the dashboard when it starts or opens an
+  item, push it to `wf` first, as `git push wf main` would: `main: pushed 2 commits to wf`. Other
+  commands warn on stderr until then, `wf status` says it first in `next:`, and the dashboard's header
+  has it.
+* **Diverged**, each has commits the other lacks: nothing moves, and every command warns, as your
+  push would be refused. Rebase onto `wf/main`, `git pull --rebase wf main`, then push.
+
+wf never forces a push, nor rebases or merges your work: anything but a fast-forward is yours to do.
+It compares the two directly, without a fetch, as `wf/main` in your checkout may be stale, and leaves
+your checkout alone inside a session. With `--json` it says nothing of what moved, and warns of
+nothing. `git pull` and `git push` work as ever:
 
 ```sh
 git pull                         # brings in what the daemon merged into main
@@ -149,18 +169,6 @@ branches are never sent to wf's repository, and nothing in it is pushed anywhere
 made and signed as the git config of wf's repository and of your account say (`wf init` copied your
 checkout's `user.name`, `user.email` and signing config into it; `git -C ~/.local/share/workforce/<workforce
 id>/git config` changes them); see `merge_signing` in [machine-config.md](machine-config.md#commits-and-signatures).
-
-Agents start from `main` in wf's repository, not from your checkout: a commit you never pushed is
-one no agent sees. wf compares the two directly, without a fetch, as `wf/main` in your checkout may be
-stale:
-
-* **Ahead**, your `main` has commits wf's lacks: every command warns on stderr, `wf status` says it
-  first in `next:`, and the dashboard's header has it. `git push wf main` fixes it.
-* **Diverged**, each has commits the other lacks: the same warning, as your push would be refused.
-  Rebase onto `wf/main`, `git pull --rebase wf main`, then push.
-* **Behind**, as after merges: only a hint in `wf status` and the dashboard's header, `git pull`.
-
-No warning is shown with `--json` or inside a session.
 
 Work on an item whose level has no steps is merged as soon as the session submits.
 

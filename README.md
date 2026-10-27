@@ -54,8 +54,9 @@ the daemon runs (pid 48213); it logs to /Users/ada/.local/share/workforce/daemon
 
 You are `@ada`, the **principal**: the person the agents work for. `wf init` writes
 `.workforce.toml`; commit it, so that clones on your other machines find it. It also adds wf's own
-repository as the remote `wf` of your checkout: `git pull` brings in merged work, and `git push`
-sends your own commits to the agents.
+repository as the remote `wf` of your checkout. The two follow each other: `wf` brings merged work
+into your checkout, and sends your own commits on `main` to wf's repository before agents start from
+it; when they diverge, it says what to run.
 
 Add an item. The `- [ ]` lines are **steps** the agent ticks off and reports on:
 
