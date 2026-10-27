@@ -140,6 +140,26 @@ where
 /// stdin, stdout and stderr, that git is run with.
 pub const BRIDGE_DESCRIPTOR: std::os::fd::RawFd = 3;
 
+/// Has `command` start with `source` as descriptor [`BRIDGE_DESCRIPTOR`], open on exec. `source`
+/// must stay open until `command` is spawned. When `source` already is that descriptor, `dup2`
+/// would leave it close-on-exec, so the flag is cleared instead.
+pub fn inherit_as_bridge(command: &mut Command, source: std::os::fd::RawFd) {
+    // SAFETY: only async-signal-safe functions are called.
+    unsafe {
+        command.pre_exec(move || {
+            if source == BRIDGE_DESCRIPTOR {
+                let flags = libc::fcntl(source, libc::F_GETFD);
+                if flags < 0 || libc::fcntl(source, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+            } else if libc::dup2(source, BRIDGE_DESCRIPTOR) < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            Ok(())
+        });
+    }
+}
+
 /// Like [`spawn`], with `inherit` as descriptor [`BRIDGE_DESCRIPTOR`] of git and so of what git
 /// runs. Nothing else can reach it, as no path leads to it. This process closes its copy once git
 /// is started.
@@ -167,24 +187,9 @@ where
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     if let Some(descriptor) = &inherit {
-        let source = descriptor.as_raw_fd();
-        // SAFETY: only async-signal-safe functions are called. It runs after the closing of every
-        // descriptor above 2 on exec, so the one it makes is the only one git inherits.
-        unsafe {
-            command.pre_exec(move || {
-                if source == BRIDGE_DESCRIPTOR {
-                    let flags = libc::fcntl(source, libc::F_GETFD);
-                    if flags < 0
-                        || libc::fcntl(source, libc::F_SETFD, flags & !libc::FD_CLOEXEC) < 0
-                    {
-                        return Err(std::io::Error::last_os_error());
-                    }
-                } else if libc::dup2(source, BRIDGE_DESCRIPTOR) < 0 {
-                    return Err(std::io::Error::last_os_error());
-                }
-                Ok(())
-            });
-        }
+        // It runs after the closing of every descriptor above 2 on exec, so the one it makes is
+        // the only one git inherits.
+        inherit_as_bridge(&mut command, descriptor.as_raw_fd());
     }
     let child = command.spawn().map_err(VcsError::Spawn)?;
     drop(inherit);
