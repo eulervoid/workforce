@@ -545,6 +545,81 @@ mod tests {
         );
     }
 
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &to.join(entry.file_name()));
+            } else {
+                std::fs::copy(entry.path(), to.join(entry.file_name())).unwrap();
+            }
+        }
+    }
+
+    #[test]
+    fn an_agent_repository_copied_from_another_workforce_works_on_the_renamed_branch() {
+        let (repo, _) = checkout_with_branches();
+        let old_path = repo.root.path().join("old-git");
+        let old =
+            GitCli::create_bare_repository(&old_path, "main", Some(&repo.directory())).unwrap();
+        let (old_item, new_item) = (ItemId::from_bytes([7; 32]), ItemId::from_bytes([9; 32]));
+        let old_agent = repo.root.path().join("old-repos").join("agent");
+        old.create_agent_repository(&old_agent, &item_branch(old_item), repo.main())
+            .unwrap();
+        std::fs::write(old_agent.join("work.txt"), "work\n").unwrap();
+        git_in(&old_agent, &["add", "--all"]);
+        git_in(
+            &old_agent,
+            &[
+                "-c",
+                "user.name=A",
+                "-c",
+                "user.email=a@example.com",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "--quiet",
+                "-m",
+                "work",
+            ],
+        );
+        let Import::Imported { commit } = old
+            .import_commits(&old_agent, old_item, "main", ImportMode::InProgress)
+            .unwrap()
+        else {
+            panic!("the commit is imported");
+        };
+        std::fs::write(old_agent.join("unfinished.txt"), "not yet\n").unwrap();
+
+        let new_path = repo.root.path().join("new-git");
+        let new = GitCli::create_fork_repository(&new_path, "main", &old_path, None).unwrap();
+        new.rename_branch(&item_branch(old_item), &item_branch(new_item))
+            .unwrap();
+        let new_agent = repo.root.path().join("new-repos").join("agent");
+        copy_tree(&old_agent, &new_agent);
+        new.adopt_agent_repository(&new_agent, old_item, new_item)
+            .unwrap();
+        std::fs::remove_dir_all(&old_path).unwrap();
+        std::fs::remove_dir_all(&old_agent).unwrap();
+
+        assert_eq!(new.branch_head(&item_branch(new_item)).unwrap(), commit);
+        assert_eq!(
+            crate::agent_branch_head(&new_agent, &item_branch(new_item)),
+            Some(commit)
+        );
+        assert_eq!(
+            git_in(&new_agent, &["symbolic-ref", "HEAD"]),
+            format!("refs/heads/{}", item_branch(new_item))
+        );
+        // The objects come from the new repository, and the work not committed is still there.
+        git_in(&new_agent, &["fsck", "--no-dangling"]);
+        assert_eq!(
+            git_in(&new_agent, &["status", "--porcelain"]),
+            "?? unfinished.txt"
+        );
+    }
+
     #[test]
     fn the_checkout_fetches_work_it_does_not_have_before_checking_it_out() {
         let (repo, _) = checkout_with_branches();

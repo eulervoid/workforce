@@ -133,6 +133,58 @@ impl GitCli {
         Ok(())
     }
 
+    /// Makes the agent repository at `path`, copied from the repository of `old` in another
+    /// workforce, the repository of `new` in this one: its objects come from this repository, and
+    /// the branch of `old` becomes the branch of `new`, checked out where that of `old` was. Only
+    /// files change, so no git starts in the agent's repository.
+    pub fn adopt_agent_repository(
+        &self,
+        path: &Path,
+        old: ItemId,
+        new: ItemId,
+    ) -> Result<(), VcsError> {
+        let git_directory = path.join(".git");
+        if !std::fs::symlink_metadata(&git_directory).is_ok_and(|metadata| metadata.is_dir()) {
+            return Err(VcsError::NotARepository(path.to_path_buf()));
+        }
+        let alternates = git_directory.join("objects/info");
+        std::fs::create_dir_all(&alternates)?;
+        std::fs::write(
+            alternates.join("alternates"),
+            format!("{}\n", self.git_directory.join("objects").display()),
+        )?;
+        let (old_reference, new_reference) = (
+            format!("refs/heads/{}", item_branch(old)),
+            format!("refs/heads/{}", item_branch(new)),
+        );
+        for directory in [git_directory.clone(), git_directory.join("logs")] {
+            let file = directory.join(&old_reference);
+            if std::fs::symlink_metadata(&file).is_ok_and(|metadata| metadata.is_file()) {
+                let renamed = directory.join(&new_reference);
+                std::fs::create_dir_all(renamed.parent().expect("a reference is in a directory"))?;
+                std::fs::rename(file, renamed)?;
+            }
+        }
+        let packed = git_directory.join("packed-refs");
+        if let Some(text) = read_regular_file(&packed, PACKED_REFS_LIMIT) {
+            let renamed: String = text
+                .lines()
+                .map(|line| match line.strip_suffix(old_reference.as_str()) {
+                    Some(commit) if commit.ends_with(' ') => format!("{commit}{new_reference}\n"),
+                    Some(_) | None => format!("{line}\n"),
+                })
+                .collect();
+            std::fs::write(&packed, renamed)?;
+        }
+        let head = git_directory.join("HEAD");
+        if read_regular_file(&head, 1024)
+            .is_some_and(|text| text.trim() == format!("ref: {old_reference}"))
+        {
+            std::fs::write(&head, format!("ref: {new_reference}\n"))?;
+        }
+        Ok(())
+    }
+
     /// Copies the commits on the branch of `item` in the agent's repository into the principal's
     /// and points the branch of the item there at the head. The head is read from the file of the
     /// reference and the objects are packed from the principal's repository, which reads the

@@ -19,7 +19,7 @@ mod target;
 pub(crate) use check_turns::CheckTurns;
 pub(crate) use dispatch::run_dispatcher;
 pub(crate) use merge::{MergeQueue, run_merger};
-pub use resume::session_model;
+pub use resume::{copy_session_record, session_model};
 pub(crate) use start::sandboxed_in;
 pub(crate) use submit::SubmissionChecks;
 pub(crate) use target::{TargetBranch, run_target};

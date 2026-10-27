@@ -592,6 +592,16 @@ impl GitCli {
         Ok(())
     }
 
+    /// Renames `from` to `to`; a branch that is not there is left alone.
+    pub fn rename_branch(&self, from: &str, to: &str) -> Result<(), VcsError> {
+        if !self.branch_exists(from)? {
+            return Ok(());
+        }
+        self.run(&self.repository, &[], ["branch", "-m", from, to])?
+            .ok()?;
+        Ok(())
+    }
+
     /// The commit a branch points at.
     pub fn branch_head(&self, branch: &str) -> Result<CommitId, VcsError> {
         let found = self.run(
