@@ -10,7 +10,7 @@ use iroh::address_lookup::memory::MemoryLookup;
 use iroh::endpoint::{Connection, presets};
 use iroh::protocol::{AcceptError, ProtocolHandler, Router};
 use iroh::{Endpoint, EndpointAddr, EndpointId, RelayMode, RelayUrl, SecretKey};
-use wf_core::id::{ItemId, WorkforceId};
+use wf_core::id::{ItemId, SessionId, WorkforceId};
 use wf_core::identity::{DeviceKey, DeviceSigner};
 use wf_core::invite::{InviteCode, JoinRefusal};
 use wf_core::session::CommitId;
@@ -19,7 +19,10 @@ use crate::git::{self, GIT_ALPN, GitError, GitRequest, GitSource, read_git_reque
 use crate::gossip::{GOSSIP_ALPN, HeadsTopic, topic_id};
 use crate::join::{JOIN_ALPN, JoinFailure, JoinHandler, JoinRequest, Reservations, run_join};
 use crate::log::{LogError, SyncLog};
-use crate::query::{self, DiffAnswer, QUERY_ALPN, Query, QueryError, QuerySource, read_query};
+use crate::query::{
+    self, DiffAnswer, DiffRequest, QUERY_ALPN, QueryError, QueryRequest, QuerySource,
+    TranscriptAnswer, TranscriptRequest, read_query,
+};
 use crate::sync::{IDLE_TIMEOUT, SYNC_ALPN, SyncError, SyncReport, initiate, read_open, respond};
 
 /// Hole punching and address lookup can take a while.
@@ -51,7 +54,7 @@ pub enum NetError {
         #[source]
         source: SyncError,
     },
-    #[error("asking {peer} for work failed: {source}")]
+    #[error("asking {peer} about a session failed: {source}")]
     Query {
         peer: String,
         #[source]
@@ -262,13 +265,13 @@ impl<L: SyncLog + Clone + 'static> ProtocolHandler for QueryHandler<L> {
         let request = read_query(&mut recv, IDLE_TIMEOUT)
             .await
             .map_err(AcceptError::from_err)?;
-        let Query::Diff { workforce, .. } = &request;
+        let workforce = request.workforce();
         let source = self
             .source
             .read()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
             .clone();
-        let (Some(log), Some(source)) = (self.registry.get(workforce), source) else {
+        let (Some(log), Some(source)) = (self.registry.get(&workforce), source) else {
             connection.close(NOT_SERVED.into(), b"workforce not served");
             return Ok(());
         };
@@ -644,6 +647,35 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
         item: ItemId,
         since: Option<CommitId>,
     ) -> Result<DiffAnswer, NetError> {
+        let request = DiffRequest {
+            workforce,
+            item,
+            since,
+        };
+        self.query(peer, &request).await
+    }
+
+    /// Asks a device for the transcript of one of its sessions from byte `from` on.
+    pub async fn query_transcript(
+        &self,
+        peer: impl Into<EndpointAddr>,
+        workforce: WorkforceId,
+        session: SessionId,
+        from: u64,
+    ) -> Result<TranscriptAnswer, NetError> {
+        let request = TranscriptRequest {
+            workforce,
+            session,
+            from,
+        };
+        self.query(peer, &request).await
+    }
+
+    async fn query<R: QueryRequest>(
+        &self,
+        peer: impl Into<EndpointAddr>,
+        request: &R,
+    ) -> Result<R::Answer, NetError> {
         let peer: EndpointAddr = peer.into();
         let name = device_key(peer.id).fmt_short();
         let connection = tokio::time::timeout(
@@ -657,12 +689,7 @@ impl<L: SyncLog + Clone + 'static> Node<L> {
             .open_bi()
             .await
             .map_err(|error| connect_error(&name, error))?;
-        let request = Query::Diff {
-            workforce,
-            item,
-            since,
-        };
-        let answer = query::initiate(tokio::io::join(&mut recv, &mut send), &request)
+        let answer = query::initiate(tokio::io::join(&mut recv, &mut send), request)
             .await
             .map_err(|source| NetError::Query {
                 peer: name.clone(),
