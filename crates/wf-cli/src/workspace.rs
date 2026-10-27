@@ -16,7 +16,7 @@ use wf_daemon::caches::CacheUsage;
 use wf_daemon::caller::Caller;
 use wf_daemon::client::{ClientError, DaemonClient};
 use wf_daemon::data_dir::DataDirError;
-use wf_daemon::proto::{EndAnswer, HeldPermission, LiveDiff, ProtoError};
+use wf_daemon::proto::{EndAnswer, HeldPermission, LiveDiff, ProtoError, TranscriptCopy};
 use wf_harness::Permission;
 use wf_store::{EventStore, RedbStore, Replica};
 
@@ -519,6 +519,20 @@ impl Workspace {
                 item,
                 since,
             )?)),
+        }
+    }
+
+    /// Has the daemon follow the transcript of `session`, a session of another device, for some
+    /// seconds more, keeping a copy of it at [`DataDir::transcript_copy`]: what the copy came to
+    /// so far. `None` without a daemon, which fetches it.
+    pub fn follow_transcript(&self, session: SessionId) -> anyhow::Result<Option<TranscriptCopy>> {
+        match &self.source {
+            Source::Local(..) => Ok(None),
+            Source::Daemon { client, .. } => Ok(Some(
+                client
+                    .borrow_mut()
+                    .follow_transcript(self.workforce, session)?,
+            )),
         }
     }
 

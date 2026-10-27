@@ -6,6 +6,7 @@ mod agents;
 mod context;
 mod detail;
 mod diff;
+mod elsewhere;
 mod ended;
 mod items;
 mod links;
