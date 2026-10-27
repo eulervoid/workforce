@@ -57,7 +57,7 @@ pub fn carry_out(
     match effect {
         Effect::Quit => Ok(Outcome::Quit),
         Effect::ChooseStart { item } => Ok(Outcome::Choose(starters(workspace, item)?)),
-        Effect::ChooseState { item } => Ok(Outcome::Choose(states(workspace, item)?)),
+        Effect::ChooseState { item } => Ok(Outcome::Choose(states(workspace.state(), item)?)),
         Effect::Approve {
             item,
             reviewed,
@@ -182,9 +182,8 @@ fn starters(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
 }
 
 /// The states a principal moves an item to, that its type uses, less the one it is in. `active`
-/// and `review` are the runner's.
-fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
-    let state = workspace.state();
+/// and `review` are the runner's, and `open` waits until no work session holds the item.
+fn states(state: &State, item: ItemId) -> anyhow::Result<Choice> {
     let policy = &state.policy().expect("a workforce has a policy").policy;
     let ItemEntry::Live(live) = state
         .item(item)
@@ -196,6 +195,7 @@ fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
         .type_config(live.item_type())
         .ok_or_else(|| anyhow!("no item type `{}` in the policy", live.item_type()))?;
     let current = live.state();
+    let held = state.holder(item, &SessionRole::Work).is_some();
     let states: Vec<ItemState> = [
         ItemState::Draft,
         ItemState::Open,
@@ -204,6 +204,7 @@ fn states(workspace: &Workspace, item: ItemId) -> anyhow::Result<Choice> {
     ]
     .into_iter()
     .filter(|state| config.uses(*state) && *state != current)
+    .filter(|state| !(held && *state == ItemState::Open))
     .collect();
     if states.is_empty() {
         bail!("a {} that is {current} cannot be moved", live.item_type());
@@ -635,6 +636,7 @@ fn suspended<T>(terminal: &mut DefaultTerminal, run: impl FnOnce() -> T) -> anyh
 
 #[cfg(test)]
 mod tests {
+    use wf_core::session::EndReason;
     use wf_core::testing::*;
 
     use super::*;
@@ -670,6 +672,28 @@ mod tests {
             "{refused}"
         );
         assert!(submitted(&state, item, None).is_err());
+    }
+
+    #[test]
+    fn an_item_a_work_session_holds_is_not_offered_to_open() {
+        let fixture = Fixture::new(1);
+        let mut state = fixture.state();
+        let apply = |state: &mut State, body| fixture.apply(state, 0, 1_000, body);
+        apply(&mut state, define_agent("coder"));
+        let item = apply(&mut state, create("task", "Work")).id().into();
+        let session = apply(&mut state, start_session("coder", item)).id().into();
+        apply(&mut state, moved(item, ItemState::Active));
+        let offered = |state: &State| match states(state, item).unwrap() {
+            Choice::State { states, .. } => states,
+            other => panic!("not a choice of states: {other:?}"),
+        };
+        assert_eq!(
+            offered(&state),
+            [ItemState::Draft, ItemState::Done, ItemState::Cancelled]
+        );
+
+        apply(&mut state, end_session(session, EndReason::Released));
+        assert!(offered(&state).contains(&ItemState::Open));
     }
 
     /// Fails the `fail_at`th call to it, counting from 0.
