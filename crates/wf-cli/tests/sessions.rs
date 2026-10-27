@@ -431,26 +431,46 @@ async fn manual_start_uses_the_policy_agent_unless_overridden() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn adding_an_item_and_starting_a_session_warn_of_commits_wfs_repository_lacks() {
+async fn adding_an_item_and_starting_a_session_push_the_commits_wfs_repository_lacks() {
     let world = World::new("say hello\n").await;
     let repository = &world.wf.repository;
-    std::fs::write(repository.join("own.txt"), "own\n").unwrap();
-    git_in(repository, &["add", "own.txt"]);
-    git_in(repository, &["commit", "--quiet", "-m", "own"]);
+    let commit = |name: &str| {
+        std::fs::write(repository.join(name), "own\n").unwrap();
+        git_in(repository, &["add", name]);
+        git_in(repository, &["commit", "--quiet", "-m", name]);
+        git_in(repository, &["rev-parse", "main"])
+    };
     let stderr = |args: &[&str]| {
         let output = common::output(&mut world.wf.command(args));
         assert!(output.status.success(), "wf {args:?} failed");
         String::from_utf8(output.stderr).unwrap()
     };
-    let warning = "warning: main here has 1 commit that wf's repository lacks, and agents start \
-                   from wf's: `git push wf main`\n";
+    let bare = world.bare();
+    let written = |commit: &str| {
+        let moved = format!("target moved to {commit}");
+        move |world: &World| world.wf.run(&["log"]).contains(&moved)
+    };
 
-    assert_eq!(stderr(&["item", "add", "--title", "Stale start"]), warning);
+    let first = commit("one.txt");
+    assert_eq!(
+        stderr(&["item", "add", "--title", "Started"]),
+        "main: pushed 1 commit to wf\n"
+    );
+    assert_eq!(git_in(&bare, &["rev-parse", "main"]), first);
+    world
+        .wait("the daemon to write the push", written(&first))
+        .await;
+
     let item = world.wf.add(&["--title", "Started"]);
+    commit("two.txt");
+    let second = commit("three.txt");
     assert_eq!(
         stderr(&["session", "start", short(&item), "--agent", "coder"]),
-        warning
+        "main: pushed 2 commits to wf\n"
     );
+    world
+        .wait("the daemon to write the push", written(&second))
+        .await;
 }
 
 #[tokio::test(flavor = "multi_thread")]

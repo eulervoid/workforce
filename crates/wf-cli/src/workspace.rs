@@ -96,6 +96,17 @@ pub struct Workspace {
     checkout: Option<PathBuf>,
 }
 
+/// Which side [`Workspace::follow_target`] may move to bring the target of the principal's
+/// checkout and wf's in step.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Movable {
+    /// The checkout's, to the work merged in wf's repository: every command does that.
+    Checkout,
+    /// Either: wf's also takes the commits of the checkout, so that agents start from them. The
+    /// commands that lead to agents starting do that.
+    Both,
+}
+
 /// Why [`Workspace::reconnect`] did not connect.
 #[derive(Debug)]
 pub enum Reconnect {
@@ -279,14 +290,50 @@ impl Workspace {
     /// agent's, outside a checkout, before wf's repository is there, or when git cannot tell:
     /// the comparison only informs, and never keeps a command from running.
     pub fn checkout_target(&self) -> Option<crate::view::CheckoutTarget> {
+        let (_, _, target, standing) = self.target_standing()?;
+        crate::view::CheckoutTarget::new(target, standing)
+    }
+
+    /// Brings the target of the principal's checkout and wf's in step where one fast-forwards the
+    /// other and `movable` lets that side move, and says what moved or how they still stand
+    /// apart. Nothing where [`Workspace::checkout_target`] has nothing to say. A move that fails,
+    /// as on uncommitted changes the fast-forward would touch, leaves both as they were.
+    pub fn follow_target(&self, movable: Movable) -> Option<crate::view::TargetFollowed> {
+        use crate::view::{CheckoutMove, CheckoutTarget, TargetFollowed};
+        use wf_vcs::TargetStanding;
+        let (checkout, bare, target, standing) = self.target_standing()?;
+        let moved = match (standing, movable) {
+            (TargetStanding::Behind { commits }, Movable::Checkout | Movable::Both) => {
+                wf_vcs::fast_forward_target(checkout, &bare, target)
+                    .ok()
+                    .map(|()| CheckoutMove::fast_forwarded(target, commits))
+            }
+            (TargetStanding::Ahead { commits }, Movable::Both) => {
+                wf_vcs::push_target(checkout, &bare, target)
+                    .ok()
+                    .map(|()| CheckoutMove::pushed(target, commits))
+            }
+            (TargetStanding::Ahead { .. }, Movable::Checkout)
+            | (TargetStanding::Same | TargetStanding::Diverged, _) => None,
+        };
+        match moved {
+            Some(moved) => Some(TargetFollowed::Moved(moved)),
+            None => CheckoutTarget::new(target, standing).map(TargetFollowed::Apart),
+        }
+    }
+
+    /// The checkout, wf's repository and the target, and how the target stands in the two.
+    /// Nothing inside a session, outside a checkout, before wf's repository is there, or when
+    /// git cannot tell.
+    fn target_standing(&self) -> Option<(&Path, PathBuf, &str, wf_vcs::TargetStanding)> {
         if self.session().is_some() {
             return None;
         }
         let checkout = self.checkout.as_deref()?;
-        let target = &self.state().policy()?.policy.merge.target;
+        let target = self.state().policy()?.policy.merge.target.as_str();
         let bare = wf_vcs::bare_repository(&self.data.workforce(&self.workforce));
         let standing = wf_vcs::target_standing(checkout, &bare, target).ok()??;
-        crate::view::CheckoutTarget::new(target, standing)
+        Some((checkout, bare, target, standing))
     }
 
     /// When devices were last heard from and when the daemon started. Only a running daemon

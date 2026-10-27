@@ -28,7 +28,7 @@ use crate::harness;
 use crate::interactive::{self, Mode};
 use crate::render;
 use crate::view::{self, Envelope};
-use crate::workspace::Workspace;
+use crate::workspace::{Movable, Workspace};
 use agent::agent;
 use check::check;
 use comment::{comment, mentions};
@@ -110,6 +110,16 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
     let Some(command) = cli.command else {
         return dashboard(mode, data, cwd, cli.item.as_deref());
     };
+    // The commands that lead to agents starting from the target push the principal's commits.
+    let movable = if matches!(
+        &command,
+        Command::Item(ItemCommand::Add(_) | ItemCommand::Open(_))
+            | Command::Session(SessionCommand::Start(_))
+    ) {
+        Movable::Both
+    } else {
+        Movable::Checkout
+    };
     match command {
         Command::Init(args) => init(json, mode, args, data, cwd),
         Command::Join(args) => crate::network::join(json, mode, args, data, cwd),
@@ -125,6 +135,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
         Command::Harness(HarnessCommand::Models { harness }) => harness::models(json, &harness),
         Command::Status { refold } => {
             let workspace = Workspace::open(data, cwd, refold)?;
+            let checkout_target = follow_target(json, &workspace, Movable::Checkout);
             let machine_faults = workspace.machine_faults()?;
             let waiting_on_you = view::inbox_count(
                 workspace.state(),
@@ -144,7 +155,7 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
                 waiting_on_you,
                 refolded: refold,
                 caches: workspace.cache_usage()?,
-                checkout_target: workspace.checkout_target(),
+                checkout_target,
             };
             emit(
                 json,
@@ -157,13 +168,13 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             )
         }
         Command::Session(command) => {
-            crate::session::session(json, mode, command, &mut open(json, data, cwd)?)
+            crate::session::session(json, mode, command, &mut open(json, movable, data, cwd)?)
         }
-        Command::Work(command) => work(json, command, &mut open(json, data, cwd)?),
-        Command::Review(args) => review(json, mode, &mut open(json, data, cwd)?, args),
-        Command::Check { names } => check(json, &open(json, data, cwd)?, cwd, names),
+        Command::Work(command) => work(json, command, &mut open(json, movable, data, cwd)?),
+        Command::Review(args) => review(json, mode, &mut open(json, movable, data, cwd)?, args),
+        Command::Check { names } => check(json, &open(json, movable, data, cwd)?, cwd, names),
         Command::Inbox => {
-            let workspace = open(json, data, cwd)?;
+            let workspace = open(json, movable, data, cwd)?;
             let views = view::inbox_views(
                 workspace.state(),
                 workspace.device_key(),
@@ -172,49 +183,69 @@ pub fn run(cli: Cli, data: DataDir, cwd: &Path) -> anyhow::Result<()> {
             );
             emit(json, &views, |views| render::inbox(views))
         }
-        Command::Agent(command) => agent(json, command, &mut open(json, data, cwd)?),
-        Command::Item(command) => item(json, mode, command, &mut open(json, data, cwd)?),
-        Command::Comment(args) => comment(json, mode, &mut open(json, data, cwd)?, args),
-        Command::Mentions { target } => mentions(json, &open(json, data, cwd)?, &target),
-        Command::Policy(command) => policy(json, command, &mut open(json, data, cwd)?),
-        Command::Log(args) => log(json, mode, &mut open(json, data, cwd)?, args),
+        Command::Agent(command) => agent(json, command, &mut open(json, movable, data, cwd)?),
+        Command::Item(command) => item(json, mode, command, &mut open(json, movable, data, cwd)?),
+        Command::Comment(args) => comment(json, mode, &mut open(json, movable, data, cwd)?, args),
+        Command::Mentions { target } => mentions(json, &open(json, movable, data, cwd)?, &target),
+        Command::Policy(command) => policy(json, command, &mut open(json, movable, data, cwd)?),
+        Command::Log(args) => log(json, mode, &mut open(json, movable, data, cwd)?, args),
         Command::Stats => {
-            let workspace = open(json, data, cwd)?;
+            let workspace = open(json, movable, data, cwd)?;
             let views = view::item_stats_views(workspace.state());
             emit_paged(json, mode, &views, |views| render::item_stats_list(views))
         }
-        Command::Export => crate::export::export(&open(json, data, cwd)?),
+        Command::Export => crate::export::export(&open(json, movable, data, cwd)?),
         Command::Device(command) => {
-            crate::devices::device(json, command, &mut open(json, data, cwd)?)
+            crate::devices::device(json, command, &mut open(json, movable, data, cwd)?)
         }
-        Command::Members => crate::devices::members(json, &open(json, data, cwd)?),
+        Command::Members => crate::devices::members(json, &open(json, movable, data, cwd)?),
         Command::Fork {
             command: Some(ForkCommand::List),
             ..
-        } => crate::fork::list(json, &open(json, data, cwd)?),
+        } => crate::fork::list(json, &open(json, movable, data, cwd)?),
         Command::Fork {
             args,
             command: None,
-        } => crate::fork::fork(json, &mut open(json, data, cwd)?, args, cwd),
-        Command::Sync(args) => crate::network::sync(json, open(json, data, cwd)?, args),
+        } => crate::fork::fork(json, &mut open(json, movable, data, cwd)?, args, cwd),
+        Command::Sync(args) => crate::network::sync(json, open(json, movable, data, cwd)?, args),
         Command::Invite(InviteCommand::Device(args)) => {
-            crate::network::invite_device(json, &mut open(json, data, cwd)?, args)
+            crate::network::invite_device(json, &mut open(json, movable, data, cwd)?, args)
         }
     }
 }
 
-/// The workforce of the working directory, for the commands that read or write its log. When the
-/// principal's checkout has commits on the target that agents cannot see, one line on stderr says
-/// so; never with `--json`, and never in a session.
-fn open(json: bool, data: DataDir, cwd: &Path) -> anyhow::Result<Workspace> {
+/// The workforce of the working directory, for the commands that read or write its log, with the
+/// target of the principal's checkout and wf's brought in step as `movable` lets it. When the
+/// checkout still has commits on the target that agents cannot see, one line on stderr says so;
+/// never with `--json`, and never in a session.
+fn open(json: bool, movable: Movable, data: DataDir, cwd: &Path) -> anyhow::Result<Workspace> {
     let workspace = Workspace::open(data, cwd, false)?;
-    if !json && let Some(target) = workspace.checkout_target().filter(|target| target.warns()) {
+    let apart = follow_target(json, &workspace, movable);
+    if !json && let Some(target) = apart.filter(|target| target.warns()) {
         anstream::eprintln!(
             "{} {target}",
             render::paint(crate::theme::warning(), "warning:")
         );
     }
     Ok(workspace)
+}
+
+/// Brings the target of the principal's checkout and wf's in step as `movable` lets it, says on
+/// stderr what moved, unless with `--json`, and returns how they still stand apart.
+fn follow_target(
+    json: bool,
+    workspace: &Workspace,
+    movable: Movable,
+) -> Option<view::CheckoutTarget> {
+    match workspace.follow_target(movable)? {
+        view::TargetFollowed::Moved(moved) => {
+            if !json {
+                anstream::eprintln!("{moved}");
+            }
+            None
+        }
+        view::TargetFollowed::Apart(apart) => Some(apart),
+    }
 }
 
 /// Plain `wf`: the dashboard at a terminal. Anywhere else nobody could use it, so the help.

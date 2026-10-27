@@ -1634,7 +1634,7 @@ fn archive_by_state_takes_every_finished_item_of_every_type() {
 }
 
 #[test]
-fn commands_warn_of_commits_on_the_target_that_wfs_repository_lacks() {
+fn the_checkout_and_wfs_repository_follow_each_other_where_one_fast_forwards_the_other() {
     use wf_vcs::testing::{git_in, init_repository};
 
     let wf = Sandbox::new();
@@ -1645,12 +1645,21 @@ fn commands_warn_of_commits_on_the_target_that_wfs_repository_lacks() {
         assert!(output.status.success(), "wf {args:?} failed");
         String::from_utf8(output.stderr).unwrap()
     };
+    let commit = |name: &str, text: &str| {
+        std::fs::write(wf.repository.join(name), text).unwrap();
+        git_in(&wf.repository, &["add", name]);
+        git_in(&wf.repository, &["commit", "--quiet", "-m", name]);
+    };
+    let (_, workforce) = wf_cli::workspace::find_workforce(&wf.repository).unwrap();
+    let bare = wf_vcs::bare_repository(
+        &wf_daemon::DataDir::new(wf.data.join("workforce")).workforce(&workforce),
+    );
+    let tip = |directory: &std::path::Path| git_in(directory, &["rev-parse", "main"]);
     assert_eq!(stderr(&["item", "list"]), "");
     assert!(wf.json(&["status"])["checkout_target"].is_null());
 
-    std::fs::write(wf.repository.join("own.txt"), "own\n").unwrap();
-    git_in(&wf.repository, &["add", "own.txt"]);
-    git_in(&wf.repository, &["commit", "--quiet", "-m", "own"]);
+    // Ahead: commands that start no agent warn, those that lead to one push.
+    commit("own.txt", "own\n");
     let warned = stderr(&["item", "list"]);
     assert!(
         warned.starts_with("warning: main here has 1 commit that wf's repository lacks"),
@@ -1675,27 +1684,74 @@ fn commands_warn_of_commits_on_the_target_that_wfs_repository_lacks() {
         !stderr(&["status"]).contains("warning"),
         "said once, in the status"
     );
-
-    git_in(&wf.repository, &["push", "--quiet", "wf", "main"]);
+    commit("more.txt", "more\n");
+    assert_eq!(
+        stderr(&["item", "add", "--title", "Started"]),
+        "main: pushed 2 commits to wf\n"
+    );
+    assert_eq!(tip(&bare), tip(&wf.repository));
     assert_eq!(stderr(&["item", "list"]), "");
     assert!(!wf.run(&["status"]).contains("target:"));
 
-    // Behind, as after merges, is only a hint of the status.
+    // Behind, as after merges: every command fast-forwards the checkout, files and all.
+    commit("file.txt", "merged\n");
+    git_in(&wf.repository, &["push", "--quiet", "wf", "main"]);
     git_in(&wf.repository, &["reset", "--quiet", "--hard", "HEAD~1"]);
+    assert_eq!(
+        stderr(&["item", "list"]),
+        "main: fast-forwarded 1 merged commit from wf\n"
+    );
+    assert_eq!(tip(&wf.repository), tip(&bare));
+    let file = wf.repository.join("file.txt");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "merged\n");
+
+    // Not over uncommitted changes it would touch: the status says what to run.
+    git_in(&wf.repository, &["reset", "--quiet", "--hard", "HEAD~1"]);
+    std::fs::write(&file, "mine\n").unwrap();
     assert_eq!(stderr(&["item", "list"]), "");
+    assert_eq!(std::fs::read_to_string(&file).unwrap(), "mine\n");
     let status = wf.run(&["status"]);
     assert!(
         status.contains("target: main here is 1 commit behind wf's repository: `git pull`"),
         "{status}"
     );
+    git_in(&wf.repository, &["checkout", "--quiet", "--", "file.txt"]);
+    assert_eq!(
+        stderr(&["status"]),
+        "main: fast-forwarded 1 merged commit from wf\n"
+    );
+    assert_eq!(tip(&wf.repository), tip(&bare));
 
-    // Each side with a commit the other lacks diverges.
-    std::fs::write(wf.repository.join("other.txt"), "other\n").unwrap();
-    git_in(&wf.repository, &["add", "other.txt"]);
-    git_in(&wf.repository, &["commit", "--quiet", "-m", "other"]);
-    let warned = stderr(&["item", "list"]);
-    assert!(warned.contains("have diverged"), "{warned}");
-    assert!(warned.contains("`git pull --rebase wf main`"), "{warned}");
+    // With another branch checked out, the target moves alone.
+    git_in(&wf.repository, &["switch", "--quiet", "-c", "own"]);
+    git_in(
+        &wf.repository,
+        &["branch", "--quiet", "--force", "main", "HEAD~1"],
+    );
+    assert_eq!(
+        stderr(&["item", "list"]),
+        "main: fast-forwarded 1 merged commit from wf\n"
+    );
+    assert_eq!(tip(&wf.repository), tip(&bare));
+    assert_eq!(
+        git_in(&wf.repository, &["symbolic-ref", "--short", "HEAD"]),
+        "own"
+    );
+
+    // Each side with a commit the other lacks diverges: nothing moves, and every command warns.
+    git_in(&wf.repository, &["switch", "--quiet", "main"]);
+    git_in(&wf.repository, &["reset", "--quiet", "--hard", "HEAD~1"]);
+    commit("other.txt", "other\n");
+    let (checkout_tip, bare_tip) = (tip(&wf.repository), tip(&bare));
+    for args in [
+        &["item", "list"][..],
+        &["item", "add", "--title", "Diverged"],
+    ] {
+        let warned = stderr(args);
+        assert!(warned.contains("have diverged"), "{warned}");
+        assert!(warned.contains("`git pull --rebase wf main`"), "{warned}");
+    }
+    assert_eq!((tip(&wf.repository), tip(&bare)), (checkout_tip, bare_tip));
 }
 
 #[test]

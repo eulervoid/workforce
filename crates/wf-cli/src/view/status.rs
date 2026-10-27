@@ -368,6 +368,68 @@ impl Serialize for CheckoutTarget {
     }
 }
 
+/// What came of bringing the target of the principal's checkout and wf's in step.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum TargetFollowed {
+    /// One fast-forwarded the other, and they are at the same commit now.
+    Moved(CheckoutMove),
+    /// They still stand apart, as this says.
+    Apart(CheckoutTarget),
+}
+
+/// What wf moved to bring the target of the principal's checkout and wf's in step, said in one
+/// line: `main: pushed 2 commits to wf`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckoutMove {
+    branch: String,
+    direction: MoveDirection,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MoveDirection {
+    /// The checkout's commits went to wf's repository.
+    Pushed { commits: usize },
+    /// The checkout took the commits merged in wf's repository.
+    FastForwarded { commits: usize },
+}
+
+impl CheckoutMove {
+    /// `commits` of the checkout's `branch` were pushed to wf's repository.
+    pub fn pushed(branch: &str, commits: usize) -> Self {
+        Self {
+            branch: branch.to_string(),
+            direction: MoveDirection::Pushed { commits },
+        }
+    }
+
+    /// The checkout's `branch` was fast-forwarded by `commits` of wf's repository.
+    pub fn fast_forwarded(branch: &str, commits: usize) -> Self {
+        Self {
+            branch: branch.to_string(),
+            direction: MoveDirection::FastForwarded { commits },
+        }
+    }
+}
+
+impl fmt::Display for CheckoutMove {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        let (branch, remote) = (&self.branch, wf_vcs::REMOTE);
+        let plural = |count: usize| if count == 1 { "" } else { "s" };
+        match self.direction {
+            MoveDirection::Pushed { commits } => write!(
+                formatter,
+                "{branch}: pushed {commits} commit{} to {remote}",
+                plural(commits)
+            ),
+            MoveDirection::FastForwarded { commits } => write!(
+                formatter,
+                "{branch}: fast-forwarded {commits} merged commit{} from {remote}",
+                plural(commits)
+            ),
+        }
+    }
+}
+
 /// What `wf status` knows besides the state.
 pub struct StatusContext<'a> {
     /// How the target branch of the principal's checkout differs from wf's, if it does.

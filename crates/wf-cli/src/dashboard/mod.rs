@@ -35,7 +35,7 @@ use self::restart::{Executable, Mismatch};
 use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
 use crate::commands::{DeviceDiff, ItemDiff};
 use crate::transcript::Format;
-use crate::workspace::{self, Reconnect, Workspace};
+use crate::workspace::{self, Movable, Reconnect, Workspace};
 use crate::{commands, render, transcript, view};
 
 /// How often the daemon is asked for what is new.
@@ -132,7 +132,7 @@ fn event_loop(
     }
     feed.read_transcripts(workspace, &mut app);
     feed.read_diff(workspace, &mut app);
-    if let Some(snapshot) = feed.snapshot(workspace, &app)? {
+    if let Some(snapshot) = feed.snapshot(workspace, &mut app)? {
         app.refresh(snapshot);
     }
     let mut refreshed = Instant::now();
@@ -187,7 +187,7 @@ fn event_loop(
         draw = true;
         feed.read_transcripts(workspace, &mut app);
         feed.read_diff(workspace, &mut app);
-        match feed.snapshot(workspace, &app)? {
+        match feed.snapshot(workspace, &mut app)? {
             Some(snapshot) => app.refresh(snapshot),
             None => app.tick(wf_store::now_ms()),
         }
@@ -539,8 +539,13 @@ impl Feed {
     /// Takes the snapshot, unless nothing it is taken from changed since the last one: the same
     /// events, permission requests, machine faults, devices heard from and wanted, or the minute. Then only the
     /// clock moves, and `None` says to keep the snapshot on screen.
-    fn snapshot(&mut self, workspace: &Workspace, app: &App) -> anyhow::Result<Option<Snapshot>> {
+    fn snapshot(
+        &mut self,
+        workspace: &Workspace,
+        app: &mut App,
+    ) -> anyhow::Result<Option<Snapshot>> {
         let now_ms = wf_store::now_ms();
+        let checkout_target = self.follow_target(workspace, app, now_ms);
         let taken = Taken {
             minute: now_ms / MINUTE_MS,
             events: self.events.len(),
@@ -548,7 +553,7 @@ impl Feed {
             machine_faults: workspace.machine_faults()?,
             awaited: workspace.awaited_commits()?,
             presence: workspace.presence()?,
-            checkout_target: workspace.checkout_target(),
+            checkout_target,
             wanted: app.wanted(),
             detail_width: app.detail_width(),
         };
@@ -577,6 +582,32 @@ impl Feed {
         );
         self.taken = Some(taken);
         Ok(Some(snapshot))
+    }
+
+    /// How the target of the principal's checkout stands against wf's, after the checkout was
+    /// fast-forwarded to the work merged there, which the app says. The fast-forward is tried when
+    /// the standing changes, not on every refresh while uncommitted changes keep it from moving.
+    fn follow_target(
+        &self,
+        workspace: &Workspace,
+        app: &mut App,
+        now_ms: u64,
+    ) -> Option<view::CheckoutTarget> {
+        let standing = workspace.checkout_target();
+        let shown = self
+            .taken
+            .as_ref()
+            .and_then(|taken| taken.checkout_target.as_ref());
+        if standing.is_none() || standing.as_ref() == shown {
+            return standing;
+        }
+        match workspace.follow_target(Movable::Checkout)? {
+            view::TargetFollowed::Moved(moved) => {
+                app.did(moved.to_string(), now_ms);
+                None
+            }
+            view::TargetFollowed::Apart(apart) => Some(apart),
+        }
     }
 
     /// What the detail on screen shows, read against what the snapshot on screen flags.

@@ -17,7 +17,8 @@ use super::app::{Choice, Effect, Request, Starter, Written};
 use super::diff::LineComment;
 use crate::commands::{edit_in_editor, edit_until_valid, item_work, resolving, write_verdict};
 use crate::draft::Draft;
-use crate::workspace::Workspace;
+use crate::view::TargetFollowed;
+use crate::workspace::{Movable, Workspace};
 
 /// What is written above this line in `$EDITOR` counts; what is below is there to read.
 const SCISSORS: &str = "--- wf: everything below this line is left out ---";
@@ -221,12 +222,23 @@ fn start_agent(
     item: ItemId,
     agent: AgentName,
 ) -> anyhow::Result<String> {
+    let pushed = push_target(workspace);
     let session = workspace.start_session(agent.clone(), item, None)?;
     Ok(format!(
-        "started {agent} on #{} ({})",
+        "started {agent} on #{} ({}){pushed}",
         item.short(),
         session.short()
     ))
+}
+
+/// Pushes the principal's commits on the target to wf's repository before an agent may start
+/// from it, and says so after what the action did: `; main: pushed 2 commits to wf`. The header
+/// goes on warning of commits that could not be pushed.
+fn push_target(workspace: &Workspace) -> String {
+    match workspace.follow_target(Movable::Both) {
+        Some(TargetFollowed::Moved(moved)) => format!("; {moved}"),
+        Some(TargetFollowed::Apart(_)) | None => String::new(),
+    }
 }
 
 fn stop_session(workspace: &mut Workspace, session: SessionId) -> anyhow::Result<String> {
@@ -235,13 +247,21 @@ fn stop_session(workspace: &mut Workspace, session: SessionId) -> anyhow::Result
 }
 
 fn move_item(workspace: &mut Workspace, item: ItemId, state: ItemState) -> anyhow::Result<String> {
+    let pushed = match state {
+        ItemState::Open => push_target(workspace),
+        ItemState::Draft
+        | ItemState::Active
+        | ItemState::Review
+        | ItemState::Done
+        | ItemState::Cancelled => String::new(),
+    };
     workspace.author(EventBody::ItemMoved(ItemMoved {
         item,
         to: state.into(),
         by_session: None,
         because: None,
     }))?;
-    Ok(format!("#{} is {state}", item.short()))
+    Ok(format!("#{} is {state}{pushed}", item.short()))
 }
 
 /// Edits `item` in `$EDITOR`, as `wf item edit` does.
