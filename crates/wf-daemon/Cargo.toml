@@ -26,7 +26,7 @@ humantime.workspace = true
 humantime-serde.workspace = true
 jiff.workspace = true
 libc = "0.2"
-nix = { version = "0.31", default-features = false, features = ["signal", "process"] }
+nix = { version = "0.31", default-features = false, features = ["signal", "process", "poll"] }
 data-encoding.workspace = true
 rand.workspace = true
 url = { version = "2", features = ["serde"] }

@@ -192,11 +192,31 @@ pub fn run_git_bridge() -> std::io::Result<()> {
     // Straight to the descriptor: `Stdout` holds back what follows the last newline, and git's
     // flush packet has none, so git would wait for it forever.
     let mut output = std::fs::File::from(std::io::stdout().as_fd().try_clone_to_owned()?);
-    let mut reader = stream;
-    std::io::copy(&mut reader, &mut output)?;
+    std::io::copy(&mut Polled(stream), &mut output)?;
     // The daemon's side has ended, so there is nothing more to say: exiting closes git's input
     // even when git still waits to be answered, as when the other device refused at once.
     Ok(())
+}
+
+/// A socket read only once `poll` says it has something: macOS can leave a `read` that is already
+/// waiting asleep when the other side shuts down its write half, which is how the daemon passes
+/// on the end of the other device, while `poll` sees the end.
+struct Polled(std::os::unix::net::UnixStream);
+
+impl std::io::Read for Polled {
+    fn read(&mut self, buffer: &mut [u8]) -> std::io::Result<usize> {
+        use nix::poll::{PollFd, PollFlags, PollTimeout, poll};
+        use std::os::fd::AsFd;
+
+        let mut descriptors = [PollFd::new(self.0.as_fd(), PollFlags::POLLIN)];
+        loop {
+            match poll(&mut descriptors, PollTimeout::NONE) {
+                Err(nix::errno::Errno::EINTR) => continue,
+                Err(error) => return Err(error.into()),
+                Ok(_) => return self.0.read(buffer),
+            }
+        }
+    }
 }
 
 /// Whether `descriptor` is open in this process and a socket.
