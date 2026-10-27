@@ -1784,6 +1784,40 @@ async fn cancelling_an_item_stops_its_session() {
     assert_eq!(world.item(&item)["state"], "cancelled");
 }
 
+/// An item never shows `open` while a session works on it: opening it is refused, and holding it
+/// back as a draft stops the session as a cancel does.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_item_a_session_works_on_is_held_back_but_not_opened() {
+    let world = World::new("wf comment {item} \"which crate?\" --block\n").await;
+    let item = world.wf.add(&["--title", "Changed my mind"]);
+    let session = start_session(&world, &item);
+    world
+        .wait("the blocker", |world| {
+            !world.item(&item)["open"].as_array().unwrap().is_empty()
+        })
+        .await;
+    let error = world.wf.fail(&["item", "open", short(&item)]);
+    assert!(
+        error.contains(&format!("wf session stop {}", short(&session))),
+        "{error}"
+    );
+    assert!(
+        error.contains(&format!("`wf item draft {}`", short(&item)))
+            && error.contains(&format!("`wf item cancel {}`", short(&item)))
+            && error.contains("from any machine")
+            && error.contains("on the session's machine"),
+        "{error}"
+    );
+    assert_eq!(world.item(&item)["state"], "active");
+
+    world.wf.run(&["item", "draft", short(&item)]);
+    let ended = world.ended_session().await;
+    assert_eq!(ended["status"], "cancelled", "{ended}");
+    assert_eq!(world.item(&item)["state"], "draft");
+    world.wf.run(&["item", "open", short(&item)]);
+    assert_eq!(world.item(&item)["state"], "open");
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn a_session_that_waits_too_long_for_an_answer_times_out() {
     let script = "wf comment {item} \"anyone there?\" --block\n";

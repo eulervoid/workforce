@@ -8,6 +8,7 @@ use crate::lifecycle::{
 use crate::session::{CommitId, EndReason, MachineFault, SessionRole, Verdict};
 use crate::state::State;
 use crate::testing::*;
+use crate::validate::PolicyViolation;
 
 fn commit() -> CommitId {
     CommitId::Git("00112233445566778899aabbccddeeff00112233".parse().unwrap())
@@ -243,6 +244,77 @@ fn a_turn_closes_when_the_session_ended_or_the_item_is_blocked() {
     assert_eq!(
         scene.state.turn_outcome(session, 0, 3, None),
         TurnOutcome::Close
+    );
+}
+
+/// Moving the item of a live work session to `draft` or `done` ends the session after its turn,
+/// as `cancel` does. Opening it is refused until the session ended, so an item never shows
+/// `open` while a session works on it.
+#[test]
+fn an_item_a_live_work_session_holds_cannot_be_opened() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    let session = scene.start(task);
+    scene.apply(moved(task, ItemState::Active));
+    let device = scene.fixture.devices[0].key();
+    let principal = Actor::Principal(scene.fixture.founder.key());
+    let open = moved(task, ItemState::Open);
+    let held = Err(PolicyViolation::OpenWhileHeld {
+        item: task,
+        session,
+    });
+    assert_eq!(scene.state.check_actor(device, &principal, &open), held);
+    let other = scene.item(create("task", "other work"));
+    let other_session = scene.start(other);
+    let agent = scene.fixture.agent_actor("coder", other_session);
+    assert_eq!(scene.state.check_actor(device, &agent, &open), held);
+    for to in [ItemState::Draft, ItemState::Done, ItemState::Cancelled] {
+        assert_eq!(
+            scene
+                .state
+                .check_actor(device, &principal, &moved(task, to)),
+            Ok(()),
+            "{to}"
+        );
+    }
+
+    scene.apply(moved(task, ItemState::Draft));
+    assert_eq!(
+        scene.state.check_actor(device, &principal, &open),
+        held,
+        "the session still holds the draft until its turn ends"
+    );
+    assert_eq!(
+        scene.state.turn_outcome(session, 0, 3, None),
+        TurnOutcome::Close
+    );
+    assert_eq!(
+        scene
+            .state
+            .after_end(session, EndReason::Cancelled, None)
+            .unwrap(),
+        AfterEnd::Nothing,
+        "the item stays a draft"
+    );
+    scene.end(session, EndReason::Cancelled);
+    assert_eq!(scene.state.check_actor(device, &principal, &open), Ok(()));
+}
+
+/// The daemon moves the item of an ending session back to `open` while the session still holds
+/// it, so that the item is never ready in between.
+#[test]
+fn the_daemon_opens_the_item_of_a_session_that_ends() {
+    let mut scene = Scene::new();
+    let task = scene.item(create("task", "work"));
+    scene.start(task);
+    scene.apply(moved(task, ItemState::Active));
+    let daemon = Actor::Daemon(scene.fixture.founder.key());
+    let device = scene.fixture.devices[0].key();
+    assert_eq!(
+        scene
+            .state
+            .check_actor(device, &daemon, &moved(task, ItemState::Open)),
+        Ok(())
     );
 }
 

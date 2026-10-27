@@ -16,7 +16,7 @@ use crate::event::{
     ItemEdited, ItemLinked, ItemMoved, Link, MAX_EVENT_LEN,
 };
 use crate::hlc::HLC_TOLERANCE_MS;
-use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
+use crate::id::{CommentId, EventId, HashId, ItemId, SessionId, WorkforceId};
 use crate::identity::{Actor, AgentId, DeviceKey, PrincipalKey, Role, Signed};
 use crate::item::ItemState;
 use crate::name::{LaneName, RecoveryLevelName, ReviewLevelName, TypeName};
@@ -205,6 +205,10 @@ pub enum PolicyViolation {
     SessionEndsAnother,
     #[error("a session cannot move its own item to `done`; it submits the work instead")]
     SessionFinishesItsItem,
+    #[error(
+        "#{} is held by the live work session {}, so it cannot be opened until that session ends; `wf item draft {}` or `wf item cancel {}` stops it after its current turn from any machine, then `wf item open {}`; `wf session stop {}` stops it at once, on the session's machine", .item.short(), .session.short(), .item.short(), .item.short(), .item.short(), .session.short()
+    )]
+    OpenWhileHeld { item: ItemId, session: SessionId },
     #[error(
         "only a review session of the commit, by an agent that did not do the work, can review as an agent"
     )]
@@ -877,6 +881,9 @@ impl State {
                 EventBody::Reviewed(review) if review.round_limit_reached.is_some() => {
                     Err(PolicyViolation::WrongRoundLimit(review.item))
                 }
+                EventBody::ItemMoved(moved) if matches!(actor, Actor::Principal(_)) => {
+                    self.check_open_while_held(moved)
+                }
                 EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
                 | EventBody::AgentDefined(_)
@@ -982,7 +989,7 @@ impl State {
                 if moved.to == ItemState::Done && moved.item == folded.item() {
                     Err(PolicyViolation::SessionFinishesItsItem)
                 } else {
-                    Ok(())
+                    self.check_open_while_held(moved)
                 }
             }
             EventBody::Commented(comment) => {
@@ -1011,6 +1018,20 @@ impl State {
             | EventBody::ItemUnarchived(_)
             | EventBody::SessionEnded(_)
             | EventBody::Unknown { .. } => Ok(()),
+        }
+    }
+
+    /// Refuses opening an item a live work session holds, which would show it `open`, ready for
+    /// the dispatcher, while the session works on it. Moving it to `draft`, `done` or `cancelled`
+    /// is fine: the session stops after its current turn. Only the daemon opens a held item, that
+    /// of a session that ends, before it writes the end.
+    fn check_open_while_held(&self, moved: &ItemMoved) -> Result<(), PolicyViolation> {
+        match self.holder(moved.item, &SessionRole::Work) {
+            Some(holder) if moved.to == ItemState::Open => Err(PolicyViolation::OpenWhileHeld {
+                item: moved.item,
+                session: holder.id(),
+            }),
+            Some(_) | None => Ok(()),
         }
     }
 

@@ -676,13 +676,19 @@ pub enum ItemCommand {
     Check(ItemCheckArgs),
     /// Release drafts or reopen items: `wf item open k3f a8c`.
     ///
-    /// Released drafts go to the dispatcher.
+    /// Released drafts go to the dispatcher. An item a live work session holds cannot be opened
+    /// until the session ends. From any machine, `wf item draft` or `wf item cancel` stops the
+    /// session after its current turn, then `wf item open` once it ended; `wf session stop
+    /// <session>` stops it at once, but only on the session's machine.
     Open(ItemMoveArgs),
     /// Hold items back as drafts, until `wf item open`.
     ///
-    /// Nothing starts a draft until `wf item open`.
+    /// Nothing starts a draft until `wf item open`. A session working on it stops after its
+    /// current turn.
     Draft(ItemMoveArgs),
     /// Finish items without a session. For a proposed decision: accept it.
+    ///
+    /// A session working on it stops after its current turn.
     Done(ItemMoveArgs),
     /// Cancel an item. For a proposed decision: reject it.
     ///
