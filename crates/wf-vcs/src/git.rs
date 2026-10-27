@@ -605,6 +605,13 @@ impl GitCli {
         self.oid("rev-parse", &found.stdout)
     }
 
+    /// Where `branch` points, read from the files of the references without git, so cheap enough
+    /// to look often. `None` when the files do not tell: the branch may still be there, so ask
+    /// [`GitCli::branch_head`].
+    pub fn branch_head_from_files(&self, branch: &str) -> Option<CommitId> {
+        crate::agent_repository::read_branch_head(&self.git_directory, branch)
+    }
+
     /// The unmerged work on the branch of `item`, compared against `target`; `None` when this
     /// repository has no branch of the item.
     pub fn branch_work(&self, item: ItemId, target: &str) -> Result<Option<Work>, VcsError> {
@@ -1040,6 +1047,34 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn a_branch_head_read_from_the_files_is_where_git_says() {
+        let repository = crate::testing::TestRepository::new();
+        let git = GitCli::open(&repository.directory()).unwrap();
+        let work = repository.work("work", "work.txt", "x\n");
+        assert_eq!(git.branch_head_from_files("work"), Some(work));
+
+        crate::testing::git_in(&repository.directory(), &["pack-refs", "--all"]);
+        assert_eq!(git.branch_head_from_files("work"), Some(work));
+        assert_eq!(git.branch_head_from_files("main"), Some(repository.main()));
+        let worktree = repository.worktree_path("work");
+        repository.write(&worktree, "more.txt", "x\n");
+        let moved = repository.commit(&worktree, "more");
+        assert_eq!(
+            git.branch_head_from_files("work"),
+            Some(moved),
+            "the loose reference wins"
+        );
+
+        assert_eq!(git.branch_head_from_files("missing"), None);
+        crate::testing::git_in(
+            &repository.directory(),
+            &["symbolic-ref", "refs/heads/alias", "refs/heads/work"],
+        );
+        assert_eq!(git.branch_head_from_files("alias"), None, "not read");
+        assert_eq!(git.branch_head("alias").unwrap(), moved);
     }
 
     #[test]

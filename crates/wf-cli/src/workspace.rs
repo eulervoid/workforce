@@ -79,7 +79,7 @@ enum Source {
     Local(Replica<RedbStore>, Box<DeviceSigner>),
     Daemon {
         client: RefCell<DaemonClient>,
-        state: State,
+        state: Box<State>,
     },
 }
 
@@ -170,7 +170,7 @@ impl Workspace {
             return Self::bound(
                 Source::Daemon {
                     client: RefCell::new(client),
-                    state,
+                    state: Box::new(state),
                 },
                 data,
                 id,
@@ -369,7 +369,7 @@ impl Workspace {
             }))) => return Err(Reconnect::Refused { daemon, client }),
             Err(error) => return Err(Reconnect::Failed(error.into())),
         };
-        *state = fresh
+        **state = fresh
             .state(self.workforce)
             .map_err(|error| Reconnect::Failed(error.into()))?;
         *client.get_mut() = fresh;
@@ -380,7 +380,7 @@ impl Workspace {
     pub fn refresh(&mut self) -> anyhow::Result<()> {
         match &mut self.source {
             Source::Daemon { client, state } => {
-                *state = client.get_mut().state(self.workforce)?;
+                **state = client.get_mut().state(self.workforce)?;
             }
             Source::Local(..) => {}
         }

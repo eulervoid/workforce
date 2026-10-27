@@ -363,8 +363,8 @@ async fn blocking<T: Send + 'static>(
 }
 
 impl Daemon {
-    pub(crate) async fn snapshot(&self, loaded: &Loaded) -> Result<State, StorageClosed> {
-        loaded.storage.with(|replica| replica.state().clone()).await
+    pub(crate) async fn snapshot(&self, loaded: &Loaded) -> Result<Arc<State>, StorageClosed> {
+        loaded.storage.with(|replica| replica.shared_state()).await
     }
 
     /// Runs `read` on the state where it lives, so that only its answer is copied out.
@@ -430,5 +430,23 @@ impl Daemon {
     /// The bare repository of a workforce on this machine, where the daemon runs git.
     pub(crate) fn bare_repository(&self, workforce: WorkforceId) -> PathBuf {
         wf_vcs::bare_repository(&self.workforce_directory(workforce))
+    }
+
+    /// The bare repository of a workforce, opened the first time it is there and kept. `None`
+    /// while it is not made yet.
+    pub(crate) async fn open_bare_repository(
+        &self,
+        workforce: WorkforceId,
+        loaded: &Loaded,
+    ) -> Result<Option<GitCli>, SessionError> {
+        if let Some(git) = loaded.bare.get() {
+            return Ok(Some(git.clone()));
+        }
+        let repository = self.bare_repository(workforce);
+        if !repository.join("HEAD").is_file() {
+            return Ok(None);
+        }
+        let git = blocking(move || GitCli::open(&repository)).await??;
+        Ok(Some(loaded.bare.get_or_init(|| git).clone()))
     }
 }

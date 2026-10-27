@@ -19,7 +19,8 @@ use wf_vcs::{GitCli, VcsError};
 use super::{SessionError, blocking};
 use crate::{Daemon, Loaded};
 
-/// How often the target branch is read for a push of the principal, which nothing announces.
+/// How often the files of the target branch are read for a push of the principal, which nothing
+/// announces. Git runs only when they say the branch moved.
 const LOOK_FOR_PUSHES: Duration = Duration::from_secs(5);
 
 /// Where this daemon last saw the target branch of `<wf>/git`. Held while the branch moves and
@@ -135,13 +136,21 @@ fn decide(
 /// was needs no pass, so that not every event runs git.
 #[derive(PartialEq, Eq)]
 struct Watched {
+    target: Option<String>,
     tip: Option<CommitId>,
     moves: usize,
     lost_merges: Vec<ItemId>,
 }
 
+/// What woke the follower.
+enum Woke {
+    LogChanged,
+    CommitsArrived,
+    LookForPushes,
+}
+
 /// Follows the target of a workforce for as long as the daemon runs and its storage does: when
-/// what the log says of it changes, when commits arrived, and now and then for pushes, which
+/// what the log says of it changes, when commits arrived, and when the branch moved, a push that
 /// nothing announces.
 pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loaded: Arc<Loaded>) {
     let Some(mut halted) = daemon.upgrade().map(|strong| strong.halted.subscribe()) else {
@@ -150,22 +159,24 @@ pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loa
     let mut heads = loaded.storage.watch_heads();
     let mut arrived = loaded.commits.arrived.subscribe();
     let mut watched = None;
+    // The branch as its files said before the last pass that left it at the tip; `None` when the
+    // last pass did not, so that the next look runs one.
+    let mut followed_from = None;
     // Ticks however often the log changes; the first tick is at once.
     let mut look_for_pushes = tokio::time::interval(LOOK_FOR_PUSHES);
     look_for_pushes.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
     loop {
-        let due = tokio::select! {
+        let woke = tokio::select! {
             changed = heads.changed() => {
                 if changed.is_err() {
                     return;
                 }
                 heads.borrow_and_update();
-                false
+                Woke::LogChanged
             }
             () = async { let _ = halted.wait_for(|halted| *halted).await; } => return,
-            // The tip may be what arrived.
-            _ = arrived.changed() => true,
-            _ = look_for_pushes.tick() => true,
+            _ = arrived.changed() => Woke::CommitsArrived,
+            _ = look_for_pushes.tick() => Woke::LookForPushes,
         };
         let Some(strong) = daemon.upgrade() else {
             return;
@@ -176,25 +187,51 @@ pub(crate) async fn run_target(daemon: Weak<Daemon>, workforce: WorkforceId, loa
         let (own, presence, now_ms) = (strong.device(), strong.presence_now(), wf_store::now_ms());
         let now = strong
             .read(&loaded, move |state| Watched {
+                target: state
+                    .policy()
+                    .map(|policy| policy.policy.merge.target.clone()),
                 tip: state.target(),
                 moves: state.target_moves().count(),
                 lost_merges: state.lost_merges(own, &presence, now_ms),
             })
             .await
             .ok();
+        let branch = branch_from_files(&loaded, now.as_ref()).await;
+        let due = match woke {
+            Woke::LogChanged => false,
+            // The tip may be what arrived.
+            Woke::CommitsArrived => true,
+            Woke::LookForPushes => branch.is_none() || branch != followed_from,
+        };
         if due || now != watched {
             watched = now;
-            if let Err(error) = strong.follow_target(workforce, &loaded).await {
-                tracing::warn!(
-                    "could not follow the target branch: {}",
-                    wf_core::error_chain(&error)
-                );
-            }
+            followed_from = match strong.follow_target(workforce, &loaded).await {
+                Ok(TargetAt::Tip { .. }) => branch,
+                Ok(TargetAt::Elsewhere) => None,
+                Err(error) => {
+                    tracing::warn!(
+                        "could not follow the target branch: {}",
+                        wf_core::error_chain(&error)
+                    );
+                    None
+                }
+            };
         }
         #[cfg(test)]
         loaded.target.followed.send_replace(reading);
         drop(strong);
     }
+}
+
+/// Where the target branch is, as its files in `<wf>/git` say without git. `None` when they do not
+/// tell, or the repository has not been opened yet.
+async fn branch_from_files(loaded: &Loaded, watched: Option<&Watched>) -> Option<CommitId> {
+    let git = loaded.bare.get()?.clone();
+    let target = watched?.target.clone()?;
+    tokio::task::spawn_blocking(move || git.branch_head_from_files(&target))
+        .await
+        .ok()
+        .flatten()
 }
 
 impl Daemon {
@@ -206,10 +243,9 @@ impl Daemon {
         loaded: &Loaded,
     ) -> Result<TargetAt, SessionError> {
         let own = self.device();
-        let repository = self.bare_repository(workforce);
-        if !repository.join("HEAD").is_file() {
+        let Some(git) = self.open_bare_repository(workforce, loaded).await? else {
             return Ok(TargetAt::Elsewhere);
-        }
+        };
         let mut seen = loaded.target.seen.lock().await;
         // A push written in the first round is settled by the log in the second.
         let mut at = TargetAt::Elsewhere;
@@ -221,22 +257,18 @@ impl Daemon {
             let Some(reading) = reading else {
                 return Ok(TargetAt::Elsewhere);
             };
-            let (git_repository, last) = (repository.clone(), *seen);
-            let ((branch, follow), reading) = blocking(move || {
-                let git = GitCli::open(&git_repository)?;
-                Ok::<_, VcsError>((decide(&git, &reading, last)?, reading))
-            })
-            .await??;
+            let (pass_git, last) = (git.clone(), *seen);
+            let ((branch, follow), reading) =
+                blocking(move || Ok::<_, VcsError>((decide(&pass_git, &reading, last)?, reading)))
+                    .await??;
             *seen = branch.or(*seen);
             self.send_back_lost_merges(loaded, &reading).await?;
             match follow {
                 Follow::Stays { at } => return Ok(TargetAt::Tip { at }),
                 Follow::Waits => return Ok(TargetAt::Elsewhere),
                 Follow::Moves { from, to } => {
-                    let (repository, target) = (repository.clone(), reading.target.clone());
-                    let moved =
-                        blocking(move || GitCli::open(&repository)?.move_target(&target, from, to))
-                            .await??;
+                    let (git, target) = (git.clone(), reading.target.clone());
+                    let moved = blocking(move || git.move_target(&target, from, to)).await??;
                     if moved {
                         *seen = Some(to);
                         return Ok(TargetAt::Tip { at: to });
@@ -414,7 +446,7 @@ mod tests {
         }
 
         async fn state(&self) -> State {
-            self.daemon.snapshot(&self.loaded).await.unwrap()
+            State::clone(&self.daemon.snapshot(&self.loaded).await.unwrap())
         }
 
         /// What device 1 writes on `state`, as it saw the log then: it wins a fork with anything
@@ -475,6 +507,33 @@ mod tests {
         // Written once.
         scene.follow().await;
         assert_eq!(scene.state().await.target_moves().count(), 2);
+    }
+
+    /// Nothing wakes the follower for a push: it reads the branch now and then, and writes it.
+    #[tokio::test]
+    async fn the_follower_sees_a_push_by_itself() {
+        let mut scene = Scene::new().await;
+        let main = scene.tip_at_main().await;
+        assert_eq!(scene.follow().await, Some(main));
+        let mut heads = scene.loaded.storage.watch_heads();
+        let now = heads.borrow().clone();
+        let mut followed = scene.loaded.target.followed.subscribe();
+        followed
+            .wait_for(|followed| *followed == now)
+            .await
+            .unwrap();
+        let pushed = scene.commit("pushed");
+        scene.push("pushed");
+
+        let written = async {
+            while scene.state().await.target() != Some(pushed) {
+                heads.changed().await.unwrap();
+            }
+        };
+        tokio::time::timeout(LOOK_FOR_PUSHES * 4, written)
+            .await
+            .expect("the push is written");
+        assert_eq!(scene.state().await.target_tip().unwrap().onto, main);
     }
 
     #[tokio::test]

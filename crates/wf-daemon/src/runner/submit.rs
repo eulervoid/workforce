@@ -225,14 +225,14 @@ impl Daemon {
         let Submission {
             workforce, commit, ..
         } = *submission;
-        let state = self.snapshot(loaded).await?;
-        let target = state
-            .policy()
-            .ok_or(SessionError::NoPolicy)?
-            .policy
-            .merge
-            .target
-            .clone();
+        let target = self
+            .read(loaded, |state| {
+                state
+                    .policy()
+                    .map(|policy| policy.policy.merge.target.clone())
+            })
+            .await?
+            .ok_or(SessionError::NoPolicy)?;
         let repository = self.bare_repository(workforce);
         let made = {
             let (repository, target) = (repository.clone(), target.clone());

@@ -282,8 +282,10 @@ impl Daemon {
             Err(error) => return cannot_merge(wf_core::error_chain(&error)).await,
         };
         let checks = match policy.merge.mode {
-            MergeMode::Local => policy.merge.checks.as_slice(),
+            MergeMode::Local => policy.merge.checks.clone(),
         };
+        // Held through the checks, the snapshot would cost a copy of the state when an event comes.
+        drop(state);
         let mut outcome = MergeOutcome::TargetMoved;
         // The tip the merge moved the target from; none for work found landed already.
         let mut onto = None;
@@ -325,7 +327,7 @@ impl Daemon {
                         .check_merge(
                             workforce,
                             &repository,
-                            checks,
+                            &checks,
                             base,
                             tree,
                             CheckStage::Merge,
