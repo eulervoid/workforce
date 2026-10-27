@@ -96,9 +96,7 @@ impl TranscriptLines {
             *self = Self::new(layout);
         } else if self.layout != layout {
             self.layout = layout;
-            self.entries.clear();
-            self.lines.clear();
-            self.last = Spacing::Nothing;
+            self.forget_lines();
         }
         for (index, block) in blocks.iter().enumerate().skip(self.entries.len()) {
             let (text, extent) = self.lay_out(index, block);
@@ -219,10 +217,19 @@ impl TranscriptLines {
     }
 
     /// `f`: every entry shows as much as the layout says, whatever was opened or closed by hand,
-    /// from the end.
+    /// from the end. All are laid out again with the next update, even when `f` was pressed twice
+    /// before it and the layout is the same.
     pub fn set_all(&mut self) {
         self.by_hand.clear();
         self.cursor = EntryCursor::Last;
+        self.forget_lines();
+    }
+
+    /// Lets go of the lines laid out, for the next update to lay out every block again.
+    fn forget_lines(&mut self) {
+        self.entries.clear();
+        self.lines.clear();
+        self.last = Spacing::Nothing;
     }
 
     /// The blocks of the entries that show something.
