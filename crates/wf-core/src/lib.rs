@@ -25,6 +25,7 @@ pub mod placement;
 pub mod policy;
 pub mod recovery;
 pub mod refs;
+pub mod resign;
 pub mod resolve;
 pub mod review;
 pub mod search;

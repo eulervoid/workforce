@@ -19,12 +19,12 @@ jiff.workspace = true
 postcard.workspace = true
 pulldown-cmark.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 thiserror.workspace = true
 toml.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
-serde_json.workspace = true
 
 [[bench]]
 name = "queries"
