@@ -125,6 +125,8 @@ pub(crate) struct Loaded {
     /// removes them.
     pub(crate) item_refs: tokio::sync::Mutex<()>,
     pub(crate) target: runner::TargetBranch,
+    /// `<wf>/git`, kept once it is opened: opening it runs git.
+    pub(crate) bare: std::sync::OnceLock<wf_vcs::GitCli>,
 }
 
 /// Serves the workforce to its other devices and keeps in sync with them, from when it first has
@@ -552,6 +554,7 @@ impl Daemon {
             commits: commits::Commits::default(),
             item_refs: tokio::sync::Mutex::new(()),
             target: runner::TargetBranch::default(),
+            bare: std::sync::OnceLock::new(),
         });
         self.loaded
             .lock()

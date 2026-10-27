@@ -273,6 +273,13 @@ pub fn agent_branch_head(repository: &Path, branch: &str) -> Option<CommitId> {
     if !std::fs::symlink_metadata(&git_directory).ok()?.is_dir() {
         return None;
     }
+    read_branch_head(&git_directory, branch)
+}
+
+/// The commit `branch` points at in `git_directory`, read from the reference's file or
+/// `packed-refs` without git. `None` when there is no such branch, or the files do not name a
+/// commit id: a symbolic reference, say, or a repository that keeps its references elsewhere.
+pub(crate) fn read_branch_head(git_directory: &Path, branch: &str) -> Option<CommitId> {
     let reference = format!("refs/heads/{branch}");
     let file = git_directory.join(&reference);
     let text = match std::fs::symlink_metadata(&file) {
