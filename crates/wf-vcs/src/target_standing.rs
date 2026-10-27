@@ -3,11 +3,15 @@
 //!
 //! The two are compared directly, without a fetch and without writing anything: the checkout's
 //! remote-tracking branch of the target may be stale.
+//!
+//! Whichever side is behind is moved by a fast-forward of the other, and only by one: a push that
+//! is never forced, and a fast-forward of the checkout that never touches uncommitted changes.
+//! Diverged branches stay as they are, for the principal to rebase.
 
 use std::path::Path;
 
-use crate::VcsError;
 use crate::git::spawn;
+use crate::{REMOTE, VcsError};
 
 /// How the checkout's target branch stands against the target in wf's repository.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,6 +64,69 @@ pub fn target_standing(
         (0, commits) => TargetStanding::Behind { commits },
         _ => TargetStanding::Diverged,
     }))
+}
+
+/// Pushes the branch `target` of the checkout at `checkout` to the bare repository at `bare`, as
+/// `git push wf <target>` does, if that fast-forwards it: a push that does not is refused, never
+/// forced. The checkout's remote-tracking branch of the target follows.
+pub fn push_target(checkout: &Path, bare: &Path, target: &str) -> Result<(), VcsError> {
+    let reference = format!("refs/heads/{target}");
+    let refspec = format!("{reference}:{reference}");
+    let bare_text = bare.to_string_lossy();
+    let args = ["push", "--quiet", &bare_text, &refspec];
+    spawn(checkout, &[], args)?.ok()?;
+    fetch_tracking_branch(checkout, bare, target)
+}
+
+/// Fast-forwards the branch `target` of the checkout at `checkout` to `target` of the bare
+/// repository at `bare`, and fails if that is no fast-forward. When the checkout has the branch
+/// checked out, its files move with it as `git merge --ff-only` moves them, which refuses to touch
+/// uncommitted changes. Otherwise the branch alone moves, unless another worktree of the checkout
+/// has it checked out or a rebase or bisect there works on it.
+pub fn fast_forward_target(checkout: &Path, bare: &Path, target: &str) -> Result<(), VcsError> {
+    fetch_tracking_branch(checkout, bare, target)?;
+    let reference = format!("refs/heads/{target}");
+    let tracking = format!("refs/remotes/{REMOTE}/{target}");
+    let head = spawn(checkout, &[], ["symbolic-ref", "--quiet", "HEAD"])?;
+    if head.success && head.stdout.trim() == reference {
+        spawn(
+            checkout,
+            &[],
+            ["merge", "--ff-only", "--quiet", "--no-stat", &tracking],
+        )?
+        .ok()?;
+    } else {
+        // A fetch into a branch only fast-forwards it, from the tip it read, and refuses a branch
+        // that any worktree has checked out or is rebasing or bisecting.
+        let refspec = format!("{tracking}:{reference}");
+        let args = [
+            "fetch",
+            "--quiet",
+            "--no-tags",
+            "--no-write-fetch-head",
+            ".",
+            &refspec,
+        ];
+        spawn(checkout, &[], args)?.ok()?;
+    }
+    Ok(())
+}
+
+/// Sets the checkout's remote-tracking branch of `target` to where it is in the bare repository,
+/// as `git fetch wf` does, and brings its commits along.
+fn fetch_tracking_branch(checkout: &Path, bare: &Path, target: &str) -> Result<(), VcsError> {
+    let refspec = format!("+refs/heads/{target}:refs/remotes/{REMOTE}/{target}");
+    let bare_text = bare.to_string_lossy();
+    let args = [
+        "fetch",
+        "--quiet",
+        "--no-tags",
+        "--no-write-fetch-head",
+        &bare_text,
+        &refspec,
+    ];
+    spawn(checkout, &[], args)?.ok()?;
+    Ok(())
 }
 
 /// The commit `branch` points at in the repository at `directory`, if it has the branch.
@@ -227,5 +294,136 @@ mod tests {
         );
         let missing = repo.root.path().join("no-git");
         assert_eq!(standing(&repo, &missing), None);
+    }
+
+    fn push(repo: &TestRepository, bare: &Path) -> Result<(), VcsError> {
+        push_target(&repo.directory(), bare, "main")
+    }
+
+    fn fast_forward(repo: &TestRepository, bare: &Path) -> Result<(), VcsError> {
+        fast_forward_target(&repo.directory(), bare, "main")
+    }
+
+    fn tip(directory: &Path, reference: &str) -> String {
+        git_in(directory, &["rev-parse", reference])
+    }
+
+    #[test]
+    fn a_checkout_ahead_is_pushed_and_its_tracking_branch_follows() {
+        let (repo, bare) = checkout_and_bare();
+        commit_in_checkout(&repo, "a.txt");
+        commit_in_checkout(&repo, "b.txt");
+        push(&repo, &bare).unwrap();
+        assert_eq!(standing(&repo, &bare), Some(TargetStanding::Same));
+        let checkout = repo.directory();
+        assert_eq!(tip(&bare, "main"), tip(&checkout, "main"));
+        assert_eq!(tip(&checkout, "wf/main"), tip(&checkout, "main"));
+    }
+
+    #[test]
+    fn a_checkout_behind_with_the_target_checked_out_is_fast_forwarded_with_its_files() {
+        let (repo, bare) = checkout_and_bare();
+        advance_bare(&repo, &bare, 2);
+        fast_forward(&repo, &bare).unwrap();
+        assert_eq!(standing(&repo, &bare), Some(TargetStanding::Same));
+        let checkout = repo.directory();
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("merged.txt")).unwrap(),
+            "1\n"
+        );
+        assert_eq!(git_in(&checkout, &["status", "--porcelain"]), "");
+    }
+
+    #[test]
+    fn uncommitted_changes_the_fast_forward_would_touch_keep_the_checkout_where_it_is() {
+        let (repo, bare) = checkout_and_bare();
+        advance_bare(&repo, &bare, 1);
+        let checkout = repo.directory();
+        repo.write(&checkout, "merged.txt", "mine\n");
+        let before = tip(&checkout, "main");
+        assert!(fast_forward(&repo, &bare).is_err());
+        assert_eq!(tip(&checkout, "main"), before);
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("merged.txt")).unwrap(),
+            "mine\n"
+        );
+        assert_eq!(
+            standing(&repo, &bare),
+            Some(TargetStanding::Behind { commits: 1 })
+        );
+    }
+
+    #[test]
+    fn uncommitted_changes_the_fast_forward_leaves_alone_stay_as_they_are() {
+        let (repo, bare) = checkout_and_bare();
+        advance_bare(&repo, &bare, 1);
+        let checkout = repo.directory();
+        repo.write(&checkout, "file.txt", "mine\n");
+        fast_forward(&repo, &bare).unwrap();
+        assert_eq!(standing(&repo, &bare), Some(TargetStanding::Same));
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("file.txt")).unwrap(),
+            "mine\n"
+        );
+    }
+
+    #[test]
+    fn a_target_not_checked_out_moves_alone() {
+        let (repo, bare) = checkout_and_bare();
+        advance_bare(&repo, &bare, 1);
+        let checkout = repo.directory();
+        git_in(&checkout, &["switch", "--quiet", "-c", "own"]);
+        repo.write(&checkout, "merged.txt", "mine\n");
+        fast_forward(&repo, &bare).unwrap();
+        assert_eq!(standing(&repo, &bare), Some(TargetStanding::Same));
+        assert_eq!(
+            git_in(&checkout, &["symbolic-ref", "--short", "HEAD"]),
+            "own"
+        );
+        assert_eq!(
+            std::fs::read_to_string(checkout.join("merged.txt")).unwrap(),
+            "mine\n"
+        );
+    }
+
+    #[test]
+    fn a_target_checked_out_in_another_worktree_is_left_alone() {
+        let (repo, bare) = checkout_and_bare();
+        advance_bare(&repo, &bare, 1);
+        let checkout = repo.directory();
+        git_in(&checkout, &["switch", "--quiet", "-c", "own"]);
+        let other = repo.root.path().join("other");
+        git_in(
+            &checkout,
+            &[
+                "worktree",
+                "add",
+                "--quiet",
+                other.to_str().unwrap(),
+                "main",
+            ],
+        );
+        assert!(fast_forward(&repo, &bare).is_err());
+        assert_eq!(
+            standing(&repo, &bare),
+            Some(TargetStanding::Behind { commits: 1 })
+        );
+    }
+
+    #[test]
+    fn diverged_branches_are_neither_pushed_nor_fast_forwarded() {
+        let (repo, bare) = checkout_and_bare();
+        advance_bare(&repo, &bare, 1);
+        commit_in_checkout(&repo, "a.txt");
+        let (checkout, bare_tip) = (tip(&repo.directory(), "main"), tip(&bare, "main"));
+        assert!(push(&repo, &bare).is_err());
+        assert!(fast_forward(&repo, &bare).is_err());
+        assert_eq!(tip(&repo.directory(), "main"), checkout);
+        assert_eq!(tip(&bare, "main"), bare_tip);
+        assert_eq!(standing(&repo, &bare), Some(TargetStanding::Diverged));
+
+        git_in(&repo.directory(), &["switch", "--quiet", "-c", "own"]);
+        assert!(fast_forward(&repo, &bare).is_err(), "nor the branch alone");
+        assert_eq!(tip(&repo.directory(), "main"), checkout);
     }
 }
