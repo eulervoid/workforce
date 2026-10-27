@@ -27,12 +27,13 @@ use ratatui::crossterm::event::{
 use ratatui::crossterm::execute;
 use wf_core::event::Event;
 use wf_core::id::{ItemId, SessionId};
+use wf_core::identity::AgentId;
 use wf_daemon::proto::HeldPermission;
 
 use self::app::{App, Wheel};
 use self::diff::{Changes, ItemWork};
 use self::restart::{Executable, Mismatch};
-use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
+use self::snapshot::{Detail, InView, ItemListing, Listing, Snapshot, Sources, Wanted};
 use crate::commands::{DeviceDiff, ItemDiff};
 use crate::transcript::Format;
 use crate::workspace::{self, Movable, Reconnect, Workspace};
@@ -179,8 +180,10 @@ fn event_loop(
                 draw = true;
                 feed.read_transcripts(workspace, &mut app);
                 feed.read_diff(workspace, &mut app);
-                let in_view = feed.in_view(workspace, &app);
-                app.refresh_detail(in_view);
+                match feed.in_view(workspace, &app) {
+                    Ok(in_view) => app.refresh_detail(in_view),
+                    Err(error) => app.refresh_failed(&error),
+                }
                 continue;
             }
         }
@@ -306,7 +309,10 @@ fn handle(
 
 /// What the dashboard has read from the workforce so far.
 struct Feed {
-    events: Vec<Event>,
+    /// How many events of the log were read: where the next refresh reads from.
+    read: u64,
+    /// The events of the detail on screen, read when it was opened.
+    detail_events: Option<DetailEvents>,
     /// The transcripts followed, by session.
     readers: HashMap<SessionId, transcript::Reader>,
     /// The repository the diffs are read from, once one was.
@@ -318,6 +324,49 @@ struct Feed {
     /// When the agent repository of each diff on screen was last read.
     /// The executable as it was when the dashboard started.
     executable: Executable,
+}
+
+/// The events a detail shows, read when it is opened and kept up with the new ones as they come
+/// in, rather than the whole log.
+struct DetailEvents {
+    of: EventsOf,
+    /// In the order this machine applied them.
+    events: Vec<Event>,
+}
+
+/// Whose events a detail shows.
+#[derive(Clone, PartialEq, Eq)]
+enum EventsOf {
+    /// Those that can show in the activity of an item, for its detail or its diff.
+    Item(ItemId),
+    /// Those that defined or removed an agent.
+    Agent(AgentId),
+}
+
+impl EventsOf {
+    /// Whose events `detail` shows, if any.
+    fn shown_in(detail: &Detail) -> Option<Self> {
+        match detail {
+            Detail::Item(item) | Detail::Diff(item) => Some(Self::Item(*item)),
+            Detail::Agent(agent) => Some(Self::Agent(agent.clone())),
+            Detail::Session(_) | Detail::Flag(_) => None,
+        }
+    }
+
+    fn read(&self, workspace: &Workspace) -> anyhow::Result<Vec<Event>> {
+        match self {
+            Self::Item(item) => workspace.item_events(*item),
+            Self::Agent(agent) => workspace.agent_events(agent),
+        }
+    }
+
+    /// Whether `event` is one of these, as `state` has it.
+    fn concerns(&self, state: &wf_core::state::State, event: &Event) -> bool {
+        match self {
+            Self::Item(item) => state.can_be_activity_of(*item, event),
+            Self::Agent(agent) => state.agent_change(agent, event).is_some(),
+        }
+    }
 }
 
 /// What came of a refresh.
@@ -359,13 +408,20 @@ impl Asks {
 }
 
 impl Feed {
-    /// Reads the log so far, and hands the app the lines of its latest events.
+    /// Reads the log so far, and hands the app the lines of its latest events; only how many
+    /// there were is kept.
     fn new(workspace: &Workspace, app: &mut App, executable: Executable) -> anyhow::Result<Self> {
         let events = workspace.events()?;
         let backlog = &events[events.len().saturating_sub(BACKLOG)..];
-        app.logged(log_lines(workspace.state(), &events, backlog, app.width));
+        app.logged(log_lines(
+            workspace.state(),
+            &|_| &events,
+            backlog,
+            app.width,
+        ));
         Ok(Self {
-            events,
+            read: events.len() as u64,
+            detail_events: None,
             readers: HashMap::new(),
             git: None,
             taken: None,
@@ -410,24 +466,52 @@ impl Feed {
     }
 
     /// Asks the daemon for the new events, and for the state when there are some, and hands the
-    /// app their lines and the moves back to `open` among them to warn of.
+    /// app their lines and the moves back to `open` among them to warn of. Their lines and moves
+    /// are read against the events of the items they are about, asked of the workspace.
     fn refresh(&mut self, workspace: &mut Workspace, app: &mut App) -> anyhow::Result<()> {
-        let new = workspace.events_since(self.events.len() as u64)?;
+        let new = workspace.events_since(self.read)?;
         if new.is_empty() {
             return Ok(());
         }
         workspace.refresh()?;
-        let known = self.events.len();
-        self.events.extend(new);
-        let lines = log_lines(
-            workspace.state(),
-            &self.events,
-            &self.events[known..],
-            app.width,
-        );
-        app.logged(lines);
-        app.warn(snapshot::moves_back(&self.events, known));
+        self.read += new.len() as u64;
+        let state = workspace.state();
+        if let Some(detail) = &mut self.detail_events {
+            let concerned = new.iter().filter(|event| detail.of.concerns(state, event));
+            detail.events.extend(concerned.cloned());
+        }
+        let mut item_events: HashMap<ItemId, Vec<Event>> = HashMap::new();
+        for item in new.iter().filter_map(|event| state.item_of(event)) {
+            if let std::collections::hash_map::Entry::Vacant(vacant) = item_events.entry(item) {
+                vacant.insert(workspace.item_events(item)?);
+            }
+        }
+        let events_of = |item| item_events.get(&item).map_or(&[][..], Vec::as_slice);
+        app.logged(log_lines(state, &events_of, &new, app.width));
+        app.warn(snapshot::moves_back(&new, &item_events));
         Ok(())
+    }
+
+    /// The events `detail` shows, read from the workspace unless they were for it already.
+    fn detail_events(
+        &mut self,
+        workspace: &Workspace,
+        detail: Option<&Detail>,
+    ) -> anyhow::Result<&[Event]> {
+        let of = detail.and_then(EventsOf::shown_in);
+        if self.detail_events.as_ref().map(|read| &read.of) != of.as_ref() {
+            self.detail_events = match of {
+                Some(of) => Some(DetailEvents {
+                    events: of.read(workspace)?,
+                    of,
+                }),
+                None => None,
+            };
+        }
+        Ok(self
+            .detail_events
+            .as_ref()
+            .map_or(&[][..], |read| read.events.as_slice()))
     }
 
     /// Hands the app what was written to the transcripts of this machine's live sessions, and
@@ -557,7 +641,7 @@ impl Feed {
         let checkout_target = self.follow_target(workspace, app, now_ms);
         let taken = Taken {
             minute: now_ms / MINUTE_MS,
-            events: self.events.len(),
+            events: self.read,
             held: workspace.held_permissions()?,
             machine_faults: workspace.machine_faults()?,
             awaited: workspace.awaited_commits()?,
@@ -569,12 +653,21 @@ impl Feed {
         if self.taken.as_ref() == Some(&taken) {
             return Ok(None);
         }
+        // Searching reads the text of every comment, only for as long as it lasts.
+        let comment_texts = match &taken.wanted.listing {
+            Some(Listing::Items(ItemListing {
+                search: Some(_), ..
+            })) => view::comment_texts(&workspace.events()?),
+            Some(Listing::Items(_) | Listing::Agents) | None => HashMap::new(),
+        };
+        let detail_events = self.detail_events(workspace, taken.wanted.detail.as_ref())?;
         let state = workspace.state();
         let graph = state.dependency_graph();
         let sources = Sources {
             state,
             graph: &graph,
-            events: &self.events,
+            detail_events,
+            comment_texts: &comment_texts,
             event: &|id| workspace.event(&id).ok().flatten(),
             own: workspace.device_key(),
             now_ms,
@@ -620,24 +713,28 @@ impl Feed {
     }
 
     /// What the detail on screen shows, read against what the snapshot on screen flags.
-    fn in_view(&mut self, workspace: &Workspace, app: &App) -> Option<InView> {
+    fn in_view(&mut self, workspace: &Workspace, app: &App) -> anyhow::Result<Option<InView>> {
         // The snapshot on screen is taken to show this detail from now on.
         if let Some(taken) = &mut self.taken {
             taken.wanted = app.wanted();
         }
-        let detail = app.wanted().detail?;
+        let Some(detail) = app.wanted().detail else {
+            return Ok(None);
+        };
+        let detail_events = self.detail_events(workspace, Some(&detail))?;
         let state = workspace.state();
         let graph = state.dependency_graph();
         let sources = Sources {
             state,
             graph: &graph,
-            events: &self.events,
+            detail_events,
+            comment_texts: &HashMap::new(),
             event: &|_| None,
             own: workspace.device_key(),
             now_ms: wf_store::now_ms(),
             detail_width: app.detail_width(),
         };
-        InView::take(&sources, &app.snapshot.flagged, detail)
+        Ok(InView::take(&sources, &app.snapshot.flagged, detail))
     }
 }
 
@@ -650,7 +747,7 @@ struct Taken {
     /// the finest, so they go stale when it turns.
     minute: u64,
     /// How many events the log had.
-    events: usize,
+    events: u64,
     held: Vec<HeldPermission>,
     machine_faults: wf_daemon::MachineFaults,
     awaited: Vec<wf_core::commits::AwaitedCommit>,
@@ -660,17 +757,17 @@ struct Taken {
     detail_width: u16,
 }
 
-/// What the `new` events did, as `wf log --follow` prints it, read against all `events`, for a window
-/// `width` wide.
-fn log_lines(
+/// What the `new` events did, as `wf log --follow` prints it, read against the events of their
+/// items, for a window `width` wide.
+fn log_lines<'a>(
     state: &wf_core::state::State,
-    events: &[Event],
+    item_events: &dyn Fn(ItemId) -> &'a [Event],
     new: &[Event],
     width: u16,
 ) -> Vec<String> {
     // Within the margin of the Log tab.
     let width = Some(usize::from(width.saturating_sub(1)).min(100));
-    view::event_lines(state, events, new)
+    view::event_lines(state, item_events, new)
         .iter()
         .map(|line| render::event_line_for(line, width, Format::Styled))
         .collect()

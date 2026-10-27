@@ -323,7 +323,11 @@ pub struct Sources<'a> {
     pub state: &'a State,
     /// The dependencies of `state`, built once for everything taken from it.
     pub graph: &'a DependencyGraph,
-    pub events: &'a [Event],
+    /// The events of the detail wanted: for an item or its diff, those that can show in the
+    /// activity of the item; for an agent, those that defined or removed it; none for another.
+    pub detail_events: &'a [Event],
+    /// The text of each comment, while the items are searched; empty otherwise.
+    pub comment_texts: &'a HashMap<CommentId, String>,
     /// Looks an event up by its id, without going through the log.
     pub event: &'a dyn Fn(EventId) -> Option<Event>,
     pub own: DeviceKey,
@@ -347,7 +351,8 @@ impl Snapshot {
         let Sources {
             state,
             graph,
-            events: _,
+            detail_events: _,
+            comment_texts: _,
             event,
             own,
             now_ms,
@@ -551,7 +556,8 @@ impl InView {
         let Sources {
             state,
             graph,
-            events,
+            detail_events: events,
+            comment_texts: _,
             event: _,
             own,
             now_ms,
@@ -680,12 +686,11 @@ fn item_groups(sources: &Sources, listing: ItemListing) -> Vec<ItemGroup> {
     let Sources {
         state,
         graph,
-        events,
+        comment_texts,
         ..
     } = *sources;
     let found: Option<BTreeSet<ItemId>> = listing.search.map(|query| {
-        let texts = view::comment_texts(events);
-        search(state, &query, &texts, SearchScope::Live)
+        search(state, &query, comment_texts, SearchScope::Live)
             .iter()
             .map(|hit| hit.item.id())
             .collect()
@@ -711,17 +716,24 @@ pub struct MovedBack {
     pub reason: String,
 }
 
-/// The moves back among `events[known..]`, read against the events before them: those the daemon
-/// made from `review` to `open` naming a comment that says why.
-pub fn moves_back(events: &[Event], known: usize) -> Vec<MovedBack> {
+/// The moves back among the `new` events: those the daemon made from `review` to `open` naming a
+/// comment that says why. Each is read against the events of its item before it, which
+/// `item_events` has in the order they were applied, the move among them.
+pub fn moves_back(new: &[Event], item_events: &HashMap<ItemId, Vec<Event>>) -> Vec<MovedBack> {
     let mut moves = Vec::new();
-    for (index, event) in events.iter().enumerate().skip(known) {
+    for event in new {
         let EventBody::ItemMoved(moved) = &event.content.body else {
             continue;
         };
         let (Actor::Daemon(_), ItemState::Open, Some(because)) =
             (&event.content.actor, moved.to.state(), moved.because)
         else {
+            continue;
+        };
+        let Some(events) = item_events.get(&moved.item) else {
+            continue;
+        };
+        let Some(index) = events.iter().position(|known| known.id() == event.id()) else {
             continue;
         };
         let before = &events[..index];
