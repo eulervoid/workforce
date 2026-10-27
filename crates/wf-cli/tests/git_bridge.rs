@@ -5,7 +5,6 @@ use std::io::Write;
 use std::net::Shutdown;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::os::unix::net::UnixStream;
-use std::os::unix::process::CommandExt;
 use std::process::{Child, Stdio};
 use std::time::Duration;
 
@@ -14,9 +13,6 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 mod common;
 
 use common::Sandbox;
-
-/// The descriptor the daemon hands git, and git the bridge.
-const BRIDGE_DESCRIPTOR: i32 = 3;
 
 #[test]
 fn the_bridge_pipes_both_ways_and_passes_on_the_ends() {
@@ -200,15 +196,7 @@ fn spawn_bridge(sandbox: &Sandbox, bridge_end: UnixStream, output: Stdio) -> Chi
     let bridge_end = OwnedFd::from(bridge_end);
     let inherited = bridge_end.as_raw_fd();
     let mut command = sandbox.command(&["git-bridge"]);
-    // SAFETY: dup2 is async-signal-safe; the copy it makes is not closed on exec.
-    unsafe {
-        command.pre_exec(move || {
-            if libc::dup2(inherited, BRIDGE_DESCRIPTOR) < 0 {
-                return Err(std::io::Error::last_os_error());
-            }
-            Ok(())
-        });
-    }
+    wf_vcs::inherit_as_bridge(&mut command, inherited);
     command
         .stdin(Stdio::piped())
         .stdout(output)
