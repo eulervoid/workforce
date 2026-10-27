@@ -112,7 +112,8 @@ async fn answer(daemon: &Arc<Daemon>, caller: Caller, request: Request) -> Vec<u
         | Call::CacheUsage
         | Call::LiveDiff { .. }
         | Call::TargetCommit
-        | Call::AwaitedCommits => daemon.workforce(request.workforce).await,
+        | Call::AwaitedCommits
+        | Call::FollowTranscript(_) => daemon.workforce(request.workforce).await,
     };
     let loaded = match opened {
         Ok(loaded) => loaded,
@@ -174,6 +175,7 @@ fn permit(caller: Caller, workforce: WorkforceId, call: &Call) -> Result<(), Str
         Call::StopSession(_) => principals("stop sessions"),
         Call::AnswerPermission { .. } => principals("answer permission requests"),
         Call::LiveDiff { .. } => principals("ask for a live diff"),
+        Call::FollowTranscript(_) => principals("follow the transcripts of other devices"),
     }
 }
 
@@ -355,6 +357,13 @@ async fn call(
                 .await
                 .map_err(|error| wf_core::error_chain(&error))?;
             reply(diff)
+        }
+        Call::FollowTranscript(session) => {
+            let copy = daemon
+                .follow_transcript(workforce, session)
+                .await
+                .map_err(|error| wf_core::error_chain(&error))?;
+            reply(copy)
         }
         Call::TargetCommit => {
             let commit = daemon

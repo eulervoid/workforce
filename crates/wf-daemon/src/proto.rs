@@ -25,7 +25,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 26;
+pub const PROTOCOL_VERSION: u32 = 27;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -166,6 +166,11 @@ pub enum Call {
     /// The commits the log names that this device has not got yet, which what waits for them
     /// (a session, a review, a merge) waits for; answered with a `Vec<AwaitedCommit>`.
     AwaitedCommits,
+    /// Follows the transcript of a session of another device for a while, for the principal: the
+    /// daemon keeps a copy of it at [`DataDir::transcript_copy`](crate::DataDir::transcript_copy)
+    /// up to date while this is called again within some seconds. Answered with a
+    /// [`TranscriptCopy`].
+    FollowTranscript(SessionId),
 }
 
 /// What a [`Call::LiveDiff`] came to.
@@ -177,6 +182,21 @@ pub enum LiveDiff {
     NoSession,
     /// The device of the session could not be asked.
     Unreachable { device: DeviceKey, reason: String },
+}
+
+/// What the copy of the transcript of a session of another device came to so far.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum TranscriptCopy {
+    /// The device of the session has not answered yet, or the copy is still catching up.
+    Fetching,
+    /// The copy has what the transcript had when the device last answered; the session is live.
+    CaughtUp,
+    /// The session ended and the copy has all of its transcript.
+    Complete,
+    /// The device of the session could not be asked the last time; the copy has what came before.
+    Unreachable { device: DeviceKey, reason: String },
+    /// The device of the session answered that it has no such session.
+    NotHere { device: DeviceKey },
 }
 
 /// A request of an agent for permission to do something, held until the principal answers.
@@ -283,6 +303,16 @@ mod tests {
                 reason: "timed out".into(),
             },
         ];
+        let copies = vec![
+            TranscriptCopy::Fetching,
+            TranscriptCopy::CaughtUp,
+            TranscriptCopy::Complete,
+            TranscriptCopy::Unreachable {
+                device,
+                reason: "timed out".into(),
+            },
+            TranscriptCopy::NotHere { device },
+        ];
         let state = encoding::encode(&(golden_state(), golden_forking_state())).unwrap();
         let replies: Vec<(&str, Vec<u8>)> = vec![
             ("State", encoding::encode(&Reply::Ok(state)).unwrap()),
@@ -303,6 +333,10 @@ mod tests {
             (
                 "LiveDiff",
                 encoding::encode(&Reply::Ok(live_diffs)).unwrap(),
+            ),
+            (
+                "FollowTranscript",
+                encoding::encode(&Reply::Ok(copies)).unwrap(),
             ),
             (
                 "failure",
@@ -354,11 +388,12 @@ mod tests {
             Call::LiveDiff { .. } => "LiveDiff",
             Call::TargetCommit => "TargetCommit",
             Call::AwaitedCommits => "AwaitedCommits",
+            Call::FollowTranscript(_) => "FollowTranscript",
         }
     }
 
     /// The number of arms of [`golden_name`].
-    const CALL_VARIANTS: usize = 21;
+    const CALL_VARIANTS: usize = 22;
 
     /// A [`Request`] is decoded by the daemon the way a reply is by the CLI, so a `Call` that
     /// gained, lost or reordered a variant or a field shifts the bytes of every call after it.
@@ -427,6 +462,7 @@ mod tests {
             },
             Call::TargetCommit,
             Call::AwaitedCommits,
+            Call::FollowTranscript(SessionId::from_bytes([3; 32])),
         ];
         assert_eq!(
             calls.len(),
@@ -463,7 +499,7 @@ mod tests {
         );
     }
 
-    const GOLDEN_REQUESTS: [(&str, usize, &str); 21] = [
+    const GOLDEN_REQUESTS: [(&str, usize, &str); 22] = [
         (
             "State",
             34,
@@ -569,10 +605,15 @@ mod tests {
             34,
             "5msmqw2c7yzuofh4s4bpco4hbgk6nkb2ld6ybzmawmg25sbtdomq",
         ),
+        (
+            "FollowTranscript",
+            67,
+            "tsqew5hue2dvskcpnk7kf4erfkqsefexkoedqmvx6xvlqgdutptq",
+        ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 26;
-    const GOLDEN_REPLIES: [(&str, usize, &str); 8] = [
+    const GOLDEN_PROTOCOL_VERSION: u32 = 27;
+    const GOLDEN_REPLIES: [(&str, usize, &str); 9] = [
         (
             "State",
             24499,
@@ -607,6 +648,11 @@ mod tests {
             "LiveDiff",
             96,
             "ehkn7afzf5poajq3wkx5kagr5zpy4c5ltaovawkaeypjm4lx2u5a",
+        ),
+        (
+            "FollowTranscript",
+            83,
+            "vaxmg5axvomfa554367wzu273glut2jsfeyzofvloduhhfeqt73q",
         ),
         (
             "failure",

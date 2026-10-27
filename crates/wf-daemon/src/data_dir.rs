@@ -128,6 +128,16 @@ impl DataDir {
         self.transcripts(id).join(format!("{session}.jsonl"))
     }
 
+    /// The copies of the transcripts of sessions on other devices, kept apart from the
+    /// transcripts of this machine's sessions. They are a cache, fetched again once removed.
+    pub fn transcript_copies(&self, id: &WorkforceId) -> PathBuf {
+        self.workforce(id).join("transcript-copies")
+    }
+
+    pub fn transcript_copy(&self, id: &WorkforceId, session: SessionId) -> PathBuf {
+        self.transcript_copies(id).join(format!("{session}.jsonl"))
+    }
+
     /// The directory the sessions of a workforce on this machine run in.
     pub fn repositories(&self, id: &WorkforceId) -> PathBuf {
         wf_vcs::repositories(&self.workforce(id))

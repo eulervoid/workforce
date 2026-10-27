@@ -296,6 +296,8 @@ pub struct Daemon {
     /// How many principal reviews the daemon found to merge into the target when it first checked
     /// them; the tests wait on it to know a check ran.
     reviews_found_merging: std::sync::atomic::AtomicUsize,
+    /// The transcripts of sessions on other devices that the principal follows.
+    followed: transcript_copy::Followed,
 }
 
 impl Daemon {
@@ -330,6 +332,7 @@ impl Daemon {
             #[cfg(test)]
             before_merge_tree: Mutex::new(None),
             reviews_found_merging: Default::default(),
+            followed: Default::default(),
         });
         daemon.load_stored_workforces().await;
         crate::spawn(rescan(Arc::downgrade(&daemon)));
