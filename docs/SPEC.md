@@ -1404,7 +1404,7 @@ model the harness does not offer fails the session with the list.
 | `session/new` | start in the session's directory with `WF_SESSION`, `WF_SESSION_TOKEN`, `WF_WORKFORCE` |
 | `session/resume`, `session/load` | resume after a daemon restart (section 9) |
 | `session/prompt` | the brief, nudges, "what you were waiting for is resolved", "wf restarted" |
-| `session/update` | the transcript (local, `wf session watch` and the dashboard) |
+| `session/update` | the transcript (kept on the session's device; `wf session watch` and the dashboard, on any device of the workforce) |
 | `session/request_permission` | answered by the agent's `permissions` (below) |
 | `session/cancel` | `wf session stop`, `max_duration`, the item moved on, daemon halt; not when the agent ended its own session, which gets 20 s to finish its turn |
 | `terminal/*`, `fs/*` | not offered; harnesses use their own tools |
@@ -1589,8 +1589,12 @@ by itself: a directory to write to also goes in `allow_write`.
   memory only.
 * Those values are used to scrub: exact match plus base64, URL and hex encodings, then gitleaks-style
   pattern scanning. Comments of agent sessions pass this redaction before signing.
-* Transcripts are local and never synced today. A per-workforce `publish = none | redacted | full`
-  comes with stage 3 and 4 (M7).
+* Transcripts are never synced. The principal follows a session of another device of their own by
+  asking that device for its transcript (`wf/query/1`, section 14); the asker keeps a copy as a
+  cache. No redaction comes first: every device of the workforce belongs to its one principal and
+  is trusted, and a transcript goes only to a bound device, which already runs that principal's
+  agents. A per-workforce `publish = none | redacted | full` comes with stage 3 and 4 (M7), when
+  devices of other principals could ask.
 * Real isolation of donor agents is OS-level, beyond what ACP routes through the client (M7).
 
 ## 14. Connectivity
@@ -1642,15 +1646,26 @@ mDNS for LAN-only use.
   node that serves no repository answers `404`, and one already serving the device four fetches
   `429`. Neither side waits more than 30 s of silence.
 * **`wf/query/1`**: a device asks another for what only it has, read from its current state and
-  changing and storing nothing. Today that is the live diff of an item, which only the device with
-  its branch and agent repository has. One `Query::Diff { workforce, item, since }` (the head commit the
-  asker last saw), one answer of its own type, here `DiffAnswer`: `Unchanged` (the head is still `since`, so polling is one small
+  changing and storing nothing: the live diff of an item, which only the device with its branch and
+  agent repository has, and the transcript of a session, which only its device writes. One request,
+  one answer of the type the request names. `Query::Diff { workforce, item, since }` (the head commit the
+  asker last saw) is answered with a `DiffAnswer`: `Unchanged` (the head is still `since`, so polling is one small
   frame), `Work` (the target, the head commit and its diff against the target as git prints it), `NotHere` (no
   branch or agent repository of the item on this device) or `TooLarge` (the work does not fit the answer,
   told apart from a broken connection). A request is at most 1 KiB, an answer at most
   32 MiB, and a peer silent for 30 s ends the exchange. The diff is of the committed work only: the daemon does not run git in an agent's repository to read what is uncommitted there. A live view
   is asked of one device and never stored or synced; iroh-docs would replicate every snapshot to
-  every replica whether anyone looks. *Planned:* a `Transcript` request.
+  every replica whether anyone looks. `Query::Transcript { workforce, session, from }` is answered
+  with a `TranscriptAnswer`: `Part` (the bytes after byte `from`, at most 1 MiB; more may follow),
+  `Last` (the session ended and these are the last bytes, maybe none) or `NotHere` (the session is
+  not one of the answering device, which answers only for its own). The device reads whether the
+  session ended before it reads the transcript, so `Last` is never early. The asking daemon keeps a
+  copy while the principal follows the session (`wf session watch`, the dashboard): each follow
+  call keeps it followed for 10 s more, and meanwhile it asks for what follows the end of the copy
+  every second, at once while parts come full, and backing off up to 30 s while the device cannot
+  be reached. It stops once the copy is complete. Copies live in `<workforce>/transcript-copies/`,
+  apart from the transcripts of this device's sessions. They are a cache: the end of the copy is
+  where the next request starts, so one that is removed is fetched again from the start.
 * **Gossip** on a topic derived from the workforce id announces a digest of each device's heads after
   writes and every 60 s; a digest that differs from its own makes a device sync with that peer. One
   task per peer device syncs on announcements and every 60 s, backing off from 5 s to 5 minutes.
@@ -1794,11 +1809,12 @@ actions write the same events as the commands. Four tabs, each a list with a det
 * **Agents:** this week's numbers, and each agent's load and sessions.
 * **Log:** `wf log --follow`.
 
-An item's detail is `wf item show`; a session's is its live transcript (this machine's sessions
-only). Keys answer what waits in place (allow or deny a request, answer a blocker, approve or request
+An item's detail is `wf item show`; a session's is its live transcript, of a session on any device:
+another device's comes from the copy the daemon keeps while it is on screen, under a line that says
+when that device cannot be reached. Keys answer what waits in place (allow or deny a request, answer a blocker, approve or request
 changes, start, stop, move, comment, edit), the mouse selects and follows links, and a footer warns
 when the daemon sends approved work back after a conflict. Keys are in `docs/guide/dashboard.md`.
-*Planned:* a push subscription instead of polling; transcripts of other devices (M3).
+*Planned:* a push subscription instead of polling.
 
 ## 17. Not yet decided
 

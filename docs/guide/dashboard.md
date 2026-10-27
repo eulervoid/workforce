@@ -46,7 +46,8 @@ Piped, plain `wf` prints the help instead; `wf log --follow` prints the event st
 
 Each tab is a list with a detail. From 120 columns the detail sits right of the list and follows the
 selection; narrower, `enter` opens it and `esc` goes back. An item's detail shows its body, steps,
-comments and history; a session's detail is its live transcript; one further right is the diff of the
+comments and history; a session's detail is its live transcript, fetched from the machine it runs
+on when that is another of yours; one further right is the diff of the
 item's work, as `wf item diff` computes it, against the target or, once merged, as its merge brought
 it in: a header for each file with what it adds and removes, then its hunks, each line with its
 numbers before and after.
@@ -55,6 +56,10 @@ While an agent works on another of your machines, the diff is read from that mac
 it says which device and how long ago it answered. The dashboard asks again every few seconds while
 the diff is on screen, and when the machine cannot be reached it keeps the last diff, with its age and
 the reason. Only what is committed shows from another machine, not what its agent has yet to commit.
+
+A session's transcript is fetched from its machine the same way, every second while it is on screen.
+The daemon keeps a copy of it. When the machine cannot be reached, a line under the transcript says
+so, and what was fetched before stays on screen.
 
 While an agent works on the item on this machine, the diff follows what it has committed, as the
 daemon copies its commits into wf's repository at the end of every turn. Only the committed part takes comments on
@@ -249,6 +254,11 @@ plans and diffs. Tool output and diffs are cut at 20 lines a block; `--full` sho
 paragraph at a time. `--no-follow` prints what is there and stops. `Ctrl-C` stops watching; the
 session goes on.
 
+A session that runs on another of your machines is watched the same way. The daemon fetches its
+transcript from that machine every second while you watch, into a copy beside this machine's own
+transcripts. When the machine cannot be reached, `wf session watch` says so and shows what was
+fetched before. It keeps watching a live session until the machine answers again.
+
 Every command that takes an item or a session offers a picker at a terminal when you leave it out:
 `wf session stop` offers the live sessions of this machine, `wf session allow` and `deny` the pending
-requests, `wf session watch` the sessions with a transcript here.
+requests, `wf session watch` the sessions with a transcript here and those of your other machines.
