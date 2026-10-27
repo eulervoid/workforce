@@ -244,7 +244,7 @@ mod actors {
         let policy = fixture.policy_set(&state, 0, 3_002, &fixture.founder, "");
         assert_eq!(
             check(&fixture, &state, 0, session, &policy),
-            Err(PolicyViolation::AgentCannotWrite("BoundPolicySet"))
+            Err(PolicyViolation::AgentCannotWrite("PolicySet"))
         );
     }
 

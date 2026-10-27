@@ -55,8 +55,7 @@ pub(super) fn steps_view(item: &Item) -> Option<StepsView> {
     (total > 0).then_some(StepsView { done, total })
 }
 
-pub fn item_ref_view(state: &State, view: ItemEntry<'_>) -> ItemRefView {
-    let policy = &state.policy().expect("a workforce has a policy").policy;
+pub fn item_ref_view(view: ItemEntry<'_>) -> ItemRefView {
     let priority = match view {
         ItemEntry::Live(item) => item.priority(),
         ItemEntry::Archived(_) => None,
@@ -65,7 +64,7 @@ pub fn item_ref_view(state: &State, view: ItemEntry<'_>) -> ItemRefView {
         id: view.id(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
-        state: view.state(policy),
+        state: view.state(),
         priority,
     }
 }
@@ -88,7 +87,7 @@ pub fn item_stats_views(state: &State) -> Vec<ItemStatsView> {
         .filter_map(|view| {
             let stats = state.item_stats(view.id())?;
             (stats.sessions > 0).then(|| ItemStatsView {
-                item: item_ref_view(state, view),
+                item: item_ref_view(view),
                 archived: matches!(view, ItemEntry::Archived(_)),
                 stats,
             })
@@ -120,7 +119,7 @@ fn blocking_views(state: &State, graph: &DependencyGraph, item: &Item) -> Vec<It
     });
     waiting
         .into_iter()
-        .map(|waiting| item_ref_view(state, ItemEntry::Live(waiting)))
+        .map(|waiting| item_ref_view(ItemEntry::Live(waiting)))
         .collect()
 }
 
@@ -138,10 +137,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemEntry<'_>) -> I
                 .unfinished_dependencies(graph, item.id())
                 .iter()
                 .map(|dependency| {
-                    item_ref_view(
-                        state,
-                        state.item(dependency.item).expect("dependencies exist"),
-                    )
+                    item_ref_view(state.item(dependency.item).expect("dependencies exist"))
                 })
                 .collect(),
             blocking_views(state, graph, item),
@@ -155,7 +151,7 @@ pub fn summary(state: &State, graph: &DependencyGraph, view: ItemEntry<'_>) -> I
         id: view.id(),
         item_type: view.item_type().to_string(),
         title: view.title().to_string(),
-        state: view.state(policy),
+        state: view.state(),
         priority,
         readiness,
         blocked_by,

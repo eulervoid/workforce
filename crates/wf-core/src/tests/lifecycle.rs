@@ -564,11 +564,10 @@ fn a_merge_is_planned_from_what_the_item_already_went_through() {
     let task = scene.item(create("task", "work"));
     let plan = |scene: &Scene| {
         let state = &scene.state;
-        let policy = &state.policy().unwrap().policy;
         let Some(ItemEntry::Live(item)) = state.item(task) else {
             panic!("the item is live");
         };
-        MergePlan::of(item, policy, commit())
+        MergePlan::of(item, commit())
     };
     assert_eq!(plan(&scene), MergePlan::Merge);
 

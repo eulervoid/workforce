@@ -82,9 +82,6 @@ impl State {
     /// was submitted at, which its reviews and its merge start on, and the tip of the target. What finished items or heads
     /// rewritten away once named, or verdicts on them, is not here: no device is asked for it.
     pub fn named_commits(&self) -> Vec<NamedCommit> {
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return Vec::new();
-        };
         let mut named = Vec::new();
         for heads in self.item_heads().iter().filter(|heads| !heads.finished) {
             for head in heads.holder.iter().chain(&heads.others) {
@@ -100,7 +97,7 @@ impl State {
         }
         for item in self.live_items() {
             let id = item.id();
-            let state = item.state(policy);
+            let state = item.state();
             if state.is_terminal() {
                 continue;
             }
@@ -127,9 +124,6 @@ impl State {
 
     /// Where the work on each item that is not archived stands, as the log names the heads.
     pub fn item_heads(&self) -> Vec<ItemHeads> {
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return Vec::new();
-        };
         self.live_items()
             .map(|item| {
                 let head_of = |session: &crate::session::Session| {
@@ -162,7 +156,7 @@ impl State {
                 });
                 ItemHeads {
                     item: id,
-                    finished: merged || item.state(policy).is_terminal(),
+                    finished: merged || item.state().is_terminal(),
                     sessions: work().map(|session| session.id()).collect(),
                     holder,
                     others,

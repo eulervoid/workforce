@@ -362,11 +362,10 @@ fn requesting_changes_reopens_the_item_in_the_same_event() {
     let item = scene.submitted("standard");
     scene.apply(moved(item, ItemState::Review));
     scene.apply(verdict(item, commit(1), Verdict::RequestChanges));
-    let policy = &scene.state.policy().unwrap().policy;
     let Some(crate::item::ItemEntry::Live(live)) = scene.state.item(item) else {
         panic!("the item is live")
     };
-    assert_eq!(live.state(policy), ItemState::Open);
+    assert_eq!(live.state(), ItemState::Open);
 }
 
 #[test]

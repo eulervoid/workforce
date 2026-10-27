@@ -127,7 +127,7 @@ impl State {
                 && moved.item == item
                 && let Some(session) = moved.by_session
             {
-                session_moves.insert(session, moved.to.state());
+                session_moves.insert(session, moved.to);
             }
         }
 
@@ -180,24 +180,21 @@ impl State {
                 EventBody::ItemMoved(moved) if moved.item == item => match moved.by_session {
                     Some(_) => continue,
                     None => Activity::Moved {
-                        to: moved.to.state(),
+                        to: moved.to,
                         because: moved.because,
                     },
                 },
-                EventBody::ItemMoved(moved) if depends_on.contains(&moved.item) => {
-                    match moved.to.state() {
-                        finished @ (ItemState::Done | ItemState::Cancelled) => {
-                            Activity::DependencyFinished {
-                                item: moved.item,
-                                to: finished,
-                            }
+                EventBody::ItemMoved(moved) if depends_on.contains(&moved.item) => match moved.to {
+                    finished @ (ItemState::Done | ItemState::Cancelled) => {
+                        Activity::DependencyFinished {
+                            item: moved.item,
+                            to: finished,
                         }
-                        ItemState::Draft
-                        | ItemState::Open
-                        | ItemState::Active
-                        | ItemState::Review => continue,
                     }
-                }
+                    ItemState::Draft | ItemState::Open | ItemState::Active | ItemState::Review => {
+                        continue;
+                    }
+                },
                 EventBody::ItemEdited(edited) if edited.item == item => {
                     for change in &edited.changes {
                         let activity = match change {
@@ -311,7 +308,6 @@ impl State {
                 | EventBody::MergeClaimed(_)
                 | EventBody::Genesis(_)
                 | EventBody::PolicySet(_)
-                | EventBody::BoundPolicySet(_)
                 | EventBody::AgentDefined(_)
                 | EventBody::AgentRemoved(_)
                 | EventBody::InviteCreated(_)
@@ -383,7 +379,6 @@ impl State {
             EventBody::Genesis(_)
             | EventBody::TargetMoved(_)
             | EventBody::PolicySet(_)
-            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)
@@ -415,7 +410,6 @@ impl State {
             EventBody::Genesis(_)
             | EventBody::TargetMoved(_)
             | EventBody::PolicySet(_)
-            | EventBody::BoundPolicySet(_)
             | EventBody::AgentDefined(_)
             | EventBody::AgentRemoved(_)
             | EventBody::InviteCreated(_)

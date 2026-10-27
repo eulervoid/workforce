@@ -135,7 +135,7 @@ pub fn describe(body: &EventBody) -> String {
     let item = |id: &ItemId| format!("#{}", id.short());
     match body {
         EventBody::Genesis(signed) => format!("workforce \"{}\"", signed.statement.name),
-        EventBody::PolicySet(_) | EventBody::BoundPolicySet(_) => "policy replaced".to_string(),
+        EventBody::PolicySet(_) => "policy replaced".to_string(),
         EventBody::AgentDefined(defined) => format!("{} on {}", defined.name, defined.harness),
         EventBody::AgentRemoved(removed) => format!("{} removed", removed.name),
         EventBody::InviteCreated(_) => "device invite".to_string(),
@@ -165,10 +165,10 @@ pub fn describe(body: &EventBody) -> String {
             Some(session) => format!(
                 "{} -> {} for session {}",
                 item(&moved.item),
-                moved.to.state(),
+                moved.to,
                 session.short()
             ),
-            None => format!("{} -> {}", item(&moved.item), moved.to.state()),
+            None => format!("{} -> {}", item(&moved.item), moved.to),
         },
         EventBody::ItemLinked(linked) => match &linked.link {
             Link::DependsOn(wf_core::crdt::SetChange::Add(target)) => {
@@ -267,7 +267,6 @@ pub fn event_view(
         }),
         EventBody::Genesis(_)
         | EventBody::PolicySet(_)
-        | EventBody::BoundPolicySet(_)
         | EventBody::AgentDefined(_)
         | EventBody::AgentRemoved(_)
         | EventBody::InviteCreated(_)

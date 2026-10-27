@@ -60,11 +60,6 @@ pub struct StatusView {
 /// and its JSON has that line; the dashboard shows its parts.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Flag {
-    UnknownState {
-        item: ItemId,
-        title: String,
-        state: String,
-    },
     UnknownType {
         item: ItemId,
         title: String,
@@ -134,7 +129,6 @@ impl Flag {
     /// What kind of trouble it is, in a few words.
     pub fn heading(&self) -> &'static str {
         match self {
-            Flag::UnknownState { .. } => "unknown state",
             Flag::UnknownType { .. } => "unknown type",
             Flag::UnusedState { .. } => "state no longer used",
             Flag::Stranded { .. } => "stranded",
@@ -152,10 +146,6 @@ impl Flag {
     /// What is wrong, without the command that fixes it.
     pub fn what(&self) -> String {
         match self {
-            Flag::UnknownState { item, title, state } => format!(
-                "#{} \"{title}\" is in the unknown state `{state}`, so it counts as a draft",
-                item.short()
-            ),
             Flag::UnknownType {
                 item,
                 title,
@@ -211,8 +201,7 @@ impl Flag {
             Flag::UnreadablePolicy { .. } => Some("wf policy edit".to_string()),
             Flag::InviteUsedTwice { .. } => Some("wf fork --exclude".to_string()),
             Flag::Fork { to, .. } => Some(format!("wf fork accept {to}")),
-            Flag::UnknownState { .. }
-            | Flag::UnknownType { .. }
+            Flag::UnknownType { .. }
             | Flag::UnusedState { .. }
             | Flag::Stranded { .. }
             | Flag::UnstaffedReview { .. }
@@ -224,8 +213,7 @@ impl Flag {
     /// The item it is about, where it is about one.
     pub fn item(&self) -> Option<ItemId> {
         match self {
-            Flag::UnknownState { item, .. }
-            | Flag::UnknownType { item, .. }
+            Flag::UnknownType { item, .. }
             | Flag::UnusedState { item, .. }
             | Flag::Stranded { item, .. }
             | Flag::UnstaffedReview { item, .. }
@@ -253,7 +241,6 @@ impl fmt::Display for Flag {
             Flag::Fork { .. } => write!(formatter, "{what}; `{command}` follows it"),
             Flag::AgentWithoutLane { .. }
             | Flag::AgentWithoutDevice { .. }
-            | Flag::UnknownState { .. }
             | Flag::UnknownType { .. }
             | Flag::UnusedState { .. }
             | Flag::Stranded { .. }
@@ -569,23 +556,17 @@ pub fn status(state: &State, graph: &DependencyGraph, context: StatusContext) ->
                 let config = policy.type_config(item.item_type());
                 let id = item.id();
                 let title = item.title().to_string();
-                if let Some(name) = item.unknown_state() {
-                    flagged.push(Flag::UnknownState {
-                        item: id,
-                        title,
-                        state: name.to_string(),
-                    });
-                } else if config.is_none() {
+                if config.is_none() {
                     flagged.push(Flag::UnknownType {
                         item: id,
                         title,
                         item_type: item.item_type().to_string(),
                     });
-                } else if config.is_some_and(|config| !config.uses(item.state(policy))) {
+                } else if config.is_some_and(|config| !config.uses(item.state())) {
                     flagged.push(Flag::UnusedState {
                         item: id,
                         title,
-                        state: item.state(policy).to_string(),
+                        state: item.state().to_string(),
                     });
                 } else if state.readiness(graph, item) == Some(Readiness::Stranded) {
                     flagged.push(Flag::Stranded { item: id, title });

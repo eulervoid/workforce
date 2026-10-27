@@ -5,7 +5,6 @@ use serde::Serialize;
 use crate::id::ItemId;
 use crate::identity::AgentId;
 use crate::item::{Item, ItemState};
-use crate::policy::Policy;
 use crate::session::{Outcome, Session, SessionRole};
 use crate::state::State;
 
@@ -68,16 +67,13 @@ impl State {
     /// How the workforce is doing at `now_ms`, archived items included.
     pub fn project_stats(&self, now_ms: u64) -> ProjectStats {
         let mut stats = ProjectStats::default();
-        let Some(policy) = self.policy().map(|document| &document.policy) else {
-            return stats;
-        };
         let mut leads = Vec::new();
         for item in self.items_including_archived() {
             let done_at = item.state.stamp().hlc.wall_ms();
-            let done = item.state(policy) == ItemState::Done;
+            let done = item.state() == ItemState::Done;
             if done && now_ms.saturating_sub(done_at) <= RECENT_MS {
                 stats.done_lately += 1;
-                leads.extend(self.lead_ms(item, policy));
+                leads.extend(self.lead_ms(item));
             }
             if item.merges().next().is_some() {
                 stats.merged += 1;
@@ -110,10 +106,9 @@ impl State {
 
     /// How the work on `item` went, archived or not. `None` for an item that does not exist.
     pub fn item_stats(&self, item: ItemId) -> Option<ItemStats> {
-        let policy = &self.policy()?.policy;
         let item = self.workforce.as_ref()?.items.get(&item)?;
         let mut stats = ItemStats {
-            lead_ms: self.lead_ms(item, policy),
+            lead_ms: self.lead_ms(item),
             change_requests: item
                 .comments()
                 .values()
@@ -134,8 +129,8 @@ impl State {
 
     /// From the start of the first work session of `item` to its move to done; `None` unless it
     /// is done and was worked on.
-    fn lead_ms(&self, item: &Item, policy: &Policy) -> Option<u64> {
-        if item.state(policy) != ItemState::Done {
+    fn lead_ms(&self, item: &Item) -> Option<u64> {
+        if item.state() != ItemState::Done {
             return None;
         }
         let first_work = self

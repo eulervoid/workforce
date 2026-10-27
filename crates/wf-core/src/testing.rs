@@ -6,10 +6,9 @@ use crate::autonomy::Autonomy;
 use crate::body::StepId;
 use crate::crdt::SetChange;
 use crate::event::{
-    AgentDefined, BoundPolicySet, Change, CommentKind, Commented, DeviceBound, DeviceProfile,
-    Event, EventBody, EventBuilder, ForkAnnounced, ForkPoint, Genesis, InviteCreated, InviteKind,
-    ItemCreated, ItemEdited, ItemLinked, ItemMoved, ItemRef, Link, SessionEnded, SessionStarted,
-    WrittenState,
+    AgentDefined, Change, CommentKind, Commented, DeviceBound, DeviceProfile, Event, EventBody,
+    EventBuilder, ForkAnnounced, ForkPoint, Genesis, InviteCreated, InviteKind, ItemCreated,
+    ItemEdited, ItemLinked, ItemMoved, ItemRef, Link, PolicySet, SessionEnded, SessionStarted,
 };
 use crate::id::{CommentId, EventId, ItemId, SessionId, WorkforceId};
 use crate::identity::{
@@ -258,11 +257,11 @@ impl Fixture {
             )
             .expect("state has a genesis")
             .hlc();
-        EventBody::BoundPolicySet(
+        EventBody::PolicySet(
             Signed::sign(
                 signer,
                 state.workforce_id(),
-                BoundPolicySet {
+                PolicySet {
                     policy: source.into(),
                     hlc,
                 },
@@ -282,9 +281,10 @@ pub fn create(item_type: &str, title: &str) -> EventBody {
         labels: vec![],
         requires: vec![],
         review: None,
+        // An unknown type has no initial state: such an item is written by hand or by a newer peer.
         state: Policy::default_policy()
             .type_config(&TypeName::new(item_type).unwrap())
-            .map(|config| config.initial.into()),
+            .map_or(ItemState::Open, |config| config.initial),
     })
 }
 
@@ -292,16 +292,7 @@ pub fn create_in(item_type: &str, title: &str, state: ItemState) -> EventBody {
     let EventBody::ItemCreated(mut created) = create(item_type, title) else {
         unreachable!()
     };
-    created.state = Some(state.into());
-    EventBody::ItemCreated(created)
-}
-
-/// An item as created before `ItemCreated` carried a state.
-pub fn create_without_state(item_type: &str, title: &str) -> EventBody {
-    let EventBody::ItemCreated(mut created) = create(item_type, title) else {
-        unreachable!()
-    };
-    created.state = None;
+    created.state = state;
     EventBody::ItemCreated(created)
 }
 
@@ -316,17 +307,7 @@ pub fn create_with_body(item_type: &str, title: &str, body: &str) -> EventBody {
 pub fn moved(item: ItemId, to: ItemState) -> EventBody {
     EventBody::ItemMoved(ItemMoved {
         item,
-        to: to.into(),
-        by_session: None,
-        because: None,
-    })
-}
-
-/// A move as an older version wrote it, to a state named the way its type did.
-pub fn moved_as_written(item: ItemId, to: &str) -> EventBody {
-    EventBody::ItemMoved(ItemMoved {
-        item,
-        to: WrittenState::as_written(to),
+        to,
         by_session: None,
         because: None,
     })
@@ -841,7 +822,6 @@ mod tests {
         assert!(!workforce.aliases.is_empty());
         assert!(!workforce.profiles.is_empty());
         assert!(!workforce.announcements.is_empty());
-        assert!(workforce.bound_policy.is_some());
         assert!(
             workforce
                 .invites

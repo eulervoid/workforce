@@ -11,7 +11,6 @@ use crate::hlc::Hlc;
 use crate::id::{CommentId, ItemId, SessionId};
 use crate::identity::Actor;
 use crate::item::{Item, ItemEntry, ItemState};
-use crate::policy::Policy;
 use crate::review::ReviewStatus;
 use crate::session::{CommitId, EndReason, MachineFault, Outcome, SessionRole, Verdict};
 use crate::state::State;
@@ -153,8 +152,8 @@ pub enum MergePlan {
 impl MergePlan {
     /// What the daemon does for a request to merge `commit`, the commit that was reviewed, of
     /// `item`.
-    pub fn of(item: &Item, policy: &Policy, commit: CommitId) -> MergePlan {
-        if item.state(policy) == ItemState::Done {
+    pub fn of(item: &Item, commit: CommitId) -> MergePlan {
+        if item.state() == ItemState::Done {
             MergePlan::Nothing
         } else if item.merges().any(|merged| merged.reviewed == commit) {
             MergePlan::MoveToDone
@@ -607,9 +606,8 @@ impl State {
 
     /// The state of a live item; `None` for an archived one.
     pub fn live_state(&self, item: ItemId) -> Option<ItemState> {
-        let policy = &self.policy()?.policy;
         match self.item(item)? {
-            ItemEntry::Live(item) => Some(item.state(policy)),
+            ItemEntry::Live(item) => Some(item.state()),
             ItemEntry::Archived(_) => None,
         }
     }

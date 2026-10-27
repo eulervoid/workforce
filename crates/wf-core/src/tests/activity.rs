@@ -57,7 +57,7 @@ impl Log {
 fn moved_for(item: ItemId, to: ItemState, session: SessionId) -> EventBody {
     EventBody::ItemMoved(ItemMoved {
         item,
-        to: to.into(),
+        to,
         by_session: Some(session),
         because: None,
     })

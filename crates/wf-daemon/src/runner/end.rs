@@ -34,7 +34,7 @@ impl Daemon {
             Actor::Daemon(principal),
             EventBody::ItemMoved(ItemMoved {
                 item,
-                to: to.into(),
+                to,
                 by_session,
                 because,
             }),

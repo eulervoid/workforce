@@ -25,7 +25,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 28;
+pub const PROTOCOL_VERSION: u32 = 29;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -503,121 +503,121 @@ mod tests {
         (
             "State",
             34,
-            "uun4zkpkslyfndl7i57iknzogv5tnxvsct4dn5f2i7rsge2il37a",
+            "wlcqcya4cz77onxsm2ty23q6qs7abd5vrasr4eu5sa27kl5qkudq",
         ),
         (
             "Event",
             67,
-            "7uabbxsropvzunejhftkt74rfwlbsd34hmo3vtsuryh4tjwb5dra",
+            "jppshzhqtwrgejqbqfoqjw6trmf42u7f6bswqcumlrnxhkqlao6a",
         ),
         (
             "Events",
             35,
-            "7d7qvmwvu2bhsxw5amrfbnwanrwx2qrcafd5dazpv5axk2vk5xfa",
+            "mv2566yqasmrhpz5narw7miji5at5ndtjzcoxcy4xgjlfap7ekwq",
         ),
         (
             "ItemEvents",
             68,
-            "rb335w5mquvmnj6nslgwdfsiltjrhb5zdb3pygxvjvaq4tco7mea",
+            "tqilx2bha7nv7rptyhwenawgx2e537lmj2ueqssyg43c5cpnovza",
         ),
         (
             "AgentEvents",
             74,
-            "tidcz6k5zekiqlkpevrrpbcyreopk7kyph3wulic4zedryq3mdpq",
+            "pon2lzcp5kfddvm2nemqeyus74qv6tchlj7pucjd4cn24lyekgrq",
         ),
         (
             "Author",
-            76,
-            "vvitnzxq4ivnkblmb5tp3j5u35f6qe5532h3sgtrfkebxqbs7h4a",
+            78,
+            "nazduy7tjhgg4w7nvjxf7pcekn2nav3v3wg2cwwn3vkmcxcbd6wa",
         ),
         (
             "SyncNow",
             34,
-            "q3vz6xr3ahof2uz4lzvyd5gub2dfs5qrdvq6jairwjwlun7tgaya",
+            "phiajiqxzhhdn5sbbjlnfpord5zqksbm6qzfxwwbwp665gwizrkq",
         ),
         (
             "Fork",
             2114,
-            "azcqvjj33zlhqwp6kuswsvikrvncvorarfdipubnhamygmtduntq",
+            "zyzwhu5evwv3awrg34o5cnxzprfn7yz26l4z44ek4yrzce4l2gza",
         ),
         (
             "Join",
             73,
-            "squn66qkhsamokc2knd5i22bjn7ep6dpclctgmke6yzvhh2rxm5q",
+            "hmpjtxgomgougtzfyrz4lch24bpcsvf6cbz3rhoyaradvnbe3vqa",
         ),
         (
             "Follow",
             68,
-            "ecwm4akw6r4k4bgmtfmavll7yd5gs6qe5sbrsxc25bwc4gttceoq",
+            "rx2m5tktl37vhxtq435wtpoks53qq6h6367znkwedismbv357s3a",
         ),
         (
             "Presence",
             34,
-            "golkl4gskednp3cut32xd4n6uwakmtcymheyoatichlz2kej6xoa",
+            "4mq2af3in4w45kxs5lynopyub2zd5d67ki2rdp4pnbiikbcsts4q",
         ),
         (
             "StartSession",
             75,
-            "ukqjthnmoaxq3qjltbxabki5fmmm75vymii4o5frb3diswpywozq",
+            "dsyndcl62ww6imchxbt4vm57p6u7srfa5zthvvizxgejdfngeeua",
         ),
         (
             "EndSession",
             41,
-            "zmberfrlin2adwi33t2z27lzwsbd2ucl5xeqqitw6nwkz4c3l64q",
+            "ymfkpzv322maxh363b3zkmvreqwarktp53eu3jvhrxoqdn4p3xfq",
         ),
         (
             "StopSession",
             67,
-            "yrti45qpkxfaizfpxxrzahxm6wxoeezz7melzxrkj7xwrcgjs7nq",
+            "kylbvrf3xxzrz7tqhbycri37xjrnophq66h2bgn3krwyt7cv4jdq",
         ),
         (
             "Permissions",
             34,
-            "2negz735oxc2izfjtgrc65kc23dznrsnbiz26d46y3bvbm7ftgyq",
+            "navv27nk5bvp6gepqrhuror4qgacq6n4vjsi7fov2gtcwoho5tfq",
         ),
         (
             "AnswerPermission",
             70,
-            "3z73tbdl6246i7om57ko5wljiw3ymuyacoyuesdrbt53ou5gwv6q",
+            "hcrsrbdvffj7eanzmjxlyda5zjzurcesx37z7hkehwa7i4ank33a",
         ),
         (
             "MachineFaults",
             34,
-            "lt5l2kayjva4da3n53albuk3ykr3hl5n2c2nw32xzioghqz7ti6a",
+            "pzxatnxseofmpzsbqwsgobae6hawls2z7msngapqltnssqqvej6q",
         ),
         (
             "CacheUsage",
             34,
-            "7hj3azs6rsep2vg4noxpxwwe6m7hqw7r7f6onf6hxnewsb2isrna",
+            "5o3mf5ues7mpfqt5j3lbf6tubhtpj7jhxwgcv3l5lxz2kddddroa",
         ),
         (
             "LiveDiff",
             90,
-            "toldep4z7fw5kc3t2j5zq3atdx5mxqrghkbulnwd6kq564bsasga",
+            "zsbfpyhdo6zlhdkua7rtzzkudwywcfix2p2djuh273agyoym6wtq",
         ),
         (
             "TargetCommit",
             34,
-            "cmgxhicxtrff6finessdexo5yzwek5jmgkga335q3w2a5idgtp7a",
+            "un2bxeyghqbtsivctofjomzcjmtvvvkngu4i32d53to66jhekr3a",
         ),
         (
             "AwaitedCommits",
             34,
-            "5msmqw2c7yzuofh4s4bpco4hbgk6nkb2ld6ybzmawmg25sbtdomq",
+            "hncxj5p5snds65sswv2u5xg4fhasm77v3gh3dovgys5cliwo5k3q",
         ),
         (
             "FollowTranscript",
             67,
-            "tsqew5hue2dvskcpnk7kf4erfkqsefexkoedqmvx6xvlqgdutptq",
+            "wbybn6jv5or5yd46o4gbkyffs7zptog7pw6hfzgn4fip5ylhzajq",
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 28;
+    const GOLDEN_PROTOCOL_VERSION: u32 = 29;
     const GOLDEN_REPLIES: [(&str, usize, &str); 9] = [
         (
             "State",
-            24499,
-            "a7a6siegwlfg7lnbdw6wjttic4lslviiuers7mcpqpsam66aegqa",
+            20911,
+            "idme55mbc2nxu2om7eywj354vajrmjpeajogmp725zxlvz74vroa",
         ),
         (
             "Permissions",

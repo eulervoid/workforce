@@ -92,19 +92,6 @@ impl ItemState {
             ItemState::Draft | ItemState::Open | ItemState::Active | ItemState::Review => false,
         }
     }
-
-    /// Reads a state as events and policies written before the states were fixed name it too:
-    /// the states the built-in types had then. `None` for a name that is neither.
-    pub fn from_written(name: &str) -> Option<ItemState> {
-        match name {
-            "backlog" => Some(ItemState::Draft),
-            "in_progress" => Some(ItemState::Active),
-            "in_review" | "proposed" => Some(ItemState::Review),
-            "ratified" | "superseded" => Some(ItemState::Done),
-            "dropped" | "rejected" => Some(ItemState::Cancelled),
-            current => current.parse().ok(),
-        }
-    }
 }
 
 impl fmt::Display for ItemState {
@@ -120,7 +107,6 @@ pub struct ItemStateError(pub String);
 impl FromStr for ItemState {
     type Err = ItemStateError;
 
-    /// Only the current names: old ones are read, never written.
     fn from_str(text: &str) -> Result<Self, ItemStateError> {
         ItemState::ALL
             .into_iter()
@@ -136,7 +122,6 @@ impl Serialize for ItemState {
     }
 }
 
-/// Only the current names; the policy reads the old ones of policies already in the log itself.
 impl<'de> Deserialize<'de> for ItemState {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         String::deserialize(deserializer)?
@@ -149,7 +134,7 @@ use std::collections::BTreeMap;
 
 use crate::body::{Body, Step, StepId};
 use crate::crdt::{AddWinsSet, Lww, Stamp};
-use crate::event::{CommentKind, WrittenState};
+use crate::event::CommentKind;
 use crate::hlc::Hlc;
 use crate::id::{CommentId, EventId, ItemId, SessionId};
 use crate::identity::{Actor, DeviceKey};
@@ -268,9 +253,7 @@ pub struct Item {
     pub(crate) body: Lww<Body>,
     /// Ticks of steps. One counts only while it is newer than the body it was made against.
     pub(crate) step_marks: BTreeMap<StepId, Lww<bool>>,
-    /// `None` for an item created before `ItemCreated` carried a state, until its first move: the
-    /// type's initial state under the current policy.
-    pub(crate) state: Lww<Option<WrittenState>>,
+    pub(crate) state: Lww<ItemState>,
     pub(crate) priority: Lww<Option<Priority>>,
     pub(crate) lane: Lww<Option<LaneName>>,
     pub(crate) review: Lww<Option<ReviewLevelName>>,
@@ -488,21 +471,8 @@ impl Item {
             .is_some_and(|level| !level.steps.is_empty())
     }
 
-    /// An item whose event names a state no version knew, or that has no state yet and whose type
-    /// the policy dropped, is a draft: nothing starts it. See [`Item::unknown_state`].
-    pub fn state(&self, policy: &Policy) -> ItemState {
-        match self.state.value() {
-            Some(written) => written.state(),
-            None => policy
-                .type_config(&self.item_type)
-                .map_or(ItemState::Draft, |config| config.initial),
-        }
-    }
-
-    /// The name of the state the item was put in, when it is not one this version knows. The item
-    /// counts as a draft until it is moved.
-    pub fn unknown_state(&self) -> Option<&str> {
-        self.state.value().as_ref().and_then(WrittenState::unknown)
+    pub fn state(&self) -> ItemState {
+        *self.state.value()
     }
 
     /// When the principal last did something to the item: created, edited, moved, linked,
@@ -545,7 +515,7 @@ impl Item {
             title: Lww::new(created.title.clone(), stamp),
             body: Lww::new(body_of(&created.body), stamp),
             step_marks: BTreeMap::new(),
-            state: Lww::new(created.state.clone(), stamp),
+            state: Lww::new(created.state, stamp),
             priority: Lww::new(created.priority, stamp),
             lane: Lww::new(created.lane.clone(), stamp),
             review: Lww::new(created.review.clone(), stamp),
@@ -594,8 +564,8 @@ impl<'a> ArchivedStub<'a> {
         self.archived_at
     }
 
-    pub fn state(&self, policy: &Policy) -> ItemState {
-        self.item.state(policy)
+    pub fn state(&self) -> ItemState {
+        self.item.state()
     }
 }
 
@@ -636,10 +606,10 @@ impl<'a> ItemEntry<'a> {
         }
     }
 
-    pub fn state(&self, policy: &Policy) -> ItemState {
+    pub fn state(&self) -> ItemState {
         match self {
-            ItemEntry::Live(item) => item.state(policy),
-            ItemEntry::Archived(stub) => stub.state(policy),
+            ItemEntry::Live(item) => item.state(),
+            ItemEntry::Archived(stub) => stub.state(),
         }
     }
 }
@@ -657,15 +627,8 @@ mod tests {
     }
 
     #[test]
-    fn old_state_names_are_read_but_not_parsed() {
-        assert_eq!(
-            ItemState::from_written("in_review"),
-            Some(ItemState::Review)
-        );
-        assert_eq!(ItemState::from_written("superseded"), Some(ItemState::Done));
-        assert_eq!(ItemState::from_written("draft"), Some(ItemState::Draft));
-        assert_eq!(ItemState::from_written("triaged"), None);
-        assert!("backlog".parse::<ItemState>().is_err());
+    fn states_parse_by_their_names() {
+        assert!("in_progress".parse::<ItemState>().is_err());
         assert_eq!("cancelled".parse(), Ok(ItemState::Cancelled));
     }
 }

@@ -236,6 +236,26 @@ fn a_snapshot_of_the_previous_format_is_discarded_and_refolded() {
 }
 
 #[test]
+fn a_store_of_an_older_event_version_is_refused_with_how_to_sign_it_again() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let mut content = fixture.genesis.content.clone();
+    content.v = wf_core::event::EVENT_VERSION - 1;
+    let old = Event::sign_content(content, &fixture.devices[0]).unwrap();
+    open(&directory)
+        .commit(Commit {
+            append: &[old],
+            ..Commit::default()
+        })
+        .unwrap();
+    let Err(error) = Replica::open(open(&directory), fixture.workforce()) else {
+        panic!("a store of an older event version opened");
+    };
+    let message = wf_core::error_chain(&error);
+    assert!(message.contains("wf import --resign"), "{message}");
+}
+
+#[test]
 fn out_of_order_events_are_parked_and_survive_restarts() {
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);

@@ -40,10 +40,10 @@ fn tampered_events_are_rejected() {
 fn unsupported_version() {
     let fixture = Fixture::new(1);
     let mut state = fixture.state();
-    let event = forged(&fixture, &state, |content| content.v = 2);
+    let event = forged(&fixture, &state, |content| content.v = 1);
     assert_eq!(
         receive(&mut state, event),
-        Err(Invalid::UnsupportedVersion(2))
+        Err(Invalid::UnsupportedVersion(1))
     );
 }
 
@@ -403,11 +403,11 @@ fn policy_changes_need_a_valid_principal_signature_for_this_workforce() {
     let mut state = fixture.state();
 
     let other_workforce = WorkforceId::from(EventId::of(b"elsewhere"));
-    let replayed = EventBody::BoundPolicySet(
+    let replayed = EventBody::PolicySet(
         Signed::sign(
             &fixture.founder,
             Some(other_workforce),
-            crate::event::BoundPolicySet {
+            crate::event::PolicySet {
                 policy: crate::policy::DEFAULT_POLICY_TOML.into(),
                 hlc: state
                     .builder(fixture.devices[0].key(), fixture.founder_actor(), 5_000)
@@ -451,13 +451,12 @@ fn an_old_signed_policy_cannot_be_written_into_a_new_event() {
     let old_event = fixture.apply(&mut state, 0, 5_000, old);
     let newer = fixture.policy_set(&state, 0, 5_100, &fixture.founder, &newer_source);
     fixture.apply(&mut state, 0, 5_100, newer);
-    let EventBody::BoundPolicySet(signed) = &old_event.content.body else {
+    let EventBody::PolicySet(signed) = &old_event.content.body else {
         panic!("a policy was written")
     };
 
     // Another device of the owner writes the signed statement into an event with a newer stamp.
-    let by_owner_device =
-        fixture.author(&state, 1, 5_200, EventBody::BoundPolicySet(signed.clone()));
+    let by_owner_device = fixture.author(&state, 1, 5_200, EventBody::PolicySet(signed.clone()));
     assert_eq!(
         receive(&mut state, by_owner_device),
         Err(Invalid::PolicyNotForThisEvent)
@@ -471,110 +470,13 @@ fn an_old_signed_policy_cannot_be_written_into_a_new_event() {
             5_200,
         )
         .unwrap()
-        .sign(
-            &fixture.member_device,
-            EventBody::BoundPolicySet(signed.clone()),
-        )
+        .sign(&fixture.member_device, EventBody::PolicySet(signed.clone()))
         .unwrap();
     assert_eq!(
         receive(&mut state, member_event),
         Err(Invalid::ActorMismatch)
     );
     assert_eq!(state.policy().unwrap().source, newer_source);
-}
-
-#[test]
-fn a_bound_policy_beats_an_unbound_one_whatever_its_parents_and_stamp() {
-    let fixture = Fixture::new(2);
-    let mut state = fixture.state();
-    let unbound = |source: &str| {
-        EventBody::PolicySet(
-            Signed::sign(
-                &fixture.founder,
-                Some(fixture.workforce()),
-                crate::event::PolicySet {
-                    policy: source.into(),
-                },
-            )
-            .unwrap(),
-        )
-    };
-    let before = format!("{}\n# before\n", crate::policy::DEFAULT_POLICY_TOML);
-    let event = fixture.author(&state, 0, 5_000, unbound(&before));
-    assert_eq!(receive(&mut state, event), Ok(Disposition::Applied));
-    let mut before_bound = state.clone();
-
-    let bound = fixture.author(
-        &state,
-        0,
-        5_100,
-        fixture.policy_set(
-            &state,
-            0,
-            5_100,
-            &fixture.founder,
-            crate::policy::DEFAULT_POLICY_TOML,
-        ),
-    );
-    assert_eq!(receive(&mut state, bound.clone()), Ok(Disposition::Applied));
-
-    // Written on parents from before the bound policy, with a later stamp.
-    let replay = fixture.author(&before_bound, 1, 5_200, unbound(&before));
-    assert_eq!(
-        receive(&mut state, replay.clone()),
-        Ok(Disposition::Applied)
-    );
-    assert_eq!(
-        state.policy().unwrap().source,
-        crate::policy::DEFAULT_POLICY_TOML
-    );
-
-    // Folding the same events in the other order gives the same policy.
-    assert_eq!(receive(&mut before_bound, replay), Ok(Disposition::Applied));
-    assert_eq!(receive(&mut before_bound, bound), Ok(Disposition::Applied));
-    assert_eq!(before_bound.policy(), state.policy());
-}
-
-#[test]
-fn an_unreadable_bound_policy_gives_the_same_policy_in_either_fold_order() {
-    let fixture = Fixture::new(2);
-    let base = fixture.state();
-    let unbound_source = format!("{}\n# unbound\n", crate::policy::DEFAULT_POLICY_TOML);
-    let unbound = fixture.author(
-        &base,
-        1,
-        5_200,
-        EventBody::PolicySet(
-            Signed::sign(
-                &fixture.founder,
-                Some(fixture.workforce()),
-                crate::event::PolicySet {
-                    policy: unbound_source.clone(),
-                },
-            )
-            .unwrap(),
-        ),
-    );
-    let unreadable = newer_policy();
-    let bound = fixture.author(
-        &base,
-        0,
-        5_100,
-        fixture.policy_set(&base, 0, 5_100, &fixture.founder, &unreadable),
-    );
-
-    let mut bound_first = base.clone();
-    receive(&mut bound_first, bound.clone()).unwrap();
-    receive(&mut bound_first, unbound.clone()).unwrap();
-    let mut unbound_first = base;
-    receive(&mut unbound_first, unbound).unwrap();
-    receive(&mut unbound_first, bound).unwrap();
-
-    // With no readable bound policy the unbound one still runs, and the bound one is flagged.
-    assert_eq!(bound_first.policy(), unbound_first.policy());
-    assert_eq!(bound_first.policy().unwrap().source, unbound_source);
-    assert!(bound_first.unreadable_policy().is_some());
-    assert!(unbound_first.unreadable_policy().is_some());
 }
 
 /// A policy written by a newer version, with a recovery step this version does not know.

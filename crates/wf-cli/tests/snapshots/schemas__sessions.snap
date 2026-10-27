@@ -6,9 +6,9 @@ expression: "Envelope::new(&sessions)"
   "schema": 9,
   "data": [
     {
-      "id": "jqtmhivg4xsf7mit7dhklshi73v6fyj3r4t3n4gxpmbfo7nyauxq",
+      "id": "blqxn6zur7ziu245udelfdnkxi32p2ao2sajihlh66x7yzwqeflq",
       "agent": "@ada/coder",
-      "item": "kivqt62afhwnbiwgubx4257td5kplubx7cd63ryemlzsfolq2rtq",
+      "item": "zcipve6a3qzzyk3hectotwlj3ocoqx4szl4zl4r47imhfm54o3lq",
       "title": "Implement feed sync",
       "role": "work",
       "status": "live",
@@ -19,9 +19,9 @@ expression: "Envelope::new(&sessions)"
       "steps": null
     },
     {
-      "id": "npxfia6zjengvojif7dji2bg5mtofsoplmem4hydxorrfxa7dfmq",
+      "id": "bvvrhjipz3t3mo6hxto4pnwv4u2ou5ur7waf66ompi6cdvcorv6q",
       "agent": "@ada/coder",
-      "item": "kivqt62afhwnbiwgubx4257td5kplubx7cd63ryemlzsfolq2rtq",
+      "item": "zcipve6a3qzzyk3hectotwlj3ocoqx4szl4zl4r47imhfm54o3lq",
       "title": "Implement feed sync",
       "role": "work",
       "status": "live",

@@ -389,9 +389,6 @@ pub fn last_comment(item: &Item, sources: &impl Sources) -> Option<String> {
 }
 
 fn dependencies(state: &State, item: &Item, sources: &impl Sources) -> Vec<Dependency> {
-    let Some(policy) = state.policy().map(|doc| &doc.policy) else {
-        return Vec::new();
-    };
     let graph = state.dependency_graph();
     graph
         .depends_on(item.id())
@@ -402,7 +399,7 @@ fn dependencies(state: &State, item: &Item, sources: &impl Sources) -> Vec<Depen
         .map(|dependency| Dependency {
             item: HashId::short(&dependency.id()),
             title: dependency.title().to_string(),
-            state: dependency.state(policy).to_string(),
+            state: dependency.state().to_string(),
             note: last_comment(dependency, sources),
         })
         .collect()

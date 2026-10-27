@@ -1,7 +1,7 @@
 //! `wf policy`: showing and changing the policy of the workforce.
 
 use anyhow::Context;
-use wf_core::event::{BoundPolicySet, Event, EventBody};
+use wf_core::event::{Event, EventBody, PolicySet};
 use wf_core::identity::{PrincipalSigner, Signed};
 use wf_core::policy::Policy;
 use wf_core::state::State;
@@ -36,7 +36,7 @@ pub(super) fn policy(
         }
         PolicyCommand::Edit => {
             let edited = edit_until_valid(&current, ".toml", |source| {
-                Policy::parse_new(source)?;
+                Policy::parse(source)?;
                 Ok(source.to_string())
             })?;
             if edited == current {
@@ -48,7 +48,7 @@ pub(super) fn policy(
 }
 
 fn apply_policy(json: bool, workspace: &mut Workspace, source: String) -> anyhow::Result<()> {
-    Policy::parse_new(&source)?;
+    Policy::parse(&source)?;
     let principal = workspace.principal_signer()?;
     let event = author_policy(workspace, &principal, source)?;
     done(json, "policy replaced".to_string(), &event, None)
@@ -96,12 +96,12 @@ fn author_policy(
         let statement = Signed::sign(
             principal,
             Some(workforce),
-            BoundPolicySet {
+            PolicySet {
                 policy: source.clone(),
                 hlc,
             },
         )?;
-        let error = match authoring.author(EventBody::BoundPolicySet(statement)) {
+        let error = match authoring.author(EventBody::PolicySet(statement)) {
             Ok(event) => return Ok(event),
             Err(error) => error,
         };
@@ -156,7 +156,7 @@ mod tests {
                 self.fixture
                     .apply(&mut self.latest, 1, now_ms + 1_000, landed);
             }
-            let EventBody::BoundPolicySet(signed) = &body else {
+            let EventBody::PolicySet(signed) = &body else {
                 panic!("only policies are authored here");
             };
             let device = &self.fixture.devices[0];
