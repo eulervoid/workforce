@@ -57,6 +57,19 @@ fn events_survive_reopening() {
 }
 
 #[test]
+fn a_shared_state_stays_as_it_was_taken() {
+    let directory = TempDir::new().unwrap();
+    let fixture = Fixture::new(1);
+    let mut replica = new_replica(&directory, &fixture);
+    add(&mut replica, &fixture, 1);
+    let taken = replica.shared_state();
+    add(&mut replica, &fixture, 2);
+    assert_eq!(titles(&taken), ["task 0"]);
+    assert_eq!(titles(replica.state()), ["task 0", "task 0", "task 1"]);
+    assert_eq!(&*replica.shared_state(), replica.state());
+}
+
+#[test]
 fn events_can_be_read_back_by_id_and_by_feed() {
     let directory = TempDir::new().unwrap();
     let fixture = Fixture::new(1);

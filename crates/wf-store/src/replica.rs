@@ -1,4 +1,5 @@
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use wf_core::event::{Event, EventBody, EventError};
 use wf_core::hlc::HLC_TOLERANCE_MS;
@@ -61,7 +62,9 @@ pub enum ForkError {
 /// reopen it.
 pub struct Replica<S: EventStore> {
     store: S,
-    state: State,
+    /// Shared with the readers that took it, so that taking it costs nothing; an event applied
+    /// while a reader still holds it copies it once.
+    state: Arc<State>,
     snapshot_event_count: usize,
     history: Option<Box<dyn HistorySource>>,
     /// The first write that failed, with its causes.
@@ -109,7 +112,7 @@ impl<S: EventStore> Replica<S> {
 
         let mut replica = Self {
             store,
-            state,
+            state: Arc::new(state),
             snapshot_event_count,
             history: None,
             failed_write: None,
@@ -142,6 +145,12 @@ impl<S: EventStore> Replica<S> {
         &self.state
     }
 
+    /// The state as it is now, kept so while the replica changes. Taking it costs a reference
+    /// count; the next event applied while it is held copies the state once.
+    pub fn shared_state(&self) -> Arc<State> {
+        Arc::clone(&self.state)
+    }
+
     pub fn store(&self) -> &S {
         &self.store
     }
@@ -149,9 +158,8 @@ impl<S: EventStore> Replica<S> {
     /// Validates an event and persists whatever it changed: itself, events it released from the
     /// pending set, or its own place in the pending set.
     pub fn receive(&mut self, event: Event) -> Result<Received, ReceiveError> {
-        let received = self
-            .state
-            .receive_at(event.clone(), Trust::Untrusted, now_ms())?;
+        let received =
+            Arc::make_mut(&mut self.state).receive_at(event.clone(), Trust::Untrusted, now_ms())?;
         self.persist(&event, &received)?;
         Ok(received)
     }
@@ -183,9 +191,10 @@ impl<S: EventStore> Replica<S> {
         let mut released: Vec<EventId> = Vec::new();
         let mut rejected = 0;
         for event in events {
+            let state = Arc::make_mut(&mut self.state);
             let result = match trust {
-                Trust::Untrusted => self.state.receive_at(event.clone(), trust, now_ms()),
-                Trust::Stored => self.state.receive(event.clone(), trust),
+                Trust::Untrusted => state.receive_at(event.clone(), trust, now_ms()),
+                Trust::Stored => state.receive(event.clone(), trust),
             };
             match result {
                 Ok(received) => {
@@ -302,8 +311,7 @@ impl<S: EventStore> Replica<S> {
         let event = builder.sign(signer, body)?;
         // The builder's floor may lie beyond this device's clock (stored events, peers admitted
         // under an earlier clock), so the tolerance of `receive_at` must not judge own events.
-        let received = self
-            .state
+        let received = Arc::make_mut(&mut self.state)
             .receive(event.clone(), Trust::Untrusted)
             .map_err(ReceiveError::from)?;
         self.persist(&event, &received)

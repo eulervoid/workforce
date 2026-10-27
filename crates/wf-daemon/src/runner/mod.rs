@@ -363,8 +363,8 @@ async fn blocking<T: Send + 'static>(
 }
 
 impl Daemon {
-    pub(crate) async fn snapshot(&self, loaded: &Loaded) -> Result<State, StorageClosed> {
-        loaded.storage.with(|replica| replica.state().clone()).await
+    pub(crate) async fn snapshot(&self, loaded: &Loaded) -> Result<Arc<State>, StorageClosed> {
+        loaded.storage.with(|replica| replica.shared_state()).await
     }
 
     /// Runs `read` on the state where it lives, so that only its answer is copied out.

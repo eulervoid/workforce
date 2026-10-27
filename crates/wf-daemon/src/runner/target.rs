@@ -414,7 +414,7 @@ mod tests {
         }
 
         async fn state(&self) -> State {
-            self.daemon.snapshot(&self.loaded).await.unwrap()
+            State::clone(&self.daemon.snapshot(&self.loaded).await.unwrap())
         }
 
         /// What device 1 writes on `state`, as it saw the log then: it wins a fork with anything
