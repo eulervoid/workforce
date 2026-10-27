@@ -82,6 +82,8 @@ Within seconds the daemon starts `cecilia` on it. Open the dashboard to follow a
 wf                               # what waits on you, who works on what; `?` lists the keys
 ```
 
+The dashboard starts the daemon itself when none runs, so `wf` alone is enough to get going.
+
 When the agent is done, it submits, and the review waits for you:
 
 ```sh

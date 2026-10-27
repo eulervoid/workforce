@@ -266,12 +266,21 @@ fn dashboard(mode: Mode, data: DataDir, cwd: &Path, item: Option<&str>) -> anyho
             std::process::exit(2);
         }
     }
-    let mut workspace = Workspace::open(data, cwd, false)?;
-    if !workspace.follows_daemon() {
-        bail!("the dashboard follows the daemon; start it with `wf daemon start`");
-    }
+    let mut workspace = Workspace::open(data.clone(), cwd, false)?;
+    let started = if workspace.follows_daemon() {
+        None
+    } else {
+        // The daemon opens the store this workspace has open.
+        drop(workspace);
+        let started = crate::daemon::spawn_daemon(Default::default(), &data)?;
+        workspace = Workspace::open(data, cwd, false)?;
+        if !workspace.follows_daemon() {
+            bail!("the daemon stopped as the dashboard started it; see `wf daemon log`");
+        }
+        Some(started)
+    };
     let only = item.map(|text| workspace.resolve_item(text)).transpose()?;
-    crate::dashboard::run(&mut workspace, only)
+    crate::dashboard::run(&mut workspace, only, started)
 }
 
 fn handle_from_environment() -> Handle {

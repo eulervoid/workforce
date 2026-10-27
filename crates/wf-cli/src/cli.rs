@@ -408,7 +408,7 @@ pub enum DaemonCommand {
     Run(DaemonArgs),
 }
 
-#[derive(Args)]
+#[derive(Args, Default)]
 pub struct DaemonArgs {
     /// Use this relay server instead of the default ones.
     #[arg(long, value_name = "URL")]

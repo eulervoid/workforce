@@ -3,8 +3,10 @@
 ## The dashboard
 
 Plain `wf` at a terminal opens the dashboard. It is meant to stay open, for example in a pane next to
-your editor: it shows what waits on you, who works on what, and lets you answer right there. It needs
-the daemon (`wf daemon start`) and refreshes twice a second.
+your editor: it shows what waits on you, who works on what, and lets you answer right there. It
+follows the daemon and refreshes twice a second. When no daemon runs, it starts one as `wf daemon
+start` does and says so in its status line, "started the daemon (pid 48213); it logs to
+…/daemon.log". That daemon runs on after you close the dashboard, until `wf daemon stop`.
 
 ```sh
 wf                   # the dashboard
