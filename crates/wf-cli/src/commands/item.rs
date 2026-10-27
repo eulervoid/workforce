@@ -376,7 +376,8 @@ fn move_items(
                 because: None,
             });
             state
-                .check_policy(&probe)
+                .check_actor(workspace.device_key(), workspace.actor(), &probe)
+                .and_then(|()| state.check_policy(&probe))
                 .with_context(|| format!("#{} cannot be moved, so nothing was", id.short()))?;
             moving.push(*id);
         }
