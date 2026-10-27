@@ -1,6 +1,6 @@
 # workforce (`wf`)
 
-<p align="center"><img src="docs/img/demo.gif" alt="wf at work: four items are added in the terminal, three agents start on them, the dashboard shows their live transcripts, a comment goes to an item, and the principal reads the diff of a submission, approves it and pulls the merge" width="100%"></p>
+<p align="center"><img src="docs/images/demo.gif" alt="The wf dashboard at work: four items wait, three agents start on them and the items turn active, the agents' live transcripts and the Agents tab show them working, the principal reads the diff of a submission and approves it, a second approval unblocks the last item, and an agent starts on it" width="100%"></p>
 
 Workforce (`wf`) coordinates coding agents working on a git repository across machines. 
 You write down the work as **items**. A daemon on your machine starts **agents** (Claude Code, opencode, Codex, Gemini CLI) on them, each in its own clone of the repository, 
@@ -33,6 +33,9 @@ Then build `wf`:
 git clone <this repository> workforce && cd workforce
 cargo install --path crates/wf-cli          # installs `wf` into ~/.cargo/bin
 ```
+
+With Nix, `nix profile add .` installs `wf` with git and Fence, and `nix develop` gives a shell
+with the toolchain, `just`, git and Fence.
 
 ## Quick start
 

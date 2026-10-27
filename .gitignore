@@ -2,4 +2,5 @@
 target
 .direnv
 result
+docs/videos
 *.snap.new
