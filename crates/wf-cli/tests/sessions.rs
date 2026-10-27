@@ -1305,7 +1305,7 @@ async fn a_session_whose_record_cannot_be_written_fails() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn work_merges_while_the_principals_checkout_has_changes_and_a_pull_brings_it_in() {
+async fn work_merges_while_the_principals_checkout_has_changes_and_wf_brings_it_in() {
     let script = "\
 sh echo hi > hello.txt && git add hello.txt && git commit -q -m hello
 wf work submit
@@ -1318,17 +1318,11 @@ wf work submit
     start_session(&world, &item);
     let session = world.ended_session().await;
     assert_eq!(session["status"], "submitted");
+    // The next `wf` command fast-forwards the checkout, keeping the changes the merge leaves alone.
     world
         .wait("the merge", |world| world.item(&item)["state"] == "done")
         .await;
-    // The checkout is the principal's: nothing of the merge reaches it until they pull.
-    assert!(!world.wf.repository.join("hello.txt").exists());
-    assert!(
-        std::fs::read_to_string(&file)
-            .unwrap()
-            .ends_with("# edited by hand\n")
-    );
-    world.pull();
+    world.wf.run(&["status"]);
     assert!(world.wf.repository.join("hello.txt").is_file());
     assert!(
         std::fs::read_to_string(&file)
