@@ -6018,6 +6018,7 @@ dependencies = [
  "insta",
  "jiff",
  "libc",
+ "lru",
  "nucleo-picker",
  "pulldown-cmark",
  "rand 0.10.3",

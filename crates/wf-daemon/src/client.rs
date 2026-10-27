@@ -141,13 +141,14 @@ impl DaemonClient {
         }
     }
 
-    /// The events that can show in the activity of `item`, in the order the daemon applied them.
+    /// The events that can show in the activity of any of `items`, in the order the daemon
+    /// applied them.
     pub fn item_events(
         &mut self,
         workforce: WorkforceId,
-        item: ItemId,
+        items: Vec<ItemId>,
     ) -> Result<Vec<Event>, ClientError> {
-        self.call(workforce, Call::ItemEvents(item))
+        self.call(workforce, Call::ItemEvents(items))
     }
 
     /// The events that defined or removed `agent`, in the order the daemon applied them.

@@ -100,7 +100,7 @@ fn only_new_daemon_moves_from_review_back_to_open_with_a_reason_warn() {
     let new = vec![note, back];
     events.extend(new.clone());
     // The events of the item, as the workspace gives them: all of them here.
-    let item_events = std::collections::HashMap::from([(item, events.clone())]);
+    let item_events = |_| events.as_slice();
 
     let warned = vec![MovedBack {
         item,
@@ -113,7 +113,7 @@ fn only_new_daemon_moves_from_review_back_to_open_with_a_reason_warn() {
     // Nor does one the principal made.
     let by_principal = fixture.author(&state, 0, 3_002, moved(item, ItemState::Open));
     events.push(by_principal.clone());
-    let item_events = std::collections::HashMap::from([(item, events.clone())]);
+    let item_events = |_| events.as_slice();
     assert_eq!(moves_back(&[by_principal], &item_events), Vec::new());
 }
 

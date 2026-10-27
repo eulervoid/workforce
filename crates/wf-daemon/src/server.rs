@@ -255,11 +255,13 @@ async fn call(
                 .map_err(|error| wf_core::error_chain(&error))?;
             reply(events)
         }
-        Call::ItemEvents(item) => {
+        Call::ItemEvents(items) => {
             let events = storage
                 .with(move |replica| {
                     filtered_log(replica, |state, event| {
-                        state.can_be_activity_of(item, event)
+                        items
+                            .iter()
+                            .any(|item| state.can_be_activity_of(*item, event))
                     })
                 })
                 .await

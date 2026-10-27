@@ -6,7 +6,7 @@ use wf_core::state::State;
 use wf_core::testing::{Fixture, comment, create, create_with_body};
 
 use crate::dashboard::snapshot::{Detail, InView, Sources};
-use crate::dashboard::{EventsOf, log_lines};
+use crate::dashboard::{ITEMS_KEPT, KeptEvents, log_lines};
 
 /// A log of two items, where the second refers to the first: the first item and its log.
 fn log() -> (Fixture, State, ItemId, Vec<Event>) {
@@ -31,11 +31,15 @@ fn log() -> (Fixture, State, ItemId, Vec<Event>) {
     (fixture, state, item, events)
 }
 
-/// The events of `item`, as the workspace gives them.
-fn item_events(state: &State, item: ItemId, events: &[Event]) -> Vec<Event> {
+/// The events of any of `items`, as the workspace gives them.
+fn item_events(state: &State, items: &[ItemId], events: &[Event]) -> Vec<Event> {
     events
         .iter()
-        .filter(|event| state.can_be_activity_of(item, event))
+        .filter(|event| {
+            items
+                .iter()
+                .any(|item| state.can_be_activity_of(*item, event))
+        })
         .cloned()
         .collect()
 }
@@ -44,18 +48,14 @@ fn item_events(state: &State, item: ItemId, events: &[Event]) -> Vec<Event> {
 fn the_log_tab_reads_new_events_against_the_events_of_their_items_as_against_the_whole_log() {
     let (_, state, _, events) = log();
     let new = &events[2..];
-    let of_items = |item| item_events(&state, item, &events);
-    let read: Vec<(ItemId, Vec<Event>)> = new
+    // The items the new events are about, read in one go.
+    let touched: Vec<ItemId> = new
         .iter()
         .filter_map(|event| state.item_of(event))
-        .map(|item| (item, of_items(item)))
         .collect();
-    let by_item = |item| {
-        read.iter()
-            .find(|(read, _)| *read == item)
-            .map_or(&[][..], |(_, events)| events.as_slice())
-    };
-    let lines = log_lines(&state, &by_item, new, 100);
+    let mut kept = KeptEvents::new(ITEMS_KEPT);
+    kept.keep(&state, &touched, &item_events(&state, &touched, &events));
+    let lines = log_lines(&state, &|item| kept.of(item), new, 100);
     assert_eq!(lines, log_lines(&state, &|_| &events, new, 100));
     assert_eq!(lines.len(), 3, "{lines:#?}");
 }
@@ -63,18 +63,14 @@ fn the_log_tab_reads_new_events_against_the_events_of_their_items_as_against_the
 #[test]
 fn an_item_kept_up_with_since_it_was_opened_shows_what_the_whole_log_did() {
     let (fixture, state, item, events) = log();
-    let of = EventsOf::Item(item);
-    // Opened after the first remark; the rest came in at refreshes.
-    let mut kept = item_events(&state, item, &events[..2]);
-    kept.extend(
-        events[2..]
-            .iter()
-            .filter(|event| of.concerns(&state, event))
-            .cloned(),
-    );
-    assert_eq!(kept, item_events(&state, item, &events));
+    let mut kept = KeptEvents::new(ITEMS_KEPT);
+    // Opened when the feed had read two events and the log had three; the rest, the third among
+    // them, came in at a refresh.
+    kept.keep(&state, &[item], &item_events(&state, &[item], &events[..3]));
+    kept.keep_up(&state, &events[2..]);
+    assert_eq!(kept.of(item), item_events(&state, &[item], &events));
     assert!(
-        kept.len() < events.len(),
+        kept.of(item).len() < events.len(),
         "the other item's own are left out"
     );
 
@@ -95,9 +91,24 @@ fn an_item_kept_up_with_since_it_was_opened_shows_what_the_whole_log_did() {
             other => panic!("{other:?}"),
         }
     };
-    let text = detail(&kept);
+    let text = detail(kept.of(item));
     assert_eq!(text, detail(&events));
     for shown in ["first remark", "second remark", "Lex"] {
         assert!(text.contains(shown), "{shown} in {text}");
     }
+}
+
+#[test]
+fn only_the_items_opened_or_touched_last_are_kept() {
+    let (_, state, item, events) = log();
+    let other: ItemId = events[2].id().into();
+    let mut kept = KeptEvents::new(1);
+    kept.keep(&state, &[item], &item_events(&state, &[item], &events));
+    kept.keep(&state, &[other], &item_events(&state, &[other], &events));
+    kept.trim();
+    assert_eq!(kept.of(item), &[][..], "let go of");
+    assert_eq!(kept.of(other), item_events(&state, &[other], &events));
+    // New events of an item let go of are left to be read with it.
+    kept.keep_up(&state, &events);
+    assert_eq!(kept.of(item), &[][..]);
 }

@@ -25,7 +25,7 @@ use wf_net::frame::{FrameError, blocking as frame};
 
 use crate::caller::{Caller, Token};
 
-pub const PROTOCOL_VERSION: u32 = 27;
+pub const PROTOCOL_VERSION: u32 = 28;
 
 /// A frame holds this many events at most, so a long log does not need one huge frame.
 pub const EVENTS_PER_PAGE: usize = 512;
@@ -96,9 +96,9 @@ pub enum Call {
     /// A page of the log: up to [`EVENTS_PER_PAGE`] events in the order the daemon applied them,
     /// starting at position `from`, as `Vec<Event>`. An empty page is the end.
     Events { from: u64 },
-    /// The events of the log that can show in the activity of an item, in the order the daemon
-    /// applied them, as `Vec<Event>` ([`wf_core::state::State::can_be_activity_of`]).
-    ItemEvents(ItemId),
+    /// The events of the log that can show in the activity of any of these items, in the order
+    /// the daemon applied them, as `Vec<Event>` ([`wf_core::state::State::can_be_activity_of`]).
+    ItemEvents(Vec<ItemId>),
     /// The events that defined or removed an agent, in the order the daemon applied them, as
     /// `Vec<Event>`.
     AgentEvents(AgentId),
@@ -419,7 +419,7 @@ mod tests {
             Call::State,
             Call::Event(EventId::from_bytes([4; 32])),
             Call::Events { from: 7 },
-            Call::ItemEvents(item),
+            Call::ItemEvents(vec![item]),
             Call::AgentEvents(AgentId {
                 principal: PrincipalSigner::generate([9; 32]).key(),
                 name: AgentName::new("claude").unwrap(),
@@ -517,8 +517,8 @@ mod tests {
         ),
         (
             "ItemEvents",
-            67,
-            "txuwcouz3fjf652kn6eftw43uzz2d7lfydgxqfsatib3dk5ee3ba",
+            68,
+            "rb335w5mquvmnj6nslgwdfsiltjrhb5zdb3pygxvjvaq4tco7mea",
         ),
         (
             "AgentEvents",
@@ -612,7 +612,7 @@ mod tests {
         ),
     ];
 
-    const GOLDEN_PROTOCOL_VERSION: u32 = 27;
+    const GOLDEN_PROTOCOL_VERSION: u32 = 28;
     const GOLDEN_REPLIES: [(&str, usize, &str); 9] = [
         (
             "State",

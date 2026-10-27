@@ -26,14 +26,14 @@ use ratatui::crossterm::event::{
 };
 use ratatui::crossterm::execute;
 use wf_core::event::Event;
-use wf_core::id::{ItemId, SessionId};
+use wf_core::id::{CommentId, ItemId, SessionId};
 use wf_core::identity::AgentId;
 use wf_daemon::proto::HeldPermission;
 
 use self::app::{App, Wheel};
 use self::diff::{Changes, ItemWork};
 use self::restart::{Executable, Mismatch};
-use self::snapshot::{Detail, InView, ItemListing, Listing, Snapshot, Sources, Wanted};
+use self::snapshot::{Detail, InView, Snapshot, Sources, Wanted};
 use crate::commands::{DeviceDiff, ItemDiff};
 use crate::transcript::Format;
 use crate::workspace::{self, Movable, Reconnect, Workspace};
@@ -48,6 +48,9 @@ const ASK_DEVICE_EVERY: Duration = Duration::from_secs(3);
 
 /// How many of the latest events the Log tab starts with.
 const BACKLOG: usize = 200;
+
+/// How many items the dashboard keeps the events of: those opened or touched by an event last.
+const ITEMS_KEPT: usize = 64;
 
 pub fn run(workspace: &mut Workspace, only: Option<ItemId>) -> anyhow::Result<()> {
     let executable = Executable::start()?;
@@ -311,8 +314,10 @@ fn handle(
 struct Feed {
     /// How many events of the log were read: where the next refresh reads from.
     read: u64,
-    /// The events of the detail on screen, read when it was opened.
-    detail_events: Option<DetailEvents>,
+    /// The events kept to show the latest items and the agent on screen.
+    kept: KeptEvents,
+    /// The text of each comment, to search the items by.
+    comment_texts: HashMap<CommentId, String>,
     /// The transcripts followed, by session.
     readers: HashMap<SessionId, transcript::Reader>,
     /// The repository the diffs are read from, once one was.
@@ -326,45 +331,116 @@ struct Feed {
     executable: Executable,
 }
 
-/// The events a detail shows, read when it is opened and kept up with the new ones as they come
-/// in, rather than the whole log.
-struct DetailEvents {
-    of: EventsOf,
-    /// In the order this machine applied them.
-    events: Vec<Event>,
+/// The events the dashboard keeps of the log, rather than the whole log: those of the items
+/// opened or touched by an event last, and of the agent last opened. Each is read once, when it is
+/// first wanted, and kept up with the new events from then on.
+struct KeptEvents {
+    /// By item, those that can show in its activity, in the order this machine applied them; the
+    /// items opened or touched last are the most recently used.
+    items: lru::LruCache<ItemId, Vec<Event>>,
+    /// How many items are kept after a refresh.
+    items_kept: usize,
+    /// Those that defined or removed the agent.
+    agent: Option<(AgentId, Vec<Event>)>,
 }
 
-/// Whose events a detail shows.
-#[derive(Clone, PartialEq, Eq)]
-enum EventsOf {
-    /// Those that can show in the activity of an item, for its detail or its diff.
-    Item(ItemId),
-    /// Those that defined or removed an agent.
-    Agent(AgentId),
-}
+impl KeptEvents {
+    fn new(items_kept: usize) -> Self {
+        Self {
+            items: lru::LruCache::unbounded(),
+            items_kept,
+            agent: None,
+        }
+    }
 
-impl EventsOf {
-    /// Whose events `detail` shows, if any.
-    fn shown_in(detail: &Detail) -> Option<Self> {
+    /// Keeps `events` of `items`, read for them from the log.
+    fn keep(&mut self, state: &wf_core::state::State, items: &[ItemId], events: &[Event]) {
+        for item in items {
+            let of_item = events
+                .iter()
+                .filter(|event| state.can_be_activity_of(*item, event))
+                .cloned()
+                .collect();
+            self.items.put(*item, of_item);
+        }
+    }
+
+    /// Reads the events of those of `items` not kept yet, all in one read of the log, and makes
+    /// them all the most recently used, the last of them the latest.
+    fn read(&mut self, workspace: &Workspace, items: &[ItemId]) -> anyhow::Result<()> {
+        let mut missing: Vec<ItemId> = items
+            .iter()
+            .filter(|item| !self.items.contains(item))
+            .copied()
+            .collect();
+        missing.sort();
+        missing.dedup();
+        if !missing.is_empty() {
+            let events = workspace.item_events(&missing)?;
+            self.keep(workspace.state(), &missing, &events);
+        }
+        for item in items {
+            self.items.promote(item);
+        }
+        Ok(())
+    }
+
+    /// Adds the `new` events to those kept that they concern, as `state` has it, unless they were
+    /// read with them already.
+    fn keep_up(&mut self, state: &wf_core::state::State, new: &[Event]) {
+        for (item, events) in self.items.iter_mut() {
+            extend_unread(events, new, |event| state.can_be_activity_of(*item, event));
+        }
+        if let Some((agent, events)) = &mut self.agent {
+            extend_unread(events, new, |event| {
+                state.agent_change(agent, event).is_some()
+            });
+        }
+    }
+
+    /// Lets go of the items used least recently, beyond those kept.
+    fn trim(&mut self) {
+        while self.items.len() > self.items_kept {
+            self.items.pop_lru();
+        }
+    }
+
+    /// The events of `item` kept; none if it is not.
+    fn of(&self, item: ItemId) -> &[Event] {
+        self.items.peek(&item).map_or(&[][..], Vec::as_slice)
+    }
+
+    /// The events `detail` shows: for an item or its diff, those that can show in the activity of
+    /// the item; for an agent, those that defined or removed it; none for another. They are read
+    /// from the workspace unless they are kept.
+    fn of_detail(
+        &mut self,
+        workspace: &Workspace,
+        detail: Option<&Detail>,
+    ) -> anyhow::Result<&[Event]> {
         match detail {
-            Detail::Item(item) | Detail::Diff(item) => Some(Self::Item(*item)),
-            Detail::Agent(agent) => Some(Self::Agent(agent.clone())),
-            Detail::Session(_) | Detail::Flag(_) => None,
+            Some(Detail::Item(item) | Detail::Diff(item)) => {
+                self.read(workspace, &[*item])?;
+                Ok(self.of(*item))
+            }
+            Some(Detail::Agent(agent)) => {
+                let kept = match self.agent.take() {
+                    Some((kept, events)) if kept == *agent => (kept, events),
+                    Some(_) | None => (agent.clone(), workspace.agent_events(agent)?),
+                };
+                Ok(&self.agent.insert(kept).1)
+            }
+            Some(Detail::Session(_) | Detail::Flag(_)) | None => Ok(&[]),
         }
     }
+}
 
-    fn read(&self, workspace: &Workspace) -> anyhow::Result<Vec<Event>> {
-        match self {
-            Self::Item(item) => workspace.item_events(*item),
-            Self::Agent(agent) => workspace.agent_events(agent),
-        }
-    }
-
-    /// Whether `event` is one of these, as `state` has it.
-    fn concerns(&self, state: &wf_core::state::State, event: &Event) -> bool {
-        match self {
-            Self::Item(item) => state.can_be_activity_of(*item, event),
-            Self::Agent(agent) => state.agent_change(agent, event).is_some(),
+/// Adds to `events` those of `new` that are `concerned`, unless `events` has them: read after
+/// `new` came in, `events` can end with some of them.
+fn extend_unread(events: &mut Vec<Event>, new: &[Event], concerned: impl Fn(&Event) -> bool) {
+    for event in new {
+        if concerned(event) && !events.iter().rev().any(|kept| kept.id() == event.id()) {
+            events.push(event.clone());
         }
     }
 }
@@ -409,7 +485,7 @@ impl Asks {
 
 impl Feed {
     /// Reads the log so far, and hands the app the lines of its latest events; only how many
-    /// there were is kept.
+    /// there were and the text of the comments are kept.
     fn new(workspace: &Workspace, app: &mut App, executable: Executable) -> anyhow::Result<Self> {
         let events = workspace.events()?;
         let backlog = &events[events.len().saturating_sub(BACKLOG)..];
@@ -421,7 +497,8 @@ impl Feed {
         ));
         Ok(Self {
             read: events.len() as u64,
-            detail_events: None,
+            kept: KeptEvents::new(ITEMS_KEPT),
+            comment_texts: view::comment_texts(&events),
             readers: HashMap::new(),
             git: None,
             taken: None,
@@ -467,7 +544,8 @@ impl Feed {
 
     /// Asks the daemon for the new events, and for the state when there are some, and hands the
     /// app their lines and the moves back to `open` among them to warn of. Their lines and moves
-    /// are read against the events of the items they are about, asked of the workspace.
+    /// are read against the events of the items they are about: kept up with if they are kept,
+    /// and otherwise read from the workspace, in one read for all of them.
     fn refresh(&mut self, workspace: &mut Workspace, app: &mut App) -> anyhow::Result<()> {
         let new = workspace.events_since(self.read)?;
         if new.is_empty() {
@@ -476,42 +554,18 @@ impl Feed {
         workspace.refresh()?;
         self.read += new.len() as u64;
         let state = workspace.state();
-        if let Some(detail) = &mut self.detail_events {
-            let concerned = new.iter().filter(|event| detail.of.concerns(state, event));
-            detail.events.extend(concerned.cloned());
-        }
-        let mut item_events: HashMap<ItemId, Vec<Event>> = HashMap::new();
-        for item in new.iter().filter_map(|event| state.item_of(event)) {
-            if let std::collections::hash_map::Entry::Vacant(vacant) = item_events.entry(item) {
-                vacant.insert(workspace.item_events(item)?);
-            }
-        }
-        let events_of = |item| item_events.get(&item).map_or(&[][..], Vec::as_slice);
+        self.comment_texts.extend(view::comment_texts(&new));
+        self.kept.keep_up(state, &new);
+        let touched: Vec<ItemId> = new
+            .iter()
+            .filter_map(|event| state.item_of(event))
+            .collect();
+        self.kept.read(workspace, &touched)?;
+        let events_of = |item| self.kept.of(item);
         app.logged(log_lines(state, &events_of, &new, app.width));
-        app.warn(snapshot::moves_back(&new, &item_events));
+        app.warn(snapshot::moves_back(&new, &events_of));
+        self.kept.trim();
         Ok(())
-    }
-
-    /// The events `detail` shows, read from the workspace unless they were for it already.
-    fn detail_events(
-        &mut self,
-        workspace: &Workspace,
-        detail: Option<&Detail>,
-    ) -> anyhow::Result<&[Event]> {
-        let of = detail.and_then(EventsOf::shown_in);
-        if self.detail_events.as_ref().map(|read| &read.of) != of.as_ref() {
-            self.detail_events = match of {
-                Some(of) => Some(DetailEvents {
-                    events: of.read(workspace)?,
-                    of,
-                }),
-                None => None,
-            };
-        }
-        Ok(self
-            .detail_events
-            .as_ref()
-            .map_or(&[][..], |read| read.events.as_slice()))
     }
 
     /// Hands the app what was written to the transcripts of this machine's live sessions, and
@@ -653,21 +707,16 @@ impl Feed {
         if self.taken.as_ref() == Some(&taken) {
             return Ok(None);
         }
-        // Searching reads the text of every comment, only for as long as it lasts.
-        let comment_texts = match &taken.wanted.listing {
-            Some(Listing::Items(ItemListing {
-                search: Some(_), ..
-            })) => view::comment_texts(&workspace.events()?),
-            Some(Listing::Items(_) | Listing::Agents) | None => HashMap::new(),
-        };
-        let detail_events = self.detail_events(workspace, taken.wanted.detail.as_ref())?;
+        let detail_events = self
+            .kept
+            .of_detail(workspace, taken.wanted.detail.as_ref())?;
         let state = workspace.state();
         let graph = state.dependency_graph();
         let sources = Sources {
             state,
             graph: &graph,
             detail_events,
-            comment_texts: &comment_texts,
+            comment_texts: &self.comment_texts,
             event: &|id| workspace.event(&id).ok().flatten(),
             own: workspace.device_key(),
             now_ms,
@@ -721,7 +770,7 @@ impl Feed {
         let Some(detail) = app.wanted().detail else {
             return Ok(None);
         };
-        let detail_events = self.detail_events(workspace, Some(&detail))?;
+        let detail_events = self.kept.of_detail(workspace, Some(&detail))?;
         let state = workspace.state();
         let graph = state.dependency_graph();
         let sources = Sources {

@@ -719,7 +719,10 @@ pub struct MovedBack {
 /// The moves back among the `new` events: those the daemon made from `review` to `open` naming a
 /// comment that says why. Each is read against the events of its item before it, which
 /// `item_events` has in the order they were applied, the move among them.
-pub fn moves_back(new: &[Event], item_events: &HashMap<ItemId, Vec<Event>>) -> Vec<MovedBack> {
+pub fn moves_back<'a>(
+    new: &[Event],
+    item_events: &dyn Fn(ItemId) -> &'a [Event],
+) -> Vec<MovedBack> {
     let mut moves = Vec::new();
     for event in new {
         let EventBody::ItemMoved(moved) = &event.content.body else {
@@ -730,9 +733,7 @@ pub fn moves_back(new: &[Event], item_events: &HashMap<ItemId, Vec<Event>>) -> V
         else {
             continue;
         };
-        let Some(events) = item_events.get(&moved.item) else {
-            continue;
-        };
+        let events = item_events(moved.item);
         let Some(index) = events.iter().position(|known| known.id() == event.id()) else {
             continue;
         };
